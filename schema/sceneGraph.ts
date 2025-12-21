@@ -40,12 +40,7 @@ import {
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
 } from './components/definitions/warpGateComponent';
-import type { WaterComponentProps } from './components/definitions/waterComponent'
-import {
-  WATER_COMPONENT_TYPE,
-  WATER_COMPONENT_METADATA_KEY,
-  clampWaterComponentProps,
-} from './components/definitions/waterComponent'
+import { WATER_COMPONENT_TYPE } from './components/definitions/waterComponent'
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
@@ -115,7 +110,6 @@ class SceneGraphBuilder {
   private readonly materialFactory: SceneMaterialFactory;
   private readonly meshTemplateCache = new Map<string, MeshTemplate>();
   private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
-  private readonly waterNormalTextures = new Map<string, THREE.Texture | null>();
   private readonly document: SceneJsonExportDocument;
   private readonly outlineMeshMap: SceneOutlineMeshMap;
   private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
@@ -199,7 +193,6 @@ class SceneGraphBuilder {
     const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
     await this.preloadAssets(nodes, materials);
-    await this.prepareWaterNormalTextures(nodes);
     await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
@@ -450,15 +443,6 @@ class SceneGraphBuilder {
           }
         });
       }
-      const waterState = node.components?.[WATER_COMPONENT_TYPE] as
-        | SceneNodeComponentState<WaterComponentProps>
-        | undefined;
-      if (waterState?.enabled) {
-        const props = clampWaterComponentProps(waterState.props as Partial<WaterComponentProps> | null | undefined);
-        if (props.waterNormals) {
-          ids.add(props.waterNormals);
-        }
-      }
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
       }
@@ -485,33 +469,6 @@ class SceneGraphBuilder {
         bucket.add(assetId);
       }
     });
-  }
-
-  private collectWaterNormalAssetIds(nodes: SceneNodeWithExtras[]): string[] {
-    if (!Array.isArray(nodes) || nodes.length === 0) {
-      return [];
-    }
-    const ids = new Set<string>();
-    const stack: SceneNodeWithExtras[] = [...nodes];
-    while (stack.length) {
-      const node = stack.pop();
-      if (!node) {
-        continue;
-      }
-      const waterState = node.components?.[WATER_COMPONENT_TYPE] as
-        | SceneNodeComponentState<WaterComponentProps>
-        | undefined;
-      if (waterState?.enabled) {
-        const props = clampWaterComponentProps(waterState.props as Partial<WaterComponentProps> | null | undefined);
-        if (props.waterNormals) {
-          ids.add(props.waterNormals);
-        }
-      }
-      if (Array.isArray(node.children) && node.children.length) {
-        stack.push(...(node.children as SceneNodeWithExtras[]));
-      }
-    }
-    return Array.from(ids);
   }
 
   private async preloadTextureAsset(assetId: string): Promise<void> {
@@ -586,27 +543,6 @@ class SceneGraphBuilder {
     if (size > 0) {
       this.updateAssetSize(assetId, size);
       this.updateAssetLoadedBytes(assetId, size);
-    }
-  }
-
-  private async prepareWaterNormalTextures(nodes: SceneNodeWithExtras[]): Promise<void> {
-    const assetIds = this.collectWaterNormalAssetIds(nodes);
-    if (!assetIds.length) {
-      return;
-    }
-    await Promise.all(assetIds.map((assetId) => this.loadWaterNormalTexture(assetId)));
-  }
-
-  private async loadWaterNormalTexture(assetId: string): Promise<void> {
-    if (!assetId || this.waterNormalTextures.has(assetId)) {
-      return;
-    }
-    try {
-      const texture = await this.materialFactory.loadTexture(assetId, null);
-      this.waterNormalTextures.set(assetId, texture);
-    } catch (error) {
-      console.warn('水面法线纹理加载失败', assetId, error);
-      this.waterNormalTextures.set(assetId, null);
     }
   }
 
@@ -1049,17 +985,6 @@ class SceneGraphBuilder {
       metadata.warpGate = true;
       const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
       metadata[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
-    }
-    const waterState = node.components?.[WATER_COMPONENT_TYPE] as
-      | SceneNodeComponentState<WaterComponentProps>
-      | undefined;
-    if (waterState?.enabled) {
-      const props = clampWaterComponentProps(waterState.props as Partial<WaterComponentProps> | null | undefined);
-      const assetId = props.waterNormals;
-      metadata[WATER_COMPONENT_METADATA_KEY] = {
-        waterNormalsAssetId: assetId,
-        waterNormalsTexture: assetId ? this.waterNormalTextures.get(assetId) ?? null : null,
-      };
     }
   }
 

@@ -11596,7 +11596,6 @@ export const useSceneStore = defineStore('scene', {
           currentProps.indexUpAxis !== merged.indexUpAxis ||
           currentProps.indexForwardAxis !== merged.indexForwardAxis ||
           wheelsChanged
-
         if (!hasChanges) {
           return false
         }
@@ -11622,13 +11621,10 @@ export const useSceneStore = defineStore('scene', {
         const unchanged =
           currentProps.textureWidth === merged.textureWidth &&
           currentProps.textureHeight === merged.textureHeight &&
-          Math.abs(currentProps.alpha - merged.alpha) <= 1e-6 &&
-          currentProps.color === merged.color &&
           Math.abs(currentProps.distortionScale - merged.distortionScale) <= 1e-6 &&
           Math.abs(currentProps.size - merged.size) <= 1e-6 &&
           Math.abs(currentProps.flowSpeed - merged.flowSpeed) <= 1e-6 &&
-          flowDirectionUnchanged &&
-          (currentProps.waterNormals ?? '') === (merged.waterNormals ?? '')
+          flowDirectionUnchanged
         if (unchanged) {
           return false
         }

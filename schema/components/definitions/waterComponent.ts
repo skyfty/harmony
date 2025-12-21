@@ -1,4 +1,4 @@
-import type { BufferGeometry, Mesh, Object3D, Texture } from 'three'
+import type { BufferGeometry, Material, Mesh, Object3D, Texture } from 'three'
 import { Color, DataTexture, RepeatWrapping, ShaderMaterial, Vector2, Vector3 } from 'three'
 import { Water } from 'three/examples/jsm/objects/Water.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
@@ -6,18 +6,12 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const WATER_COMPONENT_TYPE = 'water'
-export const WATER_COMPONENT_METADATA_KEY = '__harmonyWaterComponent'
-
 export const WATER_DEFAULT_TEXTURE_WIDTH = 512
 export const WATER_DEFAULT_TEXTURE_HEIGHT = 512
-export const WATER_DEFAULT_ALPHA = 1
-export const WATER_DEFAULT_COLOR = 0x001e0f
 export const WATER_DEFAULT_DISTORTION_SCALE = 3.7
 export const WATER_DEFAULT_SIZE = 10
 export const WATER_DEFAULT_FLOW_SPEED = 1
 export const WATER_MIN_TEXTURE_SIZE = 64
-export const WATER_MIN_ALPHA = 0
-export const WATER_MAX_ALPHA = 1
 export const WATER_MIN_DISTORTION_SCALE = 0
 export const WATER_MIN_SIZE = 1
 export const WATER_MIN_FLOW_SPEED = 0
@@ -30,22 +24,17 @@ export interface FlowDirection {
 export interface WaterComponentProps {
   textureWidth: number
   textureHeight: number
-  alpha: number
-  color: number
   distortionScale: number
-  waterNormals: string | null
   size: number
   flowDirection: FlowDirection
   flowSpeed: number
 }
 
-export interface WaterComponentMetadata {
-  waterNormalsTexture?: Texture | null
-  waterNormalsAssetId?: string | null
-}
-
 const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
 const DEFAULT_NORMAL_MAP = createDefaultNormalTexture()
+const WATER_DEFAULT_ALPHA = 1
+const WATER_DEFAULT_COLOR = 0x001e0f
+const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
 function createDefaultNormalTexture(): Texture {
   const size = 2
@@ -74,28 +63,16 @@ function normalizeFlowDirection(candidate?: FlowDirection | null): FlowDirection
   return { x: rawX / length, y: rawY / length }
 }
 
-function normalizeAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  return trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
-}
-
 export function clampWaterComponentProps(
   props: Partial<WaterComponentProps> | null | undefined,
 ): WaterComponentProps {
   const normalizedFlow = normalizeFlowDirection(props?.flowDirection ?? null)
-  const width = Number.isFinite(props?.textureWidth) ? Math.max(WATER_MIN_TEXTURE_SIZE, props!.textureWidth!) : WATER_DEFAULT_TEXTURE_WIDTH
+  const width = Number.isFinite(props?.textureWidth)
+    ? Math.max(WATER_MIN_TEXTURE_SIZE, props!.textureWidth!)
+    : WATER_DEFAULT_TEXTURE_WIDTH
   const height = Number.isFinite(props?.textureHeight)
     ? Math.max(WATER_MIN_TEXTURE_SIZE, props!.textureHeight!)
     : WATER_DEFAULT_TEXTURE_HEIGHT
-  const alpha = Number.isFinite(props?.alpha)
-    ? Math.min(WATER_MAX_ALPHA, Math.max(WATER_MIN_ALPHA, props!.alpha!))
-    : WATER_DEFAULT_ALPHA
   const distortionScale = Number.isFinite(props?.distortionScale)
     ? Math.max(WATER_MIN_DISTORTION_SCALE, props!.distortionScale!)
     : WATER_DEFAULT_DISTORTION_SCALE
@@ -103,14 +80,10 @@ export function clampWaterComponentProps(
   const flowSpeed = Number.isFinite(props?.flowSpeed)
     ? Math.max(WATER_MIN_FLOW_SPEED, props!.flowSpeed!)
     : WATER_DEFAULT_FLOW_SPEED
-  const color = Number.isFinite(props?.color) ? props!.color! : WATER_DEFAULT_COLOR
   return {
     textureWidth: width,
     textureHeight: height,
-    alpha,
-    color,
     distortionScale,
-    waterNormals: normalizeAssetId(props?.waterNormals ?? null),
     size,
     flowDirection: normalizedFlow,
     flowSpeed,
@@ -121,10 +94,7 @@ export function cloneWaterComponentProps(props: WaterComponentProps): WaterCompo
   return {
     textureWidth: props.textureWidth,
     textureHeight: props.textureHeight,
-    alpha: props.alpha,
-    color: props.color,
     distortionScale: props.distortionScale,
-    waterNormals: props.waterNormals ?? null,
     size: props.size,
     flowDirection: { x: props.flowDirection.x, y: props.flowDirection.y },
     flowSpeed: props.flowSpeed,
@@ -164,7 +134,6 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
-    console.log('WaterComponent onUpdate called');
     if (!this.waterInstance) {
       return
     }
@@ -190,16 +159,17 @@ class WaterComponent extends Component<WaterComponentProps> {
       return
     }
     const props = clampWaterComponentProps(this.context.getProps())
-    const metadata = this.resolveMetadata(mesh)
-    const signature = this.createRebuildSignature(props, metadata?.waterNormalsAssetId ?? null)
+    const material = this.selectPrimaryMaterial(mesh.material)
+    const materialSignature = this.computeMaterialSignature(material)
+    const signature = this.createRebuildSignature(props, materialSignature)
     if (this.hostMesh !== mesh || signature !== this.lastSignature) {
       this.destroyWater()
       this.hostMesh = mesh
       this.lastSignature = signature
-      this.createWater(mesh, props, metadata?.waterNormalsTexture ?? null)
+      this.createWater(mesh, props, material)
       return
     }
-    this.applyUniforms(props)
+    this.applyUniforms(props, material)
   }
 
   private resolveHostMesh(root: Object3D | null): Mesh | null {
@@ -218,43 +188,99 @@ class WaterComponent extends Component<WaterComponentProps> {
     return null
   }
 
-  private resolveMetadata(mesh: Mesh): WaterComponentMetadata | null {
-    const userData = mesh.userData as Record<string, unknown> | undefined
-    if (!userData) {
+  private selectPrimaryMaterial(material: Material | Material[] | null | undefined): Material | null {
+    if (!material) {
       return null
     }
-    const layout = userData[WATER_COMPONENT_METADATA_KEY] as WaterComponentMetadata | undefined
-    return layout ?? null
+    if (Array.isArray(material)) {
+      return material.length > 0 ? material[0] : null
+    }
+    return material
   }
 
-  private createRebuildSignature(props: WaterComponentProps, assetId: string | null): string {
-    return [props.textureWidth, props.textureHeight, assetId ?? 'none'].join('_')
+  private computeMaterialSignature(material: Material | null): string {
+    if (!material) {
+      return 'material:none'
+    }
+    const colorHex = this.getMaterialColorHex(material)
+    const opacity = typeof material.opacity === 'number' ? material.opacity.toFixed(4) : WATER_DEFAULT_ALPHA.toFixed(4)
+    const transparentFlag = material.transparent ? 't' : 'f'
+    const normalKey = this.getNormalTextureKey(material)
+    return [colorHex, opacity, transparentFlag, normalKey].join('|')
   }
 
-  private createWater(mesh: Mesh, props: WaterComponentProps, sourceTexture: Texture | null): void {
+  private getMaterialColorHex(material: Material): string {
+    if ('color' in material && material.color) {
+      return material.color.getHexString()
+    }
+    return DEFAULT_WATER_COLOR.getHexString()
+  }
+
+  private getNormalTextureKey(material: Material): string {
+    if (!('normalMap' in material)) {
+      return 'normal:none'
+    }
+    const normalMap = (material as { normalMap?: Texture | null }).normalMap
+    if (!normalMap) {
+      return 'normal:none'
+    }
+    const source = (normalMap as Texture & { image?: { src?: string } }).image?.src ?? ''
+    return `${normalMap.uuid}:${source}`
+  }
+
+  private resolveMaterialColor(material: Material | null): Color {
+    if (material && 'color' in material && material.color) {
+      return material.color.clone()
+    }
+    return DEFAULT_WATER_COLOR.clone()
+  }
+
+  private resolveMaterialAlpha(material: Material | null): number {
+    if (!material) {
+      return WATER_DEFAULT_ALPHA
+    }
+    const opacity = typeof material.opacity === 'number' ? Math.max(0, Math.min(1, material.opacity)) : WATER_DEFAULT_ALPHA
+    return opacity
+  }
+
+  private resolveMaterialNormalMap(material: Material | null): Texture | null {
+    if (!material) {
+      return null
+    }
+    if ('normalMap' in material) {
+      return (material as { normalMap?: Texture | null }).normalMap ?? null
+    }
+    return null
+  }
+
+  private createRebuildSignature(props: WaterComponentProps, materialSignature: string): string {
+    return [props.textureWidth, props.textureHeight, materialSignature].join('_')
+  }
+
+  private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry ? mesh.geometry.clone() : null
     if (baseGeometry) {
       this.waterGeometry = baseGeometry
     }
-    const normalTexture = this.prepareNormalTexture(sourceTexture)
+    const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
     const water = new Water(baseGeometry ?? undefined, {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
-      alpha: props.alpha,
-      waterColor: new Color(props.color),
+      alpha: this.resolveMaterialAlpha(material),
+      waterColor: this.resolveMaterialColor(material),
       distortionScale: props.distortionScale,
       waterNormals: normalTexture,
     })
     water.name = `${mesh.name ?? 'Water'} (Water)`
     water.renderOrder = mesh.renderOrder
-    const material = water.material as ShaderMaterial
-    material.uniforms.normalSampler.value = normalTexture
-    material.uniforms.size.value = props.size
+    const shaderMaterial = water.material as ShaderMaterial
+    shaderMaterial.uniforms.normalSampler.value = normalTexture
+    shaderMaterial.uniforms.size.value = props.size
     mesh.add(water)
     mesh.visible = false
     this.waterInstance = water
-    this.applyUniforms(props)
+    this.applyUniforms(props, material)
     this.syncSunUniforms()
   }
 
@@ -267,15 +293,15 @@ class WaterComponent extends Component<WaterComponentProps> {
     return clone
   }
 
-  private applyUniforms(props: WaterComponentProps): void {
+  private applyUniforms(props: WaterComponentProps, material: Material | null): void {
     if (!this.waterInstance) {
       return
     }
-    const material = this.waterInstance.material as ShaderMaterial
-    material.uniforms.alpha.value = props.alpha
-    material.uniforms.distortionScale.value = props.distortionScale
-    material.uniforms.size.value = props.size
-    material.uniforms.waterColor.value.set(props.color)
+    const shaderMaterial = this.waterInstance.material as ShaderMaterial
+    shaderMaterial.uniforms.alpha.value = this.resolveMaterialAlpha(material)
+    shaderMaterial.uniforms.distortionScale.value = props.distortionScale
+    shaderMaterial.uniforms.size.value = props.size
+    shaderMaterial.uniforms.waterColor.value.copy(this.resolveMaterialColor(material))
     this.resolvedFlowDirection.set(props.flowDirection.x, props.flowDirection.y)
     const normalized = this.resolvedFlowDirection.lengthSq() > 1e-6
       ? this.resolvedFlowDirection.normalize()
