@@ -59,13 +59,15 @@ function buildTwoPointPreviewPoints(first: THREE.Vector3, previewEnd: THREE.Vect
     return [first.clone(), previewEnd.clone(), previewEnd.clone()]
   }
 
-  const perp = new THREE.Vector3(-direction.z, 0, direction.x)
+  const perp = new THREE.Vector3(direction.z, 0, -direction.x)
   perp.normalize()
   perp.multiplyScalar(0.1)
 
-  const triangle = [first.clone(), previewEnd.clone(), previewEnd.clone().add(perp)]
+  const offsetPoint = previewEnd.clone().add(perp)
+  let triangle = [first.clone(), offsetPoint.clone(), previewEnd.clone()]
   if (computePolygonArea2D(triangle) < 0) {
-    triangle[2] = previewEnd.clone().sub(perp)
+    const flipped = previewEnd.clone().sub(perp)
+    triangle = [first.clone(), flipped, previewEnd.clone()]
   }
   return triangle
 }
@@ -218,7 +220,7 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
     return null
   }
 
-  const normalizedVertices = vertices.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const normalizedVertices = vertices.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
 
   const definition: FloorDynamicMesh = {
     type: 'Floor',
