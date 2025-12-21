@@ -172,6 +172,7 @@ import type {
   RoadComponentProps,
   FloorComponentProps,
   WarpGateComponentProps,
+  WaterComponentProps,
 } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
@@ -222,6 +223,9 @@ import {
   cloneFloorComponentProps,
   resolveFloorComponentPropsFromMesh,
   FLOOR_DEFAULT_SMOOTH,
+  WATER_COMPONENT_TYPE,
+  clampWaterComponentProps,
+  cloneWaterComponentProps,
 } from '@schema/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
@@ -11597,6 +11601,38 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneVehicleComponentProps(merged)
+      } else if (type === WATER_COMPONENT_TYPE) {
+        const currentProps = clampWaterComponentProps(component.props as WaterComponentProps)
+        const typedPatch = patch as Partial<WaterComponentProps>
+        const flowPatch = typedPatch.flowDirection
+        const mergedFlowDirection = flowPatch
+          ? {
+              x: typeof flowPatch.x === 'number' ? flowPatch.x : currentProps.flowDirection.x,
+              y: typeof flowPatch.y === 'number' ? flowPatch.y : currentProps.flowDirection.y,
+            }
+          : currentProps.flowDirection
+        const merged = clampWaterComponentProps({
+          ...currentProps,
+          ...typedPatch,
+          flowDirection: mergedFlowDirection,
+        })
+        const flowDirectionUnchanged =
+          Math.abs(currentProps.flowDirection.x - merged.flowDirection.x) <= 1e-6 &&
+          Math.abs(currentProps.flowDirection.y - merged.flowDirection.y) <= 1e-6
+        const unchanged =
+          currentProps.textureWidth === merged.textureWidth &&
+          currentProps.textureHeight === merged.textureHeight &&
+          Math.abs(currentProps.alpha - merged.alpha) <= 1e-6 &&
+          currentProps.color === merged.color &&
+          Math.abs(currentProps.distortionScale - merged.distortionScale) <= 1e-6 &&
+          Math.abs(currentProps.size - merged.size) <= 1e-6 &&
+          Math.abs(currentProps.flowSpeed - merged.flowSpeed) <= 1e-6 &&
+          flowDirectionUnchanged &&
+          (currentProps.waterNormals ?? '') === (merged.waterNormals ?? '')
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneWaterComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }

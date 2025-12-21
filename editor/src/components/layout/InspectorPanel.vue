@@ -15,6 +15,7 @@ import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import SkyPanel from '@/components/inspector/SkyPanel.vue'
+import WaterPanel from '@/components/inspector/WaterPanel.vue'
 import CloudPanel from '@/components/inspector/CloudPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
@@ -38,6 +39,7 @@ import {
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  WATER_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
   componentManager,
   type RigidbodyColliderType,
@@ -561,6 +563,7 @@ watch(
               />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
+              <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
                 @open-details="handleOpenBehaviorDetails"

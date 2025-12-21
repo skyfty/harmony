@@ -550,6 +550,13 @@ export class SceneMaterialFactory {
     return pending;
   }
 
+  async loadTexture(
+    assetId: string,
+    settings: Partial<SceneMaterialTextureSettings> | null = null,
+  ): Promise<THREE.Texture | null> {
+    return this.ensureTexture(assetId, settings)
+  }
+
   private async createTextureInstance(
     assetId: string,
     settings: Partial<SceneMaterialTextureSettings> | null,
