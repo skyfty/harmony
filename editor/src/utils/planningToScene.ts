@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
+import type { FloorDynamicMesh, GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -13,6 +13,7 @@ import {
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { createFloorGroup } from '@schema/floorMesh'
 import { createRoadGroup } from '@schema/roadMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
@@ -75,7 +76,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 const POISSON_CANDIDATES_PER_ACTIVE = 24
 
-type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
+type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -184,6 +185,8 @@ function layerKindFromId(layerId: string): LayerKind | null {
       return 'building'
     case 'road-layer':
       return 'road'
+    case 'floor-layer':
+      return 'floor'
     case 'green-layer':
       return 'green'
     case 'wall-layer':
@@ -193,7 +196,7 @@ function layerKindFromId(layerId: string): LayerKind | null {
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(terrain|building|road|green|wall)-layer\b/i.exec(layerId)
+  const match = /^(terrain|building|road|floor|green|wall)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -210,7 +213,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['terrain-layer', 'building-layer', 'road-layer', 'green-layer', 'wall-layer']
+  return ['terrain-layer', 'building-layer', 'road-layer', 'floor-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -220,7 +223,14 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
     const kind = found?.kind
     if (typeof kind === 'string') {
       const normalized = kind.toLowerCase()
-      if (normalized === 'terrain' || normalized === 'building' || normalized === 'road' || normalized === 'green' || normalized === 'wall') {
+      if (
+        normalized === 'terrain'
+        || normalized === 'building'
+        || normalized === 'road'
+        || normalized === 'floor'
+        || normalized === 'green'
+        || normalized === 'wall'
+      ) {
         return normalized as LayerKind
       }
     }
@@ -261,6 +271,19 @@ function resolveRoadSmoothingFromPlanningData(planningData: PlanningSceneData, l
     const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
     if (Number.isFinite(smoothing)) {
       return Math.min(1, Math.max(0, smoothing))
+    }
+  }
+  return 0.5
+}
+
+function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const smoothRaw = found?.floorSmooth
+    const smooth = typeof smoothRaw === 'number' ? smoothRaw : Number(smoothRaw)
+    if (Number.isFinite(smooth)) {
+      return Math.min(1, Math.max(0, smooth))
     }
   }
   return 0.5
@@ -591,6 +614,104 @@ function polygonEdges(points: PlanningPoint[]): Array<{ start: PlanningPoint; en
     edges.push({ start, end })
   }
   return edges
+}
+
+function clampFloorSmoothValue(value: unknown): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0.5
+  if (raw <= 0) {
+    return 0
+  }
+  if (raw >= 1) {
+    return 1
+  }
+  return raw
+}
+
+function buildFloorWorldPointsFromPlanning(
+  points: PlanningPoint[],
+  groundWidth: number,
+  groundDepth: number,
+): Array<{ x: number; z: number }> {
+  const worldPoints: Array<{ x: number; z: number }> = []
+  const duplicateEpsilon = 1e-10
+  points.forEach((point) => {
+    if (!point) {
+      return
+    }
+    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+    const x = world.x
+    const z = world.z
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const previous = worldPoints[worldPoints.length - 1]
+    if (previous) {
+      const dx = x - previous.x
+      const dz = z - previous.z
+      if (dx * dx + dz * dz <= duplicateEpsilon) {
+        return
+      }
+    }
+    worldPoints.push({ x, z })
+  })
+
+  if (worldPoints.length >= 3) {
+    const first = worldPoints[0]!
+    const last = worldPoints[worldPoints.length - 1]!
+    const dx = first.x - last.x
+    const dz = first.z - last.z
+    if (dx * dx + dz * dz <= 1e-10) {
+      worldPoints.pop()
+    }
+  }
+
+  return worldPoints
+}
+
+function computeFloorCenterFromWorldPoints(points: Array<{ x: number; z: number }>) {
+  if (!points.length) {
+    return { x: 0, y: 0, z: 0 }
+  }
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  points.forEach((pt) => {
+    minX = Math.min(minX, pt.x)
+    maxX = Math.max(maxX, pt.x)
+    minZ = Math.min(minZ, pt.z)
+    maxZ = Math.max(maxZ, pt.z)
+  })
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return { x: 0, y: 0, z: 0 }
+  }
+  return {
+    x: (minX + maxX) * 0.5,
+    y: 0,
+    z: (minZ + maxZ) * 0.5,
+  }
+}
+
+function buildFloorDynamicMeshFromPlanningPolygon(options: {
+  polygon: PlanningPolygonAny
+  groundWidth: number
+  groundDepth: number
+  smooth: number
+}): { center: { x: number; y: number; z: number }; definition: FloorDynamicMesh } | null {
+  const { polygon, groundWidth, groundDepth, smooth } = options
+  const worldPoints = buildFloorWorldPointsFromPlanning(polygon.points, groundWidth, groundDepth)
+  if (worldPoints.length < 3) {
+    return null
+  }
+  const center = computeFloorCenterFromWorldPoints(worldPoints)
+  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, center.z - pt.z])
+  const definition: FloorDynamicMesh = {
+    type: 'Floor',
+    vertices,
+    materialId: null,
+    smooth: clampFloorSmoothValue(smooth),
+  }
+  return { center, definition }
 }
 
 function normalizeScatter(raw: unknown): ScatterAssignment | null {
@@ -1017,6 +1138,38 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
         sceneStore.updateNodeDynamicMesh(roadNode.id, build.definition)
+      }
+    } else if (kind === 'floor') {
+      const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
+      for (const poly of group.polygons) {
+        updateProgressForUnit(`Converting floor: ${poly.name?.trim() || poly.id}`)
+        const build = buildFloorDynamicMeshFromPlanningPolygon({
+          polygon: poly,
+          groundWidth,
+          groundDepth,
+          smooth: floorSmooth,
+        })
+        if (!build) {
+          continue
+        }
+
+        const floorObject = createFloorGroup(build.definition)
+        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+        const floorNode = sceneStore.addSceneNode({
+          nodeType: 'Mesh',
+          object: floorObject,
+          name: layerName ? `${layerName} Floor` : 'Planning Floor',
+          position: build.center,
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          userData: {
+            source: PLANNING_CONVERSION_SOURCE,
+            planningLayerId: layerId,
+            kind: 'floor',
+          },
+        })
+        sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.updateNodeDynamicMesh(floorNode.id, build.definition)
       }
     } else if (kind === 'green') {
       for (const poly of group.polygons) { 

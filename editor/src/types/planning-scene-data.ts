@@ -35,7 +35,7 @@ export interface PlanningImageData {
   alignMarker?: { x: number; y: number }
 }
 
-export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
+export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor'
 
 export interface PlanningLayerState {
   id: string
@@ -52,6 +52,8 @@ export interface PlanningLayerState {
   roadWidthMeters?: number
   /** Optional; controls how much road corners are rounded for this layer. */
   roadSmoothing?: number
+  /** Optional; controls how smooth floor corners should be when converting. */
+  floorSmooth?: number
   /** Optional; currently used by wall layers. */
   wallHeightMeters?: number
   /** Optional; currently used by wall layers. */

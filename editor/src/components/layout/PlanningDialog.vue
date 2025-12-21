@@ -23,17 +23,18 @@ const { currentSceneId } = storeToRefs(sceneStore)
 const uiStore = useUiStore()
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
-type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
+type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
   building: 'Building',
   road: 'Road',
+  floor: 'Floor',
   green: 'Green',
   wall: 'Wall',
 }
 
-const addableLayerKinds: LayerKind[] = ['terrain', 'building', 'road', 'green', 'wall']
+const addableLayerKinds: LayerKind[] = ['terrain', 'building', 'road', 'floor', 'green', 'wall']
 
 interface PlanningLayer {
   id: string
@@ -46,6 +47,8 @@ interface PlanningLayer {
   roadWidthMeters?: number
   /** Road layer smoothing (0-1) controlling the roundedness of junctions. */
   roadSmoothing?: number
+  /** Floor layer smoothness (0-1) controlling the corner rounding. */
+  floorSmooth?: number
   /** Wall layer height in meters (only used when kind === 'wall'). */
   wallHeightMeters?: number
   /** Wall layer thickness in meters (only used when kind === 'wall'). */
@@ -167,6 +170,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
+  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.5 },
   { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 3, wallThicknessMeters: 0.15 },
 ]
 
@@ -804,6 +808,7 @@ function buildPlanningSnapshot() {
       locked: layer.locked,
       roadWidthMeters: layer.roadWidthMeters,
         roadSmoothing: layer.roadSmoothing,
+      floorSmooth: layer.floorSmooth,
       wallHeightMeters: layer.wallHeightMeters,
       wallThicknessMeters: layer.wallThicknessMeters,
     })),
@@ -1102,6 +1107,10 @@ function loadPlanningFromScene() {
               typeof (raw as any).wallThicknessMeters === 'number'
                 ? Number((raw as any).wallThicknessMeters)
                 : ((kind ?? preset?.kind) === 'wall' ? 0.15 : undefined),
+            floorSmooth:
+              typeof (raw as any).floorSmooth === 'number'
+                ? Number((raw as any).floorSmooth)
+                : ((kind ?? preset?.kind) === 'floor' ? 0.5 : undefined),
           } as PlanningLayer
         })
     } else {
@@ -1426,6 +1435,25 @@ const roadSmoothingModel = computed({
     const next = Number(value)
     if (!Number.isFinite(next)) return
     layer.roadSmoothing = Math.min(1, Math.max(0, next))
+    markPlanningDirty()
+  },
+})
+
+const floorSmoothModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'floor') return 0.5
+    const raw = Number(layer.floorSmooth ?? 0.5)
+    if (!Number.isFinite(raw)) return 0.5
+    return Math.min(1, Math.max(0, raw))
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'floor') return
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    layer.floorSmooth = Math.min(1, Math.max(0, next))
     markPlanningDirty()
   },
 })
@@ -1856,6 +1884,7 @@ function addPlanningLayer(kind: LayerKind) {
       roadSmoothing: kind === 'road' ? 0.5 : undefined,
     wallHeightMeters: kind === 'wall' ? 3 : undefined,
     wallThicknessMeters: kind === 'wall' ? 0.15 : undefined,
+    floorSmooth: kind === 'floor' ? 0.5 : undefined,
   }
 
   // 新建图层置顶（列表靠前）
@@ -4762,6 +4791,25 @@ onBeforeUnmount(() => {
                   />
                   <div class="property-panel__density-value">
                     {{ Math.round(roadSmoothingModel * 100) }}%
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="propertyPanelLayerKind === 'floor'">
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">地面平滑度</div>
+                <div class="property-panel__density-row">
+                  <v-slider
+                    v-model="floorSmoothModel"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    density="compact"
+                    hide-details
+                  />
+                  <div class="property-panel__density-value">
+                    {{ Math.round(floorSmoothModel * 100) }}%
                   </div>
                 </div>
               </div>
