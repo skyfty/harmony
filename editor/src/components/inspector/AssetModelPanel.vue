@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
 const { selectedNode, draggingAssetId } = storeToRefs(sceneStore)
@@ -11,7 +12,6 @@ const dropActive = ref(false)
 const dropProcessing = ref(false)
 const feedbackMessage = ref<string | null>(null)
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const currentAsset = computed(() => {
   const node = selectedNode.value

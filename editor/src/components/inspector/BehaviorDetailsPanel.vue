@@ -29,6 +29,7 @@ import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
 import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
 import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 type PanelMode = 'create' | 'edit'
 type DragSource = 'palette' | 'sequence' | null
@@ -50,7 +51,6 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const localAction = ref<BehaviorEventType>('click')
 const localSequence = ref<SceneBehavior[]>([])

@@ -4,8 +4,7 @@ import type { ShowAlertBehaviorParams } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const props = defineProps<{
   modelValue: ShowAlertBehaviorParams | undefined

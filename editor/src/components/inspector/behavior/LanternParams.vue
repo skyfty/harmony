@@ -4,6 +4,7 @@ import type { LanternBehaviorParams, LanternSlideDefinition, LanternSlideLayout 
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const props = defineProps<{
   modelValue: LanternBehaviorParams | undefined
@@ -15,7 +16,6 @@ const emit = defineEmits<{
 
 let slideCounter = 0
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const draggingSlideIndex = ref<number | null>(null)

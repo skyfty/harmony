@@ -24,10 +24,9 @@ import {
   WATER_MIN_SIZE,
   WATER_MIN_TEXTURE_SIZE,
 } from '@schema/components'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const DEFAULT_FLOW_DIRECTION = { x: 0.7071, y: 0.7071 }
-const DEFAULT_DROP_HINT = 'Drop texture asset to assign normals.'
 const ASSET_DIALOG_TYPES = 'texture,image'
 
 const sceneStore = useSceneStore()
@@ -74,7 +73,6 @@ const waterNormalsLabel = computed(() => {
   return assignedNormalsAssetId.value || 'None assigned'
 })
 const canClearNormals = computed(() => assignedNormalsAssetId.value.length > 0)
-const dropHintText = computed(() => dropFeedback.value ?? DEFAULT_DROP_HINT)
 
 const assetDialogVisible = ref(false)
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
@@ -604,6 +602,7 @@ function clearWaterNormals() {
             @dragover.prevent="handleDragOver"
             @dragleave="handleDragLeave"
             @drop.prevent.stop="handleDrop"
+            @click.stop="handleOpenAssetDialog($event)"
           >
             <div class="texture-thumb" :style="texturePreviewStyle">
               <v-icon size="18">mdi-water</v-icon>
@@ -611,17 +610,8 @@ function clearWaterNormals() {
             <div class="texture-body">
               <div class="texture-title">Normals Texture</div>
               <div class="texture-label">{{ waterNormalsLabel }}</div>
-              <div class="texture-helper">{{ dropHintText }}</div>
             </div>
             <div class="texture-actions">
-              <v-btn
-                variant="text"
-                density="compact"
-                size="small"
-                :disabled="!componentEnabled"
-                @click.stop="handleOpenAssetDialog($event)">
-                Choose Texture
-              </v-btn>
               <v-btn
                 v-if="canClearNormals"
                 icon
@@ -711,6 +701,7 @@ function clearWaterNormals() {
   background: rgba(12, 16, 22, 0.55);
   transition: border-color 160ms ease, background-color 160ms ease;
   min-height: 44px;
+  cursor: pointer;
 }
 
 .texture-tile.is-active-drop {

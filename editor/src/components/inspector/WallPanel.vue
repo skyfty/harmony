@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@harmony/schema'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -29,7 +30,6 @@ const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
 const jointDropAreaRef = ref<HTMLElement | null>(null)

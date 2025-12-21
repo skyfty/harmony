@@ -16,6 +16,7 @@ import TexturePanel from './TexturePanel.vue'
 import AssetDialog from '@/components/common/AssetDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@harmony/schema'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -49,7 +50,6 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
 const COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
 const MATERIAL_FLAG_OPTIONS = [

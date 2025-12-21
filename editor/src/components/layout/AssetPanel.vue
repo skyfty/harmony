@@ -25,6 +25,7 @@ import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import type { SceneNode } from '@harmony/schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -72,7 +73,6 @@ watch(projectTree, () => {
   triggerProviderLoadForOpenedDirectories(sanitized)
 })
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const NODE_DRAG_MIME = 'application/x-harmony-node'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null

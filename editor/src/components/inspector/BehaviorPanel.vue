@@ -9,6 +9,7 @@ import type {
 } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   behaviorMapToList,
   cloneBehaviorList,
@@ -38,7 +39,6 @@ type BehaviorDetailsContext = {
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const isPrefabDragActive = ref(false)
 const isApplyingPrefab = ref(false)
 

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 
@@ -31,7 +32,6 @@ const dragOverSlotId = ref<string | null>(null)
 const isListDragActive = ref(false)
 const activeColorPickerId = ref<string | null>(null)
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const DEFAULT_MATERIAL_COLOR = '#ffffff'
 
 watch(

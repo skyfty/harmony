@@ -11,6 +11,7 @@ import {
 } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import { MULTIUSER_NODE_ID } from '@harmony/schema'
@@ -32,7 +33,6 @@ const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const NODE_DRAG_LIST_MIME = 'application/x-harmony-node-list'
 
 const selectionAnchorId = ref<string | null>(null)

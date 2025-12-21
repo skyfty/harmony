@@ -9,8 +9,8 @@ import {
   type DisplayBoardComponentProps,
 } from '@schema/components'
 import AssetDialog from '@/components/common/AssetDialog.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

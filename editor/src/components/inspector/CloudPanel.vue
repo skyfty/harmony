@@ -12,6 +12,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import AssetDialog from '@/components/common/AssetDialog.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   cloneCloudSettings,
   cloudSettingsEqual,
@@ -19,7 +20,6 @@ import {
   sanitizeCloudSettings,
 } from '@schema/cloudRenderer'
 
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
