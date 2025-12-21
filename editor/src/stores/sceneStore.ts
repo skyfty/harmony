@@ -1719,6 +1719,17 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
     return undefined
   }
   const type = normalizeDynamicMeshType(mesh.type)
+  const normalizeVertex2D = (value: unknown): [number, number] | null => {
+    if (!Array.isArray(value) || value.length < 2) {
+      return null
+    }
+    const x = Number(value[0])
+    const y = Number(value[1])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null
+    }
+    return [x, y]
+  }
   switch (type) {
     case 'Ground':
       return cloneGroundDynamicMesh({ ...(mesh as GroundDynamicMesh), type })
@@ -1740,20 +1751,8 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
     case 'Road': {
       const roadMesh = mesh as RoadDynamicMesh
 
-      const normalizePoint2D = (p: unknown): [number, number] | null => {
-        if (!Array.isArray(p) || p.length < 2) {
-          return null
-        }
-        const x = Number(p[0])
-        const y = Number(p[1])
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          return null
-        }
-        return [x, y]
-      }
-
       const vertices = (Array.isArray(roadMesh.vertices) ? roadMesh.vertices : [])
-        .map(normalizePoint2D)
+        .map(normalizeVertex2D)
         .filter((p): p is [number, number] => !!p)
 
       // One-time migration for older saved scenes: legacy `points` -> `vertices`.
@@ -1761,7 +1760,7 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         ? ((roadMesh as any).points as unknown[])
         : ([] as unknown[])
       const legacyPoints = legacyPointsRaw
-        .map(normalizePoint2D)
+        .map(normalizeVertex2D)
         .filter((p): p is [number, number] => !!p)
 
       const effectiveVertices = vertices.length ? vertices : legacyPoints
@@ -1797,6 +1796,20 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         width: Number.isFinite(roadMesh.width) ? Math.max(ROAD_MIN_WIDTH, roadMesh.width) : ROAD_DEFAULT_WIDTH,
         vertices: effectiveVertices,
         segments: effectiveSegments,
+      }
+    }
+    case 'Floor': {
+      const floorMesh = mesh as FloorDynamicMesh
+      const vertices = (Array.isArray(floorMesh.vertices) ? floorMesh.vertices : [])
+        .map(normalizeVertex2D)
+        .filter((value): value is [number, number] => !!value)
+
+      return {
+        type: 'Floor',
+        vertices,
+        materialId: typeof floorMesh.materialId === 'string' && floorMesh.materialId.trim().length
+          ? floorMesh.materialId
+          : null,
       }
     }
     default:
@@ -3187,6 +3200,7 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
       : meshType === 'Floor'
         ? createFloorGroup(meshDefinition as FloorDynamicMesh)
         : createWallGroup(meshDefinition as WallDynamicMesh)
+
     runtime.name = node.name ?? runtime.name
     prepareRuntimeObjectForNode(runtime)
     tagObjectWithNodeId(runtime, node.id)
