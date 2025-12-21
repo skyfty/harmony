@@ -24,19 +24,110 @@ function encodePreviewNumber(value: number): string {
   return `${Math.round(value * FLOOR_PREVIEW_SIGNATURE_PRECISION)}`
 }
 
-function computeFloorPreviewSignature(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null): string {
-  if (!points.length && !previewEnd) {
+function buildRectanglePreviewPoints(first: THREE.Vector3, second: THREE.Vector3): THREE.Vector3[] {
+  const minX = Math.min(first.x, second.x)
+  const maxX = Math.max(first.x, second.x)
+  const minZ = Math.min(first.z, second.z)
+  const maxZ = Math.max(first.z, second.z)
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return []
+  }
+
+  return [
+    new THREE.Vector3(minX, 0, minZ),
+    new THREE.Vector3(minX, 0, maxZ),
+    new THREE.Vector3(maxX, 0, maxZ),
+    new THREE.Vector3(maxX, 0, minZ),
+  ]
+}
+
+function computePolygonArea2D(vertices: THREE.Vector3[]): number {
+  let area = 0
+  for (let i = 0; i < vertices.length; i += 1) {
+    const current = vertices[i]!
+    const next = vertices[(i + 1) % vertices.length]!
+    area += current.x * next.z - next.x * current.z
+  }
+  return area * 0.5
+}
+
+function buildTwoPointPreviewPoints(first: THREE.Vector3, previewEnd: THREE.Vector3): THREE.Vector3[] {
+  const direction = previewEnd.clone().sub(first)
+  direction.y = 0
+  if (direction.lengthSq() <= Number.EPSILON) {
+    return [first.clone(), previewEnd.clone(), previewEnd.clone()]
+  }
+
+  const perp = new THREE.Vector3(-direction.z, 0, direction.x)
+  perp.normalize()
+  perp.multiplyScalar(0.1)
+
+  const triangle = [first.clone(), previewEnd.clone(), previewEnd.clone().add(perp)]
+  if (computePolygonArea2D(triangle) < 0) {
+    triangle[2] = previewEnd.clone().sub(perp)
+  }
+  return triangle
+}
+
+function getPreviewVertices(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null): THREE.Vector3[] {
+  if (!points.length) {
+    return []
+  }
+
+  if (points.length === 1 && previewEnd) {
+    return buildTwoPointPreviewPoints(points[0], previewEnd)
+  }
+
+  if (points.length === 2 && previewEnd && previewEnd.equals(points[1])) {
+    const rectangle = buildRectanglePreviewPoints(points[0], points[1])
+    if (rectangle.length) {
+      return rectangle
+    }
+  }
+
+  const combined = points.map((p) => p.clone())
+  if (previewEnd) {
+    combined.push(previewEnd.clone())
+  }
+  return combined
+}
+
+function computePreviewCenter(points: THREE.Vector3[]): THREE.Vector3 | null {
+  if (!points.length) {
+    return null
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  points.forEach((p) => {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.z)) {
+      return
+    }
+    minX = Math.min(minX, p.x)
+    minZ = Math.min(minZ, p.z)
+    maxX = Math.max(maxX, p.x)
+    maxZ = Math.max(maxZ, p.z)
+  })
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+
+  return new THREE.Vector3((minX + maxX) * 0.5, 0, (minZ + maxZ) * 0.5)
+}
+
+function computeFloorPreviewSignature(vertices: THREE.Vector3[]): string {
+  if (!vertices.length) {
     return 'empty'
   }
 
-  const pSignature = points
+  return vertices
     .map((p) => [encodePreviewNumber(p.x), encodePreviewNumber(p.z)].join(','))
     .join(';')
-  const endSignature = previewEnd
-    ? [encodePreviewNumber(previewEnd.x), encodePreviewNumber(previewEnd.z)].join(',')
-    : 'none'
-
-  return `${pSignature}|${endSignature}`
 }
 
 function disposeFloorPreviewGroup(group: THREE.Group) {
@@ -119,39 +210,19 @@ function applyFloorPreviewStyling(group: THREE.Group) {
   })
 }
 
-function buildFloorPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null): {
+function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Vector3): {
   center: THREE.Vector3
   definition: FloorDynamicMesh
 } | null {
-  const combined = [...points]
-  if (previewEnd && points.length) {
-    combined.push(previewEnd)
-  }
-
-  if (combined.length < 3) {
+  if (vertices.length < 3) {
     return null
   }
 
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
-
-  combined.forEach((p) => {
-    min.x = Math.min(min.x, p.x)
-    min.z = Math.min(min.z, p.z)
-    max.x = Math.max(max.x, p.x)
-    max.z = Math.max(max.z, p.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return null
-  }
-
-  const center = new THREE.Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
-  const vertices = combined.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const normalizedVertices = vertices.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
 
   const definition: FloorDynamicMesh = {
     type: 'Floor',
-    vertices,
+    vertices: normalizedVertices,
     materialId: null,
   }
 
@@ -183,7 +254,30 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       return
     }
 
-    const build = buildFloorPreviewDefinition(session.points, session.previewEnd)
+    const previewVertices = getPreviewVertices(session.points, session.previewEnd)
+    if (previewVertices.length < 3) {
+      if (session.previewGroup) {
+        clear(session)
+      }
+      signature = null
+      return
+    }
+
+    const nextSignature = computeFloorPreviewSignature(previewVertices)
+    if (nextSignature === signature) {
+      return
+    }
+
+    const center = computePreviewCenter(session.points)
+    if (!center) {
+      if (session.previewGroup) {
+        clear(session)
+      }
+      signature = null
+      return
+    }
+
+    const build = buildFloorPreviewDefinition(previewVertices, center)
     if (!build) {
       if (session.previewGroup) {
         clear(session)
@@ -192,10 +286,6 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       return
     }
 
-    const nextSignature = computeFloorPreviewSignature(session.points, session.previewEnd)
-    if (nextSignature === signature) {
-      return
-    }
     signature = nextSignature
 
     if (!session.previewGroup) {
