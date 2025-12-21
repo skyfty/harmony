@@ -26,7 +26,7 @@ import type {
   SceneSkyboxSettings,
   GroundDynamicMesh,
   RoadDynamicMesh,
-  
+  FloorDynamicMesh,
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
@@ -80,6 +80,7 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
+import { updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -93,6 +94,12 @@ import {
   ROAD_VERTEX_HANDLE_Y,
   type RoadVertexHandlePickResult,
 } from './RoadVertexRenderer'
+import {
+  createFloorVertexRenderer,
+  FLOOR_VERTEX_HANDLE_GROUP_NAME,
+  FLOOR_VERTEX_HANDLE_Y,
+  type FloorVertexHandlePickResult,
+} from './FloorVertexRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -495,6 +502,25 @@ function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh): string {
     Number.isFinite(definition.width) ? definition.width : null,
   ])
   return hashString(serialized)
+}
+
+function ensureGroundMeshInContainer(container: THREE.Group, node: SceneNode): boolean {
+  const definition = node.dynamicMesh?.type === 'Ground' ? (node.dynamicMesh as GroundDynamicMesh) : null
+  if (!definition) {
+    return false
+  }
+
+  const groundMesh = createGroundMesh(definition)
+  groundMesh.removeFromParent()
+  groundMesh.userData.nodeId = node.id
+  groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(definition)
+
+  const containerData = container.userData ?? (container.userData = {})
+  containerData.groundMesh = groundMesh
+  containerData.dynamicMeshType = 'Ground'
+
+  container.add(groundMesh)
+  return true
 }
 
 
@@ -1410,7 +1436,21 @@ type RoadVertexDragState = {
 
 let roadVertexDragState: RoadVertexDragState | null = null
 
+type FloorVertexDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  runtimeObject: THREE.Object3D
+  workingDefinition: FloorDynamicMesh
+}
+
+let floorVertexDragState: FloorVertexDragState | null = null
+
 const roadVertexRenderer = createRoadVertexRenderer()
+const floorVertexRenderer = createFloorVertexRenderer()
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -1430,6 +1470,36 @@ function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
   } else {
     roadVertexRenderer.ensure(common)
   }
+}
+
+function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'floor'
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveFloorDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    floorVertexRenderer.forceRebuild(common)
+  } else {
+    floorVertexRenderer.ensure(common)
+  }
+}
+
+function pickFloorVertexHandleAtPointer(event: PointerEvent): FloorVertexHandlePickResult | null {
+  return floorVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
 }
 
 function pickRoadVertexHandleAtPointer(event: PointerEvent): RoadVertexHandlePickResult | null {
@@ -1861,6 +1931,7 @@ const transformQuaternionInverseHelper = new THREE.Quaternion()
 const instancedPivotCenterLocalHelper = new THREE.Vector3()
 const instancedPivotWorldHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
+const floorVertexCenterHelper = new THREE.Vector3()
 const transformCurrentWorldPosition = new THREE.Vector3()
 const transformLastWorldPosition = new THREE.Vector3()
 let hasTransformLastWorldPosition = false
@@ -2584,6 +2655,7 @@ watch(
   ],
   () => {
     ensureRoadVertexHandlesForSelectedNode()
+    ensureFloorVertexHandlesForSelectedNode()
   },
   { deep: false, immediate: true },
 )
@@ -3620,6 +3692,7 @@ function animate() {
   roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
+  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -4516,6 +4589,36 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'floor') {
+    ensureFloorVertexHandlesForSelectedNode()
+    if (button === 1 && !isAltOverrideActive) {
+      const handleHit = pickFloorVertexHandleAtPointer(event)
+      if (handleHit) {
+        const node = findSceneNode(sceneStore.nodes, handleHit.nodeId)
+        const runtime = objectMap.get(handleHit.nodeId) ?? null
+        if (node?.dynamicMesh?.type === 'Floor' && runtime) {
+          floorVertexDragState = {
+            pointerId: event.pointerId,
+            nodeId: handleHit.nodeId,
+            vertexIndex: handleHit.vertexIndex,
+            startX: event.clientX,
+            startY: event.clientY,
+            moved: false,
+            runtimeObject: runtime,
+            workingDefinition: JSON.parse(JSON.stringify(node.dynamicMesh)) as FloorDynamicMesh,
+          }
+          try {
+            canvasRef.value?.setPointerCapture(event.pointerId)
+          } catch {
+            /* noop */
+          }
+          pointerTrackingState = null
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+          return
+        }
+      }
+    }
     floorBuildTool.handlePointerDown(event)
     if (button === 1 && !isAltOverrideActive) {
       pointerTrackingState = null
@@ -4770,6 +4873,51 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (floorVertexDragState && event.pointerId === floorVertexDragState.pointerId) {
+    const state = floorVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      state.moved = true
+    }
+
+    const isMiddleDown = (event.buttons & 4) !== 0
+    if (!isMiddleDown) {
+      return
+    }
+    if (!raycastGroundPoint(event, groundPointerHelper)) {
+      return
+    }
+    const snapped = groundPointerHelper.clone()
+    snapped.y = 0
+
+    const center = floorVertexCenterHelper
+    state.runtimeObject.getWorldPosition(center)
+    const normalizedX = snapped.x - center.x
+    const normalizedZ = center.z - snapped.z
+
+    const working = state.workingDefinition
+    const vertices = Array.isArray(working.vertices) ? working.vertices : []
+    if (!vertices[state.vertexIndex]) {
+      return
+    }
+    vertices[state.vertexIndex] = [normalizedX, normalizedZ]
+    working.vertices = vertices
+
+    updateFloorGroup(state.runtimeObject, working)
+
+    const handles = state.runtimeObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const mesh = handles.children.find(
+        (child) => child?.userData?.floorVertexIndex === state.vertexIndex,
+      ) as THREE.Object3D | undefined
+      if (mesh) {
+        mesh.position.set(normalizedX, FLOOR_VERTEX_HANDLE_Y, -normalizedZ)
+      }
+    }
+    return
+  }
+
   if (updateContinuousInstancedCreate(event)) {
     return
   }
@@ -4944,6 +5092,31 @@ function handlePointerUp(event: PointerEvent) {
         }
       }
     }
+    return
+  }
+
+  if (floorVertexDragState && event.pointerId === floorVertexDragState.pointerId && event.button === 1) {
+    const state = floorVertexDragState
+    floorVertexDragState = null
+    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+      canvasRef.value.releasePointerCapture(event.pointerId)
+    }
+
+    if (state.moved) {
+      sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      ensureFloorVertexHandlesForSelectedNode()
+      void nextTick(() => {
+        ensureFloorVertexHandlesForSelectedNode()
+      })
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
