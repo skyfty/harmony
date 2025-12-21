@@ -1335,7 +1335,7 @@ function buildRoadDynamicMeshFromWorldPoints(
   const center = computeRoadCenter(worldPoints)
   const normalizedWidth = normalizeRoadWidth(width)
 
-  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const vertices = worldPoints.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
   const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
 
   const definition: RoadDynamicMesh = {
@@ -1406,7 +1406,7 @@ function buildFloorDynamicMeshFromWorldPoints(
   }
 
   const center = computeFloorCenter(worldPoints)
-  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const vertices = worldPoints.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
 
   const definition: FloorDynamicMesh = {
     type: 'Floor',
