@@ -4,6 +4,8 @@ import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import AssetDialog from '@/components/common/AssetDialog.vue'
 import {
   WATER_COMPONENT_TYPE,
   type WaterComponentProps,
@@ -26,8 +28,10 @@ import {
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const DEFAULT_FLOW_DIRECTION = { x: 0.7071, y: 0.7071 }
 const DEFAULT_DROP_HINT = 'Drop texture asset to assign normals.'
+const ASSET_DIALOG_TYPES = 'texture,image'
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const waterComponent = computed(
@@ -71,6 +75,25 @@ const waterNormalsLabel = computed(() => {
 })
 const canClearNormals = computed(() => assignedNormalsAssetId.value.length > 0)
 const dropHintText = computed(() => dropFeedback.value ?? DEFAULT_DROP_HINT)
+
+const assetDialogVisible = ref(false)
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const assetDialogSelectedId = ref('')
+const waterNormalsThumbnail = computed(() => {
+  const asset = assignedNormalsAsset.value
+  if (!asset) {
+    return null
+  }
+  return assetCacheStore.resolveAssetThumbnail({ asset, assetId: asset.id })
+})
+
+const texturePreviewStyle = computed(() => {
+  const url = waterNormalsThumbnail.value
+  if (!url) {
+    return undefined
+  }
+  return { backgroundImage: `url(${url})` }
+})
 
 watch(
   () => waterComponent.value?.props,
@@ -212,6 +235,16 @@ watch(componentEnabled, (enabled) => {
   }
 })
 
+watch(assignedNormalsAssetId, (value) => {
+  assetDialogSelectedId.value = value
+})
+
+watch(assetDialogVisible, (open) => {
+  if (!open) {
+    assetDialogAnchor.value = null
+  }
+})
+
 function handleToggleComponent() {
   const component = waterComponent.value
   const nodeId = selectedNodeId.value
@@ -219,6 +252,27 @@ function handleToggleComponent() {
     return
   }
   sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleOpenAssetDialog(event?: MouseEvent) {
+  if (!componentEnabled.value) {
+    return
+  }
+  assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  assetDialogSelectedId.value = assignedNormalsAssetId.value
+  assetDialogVisible.value = true
+}
+
+function handleAssetDialogUpdate(asset: ProjectAsset | null) {
+  if (!asset || !isTextureAsset(asset)) {
+    return
+  }
+  assignWaterNormalsAsset(asset.id)
+  assetDialogVisible.value = false
+}
+
+function handleAssetDialogCancel() {
+  assetDialogVisible.value = false
 }
 
 function handleRemoveComponent() {
@@ -542,33 +596,57 @@ function clearWaterNormals() {
         />
       </div>
       <div class="water-normals-section">
-        <div
-          class="water-normals-drop"
-          :class="{ 'is-active': dropActive, 'is-disabled': !componentEnabled }"
-          @dragenter.prevent="handleDragEnter"
-          @dragover.prevent="handleDragOver"
-          @dragleave="handleDragLeave"
-          @drop.prevent.stop="handleDrop"
-        >
-          <div class="water-normals-header">
-            <span>Normals Texture</span>
-            <v-btn
-              v-if="canClearNormals"
-              icon
-              size="small"
-              variant="text"
-              :disabled="!componentEnabled"
-              @click.stop="clearWaterNormals()"
-            >
-              <v-icon size="16">mdi-close</v-icon>
-            </v-btn>
-          </div>
-          <div class="water-normals-content">
-            <span class="water-normals-name">{{ waterNormalsLabel }}</span>
-            <span class="water-normals-helper">{{ dropHintText }}</span>
+        <div class="texture-item">
+          <div
+            class="texture-tile"
+            :class="{ 'is-active-drop': dropActive, 'is-disabled': !componentEnabled }"
+            @dragenter.prevent="handleDragEnter"
+            @dragover.prevent="handleDragOver"
+            @dragleave="handleDragLeave"
+            @drop.prevent.stop="handleDrop"
+          >
+            <div class="texture-thumb" :style="texturePreviewStyle">
+              <v-icon size="18">mdi-water</v-icon>
+            </div>
+            <div class="texture-body">
+              <div class="texture-title">Normals Texture</div>
+              <div class="texture-label">{{ waterNormalsLabel }}</div>
+              <div class="texture-helper">{{ dropHintText }}</div>
+            </div>
+            <div class="texture-actions">
+              <v-btn
+                variant="text"
+                density="compact"
+                size="small"
+                :disabled="!componentEnabled"
+                @click.stop="handleOpenAssetDialog($event)">
+                Choose Texture
+              </v-btn>
+              <v-btn
+                v-if="canClearNormals"
+                icon
+                size="small"
+                variant="text"
+                :disabled="!componentEnabled"
+                @click.stop="clearWaterNormals()"
+              >
+                <v-icon size="16">mdi-close</v-icon>
+              </v-btn>
+            </div>
           </div>
         </div>
       </div>
+      <AssetDialog
+        v-model="assetDialogVisible"
+        :asset-id="assetDialogSelectedId"
+        :asset-type="ASSET_DIALOG_TYPES"
+        :anchor="assetDialogAnchor"
+        title="Select Normals Texture"
+        confirm-text="Select"
+        cancel-text="Cancel"
+        @update:asset="handleAssetDialogUpdate"
+        @cancel="handleAssetDialogCancel"
+      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -611,49 +689,77 @@ function clearWaterNormals() {
   gap: 0.4rem;
 }
 
+
 .water-normals-section {
   margin-top: 0.7rem;
 }
 
-.water-normals-drop {
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  padding: 0.75rem;
+.texture-item {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 4px;
+}
+
+.texture-tile {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 5px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: rgba(12, 16, 22, 0.55);
   transition: border-color 160ms ease, background-color 160ms ease;
+  min-height: 44px;
 }
 
-.water-normals-drop.is-active {
-  border-color: rgba(77, 208, 225, 0.7);
-  background-color: rgba(77, 208, 225, 0.08);
+.texture-tile.is-active-drop {
+  border-color: rgba(77, 208, 225, 0.8);
+  background: rgba(77, 208, 225, 0.08);
 }
 
-.water-normals-drop.is-disabled {
-  opacity: 0.5;
+.texture-tile.is-disabled {
+  opacity: 0.6;
   pointer-events: none;
 }
 
-.water-normals-header {
+.texture-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(233, 236, 241, 0.08);
+  background-size: cover;
+  background-position: center;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
 }
 
-.water-normals-content {
+.texture-body {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 2px;
 }
 
-.water-normals-name {
-  font-size: 0.85rem;
+.texture-title {
+  font-size: 0.8rem;
   font-weight: 600;
 }
 
-.water-normals-helper {
+.texture-label {
   font-size: 0.75rem;
-  color: rgba(233, 236, 241, 0.62);
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.texture-helper {
+  font-size: 0.7rem;
+  color: rgba(233, 236, 241, 0.55);
+}
+
+.texture-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 </style>
