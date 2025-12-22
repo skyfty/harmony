@@ -173,8 +173,8 @@ const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
-  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.5 },
-  { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.5 },
+  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
+  { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
   { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 3, wallThicknessMeters: 0.15 },
 ]
 
@@ -1107,7 +1107,7 @@ function loadPlanningFromScene() {
             waterSmoothing:
               typeof (raw as any).waterSmoothing === 'number'
                 ? Number((raw as any).waterSmoothing)
-                : ((kind ?? preset?.kind) === 'water' ? 0.5 : undefined),
+                : ((kind ?? preset?.kind) === 'water' ? 0.1 : undefined),
             wallHeightMeters:
               typeof (raw as any).wallHeightMeters === 'number'
                 ? Number((raw as any).wallHeightMeters)
@@ -1119,7 +1119,7 @@ function loadPlanningFromScene() {
             floorSmooth:
               typeof (raw as any).floorSmooth === 'number'
                 ? Number((raw as any).floorSmooth)
-                : ((kind ?? preset?.kind) === 'floor' ? 0.5 : undefined),
+                : ((kind ?? preset?.kind) === 'floor' ? 0.1 : undefined),
           } as PlanningLayer
         })
     } else {
@@ -1451,9 +1451,9 @@ const roadSmoothingModel = computed({
 const waterSmoothingModel = computed({
   get: () => {
     const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'water') return 0.5
-    const raw = Number(layer.waterSmoothing ?? 0.5)
-    if (!Number.isFinite(raw)) return 0.5
+    if (!layer || layer.kind !== 'water') return 0.1
+    const raw = Number(layer.waterSmoothing ?? 0.1)
+    if (!Number.isFinite(raw)) return 0.1
     return Math.min(1, Math.max(0, raw))
   },
   set: (value: number) => {
@@ -1470,9 +1470,9 @@ const waterSmoothingModel = computed({
 const floorSmoothModel = computed({
   get: () => {
     const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'floor') return 0.5
-    const raw = Number(layer.floorSmooth ?? 0.5)
-    if (!Number.isFinite(raw)) return 0.5
+    if (!layer || layer.kind !== 'floor') return 0.1
+    const raw = Number(layer.floorSmooth ?? 0.1)
+    if (!Number.isFinite(raw)) return 0.1
     return Math.min(1, Math.max(0, raw))
   },
   set: (value: number) => {
@@ -2515,7 +2515,8 @@ const polygonDraftPreview = computed(() => {
   // 第一次点击后即显示预览：使用 [首点, 鼠标点] 形成可见闭合线段。
   const previewPoints = pts.length === 1 ? [pts[0]!, hover] : [...pts, hover]
   const fill = previewPoints.length >= 3 ? 'rgba(98, 179, 255, 0.08)' : 'transparent'
-  return { d: getPolygonPath(previewPoints), fill }
+  const smoothing = getLayerSmoothingValue(activeLayerId.value)
+  return { d: getPolygonPath(previewPoints, smoothing), fill }
 })
 
 function startLineDraft(point: PlanningPoint) {
@@ -3885,12 +3886,105 @@ function handleImageResizePointerDown(
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
-function getPolygonPath(points: PlanningPoint[]) {
+function getPolygonPath(points: PlanningPoint[], smoothing = 0) {
   if (!points.length) {
     return ''
   }
+  if (smoothing <= 0) {
+    return buildSimplePolygonPath(points)
+  }
+  const rounded = buildRoundedPolygonPath(points, smoothing)
+  return rounded ?? buildSimplePolygonPath(points)
+}
+
+function buildSimplePolygonPath(points: PlanningPoint[]) {
   const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
   return `${segments.join(' ')} Z`
+}
+
+function buildRoundedPolygonPath(points: PlanningPoint[], smoothing: number) {
+  if (points.length < 3) {
+    return null
+  }
+
+  const edgeCount = points.length
+  const edges: Array<{ start: PlanningPoint; end: PlanningPoint; length: number }> = []
+  let totalLength = 0
+  for (let i = 0; i < edgeCount; i += 1) {
+    const start = points[i]!
+    const end = points[(i + 1) % edgeCount]!
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const length = Math.hypot(dx, dy)
+    if (!Number.isFinite(length) || length <= 1e-8) {
+      return null
+    }
+    edges.push({ start, end, length })
+    totalLength += length
+  }
+  if (totalLength <= 1e-8) {
+    return null
+  }
+
+  const averageEdgeLength = totalLength / edges.length
+  const baseRadius = smoothing * averageEdgeLength
+  if (baseRadius <= 1e-8) {
+    return null
+  }
+
+  const segments: Array<{ start: PlanningPoint; corner: PlanningPoint; end: PlanningPoint }> = []
+  for (let i = 0; i < edgeCount; i += 1) {
+    const prevEdge = edges[(i - 1 + edgeCount) % edgeCount]
+    const nextEdge = edges[i]
+    const prevRadius = Math.min(baseRadius, prevEdge.length * 0.5)
+    const nextRadius = Math.min(baseRadius, nextEdge.length * 0.5)
+    const startPoint = pointAlongEdge(prevEdge, 1 - prevRadius / prevEdge.length)
+    const endPoint = pointAlongEdge(nextEdge, nextRadius / nextEdge.length)
+    segments.push({ start: startPoint, corner: points[i]!, end: endPoint })
+  }
+
+  const builder: string[] = []
+  segments.forEach((segment, index) => {
+    if (index === 0) {
+      builder.push(`M ${segment.start.x} ${segment.start.y}`)
+    } else {
+      builder.push(`L ${segment.start.x} ${segment.start.y}`)
+    }
+    builder.push(`Q ${segment.corner.x} ${segment.corner.y} ${segment.end.x} ${segment.end.y}`)
+  })
+  builder.push('Z')
+  return builder.join(' ')
+}
+
+function pointAlongEdge(edge: { start: PlanningPoint; end: PlanningPoint; length: number }, t: number) {
+  return {
+    x: edge.start.x + (edge.end.x - edge.start.x) * t,
+    y: edge.start.y + (edge.end.y - edge.start.y) * t,
+  }
+}
+
+function getLayerSmoothingValue(layerId?: string | null) {
+  if (!layerId) {
+    return 0
+  }
+  const layer = layers.value.find((item) => item.id === layerId)
+  if (!layer) {
+    return 0
+  }
+  if (layer.kind === 'floor') {
+    return normalizeLayerSmoothingValue(layer.floorSmooth)
+  }
+  if (layer.kind === 'water') {
+    return normalizeLayerSmoothingValue(layer.waterSmoothing)
+  }
+  return 0
+}
+
+function normalizeLayerSmoothingValue(value: number | undefined) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.min(1, Math.max(0, value))
+  }
+  return 0.1
 }
 
 function getLineSegments(line: PlanningPolyline) {
@@ -4406,7 +4500,7 @@ onBeforeUnmount(() => {
                         selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id,
                         'inactive-layer-feature': !isActiveLayer(poly.layerId),
                       }"
-                      :d="getPolygonPath(poly.points)"
+                      :d="getPolygonPath(poly.points, getLayerSmoothingValue(poly.layerId))"
                       :fill="getLayerColor(poly.layerId, 0.22)"
                       :stroke="getLayerColor(poly.layerId, 0.95)"
                       stroke-width="0.1"
@@ -4522,7 +4616,7 @@ onBeforeUnmount(() => {
                   <path
                     v-if="dragState.type === 'rectangle'"
                     class="planning-rectangle-preview"
-                    :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
+                    :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current), getLayerSmoothingValue(dragState.layerId))"
                     fill="rgba(98, 179, 255, 0.12)"
                     stroke="rgba(98, 179, 255, 0.45)"
                     stroke-width="0.1"

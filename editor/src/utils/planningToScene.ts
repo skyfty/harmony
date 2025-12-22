@@ -291,7 +291,7 @@ function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, lay
       return Math.min(1, Math.max(0, smooth))
     }
   }
-  return 0.5
+  return 0.1
 }
 
 function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
@@ -304,7 +304,7 @@ function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, 
       return Math.min(1, Math.max(0, smoothing))
     }
   }
-  return 0.5
+  return 0.1
 }
 
 function resolveWallHeightFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
@@ -1063,6 +1063,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       createdAt: Date.now(),
     },
   })
+  sceneStore.setNodeLocked(root.id, true)
 
   // Collect features
   const polygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
@@ -1156,6 +1157,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
         sceneStore.updateNodeDynamicMesh(roadNode.id, build.definition)
+        sceneStore.setNodeLocked(roadNode.id, true)
       }
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
@@ -1177,7 +1179,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           nodeType: 'Mesh',
           object: floorObject,
           name: layerName ? `${layerName} Floor` : 'Planning Floor',
-          position: build.center,
+          position: { x: build.center.x, y: build.center.y + 0.01, z: build.center.z },
           rotation: { x: 0, y: 0, z: 0 },
           scale: { x: 1, y: 1, z: 1 },
           userData: {
@@ -1188,6 +1190,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
         sceneStore.updateNodeDynamicMesh(floorNode.id, build.definition)
+        sceneStore.setNodeLocked(floorNode.id, true)
       }
     } else if (kind === 'water') {
       const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
@@ -1209,7 +1212,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           nodeType: 'Mesh',
           object: waterObject,
           name: layerName ? `${layerName} Water` : 'Planning Water',
-          position: build.center,
+          position: { x: build.center.x, y: build.center.y + 0.01, z: build.center.z },
           rotation: { x: 0, y: 0, z: 0 },
           scale: { x: 1, y: 1, z: 1 },
           userData: {
@@ -1224,6 +1227,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
         sceneStore.updateNodeDynamicMesh(waterNode.id, build.definition)
+        sceneStore.setNodeLocked(waterNode.id, true)
         const floorComponent = sceneStore.addNodeComponent(waterNode.id, FLOOR_COMPONENT_TYPE)
         if (floorComponent && typeof floorComponent === 'object' && typeof (floorComponent as any).id === 'string') {
           sceneStore.updateNodeComponentProps(waterNode.id, (floorComponent as any).id, { smooth: waterSmooth })

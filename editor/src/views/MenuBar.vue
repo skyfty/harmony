@@ -91,6 +91,11 @@ function openPlanningDialog() {
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('SaveAs')" class="menu-list-item">
                     Save as
+                  </v-list-item>      
+                              <v-divider />
+
+                  <v-list-item @click="openPlanningDialog" class="menu-list-item">
+                    Planning
                   </v-list-item>
                   <v-divider />
                   <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
@@ -98,10 +103,6 @@ function openPlanningDialog() {
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Export')" class="menu-list-item">
                     Export
-                  </v-list-item>
-                  <v-divider />
-                  <v-list-item @click="openPlanningDialog" class="menu-list-item">
-                    Planning
                   </v-list-item>
        
                 </v-list>
