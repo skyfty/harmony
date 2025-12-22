@@ -404,14 +404,18 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
+  return tryNormalizeHexColor(value) ?? fallback
+}
+
+function tryNormalizeHexColor(value: unknown): string | null {
   if (typeof value !== 'string') {
-    return fallback
+    return null
   }
   const trimmed = value.trim()
   const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(prefixed)
   if (!match) {
-    return fallback
+    return null
   }
   const hexValue = match[1] ?? ''
   if (hexValue.length === 3) {
@@ -498,8 +502,13 @@ function commitMaterialMetadata(update: { name?: string }) {
   }
 }
 
-function handleHexColorChange(field: 'color' | 'emissive', value: string) {
-  const normalized = normalizeHexColor(value, materialForm[field])
+function handleHexColorChange(field: 'color' | 'emissive', value: string | null) {
+  const nextValue = typeof value === 'string' ? value : ''
+  materialForm[field] = nextValue
+  const normalized = tryNormalizeHexColor(nextValue)
+  if (!normalized) {
+    return
+  }
   materialForm[field] = normalized
   if (field === 'color') {
     commitMaterialProps({ color: normalized })
@@ -1001,15 +1010,15 @@ async function handleImportFileChange(event: Event) {
             <div class="material-properties">
               <div class="material-color">
                 <div class="color-input">
-                  <v-text-field
-                    label="Color"
-                    class="slider-input"
-                    :model-value="materialForm.color"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
-                  />
+                    <v-text-field
+                      label="Color"
+                      class="slider-input"
+                      :model-value="materialForm.color"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      @update:model-value="(value) => handleHexColorChange('color', value ?? '')"
+                    />
                   <v-menu
                     v-model="baseColorMenuOpen"
                     :close-on-content-click="false"
@@ -1047,7 +1056,7 @@ async function handleImportFileChange(event: Event) {
                     density="compact"
                     variant="underlined"
                     hide-details
-                    @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
+                    @update:model-value="(value) => handleHexColorChange('emissive', value ?? '')"
                   />
                   <v-menu
                     v-model="emissiveColorMenuOpen"
