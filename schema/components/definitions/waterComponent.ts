@@ -298,7 +298,7 @@ class WaterComponent extends Component<WaterComponentProps> {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
       alpha: this.resolveMaterialAlpha(material),
-      waterColor: this.resolveMaterialColor(material),
+      waterColor:  0x001e0f,
       distortionScale: props.distortionScale,
       waterNormals: normalTexture,
     })

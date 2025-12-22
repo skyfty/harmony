@@ -31,6 +31,8 @@ const waterComponent = computed(
 
 const componentEnabled = computed(() => waterComponent.value?.enabled !== false)
 
+const FLOW_DIRECTION_DECIMALS = 2
+
 const localState = reactive({
   textureWidth: WATER_DEFAULT_TEXTURE_WIDTH,
   textureHeight: WATER_DEFAULT_TEXTURE_HEIGHT,
@@ -52,8 +54,8 @@ watch(
     localState.textureHeight = normalized.textureHeight
     localState.distortionScale = normalized.distortionScale
     localState.size = normalized.size
-    localState.flowDirectionX = normalized.flowDirection.x
-    localState.flowDirectionY = normalized.flowDirection.y
+    localState.flowDirectionX = toFixedNumber(normalized.flowDirection.x, FLOW_DIRECTION_DECIMALS)
+    localState.flowDirectionY = toFixedNumber(normalized.flowDirection.y, FLOW_DIRECTION_DECIMALS)
     localState.flowSpeed = normalized.flowSpeed
     nextTick(() => {
       syncing.value = false
@@ -72,6 +74,14 @@ function applyWaterPatch(patch: Partial<WaterComponentProps>) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
+}
+
+function toFixedNumber(value: number, decimals: number) {
+  if (!Number.isFinite(value) || decimals < 0) {
+    return value
+  }
+  const factor = 10 ** decimals
+  return Math.round(value * factor) / factor
 }
 
 watch(
@@ -136,17 +146,33 @@ function applyFlowDirection() {
   applyWaterPatch({ flowDirection: { x, y } })
 }
 
+function handleFlowDirectionInput(axis: 'x' | 'y', value: number) {
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const rounded = toFixedNumber(value, FLOW_DIRECTION_DECIMALS)
+  if (Math.abs(value - rounded) > 1e-6) {
+    if (axis === 'x') {
+      localState.flowDirectionX = rounded
+    } else {
+      localState.flowDirectionY = rounded
+    }
+    return
+  }
+  applyFlowDirection()
+}
+
 watch(
   () => localState.flowDirectionX,
-  () => {
-    applyFlowDirection()
+  (value) => {
+    handleFlowDirectionInput('x', value)
   },
 )
 
 watch(
   () => localState.flowDirectionY,
-  () => {
-    applyFlowDirection()
+  (value) => {
+    handleFlowDirectionInput('y', value)
   },
 )
 
@@ -248,6 +274,8 @@ function handleRemoveComponent() {
           v-model.number="localState.flowSpeed"
           :min="WATER_MIN_FLOW_SPEED"
           label="Flow Speed"
+          step="0.01"
+          inputmode="decimal"
           type="number"
           density="compact"
           variant="underlined"
@@ -260,6 +288,8 @@ function handleRemoveComponent() {
             <v-text-field
               v-model.number="localState.flowDirectionX"
               suffix="X"
+              step="0.01"
+              inputmode="decimal"
               type="number"
               density="compact"
               variant="underlined"
@@ -269,6 +299,8 @@ function handleRemoveComponent() {
             <v-text-field
               v-model.number="localState.flowDirectionY"
               suffix="Y"
+              step="0.01"
+              inputmode="decimal"
               type="number"
               density="compact"
               variant="underlined"
