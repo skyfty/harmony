@@ -9,6 +9,12 @@ COPY admin/package.json admin/package-lock.json ./
 COPY schema/package.json ../schema/package.json
 # 安装依赖（包含 devDependencies，确保 vite/vue-tsc 可用）
 RUN npm ci
+
+# TypeScript also type-checks files from /app/schema (via file:../schema).
+# Node-style module resolution from /app/schema walks up to /app/node_modules,
+# so expose the admin's node_modules there for the build.
+RUN [ -e /app/node_modules ] || ln -s /app/admin/node_modules /app/node_modules
+
 # 拷贝源码（admin 与 schema）
 COPY admin/ ./
 COPY schema/ ../schema/
