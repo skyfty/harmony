@@ -9,6 +9,11 @@ COPY uploader/package.json uploader/package-lock.json ./
 COPY schema/package.json ../schema/package.json
 # 安装依赖（包含 devDependencies，确保 vue-tsc/vite 可用）
 RUN npm install --legacy-peer-deps
+
+# TypeScript also type-checks files from /app/schema (via file:../schema).
+# Node-style module resolution from /app/schema walks up to /app/node_modules,
+# so expose the uploader's node_modules there for the build.
+RUN [ -e /app/node_modules ] || ln -s /app/uploader/node_modules /app/node_modules
 # 拷贝源码（uploader 与 schema）
 COPY uploader/ ./
 COPY schema/ ../schema/
