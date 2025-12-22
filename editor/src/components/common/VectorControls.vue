@@ -1,12 +1,13 @@
 <template>
   <div class="vector-group">
-    <div class="vector-label">{{ props.label }}</div>
+    <div class="vector-label" @dblclick="onLabelDblClick">{{ props.label }}</div>
     <v-text-field
       v-for="axis in axes"
       :key="axis"
       :label="axis.toUpperCase()"
-      :model-value="formatValue(props.modelValue[axis])"
-      :type="props.readonly ? 'text' : 'number'"
+      :model-value="localValues[axis]"
+      type="number"
+      step="0.1"
       density="compact"
       variant="underlined"
       color="primary"
@@ -15,12 +16,16 @@
       :disabled="props.disabled"
       :readonly="props.readonly || props.disabled"
       inputmode="decimal"
+      @focus="() => onFocus(axis)"
+      @blur="() => onBlur(axis)"
       @update:modelValue="(value) => onInput(axis, value)"
     />
   </div>
 </template>
 
 <script setup lang="ts">
+import { reactive, ref, watch } from 'vue'
+
 type VectorAxis = 'x' | 'y' | 'z'
 type VectorValue = number | string
 type VectorDisplay = Record<VectorAxis, VectorValue>
@@ -35,19 +40,75 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:axis', axis: VectorAxis, value: string): void
+  (event: 'dblclick:label'): void
 }>()
 
 const axes: VectorAxis[] = ['x', 'y', 'z']
 
-function onInput(axis: VectorAxis, value: string | number) {
-  if (props.disabled || props.readonly) {
-    return
+const localValues = reactive<Record<VectorAxis, string>>({
+  x: '',
+  y: '',
+  z: '',
+})
+
+const editingAxis = ref<VectorAxis | null>(null)
+
+watch(
+  () => props.modelValue,
+  (modelValue) => {
+    for (const axis of axes) {
+      if (editingAxis.value === axis) continue
+      localValues[axis] = formatValue(modelValue[axis])
+    }
+      console.log('watch', localValues)
+
+  },
+  { immediate: true, deep: true },
+)
+
+function onFocus(axis: VectorAxis) {
+  if (props.disabled || props.readonly) return
+  editingAxis.value = axis
+}
+
+function onBlur(axis: VectorAxis) {
+  if (props.disabled || props.readonly) return
+  editingAxis.value = null
+
+  const normalized = normalizeToTwoDecimals(localValues[axis])
+  if (normalized !== null) {
+    localValues[axis] = normalized
   }
-  emit('update:axis', axis, typeof value === 'number' ? value.toString() : value)
+
+  emit('update:axis', axis, localValues[axis])
+}
+
+function onInput(axis: VectorAxis, value: string | number) {
+  localValues[axis] = typeof value === 'number' ? value.toString() : value
+}
+
+function onLabelDblClick() {
+  emit('dblclick:label')
 }
 
 function formatValue(value: VectorValue): string {
-  return typeof value === 'number' ? value.toString() : value
+  if (typeof value === 'number') return value.toFixed(2)
+  const normalized = normalizeToTwoDecimals(value)
+  return normalized ?? value
+}
+
+function normalizeToTwoDecimals(raw: string): string | null {
+  const text = raw.trim()
+  if (text.length === 0) return null
+
+  // Accept inputs like: 2, 1.5, 1., .5, -2.3
+  // Reject incomplete numbers like: '-', '.', '-.'
+  if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(text)) return null
+  if (text === '-' || text === '.' || text === '-.') return null
+
+  const n = Number(text)
+  if (!Number.isFinite(n)) return null
+  return n.toFixed(2)
 }
 </script>
 
@@ -63,6 +124,9 @@ function formatValue(value: VectorValue): string {
 .vector-label {
   font-size: 0.8rem;
   color: rgba(233, 236, 241, 0.72);
+  user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
 }
 
 .vector-input {

@@ -1142,28 +1142,6 @@ function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | nul
   }
 }
 
-function cloneTerrainScatterSnapshot(
-  snapshot?: TerrainScatterStoreSnapshot | null,
-): TerrainScatterStoreSnapshot | null | undefined {
-  if (snapshot === undefined) {
-    return undefined
-  }
-  if (snapshot === null) {
-    return null
-  }
-  const structuredCloneFn = (globalThis as typeof globalThis & {
-    structuredClone?: (value: unknown) => unknown
-  }).structuredClone
-  if (typeof structuredCloneFn === 'function') {
-    try {
-      return structuredCloneFn(snapshot) as TerrainScatterStoreSnapshot
-    } catch (error) {
-      console.warn('Structured clone failed for terrain scatter snapshot, falling back to manual clone', error)
-    }
-  }
-  return manualDeepClone(snapshot)
-}
-
 function manualDeepClone<T>(source: T): T {
   if (Array.isArray(source)) {
     return source.map((entry) => manualDeepClone(entry)) as unknown as T
@@ -1182,7 +1160,7 @@ function manualDeepClone<T>(source: T): T {
 }
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
-  const terrainScatter = cloneTerrainScatterSnapshot(definition.terrainScatter)
+  const terrainScatter = manualDeepClone(definition.terrainScatter)
   const result: GroundDynamicMesh = {
     type: 'Ground',
     width: definition.width,

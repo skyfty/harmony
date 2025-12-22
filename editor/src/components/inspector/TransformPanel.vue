@@ -131,11 +131,11 @@ function formatNumeric(value: number) {
 }
 
 function createZeroVector(): VectorDisplay {
-  return { x: '0.0', y: '0.0', z: '0.0' }
+  return { x: '0.00', y: '0.00', z: '0.00' }
 }
 
 function createScaleVector(): VectorDisplay {
-  return { x: '1.0', y: '1.0', z: '1.0' }
+  return { x: '1.00', y: '1.00', z: '1.00' }
 }
 
 function createNumericVector(x: number, y: number, z: number) {
@@ -156,28 +156,31 @@ function cloneVector(field: TransformField, source?: NumericVector): NumericVect
     <v-expansion-panel-title>Transform</v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="transform-field-grid">
-      <div class="section-block" @dblclick.stop="resetPosition">
+      <div class="section-block">
         <InspectorVectorControls
           label="Position"
           :model-value="transformForm.position"
           :disabled="props.disabled"
+          @dblclick:label="resetPosition"
           @update:axis="(axis, value) => handleVectorChange('position', axis, value)"
         />
       </div>
-      <div class="section-block" @dblclick.stop="resetRotation">
+      <div class="section-block">
         <InspectorVectorControls
           label="Rotation"
           :model-value="transformForm.rotation"
           :disabled="props.disabled"
+          @dblclick:label="resetRotation"
           @update:axis="(axis, value) => handleVectorChange('rotation', axis, value)"
         />
       </div>
-      <div class="section-block" @dblclick.stop="resetScale">
+      <div class="section-block">
         <InspectorVectorControls
           label="Scale"
           :model-value="transformForm.scale"
           min="0.01"
           :disabled="props.disabled"
+          @dblclick:label="resetScale"
           @update:axis="(axis, value) => handleVectorChange('scale', axis, value)"
         />
       </div>
