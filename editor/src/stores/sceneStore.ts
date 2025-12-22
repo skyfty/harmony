@@ -11451,6 +11451,7 @@ export const useSceneStore = defineStore('scene', {
         | EffectComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
+        | WaterComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = clampWallProps(component.props as WallComponentProps)
         const typedPatch = patch as Partial<WallComponentProps>

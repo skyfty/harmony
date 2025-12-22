@@ -17,7 +17,7 @@
     "skipLibCheck": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node", "three", "ws"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }

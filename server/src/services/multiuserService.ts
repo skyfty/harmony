@@ -180,8 +180,15 @@ export class MultiuserService {
     })
   }
 
-  private parseMessage(data: WebSocket.Data): MultiuserClientMessage | null {
-    const raw = typeof data === 'string' ? data : data.toString('utf-8')
+  private parseMessage(data: string | Buffer | ArrayBuffer | Buffer[]): MultiuserClientMessage | null {
+    const raw =
+      typeof data === 'string'
+        ? data
+        : data instanceof ArrayBuffer
+          ? Buffer.from(data).toString('utf-8')
+          : Array.isArray(data)
+            ? Buffer.concat(data).toString('utf-8')
+            : data.toString('utf-8')
     try {
       return JSON.parse(raw) as MultiuserClientMessage
     } catch {

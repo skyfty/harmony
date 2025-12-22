@@ -566,7 +566,7 @@ export class SceneMaterialFactory {
     if (entry) {
         const resourceEntry = this.resourceEntrys.find((entry) => entry.assetId === assetId);
         if (resourceEntry) {
-          texture = await this.loadTexture(entry, {
+          texture = await this.loadTextureFromEntry(entry, {
             hdr: resourceEntry?.type === 'hdri'
           });
         }
@@ -577,7 +577,7 @@ export class SceneMaterialFactory {
     return texture;
   }
 
-  private async loadTexture(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
+  private async loadTextureFromEntry(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     try {
       if (options?.hdr && this.hdrLoader) {
         const hdrLoader = this.hdrLoader;

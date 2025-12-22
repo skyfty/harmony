@@ -69,6 +69,7 @@ import {
 	behaviorComponentDefinition,
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
+	floorComponentDefinition,
 	wallComponentDefinition,
 	roadComponentDefinition,
 	viewPointComponentDefinition,
@@ -354,6 +355,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 }
 
 const previewComponentManager = new ComponentManager()
+previewComponentManager.registerDefinition(floorComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
@@ -4397,6 +4399,7 @@ function startAnimationLoop() {
 		}
 
 		if (isPlaying.value) {
+			previewComponentManager.update(delta)
 			animationMixers.forEach((mixer) => mixer.update(delta))
 			effectRuntimeTickers.forEach((tick) => {
 				try {

@@ -39,6 +39,8 @@
     "@types/koa-router": "^7.4.8",
     "@types/koa-static": "^4.0.4",
     "@types/node": "^20.16.5",
+    "@types/three": "^0.171.0",
+    "@types/ws": "^8.5.12",
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.10",
     "tslib": "^2.7.0",

@@ -40,7 +40,7 @@ import {
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
 } from './components/definitions/warpGateComponent';
-import { WATER_COMPONENT_TYPE } from './components/definitions/waterComponent'
+// NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
@@ -207,7 +207,6 @@ class SceneGraphBuilder {
     this.materialFactory.dispose();
     this.meshTemplateCache.clear();
     this.pendingMeshLoads.clear();
-    this.waterNormalTextures.clear();
   }
 
   private warn(message: string): void {
@@ -708,6 +707,7 @@ class SceneGraphBuilder {
     } else if (node.sourceAssetId) {
       const asset = await this.loadAssetMesh(node.sourceAssetId);
       if (asset) {
+        await this.applyMaterialOverridesToImportedObject(asset, node);
         asset.userData = asset.userData ?? {};
         asset.userData.sourceAssetId = node.sourceAssetId;
         group.add(asset);
@@ -847,6 +847,7 @@ class SceneGraphBuilder {
     if (node.sourceAssetId) {
       const asset = await this.loadAssetMesh(node.sourceAssetId);
       if (asset) {
+        await this.applyMaterialOverridesToImportedObject(asset, node);
         this.applyTransform(asset, node);
         this.applyVisibility(asset, node);
         this.recordMeshStatistics(asset);
@@ -856,6 +857,46 @@ class SceneGraphBuilder {
     }
 
     return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
+  }
+
+  private async applyMaterialOverridesToImportedObject(object: THREE.Object3D, node: SceneNodeWithExtras): Promise<void> {
+    if (!object) {
+      return;
+    }
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+    if (!nodeMaterialConfigs.length) {
+      return;
+    }
+
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
+    if (!defaultMaterialAssignment) {
+      return;
+    }
+
+    const materialByConfigId = new Map<string, THREE.Material>();
+    nodeMaterialConfigs.forEach((config, index) => {
+      const configId = typeof config?.id === 'string' ? config.id.trim() : '';
+      const material = resolvedMaterials[index];
+      if (configId && material) {
+        materialByConfigId.set(configId, material);
+      }
+    });
+
+    object.traverse((child: THREE.Object3D) => {
+      const mesh = child as THREE.Mesh & { isMesh?: boolean };
+      if (!mesh?.isMesh) {
+        return;
+      }
+
+      const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
+      const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
+      if (selectorId && materialByConfigId.has(selectorId)) {
+        mesh.material = materialByConfigId.get(selectorId)!;
+        return;
+      }
+      mesh.material = defaultMaterialAssignment;
+    });
   }
 
   private resolveOutlineMeshForNode(node: SceneNodeWithExtras): SceneOutlineMesh | null {

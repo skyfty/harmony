@@ -1,5 +1,5 @@
-import type { BufferGeometry, Material, Mesh, Object3D, Texture } from 'three'
-import { Color, DataTexture, RepeatWrapping, ShaderMaterial, Vector2, Vector3 } from 'three'
+import type { Material, Mesh, Object3D, Texture } from 'three'
+import { BufferGeometry, Color, DataTexture, RepeatWrapping, ShaderMaterial, Vector2, Vector3 } from 'three'
 import { Water } from 'three/examples/jsm/objects/Water.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
@@ -144,7 +144,9 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.normalTexture.offset.set(this.flowOffset.x, this.flowOffset.y)
     }
     const material = this.waterInstance.material as ShaderMaterial
-    material.uniforms.time.value += deltaTime * props.flowSpeed
+    if (material.uniforms?.time) {
+      material.uniforms.time.value += deltaTime * props.flowSpeed
+    }
     this.syncSunUniforms()
   }
 
@@ -193,7 +195,7 @@ class WaterComponent extends Component<WaterComponentProps> {
       return null
     }
     if (Array.isArray(material)) {
-      return material.length > 0 ? material[0] : null
+      return material.length > 0 ? material[0] ?? null : null
     }
     return material
   }
@@ -210,8 +212,9 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private getMaterialColorHex(material: Material): string {
-    if ('color' in material && material.color) {
-      return material.color.getHexString()
+    const colored = material as Material & { color?: Color }
+    if (colored.color && typeof colored.color.getHexString === 'function') {
+      return colored.color.getHexString()
     }
     return DEFAULT_WATER_COLOR.getHexString()
   }
@@ -229,8 +232,9 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private resolveMaterialColor(material: Material | null): Color {
-    if (material && 'color' in material && material.color) {
-      return material.color.clone()
+    const colored = material as (Material & { color?: Color }) | null
+    if (colored?.color && typeof colored.color.clone === 'function') {
+      return colored.color.clone()
     }
     return DEFAULT_WATER_COLOR.clone()
   }
@@ -258,13 +262,12 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
-    const baseGeometry = mesh.geometry ? mesh.geometry.clone() : null
-    if (baseGeometry) {
-      this.waterGeometry = baseGeometry
-    }
+    const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
+    const resolvedGeometry = baseGeometry ?? new BufferGeometry()
+    this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
-    const water = new Water(baseGeometry ?? undefined, {
+    const water = new Water(resolvedGeometry, {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
       alpha: this.resolveMaterialAlpha(material),
@@ -275,8 +278,12 @@ class WaterComponent extends Component<WaterComponentProps> {
     water.name = `${mesh.name ?? 'Water'} (Water)`
     water.renderOrder = mesh.renderOrder
     const shaderMaterial = water.material as ShaderMaterial
-    shaderMaterial.uniforms.normalSampler.value = normalTexture
-    shaderMaterial.uniforms.size.value = props.size
+    if (shaderMaterial.uniforms?.normalSampler) {
+      shaderMaterial.uniforms.normalSampler.value = normalTexture
+    }
+    if (shaderMaterial.uniforms?.size) {
+      shaderMaterial.uniforms.size.value = props.size
+    }
     mesh.add(water)
     mesh.visible = false
     this.waterInstance = water
@@ -298,10 +305,18 @@ class WaterComponent extends Component<WaterComponentProps> {
       return
     }
     const shaderMaterial = this.waterInstance.material as ShaderMaterial
-    shaderMaterial.uniforms.alpha.value = this.resolveMaterialAlpha(material)
-    shaderMaterial.uniforms.distortionScale.value = props.distortionScale
-    shaderMaterial.uniforms.size.value = props.size
-    shaderMaterial.uniforms.waterColor.value.copy(this.resolveMaterialColor(material))
+    if (shaderMaterial.uniforms?.alpha) {
+      shaderMaterial.uniforms.alpha.value = this.resolveMaterialAlpha(material)
+    }
+    if (shaderMaterial.uniforms?.distortionScale) {
+      shaderMaterial.uniforms.distortionScale.value = props.distortionScale
+    }
+    if (shaderMaterial.uniforms?.size) {
+      shaderMaterial.uniforms.size.value = props.size
+    }
+    if (shaderMaterial.uniforms?.waterColor) {
+      shaderMaterial.uniforms.waterColor.value.copy(this.resolveMaterialColor(material))
+    }
     this.resolvedFlowDirection.set(props.flowDirection.x, props.flowDirection.y)
     const normalized = this.resolvedFlowDirection.lengthSq() > 1e-6
       ? this.resolvedFlowDirection.normalize()
@@ -324,8 +339,12 @@ class WaterComponent extends Component<WaterComponentProps> {
       light.target?.getWorldPosition(targetPosition)
       light.getWorldPosition(direction)
       direction.sub(targetPosition).normalize()
-      material.uniforms.sunDirection.value.copy(direction)
-      material.uniforms.sunColor.value.copy(light.color)
+      if (material.uniforms?.sunDirection) {
+        material.uniforms.sunDirection.value.copy(direction)
+      }
+      if (material.uniforms?.sunColor) {
+        material.uniforms.sunColor.value.copy(light.color)
+      }
     }
   }
 

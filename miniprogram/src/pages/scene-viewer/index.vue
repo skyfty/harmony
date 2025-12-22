@@ -363,6 +363,7 @@ import {
   behaviorComponentDefinition,
   guideboardComponentDefinition,
   displayBoardComponentDefinition,
+  floorComponentDefinition,
   wallComponentDefinition,
   roadComponentDefinition,
   viewPointComponentDefinition,
@@ -830,6 +831,7 @@ function disposeMaterialTextureCache(): void {
 }
 
 const previewComponentManager = new ComponentManager();
+previewComponentManager.registerDefinition(floorComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(roadComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
@@ -7097,6 +7099,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
           }
         }
         if (deltaSeconds > 0) {
+          previewComponentManager.update(deltaSeconds);
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
           effectRuntimeTickers.forEach((tick) => {
             try {
