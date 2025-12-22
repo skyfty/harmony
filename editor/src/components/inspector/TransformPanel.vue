@@ -127,7 +127,12 @@ function resetTransformForm() {
 }
 
 function formatNumeric(value: number) {
-  return value.toFixed(1)
+  if (!Number.isFinite(value)) {
+    return '0.00'
+  }
+  // Truncate (not round) to 2 decimals.
+  const truncated = Math.trunc(value * 100) / 100
+  return truncated.toFixed(2)
 }
 
 function createZeroVector(): VectorDisplay {

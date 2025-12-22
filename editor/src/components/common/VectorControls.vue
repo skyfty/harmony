@@ -60,8 +60,6 @@ watch(
       if (editingAxis.value === axis) continue
       localValues[axis] = formatValue(modelValue[axis])
     }
-      console.log('watch', localValues)
-
   },
   { immediate: true, deep: true },
 )
@@ -76,11 +74,13 @@ function onBlur(axis: VectorAxis) {
   editingAxis.value = null
 
   const normalized = normalizeToTwoDecimals(localValues[axis])
-  if (normalized !== null) {
-    localValues[axis] = normalized
+  if (normalized === null) {
+    // Keep the current text if it's not a valid number; don't emit.
+    return
   }
 
-  emit('update:axis', axis, localValues[axis])
+  localValues[axis] = normalized
+  emit('update:axis', axis, normalized)
 }
 
 function onInput(axis: VectorAxis, value: string | number) {
@@ -92,9 +92,17 @@ function onLabelDblClick() {
 }
 
 function formatValue(value: VectorValue): string {
-  if (typeof value === 'number') return value.toFixed(2)
+  if (typeof value === 'number') return truncateNumberToTwoDecimals(value)
   const normalized = normalizeToTwoDecimals(value)
   return normalized ?? value
+}
+
+function truncateNumberToTwoDecimals(value: number): string {
+  if (!Number.isFinite(value)) return '0.00'
+  // Truncate (not round) to 2 decimals.
+  const scaled = value * 100
+  const truncatedInt = Math.trunc(scaled)
+  return (truncatedInt / 100).toFixed(2)
 }
 
 function normalizeToTwoDecimals(raw: string): string | null {
@@ -106,9 +114,15 @@ function normalizeToTwoDecimals(raw: string): string | null {
   if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(text)) return null
   if (text === '-' || text === '.' || text === '-.') return null
 
-  const n = Number(text)
-  if (!Number.isFinite(n)) return null
-  return (Math.floor(n * 100) / 100).toString()  // truncate to 2 decimal places
+  // Pure string-based truncation to avoid floating rounding, then pad to 2 decimals.
+  const negative = text.startsWith('-')
+  const unsigned = negative ? text.slice(1) : text
+  const [intRaw = '0', fracRaw = ''] = unsigned.split('.')
+
+  const intPart = intRaw.length === 0 ? '0' : intRaw
+  const fracPart = (fracRaw + '00').slice(0, 2) // truncate and pad
+
+  return `${negative ? '-' : ''}${intPart}.${fracPart}`
 }
 </script>
 
