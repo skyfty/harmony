@@ -3934,8 +3934,8 @@ function buildRoundedPolygonPath(points: PlanningPoint[], smoothing: number) {
 
   const segments: Array<{ start: PlanningPoint; corner: PlanningPoint; end: PlanningPoint }> = []
   for (let i = 0; i < edgeCount; i += 1) {
-    const prevEdge = edges[(i - 1 + edgeCount) % edgeCount]
-    const nextEdge = edges[i]
+    const prevEdge = edges[(i - 1 + edgeCount) % edgeCount]!
+    const nextEdge = edges[i]!
     const prevRadius = Math.min(baseRadius, prevEdge.length * 0.5)
     const nextRadius = Math.min(baseRadius, nextEdge.length * 0.5)
     const startPoint = pointAlongEdge(prevEdge, 1 - prevRadius / prevEdge.length)

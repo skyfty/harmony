@@ -12784,6 +12784,7 @@ export const useSceneStore = defineStore('scene', {
       'currentSceneId',
       'currentSceneMeta',
       'nodes',
+      'planningData',
       'activeDirectoryId',
       'selectedAssetId',
       'viewportSettings',
