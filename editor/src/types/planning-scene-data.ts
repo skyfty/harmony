@@ -35,7 +35,7 @@ export interface PlanningImageData {
   alignMarker?: { x: number; y: number }
 }
 
-export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor'
+export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water'
 
 export interface PlanningLayerState {
   id: string
@@ -58,6 +58,8 @@ export interface PlanningLayerState {
   wallHeightMeters?: number
   /** Optional; currently used by wall layers. */
   wallThicknessMeters?: number
+  /** Optional; controls water edge rounding when converting water layers. */
+  waterSmoothing?: number
 }
 
 export interface PlanningSceneData {

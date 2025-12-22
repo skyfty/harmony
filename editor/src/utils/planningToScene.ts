@@ -20,6 +20,7 @@ import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
 import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
+import { WATER_COMPONENT_TYPE, FLOOR_COMPONENT_TYPE } from '@schema/components'
 
 export type PlanningConversionProgress = {
   step: string
@@ -47,6 +48,7 @@ export type ConvertPlanningToSceneOptions = {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }) => SceneNode | null
+    addNodeComponent: (nodeId: string, type: string) => unknown
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
@@ -76,7 +78,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 const POISSON_CANDIDATES_PER_ACTIVE = 24
 
-type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor'
+type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -189,6 +191,8 @@ function layerKindFromId(layerId: string): LayerKind | null {
       return 'floor'
     case 'green-layer':
       return 'green'
+    case 'water-layer':
+      return 'water'
     case 'wall-layer':
       return 'wall'
     default:
@@ -196,7 +200,7 @@ function layerKindFromId(layerId: string): LayerKind | null {
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(terrain|building|road|floor|green|wall)-layer\b/i.exec(layerId)
+  const match = /^(terrain|building|road|floor|green|water|wall)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -213,7 +217,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['terrain-layer', 'building-layer', 'road-layer', 'floor-layer', 'green-layer', 'wall-layer']
+  return ['terrain-layer', 'building-layer', 'road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -229,6 +233,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
         || normalized === 'road'
         || normalized === 'floor'
         || normalized === 'green'
+        || normalized === 'water'
         || normalized === 'wall'
       ) {
         return normalized as LayerKind
@@ -284,6 +289,19 @@ function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, lay
     const smooth = typeof smoothRaw === 'number' ? smoothRaw : Number(smoothRaw)
     if (Number.isFinite(smooth)) {
       return Math.min(1, Math.max(0, smooth))
+    }
+  }
+  return 0.5
+}
+
+function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const smoothingRaw = found?.waterSmoothing
+    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+    if (Number.isFinite(smoothing)) {
+      return Math.min(1, Math.max(0, smoothing))
     }
   }
   return 0.5
@@ -1170,6 +1188,47 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
         sceneStore.updateNodeDynamicMesh(floorNode.id, build.definition)
+      }
+    } else if (kind === 'water') {
+      const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
+      for (const poly of group.polygons) {
+        updateProgressForUnit(`Converting water: ${poly.name?.trim() || poly.id}`)
+        const build = buildFloorDynamicMeshFromPlanningPolygon({
+          polygon: poly,
+          groundWidth,
+          groundDepth,
+          smooth: waterSmooth,
+        })
+        if (!build) {
+          continue
+        }
+
+        const waterObject = createFloorGroup(build.definition)
+        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+        const waterNode = sceneStore.addSceneNode({
+          nodeType: 'Mesh',
+          object: waterObject,
+          name: layerName ? `${layerName} Water` : 'Planning Water',
+          position: build.center,
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          userData: {
+            source: PLANNING_CONVERSION_SOURCE,
+            planningLayerId: layerId,
+            kind: 'water',
+          },
+        })
+        if (!waterNode) {
+          continue
+        }
+
+        sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.updateNodeDynamicMesh(waterNode.id, build.definition)
+        const floorComponent = sceneStore.addNodeComponent(waterNode.id, FLOOR_COMPONENT_TYPE)
+        if (floorComponent && typeof floorComponent === 'object' && typeof (floorComponent as any).id === 'string') {
+          sceneStore.updateNodeComponentProps(waterNode.id, (floorComponent as any).id, { smooth: waterSmooth })
+        }
+        sceneStore.addNodeComponent(waterNode.id, WATER_COMPONENT_TYPE)
       }
     } else if (kind === 'green') {
       for (const poly of group.polygons) { 
