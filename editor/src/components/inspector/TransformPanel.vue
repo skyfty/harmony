@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { onBeforeUnmount, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 
 const sceneStore = useSceneStore()
@@ -74,6 +74,66 @@ watch(
   },
   { immediate: true, deep: true }
 )
+
+let liveSyncHandle: number | null = null
+
+function stopLiveTransformSync() {
+  if (liveSyncHandle !== null) {
+    cancelAnimationFrame(liveSyncHandle)
+    liveSyncHandle = null
+  }
+}
+
+function startLiveTransformSync(nodeId: string) {
+  stopLiveTransformSync()
+
+  const tick = () => {
+    const node = selectedNode.value
+    if (!node || node.id !== nodeId || sceneStore.activeTransformNodeId !== nodeId) {
+      stopLiveTransformSync()
+      return
+    }
+
+    const runtime = getRuntimeObject(nodeId)
+    if (runtime) {
+      transformForm.position = {
+        x: formatNumeric(runtime.position.x),
+        y: formatNumeric(runtime.position.y),
+        z: formatNumeric(runtime.position.z),
+      }
+      transformForm.rotation = {
+        x: radToDeg(runtime.rotation.x),
+        y: radToDeg(runtime.rotation.y),
+        z: radToDeg(runtime.rotation.z),
+      }
+      transformForm.scale = {
+        x: formatNumeric(runtime.scale.x),
+        y: formatNumeric(runtime.scale.y),
+        z: formatNumeric(runtime.scale.z),
+      }
+    }
+
+    liveSyncHandle = requestAnimationFrame(tick)
+  }
+
+  liveSyncHandle = requestAnimationFrame(tick)
+}
+
+watch(
+  [() => sceneStore.activeTransformNodeId, selectedNode],
+  ([activeNodeId, node]) => {
+    if (activeNodeId && node && node.id === activeNodeId) {
+      startLiveTransformSync(activeNodeId)
+      return
+    }
+    stopLiveTransformSync()
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  stopLiveTransformSync()
+})
 
 function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: string) {
   transformForm[field] = {
