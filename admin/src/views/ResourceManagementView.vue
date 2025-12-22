@@ -48,6 +48,7 @@ const ASSET_TYPE_LABELS: Record<AssetType, string> = {
   prefab: '预制体',
   video: '视频',
   file: '文件',
+  behavior: '行为',
 }
 
 const typeOptions: Array<{ label: string; value: AssetType }> = AssetTypes.map((type) => ({
