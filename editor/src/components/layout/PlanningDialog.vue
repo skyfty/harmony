@@ -5060,6 +5060,24 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
+.layer-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.layer-panel header {
+  flex: 0 0 auto;
+}
+
+.layer-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .upload-error {
   margin-top: 8px;
   color: #ff8a65;
