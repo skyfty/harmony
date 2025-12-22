@@ -1,5 +1,5 @@
 import type { SceneNode, GroundDynamicMesh } from '@harmony/schema'
-import type { RigidbodyPhysicsShape } from '@schema/components'
+import type { RigidbodyPhysicsShape } from './components'
 
 export type GroundHeightfieldData = {
   matrix: number[][]

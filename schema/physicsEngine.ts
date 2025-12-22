@@ -9,16 +9,16 @@ import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
 	RigidbodyVector3Tuple,
-} from '@schema/components'
+} from './components'
 import {
 	DEFAULT_LINEAR_DAMPING,
 	DEFAULT_ANGULAR_DAMPING,
 	DEFAULT_RIGIDBODY_FRICTION,
 	DEFAULT_RIGIDBODY_RESTITUTION,
-} from '@schema/components'
-import { buildGroundHeightfieldData } from '@schema/groundHeightfield'
-import type { GroundHeightfieldData } from '@schema/groundHeightfield'
-import { isGroundDynamicMesh } from '@schema/groundHeightfield'
+} from './components'
+import { buildGroundHeightfieldData } from './groundHeightfield'
+import type { GroundHeightfieldData } from './groundHeightfield'
+import { isGroundDynamicMesh } from './groundHeightfield'
 
 export type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion

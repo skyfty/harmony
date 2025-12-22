@@ -6,20 +6,21 @@
   "private": true,
   "sideEffects": false,
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && cp terrain-scatter.js terrain-scatter.d.ts dist/ && node scripts/fix-esm-extensions.cjs",
     "build:asset-types": "tsc -p tsconfig.asset-types.json"
   },
   "exports": {
     ".": {
-      "types": "./index.d.ts",
-      "default": "./index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./asset-api": {
-      "types": "./asset-api.d.ts",
-      "default": "./asset-api.js"
+      "types": "./dist/asset-api.d.ts",
+      "default": "./dist/asset-api.js"
     },
     "./terrain-scatter": {
-      "types": "./terrain-scatter.d.ts",
-      "default": "./terrain-scatter.js"
+      "types": "./dist/terrain-scatter.d.ts",
+      "default": "./dist/terrain-scatter.js"
     }
   },
   "dependencies": {

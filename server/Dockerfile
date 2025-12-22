@@ -18,6 +18,12 @@ RUN npm ci
 # so expose the server's node_modules there for the build.
 RUN [ -e /app/node_modules ] || ln -s /app/server/node_modules /app/node_modules
 
+# Ensure the dependency points to the full schema directory.
+RUN rm -rf /app/server/node_modules/@harmony/schema && ln -s /app/schema /app/server/node_modules/@harmony/schema
+
+# Build schema so its package exports (dist/*.js) exist for runtime imports.
+RUN npm --prefix /app/schema run build
+
 # Copy source for build (TypeScript compile)
 COPY server/tsconfig.json ./tsconfig.json
 COPY server/scripts ./scripts

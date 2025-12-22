@@ -18,6 +18,10 @@ RUN [ -e /app/node_modules ] || ln -s /app/admin/node_modules /app/node_modules
 # 拷贝源码（admin 与 schema）
 COPY admin/ ./
 COPY schema/ ../schema/
+# 确保依赖实际指向完整 schema 源码（安装阶段仅拷贝了 schema/package.json）
+RUN rm -rf /app/admin/node_modules/@harmony/schema && ln -s /app/schema /app/admin/node_modules/@harmony/schema
+# 先构建 schema（生成 dist/ 供 @harmony/schema 的 exports 使用）
+RUN npm --prefix /app/schema run build
 # 构建产物
 RUN npm run build
 

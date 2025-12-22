@@ -9,9 +9,16 @@ COPY editor/package.json editor/package-lock.json ./
 COPY schema/package.json ../schema/package.json
 # 安装依赖（包含 devDependencies，确保 vite 可用）
 RUN npm ci
+
+# Schema sources live at /app/schema; it resolves node_modules by walking up to /app/node_modules.
+RUN [ -e /app/node_modules ] || ln -s /app/editor/node_modules /app/node_modules
 # 拷贝源码（editor 与 schema）
 COPY editor/ ./
 COPY schema/ ../schema/
+# 确保依赖实际指向完整 schema 源码（安装阶段仅拷贝了 schema/package.json）
+RUN rm -rf /app/editor/node_modules/@harmony/schema && ln -s /app/schema /app/editor/node_modules/@harmony/schema
+# 先构建 schema（生成 dist/ 供 @harmony/schema 的 exports 使用）
+RUN npm --prefix /app/schema run build
 # 仅使用 vite 构建，跳过类型检查以避免编译时因未使用变量而失败
 RUN npm run build
 

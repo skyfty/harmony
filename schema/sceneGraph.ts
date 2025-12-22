@@ -41,8 +41,8 @@ import {
   cloneWarpGateComponentProps,
 } from './components/definitions/warpGateComponent';
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
-import { createFileFromEntry } from '@schema/modelAssetLoader'
-import { loadObjectFromFile } from '@schema/assetImport'
+import { createFileFromEntry } from './modelAssetLoader'
+import { loadObjectFromFile } from './assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
 import { createRoadRenderGroup } from './roadMesh'
