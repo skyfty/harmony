@@ -156,20 +156,8 @@ export class ComponentManager {
     visit(nodes)
   }
 
-  syncNode(node: SceneNode, options: { runtimeObject?: Object3D | null } = {}): void {
+  syncNode(node: SceneNode): void {
     const bundle = this.ensureBundle(node.id)
-    if (options.runtimeObject !== undefined) {
-      bundle.runtimeObject = options.runtimeObject ?? null
-      bundle.instances.forEach((wrapper) => {
-        wrapper.context.setRuntimeObject(bundle.runtimeObject)
-        try {
-          wrapper.instance.onRuntimeAttached(bundle.runtimeObject)
-        } catch (error) {
-          console.warn('Component onRuntimeAttached failed', error)
-        }
-      })
-    }
-
     const statesSource: SceneNodeComponentMap | undefined = node.components ?? undefined
     const states = statesSource
       ? (Object.values(statesSource).filter((state): state is AnySceneNodeComponentState => Boolean(state)) ?? [])
