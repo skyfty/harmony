@@ -67,6 +67,7 @@
         variant="text"
         class="toolbar-button"
         title="Save as Prefab"
+        v-if="canSavePrefab"
         :disabled="!canSavePrefab || isSavingPrefab"
         @click="handleSavePrefab"
       />
@@ -227,7 +228,6 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
-import { GROUND_NODE_ID } from '@harmony/schema'
 import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -346,10 +346,7 @@ const canSavePrefab = computed(() => {
   if (!node) {
     return false
   }
-  if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-    return false
-  }
-  return true
+  return node.canPrefab !== false
 })
 
 const canApplyTransformsToGroup = computed(() => {
@@ -382,8 +379,9 @@ async function handleSavePrefab() {
   if (isSavingPrefab.value) {
     return
   }
-  const nodeId = sceneStore.selectedNodeId
-  if (!nodeId || nodeId === GROUND_NODE_ID) {
+  const node = activeNode.value
+  const nodeId = node?.id ?? null
+  if (!nodeId || node?.canPrefab === false) {
     return
   }
   isSavingPrefab.value = true

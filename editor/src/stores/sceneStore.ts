@@ -1919,6 +1919,7 @@ function createGroundSceneNode(
     id: GROUND_NODE_ID,
     name: 'Ground',
     nodeType: 'Mesh',
+    canPrefab: false,
     allowChildNodes: false,
     materials: [
       createNodeMaterial(null, createMaterialProps({
@@ -1946,6 +1947,7 @@ function createSkySceneNode(overrides: { visible?: boolean; userData?: Record<st
     id: SKY_NODE_ID,
     name: 'Sky',
     nodeType: 'Sky',
+    canPrefab: false,
     allowChildNodes: false,
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
@@ -2103,6 +2105,7 @@ function createEnvironmentSceneNode(
     id: ENVIRONMENT_NODE_ID,
     name: 'Environment',
     nodeType: 'Environment',
+    canPrefab: false,
     allowChildNodes: false,
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
@@ -8996,6 +8999,9 @@ export const useSceneStore = defineStore('scene', {
       if (!node) {
         throw new Error('节点不存在或已被移除')
       }
+      if (node.canPrefab === false) {
+        throw new Error('该节点不允许保存为预制件')
+      }
       if (isGroundNode(node)) {
         throw new Error('地面节点无法保存为预制件')
       }
@@ -10747,6 +10753,7 @@ export const useSceneStore = defineStore('scene', {
       position?: Vector3Like
       rotation?: Vector3Like
       scale?: Vector3Like
+      canPrefab?: boolean
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
       components?: SceneNodeComponentMap
@@ -10784,6 +10791,7 @@ export const useSceneStore = defineStore('scene', {
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
+        canPrefab: payload.canPrefab,
         visible: true,
         sourceAssetId: payload.sourceAssetId,
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,

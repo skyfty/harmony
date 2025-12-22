@@ -168,7 +168,7 @@ const canSavePrefab = computed(() => {
   if (!node) {
     return false
   }
-  return isNormalNodeType(node)
+  return isNormalNodeType(node) && node.canPrefab !== false
 })
 
 const canUpdatePrefab = computed(() => {
@@ -179,7 +179,7 @@ const canUpdatePrefab = computed(() => {
   if (!node ) {
     return false
   }
-  return isNormalNodeType(node) && resolvePrefabAssetId(node) !== null
+  return isNormalNodeType(node) && node.canPrefab !== false && resolvePrefabAssetId(node) !== null
 })
 
 
@@ -1159,7 +1159,8 @@ function handleTreeDragLeave(event: DragEvent) {
           density="compact"
           color="primary"
           :title="'保存为预制件'"
-          :disabled="!canSavePrefab || isSavingPrefab"
+          v-if="canSavePrefab"
+          :disabled="isSavingPrefab"
           :loading="isSavingPrefab"
           @click="handleSavePrefab"
         />

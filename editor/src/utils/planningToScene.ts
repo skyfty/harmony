@@ -42,6 +42,7 @@ export type ConvertPlanningToSceneOptions = {
       position?: { x: number; y: number; z: number }
       rotation?: { x: number; y: number; z: number }
       scale?: { x: number; y: number; z: number }
+      canPrefab?: boolean
       parentId?: string | null
       userData?: Record<string, unknown>
     }) => SceneNode
@@ -1065,6 +1066,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     nodeType: 'Group',
     object: new THREE.Group(),
     name: 'Planning 3D Scene',
+    canPrefab: false,
     userData: {
       [PLANNING_CONVERSION_ROOT_TAG]: true,
       source: PLANNING_CONVERSION_SOURCE,

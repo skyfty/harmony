@@ -59,18 +59,21 @@ function openPlanningDialog() {
         <div class="brand">Harmony</div>
         <div class="menu-items">
           <div class="menu-item">
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-            >
-              <v-menu transition="none">
-                <template #activator="{ props }">
-                  <span v-bind="props">File</span>
-                </template>
-                <v-list class="menu-dropdown">
+            <v-menu transition="none">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  v-bind="menuProps"
+                  class="menu-button"
+                  variant="text"
+                  color="rgba(255, 255, 255, 0.72)"
+                  density="comfortable"
+                  rounded="xl"
+                >
+                  File
+                  <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+                </v-btn>
+              </template>
+              <v-list class="menu-dropdown">
                   <v-list-item @click="handleMenuAction('New')" class="menu-list-item">
                     New
                     <template  #append>
@@ -105,23 +108,24 @@ function openPlanningDialog() {
                     Export
                   </v-list-item>
        
-                </v-list>
-                </v-menu>
-                <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+              </v-list>
+            </v-menu>
 
-            </v-btn>
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-            >
-              <v-menu transition="none">
-                <template #activator="{ props }">
-                  <span v-bind="props">Edit</span>
-                </template>
-                <v-list class="menu-dropdown">
+            <v-menu transition="none">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  v-bind="menuProps"
+                  class="menu-button"
+                  variant="text"
+                  color="rgba(255, 255, 255, 0.72)"
+                  density="comfortable"
+                  rounded="xl"
+                >
+                  Edit
+                  <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+                </v-btn>
+              </template>
+              <v-list class="menu-dropdown">
                   <v-list-item
                     @click="handleMenuAction('Undo')"
                     class="menu-list-item"
@@ -183,37 +187,40 @@ function openPlanningDialog() {
                   <v-divider />
                   <v-list-item @click="handleMenuAction('CleanUnusedAssets')" class="menu-list-item">
                     Clean Unused Assets    </v-list-item>
-                </v-list>
-                </v-menu>
-                <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+              </v-list>
+            </v-menu>
 
-            </v-btn>
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-            >
-              <AddNodeMenu>
-                <template #activator="{ props }">
-                  <span v-bind="props">Add</span>
-                </template>
-              </AddNodeMenu>
-              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
-            </v-btn>
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-            >
-              <v-menu transition="none">
-                <template #activator="{ props }">
-                  <span v-bind="props">Views</span>
-                </template>
-                <v-list class="menu-dropdown">
+            <AddNodeMenu>
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  v-bind="menuProps"
+                  class="menu-button"
+                  variant="text"
+                  color="rgba(255, 255, 255, 0.72)"
+                  density="comfortable"
+                  rounded="xl"
+                >
+                  Add
+                  <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+                </v-btn>
+              </template>
+            </AddNodeMenu>
+
+            <v-menu transition="none">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  v-bind="menuProps"
+                  class="menu-button"
+                  variant="text"
+                  color="rgba(255, 255, 255, 0.72)"
+                  density="comfortable"
+                  rounded="xl"
+                >
+                  Views
+                  <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+                </v-btn>
+              </template>
+              <v-list class="menu-dropdown">
                   <v-list-item
                     class="menu-list-item"
                     @click="handleTogglePanel('hierarchy')"
@@ -259,10 +266,8 @@ function openPlanningDialog() {
                       </span>
                     </template>
                   </v-list-item>
-                </v-list>
-              </v-menu>
-              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
-            </v-btn>
+              </v-list>
+            </v-menu>
             <v-btn
               class="menu-button"
               variant="text"

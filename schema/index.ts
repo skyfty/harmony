@@ -557,6 +557,8 @@ export interface SceneNode {
   position: Vector3Like;
   rotation: Vector3Like;
   scale: Vector3Like;
+  /** When false, this node cannot be saved as a prefab. Defaults to true when omitted. */
+  canPrefab?: boolean;
   sourceAssetId?: string;
   visible?: boolean;
   locked?: boolean;
