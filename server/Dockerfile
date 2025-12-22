@@ -21,6 +21,9 @@ RUN [ -e /app/node_modules ] || ln -s /app/server/node_modules /app/node_modules
 # Ensure the dependency points to the full schema directory.
 RUN rm -rf /app/server/node_modules/@harmony/schema && ln -s /app/schema /app/server/node_modules/@harmony/schema
 
+# Install schema dependencies (schema/node_modules is not copied into Docker context).
+RUN npm --prefix /app/schema ci
+
 # Build schema so its package exports (dist/*.js) exist for runtime imports.
 RUN npm --prefix /app/schema run build
 

@@ -17,6 +17,8 @@ COPY editor/ ./
 COPY schema/ ../schema/
 # 确保依赖实际指向完整 schema 源码（安装阶段仅拷贝了 schema/package.json）
 RUN rm -rf /app/editor/node_modules/@harmony/schema && ln -s /app/schema /app/editor/node_modules/@harmony/schema
+# 安装 schema 自身依赖（schema/node_modules 不会随 Docker 上下文拷贝）
+RUN npm --prefix /app/schema ci
 # 先构建 schema（生成 dist/ 供 @harmony/schema 的 exports 使用）
 RUN npm --prefix /app/schema run build
 # 仅使用 vite 构建，跳过类型检查以避免编译时因未使用变量而失败

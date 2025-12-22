@@ -114,7 +114,7 @@ function createPeerMesh(): Mesh {
 
 class OnlineComponent extends Component<OnlineComponentProps> {
   private socket: WebSocket | null = null
-  private reconnectTimer: number | null = null
+  private reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   private avatarRoot: Group | null = null
   private peers = new Map<string, PeerEntry>()
   private lastSyncTimestamp = 0
