@@ -8,6 +8,7 @@
       :model-value="localValues[axis]"
       type="number"
       step="0.1"
+      :min="props.min"
       density="compact"
       variant="underlined"
       color="primary"
@@ -84,7 +85,16 @@ function onBlur(axis: VectorAxis) {
 }
 
 function onInput(axis: VectorAxis, value: string | number) {
-  localValues[axis] = typeof value === 'number' ? value.toString() : value
+  const text = typeof value === 'number' ? value.toString() : value
+  localValues[axis] = text
+
+  // Update the scene immediately for complete numeric values (e.g. spinner up/down arrows).
+  if (props.disabled || props.readonly) return
+  if (editingAxis.value !== axis) return
+
+  const trimmed = text.trim()
+  if (!isCompleteNumberText(trimmed)) return
+  emit('update:axis', axis, trimmed)
 }
 
 function onLabelDblClick() {
@@ -123,6 +133,12 @@ function normalizeToTwoDecimals(raw: string): string | null {
   const fracPart = (fracRaw + '00').slice(0, 2) // truncate and pad
 
   return `${negative ? '-' : ''}${intPart}.${fracPart}`
+}
+
+function isCompleteNumberText(text: string): boolean {
+  // Reject incomplete numbers like: '-', '.', '-.', '1.' while typing.
+  if (text === '-' || text === '.' || text === '-.') return false
+  return /^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)
 }
 </script>
 
