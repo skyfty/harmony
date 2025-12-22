@@ -37,14 +37,38 @@ const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
 function createDefaultNormalTexture(): Texture {
-  const size = 2
+  // Use a small procedural, tileable normal map so the water surface doesn't look flat
+  // when no normalMap is provided by the host mesh material.
+  const size = 64
   const data = new Uint8Array(size * size * 4)
-  for (let i = 0; i < size * size; i += 1) {
-    const offset = i * 4
-    data[offset] = 128
-    data[offset + 1] = 128
-    data[offset + 2] = 255
-    data[offset + 3] = 255
+  const amp = 2.0
+  const freq = (Math.PI * 2 * 4) / size
+
+  const sampleHeight = (x: number, y: number): number => {
+    const nx = (x + size) % size
+    const ny = (y + size) % size
+    return Math.sin(nx * freq) + Math.cos(ny * freq)
+  }
+
+  const normal = new Vector3()
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const hL = sampleHeight(x - 1, y)
+      const hR = sampleHeight(x + 1, y)
+      const hD = sampleHeight(x, y - 1)
+      const hU = sampleHeight(x, y + 1)
+
+      const dhdx = (hR - hL) * 0.5
+      const dhdz = (hU - hD) * 0.5
+
+      normal.set(-dhdx * amp, 1, -dhdz * amp).normalize()
+
+      const offset = (y * size + x) * 4
+      data[offset] = Math.round((normal.x * 0.5 + 0.5) * 255)
+      data[offset + 1] = Math.round((normal.y * 0.5 + 0.5) * 255)
+      data[offset + 2] = Math.round((normal.z * 0.5 + 0.5) * 255)
+      data[offset + 3] = 255
+    }
   }
   const texture = new DataTexture(data, size, size)
   texture.wrapS = RepeatWrapping
@@ -103,6 +127,7 @@ export function cloneWaterComponentProps(props: WaterComponentProps): WaterCompo
 
 class WaterComponent extends Component<WaterComponentProps> {
   private hostMesh: Mesh | null = null
+  private waterParent: Object3D | null = null
   private waterInstance: Water | null = null
   private waterGeometry: BufferGeometry | null = null
   private normalTexture: Texture | null = null
@@ -137,6 +162,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (!this.waterInstance) {
       return
     }
+    this.syncWaterTransform()
     const props = clampWaterComponentProps(this.context.getProps())
     this.flowOffset.x = (this.flowOffset.x + props.flowDirection.x * props.flowSpeed * 0.05 * deltaTime) % 1
     this.flowOffset.y = (this.flowOffset.y + props.flowDirection.y * props.flowSpeed * 0.05 * deltaTime) % 1
@@ -267,6 +293,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
+
     const water = new Water(resolvedGeometry, {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
@@ -284,11 +311,37 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (shaderMaterial.uniforms?.size) {
       shaderMaterial.uniforms.size.value = props.size
     }
-    mesh.add(water)
-    mesh.visible = false
+    const parent = mesh.parent
+    if (parent) {
+      water.position.copy(mesh.position)
+      water.quaternion.copy(mesh.quaternion)
+      water.scale.copy(mesh.scale)
+      
+      parent.add(water)
+      this.waterParent = parent
+      // Hide the original floor plane mesh to avoid z-fighting.
+      mesh.visible = false
+    } else {
+      // Fallback: keep behavior safe if the mesh is not attached yet.
+      mesh.add(water)
+      this.waterParent = mesh
+      // Don't hide the host mesh here; a hidden parent would also hide the Water child.
+    }
     this.waterInstance = water
     this.applyUniforms(props, material)
     this.syncSunUniforms()
+  }
+
+  private syncWaterTransform(): void {
+    if (!this.waterInstance || !this.hostMesh) {
+      return
+    }
+    // Keep Water aligned with the host mesh even though it's not parented under it.
+    this.waterInstance.position.copy(this.hostMesh.position)
+    this.waterInstance.quaternion.copy(this.hostMesh.quaternion)
+    this.waterInstance.scale.copy(this.hostMesh.scale)
+    this.waterInstance.updateMatrix()
+    this.waterInstance.updateMatrixWorld(true)
   }
 
   private prepareNormalTexture(source: Texture | null): Texture {
@@ -376,8 +429,9 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private destroyWater(): void {
-    if (this.waterInstance && this.hostMesh) {
-      this.hostMesh.remove(this.waterInstance)
+    if (this.waterInstance) {
+      this.waterParent?.remove(this.waterInstance)
+      this.waterParent = null
       this.meshVisibility(true)
       if (this.waterInstance.geometry) {
         this.waterInstance.geometry.dispose()
