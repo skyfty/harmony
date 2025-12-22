@@ -13,6 +13,7 @@
   "dependencies": {
     "@harmony/schema": "file:../schema",
     "@koa/cors": "^5.0.0",
+    "@types/three": "^0.171.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "fs-extra": "^11.2.0",
