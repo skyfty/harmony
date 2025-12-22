@@ -13,6 +13,11 @@ WORKDIR /app/server
 COPY server/package.json server/package-lock.json ./
 RUN npm ci
 
+# TypeScript also type-checks files from /app/schema (via file:../schema).
+# Node-style module resolution from /app/schema walks up to /app/node_modules,
+# so expose the server's node_modules there for the build.
+RUN [ -e /app/node_modules ] || ln -s /app/server/node_modules /app/node_modules
+
 # Copy source for build (TypeScript compile)
 COPY server/tsconfig.json ./tsconfig.json
 COPY server/scripts ./scripts
