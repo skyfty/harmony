@@ -108,7 +108,7 @@ function normalizeToTwoDecimals(raw: string): string | null {
 
   const n = Number(text)
   if (!Number.isFinite(n)) return null
-  return n.toFixed(2)
+  return (Math.floor(n * 100) / 100).toString()  // truncate to 2 decimal places
 }
 </script>
 
