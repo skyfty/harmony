@@ -2,7 +2,13 @@ import type { Material, Mesh, Object3D, Texture } from 'three'
 import { BufferGeometry, Color, DataTexture, RepeatWrapping, ShaderMaterial, Vector2, Vector3 } from 'three'
 import { Water } from 'three/examples/jsm/objects/Water.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
-import { componentManager, type ComponentDefinition } from '../componentManager'
+import {
+  componentManager,
+  type ComponentDefinition,
+  COMPONENT_ARTIFACT_COMPONENT_ID_KEY,
+  COMPONENT_ARTIFACT_KEY,
+  COMPONENT_ARTIFACT_NODE_ID_KEY,
+} from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const WATER_COMPONENT_TYPE = 'water'
@@ -303,6 +309,10 @@ class WaterComponent extends Component<WaterComponentProps> {
       waterNormals: normalTexture,
     })
     water.name = `${mesh.name ?? 'Water'} (Water)`
+    water.userData = water.userData ?? {}
+    water.userData[COMPONENT_ARTIFACT_KEY] = true
+    water.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = this.context.nodeId
+    water.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
     water.renderOrder = mesh.renderOrder
     const shaderMaterial = water.material as ShaderMaterial
     if (shaderMaterial.uniforms?.normalSampler) {
@@ -466,6 +476,7 @@ const waterComponentDefinition: ComponentDefinition<WaterComponentProps> = {
   icon: 'mdi-water',
   order: 65,
   inspector: [],
+  recreateOnPropsChange: true,
   canAttach(node: SceneNode) {
     const type = typeof node.nodeType === 'string' ? node.nodeType.trim().toLowerCase() : ''
     return type === 'mesh' || Boolean(node.dynamicMesh) || Boolean(node.sourceAssetId)

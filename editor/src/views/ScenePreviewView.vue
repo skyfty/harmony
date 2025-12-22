@@ -6884,11 +6884,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetBehaviorRuntime()
 	previewComponentManager.reset()
 	rebuildPreviewNodeMap(document.nodes)
-	previewComponentManager.syncScene(document.nodes ?? [])
 	refreshBehaviorProximityCandidates()
-	nodeObjectMap.forEach((object, nodeId) => {
-		attachRuntimeForNode(nodeId, object)
-	})
 
 	const pendingObjects = new Map<string, THREE.Object3D>()
 	root.traverse((object) => {
@@ -6943,7 +6939,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
 	}
-
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument.nodes ?? [], pendingObjects)
 
 	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
@@ -6953,6 +6948,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		}
 	}
 
+	nodeObjectMap.forEach((object, nodeId) => {
+		attachRuntimeForNode(nodeId, object)
+	})
 	syncPhysicsBodiesForDocument(document)
 	await syncTerrainScatterInstances(document, resourceCache)
 	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active

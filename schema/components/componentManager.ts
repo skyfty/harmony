@@ -7,6 +7,8 @@ import type {
   SceneNodeComponentMap,
 } from '../index'
 
+import { stableSerialize } from '../stableSerialize'
+
 import { Component, type ComponentRuntimeContext } from './Component'
 
 export interface ComponentDefinition<TProps = Record<string, unknown>> {
@@ -17,6 +19,13 @@ export interface ComponentDefinition<TProps = Record<string, unknown>> {
   category?: string
   order?: number
   inspector?: ComponentInspectorSection<TProps>[]
+
+  /**
+   * If true, the component instance is fully destroyed and recreated when props change.
+   * Useful for components that spawn runtime children and need a clean teardown.
+   */
+  recreateOnPropsChange?: boolean
+
   canAttach(node: SceneNode): boolean
   createDefaultProps(node: SceneNode): TProps
   createInstance(context: ComponentRuntimeContext<TProps>): Component<TProps>
@@ -29,6 +38,7 @@ type AnySceneNodeComponentState = SceneNodeComponentState<any>
 type ComponentInstanceWrapper = {
   definition: AnyComponentDefinition
   state: AnySceneNodeComponentState
+  propsSignature: string
   context: ComponentContextImpl<any>
   instance: Component<any>
 }
@@ -37,6 +47,10 @@ type NodeComponentBundle = {
   runtimeObject: Object3D | null
   instances: Map<string, ComponentInstanceWrapper>
 }
+
+export const COMPONENT_ARTIFACT_KEY = '__harmonyComponentArtifact'
+export const COMPONENT_ARTIFACT_NODE_ID_KEY = '__harmonyComponentArtifactNodeId'
+export const COMPONENT_ARTIFACT_COMPONENT_ID_KEY = '__harmonyComponentArtifactComponentId'
 
 class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
   private runtimeObject: Object3D | null
@@ -139,6 +153,8 @@ export class ComponentManager {
         } catch (error) {
           console.warn('Component onDestroy failed', error)
         }
+
+        this.cleanupTaggedArtifacts(bundle.runtimeObject, wrapper.context.nodeId, wrapper.context.componentId)
       })
     })
     this.nodeBundles.clear()
@@ -184,9 +200,11 @@ export class ComponentManager {
         const context = new ComponentContextImpl(node.id, state.id, state.props, true)
         context.setRuntimeObject(bundle.runtimeObject)
         const instance = definition.createInstance(context)
+        const propsSignature = stableSerialize(state.props)
         bundle.instances.set(state.id, {
           definition,
           state,
+          propsSignature,
           context,
           instance,
         })
@@ -203,25 +221,59 @@ export class ComponentManager {
         return
       }
 
-      if (existing.state !== state) {
-        const previousProps = existing.state.props
-        const previousEnabled = existing.context.isEnabled()
-        existing.state = state
-        existing.context.setProps(state.props)
-        existing.context.setEnabled(state.enabled)
-        if (previousEnabled !== state.enabled) {
-          try {
-            existing.instance.onEnabledChanged(state.enabled)
-          } catch (error) {
-            console.warn('Component onEnabledChanged failed', error)
-          }
+      // NOTE: Component state/props may be mutated in-place by the editor.
+      // Relying solely on reference changes would miss updates.
+      const previousEnabled = existing.context.isEnabled()
+      const nextEnabled = Boolean(state.enabled)
+      const previousProps = existing.context.getProps()
+      const nextProps = state.props
+      const nextPropsSignature = stableSerialize(nextProps)
+
+      existing.state = state
+      existing.context.setProps(nextProps)
+      existing.context.setEnabled(nextEnabled)
+
+      if (previousEnabled !== nextEnabled) {
+        try {
+          existing.instance.onEnabledChanged(nextEnabled)
+        } catch (error) {
+          console.warn('Component onEnabledChanged failed', error)
         }
-        if (previousProps !== state.props) {
+      }
+
+      if (existing.propsSignature !== nextPropsSignature) {
+        // If requested, fully recreate component instance on props change.
+        if (existing.definition.recreateOnPropsChange) {
+          this.destroyInstance(node.id, state.id)
+
+          const context = new ComponentContextImpl(node.id, state.id, nextProps, true)
+          context.setRuntimeObject(bundle.runtimeObject)
+          const instance = existing.definition.createInstance(context)
+          bundle.instances.set(state.id, {
+            definition: existing.definition,
+            state,
+            propsSignature: nextPropsSignature,
+            context,
+            instance,
+          })
           try {
-            existing.instance.onPropsUpdated(state.props, previousProps)
+            instance.onInit()
           } catch (error) {
-            console.warn('Component onPropsUpdated failed', error)
+            console.warn('Component onInit failed', error)
           }
+          try {
+            instance.onRuntimeAttached(bundle.runtimeObject)
+          } catch (error) {
+            console.warn('Component onRuntimeAttached failed', error)
+          }
+          return
+        }
+
+        existing.propsSignature = nextPropsSignature
+        try {
+          existing.instance.onPropsUpdated(nextProps, previousProps)
+        } catch (error) {
+          console.warn('Component onPropsUpdated failed', error)
         }
       }
     })
@@ -275,6 +327,8 @@ export class ComponentManager {
       } catch (error) {
         console.warn('Component onDestroy failed', error)
       }
+
+      this.cleanupTaggedArtifacts(bundle.runtimeObject, wrapper.context.nodeId, wrapper.context.componentId)
     })
     this.nodeBundles.delete(nodeId)
   }
@@ -324,6 +378,36 @@ export class ComponentManager {
     } catch (error) {
       console.warn('Component onDestroy failed', error)
     }
+
+    this.cleanupTaggedArtifacts(bundle.runtimeObject, nodeId, componentId)
+  }
+
+  private cleanupTaggedArtifacts(runtimeObject: Object3D | null, nodeId: string, componentId: string): void {
+    if (!runtimeObject) {
+      return
+    }
+
+    const toRemove: Object3D[] = []
+    runtimeObject.traverse((object) => {
+      const userData = (object as any).userData as Record<string, unknown> | undefined
+      if (!userData) {
+        return
+      }
+      if (userData[COMPONENT_ARTIFACT_KEY] !== true) {
+        return
+      }
+      if (userData[COMPONENT_ARTIFACT_NODE_ID_KEY] !== nodeId) {
+        return
+      }
+      if (userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] !== componentId) {
+        return
+      }
+      toRemove.push(object)
+    })
+
+    toRemove.forEach((object) => {
+      object.parent?.remove(object)
+    })
   }
 }
 
