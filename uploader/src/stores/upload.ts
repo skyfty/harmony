@@ -331,6 +331,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
           prefab: 'Prefab',
           video: '视频',
           file: '文件',
+          behavior: '行为',
         }[type] ?? type,
     })),
   )

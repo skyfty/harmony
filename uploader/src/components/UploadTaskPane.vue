@@ -298,6 +298,7 @@ const TYPE_COLOR_FALLBACK: Record<AssetType, string> = {
   prefab: '#7986cb',
   video: '#ff7043',
   file: '#546e7a',
+  behavior: '#546e7a',
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
