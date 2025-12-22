@@ -351,6 +351,7 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
     : 'Group'
   const groupObject = new Group()
   groupObject.name = groupName
+  sceneStore.captureHistorySnapshot()
   const groupNode = sceneStore.addSceneNode({
     nodeType: 'Group',
     object: groupObject,

@@ -625,6 +625,7 @@ function handleAddGroup() {
   const selectedNode = sceneStore.selectedNode
   const parentId = resolveEffectiveParentId(selectedNode ?? null)
   const spawnPosition = computeGroupSpawnPosition(parentId)
+  sceneStore.captureHistorySnapshot()
   sceneStore.addSceneNode({
     nodeType: 'Group',
     object: group,
@@ -1282,6 +1283,7 @@ function handleCreateEmptyNode() {
   const name = getNextEmptyName()
   emptyObject.name = name
   const parentId = resolveEffectiveParentId(sceneStore.selectedNode ?? null)
+  sceneStore.captureHistorySnapshot()
   sceneStore.addSceneNode({
     nodeType: 'Empty',
     object: emptyObject,

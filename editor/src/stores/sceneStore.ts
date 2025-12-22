@@ -272,6 +272,10 @@ export const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; ke
 
 const HISTORY_LIMIT = 50
 
+// Used to suppress history snapshot creation during bulk operations.
+// Module-scoped because the editor typically has a single scene store instance.
+let historyCaptureSuppressionDepth = 0
+
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
 function normalizeRemoteCandidate(value: string | null | undefined): string | null {
@@ -6914,8 +6918,25 @@ export const useSceneStore = defineStore('scene', {
       if (this.isRestoringHistory) {
         return
       }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
       const snapshot = createHistorySnapshot(this)
       this.appendUndoSnapshot(snapshot, options)
+    },
+    beginHistoryCaptureSuppression() {
+      historyCaptureSuppressionDepth += 1
+    },
+    endHistoryCaptureSuppression() {
+      historyCaptureSuppressionDepth = Math.max(0, historyCaptureSuppressionDepth - 1)
+    },
+    async withHistorySuppressed<T>(fn: () => Promise<T> | T): Promise<T> {
+      this.beginHistoryCaptureSuppression()
+      try {
+        return await fn()
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
     },
     pushRedoSnapshot() {
       const snapshot = createHistorySnapshot(this)
@@ -10638,6 +10659,8 @@ export const useSceneStore = defineStore('scene', {
 
       const nodeType = payload.nodeType ?? (canUseInstancing ? 'Group' : resolveSceneNodeTypeFromObject(runtimeSource))
 
+      this.captureHistorySnapshot()
+
       const node = this.addSceneNode({
         nodeId: payload.nodeId,
         nodeType,
@@ -10753,7 +10776,6 @@ export const useSceneStore = defineStore('scene', {
       editorFlags?: SceneNodeEditorFlags
       userData?: Record<string, unknown>
     }) {
-      this.captureHistorySnapshot()
       const id = payload.nodeId ?? generateUuid()
       const nodeType = normalizeSceneNodeType(payload.nodeType)
       let nodeMaterials: SceneNodeMaterial[] | undefined
@@ -10860,6 +10882,8 @@ export const useSceneStore = defineStore('scene', {
       }
       const nodeMetadata = cloneAiModelMeshMetadata(metadata)
       const nodeName = resolvedName ?? 'AI Generated Mesh'
+
+      this.captureHistorySnapshot()
       const node = this.addSceneNode({
         nodeType: 'Mesh',
         object: runtime,
@@ -11068,38 +11092,45 @@ export const useSceneStore = defineStore('scene', {
 
       const wallGroup = createWallGroup(build.definition)
       const nodeName = payload.name ?? this.generateWallNodeName()
-      const node = this.addSceneNode({
-        nodeType: 'Mesh',
-        object: wallGroup,
-        name: nodeName,
-        position: createVector(build.center.x, build.center.y, build.center.z),
-        rotation: createVector(0, 0, 0),
-        scale: createVector(1, 1, 1),
-        dynamicMesh: build.definition,
-      })
-      if (node) {
-        this.ensureStaticRigidbodyComponent(node.id)
 
-        const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
-          ? payload.bodyAssetId
-          : null
-        const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
-          ? payload.jointAssetId
-          : null
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeType: 'Mesh',
+          object: wallGroup,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: build.definition,
+        })
+        if (node) {
+          this.ensureStaticRigidbodyComponent(node.id)
 
-        if (bodyAssetId || jointAssetId) {
-          const component = node.components?.[WALL_COMPONENT_TYPE] as
-            | SceneNodeComponentState<WallComponentProps>
-            | undefined
-          if (component) {
-            this.updateNodeComponentProps(node.id, component.id, {
-              bodyAssetId,
-              jointAssetId,
-            })
+          const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+            ? payload.bodyAssetId
+            : null
+          const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
+            ? payload.jointAssetId
+            : null
+
+          if (bodyAssetId || jointAssetId) {
+            const component = node.components?.[WALL_COMPONENT_TYPE] as
+              | SceneNodeComponentState<WallComponentProps>
+              | undefined
+            if (component) {
+              this.updateNodeComponentProps(node.id, component.id, {
+                bodyAssetId,
+                jointAssetId,
+              })
+            }
           }
         }
+        return node
+      } finally {
+        this.endHistoryCaptureSuppression()
       }
-      return node
     },
 
     createRoadNode(payload: {
@@ -11115,35 +11146,42 @@ export const useSceneStore = defineStore('scene', {
 
       const roadGroup = createRoadGroup(build.definition)
       const nodeName = payload.name ?? this.generateRoadNodeName()
-      const node = this.addSceneNode({
-        nodeType: 'Mesh',
-        object: roadGroup,
-        name: nodeName,
-        position: createVector(build.center.x, build.center.y, build.center.z),
-        rotation: createVector(0, 0, 0),
-        scale: createVector(1, 1, 1),
-        dynamicMesh: build.definition,
-      })
 
-      if (node) {
-        const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
-          ? payload.bodyAssetId
-          : null
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeType: 'Mesh',
+          object: roadGroup,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: build.definition,
+        })
 
-        const existing = node.components?.[ROAD_COMPONENT_TYPE] as
-          | SceneNodeComponentState<RoadComponentProps>
-          | undefined
-        const component = existing ?? (this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE) as SceneNodeComponentState<RoadComponentProps> | null)
+        if (node) {
+          const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+            ? payload.bodyAssetId
+            : null
 
-        if (component) {
-          this.updateNodeComponentProps(node.id, component.id, {
-            ...resolveRoadComponentPropsFromMesh(build.definition),
-            bodyAssetId,
-          })
+          const existing = node.components?.[ROAD_COMPONENT_TYPE] as
+            | SceneNodeComponentState<RoadComponentProps>
+            | undefined
+          const component = existing ?? (this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE) as SceneNodeComponentState<RoadComponentProps> | null)
+
+          if (component) {
+            this.updateNodeComponentProps(node.id, component.id, {
+              ...resolveRoadComponentPropsFromMesh(build.definition),
+              bodyAssetId,
+            })
+          }
         }
-      }
 
-      return node
+        return node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
     },
 
     createFloorNode(payload: {
@@ -11157,27 +11195,34 @@ export const useSceneStore = defineStore('scene', {
 
       const floorGroup = createFloorGroup(build.definition)
       const nodeName = payload.name ?? this.generateFloorNodeName()
-      const node = this.addSceneNode({
-        nodeType: 'Mesh',
-        object: floorGroup,
-        name: nodeName,
-        position: createVector(build.center.x, build.center.y, build.center.z),
-        rotation: createVector(0, 0, 0),
-        scale: createVector(1, 1, 1),
-        dynamicMesh: build.definition,
-      })
 
-      if (node) {
-        const component = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE) as
-          | SceneNodeComponentState<FloorComponentProps>
-          | null
-        if (component) {
-          const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
-          this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeType: 'Mesh',
+          object: floorGroup,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: build.definition,
+        })
+
+        if (node) {
+          const component = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE) as
+            | SceneNodeComponentState<FloorComponentProps>
+            | null
+          if (component) {
+            const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
+            this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
+          }
         }
-      }
 
-      return node
+        return node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
     },
     updateWallNodeGeometry(nodeId: string, payload: {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>

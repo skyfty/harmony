@@ -31,6 +31,8 @@ export type ConvertPlanningToSceneOptions = {
   sceneStore: {
     nodes: SceneNode[]
     groundSettings: { width: number; depth: number }
+    captureHistorySnapshot: (options?: { resetRedo?: boolean }) => void
+    withHistorySuppressed: <T>(fn: () => Promise<T> | T) => Promise<T>
     setGroundDimensions: (payload: { width?: number; depth?: number }) => boolean
     addSceneNode: (payload: {
       nodeId?: string
@@ -49,6 +51,7 @@ export type ConvertPlanningToSceneOptions = {
       name?: string
     }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
+    updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
@@ -1038,6 +1041,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   emitProgress(options, 'Preparing…', 0)
 
+  // Bulk conversion can touch many nodes/components; capture one undo snapshot and
+  // suppress nested snapshots to avoid creating a huge undo stack (performance).
+  sceneStore.captureHistorySnapshot()
+  return await sceneStore.withHistorySuppressed(async () => {
+
   // Ensure ground exists when missing.
   const groundWidth = Number(sceneStore.groundSettings?.width ?? 100)
   const groundDepth = Number(sceneStore.groundSettings?.depth ?? 100)
@@ -1465,4 +1473,5 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }
+  })
 }
