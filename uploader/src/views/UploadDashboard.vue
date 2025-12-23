@@ -34,7 +34,7 @@
           <div class="text-center py-16">
             <v-icon size="64" color="primary">mdi-cloud-upload</v-icon>
             <div class="text-h5 mt-4 mb-2">拖放文件到此处上传</div>
-            <div class="text-body-2 text-medium-emphasis">支持图片、材质、纹理、模型、Prefab 等多种资源类型，or 点击右下角的 “+” 按钮选择文件</div>
+            <div class="text-body-2 text-medium-emphasis">支持图片、材质、纹理、模型、Prefab、LOD 预设等多种资源类型，or 点击右下角的 “+” 按钮选择文件</div>
           </div>
         </template>
         <template v-else>
