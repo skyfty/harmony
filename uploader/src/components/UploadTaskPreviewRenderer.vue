@@ -1,5 +1,19 @@
 <template>
   <div class="preview-renderer">
+    <div v-if="isLodPreset" class="preview-renderer__image">
+      <v-img
+        v-if="lodThumbnailUrl"
+        :src="lodThumbnailUrl"
+        contain
+        width="100%"
+        height="100%"
+        class="preview-renderer__image-content elevation-1"
+      />
+      <div v-else class="preview-renderer__empty elevation-1">
+        <v-icon size="40" color="primary">mdi-image-outline</v-icon>
+        <div class="preview-renderer__empty-hint">LOD 预设无可用模型缩略图</div>
+      </div>
+    </div>
     <div v-if="task.preview.kind === 'model'" class="preview-renderer__model">
       <ModelPreview
         :file="task.file"
@@ -40,7 +54,7 @@ import ModelPreview from './ModelPreview.vue'
 import HDRPreview from './HDRPreview.vue'
 import type { UploadTask } from '@/stores/upload'
 import { useUploadStore } from '@/stores/upload'
-import { onMounted, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 
 interface Props {
   task: UploadTask
@@ -48,6 +62,61 @@ interface Props {
 
 const props = defineProps<Props>()
 const uploadStore = useUploadStore()
+
+const isLodPreset = ref(false)
+const lodThumbnailUrl = ref<string | null>(null)
+
+function looksLikeImageUrl(value: string): boolean {
+  if (/^data:image\//i.test(value)) return true
+  if (/^https?:\/\//i.test(value) && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(value)) return true
+  return false
+}
+
+function tryExtractLodFirstModelThumbnailUrl(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as any
+    if (!parsed || typeof parsed !== 'object') return null
+    if (typeof parsed.formatVersion !== 'number') return null
+    const props = parsed.props
+    const levels = props?.levels
+    if (!Array.isArray(levels) || levels.length === 0) return null
+    const first = levels[0]
+    const id = typeof first?.modelAssetId === 'string' ? first.modelAssetId : ''
+    if (!id) return null
+    return looksLikeImageUrl(id) ? id : null
+  } catch {
+    return null
+  }
+}
+
+async function refreshLodPresetPreview(): Promise<void> {
+  isLodPreset.value = false
+  lodThumbnailUrl.value = null
+
+  const name = props.task.file?.name ?? ''
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  // LOD presets are typically saved as JSON under a .prefab extension.
+  if (ext !== 'prefab' && ext !== 'json') {
+    return
+  }
+
+  const text = await props.task.file.text().catch(() => '')
+  if (!text) {
+    return
+  }
+  // Mark as LOD preset only if it matches the expected shape.
+  try {
+    const parsed = JSON.parse(text) as any
+    const levels = parsed?.props?.levels
+    if (!Array.isArray(levels)) {
+      return
+    }
+    isLodPreset.value = true
+    lodThumbnailUrl.value = tryExtractLodFirstModelThumbnailUrl(text)
+  } catch {
+    // not a LOD preset
+  }
+}
 
 function onModelDimensions(payload: { length: number; width: number; height: number }): void {
   const { length, width, height } = payload
@@ -115,6 +184,7 @@ function maybeExtractImageMeta(): void {
 
 onMounted(() => {
   maybeExtractImageMeta()
+  void refreshLodPresetPreview()
 })
 
 watch(
@@ -123,6 +193,13 @@ watch(
     maybeExtractImageMeta()
   },
   { deep: true },
+)
+
+watch(
+  () => props.task.file,
+  () => {
+    void refreshLodPresetPreview()
+  },
 )
 </script>
 

@@ -175,6 +175,8 @@ watch(
           :key="asset.id"
           class="thumbnail-item"
           type="button"
+          :title="asset.name || '未命名'"
+          :aria-label="asset.name || '未命名'"
           :class="{ 'is-selected': isAssetActive(asset.id) }"
           @click="handleAssetClick(asset)"
         >

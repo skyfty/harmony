@@ -47,6 +47,7 @@ const selectedAssetId = ref(props.assetId ?? '')
 const remoteAssets = ref<ProjectAsset[]>([])
 const remoteLoaded = ref(false)
 const loading = ref(false)
+const selectingAssetId = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
 const gridRef = ref<HTMLDivElement | null>(null)
@@ -376,9 +377,42 @@ watch(selectedAssetId, () => {
   void scheduleScrollToSelected()
 })
 
-function handleAssetClick(asset: ProjectAsset) {
+async function handleAssetClick(asset: ProjectAsset) {
   selectedAssetId.value = asset.id
-  emit('update:asset', ensureSceneAssetMapping(asset))
+
+  const mapped = ensureSceneAssetMapping(asset)
+  if (!mapped || !mapped.id) {
+    emit('update:asset', mapped)
+    return
+  }
+
+  const requiresCache = mapped.type === 'model' || mapped.type === 'mesh'
+  if (!requiresCache) {
+    emit('update:asset', mapped)
+    return
+  }
+
+  if (assetCacheStore.hasCache(mapped.id)) {
+    emit('update:asset', mapped)
+    return
+  }
+
+  if (selectingAssetId.value) {
+    return
+  }
+
+  selectingAssetId.value = mapped.id
+  try {
+    await assetCacheStore.downloaProjectAsset(mapped)
+    if (!assetCacheStore.hasCache(mapped.id)) {
+      return
+    }
+    emit('update:asset', mapped)
+  } catch (error) {
+    console.warn('Failed to download selected model asset', mapped.id, error)
+  } finally {
+    selectingAssetId.value = null
+  }
 }
 
 function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {

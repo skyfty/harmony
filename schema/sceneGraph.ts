@@ -1336,3 +1336,9 @@ export async function buildSceneGraph(
     builder.dispose();
   }
 }
+
+export { createTerrainScatterLodRuntime } from './terrainScatterLodRuntime'
+export type { TerrainScatterLodRuntime } from './terrainScatterLodRuntime'
+
+export { createInstancedBvhFrustumCuller } from './instancedBvhFrustumCuller'
+export type { InstancedBvhFrustumCuller } from './instancedBvhFrustumCuller'

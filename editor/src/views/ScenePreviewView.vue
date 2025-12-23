@@ -15,13 +15,12 @@ import {
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
 	type SceneNode,
-	type GroundDynamicMesh,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
 	type Vector3Like,
 } from '@harmony/schema'
-import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter'
+ 
 import {
 	applyMaterialOverrides,
 	disposeMaterialOverrides,
@@ -30,7 +29,7 @@ import {
 import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { buildSceneGraph, createTerrainScatterLodRuntime, createInstancedBvhFrustumCuller, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
@@ -82,6 +81,7 @@ import {
 	vehicleComponentDefinition,
 	waterComponentDefinition,
 	protagonistComponentDefinition,
+	lodComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -90,15 +90,18 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
+	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
+	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
 import type {
 	GuideboardComponentProps,
+	LodComponentProps,
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
@@ -106,6 +109,7 @@ import type {
 	VehicleWheelProps,
 	WarpGateComponentProps,
 } from '@schema/components'
+import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
@@ -128,7 +132,10 @@ import {
 } from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
-import { buildScatterNodeId, composeScatterMatrix } from '@/utils/terrainScatterRuntime'
+
+
+const terrainScatterRuntime = createTerrainScatterLodRuntime()
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 
 type ControlMode = 'first-person' | 'third-person'
 type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
@@ -371,6 +378,7 @@ previewComponentManager.registerDefinition(vehicleComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
+previewComponentManager.registerDefinition(lodComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -557,6 +565,11 @@ const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
+const instancedCullingProjView = new THREE.Matrix4()
+const instancedCullingFrustum = new THREE.Frustum()
+const instancedCullingBox = new THREE.Box3()
+const instancedCullingSphere = new THREE.Sphere()
+const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -691,8 +704,6 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
-const scatterInstanceNodeIds = new Set<string>()
-const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
@@ -1239,6 +1250,211 @@ function resolveVehicleComponent(
 	return component
 }
 
+function resolveLodComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<LodComponentProps> | null {
+	const component = node?.components?.[LOD_COMPONENT_TYPE] as
+		SceneNodeComponentState<LodComponentProps> | undefined
+	if (!component || !component.enabled) {
+		return null
+	}
+	return component
+}
+
+function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
+	const baseAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+	const component = resolveLodComponent(node)
+	if (!component) {
+		return baseAssetId
+	}
+
+	const props = clampLodComponentProps(component.props)
+	const levels = props.levels
+	if (!levels.length) {
+		return baseAssetId
+	}
+
+	object.getWorldPosition(instancedCullingWorldPosition)
+	const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
+
+	let chosen: (typeof levels)[number] | null = null
+	for (let i = levels.length - 1; i >= 0; i -= 1) {
+		const candidate = levels[i]
+		if (candidate && distance >= candidate.distance) {
+			chosen = candidate
+			break
+		}
+	}
+	const chosenModelAssetId = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId : null
+	return chosenModelAssetId ?? baseAssetId
+}
+
+const pendingLodModelLoads = new Map<string, Promise<void>>()
+
+async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | null): Promise<void> {
+	if (!assetId) {
+		return
+	}
+	if (getCachedModelObject(assetId)) {
+		ensureInstancedMeshesRegistered(assetId)
+		return
+	}
+	if (pendingLodModelLoads.has(assetId)) {
+		await pendingLodModelLoads.get(assetId)
+		return
+	}
+
+	const task = (async () => {
+		if (!editorResourceCache) {
+			return
+		}
+		await ensureModelInstanceGroup(assetId, sampleNode, editorResourceCache)
+		ensureInstancedMeshesRegistered(assetId)
+	})()
+		.catch((error) => {
+			console.warn('[ScenePreview] Failed to preload LOD model asset', assetId, error)
+		})
+		.finally(() => {
+			pendingLodModelLoads.delete(assetId)
+		})
+
+	pendingLodModelLoads.set(assetId, task)
+	await task
+}
+
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
+	const cached = getCachedModelObject(assetId)
+	if (!cached) {
+		const node = resolveNodeById(nodeId)
+		void ensureModelObjectCached(assetId, node)
+		return
+	}
+
+	releaseModelInstance(nodeId)
+	const binding = allocateModelInstance(assetId, nodeId)
+	if (!binding) {
+		return
+	}
+
+	object.userData = {
+		...(object.userData ?? {}),
+		instancedAssetId: assetId,
+		instancedBounds: serializeBoundingBox(cached.boundingBox),
+	}
+	object.userData.__harmonyInstancedRadius = cached.radius
+	object.userData.__harmonyCulled = false
+	syncInstancedTransform(object)
+}
+
+function resolveInstancedProxyRadius(object: THREE.Object3D): number {
+	const cached = object.userData?.__harmonyInstancedRadius as number | undefined
+	if (Number.isFinite(cached) && (cached as number) > 0) {
+		return cached as number
+	}
+	const bounds = object.userData?.instancedBounds as { min?: [number, number, number]; max?: [number, number, number] } | undefined
+	if (bounds?.min && bounds?.max) {
+		instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
+		instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
+		if (!instancedCullingBox.isEmpty()) {
+			instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+			const radius = instancedCullingSphere.radius
+			if (Number.isFinite(radius) && radius > 0) {
+				object.userData.__harmonyInstancedRadius = radius
+				return radius
+			}
+		}
+	}
+	setBoundingBoxFromObject(object, instancedCullingBox)
+	instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+	const radius = instancedCullingSphere.radius
+	object.userData.__harmonyInstancedRadius = radius
+	return radius
+}
+
+function updateInstancedCullingAndLod(): void {
+	if (!camera) {
+		return
+	}
+
+	camera.updateMatrixWorld(true)
+	instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+	instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+
+	const candidateIds: string[] = []
+	const candidateObjects = new Map<string, THREE.Object3D>()
+	nodeObjectMap.forEach((object, nodeId) => {
+		if (!object?.userData?.instancedAssetId) {
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		if (!node) {
+			return
+		}
+		const lodComponent = resolveLodComponent(node)
+		if (!lodComponent) {
+			return
+		}
+		const props = clampLodComponentProps(lodComponent.props)
+		if (props.enableCulling === false) {
+			return
+		}
+		candidateIds.push(nodeId)
+		candidateObjects.set(nodeId, object)
+	})
+
+	candidateIds.sort()
+	instancedLodFrustumCuller.setIds(candidateIds)
+	const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
+		const object = candidateObjects.get(id)
+		if (!object) {
+			return null
+		}
+		object.updateMatrixWorld(true)
+		object.getWorldPosition(centerTarget)
+		object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
+		const baseRadius = resolveInstancedProxyRadius(object)
+		const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius
+		return { radius }
+	})
+
+	candidateIds.forEach((nodeId) => {
+		const object = candidateObjects.get(nodeId)
+		if (!object) {
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		if (!node) {
+			return
+		}
+		const isVisible = visibleIds.has(nodeId)
+		if (!isVisible) {
+			if (object.userData.__harmonyCulled !== true) {
+				object.userData.__harmonyCulled = true
+			}
+			releaseModelInstance(nodeId)
+			return
+		}
+
+		object.userData.__harmonyCulled = false
+		const desiredAssetId = resolveDesiredLodAssetId(node, object)
+		if (!desiredAssetId) {
+			return
+		}
+		const currentAssetId = object.userData.instancedAssetId as string | undefined
+		if (currentAssetId !== desiredAssetId) {
+			applyInstancedLodSwitch(nodeId, object, desiredAssetId)
+			return
+		}
+		const binding = allocateModelInstance(desiredAssetId, nodeId)
+		if (!binding) {
+			void ensureModelObjectCached(desiredAssetId, node)
+			return
+		}
+		syncInstancedTransform(object)
+	})
+}
+
 function extractRigidbodyShape(
 	component: SceneNodeComponentState<RigidbodyComponentProps> | null,
 ): RigidbodyPhysicsShape | null {
@@ -1434,37 +1650,6 @@ async function prepareInstancedNodesForDocument(
 	await Promise.all(tasks)
 }
 
-type GroundScatterEntry = {
-	nodeId: string
-	snapshot: TerrainScatterStoreSnapshot
-}
-
-function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
-	if (!Array.isArray(nodes) || !nodes.length) {
-		return []
-	}
-	const stack: SceneNode[] = [...nodes]
-	const entries: GroundScatterEntry[] = []
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (node.dynamicMesh?.type === 'Ground') {
-			const definition = node.dynamicMesh as GroundDynamicMesh & {
-				terrainScatter?: TerrainScatterStoreSnapshot | null
-			}
-			const snapshot = definition.terrainScatter
-			if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
-				entries.push({ nodeId: node.id, snapshot })
-			}
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return entries
-}
 
 function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
 	const container = nodeObjectMap.get(nodeId)
@@ -1489,11 +1674,7 @@ function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
 }
 
 function releaseTerrainScatterInstances(): void {
-	if (!scatterInstanceNodeIds.size) {
-		return
-	}
-	scatterInstanceNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
-	scatterInstanceNodeIds.clear()
+	terrainScatterRuntime.dispose()
 }
 
 async function syncTerrainScatterInstances(
@@ -1504,41 +1685,7 @@ async function syncTerrainScatterInstances(
 	if (!resourceCache) {
 		return
 	}
-	const entries = collectGroundScatterEntries(document.nodes)
-	if (!entries.length) {
-		return
-	}
-	for (const entry of entries) {
-		const groundMesh = resolveGroundMeshObject(entry.nodeId)
-		if (!groundMesh) {
-			continue
-		}
-		groundMesh.updateMatrixWorld(true)
-		for (const layer of entry.snapshot.layers ?? []) {
-			const layerAssetId = typeof layer?.assetId === 'string' ? layer.assetId.trim() : ''
-			const profileAssetId = typeof layer?.profileId === 'string' ? layer.profileId.trim() : ''
-			const assetId = layerAssetId || profileAssetId
-			if (!assetId) {
-				continue
-			}
-			const group = await ensureModelInstanceGroup(assetId, null, resourceCache)
-			if (!group || !group.meshes.length) {
-				continue
-			}
-			ensureInstancedMeshesRegistered(assetId)
-			const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-			for (const instance of instances) {
-				const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
-				const binding = allocateModelInstance(assetId, nodeId)
-				if (!binding) {
-					continue
-				}
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
-				updateModelInstanceMatrix(nodeId, matrix)
-				scatterInstanceNodeIds.add(nodeId)
-			}
-		}
-	}
+	await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject)
 }
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh) {
@@ -4444,6 +4591,8 @@ function startAnimationLoop() {
 			lastOrbitState.position.copy(activeCamera.position)
 			lastOrbitState.target.copy(mapControls.target)
 		}
+		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
+		updateInstancedCullingAndLod()
 		updateBehaviorProximity()
 		// Keep ground chunk meshes in sync with camera position.
 		if (currentDocument) {
@@ -5214,7 +5363,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		}
 		removeVehicleInstance(nodeId)
 		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-		const isVisible = target.visible !== false
+		const isVisible = target.visible !== false && target.userData?.__harmonyCulled !== true
 		if (!isVisible) {
 			instancedScaleHelper.setScalar(0)
 		}

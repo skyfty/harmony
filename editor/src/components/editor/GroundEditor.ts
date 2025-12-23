@@ -14,22 +14,20 @@ import {
 	type TerrainScatterStore,
 	type TerrainScatterStoreSnapshot,
 } from '@harmony/schema/terrain-scatter'
+import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
 import {
-	sculptGround,
-	stitchGroundChunkNormals,
-	updateGroundChunks,
-	updateGroundMeshRegion,
-	updateGroundMesh,
-	sampleGroundHeight,
-	type GroundGeometryUpdateRegion,
-} from '@schema/groundMesh'
-import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '@schema/modelObjectCache'
+	ensureInstancedMeshesRegistered,
+	getCachedModelObject,
+	getOrLoadModelObject,
+	type ModelInstanceGroup,
+} from '@schema/modelObjectCache'
 import {
 	bindScatterInstance,
 	composeScatterMatrix,
 	getScatterInstanceWorldPosition,
 	releaseScatterInstance,
 	resetScatterInstanceBinding,
+	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
@@ -39,6 +37,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -111,11 +110,17 @@ const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
 const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+const scatterCullingProjView = new THREE.Matrix4()
+const scatterCullingFrustum = new THREE.Frustum()
+const scatterFrustumCuller = createInstancedBvhFrustumCuller()
+const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
 	asset: ProjectAsset
+	bindingAssetId: string
+	lodPresetAssetId: string | null
 	category: TerrainScatterCategory
 	definition: GroundDynamicMesh
 	groundMesh: THREE.Object3D
@@ -263,8 +268,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterStore: TerrainScatterStore | null = null
 	let scatterLayer: TerrainScatterLayer | null = null
 	let scatterModelGroup: ModelInstanceGroup | null = null
+	let scatterResolvedBindingAssetId: string | null = null
+	let scatterResolvedLodPresetAssetId: string | null = null
 	let scatterAssetLoadToken = 0
 	let scatterSnapshotUpdatedAt: number | null = null
+	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
+	const pendingScatterModelLoads = new Map<string, Promise<void>>()
+	const scatterLodPresetCache = new Map<string, Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>> | null>()
+	const pendingScatterLodPresetLoads = new Map<string, Promise<void>>()
+	let lastScatterLodUpdateAt = 0
+	const scatterLodCameraPosition = new THREE.Vector3()
 
 	function getActiveBrushShape(): TerrainBrushShape {
 		const value = options.brushShape.value
@@ -350,6 +363,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			try {
 				for (const layer of Array.from(scatterStore.layers.values())) {
 					for (const instance of layer.instances ?? []) {
+						scatterRuntimeAssetIdByNodeId.delete(buildScatterNodeId(layer.id, instance.id))
 						releaseScatterInstance(instance)
 					}
 				}
@@ -361,12 +375,184 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterStore = null
 		scatterLayer = null
 		scatterModelGroup = null
+		scatterResolvedBindingAssetId = null
+		scatterResolvedLodPresetAssetId = null
 		scatterSnapshotUpdatedAt = null
 		try {
 			deleteTerrainScatterStore(GROUND_NODE_ID)
 		} catch (error) {
 			console.warn('重置地面散布存储失败', reason, error)
 		}
+	}
+
+	function getScatterLayerLodPresetId(layer: TerrainScatterLayer): string | null {
+		const payload = layer.params?.payload as Record<string, unknown> | null | undefined
+		const fromPayload = payload && typeof payload.lodPresetAssetId === 'string' ? payload.lodPresetAssetId.trim() : ''
+		if (fromPayload) {
+			return fromPayload
+		}
+		const assetId = typeof layer.assetId === 'string' ? layer.assetId.trim() : ''
+		if (!assetId) {
+			return null
+		}
+		const asset = options.sceneStore.getAsset(assetId)
+		if (asset?.type === 'prefab') {
+			return assetId
+		}
+		return null
+	}
+
+	async function ensureScatterLodPresetCached(presetAssetId: string): Promise<void> {
+		const normalized = presetAssetId.trim()
+		if (!normalized) {
+			return
+		}
+		if (scatterLodPresetCache.has(normalized)) {
+			return
+		}
+		if (pendingScatterLodPresetLoads.has(normalized)) {
+			await pendingScatterLodPresetLoads.get(normalized)
+			return
+		}
+
+		const ensureReferencedAssetCached = async (assetId: string): Promise<void> => {
+			const id = assetId.trim()
+			if (!id) {
+				return
+			}
+			try {
+				if (!assetCacheStore.hasCache(id)) {
+					await assetCacheStore.loadFromIndexedDb(id)
+				}
+				if (assetCacheStore.hasCache(id)) {
+					return
+				}
+				const asset = options.sceneStore.getAsset(id)
+				if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+					return
+				}
+				await assetCacheStore.downloaProjectAsset(asset)
+			} catch (error) {
+				console.warn('缓存 LOD 预设引用资源失败', id, error)
+			}
+		}
+
+		const task = (async () => {
+			try {
+				const preset = await options.sceneStore.loadLodPreset(normalized)
+				const referencedIds: string[] = []
+				const refs = (preset as any)?.assetRefs
+				if (Array.isArray(refs) && refs.length) {
+					for (const ref of refs) {
+						const id = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+						if (id) {
+							referencedIds.push(id)
+						}
+					}
+				} else {
+					const levels = (preset as any)?.props?.levels
+					if (Array.isArray(levels) && levels.length) {
+						for (const level of levels) {
+							const id = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+							if (id) {
+								referencedIds.push(id)
+							}
+						}
+					}
+				}
+				const unique = Array.from(new Set(referencedIds))
+				if (unique.length) {
+					await Promise.all(unique.map((id) => ensureReferencedAssetCached(id)))
+				}
+				scatterLodPresetCache.set(normalized, preset)
+			} catch (_error) {
+				scatterLodPresetCache.set(normalized, null)
+			}
+		})()
+			.finally(() => {
+				pendingScatterLodPresetLoads.delete(normalized)
+			})
+		pendingScatterLodPresetLoads.set(normalized, task)
+		await task
+	}
+
+	function resolveLodBindingAssetId(preset: Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>> | null): string | null {
+		const levels = preset?.props?.levels
+		if (!Array.isArray(levels) || levels.length === 0) {
+			return null
+		}
+		for (const level of levels) {
+			const id = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+			if (id) {
+				return id
+			}
+		}
+		return null
+	}
+
+	function chooseLodModelAssetId(preset: Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>>, distance: number): string | null {
+		const levels = Array.isArray(preset?.props?.levels) ? preset.props.levels : []
+		if (!levels.length) {
+			return null
+		}
+		let chosen: (typeof levels)[number] | undefined
+		for (let i = levels.length - 1; i >= 0; i -= 1) {
+			const candidate = levels[i]
+			if (candidate && distance >= (candidate.distance ?? 0)) {
+				chosen = candidate
+				break
+			}
+		}
+		const id = typeof chosen?.modelAssetId === 'string' ? chosen.modelAssetId.trim() : ''
+		return id || null
+	}
+
+	function ensureScatterModelCached(assetId: string): boolean {
+		const normalized = assetId.trim()
+		if (!normalized) {
+			return false
+		}
+		if (getCachedModelObject(normalized)) {
+			ensureInstancedMeshesRegistered(normalized)
+			return true
+		}
+		if (pendingScatterModelLoads.has(normalized)) {
+			return false
+		}
+		const task = (async () => {
+			const asset = options.sceneStore.getAsset(normalized)
+			if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+				return
+			}
+			try {
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.loadFromIndexedDb(normalized)
+				}
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.downloaProjectAsset(asset)
+				}
+			} catch (error) {
+				console.warn('缓存散布 LOD 资源失败', normalized, error)
+			}
+			const file = assetCacheStore.createFileFromCache(normalized)
+			if (!file) {
+				return
+			}
+			try {
+				await getOrLoadModelObject(normalized, () => loadObjectFromFile(file))
+				ensureInstancedMeshesRegistered(normalized)
+			} finally {
+				assetCacheStore.releaseInMemoryBlob(normalized)
+			}
+		})()
+			.catch((error) => {
+				console.warn('预载散布 LOD 资源失败', normalized, error)
+			})
+			.finally(() => {
+				pendingScatterModelLoads.delete(normalized)
+			})
+		pendingScatterModelLoads.set(normalized, task)
+		return false
 	}
 
 	const stopSceneIdWatch = watch(
@@ -387,7 +573,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		updateGroundChunks(groundMesh, definition, options.getCamera())
 
-		const resolveAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
+		const resolveSelectionAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
 			const candidates = [instance.assetId, layer.assetId, instance.profileId, layer.profileId]
 			for (const candidate of candidates) {
 				if (typeof candidate === 'string') {
@@ -398,6 +584,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 			}
 			return null
+		}
+
+		const resolveBindingAssetId = async (selectionAssetId: string): Promise<{ bindingAssetId: string | null; lodPresetAssetId: string | null }> => {
+			const asset = options.sceneStore.getAsset(selectionAssetId)
+			if (asset?.type === 'prefab') {
+				await ensureScatterLodPresetCached(selectionAssetId)
+				const preset = scatterLodPresetCache.get(selectionAssetId) ?? null
+				const base = resolveLodBindingAssetId(preset)
+				return { bindingAssetId: base, lodPresetAssetId: preset ? selectionAssetId : null }
+			}
+			return { bindingAssetId: selectionAssetId, lodPresetAssetId: null }
 		}
 
 		const groupPromises = new Map<string, Promise<ModelInstanceGroup | null>>()
@@ -439,18 +636,37 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!layer.instances?.length) {
 				continue
 			}
+			const lodPresetId = getScatterLayerLodPresetId(layer)
+			if (lodPresetId) {
+				await ensureScatterLodPresetCached(lodPresetId)
+				if (scatterLodPresetCache.get(lodPresetId)) {
+					// Normalize payload so future runtime updates can detect the preset quickly.
+					const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
+						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
+						: ({} as Record<string, unknown>)
+					if (payload.lodPresetAssetId !== lodPresetId) {
+						payload.lodPresetAssetId = lodPresetId
+						upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
+					}
+				}
+			}
 			for (const instance of layer.instances) {
-				const assetId = resolveAssetId(instance, layer)
-				if (!assetId) {
+				const selectionAssetId = resolveSelectionAssetId(instance, layer)
+				if (!selectionAssetId) {
 					continue
 				}
-				instance.assetId = instance.assetId ?? assetId
+				instance.assetId = instance.assetId ?? selectionAssetId
 				instance.layerId = instance.layerId ?? layer.id
 				if (!instance.profileId) {
-					instance.profileId = layer.profileId ?? assetId
+					instance.profileId = layer.profileId ?? selectionAssetId
 				}
 				resetScatterInstanceBinding(instance)
-				const group = await ensureModelGroup(assetId)
+				const resolved = await resolveBindingAssetId(selectionAssetId)
+				const bindingAssetId = resolved.bindingAssetId
+				if (!bindingAssetId) {
+					continue
+				}
+				const group = await ensureModelGroup(bindingAssetId)
 				if (!group) {
 					continue
 				}
@@ -459,9 +675,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					console.warn('绑定地面散布实例失败', {
 						layerId: layer.id,
 						instanceId: instance.id,
-						assetId,
+						assetId: bindingAssetId,
 					})
+					continue
 				}
+				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), group.assetId)
 			}
 		}
 	}
@@ -539,6 +757,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	async function loadScatterModelGroup(asset: ProjectAsset): Promise<ModelInstanceGroup | null> {
 		let group = getCachedModelObject(asset.id)
 		if (group) {
+			ensureInstancedMeshesRegistered(asset.id)
 			return group
 		}
 		if (!assetCacheStore.hasCache(asset.id)) {
@@ -552,6 +771,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		try {
 			group = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+			ensureInstancedMeshesRegistered(asset.id)
 		} catch (error) {
 			console.warn('加载散布资源失败', asset.id, error)
 			return null
@@ -561,16 +781,53 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return group
 	}
 
+	async function loadScatterModelGroupById(assetId: string): Promise<ModelInstanceGroup | null> {
+		const asset = options.sceneStore.getAsset(assetId)
+		if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+			return null
+		}
+		return loadScatterModelGroup(asset)
+	}
+
 	async function prepareScatterRuntime(asset: ProjectAsset, category: TerrainScatterCategory): Promise<void> {
 		ensureScatterStoreRef()
 		scatterLayer = ensureScatterLayerForAsset(asset, category)
 		scatterAssetLoadToken += 1
 		const token = scatterAssetLoadToken
 		scatterModelGroup = null
-		const group = await loadScatterModelGroup(asset)
+		scatterResolvedBindingAssetId = null
+		scatterResolvedLodPresetAssetId = null
+
+		let bindingAssetId: string | null = asset.id
+		let lodPresetAssetId: string | null = null
+		if (asset.type === 'prefab') {
+			await ensureScatterLodPresetCached(asset.id)
+			const preset = scatterLodPresetCache.get(asset.id) ?? null
+			const base = resolveLodBindingAssetId(preset)
+			if (preset && base) {
+				bindingAssetId = base
+				lodPresetAssetId = asset.id
+				const store = ensureScatterStoreRef()
+				const layer = scatterLayer
+				if (layer) {
+					const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
+						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
+						: ({} as Record<string, unknown>)
+					if (payload.lodPresetAssetId !== asset.id) {
+						payload.lodPresetAssetId = asset.id
+						scatterLayer = upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
+						syncTerrainScatterSnapshotToScene(store)
+					}
+				}
+			}
+		}
+
+		const group = bindingAssetId ? await loadScatterModelGroupById(bindingAssetId) : null
 		if (token !== scatterAssetLoadToken) {
 			return
 		}
+		scatterResolvedBindingAssetId = bindingAssetId
+		scatterResolvedLodPresetAssetId = lodPresetAssetId
 		scatterModelGroup = group
 	}
 
@@ -873,9 +1130,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const scale = new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor)
 		const draft: TerrainScatterInstance = {
 			id: generateScatterInstanceId(),
+			// Persist the selected scatter asset id (may be a LOD preset).
 			assetId: scatterSession.asset.id,
 			layerId: scatterSession.layer.id,
-			profileId: scatterSession.layer.profileId ?? scatterSession.asset.id,
+			profileId: scatterSession.lodPresetAssetId ?? scatterSession.layer.profileId ?? scatterSession.asset.id,
 			seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
 			localPosition: { x: localPoint.x, y: localPoint.y, z: localPoint.z },
 			localRotation: { x: rotation.x, y: rotation.y, z: rotation.z },
@@ -899,11 +1157,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const matrix = composeScatterMatrix(stored, scatterSession.groundMesh, scatterWorldMatrixHelper)
-		const bound = bindScatterInstance(stored, matrix, scatterSession.asset.id)
+		const bound = bindScatterInstance(stored, matrix, scatterSession.bindingAssetId)
 		if (!bound) {
 			persistScatterInstances(nextLayer, nextLayer.instances.filter((entry) => entry.id !== stored.id))
 			return false
 		}
+		scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), scatterSession.bindingAssetId)
 		return true
 	}
 
@@ -1049,9 +1308,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		clampPointToGround(definition, scatterPointerHelper)
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
-		const layer = ensureScatterLayerForAsset(asset, category)
+		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
 		if (!scatterModelGroup) {
 			console.warn('散布资源仍在加载，请稍后重试')
+			return false
+		}
+		const bindingAssetId = scatterResolvedBindingAssetId ?? scatterModelGroup.assetId
+		if (!bindingAssetId) {
+			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
 			return false
 		}
 		const customSpacing = Number.isFinite(options.scatterSpacing.value)
@@ -1065,6 +1329,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
+			bindingAssetId,
+			lodPresetAssetId: scatterResolvedLodPresetAssetId,
 			category,
 			definition,
 			groundMesh,
@@ -1087,6 +1353,113 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.stopPropagation()
 		event.stopImmediatePropagation()
 		return true
+	}
+
+	function updateScatterLod(): void {
+		const camera = options.getCamera()
+		if (!camera) {
+			return
+		}
+		const store = scatterStore ?? ensureScatterStoreRef()
+		const groundMesh = getGroundMeshObject()
+		if (!groundMesh || !store.layers.size) {
+			return
+		}
+		const now = Date.now()
+		if (now - lastScatterLodUpdateAt < 200) {
+			return
+		}
+		lastScatterLodUpdateAt = now
+		scatterLodCameraPosition.copy(camera.position)
+
+		camera.updateMatrixWorld(true)
+		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+		scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+
+		const scatterCandidateIds: string[] = []
+		const scatterCandidateByNodeId = new Map<
+			string,
+			{ layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }
+		>()
+		for (const layer of store.layers.values()) {
+			const presetId = getScatterLayerLodPresetId(layer)
+			if (!presetId) {
+				continue
+			}
+			const preset = scatterLodPresetCache.get(presetId)
+			if (!preset || !layer.instances?.length) {
+				continue
+			}
+			for (const instance of layer.instances) {
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				scatterCandidateIds.push(nodeId)
+				scatterCandidateByNodeId.set(nodeId, { layer, instance, preset })
+			}
+		}
+
+		scatterCandidateIds.sort()
+		scatterFrustumCuller.setIds(scatterCandidateIds)
+		const visibleScatterIds = scatterFrustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+			const entry = scatterCandidateByNodeId.get(nodeId)
+			if (!entry) {
+				return null
+			}
+			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
+			centerTarget.copy(worldPos)
+			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? resolveLodBindingAssetId(entry.preset)
+			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
+			const scale = entry.instance.localScale
+			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+			return { radius }
+		})
+
+		for (const layer of store.layers.values()) {
+			const presetId = getScatterLayerLodPresetId(layer)
+			if (!presetId) {
+				continue
+			}
+			if (!scatterLodPresetCache.has(presetId)) {
+				void ensureScatterLodPresetCached(presetId)
+				continue
+			}
+			const preset = scatterLodPresetCache.get(presetId)
+			if (!preset) {
+				continue
+			}
+			if (!layer.instances?.length) {
+				continue
+			}
+			for (const instance of layer.instances) {
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				if (!visibleScatterIds.has(nodeId)) {
+					releaseScatterInstance(instance)
+					continue
+				}
+				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
+				const distance = worldPos.distanceTo(scatterLodCameraPosition)
+				const desired = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+				if (!desired) {
+					continue
+				}
+				const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
+				const hasBinding = Boolean(instance.binding?.nodeId)
+				if (current === desired && hasBinding) {
+					continue
+				}
+				if (!ensureScatterModelCached(desired)) {
+					continue
+				}
+				if (current !== desired) {
+					releaseScatterInstance(instance)
+				}
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				if (!bindScatterInstance(instance, matrix, desired)) {
+					continue
+				}
+				scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
+			}
+		}
 	}
 
 	function updateScatterPlacement(event: PointerEvent): boolean {
@@ -2023,6 +2396,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundTextureInputRef,
 		isSculpting,
 		restoreGroupdScatter,
+		updateScatterLod,
 		updateGroundSelectionToolbarPosition,
 		clearGroundSelection,
 		cancelGroundSelection,

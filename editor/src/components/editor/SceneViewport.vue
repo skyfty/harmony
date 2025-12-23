@@ -45,6 +45,9 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
+  allocateModelInstance,
+  releaseModelInstance,
+  ensureInstancedMeshesRegistered,
   subscribeInstancedMeshes,
   getModelInstanceBindingById,
   findBindingIdForInstance,
@@ -61,6 +64,7 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
 import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
@@ -120,6 +124,8 @@ import {
   createWarpGateEffectInstance,
   createGuideboardEffectInstance,
   PROTAGONIST_COMPONENT_TYPE,
+  LOD_COMPONENT_TYPE,
+  clampLodComponentProps,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -129,6 +135,7 @@ import type {
   WallComponentProps,
   WarpGateEffectInstance,
   GuideboardEffectInstance,
+  LodComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
@@ -651,6 +658,7 @@ const {
   groundSelection,
   groundTextureInputRef,
   restoreGroupdScatter,
+  updateScatterLod,
   updateGroundSelectionToolbarPosition,
   cancelGroundSelection,
   handlePointerDown: handleGroundEditorPointerDown,
@@ -1676,6 +1684,225 @@ const {
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId)
   }
 )
+
+const instancedCullingFrustum = new THREE.Frustum()
+const instancedCullingProjView = new THREE.Matrix4()
+const instancedCullingBox = new THREE.Box3()
+const instancedCullingSphere = new THREE.Sphere()
+const instancedCullingWorldPosition = new THREE.Vector3()
+const instancedPositionHelper = new THREE.Vector3()
+const instancedQuaternionHelper = new THREE.Quaternion()
+const instancedScaleHelper = new THREE.Vector3()
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+
+const pendingLodModelLoads = new Map<string, Promise<void>>()
+
+type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
+
+function serializeBoundingBox(box: THREE.Box3): InstancedBoundsPayload {
+  return {
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+  }
+}
+
+async function ensureModelObjectCached(assetId: string): Promise<void> {
+  if (!assetId) {
+    return
+  }
+  if (getCachedModelObject(assetId)) {
+    return
+  }
+  if (pendingLodModelLoads.has(assetId)) {
+    await pendingLodModelLoads.get(assetId)
+    return
+  }
+
+  const task = (async () => {
+    const asset = sceneStore.getAsset(assetId)
+    if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+      return
+    }
+    let file = assetCacheStore.createFileFromCache(asset.id)
+    if (!file) {
+      await assetCacheStore.loadFromIndexedDb(asset.id)
+      file = assetCacheStore.createFileFromCache(asset.id)
+    }
+    if (!file) {
+      return
+    }
+    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+    assetCacheStore.releaseInMemoryBlob(asset.id)
+    ensureInstancedMeshesRegistered(asset.id)
+  })()
+    .catch((error) => {
+      console.warn('[SceneViewport] Failed to preload LOD model asset', assetId, error)
+    })
+    .finally(() => {
+      pendingLodModelLoads.delete(assetId)
+    })
+
+  pendingLodModelLoads.set(assetId, task)
+  await task
+}
+
+function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+  if (!component) {
+    return (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null)
+  }
+
+  const props = clampLodComponentProps(component.props)
+  const levels = props.levels
+  if (!levels.length) {
+    return node.sourceAssetId ?? null
+  }
+  object.getWorldPosition(instancedCullingWorldPosition)
+  const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
+
+  let chosen: (typeof levels)[number] | undefined
+  for (let i = levels.length - 1; i >= 0; i -= 1) {
+    const candidate = levels[i]
+    if (candidate && distance >= candidate.distance) {
+      chosen = candidate
+      break
+    }
+  }
+
+  return chosen?.modelAssetId ?? node.sourceAssetId ?? null
+}
+
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    void ensureModelObjectCached(assetId)
+    return
+  }
+
+  releaseModelInstance(nodeId)
+  const binding = allocateModelInstance(assetId, nodeId)
+  if (!binding) {
+    return
+  }
+
+  object.userData = {
+    ...(object.userData ?? {}),
+    instancedAssetId: assetId,
+    instancedBounds: serializeBoundingBox(cached.boundingBox),
+  }
+  object.userData.__harmonyInstancedRadius = cached.radius
+  object.userData.__harmonyCulled = false
+  syncInstancedTransform(object)
+}
+
+function resolveInstancedProxyRadius(object: THREE.Object3D): number {
+  const cached = object.userData?.__harmonyInstancedRadius as number | undefined
+  if (Number.isFinite(cached) && (cached as number) > 0) {
+    return cached as number
+  }
+  const bounds = object.userData?.instancedBounds as { min?: [number, number, number]; max?: [number, number, number] } | undefined
+  if (bounds?.min && bounds?.max) {
+    instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
+    instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
+    if (!instancedCullingBox.isEmpty()) {
+      instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+      const radius = instancedCullingSphere.radius
+      if (Number.isFinite(radius) && radius > 0) {
+        object.userData.__harmonyInstancedRadius = radius
+        return radius
+      }
+    }
+  }
+  setBoundingBoxFromObject(object, instancedCullingBox)
+  instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+  const radius = instancedCullingSphere.radius
+  object.userData.__harmonyInstancedRadius = radius
+  return radius
+}
+
+function updateInstancedCullingAndLod(): void {
+  if (!camera) {
+    return
+  }
+
+  camera.updateMatrixWorld(true)
+  instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+
+
+  const candidateIds: string[] = []
+  const candidateObjects = new Map<string, THREE.Object3D>()
+
+  objectMap.forEach((object, nodeId) => {
+    if (!object?.userData?.instancedAssetId) {
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    if (!node) {
+      return
+    }
+    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+    if (!component || !component.enabled) {
+      return
+    }
+    const props = clampLodComponentProps(component.props)
+    if (props.enableCulling === false) {
+      return
+    }
+    candidateIds.push(nodeId)
+    candidateObjects.set(nodeId, object)
+  })
+
+  candidateIds.sort()
+  instancedLodFrustumCuller.setIds(candidateIds)
+  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
+    const object = candidateObjects.get(id)
+    if (!object) {
+      return null
+    }
+    object.updateMatrixWorld(true)
+    object.getWorldPosition(centerTarget)
+    object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+    const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
+    const baseRadius = resolveInstancedProxyRadius(object)
+    const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius
+    return { radius }
+  })
+
+  candidateIds.forEach((nodeId) => {
+    const object = candidateObjects.get(nodeId)
+    if (!object) {
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    if (!node) {
+      return
+    }
+    const isVisible = visibleIds.has(nodeId)
+    if (!isVisible) {
+      object.userData.__harmonyCulled = true
+      releaseModelInstance(nodeId)
+      return
+    }
+
+    object.userData.__harmonyCulled = false
+    const desiredAssetId = resolveDesiredLodAssetId(node, object)
+    if (!desiredAssetId) {
+      return
+    }
+    const currentAssetId = object.userData.instancedAssetId as string | undefined
+    if (currentAssetId !== desiredAssetId) {
+      applyInstancedLodSwitch(nodeId, object, desiredAssetId)
+      return
+    }
+    const binding = allocateModelInstance(desiredAssetId, nodeId)
+    if (!binding) {
+      void ensureModelObjectCached(desiredAssetId)
+      return
+    }
+    syncInstancedTransform(object)
+  })
+}
 
 
 function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult | null {
@@ -3802,6 +4029,9 @@ function animate() {
     cloudRenderer.update(effectiveDelta)
   }
   updateGroundChunkStreaming()
+
+  updateScatterLod()
+  updateInstancedCullingAndLod()
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()

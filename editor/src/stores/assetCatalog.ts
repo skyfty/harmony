@@ -54,7 +54,7 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     key: 'prefabs',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
     label: 'Prefabs',
-    extensions: ['.prefab'],
+    extensions: ['.prefab', '.lod'],
   },
   {
     key: 'videos',
