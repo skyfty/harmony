@@ -110,7 +110,6 @@ interface PlanningImage {
   opacity: number
   position: { x: number; y: number }
   scale: number
-  scaleRatio?: number
   // 对齐标记（存储在图片自身坐标系：原始像素坐标）
   alignMarker?: { x: number; y: number }
 }
@@ -620,6 +619,8 @@ const VERTEX_HANDLE_STROKE_PX = 1
 const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 2
 const VERTEX_HIGHLIGHT_STROKE_PX = 1
 
+// Canvas "world" coordinates are in meters (to match the 3D scene ground settings).
+// For screen rendering we map meters -> CSS pixels using BASE_PIXELS_PER_METER.
 const canvasSize = computed(() => ({
   width: sceneGroundSize.value.width,
   height: sceneGroundSize.value.height,
@@ -630,6 +631,17 @@ const canvasSize = computed(() => ({
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
 
+// Actual CSS pixel size of the stage (used by DOM/SVG layout).
+// Example: 100m -> 1000px when BASE_PIXELS_PER_METER = 10.
+const effectiveCanvasPixelSize = computed(() => {
+  const meters = effectiveCanvasSize.value
+  return {
+    width: Math.max(1, Math.round(meters.width * BASE_PIXELS_PER_METER)),
+    height: Math.max(1, Math.round(meters.height * BASE_PIXELS_PER_METER)),
+  }
+})
+
+// Screen pixels per meter after considering zoom.
 const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
 
 function pxToWorld(px: number): number {
@@ -869,7 +881,6 @@ function buildPlanningSnapshot() {
       opacity: img.opacity,
       position: { x: img.position.x, y: img.position.y },
       scale: img.scale,
-      scaleRatio: img.scaleRatio,
       alignMarker: img.alignMarker ? { x: img.alignMarker.x, y: img.alignMarker.y } : undefined,
     })),
   }
@@ -1217,7 +1228,6 @@ function loadPlanningFromScene() {
       opacity: img.opacity,
       position: { x: img.position.x, y: img.position.y },
       scale: img.scale,
-      scaleRatio: img.scaleRatio,
       alignMarker: img.alignMarker ? { x: img.alignMarker.x, y: img.alignMarker.y } : undefined,
     }))
     : []
@@ -1550,10 +1560,12 @@ const stageCenterOffset = computed(() => {
 const stageStyle = computed<CSSProperties>(() => {
   const scale = renderScale.value
   const center = stageCenterOffset.value
+  const base = effectiveCanvasPixelSize.value
   return {
-    width: `${effectiveCanvasSize.value.width}px`,
-    height: `${effectiveCanvasSize.value.height}px`,
-    transform: `translate(${center.x + viewTransform.offset.x * scale}px, ${center.y + viewTransform.offset.y * scale}px) scale(${scale})`,
+    width: `${base.width}px`,
+    height: `${base.height}px`,
+    // The stage size already includes BASE_PIXELS_PER_METER; only zoom (viewTransform.scale) is applied here.
+    transform: `translate(${center.x + viewTransform.offset.x * scale}px, ${center.y + viewTransform.offset.y * scale}px) scale(${viewTransform.scale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
   }
@@ -2101,8 +2113,8 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
   }
   const accent = getImageAccentColor(image.id)
   return {
-    left: `${world.x}px`,
-    top: `${world.y}px`,
+    left: `${world.x * BASE_PIXELS_PER_METER}px`,
+    top: `${world.y * BASE_PIXELS_PER_METER}px`,
     zIndex: 10000,
     background: accent,
     boxShadow: `0 0 0 3px ${hexToRgba(accent, 0.22)}`,
@@ -2113,7 +2125,7 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
 function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties {
   const accent = getImageAccentColor(image.id)
   return {
-    transform: `translate(${image.position.x}px, ${image.position.y}px) scale(${image.scale})`,
+    transform: `translate(${image.position.x * BASE_PIXELS_PER_METER}px, ${image.position.y * BASE_PIXELS_PER_METER}px) scale(${image.scale * BASE_PIXELS_PER_METER})`,
     transformOrigin: 'top left',
     width: `${image.width}px`,
     height: `${image.height}px`,
@@ -3596,7 +3608,6 @@ function loadPlanningImage(file: File) {
         y: centerY - image.naturalHeight / 2,
       },
       scale: 1,
-      scaleRatio: undefined,
     }
     planningImages.value.push(newImage)
     activeImageId.value = newImage.id
@@ -3642,7 +3653,7 @@ function handleImageLayerOpacityChange(imageId: string, opacity: number) {
   }
 }
 
-function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | undefined) {
+function handleImageLayerScaleRatioChange(imageId: string) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (!image) {
     return
@@ -3652,16 +3663,6 @@ function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | 
   if (!image.visible || image.locked) {
     return
   }
-  if (scaleRatio === undefined) {
-    image.scaleRatio = undefined
-    markPlanningDirty()
-    return
-  }
-  const next = Number(scaleRatio)
-  if (!Number.isFinite(next) || next <= 0) {
-    return
-  }
-  image.scaleRatio = next
   image.scale = next
   markPlanningDirty()
 }
@@ -4248,22 +4249,6 @@ onBeforeUnmount(() => {
                       />
                       <span class="control-value">{{ Math.round(image.opacity * 100) }}%</span>
                     </div>
-                    <div class="control-row">
-                      <span class="control-label">m/px</span>
-                      <v-text-field
-                        :model-value="image.scaleRatio ?? ''"
-                        type="number"
-                        min="0"
-                        step="any"
-                        placeholder="例如 0.5"
-                        suffix="m/px"
-                        density="compact"
-                        variant="underlined"
-                        hide-details
-                        :disabled="!image.visible || image.locked"
-                        @update:model-value="(v) => handleImageLayerScaleRatioChange(image.id, v === '' || v === null || v === undefined ? undefined : Number(v))"
-                      />
-                    </div>
                   </div>
                 </div>
               </v-list-item>
@@ -4478,8 +4463,8 @@ onBeforeUnmount(() => {
 
                 <svg
                   class="vector-overlay"
-                  :width="effectiveCanvasSize.width"
-                  :height="effectiveCanvasSize.height"
+                  :width="effectiveCanvasPixelSize.width"
+                  :height="effectiveCanvasPixelSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                 >
                   <defs>

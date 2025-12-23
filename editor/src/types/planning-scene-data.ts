@@ -31,7 +31,6 @@ export interface PlanningImageData {
   opacity: number
   position: { x: number; y: number }
   scale: number
-  scaleRatio?: number
   alignMarker?: { x: number; y: number }
 }
 
