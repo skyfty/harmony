@@ -14,6 +14,7 @@ import {
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
 } from './modelObjectCache'
+import { createInstancedBvhFrustumCuller } from './instancedBvhFrustumCuller'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -55,6 +56,8 @@ const scatterQuaternionHelper = new THREE.Quaternion()
 const scatterInstanceMatrixHelper = new THREE.Matrix4()
 const scatterMatrixHelper = new THREE.Matrix4()
 const scatterWorldPositionHelper = new THREE.Vector3()
+const scatterCullingProjView = new THREE.Matrix4()
+const scatterCullingFrustum = new THREE.Frustum()
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
   const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer'
@@ -255,6 +258,8 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
   const allocatedNodeIds = new Set<string>()
   const runtimeInstances = new Map<string, ScatterRuntimeInstance>()
 
+  const frustumCuller = createInstancedBvhFrustumCuller()
+
   const lodPresetCache = new Map<string, LodPresetData | null>()
   const pendingLodPresetLoads = new Map<string, Promise<void>>()
 
@@ -270,6 +275,7 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     pendingLodPresetLoads.clear()
     pendingUpdate = null
     lastLodUpdateAt = 0
+    frustumCuller.dispose()
   }
 
   async function ensureLodPresetCached(presetAssetId: string): Promise<void> {
@@ -377,16 +383,58 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     if (!cache) {
       return
     }
+
     const cameraPosition = (camera as THREE.Camera & { position: THREE.Vector3 }).position
     if (!cameraPosition || typeof cameraPosition.distanceTo !== 'function') {
       return
     }
+
+    camera.updateMatrixWorld(true)
+    scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+
+    const candidateIds: string[] = []
+    runtimeInstances.forEach((runtime, nodeId) => {
+      if (runtime.presetAssetId) {
+        candidateIds.push(nodeId)
+      }
+    })
+    candidateIds.sort()
+    frustumCuller.setIds(candidateIds)
+
+    const visibleIds = frustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+      const runtime = runtimeInstances.get(nodeId)
+      if (!runtime) {
+        return null
+      }
+      const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
+      if (!groundMesh) {
+        return null
+      }
+      const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+      centerTarget.setFromMatrixPosition(matrix)
+
+      const boundAssetId = runtime.boundAssetId
+      const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
+      const scale = runtime.instance.localScale
+      const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+      const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+      return { radius }
+    })
 
     for (const runtime of runtimeInstances.values()) {
       const presetAssetId = runtime.presetAssetId
       if (!presetAssetId) {
         continue
       }
+
+      const isVisible = visibleIds.has(runtime.nodeId)
+      if (!isVisible) {
+        releaseModelInstance(runtime.nodeId)
+        allocatedNodeIds.delete(runtime.nodeId)
+        continue
+      }
+
       await ensureLodPresetCached(presetAssetId)
       const preset = lodPresetCache.get(presetAssetId) ?? null
       if (!preset) {
@@ -405,25 +453,35 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
         continue
       }
 
-      const desiredAssetId = chooseLodModelAssetId(preset, distance)
-      if (!desiredAssetId || desiredAssetId === runtime.boundAssetId) {
+      const desiredAssetId = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+      if (!desiredAssetId) {
         continue
       }
 
-      const group = await ensureModelInstanceGroup(desiredAssetId, cache)
-      if (!group || !group.meshes.length) {
-        continue
+      if (desiredAssetId !== runtime.boundAssetId) {
+        const group = await ensureModelInstanceGroup(desiredAssetId, cache)
+        if (!group || !group.meshes.length) {
+          continue
+        }
+        ensureInstancedMeshesRegistered(desiredAssetId)
+        releaseModelInstance(runtime.nodeId)
+        const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
+        if (!binding) {
+          continue
+        }
+        runtime.boundAssetId = desiredAssetId
+        allocatedNodeIds.add(runtime.nodeId)
+      } else {
+        const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
+        if (!binding) {
+          // Ensure cached for re-entry after culling.
+          await ensureModelInstanceGroup(runtime.boundAssetId, cache)
+          continue
+        }
+        allocatedNodeIds.add(runtime.nodeId)
       }
-      ensureInstancedMeshesRegistered(desiredAssetId)
 
-      releaseModelInstance(runtime.nodeId)
-      const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
-      if (!binding) {
-        continue
-      }
       updateModelInstanceMatrix(runtime.nodeId, matrix)
-      runtime.boundAssetId = desiredAssetId
-      allocatedNodeIds.add(runtime.nodeId)
     }
   }
 

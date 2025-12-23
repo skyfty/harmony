@@ -64,6 +64,7 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
 import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
@@ -1687,7 +1688,12 @@ const {
 const instancedCullingFrustum = new THREE.Frustum()
 const instancedCullingProjView = new THREE.Matrix4()
 const instancedCullingBox = new THREE.Box3()
+const instancedCullingSphere = new THREE.Sphere()
 const instancedCullingWorldPosition = new THREE.Vector3()
+const instancedPositionHelper = new THREE.Vector3()
+const instancedQuaternionHelper = new THREE.Quaternion()
+const instancedScaleHelper = new THREE.Vector3()
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
 
@@ -1766,15 +1772,6 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): stri
   return chosen?.modelAssetId ?? node.sourceAssetId ?? null
 }
 
-function resolveCullingEnabled(node: SceneNode): boolean {
-  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
-  if (!component) {
-    return true
-  }
-  const props = clampLodComponentProps(component.props)
-  return props.enableCulling !== false
-}
-
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
   const cached = getCachedModelObject(assetId)
   if (!cached) {
@@ -1793,7 +1790,34 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
     instancedAssetId: assetId,
     instancedBounds: serializeBoundingBox(cached.boundingBox),
   }
+  object.userData.__harmonyInstancedRadius = cached.radius
+  object.userData.__harmonyCulled = false
   syncInstancedTransform(object)
+}
+
+function resolveInstancedProxyRadius(object: THREE.Object3D): number {
+  const cached = object.userData?.__harmonyInstancedRadius as number | undefined
+  if (Number.isFinite(cached) && (cached as number) > 0) {
+    return cached as number
+  }
+  const bounds = object.userData?.instancedBounds as { min?: [number, number, number]; max?: [number, number, number] } | undefined
+  if (bounds?.min && bounds?.max) {
+    instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
+    instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
+    if (!instancedCullingBox.isEmpty()) {
+      instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+      const radius = instancedCullingSphere.radius
+      if (Number.isFinite(radius) && radius > 0) {
+        object.userData.__harmonyInstancedRadius = radius
+        return radius
+      }
+    }
+  }
+  setBoundingBoxFromObject(object, instancedCullingBox)
+  instancedCullingBox.getBoundingSphere(instancedCullingSphere)
+  const radius = instancedCullingSphere.radius
+  object.userData.__harmonyInstancedRadius = radius
+  return radius
 }
 
 function updateInstancedCullingAndLod(): void {
@@ -1805,6 +1829,10 @@ function updateInstancedCullingAndLod(): void {
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
   instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
 
+
+  const candidateIds: string[] = []
+  const candidateObjects = new Map<string, THREE.Object3D>()
+
   objectMap.forEach((object, nodeId) => {
     if (!object?.userData?.instancedAssetId) {
       return
@@ -1813,36 +1841,66 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return
     }
+    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+    if (!component || !component.enabled) {
+      return
+    }
+    const props = clampLodComponentProps(component.props)
+    if (props.enableCulling === false) {
+      return
+    }
+    candidateIds.push(nodeId)
+    candidateObjects.set(nodeId, object)
+  })
+
+  candidateIds.sort()
+  instancedLodFrustumCuller.setIds(candidateIds)
+  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
+    const object = candidateObjects.get(id)
+    if (!object) {
+      return null
+    }
     object.updateMatrixWorld(true)
+    object.getWorldPosition(centerTarget)
+    object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+    const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
+    const baseRadius = resolveInstancedProxyRadius(object)
+    const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius
+    return { radius }
+  })
 
-    const cullingEnabled = resolveCullingEnabled(node)
-    let shouldCull = false
-    if (cullingEnabled) {
-      setBoundingBoxFromObject(object, instancedCullingBox)
-      if (!instancedCullingBox.isEmpty()) {
-        shouldCull = !instancedCullingFrustum.intersectsBox(instancedCullingBox)
-      }
+  candidateIds.forEach((nodeId) => {
+    const object = candidateObjects.get(nodeId)
+    if (!object) {
+      return
     }
-
-    const previousCull = object.userData.__harmonyCulled === true
-    if (previousCull !== shouldCull) {
-      object.userData.__harmonyCulled = shouldCull
-      syncInstancedTransform(object)
+    const node = resolveSceneNodeById(nodeId)
+    if (!node) {
+      return
     }
-
-    if (shouldCull) {
+    const isVisible = visibleIds.has(nodeId)
+    if (!isVisible) {
+      object.userData.__harmonyCulled = true
+      releaseModelInstance(nodeId)
       return
     }
 
+    object.userData.__harmonyCulled = false
     const desiredAssetId = resolveDesiredLodAssetId(node, object)
     if (!desiredAssetId) {
       return
     }
     const currentAssetId = object.userData.instancedAssetId as string | undefined
-    if (currentAssetId === desiredAssetId) {
+    if (currentAssetId !== desiredAssetId) {
+      applyInstancedLodSwitch(nodeId, object, desiredAssetId)
       return
     }
-    applyInstancedLodSwitch(nodeId, object, desiredAssetId)
+    const binding = allocateModelInstance(desiredAssetId, nodeId)
+    if (!binding) {
+      void ensureModelObjectCached(desiredAssetId)
+      return
+    }
+    syncInstancedTransform(object)
   })
 }
 

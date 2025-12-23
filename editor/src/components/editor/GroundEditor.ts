@@ -37,6 +37,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -109,6 +110,10 @@ const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
 const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+const scatterCullingProjView = new THREE.Matrix4()
+const scatterCullingFrustum = new THREE.Frustum()
+const scatterFrustumCuller = createInstancedBvhFrustumCuller()
+const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
@@ -1314,6 +1319,48 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		lastScatterLodUpdateAt = now
 		scatterLodCameraPosition.copy(camera.position)
 
+		camera.updateMatrixWorld(true)
+		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+		scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+
+		const scatterCandidateIds: string[] = []
+		const scatterCandidateByNodeId = new Map<
+			string,
+			{ layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }
+		>()
+		for (const layer of store.layers.values()) {
+			const presetId = getScatterLayerLodPresetId(layer)
+			if (!presetId) {
+				continue
+			}
+			const preset = scatterLodPresetCache.get(presetId)
+			if (!preset || !layer.instances?.length) {
+				continue
+			}
+			for (const instance of layer.instances) {
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				scatterCandidateIds.push(nodeId)
+				scatterCandidateByNodeId.set(nodeId, { layer, instance, preset })
+			}
+		}
+
+		scatterCandidateIds.sort()
+		scatterFrustumCuller.setIds(scatterCandidateIds)
+		const visibleScatterIds = scatterFrustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+			const entry = scatterCandidateByNodeId.get(nodeId)
+			if (!entry) {
+				return null
+			}
+			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
+			centerTarget.copy(worldPos)
+			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? resolveLodBindingAssetId(entry.preset)
+			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
+			const scale = entry.instance.localScale
+			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+			return { radius }
+		})
+
 		for (const layer of store.layers.values()) {
 			const presetId = getScatterLayerLodPresetId(layer)
 			if (!presetId) {
@@ -1331,21 +1378,28 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			for (const instance of layer.instances) {
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				if (!visibleScatterIds.has(nodeId)) {
+					releaseScatterInstance(instance)
+					continue
+				}
 				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 				const distance = worldPos.distanceTo(scatterLodCameraPosition)
 				const desired = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
 				if (!desired) {
 					continue
 				}
-				const nodeId = buildScatterNodeId(layer.id, instance.id)
 				const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
-				if (current === desired) {
+				const hasBinding = Boolean(instance.binding?.nodeId)
+				if (current === desired && hasBinding) {
 					continue
 				}
 				if (!ensureScatterModelCached(desired)) {
 					continue
 				}
-				releaseScatterInstance(instance)
+				if (current !== desired) {
+					releaseScatterInstance(instance)
+				}
 				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
 				if (!bindScatterInstance(instance, matrix, desired)) {
 					continue
