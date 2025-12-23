@@ -173,10 +173,21 @@ const levelSummaries = computed(() => {
 <template>
   <v-expansion-panel value="lod">
     <v-expansion-panel-title>
-      <div class="lod-panel-header">
+      <div
+        class="lod-panel-header"
+        @dragenter.prevent
+        @dragover.prevent
+        @drop="handleDropPreset"
+      >
         <span class="lod-panel-title">LOD</span>
         <v-spacer />
-        <span class="lod-panel-subtitle">{{ levelSummaries.length }} levels</span>
+        <v-btn
+          icon="mdi-content-save"
+          size="small"
+          variant="text"
+          title="Save"
+          @click.stop="handleSavePreset"
+        />
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
@@ -189,20 +200,6 @@ const levelSummaries = computed(() => {
             :model-value="localEnableCulling"
             @update:modelValue="(v) => updateEnableCulling(Boolean(v))"
           />
-        </div>
-
-        <div
-          class="lod-preset-drop"
-          @dragenter.prevent
-          @dragover.prevent
-          @drop="handleDropPreset"
-        >
-          <div class="lod-preset-text">
-            <div class="lod-preset-title">LOD Preset</div>
-            <div class="lod-preset-subtitle">Drag a prefab asset here to apply.</div>
-          </div>
-          <v-spacer />
-          <v-btn size="small" variant="tonal" @click="handleSavePreset">Save</v-btn>
         </div>
 
         <div v-for="summary in levelSummaries" :key="summary.index" class="lod-level">
@@ -258,11 +255,6 @@ const levelSummaries = computed(() => {
   letter-spacing: 0.02em;
 }
 
-.lod-panel-subtitle {
-  font-size: 0.78rem;
-  opacity: 0.78;
-}
-
 .lod-section {
   display: flex;
   flex-direction: column;
@@ -278,25 +270,6 @@ const levelSummaries = computed(() => {
 .lod-label {
   font-size: 0.85rem;
   opacity: 0.85;
-}
-
-.lod-preset-drop {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
-  padding: 0.65rem 0.75rem;
-}
-
-.lod-preset-title {
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-
-.lod-preset-subtitle {
-  font-size: 0.75rem;
-  opacity: 0.7;
 }
 
 .lod-level {
