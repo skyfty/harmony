@@ -38,6 +38,7 @@ import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import { updateGroundChunks } from '@schema/groundMesh'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -4419,6 +4420,16 @@ function startAnimationLoop() {
 			lastOrbitState.target.copy(mapControls.target)
 		}
 		updateBehaviorProximity()
+		// Keep ground chunk meshes in sync with camera position.
+		if (currentDocument) {
+			const groundNode = findGroundNode(currentDocument.nodes)
+			if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+				const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+				if (groundObject) {
+					updateGroundChunks(groundObject, groundNode.dynamicMesh, activeCamera)
+				}
+			}
+		}
 		updateLazyPlaceholders(delta)
 		updateRigidbodyDebugTransforms()
 		// cloudRenderer?.update(delta)

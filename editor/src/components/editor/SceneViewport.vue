@@ -78,7 +78,7 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import { createGroundMesh, updateGroundChunks, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
@@ -3801,6 +3801,7 @@ function animate() {
   if (effectiveDelta > 0 && cloudRenderer) {
     cloudRenderer.update(effectiveDelta)
   }
+  updateGroundChunkStreaming()
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
@@ -6974,13 +6975,13 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   syncInstancedTransform(object, hasChildNodes)
 
   if (node.dynamicMesh?.type === 'Ground') {
-    const groundMesh = userData.groundMesh as THREE.Mesh | undefined
-    if (groundMesh) {
-      const meshData = groundMesh.userData ?? (groundMesh.userData = {})
+    const groundObject = userData.groundMesh as THREE.Object3D | undefined
+    if (groundObject) {
+      const groundData = groundObject.userData ?? (groundObject.userData = {})
       const nextSignature = computeGroundDynamicMeshSignature(node.dynamicMesh)
-      if (meshData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateGroundMesh(groundMesh, node.dynamicMesh)
-        meshData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateGroundMesh(groundObject, node.dynamicMesh)
+        groundData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
       }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
@@ -7047,6 +7048,39 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   if (nodeType === 'Light') {
     updateLightObjectProperties(object, node)
   }
+}
+
+function updateGroundChunkStreaming() {
+  if (!camera) {
+    return
+  }
+
+  const node = findGroundNodeInTree(sceneStore.nodes)
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+
+  const container = objectMap.get(node.id)
+  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? undefined
+  if (!groundObject) {
+    return
+  }
+
+  updateGroundChunks(groundObject, node.dynamicMesh, camera)
+}
+
+function disposeGroundObjectGeometries(object: THREE.Object3D) {
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (mesh?.isMesh) {
+      try {
+        mesh.geometry?.dispose?.()
+      } catch (_error) {
+        /* noop */
+      }
+    }
+  })
+  object.clear()
 }
 
 
@@ -7158,6 +7192,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
     } else {
       child.removeFromParent()
       if (child.userData?.dynamicMeshType === 'Ground') {
+        disposeGroundObjectGeometries(child)
         continue
       }
       if (object.userData?.usesRuntimeObject) {

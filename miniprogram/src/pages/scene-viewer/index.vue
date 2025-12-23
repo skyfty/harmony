@@ -317,6 +317,7 @@ import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourcePr
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { isGroundDynamicMesh } from '@schema/groundHeightfield';
+import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -7118,6 +7119,16 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
           updateVehicleDriveCamera(deltaSeconds);
         }
         updateBehaviorProximity();
+    // Keep chunked ground meshes in sync with camera position.
+    if (currentDocument) {
+      const groundNode = findGroundNode(currentDocument.nodes);
+      if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+        const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
+        if (groundObject) {
+          updateGroundChunks(groundObject, groundNode.dynamicMesh, camera);
+        }
+      }
+    }
         updateLazyPlaceholders(deltaSeconds);
         cloudRenderer?.update(deltaSeconds);
         renderer.render(scene, camera);

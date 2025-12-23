@@ -14,7 +14,14 @@ import {
 	type TerrainScatterStore,
 	type TerrainScatterStoreSnapshot,
 } from '@harmony/schema/terrain-scatter'
-import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
+import {
+	sculptGround,
+	updateGroundChunks,
+	updateGroundMeshRegion,
+	updateGroundMesh,
+	sampleGroundHeight,
+	type GroundGeometryUpdateRegion,
+} from '@schema/groundMesh'
 import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '@schema/modelObjectCache'
 import {
 	bindScatterInstance,
@@ -110,7 +117,7 @@ type ScatterSessionState = {
 	asset: ProjectAsset
 	category: TerrainScatterCategory
 	definition: GroundDynamicMesh
-	groundMesh: THREE.Mesh
+	groundMesh: THREE.Object3D
 	spacing: number
 	radius: number
 	minScale: number
@@ -125,7 +132,7 @@ let scatterSession: ScatterSessionState | null = null
 type ScatterEraseState = {
 	pointerId: number
 	definition: GroundDynamicMesh
-	groundMesh: THREE.Mesh
+	groundMesh: THREE.Object3D
 	radius: number
 }
 
@@ -356,10 +363,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	async function restoreGroupdScatter(): Promise<void> {
 		const store = ensureScatterStoreRef()
-		const groundMesh = getGroundMeshObject()
-		if (!groundMesh || store.layers.size === 0) {
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!groundMesh || !definition || store.layers.size === 0) {
 			return
 		}
+		updateGroundChunks(groundMesh, definition, options.getCamera())
 
 		const resolveAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
 			const candidates = [instance.assetId, layer.assetId, instance.profileId, layer.profileId]
@@ -576,7 +585,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		previousGeometry?.dispose()
 	}
 
-	function conformBrushToTerrain(definition: GroundDynamicMesh, groundObject: THREE.Mesh) {
+	function conformBrushToTerrain(definition: GroundDynamicMesh, groundObject: THREE.Object3D) {
 		const geometry = brushMesh.geometry
 		const positionAttribute = geometry.getAttribute('position')
 		const basePositions = geometry.userData?.[BRUSH_BASE_POSITIONS_KEY] as Float32Array | undefined
@@ -690,22 +699,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return null
 	}
 
-	function getGroundMeshObject(): THREE.Mesh | null {
-		const container = options.objectMap.get(GROUND_NODE_ID)
-		if (!container) {
-			return null
-		}
-		let mesh: THREE.Mesh | null = null
-		container.traverse((child) => {
-			if (mesh) {
-				return
-			}
-			const candidate = child as THREE.Mesh
-			if (candidate?.isMesh && candidate !== container) {
-				mesh = candidate
-			}
-		})
-		return mesh
+	function getGroundObject(): THREE.Object3D | null {
+		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
 	function cloneHeightMap(heightMap: GroundDynamicMesh['heightMap']): GroundDynamicMesh['heightMap'] {
@@ -1025,10 +1020,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const definition = getGroundDynamicMeshDefinition()
-		const groundMesh = getGroundMeshObject()
+		const groundMesh = getGroundObject()
 		if (!definition || !groundMesh) {
 			return false
 		}
+		updateGroundChunks(groundMesh, definition, options.getCamera())
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -1112,7 +1108,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Mesh): boolean {
+	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Object3D): boolean {
 		const store = ensureScatterStoreRef()
 		const selectedCategory = options.scatterCategory.value
 		let layers = Array.from(store.layers.values()).filter((layer) => layer.category === selectedCategory)
@@ -1195,10 +1191,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const definition = getGroundDynamicMeshDefinition()
-		const groundMesh = getGroundMeshObject()
+		const groundMesh = getGroundObject()
 		if (!definition || !groundMesh) {
 			return false
 		}
+		updateGroundChunks(groundMesh, definition, options.getCamera())
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -1471,15 +1468,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const groundObject = getGroundMeshObject()
+		const groundObject = getGroundObject()
 		if (!groundObject) {
 			brushMesh.visible = false
 			return
 		}
+		updateGroundChunks(groundObject, definition, options.getCamera())
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)
-		const intersects = options.raycaster.intersectObject(groundObject, false)
+		const intersects = options.raycaster.intersectObject(groundObject, true)
 		const hit = intersects[0]
 		if (hit) {
 			brushMesh.position.copy(hit.point)
@@ -1508,8 +1506,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const definition = getGroundDynamicMeshDefinition()
 		if (!definition) return
 
-		const groundObject = getGroundMeshObject()
+		const groundObject = getGroundObject()
 		if (!groundObject) return
+		updateGroundChunks(groundObject, definition, options.getCamera())
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -1537,8 +1536,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.dirty = true
 			}
-			const geometry = (groundObject as THREE.Mesh).geometry
-			updateGroundGeometry(geometry, definition)
+			const halfWidth = definition.width * 0.5
+			const halfDepth = definition.depth * 0.5
+			const cellSize = definition.cellSize
+			const radius = options.brushRadius.value
+			const minColumn = Math.floor((localPoint.x - radius + halfWidth) / cellSize)
+			const maxColumn = Math.ceil((localPoint.x + radius + halfWidth) / cellSize)
+			const minRow = Math.floor((localPoint.z - radius + halfDepth) / cellSize)
+			const maxRow = Math.ceil((localPoint.z + radius + halfDepth) / cellSize)
+			const region: GroundGeometryUpdateRegion = {
+				minRow: Math.max(0, minRow),
+				maxRow: Math.min(definition.rows, maxRow),
+				minColumn: Math.max(0, minColumn),
+				maxColumn: Math.min(definition.columns, maxColumn),
+			}
+			updateGroundMeshRegion(groundObject, definition, region)
 		}
 	}
 
@@ -1546,8 +1558,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition) {
 			return
 		}
-		const mesh = getGroundMeshObject()
+		const mesh = getGroundObject()
 		if (mesh) {
+			updateGroundChunks(mesh, definition, options.getCamera())
 			updateGroundMesh(mesh, definition)
 		}
 	}
@@ -1591,9 +1604,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const selectedNode = options.sceneStore.selectedNode
 		if (selectedNode?.dynamicMesh?.type === 'Ground') {
-			const mesh = options.objectMap.get(selectedNode.id) as THREE.Mesh | undefined
-			if (mesh?.geometry) {
-				mesh.geometry.computeVertexNormals()
+			const groundObject = getGroundObject()
+			if (groundObject) {
+				groundObject.traverse((child) => {
+					const mesh = child as THREE.Mesh
+					if (mesh?.isMesh && mesh.geometry) {
+						mesh.geometry.computeVertexNormals()
+					}
+				})
 			}
 			commitSculptSession(selectedNode)
 		} else {

@@ -43,7 +43,7 @@ import {
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
 import { loadObjectFromFile } from './assetImport'
-import { createGroundMesh, updateGroundMesh } from './groundMesh'
+import { createGroundMesh, setGroundMaterial, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
 import { createRoadRenderGroup } from './roadMesh'
 import { createFloorRenderGroup } from './floorMesh'
@@ -1122,34 +1122,45 @@ class SceneGraphBuilder {
   }
 
   private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const base = createGroundMesh(meshInfo);
-    const geometry = base.geometry ? base.geometry.clone() : new THREE.BufferGeometry();
-    const defaultMaterial = this.cloneMaterial(base.material) ?? new THREE.MeshStandardMaterial({
-      color: '#707070',
-      roughness: 0.85,
-      metalness: 0.05,
-    });
-    const mesh = new THREE.Mesh(geometry, defaultMaterial);
-    mesh.name = node.name ?? (base.name || 'Ground');
-    mesh.castShadow = base.castShadow;
-    mesh.receiveShadow = base.receiveShadow;
-    const userData = { ...(base.userData ?? {}) } as Record<string, unknown>;
+    const groundObject = createGroundMesh(meshInfo);
+    groundObject.name = node.name ?? (groundObject.name || 'Ground');
+
+    const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
     userData.dynamicMeshType = 'Ground';
-    mesh.userData = userData;
-    updateGroundMesh(mesh, meshInfo);
-    const groundTexture = this.extractGroundTextureFromMaterial(mesh.material);
+    groundObject.userData = userData;
+
+    updateGroundMesh(groundObject, meshInfo);
+
+    // Apply node materials across all ground chunks.
+    let groundTexture: THREE.Texture | null = null;
+    groundObject.traverse((child: THREE.Object3D) => {
+      const mesh = child as unknown as THREE.Mesh;
+      if (!groundTexture && mesh && (mesh as any).isMesh) {
+        groundTexture = this.extractGroundTextureFromMaterial(mesh.material) ?? null;
+      }
+    });
+
     const materials = await this.resolveNodeMaterials(node);
     const resolvedMaterial = this.pickMaterialAssignment(materials);
     if (resolvedMaterial) {
-      mesh.material = resolvedMaterial;
+      setGroundMaterial(groundObject, resolvedMaterial);
       if (groundTexture) {
         this.assignTextureToMaterial(resolvedMaterial, groundTexture);
       }
     }
-    this.applyTransform(mesh, node);
-    this.applyVisibility(mesh, node);
-    this.recordMeshStatistics(mesh);
-    return mesh;
+
+    this.applyTransform(groundObject, node);
+    this.applyVisibility(groundObject, node);
+
+    // Record statistics for each chunk mesh.
+    groundObject.traverse((child: THREE.Object3D) => {
+      const mesh = child as unknown as THREE.Mesh;
+      if (mesh && (mesh as any).isMesh) {
+        this.recordMeshStatistics(mesh);
+      }
+    });
+
+    return groundObject;
   }
 
   private async buildWallMesh(meshInfo: WallDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
@@ -1263,16 +1274,6 @@ class SceneGraphBuilder {
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
     return group;
-  }
-
-  private cloneMaterial(material: THREE.Material | THREE.Material[] | null | undefined): THREE.Material | THREE.Material[] | null {
-    if (!material) {
-      return null;
-    }
-    if (Array.isArray(material)) {
-      return material.map((entry) => entry.clone());
-    }
-    return material.clone();
   }
 
   private pickMaterialAssignment(materials: THREE.Material[]): THREE.Material | THREE.Material[] | null {

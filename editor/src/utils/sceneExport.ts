@@ -18,7 +18,7 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createGroundMesh } from '@schema/groundMesh'
+import { createGroundMesh, ensureAllGroundChunks } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
 import { createRoadGroup } from '@schema/roadMesh'
 import {
@@ -738,7 +738,12 @@ function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
   }
   switch (mesh.type) {
     case 'Ground':
-      return createGroundMesh(mesh).clone(true)
+      {
+        const ground = createGroundMesh(mesh)
+        ensureAllGroundChunks(ground, mesh)
+        ground.updateMatrixWorld(true)
+        return ground
+      }
     case 'Wall':
       return createWallGroup(mesh).clone(true)
     case 'Road':

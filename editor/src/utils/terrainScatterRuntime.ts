@@ -16,7 +16,7 @@ export function buildScatterNodeId(layerId: string | null | undefined, instanceI
 
 export function composeScatterMatrix(
   instance: TerrainScatterInstance,
-  groundMesh: THREE.Mesh,
+  groundMesh: THREE.Object3D,
   target?: THREE.Matrix4,
 ): THREE.Matrix4 {
   groundMesh.updateMatrixWorld(true)
@@ -44,7 +44,7 @@ export function composeScatterMatrix(
 
 export function getScatterInstanceWorldPosition(
   instance: TerrainScatterInstance,
-  groundMesh: THREE.Mesh,
+  groundMesh: THREE.Object3D,
   target?: THREE.Vector3,
 ): THREE.Vector3 {
   const matrix = composeScatterMatrix(instance, groundMesh, groundMatrixHelper)
@@ -81,7 +81,7 @@ export function releaseScatterInstance(instance: TerrainScatterInstance): void {
 
 export function updateScatterInstanceMatrix(
   instance: TerrainScatterInstance,
-  groundMesh: THREE.Mesh,
+  groundMesh: THREE.Object3D,
   target?: THREE.Matrix4,
 ): THREE.Matrix4 | null {
   const nodeId = instance.binding?.nodeId
