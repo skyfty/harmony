@@ -79,6 +79,7 @@ import {
 	vehicleComponentDefinition,
 	waterComponentDefinition,
 	protagonistComponentDefinition,
+	lodComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -87,15 +88,18 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
+	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
+	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
 import type {
 	GuideboardComponentProps,
+	LodComponentProps,
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
@@ -103,6 +107,7 @@ import type {
 	VehicleWheelProps,
 	WarpGateComponentProps,
 } from '@schema/components'
+import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
@@ -368,6 +373,7 @@ previewComponentManager.registerDefinition(vehicleComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
+previewComponentManager.registerDefinition(lodComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -554,6 +560,10 @@ const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
+const instancedCullingProjView = new THREE.Matrix4()
+const instancedCullingFrustum = new THREE.Frustum()
+const instancedCullingBox = new THREE.Box3()
+const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -1233,6 +1243,161 @@ function resolveVehicleComponent(
 		return null
 	}
 	return component
+}
+
+function resolveLodComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<LodComponentProps> | null {
+	const component = node?.components?.[LOD_COMPONENT_TYPE] as
+		SceneNodeComponentState<LodComponentProps> | undefined
+	if (!component || !component.enabled) {
+		return null
+	}
+	return component
+}
+
+function resolveCullingEnabled(node: SceneNode): boolean {
+	const component = resolveLodComponent(node)
+	if (!component) {
+		return true
+	}
+	const props = clampLodComponentProps(component.props)
+	return props.enableCulling !== false
+}
+
+function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
+	const baseAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+	const component = resolveLodComponent(node)
+	if (!component) {
+		return baseAssetId
+	}
+
+	const props = clampLodComponentProps(component.props)
+	const levels = props.levels
+	if (!levels.length) {
+		return baseAssetId
+	}
+
+	object.getWorldPosition(instancedCullingWorldPosition)
+	const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
+
+	let chosen: (typeof levels)[number] | null = null
+	for (let i = levels.length - 1; i >= 0; i -= 1) {
+		const candidate = levels[i]
+		if (candidate && distance >= candidate.distance) {
+			chosen = candidate
+			break
+		}
+	}
+	const chosenModelAssetId = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId : null
+	return chosenModelAssetId ?? baseAssetId
+}
+
+const pendingLodModelLoads = new Map<string, Promise<void>>()
+
+async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | null): Promise<void> {
+	if (!assetId) {
+		return
+	}
+	if (getCachedModelObject(assetId)) {
+		ensureInstancedMeshesRegistered(assetId)
+		return
+	}
+	if (pendingLodModelLoads.has(assetId)) {
+		await pendingLodModelLoads.get(assetId)
+		return
+	}
+
+	const task = (async () => {
+		if (!editorResourceCache) {
+			return
+		}
+		await ensureModelInstanceGroup(assetId, sampleNode, editorResourceCache)
+		ensureInstancedMeshesRegistered(assetId)
+	})()
+		.catch((error) => {
+			console.warn('[ScenePreview] Failed to preload LOD model asset', assetId, error)
+		})
+		.finally(() => {
+			pendingLodModelLoads.delete(assetId)
+		})
+
+	pendingLodModelLoads.set(assetId, task)
+	await task
+}
+
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
+	const cached = getCachedModelObject(assetId)
+	if (!cached) {
+		const node = resolveNodeById(nodeId)
+		void ensureModelObjectCached(assetId, node)
+		return
+	}
+
+	releaseModelInstance(nodeId)
+	const binding = allocateModelInstance(assetId, nodeId)
+	if (!binding) {
+		return
+	}
+
+	object.userData = {
+		...(object.userData ?? {}),
+		instancedAssetId: assetId,
+		instancedBounds: serializeBoundingBox(cached.boundingBox),
+	}
+	object.userData.__harmonyCulled = false
+	syncInstancedTransform(object)
+}
+
+function updateInstancedCullingAndLod(): void {
+	if (!camera) {
+		return
+	}
+
+	camera.updateMatrixWorld(true)
+	instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+	instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+
+	nodeObjectMap.forEach((object, nodeId) => {
+		if (!object?.userData?.instancedAssetId) {
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		if (!node) {
+			return
+		}
+		object.updateMatrixWorld(true)
+
+		const cullingEnabled = resolveCullingEnabled(node)
+		let shouldCull = false
+		if (cullingEnabled) {
+			setBoundingBoxFromObject(object, instancedCullingBox)
+			if (!instancedCullingBox.isEmpty()) {
+				shouldCull = !instancedCullingFrustum.intersectsBox(instancedCullingBox)
+			}
+		}
+
+		const previousCull = object.userData.__harmonyCulled === true
+		if (previousCull !== shouldCull) {
+			object.userData.__harmonyCulled = shouldCull
+			syncInstancedTransform(object)
+		}
+
+		if (shouldCull) {
+			return
+		}
+
+		const desiredAssetId = resolveDesiredLodAssetId(node, object)
+		if (!desiredAssetId) {
+			return
+		}
+		const currentAssetId = object.userData.instancedAssetId as string | undefined
+		if (currentAssetId === desiredAssetId) {
+			return
+		}
+
+		applyInstancedLodSwitch(nodeId, object, desiredAssetId)
+	})
 }
 
 function extractRigidbodyShape(
@@ -4418,6 +4583,7 @@ function startAnimationLoop() {
 			lastOrbitState.position.copy(activeCamera.position)
 			lastOrbitState.target.copy(mapControls.target)
 		}
+		updateInstancedCullingAndLod()
 		updateBehaviorProximity()
 		updateLazyPlaceholders(delta)
 		updateRigidbodyDebugTransforms()
@@ -5178,7 +5344,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		}
 		removeVehicleInstance(nodeId)
 		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-		const isVisible = target.visible !== false
+		const isVisible = target.visible !== false && target.userData?.__harmonyCulled !== true
 		if (!isVisible) {
 			instancedScaleHelper.setScalar(0)
 		}

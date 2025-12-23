@@ -28,7 +28,13 @@ export function useInstancedMeshes(
       if (nodeId) {
         const assetId = object.userData.instancedAssetId as string | undefined
         const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
-        if (assetId && node) {
+        const isCulled = object.userData?.__harmonyCulled === true
+        if (isCulled) {
+          object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          instancedScaleHelper.setScalar(0)
+          instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+        } else if (assetId && node) {
           syncContinuousInstancedModelCommitted({ node, object, assetId })
         } else {
           object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
@@ -59,7 +65,13 @@ export function useInstancedMeshes(
         if (nodeId) {
           const assetId = current.userData.instancedAssetId as string | undefined
           const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
-          if (assetId && node) {
+          const isCulled = current.userData?.__harmonyCulled === true
+          if (isCulled) {
+            current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+            instancedScaleHelper.setScalar(0)
+            instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+            updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+          } else if (assetId && node) {
             syncContinuousInstancedModelCommitted({ node, object: current, assetId })
           } else {
             current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)

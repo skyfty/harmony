@@ -45,6 +45,9 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
+  allocateModelInstance,
+  releaseModelInstance,
+  ensureInstancedMeshesRegistered,
   subscribeInstancedMeshes,
   getModelInstanceBindingById,
   findBindingIdForInstance,
@@ -120,6 +123,8 @@ import {
   createWarpGateEffectInstance,
   createGuideboardEffectInstance,
   PROTAGONIST_COMPONENT_TYPE,
+  LOD_COMPONENT_TYPE,
+  clampLodComponentProps,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -129,6 +134,7 @@ import type {
   WallComponentProps,
   WarpGateEffectInstance,
   GuideboardEffectInstance,
+  LodComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
@@ -1676,6 +1682,169 @@ const {
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId)
   }
 )
+
+const instancedCullingFrustum = new THREE.Frustum()
+const instancedCullingProjView = new THREE.Matrix4()
+const instancedCullingBox = new THREE.Box3()
+const instancedCullingWorldPosition = new THREE.Vector3()
+
+const pendingLodModelLoads = new Map<string, Promise<void>>()
+
+type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
+
+function serializeBoundingBox(box: THREE.Box3): InstancedBoundsPayload {
+  return {
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+  }
+}
+
+async function ensureModelObjectCached(assetId: string): Promise<void> {
+  if (!assetId) {
+    return
+  }
+  if (getCachedModelObject(assetId)) {
+    return
+  }
+  if (pendingLodModelLoads.has(assetId)) {
+    await pendingLodModelLoads.get(assetId)
+    return
+  }
+
+  const task = (async () => {
+    const asset = sceneStore.getAsset(assetId)
+    if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+      return
+    }
+    let file = assetCacheStore.createFileFromCache(asset.id)
+    if (!file) {
+      await assetCacheStore.loadFromIndexedDb(asset.id)
+      file = assetCacheStore.createFileFromCache(asset.id)
+    }
+    if (!file) {
+      return
+    }
+    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+    assetCacheStore.releaseInMemoryBlob(asset.id)
+    ensureInstancedMeshesRegistered(asset.id)
+  })()
+    .catch((error) => {
+      console.warn('[SceneViewport] Failed to preload LOD model asset', assetId, error)
+    })
+    .finally(() => {
+      pendingLodModelLoads.delete(assetId)
+    })
+
+  pendingLodModelLoads.set(assetId, task)
+  await task
+}
+
+function resolveDesiredLodAssetId(nodeId: string, node: SceneNode, object: THREE.Object3D): string | null {
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+  if (!component) {
+    return (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null)
+  }
+
+  const props = clampLodComponentProps(component.props)
+  const levels = props.levels
+  if (!levels.length) {
+    return node.sourceAssetId ?? null
+  }
+  object.getWorldPosition(instancedCullingWorldPosition)
+  const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
+
+  let chosen = levels[0]
+  for (let i = levels.length - 1; i >= 0; i -= 1) {
+    const candidate = levels[i]
+    if (candidate && distance >= candidate.distance) {
+      chosen = candidate
+      break
+    }
+  }
+
+  return chosen.modelAssetId ?? node.sourceAssetId ?? null
+}
+
+function resolveCullingEnabled(node: SceneNode): boolean {
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+  if (!component) {
+    return true
+  }
+  const props = clampLodComponentProps(component.props)
+  return props.enableCulling !== false
+}
+
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    void ensureModelObjectCached(assetId)
+    return
+  }
+
+  releaseModelInstance(nodeId)
+  const binding = allocateModelInstance(assetId, nodeId)
+  if (!binding) {
+    return
+  }
+
+  object.userData = {
+    ...(object.userData ?? {}),
+    instancedAssetId: assetId,
+    instancedBounds: serializeBoundingBox(cached.boundingBox),
+  }
+  syncInstancedTransform(object)
+}
+
+function updateInstancedCullingAndLod(): void {
+  if (!camera) {
+    return
+  }
+
+  camera.updateMatrixWorld(true)
+  instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+
+  objectMap.forEach((object, nodeId) => {
+    if (!object?.userData?.instancedAssetId) {
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    if (!node) {
+      return
+    }
+    object.updateMatrixWorld(true)
+
+    const cullingEnabled = resolveCullingEnabled(node)
+    let shouldCull = false
+    if (cullingEnabled) {
+      setBoundingBoxFromObject(object, instancedCullingBox)
+      if (!instancedCullingBox.isEmpty()) {
+        shouldCull = !instancedCullingFrustum.intersectsBox(instancedCullingBox)
+      }
+    }
+
+    const previousCull = object.userData.__harmonyCulled === true
+    if (previousCull !== shouldCull) {
+      object.userData.__harmonyCulled = shouldCull
+      syncInstancedTransform(object)
+    }
+
+    if (shouldCull) {
+      return
+    }
+
+    const desiredAssetId = resolveDesiredLodAssetId(nodeId, node, object)
+    if (!desiredAssetId) {
+      return
+    }
+    const currentAssetId = object.userData.instancedAssetId as string | undefined
+    if (currentAssetId === desiredAssetId) {
+      return
+    }
+
+    applyInstancedLodSwitch(nodeId, object, desiredAssetId)
+  })
+}
 
 
 function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult | null {
@@ -3801,6 +3970,8 @@ function animate() {
   if (effectiveDelta > 0 && cloudRenderer) {
     cloudRenderer.update(effectiveDelta)
   }
+
+  updateInstancedCullingAndLod()
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()

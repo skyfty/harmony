@@ -143,6 +143,12 @@ import {
   type BehaviorPrefabData,
 } from '@/utils/behaviorPrefab'
 import {
+  buildLodPresetFilename,
+  deserializeLodPreset,
+  serializeLodPreset,
+  type LodPresetData,
+} from '@/utils/lodPreset'
+import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
   extractAiModelMeshMetadataFromUserData,
@@ -227,6 +233,11 @@ import {
   clampWaterComponentProps,
   cloneWaterComponentProps,
 } from '@schema/components'
+import {
+  LOD_COMPONENT_TYPE,
+  clampLodComponentProps,
+  type LodComponentProps,
+} from '@schema/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
 
@@ -294,6 +305,7 @@ function normalizeRemoteCandidate(value: string | null | undefined): string | nu
 const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
+const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
@@ -9325,6 +9337,104 @@ export const useSceneStore = defineStore('scene', {
         source: { type: 'local' },
         commitOptions: { updateNodes: false },
       })
+    },
+
+    async saveLodPreset(payload: {
+      name: string
+      props: LodComponentProps
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      const name = typeof payload.name === 'string' ? payload.name : ''
+      const props = clampLodComponentProps(payload.props)
+      const serialized = serializeLodPreset({ name, props })
+      const assetId = generateUuid()
+      const fileName = buildLodPresetFilename(name)
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: name?.trim().length ? name.trim() : 'LOD Preset',
+        type: 'prefab',
+        downloadUrl: assetId,
+        previewColor: LOD_PRESET_PREVIEW_COLOR,
+        thumbnail: null,
+        description: fileName,
+        gleaned: true,
+      }
+
+      const categoryId = determineAssetCategoryId(projectAsset)
+      const registered = this.registerAsset(projectAsset, {
+        categoryId,
+        source: { type: 'local' },
+        commitOptions: { updateNodes: false },
+      })
+
+      if (payload.select !== false) {
+        this.setActiveDirectory(categoryId)
+        this.selectAsset(registered.id)
+      }
+
+      return registered
+    },
+
+    async loadLodPreset(assetId: string): Promise<LodPresetData> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('LOD 预设资源不存在')
+      }
+      if (asset.type !== 'prefab') {
+        throw new Error('指定资源并非 LOD 预设')
+      }
+
+      const assetCache = useAssetCacheStore()
+      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
+        await assetCache.downloaProjectAsset(asset)
+        entry = assetCache.getEntry(assetId)
+      }
+      if (!entry || !entry.blob) {
+        throw new Error('无法加载 LOD 预设数据')
+      }
+
+      assetCache.touch(assetId)
+      const text = await entry.blob.text()
+      return deserializeLodPreset(text)
+    },
+
+    async applyLodPresetToNode(nodeId: string, assetId: string): Promise<LodPresetData> {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        throw new Error('节点不存在或已被移除')
+      }
+
+      const preset = await this.loadLodPreset(assetId)
+
+      if (!node.components?.[LOD_COMPONENT_TYPE]) {
+        const created = this.addNodeComponent(nodeId, LOD_COMPONENT_TYPE)
+        if (!created) {
+          throw new Error('无法为节点添加 LOD 组件')
+        }
+      }
+
+      const refreshedNode = findNodeById(this.nodes, nodeId)
+      const lodComponent = refreshedNode?.components?.[LOD_COMPONENT_TYPE] as
+        | SceneNodeComponentState<LodComponentProps>
+        | undefined
+      if (!lodComponent) {
+        throw new Error('LOD 组件不可用')
+      }
+
+      this.updateNodeComponentProps(nodeId, lodComponent.id, preset.props)
+      return preset
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
       const asset = this.getAsset(assetId)
