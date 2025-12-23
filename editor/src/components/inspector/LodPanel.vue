@@ -2,15 +2,11 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import AssetDialog from '@/components/common/AssetDialog.vue'
+import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import {
-  LOD_COMPONENT_TYPE,
-  type LodComponentProps,
-  clampLodComponentProps,
-} from '@schema/components'
-
-type ProjectAsset = ReturnType<typeof useSceneStore>['getAsset'] extends (id: string) => infer R ? R : never
+import { LOD_COMPONENT_TYPE, type LodComponentProps, clampLodComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
@@ -27,19 +23,41 @@ const isSyncingFromScene = ref(false)
 const localEnableCulling = ref(true)
 const localLevels = ref<LodComponentProps['levels']>([])
 
+const modelAssetDialogVisible = ref(false)
+const modelAssetDialogSelectedId = ref('')
+const modelAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const modelAssetDialogLevelIndex = ref<number | null>(null)
+
 watch(
   lodComponent,
   (component) => {
     isSyncingFromScene.value = true
-    const props = clampLodComponentProps(component?.props ?? null)
-    localEnableCulling.value = props.enableCulling
-    localLevels.value = props.levels.map((level) => ({ ...level }))
-    nextTick(() => {
-      isSyncingFromScene.value = false
-    })
+    try {
+      if (!component) {
+        localEnableCulling.value = true
+        localLevels.value = []
+        return
+      }
+      const props = clampLodComponentProps(component.props)
+      localEnableCulling.value = props.enableCulling
+      localLevels.value = props.levels.map((level) => ({ ...level }))
+    } finally {
+      nextTick(() => {
+        isSyncingFromScene.value = false
+      })
+    }
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 )
+
+watch(modelAssetDialogVisible, (open) => {
+  if (open) {
+    return
+  }
+  modelAssetDialogAnchor.value = null
+  modelAssetDialogSelectedId.value = ''
+  modelAssetDialogLevelIndex.value = null
+})
 
 function serializeAssetDragPayload(raw: string | null): string | null {
   if (!raw) {
@@ -66,7 +84,32 @@ function resolveDragAssetId(event: DragEvent): string | null {
   return draggingAssetId.value ?? null
 }
 
-function applyPropsPatch(patch: Partial<LodComponentProps>) {
+function resolveAsset(assetId?: string | null): ProjectAsset | null {
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+}
+
+function resolveAssetPreviewStyle(asset: ProjectAsset | null): Record<string, string> {
+  if (!asset) {
+    return {
+      background:
+        'linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02))',
+    }
+  }
+  if (asset.thumbnail?.trim()) {
+    return { backgroundImage: `url(${asset.thumbnail})` }
+  }
+  if (asset.previewColor) {
+    return { backgroundColor: asset.previewColor }
+  }
+  return {
+    background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02))',
+  }
+}
+
+function pushPropsToStore(): void {
   if (isSyncingFromScene.value) {
     return
   }
@@ -75,59 +118,78 @@ function applyPropsPatch(patch: Partial<LodComponentProps>) {
   if (!nodeId || !component) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
+  const nextProps = clampLodComponentProps({
+    enableCulling: localEnableCulling.value,
+    levels: localLevels.value,
+  })
+  localEnableCulling.value = nextProps.enableCulling
+  localLevels.value = nextProps.levels.map((level) => ({ ...level }))
+  sceneStore.updateNodeComponentProps(nodeId, component.id, nextProps as unknown as Record<string, unknown>)
 }
 
-function updateEnableCulling(value: boolean) {
+function updateEnableCulling(value: boolean): void {
   localEnableCulling.value = value
-  applyPropsPatch({ enableCulling: value })
+  pushPropsToStore()
 }
 
-function updateLevelDistance(index: number, raw: unknown) {
-  if (isSyncingFromScene.value) {
+function updateLevelDistance(levelIndex: number, value: unknown): void {
+  const nextValue = Number(value)
+  const distance = Number.isFinite(nextValue) ? Math.max(0, nextValue) : 0
+  const nextLevels = localLevels.value.map((level) => ({ ...level }))
+  if (!nextLevels[levelIndex]) {
     return
   }
-  const next = localLevels.value.map((level) => ({ ...level }))
-  const value = typeof raw === 'number' ? raw : Number(raw)
-  if (!Number.isFinite(value) || index < 0 || index >= next.length || !next[index]) {
-    return
-  }
-  next[index].distance = Math.max(0, value)
-  localLevels.value = next
-  applyPropsPatch({ levels: next })
+  nextLevels[levelIndex].distance = distance
+  localLevels.value = nextLevels
+  pushPropsToStore()
 }
 
-function assignModelAsset(index: number, assetId: string | null) {
-  const next = localLevels.value.map((level) => ({ ...level }))
-  if (index < 0 || index >= next.length || !next[index]) {
-    return
+function handleDistanceKeydown(event: KeyboardEvent): void {
+  if (event.key === '-') {
+    event.preventDefault()
   }
-  next[index].modelAssetId = assetId
-  localLevels.value = next
-  applyPropsPatch({ levels: next })
 }
 
-function resolveAsset(assetId: string | null | undefined): ProjectAsset | null {
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.getAsset(assetId)
-}
-
-function handleDropModel(index: number, event: DragEvent) {
-  event.preventDefault()
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
+function assignModelAsset(levelIndex: number, assetId: string | null | undefined): void {
+  const nextLevels = localLevels.value.map((level) => ({ ...level }))
+  if (!nextLevels[levelIndex]) {
     return
   }
-  const asset = sceneStore.getAsset(assetId)
-  if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
-    return
-  }
-  assignModelAsset(index, assetId)
+  nextLevels[levelIndex].modelAssetId = assetId ?? null
+  localLevels.value = nextLevels
+  pushPropsToStore()
 }
 
-async function handleSavePreset() {
+function openModelAssetDialog(levelIndex: number, event?: MouseEvent): void {
+  modelAssetDialogLevelIndex.value = levelIndex
+  modelAssetDialogSelectedId.value = localLevels.value[levelIndex]?.modelAssetId ?? ''
+  modelAssetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  modelAssetDialogVisible.value = true
+}
+
+function handleModelAssetDialogUpdate(asset: ProjectAsset | null): void {
+  const index = modelAssetDialogLevelIndex.value
+  if (index == null) {
+    modelAssetDialogVisible.value = false
+    return
+  }
+  if (!asset) {
+    modelAssetDialogVisible.value = false
+    return
+  }
+  if (asset.type !== 'model' && asset.type !== 'mesh') {
+    console.warn('Selected asset is not a model/mesh')
+    return
+  }
+  assignModelAsset(index, asset.id)
+  modelAssetDialogVisible.value = false
+}
+
+function handleModelAssetDialogCancel(): void {
+  modelAssetDialogVisible.value = false
+}
+
+async function handleSavePreset(): Promise<void> {
   const node = selectedNode.value
   const component = lodComponent.value
   if (!node || !component) {
@@ -141,7 +203,7 @@ async function handleSavePreset() {
   await sceneStore.saveLodPreset({ name, props, select: true })
 }
 
-async function handleDropPreset(event: DragEvent) {
+async function handleDropPreset(event: DragEvent): Promise<void> {
   event.preventDefault()
   const nodeId = selectedNodeId.value
   if (!nodeId) {
@@ -165,6 +227,8 @@ const levelSummaries = computed(() => {
       index,
       distance: level.distance,
       modelLabel: model ? model.name : 'Default model',
+      modelStyle: resolveAssetPreviewStyle(model),
+      isDefaultModel: !level.modelAssetId,
     }
   })
 })
@@ -190,13 +254,13 @@ const levelSummaries = computed(() => {
         />
       </div>
     </v-expansion-panel-title>
+
     <v-expansion-panel-text>
       <div class="lod-section">
         <div class="lod-row">
           <span class="lod-label">Frustum Culling</span>
           <v-switch
             density="compact"
-            inset
             :model-value="localEnableCulling"
             @update:modelValue="(v) => updateEnableCulling(Boolean(v))"
           />
@@ -208,36 +272,62 @@ const levelSummaries = computed(() => {
             <div class="lod-level-meta">≥ {{ Math.round(summary.distance) }}m</div>
           </div>
 
-          <v-text-field
-            label="Distance (m)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            :model-value="summary.distance"
-            @update:modelValue="(v) => updateLevelDistance(summary.index, v)"
-          />
+          <div class="lod-level-row">
+            <div class="lod-model-wrap">
+              <button
+                type="button"
+                class="lod-model-button"
+                :title="summary.modelLabel"
+                @click="openModelAssetDialog(summary.index, $event)"
+                @keydown.enter.prevent="openModelAssetDialog(summary.index)"
+                @keydown.space.prevent="openModelAssetDialog(summary.index)"
+              >
+                <div
+                  class="lod-model-thumb"
+                  :class="{ 'lod-model-thumb--empty': summary.isDefaultModel }"
+                  :style="summary.modelStyle"
+                />
+              </button>
 
-          <div class="lod-asset-grid">
-            <div
-              class="lod-asset-drop"
-              @dragenter.prevent
-              @dragover.prevent
-              @drop="(e) => handleDropModel(summary.index, e)"
-            >
-              <div class="lod-asset-title">Model</div>
-              <div class="lod-asset-value">{{ summary.modelLabel }}</div>
               <v-btn
-                v-if="localLevels[summary.index]?.modelAssetId"
+                v-if="!summary.isDefaultModel"
+                class="lod-clear-button"
+                icon="mdi-close"
                 size="x-small"
                 variant="text"
-                @click="assignModelAsset(summary.index, null)"
-              >
-                Clear
-              </v-btn>
+                title="Clear model override"
+                @click.stop="assignModelAsset(summary.index, null)"
+              />
+            </div>
+
+            <div class="lod-distance-col">
+              <div class="lod-model-name" :title="summary.modelLabel">{{ summary.modelLabel }}</div>
+              <v-text-field
+                class="lod-distance"
+                label="Distance"
+                type="number"
+                density="compact"
+                variant="underlined"
+                suffix="m"
+                :min="0"
+                :model-value="summary.distance"
+                @keydown="handleDistanceKeydown"
+                @update:modelValue="(v) => updateLevelDistance(summary.index, v)"
+              />
             </div>
           </div>
         </div>
       </div>
+
+      <AssetDialog
+        v-model="modelAssetDialogVisible"
+        v-model:assetId="modelAssetDialogSelectedId"
+        assetType="model,mesh"
+        title="Select Model Asset"
+        :anchor="modelAssetDialogAnchor"
+        @update:asset="handleModelAssetDialogUpdate"
+        @cancel="handleModelAssetDialogCancel"
+      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -246,8 +336,8 @@ const levelSummaries = computed(() => {
 .lod-panel-header {
   display: flex;
   align-items: center;
-  width: 100%;
   gap: 0.4rem;
+  width: 100%;
 }
 
 .lod-panel-title {
@@ -296,29 +386,72 @@ const levelSummaries = computed(() => {
   opacity: 0.75;
 }
 
-.lod-asset-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.lod-asset-drop {
+.lod-level-row {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 0.6rem;
+  align-items: flex-start;
+  gap: 0.9rem;
 }
 
-.lod-asset-title {
-  font-size: 0.75rem;
+.lod-model-wrap {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  flex: 0 0 60px;
+}
+
+.lod-model-button {
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lod-clear-button {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: unset;
+}
+
+.lod-model-button:focus-visible {
+  outline: 2px solid rgba(110, 231, 183, 0.8);
+  outline-offset: 2px;
+}
+
+.lod-model-thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  aspect-ratio: 1 / 1;
+}
+
+.lod-model-thumb--empty {
   opacity: 0.75;
 }
 
-.lod-asset-value {
+.lod-distance-col {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lod-model-name {
   font-size: 0.85rem;
   font-weight: 600;
-  min-height: 1.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lod-distance {
+  flex: 1;
 }
 </style>
