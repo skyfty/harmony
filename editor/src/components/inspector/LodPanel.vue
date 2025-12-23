@@ -258,12 +258,14 @@ const levelSummaries = computed(() => {
     <v-expansion-panel-text>
       <div class="lod-section">
         <div class="lod-row">
-          <span class="lod-label">Frustum Culling</span>
           <v-switch
+            class="lod-frustum-switch"
             density="compact"
+            hide-details
             :model-value="localEnableCulling"
             @update:modelValue="(v) => updateEnableCulling(Boolean(v))"
           />
+          <span class="lod-label">Frustum Culling</span>
         </div>
 
         <div v-for="summary in levelSummaries" :key="summary.index" class="lod-level">
@@ -355,6 +357,14 @@ const levelSummaries = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+.lod-frustum-switch {
+  align-self: center;
+}
+
+.lod-row :deep(.v-input) {
+  margin-top: 0;
 }
 
 .lod-label {
