@@ -4,7 +4,7 @@ import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeigh
 const textureLoader = new THREE.TextureLoader()
 
 const DEFAULT_GROUND_CHUNK_CELLS = 100
-const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 350
+const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
 
 type GroundChunkKey = string
 
@@ -186,11 +186,13 @@ function resolveChunkCells(definition: GroundDynamicMesh): number {
 }
 
 function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
-  // Default to ~350m radius; scale a bit with terrain size so small grounds load fully.
+  // Default to a moderate radius; keep streaming window smaller by default.
   const width = Number.isFinite(definition.width) ? definition.width : 0
   const depth = Number.isFinite(definition.depth) ? definition.depth : 0
   const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5
-  return Math.max(150, Math.min(2000, Math.max(DEFAULT_GROUND_CHUNK_RADIUS_METERS, halfDiagonal)))
+  // Bound the streaming radius so we don't accidentally load the entire ground for mid-sized scenes.
+  // Keep a small minimum to avoid thrashing when the camera jitters.
+  return Math.max(80, Math.min(2000, Math.min(DEFAULT_GROUND_CHUNK_RADIUS_METERS, halfDiagonal)))
 }
 
 function setHeightMapValue(map: GroundHeightMap, key: string, value: number): void {
