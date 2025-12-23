@@ -260,33 +260,37 @@ function handleScatterAssetSelect(
             v-if="groundPanelTabModel !== 'terrain'"
             class="scatter-spacing-panel"
           >
-            <div class="scatter-spacing-labels">
-              <span>Scatter Spacing</span>
-              <span>{{ scatterSpacingDisplay }} m</span>
+            <div class="scatter-spacing-item">
+              <div class="scatter-spacing-labels">
+                <span>Scatter Spacing</span>
+                <span>{{ scatterSpacingDisplay }} m</span>
+              </div>
+              <v-slider
+                v-model="scatterSpacingModel"
+                :min="0.1"
+                :max="2"
+                :step="0.05"
+                density="compact"
+                track-color="rgba(77, 208, 225, 0.4)"
+                color="primary"
+              />
             </div>
-            <v-slider
-              v-model="scatterSpacingModel"
-              :min="0.1"
-              :max="2"
-              :step="0.05"
-              density="compact"
-              track-color="rgba(77, 208, 225, 0.4)"
-              color="primary"
-            />
 
-            <div class="scatter-spacing-labels">
-              <span>Brush Radius</span>
-              <span>{{ scatterBrushRadiusDisplay }} m</span>
+            <div class="scatter-spacing-item">
+              <div class="scatter-spacing-labels">
+                <span>Brush Radius</span>
+                <span>{{ scatterBrushRadiusDisplay }} m</span>
+              </div>
+              <v-slider
+                v-model="scatterBrushRadiusModel"
+                :min="0.1"
+                :max="5"
+                :step="0.1"
+                density="compact"
+                track-color="rgba(77, 208, 225, 0.4)"
+                color="primary"
+              />
             </div>
-            <v-slider
-              v-model="scatterBrushRadiusModel"
-              :min="0.1"
-              :max="5"
-              :step="0.1"
-              density="compact"
-              track-color="rgba(77, 208, 225, 0.4)"
-              color="primary"
-            />
           </div>
           <v-window
             v-model="groundPanelTabModel"
@@ -385,9 +389,16 @@ function handleScatterAssetSelect(
 .scatter-spacing-panel {
   margin-top: 8px;
   padding: 6px 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.scatter-spacing-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .scatter-spacing-labels {

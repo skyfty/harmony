@@ -9433,7 +9433,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('LOD 组件不可用')
       }
 
-      this.updateNodeComponentProps(nodeId, lodComponent.id, preset.props)
+      this.updateNodeComponentProps(
+        nodeId,
+        lodComponent.id,
+        preset.props as unknown as Partial<Record<string, unknown>>,
+      )
       return preset
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {

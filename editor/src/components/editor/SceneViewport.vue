@@ -1739,7 +1739,7 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
   await task
 }
 
-function resolveDesiredLodAssetId(nodeId: string, node: SceneNode, object: THREE.Object3D): string | null {
+function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
   const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
   if (!component) {
     return (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null)
@@ -1753,7 +1753,7 @@ function resolveDesiredLodAssetId(nodeId: string, node: SceneNode, object: THREE
   object.getWorldPosition(instancedCullingWorldPosition)
   const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
 
-  let chosen = levels[0]
+  let chosen: (typeof levels)[number] | undefined
   for (let i = levels.length - 1; i >= 0; i -= 1) {
     const candidate = levels[i]
     if (candidate && distance >= candidate.distance) {
@@ -1762,7 +1762,7 @@ function resolveDesiredLodAssetId(nodeId: string, node: SceneNode, object: THREE
     }
   }
 
-  return chosen.modelAssetId ?? node.sourceAssetId ?? null
+  return chosen?.modelAssetId ?? node.sourceAssetId ?? null
 }
 
 function resolveCullingEnabled(node: SceneNode): boolean {
@@ -1833,7 +1833,7 @@ function updateInstancedCullingAndLod(): void {
       return
     }
 
-    const desiredAssetId = resolveDesiredLodAssetId(nodeId, node, object)
+    const desiredAssetId = resolveDesiredLodAssetId(node, object)
     if (!desiredAssetId) {
       return
     }
@@ -1841,7 +1841,6 @@ function updateInstancedCullingAndLod(): void {
     if (currentAssetId === desiredAssetId) {
       return
     }
-
     applyInstancedLodSwitch(nodeId, object, desiredAssetId)
   })
 }

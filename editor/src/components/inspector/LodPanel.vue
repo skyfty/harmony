@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import AssetDialog from '@/components/common/AssetDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@harmony/schema'
@@ -9,6 +10,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { LOD_COMPONENT_TYPE, type LodComponentProps, clampLodComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const lodComponent = computed(() => {
@@ -27,6 +29,7 @@ const modelAssetDialogVisible = ref(false)
 const modelAssetDialogSelectedId = ref('')
 const modelAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const modelAssetDialogLevelIndex = ref<number | null>(null)
+const isPreparingModelSelection = ref(false)
 
 watch(
   lodComponent,
@@ -167,7 +170,33 @@ function openModelAssetDialog(levelIndex: number, event?: MouseEvent): void {
   modelAssetDialogVisible.value = true
 }
 
-function handleModelAssetDialogUpdate(asset: ProjectAsset | null): void {
+async function ensureModelAssetCached(asset: ProjectAsset): Promise<boolean> {
+  if (!asset?.id) {
+    return false
+  }
+  if (assetCacheStore.hasCache(asset.id)) {
+    return true
+  }
+
+  try {
+    await assetCacheStore.loadFromIndexedDb(asset.id)
+  } catch (error) {
+    console.warn('Failed to load asset from IndexedDB', asset.id, error)
+  }
+
+  if (assetCacheStore.hasCache(asset.id)) {
+    return true
+  }
+
+  if (!asset.downloadUrl && !asset.description) {
+    return false
+  }
+
+  await assetCacheStore.downloaProjectAsset(asset)
+  return assetCacheStore.hasCache(asset.id)
+}
+
+async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise<void> {
   const index = modelAssetDialogLevelIndex.value
   if (index == null) {
     modelAssetDialogVisible.value = false
@@ -181,8 +210,25 @@ function handleModelAssetDialogUpdate(asset: ProjectAsset | null): void {
     console.warn('Selected asset is not a model/mesh')
     return
   }
-  assignModelAsset(index, asset.id)
-  modelAssetDialogVisible.value = false
+
+  if (isPreparingModelSelection.value) {
+    return
+  }
+
+  isPreparingModelSelection.value = true
+  try {
+    const cached = await ensureModelAssetCached(asset)
+    if (!cached) {
+      console.warn('Selected model asset is not cached and cannot be downloaded', asset.id)
+      return
+    }
+    assignModelAsset(index, asset.id)
+    modelAssetDialogVisible.value = false
+  } catch (error) {
+    console.warn('Failed to download selected model asset', asset.id, error)
+  } finally {
+    isPreparingModelSelection.value = false
+  }
 }
 
 function handleModelAssetDialogCancel(): void {
