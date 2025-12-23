@@ -14,7 +14,15 @@ import {
 	type TerrainScatterStore,
 	type TerrainScatterStoreSnapshot,
 } from '@harmony/schema/terrain-scatter'
-import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
+import {
+	sculptGround,
+	sampleGroundHeight,
+	stitchGroundChunkNormals,
+	updateGroundChunks,
+	updateGroundMesh,
+	updateGroundMeshRegion,
+	type GroundGeometryUpdateRegion,
+} from '@schema/groundMesh'
 import {
 	ensureInstancedMeshesRegistered,
 	getCachedModelObject,
@@ -1361,7 +1369,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const store = scatterStore ?? ensureScatterStoreRef()
-		const groundMesh = getGroundMeshObject()
+		const groundMesh = getGroundObject()
 		if (!groundMesh || !store.layers.size) {
 			return
 		}
