@@ -143,9 +143,25 @@ type SculptSessionState = {
 	definition: GroundDynamicMesh
 	heightMap: GroundDynamicMesh['heightMap']
 	dirty: boolean
+	affectedRegion: GroundGeometryUpdateRegion | null
 }
 
 let sculptSessionState: SculptSessionState | null = null
+
+function mergeRegions(
+	current: GroundGeometryUpdateRegion | null,
+	next: GroundGeometryUpdateRegion,
+): GroundGeometryUpdateRegion {
+	if (!current) {
+		return { ...next }
+	}
+	return {
+		minRow: Math.min(current.minRow, next.minRow),
+		maxRow: Math.max(current.maxRow, next.maxRow),
+		minColumn: Math.min(current.minColumn, next.minColumn),
+		maxColumn: Math.max(current.maxColumn, next.maxColumn),
+	}
+}
 
 function createStarShape(points = 5, outerRadius = 1, innerRadius = 0.5): THREE.Shape {
 	const shape = new THREE.Shape()
@@ -721,6 +737,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			definition: sessionDefinition,
 			heightMap: clonedHeightMap,
 			dirty: false,
+			affectedRegion: null,
 		}
 		return sessionDefinition
 	}
@@ -1551,6 +1568,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				maxColumn: Math.min(definition.columns, maxColumn),
 			}
 			updateGroundMeshRegion(groundObject, definition, region)
+			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+				sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
+			}
 		}
 	}
 
@@ -1605,10 +1625,37 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const selectedNode = options.sceneStore.selectedNode
 		if (selectedNode?.dynamicMesh?.type === 'Ground') {
 			const groundObject = getGroundObject()
+			const region = sculptSessionState?.nodeId === selectedNode.id
+				? sculptSessionState?.affectedRegion
+				: null
 			if (groundObject) {
 				groundObject.traverse((child) => {
 					const mesh = child as THREE.Mesh
-					if (mesh?.isMesh && mesh.geometry) {
+					if (!mesh?.isMesh || !mesh.geometry) {
+						return
+					}
+					if (!region) {
+						mesh.geometry.computeVertexNormals()
+						return
+					}
+					const chunk = mesh.userData?.groundChunk as
+						| { startRow: number; startColumn: number; rows: number; columns: number }
+						| undefined
+					if (!chunk) {
+						mesh.geometry.computeVertexNormals()
+						return
+					}
+					const chunkMinRow = chunk.startRow
+					const chunkMaxRow = chunk.startRow + chunk.rows
+					const chunkMinColumn = chunk.startColumn
+					const chunkMaxColumn = chunk.startColumn + chunk.columns
+					const overlaps = !(
+						region.maxRow < chunkMinRow ||
+						region.minRow > chunkMaxRow ||
+						region.maxColumn < chunkMinColumn ||
+						region.minColumn > chunkMaxColumn
+					)
+					if (overlaps) {
 						mesh.geometry.computeVertexNormals()
 					}
 				})

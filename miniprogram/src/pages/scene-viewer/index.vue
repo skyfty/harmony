@@ -322,9 +322,11 @@ import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
+  updateGroundHeightfieldChunksForBody,
   syncBodyFromObject as syncSharedBodyFromObject,
   syncObjectFromBody as syncSharedObjectFromBody,
   type GroundHeightfieldCacheEntry,
+  type GroundHeightfieldChunkCache,
   type PhysicsContactSettings,
   type RigidbodyInstance,
   type RigidbodyMaterialEntry,
@@ -874,6 +876,7 @@ const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
+const groundHeightfieldChunkCache = new Map<string, GroundHeightfieldChunkCache>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
@@ -3082,6 +3085,7 @@ function resetPhysicsWorld(): void {
   airWallBodies.clear();
   physicsWorld = null;
   groundHeightfieldCache.clear();
+  groundHeightfieldChunkCache.clear();
   rigidbodyMaterialCache.clear();
   rigidbodyContactMaterialKeys.clear();
   vehicleDriveActive.value = false;
@@ -3111,6 +3115,12 @@ function createRigidbodyBody(
     {
       world,
       groundHeightfieldCache,
+      groundHeightfieldChunkCache,
+      groundHeightfieldObject: object,
+      groundHeightfieldCamera: renderContext?.camera ?? null,
+      groundHeightfieldRadius: 350,
+      groundHeightfieldMaxChunks: 256,
+      groundHeightfieldMaxSamplePoints: 75_000,
       rigidbodyMaterialCache,
       rigidbodyContactMaterialKeys,
       contactSettings: physicsContactSettings,
@@ -3131,6 +3141,7 @@ function removeRigidbodyInstance(nodeId: string): void {
   }
   rigidbodyInstances.delete(nodeId);
   groundHeightfieldCache.delete(nodeId);
+  groundHeightfieldChunkCache.delete(nodeId);
   removeVehicleInstance(nodeId);
 }
 
@@ -7111,6 +7122,27 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
           });
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces();
+          }
+          if (physicsWorld && currentDocument) {
+            const groundNode = findGroundNode(currentDocument.nodes);
+            if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+              const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
+              const groundBodyEntry = rigidbodyInstances.get(groundNode.id) ?? null;
+              if (groundObject && groundBodyEntry) {
+                updateGroundHeightfieldChunksForBody({
+                  body: groundBodyEntry.body,
+                  node: groundNode,
+                  definition: groundNode.dynamicMesh,
+                  groundObject,
+                  camera,
+                  chunkCacheMap: groundHeightfieldChunkCache,
+                  radius: 350,
+                  maxChunks: 256,
+                  maxSamplePoints: 75_000,
+                  loggerTag: '[SceneViewer]',
+                });
+              }
+            }
           }
           stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
