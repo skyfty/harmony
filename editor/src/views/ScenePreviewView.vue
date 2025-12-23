@@ -42,11 +42,9 @@ import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
-	updateGroundHeightfieldChunksForBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
 	syncObjectFromBody as syncSharedObjectFromBody,
 	type GroundHeightfieldCacheEntry,
-	type GroundHeightfieldChunkCache,
 	type PhysicsContactSettings,
 	type RigidbodyInstance,
 	type RigidbodyMaterialEntry,
@@ -769,7 +767,6 @@ type VehicleInstance = {
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
-const groundHeightfieldChunkCache = new Map<string, GroundHeightfieldChunkCache>()
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION
@@ -4560,28 +4557,6 @@ function startAnimationLoop() {
 				}
 			})
 			applyVehicleDriveForces()
-			// Stream physics heightfield chunks for large grounds.
-			if (physicsWorld && currentDocument) {
-				const groundNode = findGroundNode(currentDocument.nodes)
-				if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
-					const groundObject = nodeObjectMap.get(groundNode.id) ?? null
-					const groundBodyEntry = rigidbodyInstances.get(groundNode.id) ?? null
-					if (groundObject && groundBodyEntry) {
-						updateGroundHeightfieldChunksForBody({
-							body: groundBodyEntry.body,
-							node: groundNode,
-							definition: groundNode.dynamicMesh,
-							groundObject,
-							camera: activeCamera,
-							chunkCacheMap: groundHeightfieldChunkCache,
-							radius: 350,
-							maxChunks: 256,
-							maxSamplePoints: 75_000,
-							loggerTag: '[ScenePreview]',
-						})
-					}
-				}
-			}
 			stepPhysicsWorld(delta)
 			updateVehicleSpeedFromVehicle()
 		}
@@ -5408,7 +5383,6 @@ function resetPhysicsWorld(): void {
 	disposeAirWallDebugGroup()
 	physicsWorld = null
 	groundHeightfieldCache.clear()
-	groundHeightfieldChunkCache.clear()
 	rigidbodyMaterialCache.clear()
 	rigidbodyContactMaterialKeys.clear()
 }
@@ -5518,11 +5492,6 @@ function createRigidbodyBody(
 		{
 			world,
 			groundHeightfieldCache,
-			groundHeightfieldChunkCache,
-			groundHeightfieldObject: object,
-			groundHeightfieldRadius: 350,
-			groundHeightfieldMaxChunks: 256,
-			groundHeightfieldMaxSamplePoints: 75_000,
 			rigidbodyMaterialCache,
 			rigidbodyContactMaterialKeys,
 			contactSettings: physicsContactSettings,
@@ -5543,7 +5512,6 @@ function removeRigidbodyInstance(nodeId: string): void {
 	}
 	rigidbodyInstances.delete(nodeId)
 	groundHeightfieldCache.delete(nodeId)
-	groundHeightfieldChunkCache.delete(nodeId)
 	removeVehicleInstance(nodeId)
 }
 
