@@ -30,7 +30,6 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "src/**/*.vue",
-    "src/**/*.d.ts",
-    "../schema/**/*.ts"
+    "src/**/*.d.ts"
   ]
 }

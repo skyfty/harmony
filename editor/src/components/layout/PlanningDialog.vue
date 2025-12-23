@@ -3653,20 +3653,6 @@ function handleImageLayerOpacityChange(imageId: string, opacity: number) {
   }
 }
 
-function handleImageLayerScaleRatioChange(imageId: string) {
-  const image = planningImages.value.find((img) => img.id === imageId)
-  if (!image) {
-    return
-  }
-  // 比例尺：1像素 = N米（metersPerPixel）。改变时需实时更新图层显示大小。
-  // 锁定或隐藏时，禁止缩放/比例尺调整。
-  if (!image.visible || image.locked) {
-    return
-  }
-  image.scale = next
-  markPlanningDirty()
-}
-
 function handleImageLayerDelete(imageId: string) {
   planningImages.value = planningImages.value.filter((img) => img.id !== imageId)
   if (activeImageId.value === imageId) {
