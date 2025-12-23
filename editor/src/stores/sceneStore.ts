@@ -12452,8 +12452,23 @@ export const useSceneStore = defineStore('scene', {
       })
 
       const nodes = Array.isArray(template.nodes) && template.nodes.length
-        ? (template.nodes as SceneNode[])
+        ? cloneSceneNodes(template.nodes as SceneNode[])
         : createDefaultSceneNodes(groundSettings)
+
+      const groundNode = findGroundNode(nodes)
+      if (groundNode) {
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition(
+          {
+            ...(groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : {}),
+            width: groundSettings.width,
+            depth: groundSettings.depth,
+            cellSize: 1,
+            columns: Math.max(1, Math.round(groundSettings.width)),
+            rows: Math.max(1, Math.round(groundSettings.depth)),
+          },
+          groundSettings,
+        )
+      }
       const materials = Array.isArray(template.materials) && template.materials.length
         ? (template.materials as SceneMaterial[])
         : undefined
@@ -12502,6 +12517,7 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, sceneDocument)
       this.nodes = cloneSceneNodes(sceneDocument.nodes)
       this.environment = resolveSceneDocumentEnvironment(sceneDocument)
+      this.rebuildGeneratedMeshRuntimes()
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.planningData = clonePlanningData(sceneDocument.planningData)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))

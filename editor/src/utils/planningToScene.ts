@@ -66,6 +66,7 @@ export type ConvertPlanningToSceneOptions = {
 
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
+const PLANNING_PIXELS_PER_METER = 10
 
 function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdatedAt: unknown): number {
   const prev = Number(previousSnapshot?.metadata?.updatedAt)
@@ -614,6 +615,65 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   return visit(nodes)
 }
 
+function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWidth: number, groundDepth: number): number {
+  const referenceSize = Math.max(1, Math.abs(Number(groundWidth)), Math.abs(Number(groundDepth)))
+  let maxCoordinate = 0
+
+  const scanPoints = (points: PlanningPoint[] | undefined) => {
+    if (!Array.isArray(points)) return
+    for (const point of points) {
+      if (!point) continue
+      const x = Number(point.x)
+      const y = Number(point.y)
+      if (Number.isFinite(x)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(x))
+      }
+      if (Number.isFinite(y)) {
+        maxCoordinate = Math.max(maxCoordinate, Math.abs(y))
+      }
+    }
+  }
+
+  const rawPolygons = (planningData as any)?.polygons
+  if (Array.isArray(rawPolygons)) {
+    rawPolygons.forEach((poly) => scanPoints((poly as PlanningPolygonAny)?.points))
+  }
+
+  const rawPolylines = (planningData as any)?.polylines
+  if (Array.isArray(rawPolylines)) {
+    rawPolylines.forEach((line) => scanPoints((line as PlanningPolylineAny)?.points))
+  }
+
+  if (maxCoordinate <= 0 || !Number.isFinite(referenceSize) || referenceSize <= 0) {
+    return 1
+  }
+
+  const ratio = maxCoordinate / referenceSize
+
+  // When planning data is stored in canvas pixels (1m = 10px), coordinates will be
+  // roughly an order of magnitude larger than the ground size in meters. Detect that
+  // pattern and scale down to meters; otherwise leave data untouched.
+  if (ratio >= PLANNING_PIXELS_PER_METER * 0.5) {
+    return 1 / PLANNING_PIXELS_PER_METER
+  }
+
+  return 1
+}
+
+function normalizePlanningPoints(points: PlanningPoint[] | undefined, unitsToMeters: number): PlanningPoint[] {
+  const scale = Number.isFinite(unitsToMeters) && unitsToMeters > 0 ? unitsToMeters : 1
+  if (!Array.isArray(points) || points.length === 0) return []
+  return points.map((point) => {
+    const x = Number(point?.x)
+    const y = Number(point?.y)
+    return {
+      ...point,
+      x: Number.isFinite(x) ? x * scale : 0,
+      y: Number.isFinite(y) ? y * scale : 0,
+    }
+  })
+}
+
 function toWorldPoint(
   p: PlanningPoint,
   groundWidth: number,
@@ -726,7 +786,9 @@ function buildFloorDynamicMeshFromPlanningPolygon(options: {
     return null
   }
   const center = computeFloorCenterFromWorldPoints(worldPoints)
-  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, center.z - pt.z])
+  // Local vertices are in meters, and should reconstruct world points as:
+  // world = node.position + local.
+  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, pt.z - center.z])
   const definition: FloorDynamicMesh = {
     type: 'Floor',
     vertices,
@@ -1050,6 +1112,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Ensure ground exists when missing.
   const groundWidth = Number(sceneStore.groundSettings?.width ?? 100)
   const groundDepth = Number(sceneStore.groundSettings?.depth ?? 100)
+
+  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
+
   if (!findGroundNode(sceneStore.nodes)) {
     emitProgress(options, 'Creating ground…', 5)
     sceneStore.setGroundDimensions({ width: groundWidth, depth: groundDepth })
@@ -1076,8 +1141,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   sceneStore.setNodeLocked(root.id, true)
 
   // Collect features
-  const polygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
-  const polylines = (Array.isArray((planningData as any).polylines) ? (planningData as any).polylines : []) as PlanningPolylineAny[]
+  const rawPolygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
+  const rawPolylines = (Array.isArray((planningData as any).polylines) ? (planningData as any).polylines : []) as PlanningPolylineAny[]
+
+  const polygons = rawPolygons.map((poly) => ({
+    ...poly,
+    points: normalizePlanningPoints(poly?.points, planningUnitsToMeters),
+  }))
+
+  const polylines = rawPolylines.map((line) => ({
+    ...line,
+    points: normalizePlanningPoints(line?.points, planningUnitsToMeters),
+  }))
 
   const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
 
