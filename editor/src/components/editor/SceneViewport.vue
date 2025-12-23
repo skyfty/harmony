@@ -82,7 +82,14 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundChunks, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import {
+  createGroundMesh,
+  ensureAllGroundChunks,
+  stitchGroundChunkNormals,
+  updateGroundChunks,
+  updateGroundMesh,
+  releaseGroundMeshCache,
+} from '@schema/groundMesh'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
