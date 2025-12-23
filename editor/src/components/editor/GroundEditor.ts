@@ -16,6 +16,7 @@ import {
 } from '@harmony/schema/terrain-scatter'
 import {
 	sculptGround,
+	stitchGroundChunkNormals,
 	updateGroundChunks,
 	updateGroundMeshRegion,
 	updateGroundMesh,
@@ -1568,6 +1569,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				maxColumn: Math.min(definition.columns, maxColumn),
 			}
 			updateGroundMeshRegion(groundObject, definition, region)
+			// Stitch normals across chunk boundaries to prevent visible seams.
+			const padded: GroundGeometryUpdateRegion = {
+				minRow: Math.max(0, region.minRow - 2),
+				maxRow: Math.min(definition.rows, region.maxRow + 2),
+				minColumn: Math.max(0, region.minColumn - 2),
+				maxColumn: Math.min(definition.columns, region.maxColumn + 2),
+			}
+			stitchGroundChunkNormals(groundObject, definition, padded)
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
 			}
@@ -1659,6 +1668,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 						mesh.geometry.computeVertexNormals()
 					}
 				})
+				stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundDynamicMesh, region ?? null)
 			}
 			commitSculptSession(selectedNode)
 		} else {

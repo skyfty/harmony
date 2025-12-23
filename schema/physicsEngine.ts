@@ -18,10 +18,6 @@ import {
 } from './components'
 import {
 	buildGroundHeightfieldData,
-	buildGroundHeightfieldChunkPlan,
-	buildGroundHeightfieldChunkData,
-	computeGroundHeightfieldChunkHash,
-	type GroundHeightfieldChunkPlan,
 } from './groundHeightfield'
 import type { GroundHeightfieldData } from './groundHeightfield'
 import { isGroundDynamicMesh } from './groundHeightfield'
@@ -44,20 +40,6 @@ export type GroundHeightfieldCacheEntry = {
 	signature: string
 	shape: CANNON.Heightfield
 	offset: [number, number, number]
-}
-
-export type GroundHeightfieldChunkCacheEntry = {
-	key: string
-	shape: CANNON.Heightfield
-	offset: [number, number, number]
-	hash: number
-	lastUsedAt: number
-}
-
-export type GroundHeightfieldChunkCache = {
-	planSignature: string
-	plan: GroundHeightfieldChunkPlan
-	chunks: Map<string, GroundHeightfieldChunkCacheEntry>
 }
 
 export type RigidbodyMaterialEntry = {
@@ -104,7 +86,6 @@ const groundHeightfieldOrientationAdjustment: RigidbodyOrientationAdjustment = {
 }
 
 const heightfieldShapeOffsetHelper = new CANNON.Vec3()
-const groundHeightfieldCameraWorldHelper = new THREE.Vector3()
 const physicsPositionHelper = new THREE.Vector3()
 const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
@@ -530,192 +511,10 @@ type CreateRigidbodyBodyInput = {
 export type CreateRigidbodyBodyOptions = {
 	world: CANNON.World
 	groundHeightfieldCache: Map<string, GroundHeightfieldCacheEntry>
-	groundHeightfieldChunkCache?: Map<string, GroundHeightfieldChunkCache>
-	groundHeightfieldObject?: THREE.Object3D | null
-	groundHeightfieldCamera?: THREE.Camera | null
-	groundHeightfieldRadius?: number
-	groundHeightfieldMaxChunks?: number
-	groundHeightfieldMaxSamplePoints?: number
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
 	contactSettings: PhysicsContactSettings
 	loggerTag?: string
-}
-
-function clampInclusive(value: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, value))
-}
-
-function groundChunkKey(chunkRow: number, chunkColumn: number): string {
-	return `${chunkRow}:${chunkColumn}`
-}
-
-function getOrCreateChunkCache(
-	cacheMap: Map<string, GroundHeightfieldChunkCache>,
-	nodeId: string,
-	plan: GroundHeightfieldChunkPlan,
-): GroundHeightfieldChunkCache {
-	const existing = cacheMap.get(nodeId)
-	if (existing && existing.planSignature === plan.signature) {
-		return existing
-	}
-	const next: GroundHeightfieldChunkCache = {
-		planSignature: plan.signature,
-		plan,
-		chunks: new Map(),
-	}
-	cacheMap.set(nodeId, next)
-	return next
-}
-
-function clearGroundHeightfieldChunkShapes(body: CANNON.Body, cache: GroundHeightfieldChunkCache): void {
-	const entries = Array.from(cache.chunks.values())
-	entries.forEach((entry) => {
-		try {
-			body.removeShape(entry.shape)
-		} catch (_error) {
-			/* noop */
-		}
-	})
-	cache.chunks.clear()
-	body.aabbNeedsUpdate = true
-}
-
-export function updateGroundHeightfieldChunksForBody(params: {
-	body: CANNON.Body
-	node: SceneNode
-	definition: GroundDynamicMesh
-	groundObject: THREE.Object3D
-	camera: THREE.Camera
-	chunkCacheMap: Map<string, GroundHeightfieldChunkCache>
-	radius?: number
-	maxChunks?: number
-	maxSamplePoints?: number
-	loggerTag?: string
-}): void {
-	const { body, node, definition, groundObject, camera, chunkCacheMap, loggerTag } = params
-	const radius = typeof params.radius === 'number' && Number.isFinite(params.radius) && params.radius > 0
-		? params.radius
-		: 350
-	const maxChunks = typeof params.maxChunks === 'number' && Number.isFinite(params.maxChunks) && params.maxChunks > 0
-		? Math.max(4, Math.trunc(params.maxChunks))
-		: 256
-	const maxSamplePoints = typeof params.maxSamplePoints === 'number' && Number.isFinite(params.maxSamplePoints) && params.maxSamplePoints > 0
-		? Math.max(500, Math.trunc(params.maxSamplePoints))
-		: 75_000
-
-	const plan = buildGroundHeightfieldChunkPlan(node, definition, { maxSamplePoints })
-	if (!plan) {
-		chunkCacheMap.delete(node.id)
-		return
-	}
-	const cache = getOrCreateChunkCache(chunkCacheMap, node.id, plan)
-	if (cache.planSignature !== plan.signature) {
-		// Plan changed; clear existing shapes.
-		clearGroundHeightfieldChunkShapes(body, cache)
-		cache.planSignature = plan.signature
-		cache.plan = plan
-	}
-
-	groundObject.updateMatrixWorld(true)
-	camera.getWorldPosition(groundHeightfieldCameraWorldHelper)
-	const cameraLocal = groundObject.worldToLocal(groundHeightfieldCameraWorldHelper)
-	const localX = cameraLocal.x
-	const localZ = cameraLocal.z
-
-	const chunkCells = plan.chunkCells
-	const maxChunkRowIndex = Math.max(0, Math.floor((plan.rows - 1) / chunkCells))
-	const maxChunkColumnIndex = Math.max(0, Math.floor((plan.columns - 1) / chunkCells))
-	const minColumn = clampInclusive(Math.floor((localX - radius + plan.halfWidth) / plan.elementSize), 0, plan.columns)
-	const maxColumn = clampInclusive(Math.ceil((localX + radius + plan.halfWidth) / plan.elementSize), 0, plan.columns)
-	const minRow = clampInclusive(Math.floor((localZ - radius + plan.halfDepth) / plan.elementSize), 0, plan.rows)
-	const maxRow = clampInclusive(Math.ceil((localZ + radius + plan.halfDepth) / plan.elementSize), 0, plan.rows)
-	const minChunkColumn = clampInclusive(Math.floor(minColumn / chunkCells), 0, maxChunkColumnIndex)
-	const maxChunkColumn = clampInclusive(Math.floor(maxColumn / chunkCells), 0, maxChunkColumnIndex)
-	const minChunkRow = clampInclusive(Math.floor(minRow / chunkCells), 0, maxChunkRowIndex)
-	const maxChunkRow = clampInclusive(Math.floor(maxRow / chunkCells), 0, maxChunkRowIndex)
-
-	const now = performance.now ? performance.now() : Date.now()
-	const keep = new Set<string>()
-	let created = 0
-	for (let cr = minChunkRow; cr <= maxChunkRow; cr += 1) {
-		for (let cc = minChunkColumn; cc <= maxChunkColumn; cc += 1) {
-			const key = groundChunkKey(cr, cc)
-			keep.add(key)
-			const existing = cache.chunks.get(key)
-			if (existing) {
-				const nextHash = computeGroundHeightfieldChunkHash(node, definition, plan, cr, cc)
-				if (nextHash !== existing.hash) {
-					try {
-						body.removeShape(existing.shape)
-						const chunkData = buildGroundHeightfieldChunkData(node, definition, plan, cr, cc)
-						if (chunkData) {
-							const nextShape = new CANNON.Heightfield(chunkData.matrix, { elementSize: chunkData.elementSize })
-							body.addShape(
-								nextShape,
-								heightfieldShapeOffsetHelper.set(
-									chunkData.offset[0],
-									chunkData.offset[1],
-									chunkData.offset[2],
-								),
-							)
-							existing.shape = nextShape
-							existing.offset = chunkData.offset
-							existing.hash = nextHash
-						}
-					} catch (error) {
-						warn(loggerTag, 'Failed to refresh ground heightfield chunk shape', key, error)
-					}
-				}
-				existing.lastUsedAt = now
-				continue
-			}
-			if (created >= maxChunks) {
-				continue
-			}
-			const chunkData = buildGroundHeightfieldChunkData(node, definition, plan, cr, cc)
-			if (!chunkData) {
-				continue
-			}
-			try {
-				const shape = new CANNON.Heightfield(chunkData.matrix, { elementSize: chunkData.elementSize })
-				body.addShape(
-					shape,
-					heightfieldShapeOffsetHelper.set(chunkData.offset[0], chunkData.offset[1], chunkData.offset[2]),
-				)
-				cache.chunks.set(key, {
-					key,
-					shape,
-					offset: chunkData.offset,
-					hash: computeGroundHeightfieldChunkHash(node, definition, plan, cr, cc),
-					lastUsedAt: now,
-				})
-				created += 1
-			} catch (error) {
-				warn(loggerTag, 'Failed to add ground heightfield chunk shape', key, error)
-			}
-		}
-	}
-
-	// Cull far chunks with a small TTL to avoid churn.
-	const ttlMs = 1_500
-	Array.from(cache.chunks.values()).forEach((entry) => {
-		if (keep.has(entry.key)) {
-			return
-		}
-		if (now - entry.lastUsedAt < ttlMs) {
-			return
-		}
-		try {
-			body.removeShape(entry.shape)
-		} catch (error) {
-			warn(loggerTag, 'Failed to remove ground heightfield chunk shape', entry.key, error)
-		}
-		cache.chunks.delete(entry.key)
-	})
-
-	body.aabbNeedsUpdate = true
-	body.updateMassProperties()
 }
 
 export function createRigidbodyBody(
@@ -726,12 +525,6 @@ export function createRigidbodyBody(
 	const {
 		world,
 		groundHeightfieldCache,
-		groundHeightfieldChunkCache,
-		groundHeightfieldObject,
-		groundHeightfieldCamera,
-		groundHeightfieldRadius,
-		groundHeightfieldMaxChunks,
-		groundHeightfieldMaxSamplePoints,
 		rigidbodyMaterialCache,
 		rigidbodyContactMaterialKeys,
 		contactSettings,
@@ -740,44 +533,6 @@ export function createRigidbodyBody(
 	object.updateMatrixWorld(true)
 	object.getWorldScale(physicsScaleHelper)
 	const shapeScale = normalizeScaleVector(physicsScaleHelper)
-	// Special-case ground: optionally use chunked heightfields to avoid a single massive matrix.
-	if (isGroundDynamicMesh(node.dynamicMesh) && groundHeightfieldChunkCache && groundHeightfieldObject) {
-		const props = component.props as RigidbodyComponentProps
-		const body = new CANNON.Body({ mass: 0 })
-		body.type = CANNON.Body.STATIC
-		body.material = ensureRigidbodyMaterial({
-			world,
-			rigidbodyMaterialCache,
-			rigidbodyContactMaterialKeys,
-			friction: props.friction ?? DEFAULT_RIGIDBODY_FRICTION,
-			restitution: props.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION,
-			contactSettings,
-		})
-		const orientationAdjustment = groundHeightfieldOrientationAdjustment
-		syncBodyFromObject(body, object, orientationAdjustment)
-
-		// Seed chunks (camera-driven when available; otherwise centered on origin).
-		if (groundHeightfieldCamera) {
-			updateGroundHeightfieldChunksForBody({
-				body,
-				node,
-				definition: node.dynamicMesh,
-				groundObject: groundHeightfieldObject,
-				camera: groundHeightfieldCamera,
-				chunkCacheMap: groundHeightfieldChunkCache,
-				radius: groundHeightfieldRadius,
-				maxChunks: groundHeightfieldMaxChunks,
-				maxSamplePoints: groundHeightfieldMaxSamplePoints,
-				loggerTag,
-			})
-		}
-
-		body.updateMassProperties()
-		body.linearDamping = props.linearDamping ?? DEFAULT_LINEAR_DAMPING
-		body.angularDamping = props.angularDamping ?? DEFAULT_ANGULAR_DAMPING
-		return { body, orientationAdjustment }
-	}
-
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
 	let needsHeightfieldOrientation = false

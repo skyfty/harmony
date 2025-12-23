@@ -1116,6 +1116,186 @@ export function updateGroundMeshRegion(target: THREE.Object3D, definition: Groun
   return updated
 }
 
+function averageNormalsOnEdge(params: {
+  geometryA: THREE.BufferGeometry
+  specA: GroundChunkSpec
+  geometryB: THREE.BufferGeometry
+  specB: GroundChunkSpec
+  mode: 'right' | 'down'
+}): boolean {
+  const { geometryA, specA, geometryB, specB, mode } = params
+  const normalAttrA = geometryA.getAttribute('normal') as THREE.BufferAttribute | undefined
+  const normalAttrB = geometryB.getAttribute('normal') as THREE.BufferAttribute | undefined
+  if (!normalAttrA || !normalAttrB) {
+    return false
+  }
+  const normalsA = normalAttrA.array as Float32Array
+  const normalsB = normalAttrB.array as Float32Array
+  if (!(normalsA instanceof Float32Array) || !(normalsB instanceof Float32Array)) {
+    return false
+  }
+
+  const colsA = Math.max(1, Math.trunc(specA.columns))
+  const rowsA = Math.max(1, Math.trunc(specA.rows))
+  const colsB = Math.max(1, Math.trunc(specB.columns))
+  const rowsB = Math.max(1, Math.trunc(specB.rows))
+  const vertexColumnsA = colsA + 1
+  const vertexColumnsB = colsB + 1
+
+  let touched = false
+  if (mode === 'right') {
+    const edgeColumnA = specA.startColumn + colsA
+    if (edgeColumnA !== specB.startColumn) {
+      return false
+    }
+    const rowStart = Math.max(specA.startRow, specB.startRow)
+    const rowEnd = Math.min(specA.startRow + rowsA, specB.startRow + rowsB)
+    for (let row = rowStart; row <= rowEnd; row += 1) {
+      const localRowA = row - specA.startRow
+      const localRowB = row - specB.startRow
+      const idxA = localRowA * vertexColumnsA + colsA
+      const idxB = localRowB * vertexColumnsB + 0
+      const a3 = idxA * 3
+      const b3 = idxB * 3
+      if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
+        continue
+      }
+      const ax = normalsA[a3] ?? 0
+      const ay = normalsA[a3 + 1] ?? 0
+      const az = normalsA[a3 + 2] ?? 0
+      const bx = normalsB[b3] ?? 0
+      const by = normalsB[b3 + 1] ?? 0
+      const bz = normalsB[b3 + 2] ?? 0
+      let nx = ax + bx
+      let ny = ay + by
+      let nz = az + bz
+      const len = Math.hypot(nx, ny, nz) || 1
+      nx /= len
+      ny /= len
+      nz /= len
+      normalsA[a3] = nx
+      normalsA[a3 + 1] = ny
+      normalsA[a3 + 2] = nz
+      normalsB[b3] = nx
+      normalsB[b3 + 1] = ny
+      normalsB[b3 + 2] = nz
+      touched = true
+    }
+  } else {
+    const edgeRowA = specA.startRow + rowsA
+    if (edgeRowA !== specB.startRow) {
+      return false
+    }
+    const colStart = Math.max(specA.startColumn, specB.startColumn)
+    const colEnd = Math.min(specA.startColumn + colsA, specB.startColumn + colsB)
+    for (let col = colStart; col <= colEnd; col += 1) {
+      const localColA = col - specA.startColumn
+      const localColB = col - specB.startColumn
+      const idxA = rowsA * vertexColumnsA + localColA
+      const idxB = 0 * vertexColumnsB + localColB
+      const a3 = idxA * 3
+      const b3 = idxB * 3
+      if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
+        continue
+      }
+      const ax = normalsA[a3] ?? 0
+      const ay = normalsA[a3 + 1] ?? 0
+      const az = normalsA[a3 + 2] ?? 0
+      const bx = normalsB[b3] ?? 0
+      const by = normalsB[b3 + 1] ?? 0
+      const bz = normalsB[b3 + 2] ?? 0
+      let nx = ax + bx
+      let ny = ay + by
+      let nz = az + bz
+      const len = Math.hypot(nx, ny, nz) || 1
+      nx /= len
+      ny /= len
+      nz /= len
+      normalsA[a3] = nx
+      normalsA[a3 + 1] = ny
+      normalsA[a3 + 2] = nz
+      normalsB[b3] = nx
+      normalsB[b3 + 1] = ny
+      normalsB[b3 + 2] = nz
+      touched = true
+    }
+  }
+
+  if (touched) {
+    normalAttrA.needsUpdate = true
+    normalAttrB.needsUpdate = true
+  }
+  return touched
+}
+
+export function stitchGroundChunkNormals(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  region: GroundGeometryUpdateRegion | null = null,
+): boolean {
+  const group = target as THREE.Group
+  if (!(group as any)?.isGroup) {
+    return false
+  }
+  const state = groundRuntimeStateMap.get(group)
+  if (!state) {
+    return false
+  }
+  const chunkCells = state.chunkCells
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
+  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+
+  let minChunkRow = 0
+  let maxChunkRow = maxChunkRowIndex
+  let minChunkColumn = 0
+  let maxChunkColumn = maxChunkColumnIndex
+  if (region) {
+    minChunkRow = clampInclusive(Math.floor(region.minRow / chunkCells) - 1, 0, maxChunkRowIndex)
+    maxChunkRow = clampInclusive(Math.floor(region.maxRow / chunkCells) + 1, 0, maxChunkRowIndex)
+    minChunkColumn = clampInclusive(Math.floor(region.minColumn / chunkCells) - 1, 0, maxChunkColumnIndex)
+    maxChunkColumn = clampInclusive(Math.floor(region.maxColumn / chunkCells) + 1, 0, maxChunkColumnIndex)
+  }
+
+  let stitched = false
+  for (let r = minChunkRow; r <= maxChunkRow; r += 1) {
+    for (let c = minChunkColumn; c <= maxChunkColumn; c += 1) {
+      const current = state.chunks.get(groundChunkKey(r, c))
+      if (!current) {
+        continue
+      }
+      const geometryA = current.mesh.geometry
+      if (!(geometryA instanceof THREE.BufferGeometry)) {
+        continue
+      }
+      // Stitch with right neighbor.
+      const right = state.chunks.get(groundChunkKey(r, c + 1))
+      if (right && right.mesh.geometry instanceof THREE.BufferGeometry) {
+        stitched = averageNormalsOnEdge({
+          geometryA,
+          specA: current.spec,
+          geometryB: right.mesh.geometry,
+          specB: right.spec,
+          mode: 'right',
+        }) || stitched
+      }
+      // Stitch with down neighbor.
+      const down = state.chunks.get(groundChunkKey(r + 1, c))
+      if (down && down.mesh.geometry instanceof THREE.BufferGeometry) {
+        stitched = averageNormalsOnEdge({
+          geometryA,
+          specA: current.spec,
+          geometryB: down.mesh.geometry,
+          specB: down.spec,
+          mode: 'down',
+        }) || stitched
+      }
+    }
+  }
+  return stitched
+}
+
 export function releaseGroundMeshCache(disposeResources = true) {
   if (!cachedPrototypeMesh) {
     return

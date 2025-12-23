@@ -948,9 +948,6 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="collider-editor__hint">
-              Drag the gizmo to move or scale the collider. Use the buttons above to switch modes or change the mesh shape on the left.
-            </div>
           </div>
         </div>
 
