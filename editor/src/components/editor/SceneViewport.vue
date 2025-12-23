@@ -657,6 +657,7 @@ const {
   groundSelection,
   groundTextureInputRef,
   restoreGroupdScatter,
+  updateScatterLod,
   updateGroundSelectionToolbarPosition,
   cancelGroundSelection,
   handlePointerDown: handleGroundEditorPointerDown,
@@ -3970,6 +3971,7 @@ function animate() {
     cloudRenderer.update(effectiveDelta)
   }
 
+  updateScatterLod()
   updateInstancedCullingAndLod()
   renderViewportFrame()
   gizmoControls?.render()
