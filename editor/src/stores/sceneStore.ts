@@ -147,7 +147,9 @@ import {
   deserializeLodPreset,
   serializeLodPreset,
   type LodPresetData,
+  type LodPresetAssetReference,
 } from '@/utils/lodPreset'
+import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -9346,11 +9348,41 @@ export const useSceneStore = defineStore('scene', {
     }): Promise<ProjectAsset> {
       const name = typeof payload.name === 'string' ? payload.name : ''
       const props = clampLodComponentProps(payload.props)
-      const serialized = serializeLodPreset({ name, props })
+      const assetCache = useAssetCacheStore()
+      const referencedModelIds = Array.from(
+        new Set(
+          props.levels
+            .map((level) => (typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''))
+            .filter((id) => Boolean(id)),
+        ),
+      )
+
+      const assetRefs = referencedModelIds
+        .map<LodPresetAssetReference | null>((assetId) => {
+          const asset = this.getAsset(assetId)
+          if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+            return null
+          }
+          const entry = assetCache.getEntry(assetId)
+          const candidates = [entry?.downloadUrl, asset.downloadUrl, asset.description]
+          const downloadUrl = candidates.find((candidate) => typeof candidate === 'string' && /^https?:\/\//i.test(candidate))
+          const ref: LodPresetAssetReference = {
+            assetId,
+            type: asset.type,
+            name: asset.name,
+            downloadUrl: downloadUrl ?? null,
+            description: asset.description ?? null,
+            filename: entry?.filename ?? null,
+            thumbnail: asset.thumbnail ?? null,
+          }
+          return ref
+        })
+        .filter((ref): ref is LodPresetAssetReference => ref !== null)
+
+      const serialized = serializeLodPreset({ name, props, assetRefs })
       const assetId = generateUuid()
       const fileName = buildLodPresetFilename(name)
       const blob = new Blob([serialized], { type: 'application/json' })
-      const assetCache = useAssetCacheStore()
       await assetCache.storeAssetBlob(assetId, {
         blob,
         mimeType: 'application/json',
@@ -9407,7 +9439,65 @@ export const useSceneStore = defineStore('scene', {
 
       assetCache.touch(assetId)
       const text = await entry.blob.text()
-      return deserializeLodPreset(text)
+      const preset = deserializeLodPreset(text)
+
+      const refs = Array.isArray(preset.assetRefs) ? preset.assetRefs : []
+      if (refs.length) {
+        // Best-effort: ensure referenced model assets exist in this project, and trigger download if possible.
+        refs.forEach((ref) => {
+          if (!ref?.assetId || this.getAsset(ref.assetId)) {
+            return
+          }
+          if (ref.type !== 'model' && ref.type !== 'mesh') {
+            return
+          }
+
+          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
+            ? ref.downloadUrl
+            : ''
+
+          const projectAsset: ProjectAsset = {
+            id: ref.assetId,
+            name: (typeof ref.name === 'string' && ref.name.trim().length) ? ref.name.trim() : `LOD Ref ${ref.assetId}`,
+            type: ref.type,
+            downloadUrl: remoteUrl,
+            previewColor: SERVER_ASSET_PREVIEW_COLORS[ref.type],
+            thumbnail: ref.thumbnail ?? null,
+            description: ref.description ?? (ref.filename ?? undefined),
+            gleaned: true,
+          }
+
+          this.registerAsset(projectAsset, {
+            categoryId: determineAssetCategoryId(projectAsset),
+            source: { type: 'url' },
+            commitOptions: { updateNodes: false },
+          })
+        })
+
+        refs.forEach((ref) => {
+          if (!ref?.assetId) {
+            return
+          }
+          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
+            ? ref.downloadUrl
+            : ''
+          if (!remoteUrl) {
+            return
+          }
+          if (assetCache.hasCache(ref.assetId) || assetCache.isDownloading(ref.assetId)) {
+            return
+          }
+          const asset = this.getAsset(ref.assetId)
+          if (!asset) {
+            return
+          }
+          void assetCache.downloaProjectAsset(asset).catch((error) => {
+            console.warn('[SceneStore] Failed to download referenced LOD model asset', ref.assetId, error)
+          })
+        })
+      }
+
+      return preset
     },
 
     async applyLodPresetToNode(nodeId: string, assetId: string): Promise<LodPresetData> {

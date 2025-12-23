@@ -490,7 +490,7 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
 }
 
 function isPotentialLodPresetAsset(asset: ProjectAsset): boolean {
-  // LOD presets are currently stored as .prefab JSON files.
+  // LOD presets are stored as JSON assets (typically with a .lod extension).
   return asset.type === 'prefab'
 }
 

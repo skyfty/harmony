@@ -130,8 +130,11 @@ function getScatterLayerLodPresetId(layer: TerrainScatterLayer): string | null {
     return fromPayload
   }
   const candidate = normalizeText(layer?.assetId) || normalizeText(layer?.profileId)
-  if (candidate && candidate.toLowerCase().endsWith('.prefab')) {
-    return candidate
+  if (candidate) {
+    const lower = candidate.toLowerCase()
+    if (lower.endsWith('.lod') || lower.endsWith('.prefab')) {
+      return candidate
+    }
   }
   return null
 }

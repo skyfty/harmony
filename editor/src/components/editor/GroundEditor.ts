@@ -398,9 +398,56 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			await pendingScatterLodPresetLoads.get(normalized)
 			return
 		}
+
+		const ensureReferencedAssetCached = async (assetId: string): Promise<void> => {
+			const id = assetId.trim()
+			if (!id) {
+				return
+			}
+			try {
+				if (!assetCacheStore.hasCache(id)) {
+					await assetCacheStore.loadFromIndexedDb(id)
+				}
+				if (assetCacheStore.hasCache(id)) {
+					return
+				}
+				const asset = options.sceneStore.getAsset(id)
+				if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+					return
+				}
+				await assetCacheStore.downloaProjectAsset(asset)
+			} catch (error) {
+				console.warn('缓存 LOD 预设引用资源失败', id, error)
+			}
+		}
+
 		const task = (async () => {
 			try {
 				const preset = await options.sceneStore.loadLodPreset(normalized)
+				const referencedIds: string[] = []
+				const refs = (preset as any)?.assetRefs
+				if (Array.isArray(refs) && refs.length) {
+					for (const ref of refs) {
+						const id = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+						if (id) {
+							referencedIds.push(id)
+						}
+					}
+				} else {
+					const levels = (preset as any)?.props?.levels
+					if (Array.isArray(levels) && levels.length) {
+						for (const level of levels) {
+							const id = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+							if (id) {
+								referencedIds.push(id)
+							}
+						}
+					}
+				}
+				const unique = Array.from(new Set(referencedIds))
+				if (unique.length) {
+					await Promise.all(unique.map((id) => ensureReferencedAssetCached(id)))
+				}
 				scatterLodPresetCache.set(normalized, preset)
 			} catch (_error) {
 				scatterLodPresetCache.set(normalized, null)
