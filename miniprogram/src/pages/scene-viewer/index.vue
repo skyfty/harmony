@@ -313,7 +313,13 @@ import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
-import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
+import {
+  buildSceneGraph,
+  createTerrainScatterLodRuntime,
+  createInstancedBvhFrustumCuller,
+  type SceneGraphBuildOptions,
+  type SceneGraphResourceProgress,
+} from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { isGroundDynamicMesh } from '@schema/groundHeightfield';
@@ -390,8 +396,10 @@ import {
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   clampVehicleComponentProps,
+  clampLodComponentProps,
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
+  LOD_COMPONENT_TYPE,
 } from '@schema/components';
 import {
   VehicleDriveController,
@@ -405,6 +413,7 @@ import {
 } from '@schema/VehicleDriveController';
 import type {
   GuideboardComponentProps,
+  LodComponentProps,
   WarpGateComponentProps,
   RigidbodyComponentProps,
   RigidbodyComponentMetadata,
@@ -861,8 +870,14 @@ const instancedMatrixHelper = new THREE.Matrix4();
 const instancedPositionHelper = new THREE.Vector3();
 const instancedQuaternionHelper = new THREE.Quaternion();
 const instancedScaleHelper = new THREE.Vector3();
+const instancedCullingProjView = new THREE.Matrix4();
+const instancedCullingFrustum = new THREE.Frustum();
+const instancedCullingBox = new THREE.Box3();
+const instancedCullingSphere = new THREE.Sphere();
+const instancedCullingWorldPosition = new THREE.Vector3();
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
+const terrainScatterRuntime = createTerrainScatterLodRuntime();
 const nodeObjectMap = new Map<string, THREE.Object3D>();
-const scatterInstanceNodeIds = new Set<string>();
 const scatterLocalPositionHelper = new THREE.Vector3();
 const scatterLocalRotationHelper = new THREE.Euler();
 const scatterLocalScaleHelper = new THREE.Vector3();
@@ -2594,9 +2609,191 @@ function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup)
     instanced: true,
     instancedAssetId: group.assetId,
     instancedBounds: serializeBoundingBox(group.boundingBox),
+    __harmonyInstancedRadius: group.radius,
   };
   updateNodeTransfrom(proxy, node);
   return proxy;
+}
+
+const pendingLodModelLoads = new Map<string, Promise<void>>();
+
+async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | null): Promise<void> {
+  if (!assetId) {
+    return;
+  }
+  if (getCachedModelObject(assetId)) {
+    ensureInstancedMeshesRegistered(assetId);
+    return;
+  }
+  if (pendingLodModelLoads.has(assetId)) {
+    await pendingLodModelLoads.get(assetId);
+    return;
+  }
+  const task = (async () => {
+    const cache = viewerResourceCache;
+    if (!cache) {
+      return;
+    }
+    await ensureModelInstanceGroup(assetId, sampleNode, cache);
+    ensureInstancedMeshesRegistered(assetId);
+  })()
+    .catch((error) => {
+      console.warn('[SceneViewer] Failed to preload LOD model asset', assetId, error);
+    })
+    .finally(() => {
+      pendingLodModelLoads.delete(assetId);
+    });
+
+  pendingLodModelLoads.set(assetId, task);
+  await task;
+}
+
+function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D, camera: THREE.Camera): string | null {
+  const baseAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null;
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
+  if (!component || !component.enabled) {
+    return baseAssetId;
+  }
+  const props = clampLodComponentProps(component.props);
+  const levels = props.levels;
+  if (!levels.length) {
+    return baseAssetId;
+  }
+  object.getWorldPosition(instancedCullingWorldPosition);
+  const distance = instancedCullingWorldPosition.distanceTo((camera as any).position ?? instancedCullingWorldPosition);
+  let chosen: (typeof levels)[number] | null = null;
+  for (let i = levels.length - 1; i >= 0; i -= 1) {
+    const candidate = levels[i];
+    if (candidate && distance >= candidate.distance) {
+      chosen = candidate;
+      break;
+    }
+  }
+  const id = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId.trim() : '';
+  return id || baseAssetId;
+}
+
+function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
+  const cached = getCachedModelObject(assetId);
+  if (!cached) {
+    const node = resolveNodeById(nodeId);
+    void ensureModelObjectCached(assetId, node);
+    return;
+  }
+  releaseModelInstance(nodeId);
+  const binding = allocateModelInstance(assetId, nodeId);
+  if (!binding) {
+    return;
+  }
+  object.userData = {
+    ...(object.userData ?? {}),
+    instancedAssetId: assetId,
+    instancedBounds: serializeBoundingBox(cached.boundingBox),
+    __harmonyInstancedRadius: cached.radius,
+  };
+  syncInstancedTransform(object);
+}
+
+function resolveInstancedProxyRadius(object: THREE.Object3D): number {
+  const cached = object.userData?.__harmonyInstancedRadius as number | undefined;
+  if (Number.isFinite(cached) && (cached as number) > 0) {
+    return cached as number;
+  }
+  const bounds = object.userData?.instancedBounds as { min?: [number, number, number]; max?: [number, number, number] } | undefined;
+  if (bounds?.min && bounds?.max) {
+    instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0);
+    instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0);
+    if (!instancedCullingBox.isEmpty()) {
+      instancedCullingBox.getBoundingSphere(instancedCullingSphere);
+      const radius = instancedCullingSphere.radius;
+      if (Number.isFinite(radius) && radius > 0) {
+        object.userData.__harmonyInstancedRadius = radius;
+        return radius;
+      }
+    }
+  }
+  object.userData.__harmonyInstancedRadius = 0.5;
+  return 0.5;
+}
+
+function updateInstancedCullingAndLod(): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const camera = context.camera;
+  camera.updateMatrixWorld(true);
+  instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView);
+
+  const candidateIds: string[] = [];
+  const candidateObjects = new Map<string, THREE.Object3D>();
+  nodeObjectMap.forEach((object, nodeId) => {
+    if (!object?.userData?.instancedAssetId) {
+      return;
+    }
+    const node = resolveNodeById(nodeId);
+    if (!node) {
+      return;
+    }
+    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
+    if (!component || !component.enabled) {
+      return;
+    }
+    const props = clampLodComponentProps(component.props);
+    if (props.enableCulling === false) {
+      return;
+    }
+    candidateIds.push(nodeId);
+    candidateObjects.set(nodeId, object);
+  });
+
+  candidateIds.sort();
+  instancedLodFrustumCuller.setIds(candidateIds);
+  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
+    const object = candidateObjects.get(id);
+    if (!object) {
+      return null;
+    }
+    object.updateMatrixWorld(true);
+    object.getWorldPosition(centerTarget);
+    object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+    const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z);
+    const baseRadius = resolveInstancedProxyRadius(object);
+    const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius;
+    return { radius };
+  });
+
+  candidateIds.forEach((nodeId) => {
+    const object = candidateObjects.get(nodeId);
+    if (!object) {
+      return;
+    }
+    const node = resolveNodeById(nodeId);
+    if (!node) {
+      return;
+    }
+    const isVisible = visibleIds.has(nodeId);
+    if (!isVisible) {
+      releaseModelInstance(nodeId);
+      return;
+    }
+    const desiredAssetId = resolveDesiredLodAssetId(node, object, camera);
+    if (!desiredAssetId) {
+      return;
+    }
+    const currentAssetId = object.userData?.instancedAssetId as string | undefined;
+    if (currentAssetId !== desiredAssetId) {
+      applyInstancedLodSwitch(nodeId, object, desiredAssetId);
+      return;
+    }
+    const binding = allocateModelInstance(desiredAssetId, nodeId);
+    if (!binding) {
+      void ensureModelObjectCached(desiredAssetId, node);
+      return;
+    }
+    syncInstancedTransform(object);
+  });
 }
 
 async function prepareInstancedNodesForGraph(
@@ -2794,56 +2991,18 @@ function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
 }
 
 function releaseTerrainScatterInstances(): void {
-  if (!scatterInstanceNodeIds.size) {
-    return;
-  }
-  scatterInstanceNodeIds.forEach((nodeId) => releaseModelInstance(nodeId));
-  scatterInstanceNodeIds.clear();
+  terrainScatterRuntime.dispose();
 }
 
 async function syncTerrainScatterInstances(
   document: SceneJsonExportDocument,
   resourceCache: ResourceCache | null,
 ): Promise<void> {
-  releaseTerrainScatterInstances();
+  terrainScatterRuntime.dispose();
   if (!resourceCache) {
     return;
   }
-  const entries = collectGroundScatterEntries(document.nodes);
-  if (!entries.length) {
-    return;
-  }
-  for (const entry of entries) {
-    const groundMesh = resolveGroundMeshObject(entry.nodeId);
-    if (!groundMesh) {
-      continue;
-    }
-    for (const layer of entry.snapshot.layers ?? []) {
-      const layerAssetId = typeof layer?.assetId === 'string' ? layer.assetId.trim() : '';
-      const profileAssetId = typeof layer?.profileId === 'string' ? layer.profileId.trim() : '';
-      const assetId = layerAssetId || profileAssetId;
-      if (!assetId) {
-        continue;
-      }
-      ensureModelInstanceGroup(assetId, null, resourceCache).then((group) => {
-        if (!group || !group.meshes.length) {
-          return;
-        }
-        ensureInstancedMeshesRegistered(assetId);
-        const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : [];
-        for (const instance of instances) {
-          const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id);
-          const binding = allocateModelInstance(assetId, nodeId);
-          if (!binding) {
-            continue;
-          }
-          const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper);
-          updateModelInstanceMatrix(nodeId, matrix);
-          scatterInstanceNodeIds.add(nodeId);
-        }
-      });
-    }
-  }
+  await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject);
 }
 
 function resolveGuideboardComponent(
@@ -7162,6 +7321,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       }
     }
         updateLazyPlaceholders(deltaSeconds);
+        terrainScatterRuntime.update(camera, resolveGroundMeshObject);
+        updateInstancedCullingAndLod();
         cloudRenderer?.update(deltaSeconds);
         renderer.render(scene, camera);
       });

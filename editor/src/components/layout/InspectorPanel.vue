@@ -23,6 +23,7 @@ import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
+import LodPanel from '@/components/inspector/LodPanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@harmony/schema'
@@ -44,6 +45,7 @@ import {
   componentManager,
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
+  LOD_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -562,6 +564,7 @@ watch(
                 @open-suspension-editor="handleOpenVehicleSuspensionEditor"
               />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
+              <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
               <BehaviorPanel

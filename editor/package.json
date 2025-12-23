@@ -20,6 +20,7 @@
     "sass": "^1.93.2",
     "splitpanes": "^4.0.4",
     "three": "^0.172.0",
+    "three-mesh-bvh": "^0.9.1",
     "three-viewport-gizmo": "^2.2.0",
     "vue": "^3.5.13",
     "vue-router": "^4.5.1",
