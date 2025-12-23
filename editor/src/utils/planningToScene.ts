@@ -1106,7 +1106,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   // Bulk conversion can touch many nodes/components; capture one undo snapshot and
   // suppress nested snapshots to avoid creating a huge undo stack (performance).
-  sceneStore.captureHistorySnapshot()
   return await sceneStore.withHistorySuppressed(async () => {
 
   // Ensure ground exists when missing.

@@ -7042,10 +7042,8 @@ export const useSceneStore = defineStore('scene', {
       if (!result.changed) {
         return false
       }
-      this.captureHistorySnapshot()
       groundNode.dynamicMesh = result.definition
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
       return true
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
@@ -7064,12 +7062,10 @@ export const useSceneStore = defineStore('scene', {
       if (this.groundSettings.enableAirWall === next) {
         return false
       }
-      this.captureHistorySnapshot()
       this.groundSettings = {
         ...this.groundSettings,
         enableAirWall: next,
       }
-      commitSceneSnapshot(this)
       return true
     },
     setGroundDimensions(payload: { width?: number; depth?: number }) {
@@ -7085,7 +7081,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.captureHistorySnapshot()
       this.groundSettings = normalized
 
       const clonedNodes = cloneSceneNodes(this.nodes)
@@ -7110,7 +7105,6 @@ export const useSceneStore = defineStore('scene', {
         this.environment,
       )
       this.nodes = updatedNodes
-      commitSceneSnapshot(this)
       return true
     },
     setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
@@ -7127,14 +7121,12 @@ export const useSceneStore = defineStore('scene', {
       if (definition.textureDataUrl === nextDataUrl && definition.textureName === nextName) {
         return false
       }
-      this.captureHistorySnapshot()
       groundNode.dynamicMesh = {
         ...definition,
         textureDataUrl: nextDataUrl,
         textureName: nextName,
       }
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
       return true
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
@@ -7217,7 +7209,7 @@ export const useSceneStore = defineStore('scene', {
     getExpandedGroupIds(): string[] {
       return collectExpandedGroupIds(this.nodes)
     },
-    setGroupExpanded(nodeId: string, expanded: boolean, options: { captureHistory?: boolean; commit?: boolean } = {}) {
+    setGroupExpanded(nodeId: string, expanded: boolean, _options: { captureHistory?: boolean; commit?: boolean } = {}) {
       const node = findNodeById(this.nodes, nodeId)
       if (!isGroupNode(node)) {
         return false
@@ -7227,20 +7219,14 @@ export const useSceneStore = defineStore('scene', {
       if (current === normalized) {
         return false
       }
-      if (options.captureHistory !== false) {
-        this.captureHistorySnapshot()
-      }
       node.groupExpanded = normalized
       this.nodes = [...this.nodes]
       if (!normalized) {
         this.setSelection([...this.selectedNodeIds])
       }
-      if (options.commit !== false) {
-        commitSceneSnapshot(this)
-      }
       return true
     },
-    syncGroupExpansionState(ids: string[], options: { captureHistory?: boolean; commit?: boolean } = {}) {
+    syncGroupExpansionState(ids: string[], _options: { captureHistory?: boolean; commit?: boolean } = {}) {
       const targetIds = new Set(ids)
       const assignments: Array<{ node: SceneNode; next: boolean }> = []
       const collectAssignments = (list: SceneNode[]) => {
@@ -7261,9 +7247,6 @@ export const useSceneStore = defineStore('scene', {
       if (!assignments.length) {
         return false
       }
-      if (options.captureHistory !== false) {
-        this.captureHistorySnapshot()
-      }
       let selectionNeedsNormalization = false
       assignments.forEach(({ node, next }) => {
         node.groupExpanded = next
@@ -7274,9 +7257,6 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       if (selectionNeedsNormalization) {
         this.setSelection([...this.selectedNodeIds])
-      }
-      if (options.commit !== false) {
-        commitSceneSnapshot(this)
       }
       return true
     },
@@ -7531,22 +7511,18 @@ export const useSceneStore = defineStore('scene', {
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
-      this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         node.dynamicMesh = JSON.parse(JSON.stringify(dynamicMesh))
       })
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
-      this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         node.locked = locked
       })
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
     },
     renameNode(id: string, name: string) {
       const trimmed = name.trim()
@@ -8139,12 +8115,10 @@ export const useSceneStore = defineStore('scene', {
       if (!shouldUpdate) {
         return false
       }
-      this.captureHistorySnapshot()
       nodes.forEach((node) => {
         node.visible = targetVisible
       })
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
       return true
     },
     isNodeSelectionLocked(id: string) {
@@ -8224,7 +8198,6 @@ export const useSceneStore = defineStore('scene', {
       if (!shouldUpdate) {
         return false
       }
-      this.captureHistorySnapshot()
       const processed = new Set<string>()
       nodes.forEach((node) => {
         const current = node.locked ?? false
@@ -8242,7 +8215,6 @@ export const useSceneStore = defineStore('scene', {
         this.setSelection(remainingSelection, { primaryId: nextPrimary })
       }
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
       return true
     },
     toggleSelectionTransparency(): boolean {
@@ -8267,7 +8239,6 @@ export const useSceneStore = defineStore('scene', {
       if (!shouldUpdate) {
         return false
       }
-      this.captureHistorySnapshot()
       nodes.forEach((node) => {
         if (!node.materials?.length) {
           return
@@ -8286,7 +8257,6 @@ export const useSceneStore = defineStore('scene', {
         })
       })
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
       return true
     },
     setActiveDirectory(id: string) {
@@ -9031,11 +9001,8 @@ export const useSceneStore = defineStore('scene', {
         assetId: options.assetId,
       })
 
-      this.captureHistorySnapshot()
       attachPrefabMetadata(node, registered.id)
       this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
-
       return registered
     },
     async importPrefabAssetFromClipboard(serialized: string): Promise<ProjectAsset | null> {
@@ -11073,7 +11040,6 @@ export const useSceneStore = defineStore('scene', {
       const nodeMetadata = cloneAiModelMeshMetadata(metadata)
       const nodeName = resolvedName ?? 'AI Generated Mesh'
 
-      this.captureHistorySnapshot()
       const node = this.addSceneNode({
         nodeType: 'Mesh',
         object: runtime,
@@ -11478,8 +11444,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.captureHistorySnapshot()
-
       visitNode(this.nodes, nodeId, (target) => {
         applyWallComponentPropsToNode(target, targetProps)
         const previous = target.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
@@ -11527,7 +11491,6 @@ export const useSceneStore = defineStore('scene', {
       if (normalizedNode) {
         componentManager.syncNode(normalizedNode)
       }
-      commitSceneSnapshot(this)
       return true
     },
     addNodeComponent(nodeId: string, type: NodeComponentType): SceneNodeComponentState | null {
@@ -11632,7 +11595,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         const current = findComponentEntryById(node.components, componentId)
         if (!current) {
@@ -11653,7 +11615,6 @@ export const useSceneStore = defineStore('scene', {
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
       }
-      commitSceneSnapshot(this)
       return true
     },
     toggleNodeComponentEnabled(nodeId: string, componentId: string): boolean {
@@ -12327,13 +12288,8 @@ export const useSceneStore = defineStore('scene', {
         nextTree.splice(safeIndex, 0, groupNode)
         tree = nextTree
       }
-
-      this.captureHistorySnapshot()
-
       this.nodes = tree
       this.setSelection([groupId], {primaryId: groupId })
-      commitSceneSnapshot(this)
-
       return true
     },
     duplicateNodes(nodeIds: string[], options: { select?: boolean } = {}): string[] {

@@ -947,7 +947,10 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
   group.userData.groundChunked = true
   ensureGroundRuntimeState(group, definition)
   // Seed a small neighborhood around origin so it shows up immediately.
-  updateGroundChunks(group, definition, null)
+  // Avoid using the default chunk radius here; that can load too many chunks on creation.
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const seedRadius = Math.max(50, resolveChunkCells(definition) * cellSize * 1.5)
+  updateGroundChunks(group, definition, null, { radius: seedRadius })
   applyGroundTextureToObject(group, definition)
   return group
 }
@@ -987,9 +990,14 @@ export function updateGroundChunks(
 
   let localX = 0
   let localZ = 0
-  let radius = typeof options.radius === 'number' && Number.isFinite(options.radius) && options.radius > 0
+  const loadRadius = typeof options.radius === 'number' && Number.isFinite(options.radius) && options.radius > 0
     ? options.radius
     : resolveGroundChunkRadius(definition)
+
+  // Retain chunks slightly beyond the load radius to reduce popping/churn when the camera
+  // hovers near a chunk boundary.
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const unloadRadius = loadRadius + Math.max(1, chunkCells) * cellSize
 
   if (camera) {
     root.updateMatrixWorld(true)
@@ -1002,21 +1010,66 @@ export function updateGroundChunks(
 
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
-  const cellSize = definition.cellSize
-  const minColumn = clampInclusive(Math.floor((localX - radius + halfWidth) / cellSize), 0, columns)
-  const maxColumn = clampInclusive(Math.ceil((localX + radius + halfWidth) / cellSize), 0, columns)
-  const minRow = clampInclusive(Math.floor((localZ - radius + halfDepth) / cellSize), 0, rows)
-  const maxRow = clampInclusive(Math.ceil((localZ + radius + halfDepth) / cellSize), 0, rows)
-  const minChunkColumn = clampInclusive(Math.floor(minColumn / chunkCells), 0, maxChunkColumnIndex)
-  const maxChunkColumn = clampInclusive(Math.floor(maxColumn / chunkCells), 0, maxChunkColumnIndex)
-  const minChunkRow = clampInclusive(Math.floor(minRow / chunkCells), 0, maxChunkRowIndex)
-  const maxChunkRow = clampInclusive(Math.floor(maxRow / chunkCells), 0, maxChunkRowIndex)
+  const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns)
+  const maxLoadColumn = clampInclusive(Math.ceil((localX + loadRadius + halfWidth) / cellSize), 0, columns)
+  const minLoadRow = clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize), 0, rows)
+  const maxLoadRow = clampInclusive(Math.ceil((localZ + loadRadius + halfDepth) / cellSize), 0, rows)
+
+  const minUnloadColumn = clampInclusive(Math.floor((localX - unloadRadius + halfWidth) / cellSize), 0, columns)
+  const maxUnloadColumn = clampInclusive(Math.ceil((localX + unloadRadius + halfWidth) / cellSize), 0, columns)
+  const minUnloadRow = clampInclusive(Math.floor((localZ - unloadRadius + halfDepth) / cellSize), 0, rows)
+  const maxUnloadRow = clampInclusive(Math.ceil((localZ + unloadRadius + halfDepth) / cellSize), 0, rows)
+
+  const minLoadChunkColumn = clampInclusive(Math.floor(minLoadColumn / chunkCells), 0, maxChunkColumnIndex)
+  const maxLoadChunkColumn = clampInclusive(Math.floor(maxLoadColumn / chunkCells), 0, maxChunkColumnIndex)
+  const minLoadChunkRow = clampInclusive(Math.floor(minLoadRow / chunkCells), 0, maxChunkRowIndex)
+  const maxLoadChunkRow = clampInclusive(Math.floor(maxLoadRow / chunkCells), 0, maxChunkRowIndex)
+
+  const minUnloadChunkColumn = clampInclusive(Math.floor(minUnloadColumn / chunkCells), 0, maxChunkColumnIndex)
+  const maxUnloadChunkColumn = clampInclusive(Math.floor(maxUnloadColumn / chunkCells), 0, maxChunkColumnIndex)
+  const minUnloadChunkRow = clampInclusive(Math.floor(minUnloadRow / chunkCells), 0, maxChunkRowIndex)
+  const maxUnloadChunkRow = clampInclusive(Math.floor(maxUnloadRow / chunkCells), 0, maxChunkRowIndex)
 
   const keep = new Set<GroundChunkKey>()
-  for (let cr = minChunkRow; cr <= maxChunkRow; cr += 1) {
-    for (let cc = minChunkColumn; cc <= maxChunkColumn; cc += 1) {
+
+  // Keep already-loaded chunks within the unload radius.
+  for (let cr = minUnloadChunkRow; cr <= maxUnloadChunkRow; cr += 1) {
+    for (let cc = minUnloadChunkColumn; cc <= maxUnloadChunkColumn; cc += 1) {
+      const key = groundChunkKey(cr, cc)
+      if (state.chunks.has(key)) {
+        keep.add(key)
+      }
+    }
+  }
+
+  // Load chunks within the tighter load radius.
+  let stitchRegion: GroundGeometryUpdateRegion | null = null
+  const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
+    if (!current) {
+      return { ...next }
+    }
+    return {
+      minRow: Math.min(current.minRow, next.minRow),
+      maxRow: Math.max(current.maxRow, next.maxRow),
+      minColumn: Math.min(current.minColumn, next.minColumn),
+      maxColumn: Math.max(current.maxColumn, next.maxColumn),
+    }
+  }
+
+  for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
+    for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
+      const key = groundChunkKey(cr, cc)
+      const existed = state.chunks.has(key)
       const runtime = ensureChunkMesh(root, state, definition, cr, cc)
       keep.add(runtime.key)
+      if (!existed) {
+        stitchRegion = mergeRegion(stitchRegion, {
+          minRow: runtime.spec.startRow,
+          maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
+          minColumn: runtime.spec.startColumn,
+          maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
+        })
+      }
     }
   }
 
@@ -1027,6 +1080,11 @@ export function updateGroundChunks(
     disposeChunk(chunk)
     state.chunks.delete(key)
   })
+
+  // Newly created chunks compute normals in isolation; stitch boundaries to avoid visible seams.
+  if (stitchRegion) {
+    stitchGroundChunkNormals(root, definition, stitchRegion)
+  }
 }
 
 export function ensureAllGroundChunks(target: THREE.Object3D, definition: GroundDynamicMesh): void {

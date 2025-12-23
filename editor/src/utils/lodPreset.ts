@@ -1,6 +1,6 @@
 import { generateUuid } from '@/utils/uuid'
 import type { LodComponentProps } from '@schema/components'
-import { clampLodComponentProps } from '@schema/components'
+import { clampLodComponentProps } from '@schema/components/definitions/lodComponent'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
