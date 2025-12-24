@@ -824,14 +824,6 @@ function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamer
 	return true
 }
 
-function updateMemoryStatsThrottled(delta: number): void {
-	memoryStatsUpdateElapsed += Math.max(0, delta)
-	if (memoryStatsUpdateElapsed < MEMORY_STATS_UPDATE_INTERVAL_SECONDS) {
-		return
-	}
-	memoryStatsUpdateElapsed = 0
-	updateMemoryStats()
-}
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
@@ -5032,6 +5024,114 @@ function handleKeyUp(event: KeyboardEvent) {
 	}
 }
 
+/**
+ * Per-frame camera input and control updates.
+ *
+ * Workflow:
+ * - First-person: apply keyboard yaw (Q/E), update controls, apply look tween, clamp pitch.
+ * - Orbit: update orbit look tween, update controls, persist last orbit camera+target.
+ */
+function updateCameraControlsForFrame(
+	delta: number,
+	activeCamera: THREE.PerspectiveCamera,
+	followCameraActive: boolean,
+): void {
+	if (controlMode.value === 'first-person' && firstPersonControls && !vehicleDriveState.active) {
+		const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
+		if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
+			activeCameraLookTween = null
+		}
+		if (rotationDirection !== 0) {
+			const yawDegrees = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta
+			const controlsInternal = firstPersonControls as FirstPersonControls & { _lon: number }
+			const currentLon = controlsInternal._lon ?? 0
+			const nextLon = THREE.MathUtils.euclideanModulo(currentLon + yawDegrees, 360)
+			controlsInternal._lon = nextLon
+		}
+		firstPersonControls.update(delta)
+		updateFirstPersonCameraLookTween(delta)
+		clampFirstPersonPitch()
+		activeCamera.position.y = CAMERA_HEIGHT
+		syncLastFirstPersonStateFromCamera()
+		return
+	}
+
+	if (mapControls && !followCameraActive) {
+		updateOrbitCameraLookTween(delta)
+		mapControls.update()
+		lastOrbitState.position.copy(activeCamera.position)
+		lastOrbitState.target.copy(mapControls.target)
+	}
+}
+
+/**
+ * Per-frame simulation updates when playback is active.
+ *
+ * Workflow:
+ * - Components/animations/effects
+ * - Vehicle forces and physics step
+ * - Derived state (speed)
+ */
+function updatePlaybackSystemsForFrame(delta: number): void {
+	previewComponentManager.update(delta)
+	animationMixers.forEach((mixer) => mixer.update(delta))
+	effectRuntimeTickers.forEach((tick) => {
+		try {
+			tick(delta)
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to advance effect runtime', error)
+		}
+	})
+	applyVehicleDriveForces()
+	stepPhysicsWorld(delta)
+	updateVehicleSpeedFromVehicle()
+}
+
+/**
+ * Updates the vehicle drive camera and keeps orbit-state cache in sync.
+ */
+function updateVehicleCameraForFrame(delta: number, followCameraActive: boolean, activeCamera: THREE.PerspectiveCamera): void {
+	const cameraUpdated = updateVehicleDriveCamera(delta, { applyOrbitTween: followCameraActive })
+	if (followCameraActive && cameraUpdated && mapControls) {
+		lastOrbitState.position.copy(activeCamera.position)
+		lastOrbitState.target.copy(mapControls.target)
+	}
+}
+
+/**
+ * Updates systems that depend on camera pose.
+ * Throttled internally by `shouldUpdateCameraDependentSystems`.
+ */
+function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCamera, delta: number): void {
+	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
+	if (!shouldUpdateCameraSystems) {
+		return
+	}
+	terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
+	updateInstancedCullingAndLod()
+	updateBehaviorProximity()
+	// Keep ground chunk meshes in sync with camera position.
+	if (cachedGroundNodeId && cachedGroundDynamicMesh) {
+		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
+		if (groundObject) {
+			updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
+			if (isGroundChunkStreamingDebugVisible.value) {
+				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh)
+			}
+		}
+	}
+}
+
+/**
+ * Updates miscellaneous lightweight systems that are safe to run every frame.
+ */
+function updatePerFrameDiagnostics(delta: number): void {
+	updateLazyPlaceholders(delta)
+	if (isRigidbodyDebugVisible.value) {
+		updateRigidbodyDebugTransforms()
+	}
+}
+
 function startAnimationLoop() {
 	if (animationFrameHandle) {
 		return
@@ -5047,74 +5147,24 @@ function startAnimationLoop() {
 		animationFrameHandle = requestAnimationFrame(renderLoop)
 		fpsStats?.begin()
 		const delta = clock.getDelta()
+
+		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
 		const followCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
-		if (controlMode.value === 'first-person' && firstPersonControls && !vehicleDriveState.active) {
-			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
-			if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
-				activeCameraLookTween = null
-			}
-			if (rotationDirection !== 0) {
-				const yawDegrees = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta
-				const controlsInternal = firstPersonControls as FirstPersonControls & { _lon: number }
-				const currentLon = controlsInternal._lon ?? 0
-				const nextLon = THREE.MathUtils.euclideanModulo(currentLon + yawDegrees, 360)
-				controlsInternal._lon = nextLon
-			}
-			firstPersonControls.update(delta)
-			updateFirstPersonCameraLookTween(delta)
-			clampFirstPersonPitch()
-			activeCamera.position.y = CAMERA_HEIGHT
-			syncLastFirstPersonStateFromCamera()
-		} else if (mapControls && !followCameraActive) {
-			updateOrbitCameraLookTween(delta)
-			mapControls.update()
-			lastOrbitState.position.copy(activeCamera.position)
-			lastOrbitState.target.copy(mapControls.target)
-		}
+		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
 
+		// 2) Simulation (only when playing)
 		if (isPlaying.value) {
-			previewComponentManager.update(delta)
-			animationMixers.forEach((mixer) => mixer.update(delta))
-			effectRuntimeTickers.forEach((tick) => {
-				try {
-					tick(delta)
-				} catch (error) {
-					console.warn('[ScenePreview] Failed to advance effect runtime', error)
-				}
-			})
-			applyVehicleDriveForces()
-			stepPhysicsWorld(delta)
-			updateVehicleSpeedFromVehicle()
+			updatePlaybackSystemsForFrame(delta)
 		}
 
-		const cameraUpdated = updateVehicleDriveCamera(delta, { applyOrbitTween: followCameraActive })
-		if (followCameraActive && cameraUpdated && mapControls) {
-			lastOrbitState.position.copy(activeCamera.position)
-			lastOrbitState.target.copy(mapControls.target)
-		}
-		const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
-		if (shouldUpdateCameraSystems) {
-			terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-			updateInstancedCullingAndLod()
-			updateBehaviorProximity()
-			// Keep ground chunk meshes in sync with camera position.
-			if (cachedGroundNodeId && cachedGroundDynamicMesh) {
-				const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-				if (groundObject) {
-					updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
-					if (isGroundChunkStreamingDebugVisible.value) {
-						syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh)
-					}
-				}
-			}
-		}
-		updateLazyPlaceholders(delta)
-		if (isRigidbodyDebugVisible.value) {
-			updateRigidbodyDebugTransforms()
-		}
+		// 3) Vehicle camera and camera-dependent systems
+		updateVehicleCameraForFrame(delta, followCameraActive, activeCamera)
+		updateCameraDependentSystemsForFrame(activeCamera, delta)
+		updatePerFrameDiagnostics(delta)
 		// cloudRenderer?.update(delta)
 
+		// 4) Render + stats
 		currentRenderer.render(currentScene, activeCamera)
 		fpsStats?.end()
 		updateMemoryStats()
