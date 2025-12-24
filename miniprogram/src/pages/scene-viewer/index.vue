@@ -300,7 +300,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
@@ -701,7 +701,7 @@ type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
 let canvasResult: UseCanvasResult | null = null;
 let initializing = false;
-const scope = effectScope();
+let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -4501,16 +4501,19 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
   protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
   protagonistPoseSynced = true;
-  if (options.applyToCamera && renderContext) {
-    runWithProgrammaticCameraMutation(() => {
-      withControlsVerticalFreedom(renderContext.controls, () => {
-        renderContext.camera.position.copy(protagonistPosePosition);
-        renderContext.controls.target.copy(protagonistPoseTarget);
-        renderContext.camera.lookAt(protagonistPoseTarget);
-        renderContext.controls.update();
+  if (options.applyToCamera) {
+    const context = renderContext;
+    if (context) {
+      runWithProgrammaticCameraMutation(() => {
+        withControlsVerticalFreedom(context.controls, () => {
+          context.camera.position.copy(protagonistPosePosition);
+          context.controls.target.copy(protagonistPoseTarget);
+          context.camera.lookAt(protagonistPoseTarget);
+          context.controls.update();
+        });
       });
-    });
-    lockControlsPitchToCurrent(renderContext.controls, renderContext.camera);
+      lockControlsPitchToCurrent(context.controls, context.camera);
+    }
   }
   return true;
 }
@@ -6906,6 +6909,8 @@ function handleWheelEvent(event: WheelEvent): void {
 }
 
 function teardownRenderer() {
+  renderScope?.stop();
+  renderScope = null;
   teardownWheelControls();
   if (!renderContext) {
     return;
@@ -7086,6 +7091,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+
+  renderScope?.stop();
+  renderScope = effectScope();
 }
 
 async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
@@ -7235,7 +7243,10 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 
-  scope.run(() => {
+  if (!renderScope) {
+    renderScope = effectScope();
+  }
+  renderScope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
