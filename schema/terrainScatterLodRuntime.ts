@@ -259,6 +259,7 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
 
   let resourceCache: ResourceCache | null = null
   const allocatedNodeIds = new Set<string>()
+  const visibleNodeIds = new Set<string>()
   const runtimeInstances = new Map<string, ScatterRuntimeInstance>()
 
   const frustumCuller = createInstancedBvhFrustumCuller()
@@ -272,6 +273,7 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
   function dispose(): void {
     allocatedNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
     allocatedNodeIds.clear()
+    visibleNodeIds.clear()
     runtimeInstances.clear()
     resourceCache = null
     lodPresetCache.clear()
@@ -368,6 +370,7 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
           const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
           updateModelInstanceMatrix(nodeId, matrix)
           allocatedNodeIds.add(nodeId)
+          visibleNodeIds.add(nodeId)
           runtimeInstances.set(nodeId, {
             nodeId,
             groundNodeId: entry.nodeId,
@@ -381,31 +384,22 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     }
   }
 
-  async function updateInternal(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): Promise<void> {
-    const cache = resourceCache
-    if (!cache) {
-      return
-    }
-
-    const cameraPosition = (camera as THREE.Camera & { position: THREE.Vector3 }).position
-    if (!cameraPosition || typeof cameraPosition.distanceTo !== 'function') {
-      return
-    }
-
+  function computeVisibleScatterIds(
+    camera: THREE.Camera,
+    resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
+  ): Set<string> {
     camera.updateMatrixWorld(true)
     scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
 
     const candidateIds: string[] = []
     runtimeInstances.forEach((_runtime, nodeId) => {
-      // Always include scatter instances in frustum culling, even when no LOD preset is configured.
-      // This keeps large scatter scenes performant by releasing culled instance bindings.
       candidateIds.push(nodeId)
     })
     candidateIds.sort()
     frustumCuller.setIds(candidateIds)
 
-    const visibleIds = frustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+    return frustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
       const runtime = runtimeInstances.get(nodeId)
       if (!runtime) {
         return null
@@ -424,12 +418,69 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
       const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
       return { radius }
     })
+  }
+
+  function applyCullingAndUpdateVisibleMatrices(
+    visibleIds: Set<string>,
+    resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
+  ): void {
+    // Release instances that were visible but are now culled.
+    for (const nodeId of Array.from(visibleNodeIds.values())) {
+      if (visibleIds.has(nodeId)) {
+        continue
+      }
+      releaseModelInstance(nodeId)
+      allocatedNodeIds.delete(nodeId)
+      visibleNodeIds.delete(nodeId)
+    }
+
+    // Allocate (if needed) and update matrices for currently visible instances.
+    visibleIds.forEach((nodeId) => {
+      const runtime = runtimeInstances.get(nodeId)
+      if (!runtime) {
+        return
+      }
+
+      // If this is a newly visible instance, ensure it is allocated.
+      if (!visibleNodeIds.has(nodeId)) {
+        const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
+        if (!binding) {
+          return
+        }
+        allocatedNodeIds.add(runtime.nodeId)
+        visibleNodeIds.add(runtime.nodeId)
+      }
+
+      const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
+      if (!groundMesh) {
+        return
+      }
+
+      const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+      updateModelInstanceMatrix(runtime.nodeId, matrix)
+    })
+  }
+
+  async function updateInternal(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): Promise<void> {
+    const cache = resourceCache
+    if (!cache) {
+      return
+    }
+
+    // Apply frustum culling and refresh instance matrices every frame.
+    // LOD switching remains throttled to avoid excessive async asset work.
+    const visibleIds = computeVisibleScatterIds(camera, resolveGroundMeshObject)
+    applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject)
+
+    const cameraPosition = (camera as THREE.Camera & { position: THREE.Vector3 }).position
+    if (!cameraPosition || typeof cameraPosition.distanceTo !== 'function') {
+      return
+    }
 
     for (const runtime of runtimeInstances.values()) {
-      const isVisible = visibleIds.has(runtime.nodeId)
-      if (!isVisible) {
-        releaseModelInstance(runtime.nodeId)
-        allocatedNodeIds.delete(runtime.nodeId)
+      // Frustum culling is applied each frame in `update()`. Here we only handle LOD switching,
+      // and must not resurrect instances that have been culled since the last visibility update.
+      if (!allocatedNodeIds.has(runtime.nodeId)) {
         continue
       }
 
@@ -453,11 +504,13 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
               const group = await ensureModelInstanceGroup(desiredAssetId, cache)
               if (group && group.meshes.length) {
                 ensureInstancedMeshesRegistered(desiredAssetId)
-                releaseModelInstance(runtime.nodeId)
-                const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
-                if (binding) {
-                  runtime.boundAssetId = desiredAssetId
-                  allocatedNodeIds.add(runtime.nodeId)
+                if (allocatedNodeIds.has(runtime.nodeId)) {
+                  releaseModelInstance(runtime.nodeId)
+                  const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
+                  if (binding) {
+                    runtime.boundAssetId = desiredAssetId
+                    allocatedNodeIds.add(runtime.nodeId)
+                  }
                 }
               }
             }
@@ -478,6 +531,7 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
 
   function update(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
     const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+
     if (pendingUpdate) {
       return
     }
