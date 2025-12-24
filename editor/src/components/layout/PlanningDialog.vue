@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
@@ -36,7 +36,7 @@ const layerKindLabels: Record<LayerKind, string> = {
   water: 'Water',
 }
 
-const addableLayerKinds: LayerKind[] = ['terrain', 'building', 'road', 'floor', 'water', 'green', 'wall']
+const addableLayerKinds: LayerKind[] = ['road', 'floor', 'water', 'green', 'wall']
 
 interface PlanningLayer {
   id: string
@@ -182,8 +182,6 @@ interface LineDraft {
 
 const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
-  { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
@@ -193,7 +191,7 @@ const layerPresets: PlanningLayer[] = [
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
 
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
-const activeLayerId = ref(layers.value[0]?.id ?? 'terrain-layer')
+const activeLayerId = ref(layers.value[0]?.id ?? 'green-layer')
 const polygons = ref<PlanningPolygon[]>([])
 const polylines = ref<PlanningPolyline[]>([])
 const polygonCounter = ref(1)
@@ -743,7 +741,13 @@ const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlace
   return result
 })
 
-const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() => {
+// Performance: green-layer scatter density dots are expensive (Poisson sampling).
+// When users resize a green polygon, we suspend re-computation during the drag and
+// only compute once after the drag finishes.
+const suspendPolygonScatterDensityDots = ref(false)
+const suspendedPolygonScatterDensityDotsKey = ref<{ pointerId: number; polygonId: string } | null>(null)
+
+function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
   const result: Record<string, PlanningPoint[]> = {}
   for (const poly of visiblePolygons.value) {
     if (!poly.scatter) {
@@ -803,7 +807,25 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
     }
   }
   return result
+}
+
+const polygonScatterDensityDots = shallowRef<Record<string, PlanningPoint[]>>({})
+watchEffect(() => {
+  if (suspendPolygonScatterDensityDots.value) {
+    return
+  }
+  polygonScatterDensityDots.value = computePolygonScatterDensityDots()
 })
+
+function hidePolygonScatterDensityDots(polygonId: string) {
+  const current = polygonScatterDensityDots.value
+  if (!(polygonId in current)) {
+    return
+  }
+  const next = { ...current }
+  delete next[polygonId]
+  polygonScatterDensityDots.value = next
+}
 
 const selectedPolygon = computed(() => {
   const feature = selectedFeature.value
@@ -1245,7 +1267,7 @@ function resetPlanningState() {
   selectedFeature.value = null
   activeImageId.value = null
   layers.value = layerPresets.map((layer) => ({ ...layer }))
-  activeLayerId.value = layers.value[0]?.id ?? 'terrain-layer'
+  activeLayerId.value = layers.value[0]?.id ?? 'green-layer'
   viewTransform.scale = 1
   viewTransform.offset.x = 0
   viewTransform.offset.y = 0
@@ -1309,7 +1331,7 @@ function loadPlanningFromScene() {
           return {
             id,
             name: typeof (raw as any).name === 'string' ? String((raw as any).name) : preset?.name ?? 'Layer',
-            kind: (kind ?? preset?.kind ?? 'terrain') as LayerKind,
+            kind: (kind ?? preset?.kind ?? 'green') as LayerKind,
             visible: typeof (raw as any).visible === 'boolean' ? Boolean((raw as any).visible) : true,
             color: typeof (raw as any).color === 'string' ? String((raw as any).color) : preset?.color ?? '#ffffff',
             locked: typeof (raw as any).locked === 'boolean' ? Boolean((raw as any).locked) : false,
@@ -1339,6 +1361,7 @@ function loadPlanningFromScene() {
                 : ((kind ?? preset?.kind) === 'floor' ? 0.1 : undefined),
           } as PlanningLayer
         })
+        .filter((layer): layer is PlanningLayer => !!layer)
     } else {
       const layerMap = new Map(data.layers.map((item) => [item.id, item]))
       layers.value.forEach((layer) => {
@@ -1386,6 +1409,10 @@ function loadPlanningFromScene() {
     }))
     : []
 
+  // Drop polygons belonging to removed layers.
+  const allowedLayerIds = new Set(layers.value.map((layer) => layer.id))
+  polygons.value = polygons.value.filter((poly) => allowedLayerIds.has(poly.layerId))
+
   const polylinePointPool = new Map<string, PlanningPoint>()
 
   polylines.value = Array.isArray(data.polylines)
@@ -1420,6 +1447,9 @@ function loadPlanningFromScene() {
       }
     })
     : []
+
+  // Drop polylines belonging to removed layers.
+  polylines.value = polylines.value.filter((line) => allowedLayerIds.has(line.layerId))
 
   planningImages.value = Array.isArray(data.images)
     ? data.images.map((img) => ({
@@ -2660,7 +2690,7 @@ function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
     pointerId: event.pointerId,
     start: worldPoint,
     current: worldPoint,
-    layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
+    layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer',
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
@@ -2684,7 +2714,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
   if (points.length < 3) {
     return
   }
-  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
+  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
   polygons.value.push({
     id: createId('poly'),
     name: `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`,
@@ -2739,7 +2769,7 @@ function startLineDraft(point: PlanningPoint) {
     return
   }
 
-  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
+  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
   const reuse = findNearbyPolylineVertexInLayer(point, targetLayerId)
   const reusePoint = reuse?.point
 
@@ -3096,6 +3126,32 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
+  // Middle-click while drawing cancels the current draft and removes any unfinished geometry.
+  if (event.button === 1) {
+    const rectangleActive = dragState.value.type === 'rectangle'
+    const polygonDraftActive = polygonDraftPoints.value.length > 0
+    const draftLine = getDraftLine()
+    const lineDraftActive = !!(draftLine && draftLine.points.length > 0)
+    if (rectangleActive || polygonDraftActive || lineDraftActive) {
+      event.preventDefault()
+      event.stopPropagation()
+
+      // If a pointer is captured for a drag, release it so the UI doesn't get stuck.
+      const state = dragState.value
+      if (state.type !== 'idle' && event.currentTarget instanceof Element) {
+        try {
+          event.currentTarget.releasePointerCapture(state.pointerId)
+        } catch {
+          // Ignore if not captured by this element.
+        }
+      }
+
+      cancelActiveDrafts()
+      frozenCanvasSize.value = null
+      return
+    }
+  }
+
   if (tryBeginRightPan(event)) {
     return
   }
@@ -3416,6 +3472,12 @@ function handlePointerUp(event: PointerEvent) {
       markPlanningDirty()
     }
   }
+
+  if (suspendedPolygonScatterDensityDotsKey.value?.pointerId === event.pointerId) {
+    suspendPolygonScatterDensityDots.value = false
+    suspendedPolygonScatterDensityDotsKey.value = null
+  }
+
   if (
     lineVertexClickState.value &&
     lineVertexClickState.value.pointerId === event.pointerId &&
@@ -3457,6 +3519,10 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
+
+  // Ensure we never leave scatter preview suspended.
+  suspendPolygonScatterDensityDots.value = false
+  suspendedPolygonScatterDensityDotsKey.value = null
 
   const draft = lineDraft.value
   const draftLine = getDraftLine()
@@ -3546,6 +3612,15 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
   if (effectiveTool !== 'select') {
     return
   }
+
+  // Moving green polygons triggers expensive scatter density dot sampling.
+  // Suspend during the drag and compute once after pointerup.
+  if (candidate.scatter && getLayerKind(candidate.layerId) === 'green') {
+    suspendPolygonScatterDensityDots.value = true
+    suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: candidate.id }
+    hidePolygonScatterDensityDots(candidate.id)
+  }
+
   dragState.value = {
     type: 'move-polygon',
     pointerId: event.pointerId,
@@ -3567,6 +3642,14 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   if (!polygon || !isActiveLayer(polygon.layerId)) {
     return
   }
+
+  // Resizing green polygons triggers expensive scatter density dot sampling.
+  // Suspend during the drag and compute once after pointerup.
+  if (polygon.scatter && getLayerKind(polygon.layerId) === 'green') {
+    suspendPolygonScatterDensityDots.value = true
+    suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId }
+  }
+
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
@@ -4999,7 +5082,7 @@ onBeforeUnmount(() => {
                     draggable="false"
                   >
                   <div v-else class="scatter-preview__placeholder">
-                    <v-icon icon="mdi-image-outline" size="20" />
+                    <v-icon icon="mdi-image-outline" size="26" />
                   </div>
                 </div>
                 <div class="scatter-preview__meta">
@@ -5477,8 +5560,8 @@ onBeforeUnmount(() => {
 }
 
 .scatter-preview__thumbnail {
-  width: 68px;
-  height: 68px;
+  width: 92px;
+  height: 92px;
   border-radius: 10px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
