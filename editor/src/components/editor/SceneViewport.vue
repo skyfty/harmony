@@ -4339,7 +4339,15 @@ function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Ob
 }
 
 function updateSelectionHighlights() {
-  const selectedIds = sceneStore.selectedNodeIds.filter((id) => !!id && id !== props.selectedNodeId)
+  const shouldShowSelectedHighlight = (nodeId: string | null | undefined): boolean => {
+    if (!nodeId) {
+      return false
+    }
+    const node = resolveSceneNodeById(nodeId)
+    return node?.selectedHighlight ?? true
+  }
+
+  const selectedIds = sceneStore.selectedNodeIds.filter((id) => !!id && id !== props.selectedNodeId && shouldShowSelectedHighlight(id))
   const selectedIdSet = new Set(selectedIds)
 
   selectionHighlights.forEach((group, id) => {
@@ -4454,6 +4462,13 @@ function updateOutlineSelectionTargets() {
 
   idSources.forEach((id) => {
     if (!id) {
+      return
+    }
+    const node = resolveSceneNodeById(id)
+    const shouldHighlight = typeof node?.selectedHighlight === 'boolean'
+      ? node.selectedHighlight
+      : !(id === GROUND_NODE_ID || node?.dynamicMesh?.type === 'Ground')
+    if (!shouldHighlight) {
       return
     }
     const target = resolveOutlineTargetForNode(id)

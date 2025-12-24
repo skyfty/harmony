@@ -557,6 +557,11 @@ export interface SceneNode {
   position: Vector3Like;
   rotation: Vector3Like;
   scale: Vector3Like;
+  /**
+   * Controls whether this node shows a selection highlight in the editor.
+   * Defaults to true when omitted, except Ground nodes default to false.
+   */
+  selectedHighlight?: boolean;
   /** When false, this node cannot be saved as a prefab. Defaults to true when omitted. */
   canPrefab?: boolean;
   sourceAssetId?: string;

@@ -1933,6 +1933,7 @@ function createGroundSceneNode(
     id: GROUND_NODE_ID,
     name: 'Ground',
     nodeType: 'Mesh',
+    selectedHighlight: false,
     canPrefab: false,
     allowChildNodes: false,
     materials: [

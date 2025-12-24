@@ -53,6 +53,7 @@ const createGroundNode = (width: number, depth: number, color: string) => ({
   id: GROUND_NODE_ID,
   name: 'Ground',
   nodeType: 'Mesh',
+  selectedHighlight: false,
   position: vec3(0, 0, 0),
   rotation: vec3(0, 0, 0),
   scale: vec3(1, 1, 1),
