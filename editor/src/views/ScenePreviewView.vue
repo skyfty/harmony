@@ -7754,7 +7754,7 @@ onBeforeUnmount(() => {
 <template>
 	<div class="scene-preview">
 		<div ref="containerRef" class="scene-preview__canvas"></div>
-		<div ref="statsContainerRef" class="scene-preview__stats">
+		<div class="scene-preview__stats">
 			<div
 				v-if="memoryFallbackLabel"
 				class="scene-preview__stats-fallback"
@@ -7762,11 +7762,18 @@ onBeforeUnmount(() => {
 				{{ memoryFallbackLabel }}
 			</div>
 			<div
+				v-if="isInstancedCullingVisualizationVisible"
+				class="scene-preview__stats-fallback"
+			>
+				{{ instancedCullingVisualizationLabel }}
+			</div>
+			<div
 				v-if="isGroundChunkStreamingDebugVisible"
 				class="scene-preview__stats-fallback"
 			>
 				{{ groundChunkDebugLabel }}
 			</div>
+			<div ref="statsContainerRef" class="scene-preview__stats-panels"></div>
 		</div>
 		<div class="scene-preview__debug-menu">
 			<v-menu
@@ -7836,19 +7843,6 @@ onBeforeUnmount(() => {
 					</v-list>
 				</v-card>
 			</v-menu>
-		</div>
-		<div
-			v-if="isInstancedCullingVisualizationVisible"
-			class="scene-preview__instanced-culling-label"
-		>
-			<v-chip
-				size="small"
-				color="secondary"
-				variant="tonal"
-				prepend-icon="mdi-eye-outline"
-			>
-				{{ instancedCullingVisualizationLabel }}
-			</v-chip>
 		</div>
 		<div
 			v-if="resourceProgress.active"
