@@ -12,6 +12,7 @@ import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer
 import {
 	ENVIRONMENT_NODE_ID,
 	type EnvironmentSettings,
+	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
 	type SceneNode,
@@ -151,6 +152,11 @@ const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
 const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(false)
+const isGroundChunkStreamingDebugVisible = ref(false)
+const groundChunkDebugStats = reactive({ loaded: 0, total: 0 })
+const groundChunkDebugLabel = computed(
+	() => `地面分块：${groundChunkDebugStats.loaded} / ${groundChunkDebugStats.total}`,
+)
 const isRigidbodyDebugVisible = computed(
 	() => isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value,
 )
@@ -726,6 +732,233 @@ const airWallDebugMaterial = new THREE.MeshBasicMaterial({
 	depthWrite: false,
 	depthTest: false,
 })
+
+type GroundChunkUserData = {
+	startRow: number
+	startColumn: number
+	rows: number
+	columns: number
+	chunkRow: number
+	chunkColumn: number
+}
+
+const groundChunkDebugMeshes = new Map<string, THREE.Group>()
+let groundChunkDebugGroup: THREE.Group | null = null
+let groundChunkDebugBoxGeometry: THREE.BoxGeometry | null = null
+let groundChunkDebugEdgesGeometry: THREE.EdgesGeometry | null = null
+let groundChunkDebugLastSyncAt = 0
+let groundChunkCellsEstimate: number | null = null
+const groundChunkDebugBoxHelper = new THREE.Box3()
+const groundChunkDebugCenterHelper = new THREE.Vector3()
+const groundChunkDebugSizeHelper = new THREE.Vector3()
+const groundChunkDebugRootInverseHelper = new THREE.Matrix4()
+
+function hashStringFNV1a(input: string): number {
+	let hash = 0x811c9dc5
+	for (let i = 0; i < input.length; i += 1) {
+		hash ^= input.charCodeAt(i)
+		hash = Math.imul(hash, 0x01000193)
+	}
+	return hash >>> 0
+}
+
+function colorFromGroundChunkKey(key: string): THREE.Color {
+	const hash = hashStringFNV1a(key)
+	const hue = (hash % 360) / 360
+	return new THREE.Color().setHSL(hue, 0.65, 0.55)
+}
+
+function ensureGroundChunkDebugGeometries(): void {
+	if (!groundChunkDebugBoxGeometry) {
+		groundChunkDebugBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
+	}
+	if (!groundChunkDebugEdgesGeometry && groundChunkDebugBoxGeometry) {
+		groundChunkDebugEdgesGeometry = new THREE.EdgesGeometry(groundChunkDebugBoxGeometry)
+	}
+}
+
+function disposeGroundChunkDebugHelpers(): void {
+	groundChunkDebugMeshes.forEach((group) => {
+		group.traverse((object) => {
+			if ((object as THREE.Mesh).isMesh) {
+				const mesh = object as THREE.Mesh
+				const material = mesh.material
+				if (Array.isArray(material)) {
+					material.forEach((entry) => entry?.dispose?.())
+				} else {
+					material?.dispose?.()
+				}
+			}
+			if ((object as THREE.LineSegments).isLineSegments) {
+				const line = object as THREE.LineSegments
+				const material = line.material as THREE.Material | THREE.Material[]
+				if (Array.isArray(material)) {
+					material.forEach((entry) => entry?.dispose?.())
+				} else {
+					material?.dispose?.()
+				}
+			}
+		})
+		group.removeFromParent()
+	})
+	groundChunkDebugMeshes.clear()
+	groundChunkDebugGroup?.removeFromParent()
+	groundChunkDebugGroup = null
+	groundChunkCellsEstimate = null
+	groundChunkDebugLastSyncAt = 0
+	groundChunkDebugStats.loaded = 0
+	groundChunkDebugStats.total = 0
+	if (groundChunkDebugEdgesGeometry) {
+		groundChunkDebugEdgesGeometry.dispose()
+		groundChunkDebugEdgesGeometry = null
+	}
+	if (groundChunkDebugBoxGeometry) {
+		groundChunkDebugBoxGeometry.dispose()
+		groundChunkDebugBoxGeometry = null
+	}
+}
+
+function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group {
+	if (!groundChunkDebugGroup) {
+		groundChunkDebugGroup = new THREE.Group()
+		groundChunkDebugGroup.name = 'GroundChunkDebugHelpers'
+	}
+	if (groundChunkDebugGroup.parent !== groundObject) {
+		groundObject.add(groundChunkDebugGroup)
+	}
+	return groundChunkDebugGroup
+}
+
+function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
+	const rows = Math.max(1, Math.trunc(definition.rows))
+	const columns = Math.max(1, Math.trunc(definition.columns))
+	const safeCells = Math.max(1, Math.trunc(chunkCells))
+	const rowChunks = Math.ceil(rows / safeCells)
+	const columnChunks = Math.ceil(columns / safeCells)
+	return Math.max(1, rowChunks * columnChunks)
+}
+
+function createGroundChunkDebugEntry(key: string): THREE.Group {
+	ensureGroundChunkDebugGeometries()
+	const group = new THREE.Group()
+	group.name = `GroundChunkDebug:${key}`
+	group.userData.groundChunkDebugKey = key
+	const color = colorFromGroundChunkKey(key)
+
+	const fillMaterial = new THREE.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.18,
+		depthTest: false,
+		depthWrite: false,
+	})
+	const edgeMaterial = new THREE.LineBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.9,
+		depthTest: false,
+		depthWrite: false,
+	})
+
+	const fillMesh = new THREE.Mesh(groundChunkDebugBoxGeometry!, fillMaterial)
+	fillMesh.name = `GroundChunkDebugFill:${key}`
+	fillMesh.renderOrder = 9999
+	const edgeLines = new THREE.LineSegments(groundChunkDebugEdgesGeometry!, edgeMaterial)
+	edgeLines.name = `GroundChunkDebugEdges:${key}`
+	edgeLines.renderOrder = 10000
+	group.add(fillMesh)
+	group.add(edgeLines)
+	return group
+}
+
+function syncGroundChunkStreamingDebug(groundObject: THREE.Object3D, definition: GroundDynamicMesh): void {
+	if (!isGroundChunkStreamingDebugVisible.value) {
+		return
+	}
+	const now = performance.now()
+	if (now - groundChunkDebugLastSyncAt < 120) {
+		return
+	}
+	groundChunkDebugLastSyncAt = now
+
+	const debugRoot = ensureGroundChunkDebugGroup(groundObject)
+	const keep = new Set<string>()
+	let loadedChunks = 0
+	let maxChunkCells = 0
+
+	groundObject.updateWorldMatrix(true, false)
+	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
+
+	groundObject.traverse((object) => {
+		const mesh = object as THREE.Mesh
+		if (!mesh.isMesh) {
+			return
+		}
+		const chunk = (mesh.userData?.groundChunk ?? null) as GroundChunkUserData | null
+		if (!chunk) {
+			return
+		}
+		loadedChunks += 1
+		maxChunkCells = Math.max(maxChunkCells, Math.max(chunk.rows, chunk.columns))
+		const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
+		keep.add(key)
+
+		let entry = groundChunkDebugMeshes.get(key)
+		if (!entry) {
+			entry = createGroundChunkDebugEntry(key)
+			groundChunkDebugMeshes.set(key, entry)
+			debugRoot.add(entry)
+		}
+
+		mesh.updateWorldMatrix(true, false)
+		groundChunkDebugBoxHelper.setFromObject(mesh)
+		groundChunkDebugBoxHelper.applyMatrix4(groundChunkDebugRootInverseHelper)
+		groundChunkDebugBoxHelper.getCenter(groundChunkDebugCenterHelper)
+		groundChunkDebugBoxHelper.getSize(groundChunkDebugSizeHelper)
+		entry.position.copy(groundChunkDebugCenterHelper)
+		entry.scale.set(
+			Math.max(1e-6, groundChunkDebugSizeHelper.x),
+			Math.max(1e-6, groundChunkDebugSizeHelper.y),
+			Math.max(1e-6, groundChunkDebugSizeHelper.z),
+		)
+	})
+
+	groundChunkDebugMeshes.forEach((entry, key) => {
+		if (keep.has(key)) {
+			return
+		}
+		entry.traverse((object) => {
+			if ((object as THREE.Mesh).isMesh) {
+				const mesh = object as THREE.Mesh
+				const material = mesh.material
+				if (Array.isArray(material)) {
+					material.forEach((entryMaterial) => entryMaterial?.dispose?.())
+				} else {
+					material?.dispose?.()
+				}
+			}
+			if ((object as THREE.LineSegments).isLineSegments) {
+				const line = object as THREE.LineSegments
+				const material = line.material as THREE.Material | THREE.Material[]
+				if (Array.isArray(material)) {
+					material.forEach((entryMaterial) => entryMaterial?.dispose?.())
+				} else {
+					material?.dispose?.()
+				}
+			}
+		})
+		entry.removeFromParent()
+		groundChunkDebugMeshes.delete(key)
+	})
+
+	if (maxChunkCells > 0) {
+		groundChunkCellsEstimate = Math.max(groundChunkCellsEstimate ?? 0, maxChunkCells)
+	}
+	groundChunkDebugStats.loaded = loadedChunks
+	groundChunkDebugStats.total = groundChunkCellsEstimate
+		? computeTotalGroundChunkCount(definition, groundChunkCellsEstimate)
+		: loadedChunks
+}
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
 const rigidbodyContactMaterialKeys = new Set<string>()
@@ -4576,6 +4809,7 @@ function startAnimationLoop() {
 				const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 				if (groundObject) {
 					updateGroundChunks(groundObject, groundNode.dynamicMesh, activeCamera)
+					syncGroundChunkStreamingDebug(groundObject, groundNode.dynamicMesh)
 				}
 			}
 		}
@@ -4616,6 +4850,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorProximity()
 	resetAnimationControllers()
 	disposeRigidbodyDebugHelpers()
+	disposeGroundChunkDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -7167,6 +7402,13 @@ function toggleOtherRigidbodyWireframeDebug(): void {
 	isOtherRigidbodyWireframeVisible.value = !isOtherRigidbodyWireframeVisible.value
 }
 
+function toggleGroundChunkStreamingDebug(): void {
+	isGroundChunkStreamingDebugVisible.value = !isGroundChunkStreamingDebugVisible.value
+	if (!isGroundChunkStreamingDebugVisible.value) {
+		disposeGroundChunkDebugHelpers()
+	}
+}
+
 function toggleFullscreen() {
 	if (!containerRef.value) {
 		return
@@ -7290,6 +7532,12 @@ onBeforeUnmount(() => {
 				class="scene-preview__stats-fallback"
 			>
 				{{ memoryFallbackLabel }}
+			</div>
+			<div
+				v-if="isGroundChunkStreamingDebugVisible"
+				class="scene-preview__stats-fallback"
+			>
+				{{ groundChunkDebugLabel }}
 			</div>
 		</div>
 		<div
@@ -7628,6 +7876,16 @@ onBeforeUnmount(() => {
 					:aria-label="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
 					:title="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
 					@click="toggleGroundWireframeDebug"
+				/>
+				<v-btn
+					class="scene-preview__control-button"
+					icon="mdi-vector-square"
+					variant="tonal"
+					:color="isGroundChunkStreamingDebugVisible ? 'warning' : 'secondary'"
+					size="small"
+					:aria-label="isGroundChunkStreamingDebugVisible ? '隐藏地面分块调试' : '显示地面分块调试'"
+					:title="isGroundChunkStreamingDebugVisible ? '隐藏地面分块调试' : '显示地面分块调试'"
+					@click="toggleGroundChunkStreamingDebug"
 				/>
 				<v-btn
 					class="scene-preview__control-button"
