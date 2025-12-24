@@ -7520,6 +7520,105 @@ function refreshAnimations() {
 	refreshEffectRuntimeTickers()
 }
 
+function collectPendingObjects(root: THREE.Object3D): Map<string, THREE.Object3D> {
+	const pendingObjects = new Map<string, THREE.Object3D>()
+	root.traverse((object) => {
+		const nodeId = object.userData?.nodeId as string | undefined
+		if (nodeId) {
+			pendingObjects.set(nodeId, object)
+		}
+	})
+	return pendingObjects
+}
+
+function resolveInstancingSkipNodeIds(pendingObjects: Map<string, THREE.Object3D>): Set<string> | null {
+	if (!lazyLoadMeshesEnabled) {
+		return null
+	}
+	const skipIds = new Set<string>()
+	pendingObjects.forEach((object, nodeId) => {
+		const placeholderObject = findLazyPlaceholderForNode(object, nodeId)
+		const lazyData = placeholderObject?.userData?.lazyAsset as LazyAssetMetadata
+		if (lazyData?.placeholder) {
+			skipIds.add(nodeId)
+		}
+	})
+	return skipIds.size ? skipIds : null
+}
+
+function attachBuiltRootToPreview(
+	previewRoot: THREE.Object3D,
+	builtRoot: THREE.Object3D,
+	pendingObjects: Map<string, THREE.Object3D>,
+): void {
+	while (builtRoot.children.length) {
+		const child = builtRoot.children.shift()
+		if (!child) {
+			continue
+		}
+		previewRoot.add(child)
+		registerSubtree(child, pendingObjects)
+	}
+}
+
+async function applyInitialDocumentGraph(
+	document: SceneJsonExportDocument,
+	previewRoot: THREE.Object3D,
+	builtRoot: THREE.Object3D,
+	pendingObjects: Map<string, THREE.Object3D>,
+	resourceCache: ResourceCache | null,
+	environmentSettings: EnvironmentSettings,
+): Promise<void> {
+	disposeScene({ preservePreviewNodeMap: true })
+	currentDocument = document
+	syncGroundCache(document)
+	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	await syncTerrainScatterInstances(document, resourceCache)
+	refreshAnimations()
+	initializeLazyPlaceholders(document)
+	syncPhysicsBodiesForDocument(document)
+	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
+	if (isRigidbodyDebugVisible.value) {
+		syncRigidbodyDebugHelpers()
+	}
+	void applyEnvironmentSettingsToScene(environmentSettings)
+}
+
+async function applyIncrementalDocumentGraph(
+	document: SceneJsonExportDocument,
+	previewRoot: THREE.Object3D,
+	pendingObjects: Map<string, THREE.Object3D>,
+	resourceCache: ResourceCache | null,
+	environmentSettings: EnvironmentSettings,
+): Promise<void> {
+	syncGroundCache(document)
+	reconcileNodeLists(null, document.nodes ?? [], currentDocument?.nodes ?? [], pendingObjects)
+
+	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
+		if (!nodeObjectMap.has(nodeId)) {
+			previewRoot.add(object)
+			registerSubtree(object, pendingObjects)
+		}
+	}
+
+	nodeObjectMap.forEach((object, nodeId) => {
+		attachRuntimeForNode(nodeId, object)
+	})
+	syncPhysicsBodiesForDocument(document)
+	await syncTerrainScatterInstances(document, resourceCache)
+	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
+	if (isRigidbodyDebugVisible.value) {
+		syncRigidbodyDebugHelpers()
+	}
+
+	currentDocument = document
+	refreshAnimations()
+	initializeLazyPlaceholders(document)
+	void applyEnvironmentSettingsToScene(environmentSettings)
+}
+
 async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
@@ -7586,85 +7685,34 @@ async function updateScene(document: SceneJsonExportDocument) {
 	rebuildPreviewNodeMap(document.nodes)
 	refreshBehaviorProximityCandidates()
 
-	const pendingObjects = new Map<string, THREE.Object3D>()
-	root.traverse((object) => {
-		const nodeId = object.userData?.nodeId as string | undefined
-		if (nodeId) {
-			pendingObjects.set(nodeId, object)
-		}
+	const pendingObjects = collectPendingObjects(root)
+	const instancingSkipNodeIds = resolveInstancingSkipNodeIds(pendingObjects)
+	instancingSkipNodeIds?.forEach((nodeId) => {
+		deferredInstancingNodeIds.add(nodeId)
 	})
-
-	let instancingSkipNodeIds: Set<string> | null = null
-	if (lazyLoadMeshesEnabled) {
-		instancingSkipNodeIds = new Set<string>()
-		pendingObjects.forEach((object, nodeId) => {
-			const placeholderObject = findLazyPlaceholderForNode(object, nodeId)
-			const lazyData = placeholderObject?.userData?.lazyAsset as LazyAssetMetadata
-			if (lazyData?.placeholder) {
-				instancingSkipNodeIds!.add(nodeId)
-			}
-		})
-	}
-	if (instancingSkipNodeIds?.size) {
-		instancingSkipNodeIds.forEach((nodeId) => {
-			deferredInstancingNodeIds.add(nodeId)
-		})
-	}
 	if (resourceCache) {
 		await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache, {
 			skipNodeIds: instancingSkipNodeIds ?? undefined,
 		})
 	}
 
-	if (!currentDocument) {
-		disposeScene({ preservePreviewNodeMap: true })
-		currentDocument = document
-		syncGroundCache(document)
-		while (root.children.length) {
-			const child = root.children.shift()
-			if (!child) {
-				continue
-			}
-			previewRoot.add(child)
-			registerSubtree(child, pendingObjects)
-		}
-		await syncTerrainScatterInstances(document, resourceCache)
-		refreshAnimations()
-		initializeLazyPlaceholders(document)
-		syncPhysicsBodiesForDocument(document)
-		const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
-		syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-		if (isRigidbodyDebugVisible.value) {
-			syncRigidbodyDebugHelpers()
-		}
-		void applyEnvironmentSettingsToScene(environmentSettings)
-		return
+	if (currentDocument) {
+		await applyIncrementalDocumentGraph(
+			document, 
+			previewRoot,
+			pendingObjects, 
+			resourceCache, 
+			environmentSettings)
+	} else {
+		await applyInitialDocumentGraph(
+			document,
+			previewRoot,
+			root,
+			pendingObjects,
+			resourceCache,
+			environmentSettings,
+		)
 	}
-	syncGroundCache(document)
-	reconcileNodeLists(null, document.nodes ?? [], currentDocument.nodes ?? [], pendingObjects)
-
-	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
-		if (!nodeObjectMap.has(nodeId)) {
-			previewRoot.add(object)
-			registerSubtree(object, pendingObjects)
-		}
-	}
-
-	nodeObjectMap.forEach((object, nodeId) => {
-		attachRuntimeForNode(nodeId, object)
-	})
-	syncPhysicsBodiesForDocument(document)
-	await syncTerrainScatterInstances(document, resourceCache)
-	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
-	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
-
-	currentDocument = document
-	refreshAnimations()
-	initializeLazyPlaceholders(document)
-	void applyEnvironmentSettingsToScene(environmentSettings)
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
