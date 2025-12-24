@@ -176,6 +176,8 @@ interface LineDraft {
   lineId: string
   layerId: string
   continuation?: LineContinuation
+  /** Snapshot of points before starting a continuation edit (used to rollback on cancel). */
+  startPoints?: PlanningPoint[]
 }
 
 const layerPresets: PlanningLayer[] = [
@@ -3455,7 +3457,35 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
-  clearLineDraft()
+
+  const draft = lineDraft.value
+  const draftLine = getDraftLine()
+  if (draft && draftLine) {
+    if (draft.continuation) {
+      // Continuation edits an existing polyline in-place; rollback to the original points.
+      if (Array.isArray(draft.startPoints) && draft.startPoints.length) {
+        draftLine.points = clonePoints(draft.startPoints)
+      }
+      clearLineDraft({ keepLine: true })
+    } else {
+      // New line draft (or newly created segment): remove it entirely.
+      polylines.value = polylines.value.filter((item) => item.id !== draftLine.id)
+      if (
+        (selectedFeature.value?.type === 'polyline' && selectedFeature.value.id === draftLine.id)
+        || (selectedFeature.value?.type === 'segment' && selectedFeature.value.lineId === draftLine.id)
+      ) {
+        selectFeature(null)
+      }
+      if (selectedVertex.value?.feature === 'polyline' && selectedVertex.value.targetId === draftLine.id) {
+        selectedVertex.value = null
+      }
+      clearLineDraft({ keepLine: true })
+      markPlanningDirty()
+    }
+  } else {
+    clearLineDraft()
+  }
+
   dragState.value = { type: 'idle' }
 }
 
@@ -3710,6 +3740,7 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   lineDraft.value = {
     lineId,
     layerId: line.layerId,
+    startPoints: clonePoints(line.points),
     continuation: {
       lineId,
       anchorIndex: vertexIndex,
