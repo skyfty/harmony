@@ -5167,29 +5167,33 @@ onBeforeUnmount(() => {
               <div class="property-panel__density">
                 <div class="property-panel__density-title">密集度</div>
                 <div class="property-panel__density-row">
-                  <v-slider
-                    v-model="scatterDensityPercentModel"
-                    min="0"
-                    max="100"
-                    step="1"
-                    density="compact"
-                    hide-details
-                    :disabled="!scatterDensityEnabled"
-                  />
+                  <div @pointerdown.capture="beginScatterControlsInteraction">
+                    <v-slider
+                      v-model="scatterDensityPercentModel"
+                      min="0"
+                      max="100"
+                      step="1"
+                      density="compact"
+                      hide-details
+                      :disabled="!scatterDensityEnabled"
+                    />
+                  </div>
                   <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
                 </div>
 
                 <div class="property-panel__spacing-title">分布间隔</div>
                 <div class="property-panel__density-row">
-                  <v-slider
-                    v-model="scatterMinSpacingMetersModel"
-                    min="0"
-                    max="10"
-                    step="0.1"
-                    density="compact"
-                    hide-details
-                    :disabled="!scatterMinSpacingEnabled"
-                  />
+                  <div @pointerdown.capture="beginScatterControlsInteraction">
+                    <v-slider
+                      v-model="scatterMinSpacingMetersModel"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      density="compact"
+                      hide-details
+                      :disabled="!scatterMinSpacingEnabled"
+                    />
+                  </div>
                   <div class="property-panel__density-value">{{ scatterMinSpacingMetersModel }}m</div>
                 </div>
               </div>
@@ -5221,6 +5225,7 @@ onBeforeUnmount(() => {
                     :category="tab.key"
                     :update-terrain-selection="false"
                     :selected-provider-asset-id="selectedScatterAssignment ? selectedScatterAssignment.providerAssetId : null"
+                    :thumbnail-size="68"
                     @asset-select="handleScatterAssetSelect"
                   />
                 </v-window-item>
