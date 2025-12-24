@@ -84,8 +84,6 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { BuildTool } from '@/types/build-tool'
 import {
   createGroundMesh,
-  ensureAllGroundChunks,
-  stitchGroundChunkNormals,
   updateGroundChunks,
   updateGroundMesh,
   releaseGroundMeshCache,

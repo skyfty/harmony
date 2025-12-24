@@ -724,16 +724,12 @@ const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON *
 const CAMERA_DEPENDENT_ROTATION_EPSILON = 1e-4
 const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 
-const MEMORY_STATS_UPDATE_INTERVAL_SECONDS = 0.5
-
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
 let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
-
-let memoryStatsUpdateElapsed = MEMORY_STATS_UPDATE_INTERVAL_SECONDS
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -5185,7 +5181,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	cameraDependentUpdateElapsed = 0
 	lastCameraDependentUpdatePosition.set(0, 0, 0)
 	lastCameraDependentUpdateQuaternion.identity()
-	memoryStatsUpdateElapsed = MEMORY_STATS_UPDATE_INTERVAL_SECONDS
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	nodeObjectMap.forEach((_object, nodeId) => {
