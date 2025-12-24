@@ -736,6 +736,13 @@ const nodeObjectMap = new Map<string, THREE.Object3D>()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
+type AirWallDebugEntry = {
+	key: string
+	halfExtents: [number, number, number]
+	position: THREE.Vector3
+	quaternion: THREE.Quaternion
+}
+const airWallDebugEntries = new Map<string, AirWallDebugEntry>()
 const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
@@ -5029,12 +5036,16 @@ function startAnimationLoop() {
 				const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 				if (groundObject) {
 					updateGroundChunks(groundObject, groundNode.dynamicMesh, activeCamera)
-					syncGroundChunkStreamingDebug(groundObject, groundNode.dynamicMesh)
+					if (isGroundChunkStreamingDebugVisible.value) {
+						syncGroundChunkStreamingDebug(groundObject, groundNode.dynamicMesh)
+					}
 				}
 			}
 		}
 		updateLazyPlaceholders(delta)
-		updateRigidbodyDebugTransforms()
+		if (isRigidbodyDebugVisible.value) {
+			updateRigidbodyDebugTransforms()
+		}
 		// cloudRenderer?.update(delta)
 
 		currentRenderer.render(currentScene, activeCamera)
@@ -5871,6 +5882,7 @@ function removeAirWalls(): void {
 	const world = physicsWorld
 	if (!world) {
 		airWallBodies.clear()
+		airWallDebugEntries.clear()
 		clearAirWallDebugMeshes()
 		return
 	}
@@ -5882,6 +5894,7 @@ function removeAirWalls(): void {
 		}
 	})
 	airWallBodies.clear()
+	airWallDebugEntries.clear()
 	clearAirWallDebugMeshes()
 }
 
@@ -5927,12 +5940,16 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 		body.aabbNeedsUpdate = true
 		world.addBody(body)
 		airWallBodies.set(definition.key, body)
-		createAirWallDebugMesh({
+		const debugEntry: AirWallDebugEntry = {
 			key: definition.key,
 			halfExtents: definition.halfExtents,
 			position: definition.debugPosition,
 			quaternion: definition.debugQuaternion,
-		})
+		}
+		airWallDebugEntries.set(definition.key, debugEntry)
+		if (isGroundWireframeVisible.value) {
+			createAirWallDebugMesh(debugEntry)
+		}
 	})
 }
 
@@ -6086,33 +6103,26 @@ function disposeAirWallDebugGroup(): void {
 }
 
 function setAirWallDebugVisibility(visible: boolean): void {
-	const group = airWallDebugGroup ?? null
 	if (!visible) {
-		if (group) {
-			group.visible = false
-		}
-		airWallDebugMeshes.forEach((mesh) => {
-			mesh.visible = false
-		})
+		// Fully remove debug rendering resources to avoid overhead.
+		disposeAirWallDebugGroup()
 		return
 	}
 	const ensured = ensureAirWallDebugGroup()
 	if (ensured) {
 		ensured.visible = true
 	}
+	// Lazily create debug meshes only when the option is enabled.
+	airWallDebugEntries.forEach((entry) => createAirWallDebugMesh(entry))
 	airWallDebugMeshes.forEach((mesh) => {
 		mesh.visible = true
 	})
 }
 
-type AirWallDebugEntry = {
-	key: string
-	halfExtents: [number, number, number]
-	position: THREE.Vector3
-	quaternion: THREE.Quaternion
-}
-
 function createAirWallDebugMesh(entry: AirWallDebugEntry): void {
+	if (!isGroundWireframeVisible.value) {
+		return
+	}
 	const group = ensureAirWallDebugGroup()
 	if (!group) {
 		return
