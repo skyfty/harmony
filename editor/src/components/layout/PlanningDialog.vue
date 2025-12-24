@@ -747,6 +747,69 @@ const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlace
 const suspendPolygonScatterDensityDots = ref(false)
 const suspendedPolygonScatterDensityDotsKey = ref<{ pointerId: number; polygonId: string } | null>(null)
 
+const SCATTER_CONTROLS_SUSPEND_KEY = '__scatter-controls__'
+let scatterControlsPointerId: number | null = null
+let scatterControlsListenersAttached = false
+
+function handleScatterControlsBlur() {
+  endScatterControlsInteraction()
+}
+
+function handleScatterControlsPointerEnd(event: PointerEvent) {
+  if (scatterControlsPointerId != null && event.pointerId !== scatterControlsPointerId) {
+    return
+  }
+  endScatterControlsInteraction()
+}
+
+function detachScatterControlsPointerListeners() {
+  if (!scatterControlsListenersAttached) {
+    return
+  }
+  scatterControlsListenersAttached = false
+  window.removeEventListener('pointerup', handleScatterControlsPointerEnd, true)
+  window.removeEventListener('pointercancel', handleScatterControlsPointerEnd, true)
+  window.removeEventListener('blur', handleScatterControlsBlur, true)
+}
+
+function beginScatterControlsInteraction(event: PointerEvent) {
+  // Don't clobber a polygon drag suspension; that path manages its own resume.
+  if (
+    suspendPolygonScatterDensityDots.value &&
+    suspendedPolygonScatterDensityDotsKey.value?.polygonId !== SCATTER_CONTROLS_SUSPEND_KEY
+  ) {
+    return
+  }
+
+  suspendPolygonScatterDensityDots.value = true
+  suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: SCATTER_CONTROLS_SUSPEND_KEY }
+  scatterControlsPointerId = event.pointerId
+
+  if (!scatterControlsListenersAttached) {
+    scatterControlsListenersAttached = true
+    window.addEventListener('pointerup', handleScatterControlsPointerEnd, true)
+    window.addEventListener('pointercancel', handleScatterControlsPointerEnd, true)
+    window.addEventListener('blur', handleScatterControlsBlur, true)
+  }
+}
+
+function endScatterControlsInteraction() {
+  if (suspendedPolygonScatterDensityDotsKey.value?.polygonId !== SCATTER_CONTROLS_SUSPEND_KEY) {
+    detachScatterControlsPointerListeners()
+    scatterControlsPointerId = null
+    return
+  }
+
+  suspendPolygonScatterDensityDots.value = false
+  suspendedPolygonScatterDensityDotsKey.value = null
+  scatterControlsPointerId = null
+  detachScatterControlsPointerListeners()
+}
+
+onBeforeUnmount(() => {
+  detachScatterControlsPointerListeners()
+})
+
 function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
   const result: Record<string, PlanningPoint[]> = {}
   for (const poly of visiblePolygons.value) {
@@ -5082,7 +5145,7 @@ onBeforeUnmount(() => {
                     draggable="false"
                   >
                   <div v-else class="scatter-preview__placeholder">
-                    <v-icon icon="mdi-image-outline" size="26" />
+                    <v-icon icon="mdi-image-outline" size="20" />
                   </div>
                 </div>
                 <div class="scatter-preview__meta">
@@ -5322,7 +5385,7 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 380px;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
   grid-template-rows: 1fr;
   align-items: stretch;
   gap: 12px;
@@ -5560,8 +5623,8 @@ onBeforeUnmount(() => {
 }
 
 .scatter-preview__thumbnail {
-  width: 92px;
-  height: 92px;
+  width: 68px;
+  height: 68px;
   border-radius: 10px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);

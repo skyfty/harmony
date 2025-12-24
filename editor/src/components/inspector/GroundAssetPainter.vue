@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useTerrainStore } from '@/stores/terrainStore'
@@ -13,6 +14,8 @@ const props = defineProps<{
   selectedProviderAssetId?: string | null
   search?: string
   showSearch?: boolean
+  /** Thumbnail grid item size in pixels (default 60). */
+  thumbnailSize?: number
 }>()
 
 const emit = defineEmits<{
@@ -69,6 +72,24 @@ watch(
 
 const normalizedSearch = computed(() => searchQuery.value.trim().toLowerCase())
 const isFiltering = computed(() => normalizedSearch.value.length > 0)
+
+const thumbnailSizePx = computed(() => {
+  const raw = Number(props.thumbnailSize ?? 60)
+  if (!Number.isFinite(raw)) {
+    return 60
+  }
+  // Keep reasonable bounds so layout stays usable.
+  return Math.min(96, Math.max(44, Math.round(raw)))
+})
+
+const thumbnailCssVars = computed<CSSProperties>(() => ({
+  '--scatter-thumb-size': `${thumbnailSizePx.value}px`,
+} as unknown as CSSProperties))
+
+const placeholderIconSize = computed(() => {
+  // Scale with the thumbnail size, but keep within Vuetify icon-friendly bounds.
+  return Math.min(32, Math.max(16, Math.round(thumbnailSizePx.value * 0.35)))
+})
 
 const filteredAssets = computed(() => {
   const list = assetBuckets[props.category] ?? []
@@ -146,7 +167,7 @@ watch(
 </script>
 
 <template>
-  <div class="asset-painter">
+  <div class="asset-painter" :style="thumbnailCssVars">
     <div v-if="props.showSearch !== false" class="asset-toolbar">
       <v-text-field
         :model-value="searchQuery"
@@ -182,7 +203,7 @@ watch(
         >
           <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
             <span v-if="!assetThumbnail(asset)" class="thumbnail-placeholder">
-              <v-icon icon="mdi-cube-outline" size="20" />
+              <v-icon icon="mdi-cube-outline" :size="placeholderIconSize" />
             </span>
           </div>
         </button>
@@ -201,6 +222,8 @@ watch(
 
 <style scoped>
 .asset-painter {
+  --scatter-thumb-size: 60px;
+  --scatter-thumb-gap: 2px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -223,9 +246,9 @@ watch(
 
 .thumbnail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 60px);
-  gap: 2px;
-  max-height: calc((62px * 4) + (2px * 3));
+  grid-template-columns: repeat(auto-fill, var(--scatter-thumb-size));
+  gap: var(--scatter-thumb-gap);
+  max-height: calc((var(--scatter-thumb-size) + var(--scatter-thumb-gap)) * 4 - var(--scatter-thumb-gap));
   overflow-y: auto;
   padding-right: 2px;
   justify-content: flex-start;
@@ -235,8 +258,8 @@ watch(
   border: none;
   background: transparent;
   padding: 0;
-  width: 60px;
-  height: 60px;
+  width: var(--scatter-thumb-size);
+  height: var(--scatter-thumb-size);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -254,8 +277,8 @@ watch(
 }
 
 .thumbnail {
-  width: 56px;
-  height: 56px;
+  width: calc(var(--scatter-thumb-size) - 4px);
+  height: calc(var(--scatter-thumb-size) - 4px);
   border-radius: 8px;
   background-size: cover;
   background-position: center;
