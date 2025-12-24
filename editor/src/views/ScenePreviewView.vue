@@ -153,6 +153,12 @@ const warningMessages = ref<string[]>([])
 const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
+const isInstancedCullingVisualizationVisible = ref(false)
+const instancedCullingVisualizationVisibleCount = ref(0)
+const instancedCullingVisualizationTotalCount = ref(0)
+const instancedCullingVisualizationLabel = computed(() => {
+	return `可见实例：${instancedCullingVisualizationVisibleCount.value} / ${instancedCullingVisualizationTotalCount.value}`
+})
 const groundChunkDebugStats = reactive({ loaded: 0, total: 0 })
 const groundChunkDebugLabel = computed(
 	() => `地面分块：${groundChunkDebugStats.loaded} / ${groundChunkDebugStats.total}`,
@@ -682,6 +688,19 @@ const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshes'
 const instancedMeshes: THREE.InstancedMesh[] = []
 let stopInstancedMeshSubscription: (() => void) | null = null
+
+let instancedCullingVisualizationGroup: THREE.Group | null = null
+let instancedCullingVisualizationMesh: THREE.InstancedMesh | null = null
+let instancedCullingVisualizationGeometry: THREE.BoxGeometry | null = null
+let instancedCullingVisualizationMaterial: THREE.MeshBasicMaterial | null = null
+let instancedCullingVisualizationCapacity = 0
+const instancedCullingVisualizationSizeHelper = new THREE.Vector3()
+const instancedCullingVisualizationScaleHelper = new THREE.Vector3()
+const instancedCullingVisualizationBoxScaleHelper = new THREE.Vector3()
+const instancedCullingVisualizationCenterLocalHelper = new THREE.Vector3()
+const instancedCullingVisualizationCenterWorldHelper = new THREE.Vector3()
+const instancedCullingVisualizationVisibleColor = new THREE.Color(0x2ecc71)
+const instancedCullingVisualizationCulledColor = new THREE.Color(0xe74c3c)
 const instancedMatrixHelper = new THREE.Matrix4()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
@@ -1601,6 +1620,146 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
 	return radius
 }
 
+function ensureInstancedCullingVisualizationResources(required: number): void {
+	if (!scene) {
+		return
+	}
+	if (!instancedCullingVisualizationGroup) {
+		instancedCullingVisualizationGroup = new THREE.Group()
+		instancedCullingVisualizationGroup.name = 'InstancedCullingVisualization'
+		instancedCullingVisualizationGroup.renderOrder = 999
+		scene.add(instancedCullingVisualizationGroup)
+	}
+	if (!instancedCullingVisualizationGeometry) {
+		instancedCullingVisualizationGeometry = new THREE.BoxGeometry(1, 1, 1)
+	}
+	if (!instancedCullingVisualizationMaterial) {
+		instancedCullingVisualizationMaterial = new THREE.MeshBasicMaterial({
+			wireframe: true,
+			transparent: true,
+			opacity: 0.9,
+			depthTest: false,
+			depthWrite: false,
+			vertexColors: true,
+		})
+	}
+
+	const nextCapacity = Math.max(1, required)
+	if (instancedCullingVisualizationMesh && instancedCullingVisualizationCapacity >= nextCapacity) {
+		return
+	}
+
+	if (instancedCullingVisualizationMesh) {
+		instancedCullingVisualizationGroup.remove(instancedCullingVisualizationMesh)
+		instancedCullingVisualizationMesh.dispose()
+		instancedCullingVisualizationMesh = null
+	}
+
+	instancedCullingVisualizationCapacity = nextCapacity
+	instancedCullingVisualizationMesh = new THREE.InstancedMesh(
+		instancedCullingVisualizationGeometry,
+		instancedCullingVisualizationMaterial,
+		instancedCullingVisualizationCapacity,
+	)
+	instancedCullingVisualizationMesh.name = 'InstancedCullingBoxes'
+	instancedCullingVisualizationMesh.frustumCulled = false
+	instancedCullingVisualizationMesh.count = 0
+	instancedCullingVisualizationMesh.renderOrder = 999
+	instancedCullingVisualizationGroup.add(instancedCullingVisualizationMesh)
+}
+
+function disposeInstancedCullingVisualization(): void {
+	if (instancedCullingVisualizationMesh) {
+		instancedCullingVisualizationMesh.parent?.remove(instancedCullingVisualizationMesh)
+		instancedCullingVisualizationMesh.dispose()
+		instancedCullingVisualizationMesh = null
+	}
+	instancedCullingVisualizationCapacity = 0
+	if (instancedCullingVisualizationGroup) {
+		instancedCullingVisualizationGroup.parent?.remove(instancedCullingVisualizationGroup)
+		instancedCullingVisualizationGroup.clear()
+		instancedCullingVisualizationGroup = null
+	}
+	instancedCullingVisualizationMaterial?.dispose?.()
+	instancedCullingVisualizationMaterial = null
+	instancedCullingVisualizationGeometry?.dispose?.()
+	instancedCullingVisualizationGeometry = null
+}
+
+function updateInstancedCullingVisualization(
+	candidateIds: string[],
+	candidateObjects: Map<string, THREE.Object3D>,
+	visibleIds: Set<string>,
+): void {
+	if (!isInstancedCullingVisualizationVisible.value) {
+		return
+	}
+	ensureInstancedCullingVisualizationResources(candidateIds.length)
+	const mesh = instancedCullingVisualizationMesh
+	if (!mesh) {
+		return
+	}
+	mesh.count = candidateIds.length
+
+	for (let i = 0; i < candidateIds.length; i += 1) {
+		const nodeId = candidateIds[i]!
+		const object = candidateObjects.get(nodeId)
+		if (!object) {
+			continue
+		}
+		object.updateMatrixWorld(true)
+		object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedCullingVisualizationScaleHelper)
+
+		const bounds = object.userData?.instancedBounds as
+			| { min?: [number, number, number]; max?: [number, number, number] }
+			| undefined
+
+		if (bounds?.min && bounds?.max) {
+			instancedCullingVisualizationCenterLocalHelper
+				.set(
+					(bounds.min[0] ?? 0) + (bounds.max[0] ?? 0),
+					(bounds.min[1] ?? 0) + (bounds.max[1] ?? 0),
+					(bounds.min[2] ?? 0) + (bounds.max[2] ?? 0),
+				)
+				.multiplyScalar(0.5)
+			instancedCullingVisualizationSizeHelper.set(
+				(bounds.max[0] ?? 0) - (bounds.min[0] ?? 0),
+				(bounds.max[1] ?? 0) - (bounds.min[1] ?? 0),
+				(bounds.max[2] ?? 0) - (bounds.min[2] ?? 0),
+			)
+		} else {
+			const radius = resolveInstancedProxyRadius(object)
+			const size = Math.max(0, radius * 2)
+			instancedCullingVisualizationCenterLocalHelper.set(0, 0, 0)
+			instancedCullingVisualizationSizeHelper.set(size, size, size)
+		}
+
+		instancedCullingVisualizationCenterWorldHelper
+			.copy(instancedCullingVisualizationCenterLocalHelper)
+			.applyMatrix4(object.matrixWorld)
+
+		instancedCullingVisualizationBoxScaleHelper.set(
+			instancedCullingVisualizationSizeHelper.x * instancedCullingVisualizationScaleHelper.x,
+			instancedCullingVisualizationSizeHelper.y * instancedCullingVisualizationScaleHelper.y,
+			instancedCullingVisualizationSizeHelper.z * instancedCullingVisualizationScaleHelper.z,
+		)
+		instancedMatrixHelper.compose(
+			instancedCullingVisualizationCenterWorldHelper,
+			instancedQuaternionHelper,
+			instancedCullingVisualizationBoxScaleHelper,
+		)
+		mesh.setMatrixAt(i, instancedMatrixHelper)
+		mesh.setColorAt(
+			i,
+			visibleIds.has(nodeId) ? instancedCullingVisualizationVisibleColor : instancedCullingVisualizationCulledColor,
+		)
+	}
+	mesh.instanceMatrix.needsUpdate = true
+	if (mesh.instanceColor) {
+		mesh.instanceColor.needsUpdate = true
+	}
+}
+
 function updateInstancedCullingAndLod(): void {
 	if (!camera) {
 		return
@@ -1609,6 +1768,59 @@ function updateInstancedCullingAndLod(): void {
 	camera.updateMatrixWorld(true)
 	instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
 	instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+
+	// Visualization (and counters) are driven by all instanced proxy nodes, even if they don't have an LOD component.
+	// This makes the debug overlay useful in scenes that don't opt into LOD-based culling.
+	if (isInstancedCullingVisualizationVisible.value) {
+		const visualizationIds: string[] = []
+		const visualizationObjects = new Map<string, THREE.Object3D>()
+		nodeObjectMap.forEach((object, nodeId) => {
+			if (!object?.userData?.instancedAssetId) {
+				return
+			}
+			visualizationIds.push(nodeId)
+			visualizationObjects.set(nodeId, object)
+		})
+		visualizationIds.sort()
+		const visualizationVisibleIds = new Set<string>()
+
+		for (let i = 0; i < visualizationIds.length; i += 1) {
+			const nodeId = visualizationIds[i]!
+			const object = visualizationObjects.get(nodeId)
+			if (!object) {
+				continue
+			}
+			object.updateMatrixWorld(true)
+
+			const bounds = object.userData?.instancedBounds as
+				| { min?: [number, number, number]; max?: [number, number, number] }
+				| undefined
+
+			if (bounds?.min && bounds?.max) {
+				instancedCullingBox.min.set(bounds.min[0] ?? 0, bounds.min[1] ?? 0, bounds.min[2] ?? 0)
+				instancedCullingBox.max.set(bounds.max[0] ?? 0, bounds.max[1] ?? 0, bounds.max[2] ?? 0)
+				instancedCullingBox.getCenter(instancedCullingWorldPosition)
+				instancedCullingWorldPosition.applyMatrix4(object.matrixWorld)
+			} else {
+				object.getWorldPosition(instancedCullingWorldPosition)
+			}
+
+			object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+			const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
+			const baseRadius = resolveInstancedProxyRadius(object)
+			const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius
+
+			instancedCullingSphere.center.copy(instancedCullingWorldPosition)
+			instancedCullingSphere.radius = radius
+			if (instancedCullingFrustum.intersectsSphere(instancedCullingSphere)) {
+				visualizationVisibleIds.add(nodeId)
+			}
+		}
+
+		instancedCullingVisualizationTotalCount.value = visualizationIds.length
+		instancedCullingVisualizationVisibleCount.value = visualizationVisibleIds.size
+		updateInstancedCullingVisualization(visualizationIds, visualizationObjects, visualizationVisibleIds)
+	}
 
 	const candidateIds: string[] = []
 	const candidateObjects = new Map<string, THREE.Object3D>()
@@ -4859,6 +5071,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetAssetResolutionCaches()
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
+	disposeInstancedCullingVisualization()
 	if (!rootGroup) {
 		return
 	}
@@ -7409,6 +7622,13 @@ function toggleGroundChunkStreamingDebug(): void {
 	}
 }
 
+function toggleInstancedCullingVisualization(): void {
+	isInstancedCullingVisualizationVisible.value = !isInstancedCullingVisualizationVisible.value
+	if (!isInstancedCullingVisualizationVisible.value) {
+		disposeInstancedCullingVisualization()
+	}
+}
+
 function toggleFullscreen() {
 	if (!containerRef.value) {
 		return
@@ -7539,6 +7759,19 @@ onBeforeUnmount(() => {
 			>
 				{{ groundChunkDebugLabel }}
 			</div>
+		</div>
+		<div
+			v-if="isInstancedCullingVisualizationVisible"
+			class="scene-preview__instanced-culling-label"
+		>
+			<v-chip
+				size="small"
+				color="secondary"
+				variant="tonal"
+				prepend-icon="mdi-eye-outline"
+			>
+				{{ instancedCullingVisualizationLabel }}
+			</v-chip>
 		</div>
 		<div
 			v-if="resourceProgress.active"
@@ -7869,6 +8102,16 @@ onBeforeUnmount(() => {
 				/>
 				<v-btn
 					class="scene-preview__control-button"
+					:icon="isInstancedCullingVisualizationVisible ? 'mdi-eye' : 'mdi-eye-off-outline'"
+					variant="tonal"
+					:color="isInstancedCullingVisualizationVisible ? 'warning' : 'secondary'"
+					size="small"
+					:aria-label="isInstancedCullingVisualizationVisible ? '关闭视锥剔除可视化' : '开启视锥剔除可视化'"
+					:title="isInstancedCullingVisualizationVisible ? '关闭视锥剔除可视化' : '开启视锥剔除可视化'"
+					@click="toggleInstancedCullingVisualization"
+				/>
+				<v-btn
+					class="scene-preview__control-button"
 					:icon="isGroundWireframeVisible ? 'mdi-grid' : 'mdi-grid-off'"
 					variant="tonal"
 					:color="isGroundWireframeVisible ? 'warning' : 'secondary'"
@@ -8086,6 +8329,14 @@ onBeforeUnmount(() => {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
+	z-index: 2200;
+	pointer-events: none;
+}
+
+.scene-preview__instanced-culling-label {
+	position: absolute;
+	top: 16px;
+	right: 16px;
 	z-index: 2200;
 	pointer-events: none;
 }

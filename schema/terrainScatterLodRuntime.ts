@@ -397,10 +397,10 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
 
     const candidateIds: string[] = []
-    runtimeInstances.forEach((runtime, nodeId) => {
-      if (runtime.presetAssetId) {
-        candidateIds.push(nodeId)
-      }
+    runtimeInstances.forEach((_runtime, nodeId) => {
+      // Always include scatter instances in frustum culling, even when no LOD preset is configured.
+      // This keeps large scatter scenes performant by releasing culled instance bindings.
+      candidateIds.push(nodeId)
     })
     candidateIds.sort()
     frustumCuller.setIds(candidateIds)
@@ -426,21 +426,10 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     })
 
     for (const runtime of runtimeInstances.values()) {
-      const presetAssetId = runtime.presetAssetId
-      if (!presetAssetId) {
-        continue
-      }
-
       const isVisible = visibleIds.has(runtime.nodeId)
       if (!isVisible) {
         releaseModelInstance(runtime.nodeId)
         allocatedNodeIds.delete(runtime.nodeId)
-        continue
-      }
-
-      await ensureLodPresetCached(presetAssetId)
-      const preset = lodPresetCache.get(presetAssetId) ?? null
-      if (!preset) {
         continue
       }
 
@@ -450,40 +439,39 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
       }
 
       const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
-      scatterWorldPositionHelper.setFromMatrixPosition(matrix)
-      const distance = scatterWorldPositionHelper.distanceTo(cameraPosition)
-      if (!Number.isFinite(distance)) {
+
+      const presetAssetId = runtime.presetAssetId
+      if (presetAssetId) {
+        await ensureLodPresetCached(presetAssetId)
+        const preset = lodPresetCache.get(presetAssetId) ?? null
+        if (preset) {
+          scatterWorldPositionHelper.setFromMatrixPosition(matrix)
+          const distance = scatterWorldPositionHelper.distanceTo(cameraPosition)
+          if (Number.isFinite(distance)) {
+            const desiredAssetId = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+            if (desiredAssetId && desiredAssetId !== runtime.boundAssetId) {
+              const group = await ensureModelInstanceGroup(desiredAssetId, cache)
+              if (group && group.meshes.length) {
+                ensureInstancedMeshesRegistered(desiredAssetId)
+                releaseModelInstance(runtime.nodeId)
+                const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
+                if (binding) {
+                  runtime.boundAssetId = desiredAssetId
+                  allocatedNodeIds.add(runtime.nodeId)
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
+      if (!binding) {
+        // Ensure cached for re-entry after culling.
+        await ensureModelInstanceGroup(runtime.boundAssetId, cache)
         continue
       }
-
-      const desiredAssetId = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
-      if (!desiredAssetId) {
-        continue
-      }
-
-      if (desiredAssetId !== runtime.boundAssetId) {
-        const group = await ensureModelInstanceGroup(desiredAssetId, cache)
-        if (!group || !group.meshes.length) {
-          continue
-        }
-        ensureInstancedMeshesRegistered(desiredAssetId)
-        releaseModelInstance(runtime.nodeId)
-        const binding = allocateModelInstance(desiredAssetId, runtime.nodeId)
-        if (!binding) {
-          continue
-        }
-        runtime.boundAssetId = desiredAssetId
-        allocatedNodeIds.add(runtime.nodeId)
-      } else {
-        const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
-        if (!binding) {
-          // Ensure cached for re-entry after culling.
-          await ensureModelInstanceGroup(runtime.boundAssetId, cache)
-          continue
-        }
-        allocatedNodeIds.add(runtime.nodeId)
-      }
-
+      allocatedNodeIds.add(runtime.nodeId)
       updateModelInstanceMatrix(runtime.nodeId, matrix)
     }
   }
