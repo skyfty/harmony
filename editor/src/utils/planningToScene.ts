@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
+import type { FloorDynamicMesh, GroundDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -14,7 +14,6 @@ import {
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { createFloorGroup } from '@schema/floorMesh'
-import { createRoadGroup } from '@schema/roadMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
@@ -51,12 +50,18 @@ export type ConvertPlanningToSceneOptions = {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }) => SceneNode | null
+    createRoadNode: (payload: {
+      points: Array<{ x: number; y: number; z: number }>
+      width?: number
+      name?: string
+    }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
     setNodeLocked: (nodeId: string, locked: boolean) => void
+    updateNodeUserData: (nodeId: string, userData: Record<string, unknown> | null) => void
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
   }
   planningData: PlanningSceneData
@@ -273,19 +278,6 @@ function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layer
   return 2
 }
 
-function resolveRoadSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const smoothingRaw = found?.roadSmoothing
-    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
-    if (Number.isFinite(smoothing)) {
-      return Math.min(1, Math.max(0, smoothing))
-    }
-  }
-  return 0.5
-}
-
 function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers
   if (Array.isArray(raw)) {
@@ -338,280 +330,20 @@ function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, l
   return 0.15
 }
 
-function computeRoadCenterFromWorldXZ(points: Array<{ x: number; z: number }>): { x: number; z: number } {
-  let minX = Infinity
-  let maxX = -Infinity
-  let minZ = Infinity
-  let maxZ = -Infinity
-  points.forEach((p) => {
-    minX = Math.min(minX, p.x)
-    maxX = Math.max(maxX, p.x)
-    minZ = Math.min(minZ, p.z)
-    maxZ = Math.max(maxZ, p.z)
-  })
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return { x: 0, z: 0 }
-  }
-  return { x: (minX + maxX) * 0.5, z: (minZ + maxZ) * 0.5 }
-}
-
-function buildRoadDynamicMeshFromPlanningPolylines(options: {
-  polylines: PlanningPolylineAny[]
-  groundWidth: number
-  groundDepth: number
-  widthMeters: number
-  smoothing?: number
-}): { center: { x: number; y: number; z: number }; definition: RoadDynamicMesh } | null {
-  const { polylines, groundWidth, groundDepth, widthMeters, smoothing = 0 } = options
-  if (!Array.isArray(polylines) || polylines.length === 0) {
-    return null
-  }
-
-  const vertexIndexByKey = new Map<string, number>()
-  const worldVertices: Array<{ x: number; z: number }> = []
-  const adjacency = new Map<number, Set<number>>()
-  const originalEdges: Array<{ a: number; b: number }> = []
-  const originalEdgeKeys = new Set<string>()
-
-  const getVertexKey = (point: PlanningPoint) => {
-    const rawId = typeof point.id === 'string' ? point.id.trim() : ''
-    if (rawId) {
-      return `id:${rawId}`
-    }
-    return `xy:${Number(point.x).toFixed(2)},${Number(point.y).toFixed(2)}`
-  }
-
-  const ensureAdjacencyEntry = (index: number) => {
-    if (!adjacency.has(index)) {
-      adjacency.set(index, new Set<number>())
-    }
-  }
-
-  const ensureVertexIndex = (point: PlanningPoint) => {
-    const key = getVertexKey(point)
-    const existing = vertexIndexByKey.get(key)
-    if (existing != null) {
-      return existing
-    }
-    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-    const index = worldVertices.length
-    worldVertices.push({ x: world.x, z: world.z })
-    vertexIndexByKey.set(key, index)
-    ensureAdjacencyEntry(index)
-    return index
-  }
-
-  const recordSegment = (a: number, b: number) => {
-    if (a === b) {
-      return
-    }
-    ensureAdjacencyEntry(a)
-    ensureAdjacencyEntry(b)
-    adjacency.get(a)?.add(b)
-    adjacency.get(b)?.add(a)
-    const lo = Math.min(a, b)
-    const hi = Math.max(a, b)
-    const key = `${lo}-${hi}`
-    if (originalEdgeKeys.has(key)) {
-      return
-    }
-    originalEdgeKeys.add(key)
-    originalEdges.push({ a, b })
-  }
-
-  polylines.forEach((line) => {
-    const pts = Array.isArray(line.points) ? line.points : []
-    if (pts.length < 2) {
-      return
-    }
-    for (let i = 0; i < pts.length - 1; i += 1) {
-      const aPoint = pts[i]!
-      const bPoint = pts[i + 1]!
-      const a = ensureVertexIndex(aPoint)
-      const b = ensureVertexIndex(bPoint)
-      recordSegment(a, b)
-    }
-  })
-
-  if (worldVertices.length < 2 || originalEdges.length === 0) {
-    return null
-  }
-
-  const clampedWidth = Number.isFinite(widthMeters) ? Math.min(10, Math.max(0.2, widthMeters)) : 2
-  const smoothingFactor = Math.min(1, Math.max(0, Number(smoothing ?? 0)))
-  const baseRadius = Math.max(clampedWidth * 0.5, 0.01)
-  const smoothingRadiusCandidate = baseRadius * smoothingFactor
-
-  type NeighborInfo = {
-    neighborIndex: number
-    dir: { x: number; z: number }
-    angle: number
-    length: number
-    trimIndex?: number
-  }
-
-  const trimmedVertexIndexByKey = new Map<string, number>()
-  const vertexSmoothingInfo = new Map<number, { trimRadius: number; neighbors: NeighborInfo[] }>()
-
-  if (smoothingFactor > 0 && smoothingRadiusCandidate > 1e-4) {
-    adjacency.forEach((neighbors, vertexIndex) => {
-      if (!neighbors || neighbors.size < 2) {
-        return
-      }
-      const vertexPos = worldVertices[vertexIndex]
-      if (!vertexPos) {
-        return
-      }
-      const infos: NeighborInfo[] = []
-      neighbors.forEach((neighborIndex) => {
-        const neighborPos = worldVertices[neighborIndex]
-        if (!neighborPos) {
-          return
-        }
-        const dx = neighborPos.x - vertexPos.x
-        const dz = neighborPos.z - vertexPos.z
-        const length = Math.hypot(dx, dz)
-        if (length <= 1e-6) {
-          return
-        }
-        const dir = { x: dx / length, z: dz / length }
-        infos.push({
-          neighborIndex,
-          dir,
-          length,
-          angle: Math.atan2(dir.z, dir.x),
-        })
-      })
-      if (infos.length < 2) {
-        return
-      }
-      const minHalf = Math.min(...infos.map((info) => info.length)) / 2
-      const trimRadius = Math.min(smoothingRadiusCandidate, minHalf)
-      if (trimRadius <= 1e-4) {
-        return
-      }
-      vertexSmoothingInfo.set(vertexIndex, { trimRadius, neighbors: infos })
-    })
-
-    vertexSmoothingInfo.forEach((info, vertexIndex) => {
-      const vertexPos = worldVertices[vertexIndex]
-      if (!vertexPos) {
-        return
-      }
-      info.neighbors.forEach((neighbor) => {
-        const key = `${vertexIndex}-${neighbor.neighborIndex}`
-        if (trimmedVertexIndexByKey.has(key)) {
-          neighbor.trimIndex = trimmedVertexIndexByKey.get(key)
-          return
-        }
-        const x = vertexPos.x + neighbor.dir.x * info.trimRadius
-        const z = vertexPos.z + neighbor.dir.z * info.trimRadius
-        const index = worldVertices.length
-        worldVertices.push({ x, z })
-        trimmedVertexIndexByKey.set(key, index)
-        neighbor.trimIndex = index
-      })
-    })
-  }
-
-  const finalSegments: RoadDynamicMesh['segments'] = []
-  const finalSegmentKeys = new Set<string>()
-  const addFinalSegment = (start: number, end: number) => {
-    if (start === end) {
-      return
-    }
-    const lo = Math.min(start, end)
-    const hi = Math.max(start, end)
-    const key = `${lo}-${hi}`
-    if (finalSegmentKeys.has(key)) {
-      return
-    }
-    finalSegmentKeys.add(key)
-    finalSegments.push({ a: start, b: end, materialId: null })
-  }
-
-  originalEdges.forEach((edge) => {
-    const from = trimmedVertexIndexByKey.get(`${edge.a}-${edge.b}`) ?? edge.a
-    const to = trimmedVertexIndexByKey.get(`${edge.b}-${edge.a}`) ?? edge.b
-    addFinalSegment(from, to)
-  })
-
-  if (smoothingFactor > 0) {
-    vertexSmoothingInfo.forEach((info, vertexIndex) => {
-      const vertexPos = worldVertices[vertexIndex]
-      if (!vertexPos) {
-        return
-      }
-      const neighbors = info.neighbors.filter((neighbor) => typeof neighbor.trimIndex === 'number')
-      if (neighbors.length < 2) {
-        return
-      }
-      const sorted = [...neighbors].sort((a, b) => a.angle - b.angle)
-      for (let i = 0; i < sorted.length; i += 1) {
-        const current = sorted[i]!
-        const next = sorted[(i + 1) % sorted.length]!
-        if (current.trimIndex == null || next.trimIndex == null) {
-          continue
-        }
-        let deltaAngle = next.angle - current.angle
-        if (deltaAngle <= 0) {
-          deltaAngle += Math.PI * 2
-        }
-        if (deltaAngle >= Math.PI) {
-          continue
-        }
-        const arcSteps = Math.max(
-          1,
-          Math.ceil((deltaAngle / (Math.PI / 4)) * (0.5 + smoothingFactor)),
-        )
-        const arcIndices: number[] = []
-        for (let step = 1; step <= arcSteps; step += 1) {
-          const t = step / (arcSteps + 1)
-          const angle = current.angle + t * deltaAngle
-          const x = vertexPos.x + Math.cos(angle) * info.trimRadius
-          const z = vertexPos.z + Math.sin(angle) * info.trimRadius
-          const index = worldVertices.length
-          worldVertices.push({ x, z })
-          arcIndices.push(index)
-        }
-        const chain = [current.trimIndex, ...arcIndices, next.trimIndex]
-        for (let j = 0; j < chain.length - 1; j += 1) {
-          addFinalSegment(chain[j]!, chain[j + 1]!)
-        }
-      }
-    })
-  }
-
-  if (worldVertices.length < 2 || finalSegments.length === 0) {
-    return null
-  }
-
-  const centerXZ = computeRoadCenterFromWorldXZ(worldVertices)
-  const vertices: RoadDynamicMesh['vertices'] = worldVertices.map((v) => [v.x - centerXZ.x, v.z - centerXZ.z])
-
-  const definition: RoadDynamicMesh = {
-    type: 'Road',
-    width: clampedWidth,
-    vertices,
-    segments: finalSegments,
-  }
-
-  return { center: { x: centerXZ.x, y: 0, z: centerXZ.z }, definition }
-}
-
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   const visit = (list: SceneNode[]): SceneNode | null => {
     for (const node of list) {
-      if (node.id === 'ground' || node.dynamicMesh?.type === 'Ground') {
+      if (node?.dynamicMesh?.type === 'Ground') {
         return node
       }
-      if (node.children?.length) {
-        const nested = visit(node.children)
-        if (nested) return nested
+      const child = visit(Array.isArray(node.children) ? node.children : [])
+      if (child) {
+        return child
       }
     }
     return null
   }
+
   return visit(nodes)
 }
 
@@ -1213,37 +945,39 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         updateProgressForUnit(`Converting building: ${poly.name?.trim() || poly.id}`)
       }
     } else if (kind === 'road') {
+      const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+
       for (const line of group.polylines) {
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
-      }
 
-      const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
-      const build = buildRoadDynamicMeshFromPlanningPolylines({
-        polylines: group.polylines,
-        groundWidth,
-        groundDepth,
-        widthMeters,
-        smoothing: resolveRoadSmoothingFromPlanningData(planningData, layerId),
-      })
+        const pts = Array.isArray(line.points) ? line.points : []
+        if (pts.length < 2) {
+          continue
+        }
 
-      if (build) {
-        const roadObject = createRoadGroup(build.definition)
-        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-        const roadNode = sceneStore.addSceneNode({
-          nodeType: 'Mesh',
-          object: roadObject,
-          name: layerName ? `${layerName} Road` : 'Planning Road',
-          position: build.center,
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-          userData: {
-            source: PLANNING_CONVERSION_SOURCE,
-            planningLayerId: layerId,
-            kind: 'road',
-          },
+        const points = pts.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0))
+        const nodeName = line.name?.trim()
+          ? line.name.trim()
+          : (layerName ? `${layerName} Road` : 'Planning Road')
+
+        const roadNode = sceneStore.createRoadNode({
+          points,
+          width: widthMeters,
+          name: nodeName,
         })
+
+        if (!roadNode) {
+          continue
+        }
+
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
-        sceneStore.updateNodeDynamicMesh(roadNode.id, build.definition)
+        sceneStore.updateNodeUserData(roadNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          planningPolylineId: line.id,
+          kind: 'road',
+        })
         sceneStore.setNodeLocked(roadNode.id, true)
       }
     } else if (kind === 'floor') {
