@@ -747,6 +747,23 @@ const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlace
 const suspendPolygonScatterDensityDots = ref(false)
 const suspendedPolygonScatterDensityDotsKey = ref<{ pointerId: number; polygonId: string } | null>(null)
 
+const polygonScatterDensityDotsCache = new Map<string, { key: string; dots: PlanningPoint[] }>()
+
+function hashPlanningPoints(points: PlanningPoint[]): number {
+  // Fast-ish stable hash for point arrays. Quantize to centimeters to avoid churn
+  // from tiny floating differences.
+  let hash = 2166136261
+  for (const p of points) {
+    const x = Math.round(p.x * 100)
+    const y = Math.round(p.y * 100)
+    hash ^= x
+    hash = Math.imul(hash, 16777619)
+    hash ^= y
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
 const SCATTER_CONTROLS_SUSPEND_KEY = '__scatter-controls__'
 let scatterControlsPointerId: number | null = null
 let scatterControlsListenersAttached = false
@@ -812,16 +829,38 @@ onBeforeUnmount(() => {
 
 function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
   const result: Record<string, PlanningPoint[]> = {}
+  const selected = selectedFeature.value
+  let targetPolygonId: string | null = selected && selected.type === 'polygon' ? selected.id : null
+  if (!targetPolygonId) {
+    const state = dragState.value
+    if (state.type === 'move-polygon') {
+      targetPolygonId = state.polygonId
+    } else if (state.type === 'drag-vertex' && state.feature === 'polygon') {
+      targetPolygonId = state.targetId
+    }
+  }
+
+  const visibleIds = new Set<string>()
   for (const poly of visiblePolygons.value) {
+    visibleIds.add(poly.id)
+
+    // Performance: only compute dots for the currently selected / edited polygon.
+    if (targetPolygonId && poly.id !== targetPolygonId) {
+      continue
+    }
+
     if (!poly.scatter) {
+      polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
     const layerKind = getLayerKind(poly.layerId)
     if (layerKind !== 'green') {
+      polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
     const densityPercent = clampDensityPercent(poly.scatter.densityPercent)
     if (densityPercent <= 0) {
+      polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
@@ -834,10 +873,12 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const minDistance = Math.max(minSpacingMeters, Math.sqrt(effectiveFootprintAreaM2))
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
+      polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
     const area = polygonArea(poly.points)
     if (!Number.isFinite(area) || area < 60) {
+      polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
@@ -848,6 +889,17 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
     const targetDots = Math.round((maxByArea * densityPercent) / 100)
     if (targetDots <= 0) {
+      polygonScatterDensityDotsCache.delete(poly.id)
+      continue
+    }
+
+    const pointsHash = hashPlanningPoints(poly.points)
+    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${minSpacingMeters}|${Math.round(footprintAreaM2 * 1000)}`
+    const cached = polygonScatterDensityDotsCache.get(poly.id)
+    if (cached?.key === cacheKey) {
+      if (cached.dots.length) {
+        result[poly.id] = cached.dots
+      }
       continue
     }
 
@@ -865,8 +917,18 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       Math.min(1500, Math.max(1, Math.ceil(cappedTarget * 1.6))),
     )
     const selected = candidates.length > cappedTarget ? takeRandomSubset(candidates, cappedTarget, random) : candidates
+    polygonScatterDensityDotsCache.set(poly.id, { key: cacheKey, dots: selected })
     if (selected.length) {
       result[poly.id] = selected
+    }
+  }
+
+  // Prune cache entries for polygons that are no longer visible.
+  if (polygonScatterDensityDotsCache.size) {
+    for (const key of polygonScatterDensityDotsCache.keys()) {
+      if (!visibleIds.has(key)) {
+        polygonScatterDensityDotsCache.delete(key)
+      }
     }
   }
   return result
