@@ -14,7 +14,6 @@ import {
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
 } from './modelObjectCache'
-import { createInstancedBvhFrustumCuller } from './instancedBvhFrustumCuller'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -58,6 +57,7 @@ const scatterMatrixHelper = new THREE.Matrix4()
 const scatterWorldPositionHelper = new THREE.Vector3()
 const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
+const scatterCullingSphere = new THREE.Sphere()
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
   const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer'
@@ -262,8 +262,6 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
   const visibleNodeIds = new Set<string>()
   const runtimeInstances = new Map<string, ScatterRuntimeInstance>()
 
-  const frustumCuller = createInstancedBvhFrustumCuller()
-
   const lodPresetCache = new Map<string, LodPresetData | null>()
   const pendingLodPresetLoads = new Map<string, Promise<void>>()
 
@@ -280,7 +278,6 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     pendingLodPresetLoads.clear()
     pendingUpdate = null
     lastLodUpdateAt = 0
-    frustumCuller.dispose()
   }
 
   async function ensureLodPresetCached(presetAssetId: string): Promise<void> {
@@ -391,33 +388,32 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     camera.updateMatrixWorld(true)
     scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+    const visibleIds = new Set<string>()
 
-    const candidateIds: string[] = []
-    runtimeInstances.forEach((_runtime, nodeId) => {
-      candidateIds.push(nodeId)
-    })
-    candidateIds.sort()
-    frustumCuller.setIds(candidateIds)
-
-    return frustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
-      const runtime = runtimeInstances.get(nodeId)
-      if (!runtime) {
-        return null
-      }
+    runtimeInstances.forEach((runtime, nodeId) => {
       const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
       if (!groundMesh) {
-        return null
+        return
       }
+
       const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
-      centerTarget.setFromMatrixPosition(matrix)
+      scatterWorldPositionHelper.setFromMatrixPosition(matrix)
 
       const boundAssetId = runtime.boundAssetId
       const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
       const scale = runtime.instance.localScale
       const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
       const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
-      return { radius }
+
+      scatterCullingSphere.center.copy(scatterWorldPositionHelper)
+      scatterCullingSphere.radius = radius
+
+      if (scatterCullingFrustum.intersectsSphere(scatterCullingSphere)) {
+        visibleIds.add(nodeId)
+      }
     })
+
+    return visibleIds
   }
 
   function applyCullingAndUpdateVisibleMatrices(
