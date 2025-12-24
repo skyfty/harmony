@@ -10,6 +10,7 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
+import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -62,6 +63,15 @@ interface PlanningPoint {
   id?: string
   x: number
   y: number
+}
+
+type RectCornerKey = 'minXminY' | 'maxXminY' | 'maxXmaxY' | 'minXmaxY'
+
+type RectResizeConstraint = {
+  fixed: { x: number; y: number }
+  signX: 1 | -1
+  signY: 1 | -1
+  cornerKeyByIndex: Record<number, RectCornerKey>
 }
 
 interface PlanningScatterAssignment {
@@ -152,6 +162,7 @@ type DragState =
     feature: 'polygon' | 'polyline'
     targetId: string
     vertexIndex: number
+    rectConstraint?: RectResizeConstraint
   }
   | { type: 'move-align-marker'; pointerId: number; imageId: string }
 
@@ -387,6 +398,243 @@ function polygonArea(points: PlanningPoint[]) {
   return Math.abs(areaTimes2) * 0.5
 }
 
+function rectCornerKeyForPoint(p: PlanningPoint, bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
+  const eps = 1e-6
+  const near = (a: number, b: number) => Math.abs(a - b) <= eps
+  const isMinX = near(p.x, bounds.minX)
+  const isMaxX = near(p.x, bounds.maxX)
+  const isMinY = near(p.y, bounds.minY)
+  const isMaxY = near(p.y, bounds.maxY)
+  if (isMinX && isMinY) return 'minXminY' as const
+  if (isMaxX && isMinY) return 'maxXminY' as const
+  if (isMaxX && isMaxY) return 'maxXmaxY' as const
+  if (isMinX && isMaxY) return 'minXmaxY' as const
+  return null
+}
+
+function buildRectCornerKeyByIndex(points: PlanningPoint[]): Record<number, RectCornerKey> | null {
+  if (!Array.isArray(points) || points.length !== 4) return null
+  const bounds = getPointsBounds(points)
+  if (!bounds) return null
+  if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 1e-9 || bounds.height <= 1e-9) return null
+
+  const used = new Set<RectCornerKey>()
+  const map: Record<number, RectCornerKey> = {} as any
+  for (let i = 0; i < 4; i += 1) {
+    const p = points[i]
+    if (!p) return null
+    const key = rectCornerKeyForPoint(p, bounds)
+    if (!key) return null
+    if (used.has(key)) return null
+    used.add(key)
+    map[i] = key
+  }
+  if (used.size !== 4) return null
+  return map
+}
+
+function oppositeRectCornerKey(key: RectCornerKey): RectCornerKey {
+  switch (key) {
+    case 'minXminY':
+      return 'maxXmaxY'
+    case 'maxXmaxY':
+      return 'minXminY'
+    case 'maxXminY':
+      return 'minXmaxY'
+    case 'minXmaxY':
+      return 'maxXminY'
+    default:
+      return 'maxXmaxY'
+  }
+}
+
+function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desired: PlanningPoint) {
+  const fx = constraint.fixed.x
+  const fy = constraint.fixed.y
+
+  let widthAbs = Math.abs(desired.x - fx)
+  let heightAbs = Math.abs(desired.y - fy)
+  const eps = 1e-9
+  if (widthAbs < eps && heightAbs < eps) {
+    widthAbs = eps
+    heightAbs = eps
+  }
+
+  // Keep a minimum size so the rectangle doesn't collapse.
+  const minSide = 0.2
+  widthAbs = Math.max(widthAbs, minSide)
+  heightAbs = Math.max(heightAbs, minSide)
+
+  const nx = fx + constraint.signX * widthAbs
+  const ny = fy + constraint.signY * heightAbs
+
+  const minX = Math.min(fx, nx)
+  const maxX = Math.max(fx, nx)
+  const minY = Math.min(fy, ny)
+  const maxY = Math.max(fy, ny)
+
+  const pointForKey = (key: RectCornerKey): PlanningPoint => {
+    switch (key) {
+      case 'minXminY':
+        return { x: minX, y: minY }
+      case 'maxXminY':
+        return { x: maxX, y: minY }
+      case 'maxXmaxY':
+        return { x: maxX, y: maxY }
+      case 'minXmaxY':
+        return { x: minX, y: maxY }
+      default:
+        return { x: minX, y: minY }
+    }
+  }
+
+  return {
+    nextByIndex: (index: number) => pointForKey(constraint.cornerKeyByIndex[index]!),
+  }
+}
+
+const POISSON_CANDIDATES_PER_ACTIVE = 24
+
+function computeBoundingBox(points: PlanningPoint[]) {
+  if (!Array.isArray(points) || points.length === 0) return null
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY }
+}
+
+function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): PlanningPoint | null {
+  const uniform = sampleUniformPointInPolygon(polygon, random)
+  if (uniform) return uniform
+
+  // Fallback: rejection sampling within bounding box.
+  const bbox = computeBoundingBox(polygon)
+  if (!bbox) return null
+  if (!Number.isFinite(bbox.width) || !Number.isFinite(bbox.height) || bbox.width <= 0 || bbox.height <= 0) return null
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const p = { x: bbox.minX + bbox.width * random(), y: bbox.minY + bbox.height * random() }
+    if (isPointInPolygon(p, polygon)) return p
+  }
+  return null
+}
+
+function poissonSampleInPolygon(
+  polygon: PlanningPoint[],
+  minDistance: number,
+  random: () => number,
+  maxPoints: number,
+): PlanningPoint[] {
+  if (!Array.isArray(polygon) || polygon.length < 3) return []
+  if (!Number.isFinite(minDistance) || minDistance <= 0) return []
+  if (!Number.isFinite(maxPoints) || maxPoints <= 0) return []
+
+  const bbox = computeBoundingBox(polygon)
+  if (!bbox || bbox.width <= 0 || bbox.height <= 0) return []
+
+  const cellSize = minDistance / Math.SQRT2
+  const gridWidth = Math.max(1, Math.ceil(bbox.width / cellSize))
+  const gridHeight = Math.max(1, Math.ceil(bbox.height / cellSize))
+  const grid = new Int32Array(gridWidth * gridHeight)
+  grid.fill(-1)
+
+  const points: PlanningPoint[] = []
+  const active: number[] = []
+
+  const toGridX = (x: number) => Math.floor((x - bbox.minX) / cellSize)
+  const toGridY = (y: number) => Math.floor((y - bbox.minY) / cellSize)
+  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx
+
+  const insertPoint = (p: PlanningPoint) => {
+    points.push(p)
+    const index = points.length - 1
+    active.push(index)
+    const gx = Math.min(gridWidth - 1, Math.max(0, toGridX(p.x)))
+    const gy = Math.min(gridHeight - 1, Math.max(0, toGridY(p.y)))
+    grid[gridIndex(gx, gy)] = index
+  }
+
+  const hasNeighborWithin = (p: PlanningPoint): boolean => {
+    const gx = toGridX(p.x)
+    const gy = toGridY(p.y)
+    const radius = 2
+    const minSq = minDistance * minDistance
+    for (let y = Math.max(0, gy - radius); y <= Math.min(gridHeight - 1, gy + radius); y += 1) {
+      for (let x = Math.max(0, gx - radius); x <= Math.min(gridWidth - 1, gx + radius); x += 1) {
+        const storedIndex = grid[gridIndex(x, y)]
+        if (storedIndex == null || storedIndex === -1) continue
+        const other = points[storedIndex]
+        if (!other) continue
+        const dx = other.x - p.x
+        const dy = other.y - p.y
+        if (dx * dx + dy * dy < minSq) return true
+      }
+    }
+    return false
+  }
+
+  const start = samplePointInPolygon(polygon, random)
+  if (!start) return []
+  insertPoint(start)
+
+  while (active.length && points.length < maxPoints) {
+    const activeIndex = Math.floor(random() * active.length)
+    const baseIndex = active[activeIndex]!
+    const base = points[baseIndex]!
+
+    let found = false
+    for (let attempt = 0; attempt < POISSON_CANDIDATES_PER_ACTIVE; attempt += 1) {
+      const angle = random() * Math.PI * 2
+      const radius = minDistance * (1 + random())
+      const candidate: PlanningPoint = {
+        x: base.x + Math.cos(angle) * radius,
+        y: base.y + Math.sin(angle) * radius,
+      }
+      if (candidate.x < bbox.minX || candidate.x > bbox.maxX || candidate.y < bbox.minY || candidate.y > bbox.maxY) {
+        continue
+      }
+      if (!isPointInPolygon(candidate, polygon)) {
+        continue
+      }
+      if (hasNeighborWithin(candidate)) {
+        continue
+      }
+      insertPoint(candidate)
+      found = true
+      break
+    }
+
+    if (!found) {
+      active[activeIndex] = active[active.length - 1]!
+      active.pop()
+    }
+  }
+
+  return points
+}
+
+function takeRandomSubset<T>(items: T[], count: number, random: () => number): T[] {
+  if (count <= 0) return []
+  if (items.length <= count) return items.slice()
+  const arr = items.slice()
+  for (let i = 0; i < count; i += 1) {
+    const j = i + Math.floor(random() * (arr.length - i))
+    const tmp = arr[i]
+    arr[i] = arr[j]!
+    arr[j] = tmp!
+  }
+  arr.length = count
+  return arr
+}
+
 function polylineLength(points: PlanningPoint[]) {
   if (points.length < 2) return 0
   let total = 0
@@ -515,7 +763,6 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
     const effectiveFootprintAreaM2 = footprintAreaM2 * avgScale * avgScale
 
     const minDistance = Math.max(minSpacingMeters, Math.sqrt(effectiveFootprintAreaM2))
-    const minDistSq = minDistance > 0 ? minDistance * minDistance : 0
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       continue
@@ -538,51 +785,19 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
     // Preview should stay responsive.
     const cappedTarget = Math.min(800, targetDots)
     const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${minSpacingMeters}:${Math.round(footprintAreaM2 * 1000)}`))
-    const dots: PlanningPoint[] = []
 
-    const gridCellSize = minDistance > 0 ? minDistance : 1
-    const grid = new Map<string, PlanningPoint[]>()
-    const gridKey = (x: number, y: number) => `${x},${y}`
-    const tryInsert = (candidate: PlanningPoint) => {
-      if (!minDistSq) {
-        dots.push(candidate)
-        return true
-      }
-      const cx = Math.floor(candidate.x / gridCellSize)
-      const cy = Math.floor(candidate.y / gridCellSize)
-      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
-        for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
-          const bucket = grid.get(gridKey(gx, gy))
-          if (!bucket) continue
-          for (const p of bucket) {
-            const dx = p.x - candidate.x
-            const dy = p.y - candidate.y
-            if (dx * dx + dy * dy < minDistSq) {
-              return false
-            }
-          }
-        }
-      }
-      dots.push(candidate)
-      const key = gridKey(cx, cy)
-      const bucket = grid.get(key)
-      if (bucket) bucket.push(candidate)
-      else grid.set(key, [candidate])
-      return true
-    }
-
-    const maxAttempts = Math.min(60000, cappedTarget * 140)
-    for (let attempt = 0; attempt < maxAttempts && dots.length < cappedTarget; attempt += 1) {
-      const candidate = {
-        x: bounds.minX + bounds.width * random(),
-        y: bounds.minY + bounds.height * random(),
-      }
-      if (isPointInPolygon(candidate, poly.points)) {
-        tryInsert(candidate)
-      }
-    }
-    if (dots.length) {
-      result[poly.id] = dots
+    // Use Poisson disk sampling for a more even distribution, while ensuring
+    // dots always stay inside the planned polygon region.
+    const minDistanceForDots = Math.max(minDistance, 0.05)
+    const candidates = poissonSampleInPolygon(
+      poly.points,
+      minDistanceForDots,
+      random,
+      Math.min(1500, Math.max(1, Math.ceil(cappedTarget * 1.6))),
+    )
+    const selected = candidates.length > cappedTarget ? takeRandomSubset(candidates, cappedTarget, random) : candidates
+    if (selected.length) {
+      result[poly.id] = selected
     }
   }
   return result
@@ -3076,10 +3291,21 @@ function handlePointerMove(event: PointerEvent) {
     const world = screenToWorld(event)
     if (state.feature === 'polygon') {
       const polygon = polygons.value.find((item) => item.id === state.targetId)
-      const target = polygon?.points[state.vertexIndex]
-      if (target) {
-        target.x = world.x
-        target.y = world.y
+      if (polygon && state.rectConstraint && polygon.points.length === 4) {
+        const computed = computeRectResizeFromConstraint(state.rectConstraint, world)
+        for (let i = 0; i < 4; i += 1) {
+          const p = polygon.points[i]
+          if (!p) continue
+          const next = computed.nextByIndex(i)
+          p.x = next.x
+          p.y = next.y
+        }
+      } else {
+        const target = polygon?.points[state.vertexIndex]
+        if (target) {
+          target.x = world.x
+          target.y = world.y
+        }
       }
     } else {
       const line = polylines.value.find((item) => item.id === state.targetId)
@@ -3319,12 +3545,36 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   if (effectiveTool !== 'select') {
     return
   }
+
+  let rectConstraint: RectResizeConstraint | undefined
+  const cornerKeyByIndex = buildRectCornerKeyByIndex(polygon.points)
+  if (cornerKeyByIndex) {
+    const draggedKey = cornerKeyByIndex[vertexIndex]
+    if (draggedKey) {
+      const fixedKey = oppositeRectCornerKey(draggedKey)
+      const fixedIndex = Number(Object.keys(cornerKeyByIndex).find((k) => cornerKeyByIndex[Number(k)] === fixedKey))
+      const fixedPoint = Number.isFinite(fixedIndex) ? polygon.points[fixedIndex] : null
+      const draggedPoint = polygon.points[vertexIndex]
+      if (fixedPoint && draggedPoint) {
+        const signX = (draggedPoint.x - fixedPoint.x) >= 0 ? 1 : -1
+        const signY = (draggedPoint.y - fixedPoint.y) >= 0 ? 1 : -1
+        rectConstraint = {
+          fixed: { x: fixedPoint.x, y: fixedPoint.y },
+          signX,
+          signY,
+          cornerKeyByIndex,
+        }
+      }
+    }
+  }
+
   dragState.value = {
     type: 'drag-vertex',
     pointerId: event.pointerId,
     feature: 'polygon',
     targetId: polygonId,
     vertexIndex,
+    rectConstraint,
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }

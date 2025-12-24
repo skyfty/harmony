@@ -26,6 +26,7 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
   let bvh: MeshBVH | null = null
 
   const centerScratch = new THREE.Vector3()
+  const boundsBox = new THREE.Box3()
 
   function rebuild(): void {
     const triangleCount = ids.length
@@ -37,7 +38,27 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
   }
 
   function setIds(nextIds: string[]): void {
-    ids = Array.isArray(nextIds) ? nextIds.filter((id) => typeof id === 'string' && id.trim().length) : []
+    const normalized = Array.isArray(nextIds)
+      ? nextIds
+          .filter((id) => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0)
+      : []
+
+    if (normalized.length === ids.length) {
+      let same = true
+      for (let i = 0; i < normalized.length; i += 1) {
+        if (normalized[i] !== ids[i]) {
+          same = false
+          break
+        }
+      }
+      if (same) {
+        return
+      }
+    }
+
+    ids = normalized
     rebuild()
   }
 
@@ -53,7 +74,6 @@ export function createInstancedBvhFrustumCuller(): InstancedBvhFrustumCuller {
     const attr = geometry.getAttribute('position') as THREE.BufferAttribute
     const array = attr.array as Float32Array
 
-    const boundsBox = new THREE.Box3()
     boundsBox.makeEmpty()
 
     for (let i = 0; i < ids.length; i += 1) {
