@@ -676,6 +676,7 @@ let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
 let followCameraControlActive = false
 let followCameraControlDirty = false
+let rendererInitialized = false
 const MAP_CONTROL_DEFAULTS = {
 	minDistance: 1,
 	maxDistance: 200,
@@ -4882,6 +4883,10 @@ function updateMemoryStats(): void {
 }
 
 function initRenderer() {
+	if (rendererInitialized) {
+		console.warn('[ScenePreview] Renderer already initialized; skipping initRenderer()')
+		return
+	}
 	const host = containerRef.value
 	if (!host) {
 		return
@@ -4936,6 +4941,7 @@ function initRenderer() {
 	window.addEventListener('keyup', handleKeyUp)
 
 	startAnimationLoop()
+	rendererInitialized = true
 }
 
 function initControls() {
@@ -5040,6 +5046,9 @@ function handleKeyUp(event: KeyboardEvent) {
 }
 
 function startAnimationLoop() {
+	if (animationFrameHandle) {
+		return
+	}
 	const currentRenderer = renderer
 	const currentScene = scene
 	const activeCamera = camera
@@ -7773,6 +7782,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	rendererInitialized = false
 	if (steeringWheelState.dragging) {
 		releaseSteeringWheelPointer()
 	}
