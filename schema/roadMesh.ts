@@ -6,6 +6,10 @@ export type RoadRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
 }
 
+export type RoadJunctionSmoothingOptions = {
+  junctionSmoothing?: number
+}
+
 const DEFAULT_COLOR = 0x4b4f55
 
 // Lift the road surface slightly above the ground plane to avoid z-fighting.
@@ -43,6 +47,77 @@ function createSegmentMaterial(): THREE.MeshStandardMaterial {
 type RoadVertexJunctionInfo = {
   neighbors: Set<number>
   materialIds: Set<string>
+}
+
+function clampJunctionSmoothing(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return 0
+  }
+  return Math.min(1, Math.max(0, num))
+}
+
+function buildRoundedPolygonShape(points: THREE.Vector3[], cornerRadius: number): THREE.Shape | null {
+  if (!Array.isArray(points) || points.length < 3) {
+    return null
+  }
+
+  const pts = points.map((p) => new THREE.Vector2(Number(p.x), Number(p.z)))
+  const n = pts.length
+  if (n < 3) {
+    return null
+  }
+
+  const radius = Number.isFinite(cornerRadius) ? Math.max(0, cornerRadius) : 0
+
+  if (radius <= 1e-6) {
+    const shape = new THREE.Shape()
+    shape.moveTo(pts[0]!.x, pts[0]!.y)
+    for (let i = 1; i < n; i += 1) {
+      shape.lineTo(pts[i]!.x, pts[i]!.y)
+    }
+    shape.closePath()
+    return shape
+  }
+
+  type Corner = { corner: THREE.Vector2; inPt: THREE.Vector2; outPt: THREE.Vector2 }
+  const corners: Corner[] = []
+  const tmpA = new THREE.Vector2()
+  const tmpB = new THREE.Vector2()
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = pts[(i - 1 + n) % n]!
+    const curr = pts[i]!
+    const next = pts[(i + 1) % n]!
+
+    tmpA.copy(prev).sub(curr)
+    tmpB.copy(next).sub(curr)
+    const lenA = tmpA.length()
+    const lenB = tmpB.length()
+    if (lenA <= 1e-6 || lenB <= 1e-6) {
+      corners.push({ corner: curr, inPt: curr, outPt: curr })
+      continue
+    }
+
+    tmpA.multiplyScalar(1 / lenA)
+    tmpB.multiplyScalar(1 / lenB)
+    const d = Math.min(radius, lenA * 0.45, lenB * 0.45)
+    const inPt = curr.clone().add(tmpA.clone().multiplyScalar(d))
+    const outPt = curr.clone().add(tmpB.clone().multiplyScalar(d))
+    corners.push({ corner: curr, inPt, outPt })
+  }
+
+  const shape = new THREE.Shape()
+  shape.moveTo(corners[0]!.outPt.x, corners[0]!.outPt.y)
+
+  for (let i = 1; i <= n; i += 1) {
+    const corner = corners[i % n]!
+    shape.lineTo(corner.inPt.x, corner.inPt.y)
+    shape.quadraticCurveTo(corner.corner.x, corner.corner.y, corner.outPt.x, corner.outPt.y)
+  }
+
+  shape.closePath()
+  return shape
 }
 
 function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadVertexJunctionInfo> {
@@ -84,7 +159,11 @@ function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadV
   return junctions
 }
 
-function buildRoadTransitionMeshes(definition: RoadDynamicMesh, materialTemplate: THREE.MeshStandardMaterial): THREE.Mesh[] {
+function buildRoadTransitionMeshes(
+  definition: RoadDynamicMesh,
+  materialTemplate: THREE.MeshStandardMaterial,
+  options: RoadJunctionSmoothingOptions = {},
+): THREE.Mesh[] {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
   const junctions = collectRoadJunctionInfo(definition)
   if (!junctions.size) {
@@ -93,6 +172,8 @@ function buildRoadTransitionMeshes(definition: RoadDynamicMesh, materialTemplate
 
   const width = Number.isFinite(definition.width) ? Math.max(1e-3, definition.width) : 2
   const halfWidth = width * 0.5
+  const junctionSmoothing = clampJunctionSmoothing(options.junctionSmoothing)
+  const cornerRadius = halfWidth * junctionSmoothing
 
   const meshes: THREE.Mesh[] = []
 
@@ -148,12 +229,10 @@ function buildRoadTransitionMeshes(definition: RoadDynamicMesh, materialTemplate
       return
     }
 
-    const shape = new THREE.Shape()
-    shape.moveTo(cleaned[0]!.x, cleaned[0]!.z)
-    for (let i = 1; i < cleaned.length; i += 1) {
-      shape.lineTo(cleaned[i]!.x, cleaned[i]!.z)
+    const shape = buildRoundedPolygonShape(cleaned, cornerRadius)
+    if (!shape) {
+      return
     }
-    shape.closePath()
 
     const geometry = new THREE.ShapeGeometry(shape)
     geometry.rotateX(Math.PI / 2)
@@ -171,8 +250,13 @@ function buildRoadTransitionMeshes(definition: RoadDynamicMesh, materialTemplate
   return meshes
 }
 
-function addRoadTransitionMeshes(group: THREE.Group, definition: RoadDynamicMesh, materialTemplate: THREE.MeshStandardMaterial) {
-  const meshes = buildRoadTransitionMeshes(definition, materialTemplate)
+function addRoadTransitionMeshes(
+  group: THREE.Group,
+  definition: RoadDynamicMesh,
+  materialTemplate: THREE.MeshStandardMaterial,
+  options: RoadJunctionSmoothingOptions = {},
+) {
+  const meshes = buildRoadTransitionMeshes(definition, materialTemplate, options)
   meshes.forEach((mesh) => group.add(mesh))
 }
 
@@ -214,7 +298,7 @@ function forEachRoadSegment(
   })
 }
 
-function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
+function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
   disposeObject3D(group)
   group.clear()
 
@@ -251,7 +335,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
   })
 
   // Fill junction gaps between connected segments.
-  addRoadTransitionMeshes(group, definition, material)
+  addRoadTransitionMeshes(group, definition, material, options)
 }
 
 function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
@@ -348,7 +432,11 @@ function computeRoadBodyInstanceMatrices(definition: RoadDynamicMesh, templateOb
   return matrices
 }
 
-export function createRoadRenderGroup(definition: RoadDynamicMesh, assets: RoadRenderAssetObjects = {}): THREE.Group {
+export function createRoadRenderGroup(
+  definition: RoadDynamicMesh,
+  assets: RoadRenderAssetObjects = {},
+  options: RoadJunctionSmoothingOptions = {},
+): THREE.Group {
   const group = new THREE.Group()
   group.name = 'RoadGroup'
   group.userData.dynamicMeshType = 'Road'
@@ -366,31 +454,35 @@ export function createRoadRenderGroup(definition: RoadDynamicMesh, assets: RoadR
   }
 
   if (!hasInstances) {
-    rebuildRoadGroup(content, definition)
+    rebuildRoadGroup(content, definition, options)
   } else {
     // Even when using asset instances, add transition meshes so gaps at junctions are filled.
-    addRoadTransitionMeshes(content, definition, createSegmentMaterial())
+    addRoadTransitionMeshes(content, definition, createSegmentMaterial(), options)
   }
 
   return group
 }
 
-export function createRoadGroup(definition: RoadDynamicMesh): THREE.Group {
+export function createRoadGroup(definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}): THREE.Group {
   const group = new THREE.Group()
   group.name = 'RoadGroup'
   group.userData.dynamicMeshType = 'Road'
   const content = ensureRoadContentGroup(group)
-  rebuildRoadGroup(content, definition)
+  rebuildRoadGroup(content, definition, options)
   return group
 }
 
-export function updateRoadGroup(object: THREE.Object3D, definition: RoadDynamicMesh): boolean {
+export function updateRoadGroup(
+  object: THREE.Object3D,
+  definition: RoadDynamicMesh,
+  options: RoadJunctionSmoothingOptions = {},
+): boolean {
   const group = object as THREE.Group
   if (!group || !group.isGroup) {
     return false
   }
 
   const content = ensureRoadContentGroup(group)
-  rebuildRoadGroup(content, definition)
+  rebuildRoadGroup(content, definition, options)
   return true
 }

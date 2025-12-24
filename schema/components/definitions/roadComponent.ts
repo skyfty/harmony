@@ -6,6 +6,7 @@ import type { RoadDynamicMesh, RoadSegment, SceneNodeComponentState, SceneNode }
 export const ROAD_COMPONENT_TYPE = 'road'
 export const ROAD_DEFAULT_WIDTH = 2
 export const ROAD_MIN_WIDTH = 0.2
+export const ROAD_DEFAULT_JUNCTION_SMOOTHING = 0
 
 export type RoadPoint2D = [number, number]
 
@@ -13,6 +14,7 @@ export interface RoadComponentProps {
   vertices: RoadPoint2D[]
   segments: RoadSegment[]
   width: number
+  junctionSmoothing: number
   bodyAssetId?: string | null
 }
 
@@ -30,6 +32,10 @@ function normalizePoint(value: unknown): RoadPoint2D | null {
 
 export function clampRoadProps(props: Partial<RoadComponentProps> | null | undefined): RoadComponentProps {
   const width = Number.isFinite(props?.width) ? Math.max(ROAD_MIN_WIDTH, props!.width!) : ROAD_DEFAULT_WIDTH
+
+  const smoothingRaw = (props as RoadComponentProps | undefined)?.junctionSmoothing
+  const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+  const junctionSmoothing = Number.isFinite(smoothing) ? Math.min(1, Math.max(0, smoothing)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
 
   const verticesRaw = Array.isArray((props as RoadComponentProps | undefined)?.vertices)
     ? (props as RoadComponentProps).vertices
@@ -67,6 +73,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     vertices,
     segments,
     width,
+    junctionSmoothing,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
   }
 }
@@ -77,6 +84,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       vertices: [],
       segments: [],
       width: ROAD_DEFAULT_WIDTH,
+      junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
     }
   }
@@ -91,6 +99,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     vertices: vertices as any,
     segments: segments as any,
     width: mesh.width,
+    junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
   })
 }
 
@@ -99,6 +108,7 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     vertices: props.vertices.map((p) => [p[0], p[1]]),
     segments: props.segments.map((s) => ({ a: s.a, b: s.b, materialId: s.materialId ?? null })),
     width: props.width,
+    junctionSmoothing: props.junctionSmoothing,
     bodyAssetId: props.bodyAssetId ?? null,
   }
 }
@@ -152,6 +162,7 @@ export function createRoadComponentState(
     vertices: overrides?.vertices ?? defaults.vertices,
     segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
+    junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
   })
   return {

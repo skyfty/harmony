@@ -116,6 +116,8 @@ import {
   WALL_MIN_WIDTH,
   WALL_MIN_THICKNESS,
   ROAD_DEFAULT_WIDTH,
+  ROAD_DEFAULT_JUNCTION_SMOOTHING,
+  ROAD_COMPONENT_TYPE,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -138,6 +140,7 @@ import type {
   GuideboardComponentProps,
   WarpGateComponentProps,
   WallComponentProps,
+  RoadComponentProps,
   WarpGateEffectInstance,
   GuideboardEffectInstance,
   LodComponentProps,
@@ -501,13 +504,24 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
   return hashString(serialized)
 }
 
-function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh): string {
+function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh, junctionSmoothing: number | null): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
     Array.isArray(definition.segments) ? definition.segments : [],
     Number.isFinite(definition.width) ? definition.width : null,
+    Number.isFinite(junctionSmoothing) ? junctionSmoothing : null,
   ])
   return hashString(serialized)
+}
+
+function resolveRoadJunctionSmoothing(node: SceneNode): number {
+  const component = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  const raw = component?.props?.junctionSmoothing
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(value)) {
+    return ROAD_DEFAULT_JUNCTION_SMOOTHING
+  }
+  return Math.min(1, Math.max(0, value))
 }
 
 function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
@@ -7238,18 +7252,19 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
   } else if (node.dynamicMesh?.type === 'Road') {
     const roadDefinition = node.dynamicMesh as RoadDynamicMesh
+    const junctionSmoothing = resolveRoadJunctionSmoothing(node)
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
-      roadGroup = createRoadGroup(roadDefinition)
+      roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing })
       roadGroup.userData.nodeId = node.id
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition)
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
       object.add(roadGroup)
       userData.roadGroup = roadGroup
     } else {
       const groupData = roadGroup.userData ?? (roadGroup.userData = {})
-      const nextSignature = computeRoadDynamicMeshSignature(roadDefinition)
+      const nextSignature = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateRoadGroup(roadGroup, roadDefinition)
+        updateRoadGroup(roadGroup, roadDefinition, { junctionSmoothing })
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
       }
     }
@@ -7909,10 +7924,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else if (node.dynamicMesh?.type === 'Road') {
       containerData.dynamicMeshType = 'Road'
       const roadDefinition = node.dynamicMesh as RoadDynamicMesh
-      const roadGroup = createRoadGroup(roadDefinition)
+      const junctionSmoothing = resolveRoadJunctionSmoothing(node)
+      const roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing })
       roadGroup.removeFromParent()
       roadGroup.userData.nodeId = node.id
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition)
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
     } else if (node.dynamicMesh?.type === 'Floor') {

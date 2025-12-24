@@ -19,7 +19,7 @@ import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
 import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
-import { WATER_COMPONENT_TYPE, FLOOR_COMPONENT_TYPE } from '@schema/components'
+import { FLOOR_COMPONENT_TYPE, ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING, WATER_COMPONENT_TYPE } from '@schema/components'
 
 export type PlanningConversionProgress = {
   step: string
@@ -276,6 +276,19 @@ function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layer
     }
   }
   return 2
+}
+
+function resolveRoadJunctionSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const smoothingRaw = found?.roadSmoothing
+    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+    if (Number.isFinite(smoothing)) {
+      return Math.min(1, Math.max(0, smoothing))
+    }
+  }
+  return ROAD_DEFAULT_JUNCTION_SMOOTHING
 }
 
 function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
@@ -946,6 +959,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
     } else if (kind === 'road') {
       const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
+      const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
       for (const line of group.polylines) {
@@ -972,6 +986,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
+
+        // Apply road-layer smoothing to the road component so the viewport can build
+        // smoothed junction transition meshes (no dynamic mesh recompute here).
+        const roadComponent = roadNode.components?.[ROAD_COMPONENT_TYPE] as { id: string } | undefined
+        if (roadComponent?.id) {
+          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing })
+        }
+
         sceneStore.updateNodeUserData(roadNode.id, {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,

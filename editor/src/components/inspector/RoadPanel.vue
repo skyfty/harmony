@@ -3,6 +3,9 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { RoadDynamicMesh } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@harmony/schema'
+import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING } from '@schema/components'
+import type { RoadComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, selectedRoadSegment } = storeToRefs(sceneStore)
@@ -13,6 +16,14 @@ const roadDynamicMesh = computed(() => {
     return null
   }
   return mesh as RoadDynamicMesh
+})
+
+const roadComponent = computed(() => {
+  const component = selectedNode.value?.components?.[ROAD_COMPONENT_TYPE]
+  if (!component) {
+    return null
+  }
+  return component as SceneNodeComponentState<RoadComponentProps>
 })
 
 const selectedSegmentIndex = computed(() => {
@@ -36,6 +47,7 @@ const availableNodeMaterials = computed(() => {
 
 const localMaterialId = ref<string | null>(null)
 const localWidth = ref<number>(2)
+const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
 const isSyncingFromScene = ref(false)
 
 watch(
@@ -61,6 +73,7 @@ watch(
       })
       return
     }
+
     localMaterialId.value = mesh.segments[segmentIndex]?.materialId ?? null
     nextTick(() => {
       isSyncingFromScene.value = false
@@ -68,6 +81,54 @@ watch(
   },
   { immediate: true, deep: false },
 )
+
+watch(
+  roadComponent,
+  (component) => {
+    isSyncingFromScene.value = true
+    if (!component) {
+      localJunctionSmoothing.value = ROAD_DEFAULT_JUNCTION_SMOOTHING
+      nextTick(() => {
+        isSyncingFromScene.value = false
+      })
+      return
+    }
+
+    const raw = component.props?.junctionSmoothing
+    const value = typeof raw === 'number' ? raw : Number(raw)
+    localJunctionSmoothing.value = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
+
+    nextTick(() => {
+      isSyncingFromScene.value = false
+    })
+  },
+  { immediate: true },
+)
+
+const junctionSmoothingDisplay = computed(() => `${Math.round(localJunctionSmoothing.value * 100)}%`)
+
+function applyJunctionSmoothingUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.min(1, Math.max(0, value))
+  const current = typeof component.props?.junctionSmoothing === 'number'
+    ? component.props.junctionSmoothing
+    : ROAD_DEFAULT_JUNCTION_SMOOTHING
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { junctionSmoothing: clamped })
+}
 
 function applyWidthUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
@@ -132,6 +193,21 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="road-field-grid">
+        <div class="road-field-labels">
+          <span>Junction Smoothness</span>
+          <span>{{ junctionSmoothingDisplay }}</span>
+        </div>
+        <v-slider
+          :model-value="localJunctionSmoothing"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          density="compact"
+          track-color="rgba(77, 208, 225, 0.4)"
+          color="primary"
+          @update:modelValue="(value) => { localJunctionSmoothing = Number(value); applyJunctionSmoothingUpdate(value) }"
+        />
+
         <v-text-field
           :model-value="localWidth"
           type="number"
@@ -183,5 +259,13 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
 .road-field-grid {
   display: grid;
   gap: 0.4rem;
+}
+
+.road-field-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  opacity: 0.9;
 }
 </style>
