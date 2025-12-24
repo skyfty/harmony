@@ -208,11 +208,10 @@ const editorRef = ref<HTMLDivElement | null>(null)
 const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
 const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerId: number; moved: boolean } | null>(null)
-const spacePanning = ref(false)
-const altPanning = ref(false)
-const middlePanning = ref(false)
-const temporaryPanActive = computed(() => spacePanning.value || altPanning.value || middlePanning.value)
-const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value ? 'pan' : currentTool.value))
+const activeToolbarTool = computed<PlanningTool>(() => currentTool.value)
+
+// Used to avoid treating a right-drag pan as a contextmenu/cancel gesture.
+const suppressContextMenuOnce = ref(false)
 
 const convertingTo3DScene = ref(false)
 
@@ -619,6 +618,10 @@ const VERTEX_HANDLE_STROKE_PX = 1
 const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 2
 const VERTEX_HIGHLIGHT_STROKE_PX = 1
 
+// Scatter density dots should stay readable at any zoom level.
+const SCATTER_DENSITY_DOT_RADIUS_PX = 3.5
+const SCATTER_DENSITY_DOT_STROKE_PX = 1
+
 // Canvas "world" coordinates are in meters (to match the 3D scene ground settings).
 // For screen rendering we map meters -> CSS pixels using BASE_PIXELS_PER_METER.
 const canvasSize = computed(() => ({
@@ -653,6 +656,9 @@ const vertexHandleHitRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS
 const vertexHandleStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HANDLE_STROKE_PX))
 const vertexHighlightRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX + VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX))
 const vertexHighlightStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HIGHLIGHT_STROKE_PX))
+
+const scatterDensityDotRadiusWorld = computed(() => pxToWorld(SCATTER_DENSITY_DOT_RADIUS_PX))
+const scatterDensityDotStrokeWidthWorld = computed(() => pxToWorld(SCATTER_DENSITY_DOT_STROKE_PX))
 
 type ScaleBarSpec = { meters: number; pixels: number; label: string }
 
@@ -960,29 +966,12 @@ async function handleConvertTo3DScene() {
 
   const planningData = sceneStore.planningData
   convertingTo3DScene.value = true
-  uiStore.showLoadingOverlay({
-    title: 'Convert to 3D Scene',
-    message: planningData ? 'Preparing…' : 'Clearing…',
-    mode: planningData ? 'determinate' : 'indeterminate',
-    progress: planningData ? 0 : undefined,
-    closable: false,
-    autoClose: false,
-  })
 
   try {
     // Always clear previously generated conversion output so users can clean the scene
     // even when the current planning snapshot is empty.
     await clearPlanningGeneratedContent(sceneStore)
-
     if (!planningData) {
-      uiStore.updateLoadingOverlay({
-        mode: 'determinate',
-        progress: 100,
-        message: 'Cleared.',
-        closable: true,
-        autoClose: true,
-        autoCloseDelay: 800,
-      })
       return
     }
 
@@ -1237,7 +1226,7 @@ function loadPlanningFromScene() {
 }
 
 function getEffectiveTool(): PlanningTool {
-  return temporaryPanActive.value ? 'pan' : currentTool.value
+  return currentTool.value
 }
 
 // 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
@@ -1339,8 +1328,8 @@ function beginPanDrag(event: PointerEvent) {
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
-function tryBeginMiddlePan(event: PointerEvent) {
-  if (event.button !== 1) {
+function tryBeginRightPan(event: PointerEvent) {
+  if (event.button !== 2) {
     return false
   }
   if (dragState.value.type !== 'idle') {
@@ -1348,7 +1337,7 @@ function tryBeginMiddlePan(event: PointerEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  middlePanning.value = true
+  suppressContextMenuOnce.value = true
   beginPanDrag(event)
   return true
 }
@@ -1604,9 +1593,6 @@ watch(dialogOpen, (open) => {
   } else {
     cancelActiveDrafts()
     selectedFeature.value = null
-    spacePanning.value = false
-    altPanning.value = false
-    middlePanning.value = false
     // Persist on close even if some edits forgot to mark dirty.
     persistPlanningToSceneIfDirty({ force: true })
   }
@@ -2135,7 +2121,7 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
     willChange: 'transform',
     backgroundColor: hexToRgba(accent, 0.06),
     cursor:
-      image.visible && !image.locked && (currentTool.value === 'pan' || temporaryPanActive.value)
+      image.visible && !image.locked && currentTool.value === 'pan'
         ? 'grab'
         : 'default',
   }
@@ -2429,7 +2415,7 @@ function toggleAlignMode() {
 }
 
 function handleAlignMarkerPointerDown(imageId: string, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -2893,7 +2879,7 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
 
@@ -2946,7 +2932,7 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
-  // 平移视图：平移工具、按住 Space/Alt，或选择工具在空白处拖拽时
+  // 平移视图：平移工具，或选择工具在空白处拖拽时
   if (tool === 'pan' || tool === 'select') {
     beginPanDrag(event)
     return
@@ -2994,6 +2980,13 @@ function handleEditorDoubleClick(event: MouseEvent) {
 
 function handleEditorContextMenu(event: MouseEvent) {
   if (!dialogOpen.value) {
+    return
+  }
+
+  // Right-drag panning should not be interpreted as "cancel draft".
+  if (suppressContextMenuOnce.value) {
+    event.preventDefault()
+    suppressContextMenuOnce.value = false
     return
   }
   const rectangleActive = dragState.value.type === 'rectangle'
@@ -3205,10 +3198,6 @@ function handlePointerUp(event: PointerEvent) {
     }
   }
   lineVertexClickState.value = null
-
-  if (event.button === 1 || event.type === 'pointercancel') {
-    middlePanning.value = false
-  }
 }
 
 function handleWheel(event: WheelEvent) {
@@ -3259,18 +3248,6 @@ function handleKeydown(event: KeyboardEvent) {
   if (!dialogOpen.value) {
     return
   }
-  if (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') {
-    event.preventDefault()
-    if (!altPanning.value) {
-      altPanning.value = true
-    }
-    return
-  }
-  if (event.code === 'Space') {
-    event.preventDefault()
-    spacePanning.value = true
-    return
-  }
   if (event.key === 'Escape') {
     cancelActiveDrafts()
     return
@@ -3294,22 +3271,8 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-function handleKeyup(event: KeyboardEvent) {
-  if (!dialogOpen.value) {
-    return
-  }
-  if (event.code === 'Space') {
-    event.preventDefault()
-    spacePanning.value = false
-  }
-  if (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') {
-    event.preventDefault()
-    altPanning.value = false
-  }
-}
-
 function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -3338,7 +3301,7 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
 }
 
 function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -3367,7 +3330,7 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
 }
 
 function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -3400,7 +3363,7 @@ function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
 }
 
 function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -3438,12 +3401,10 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
 }
 
 function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
-  const isPrimary = event.button === 0
-  const isSecondary = event.button === 2
-  if (!isPrimary && !isSecondary) {
+  if (event.button !== 0) {
     return
   }
   const world = screenToWorld(event)
@@ -3475,28 +3436,9 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   if (effectiveTool !== 'select') {
     return
   }
-  if (!isSecondary) {
-    return
-  }
-  const skipSplit = event.ctrlKey || event.metaKey
-  splitSegmentAt(line.id, segmentIndex, world, skipSplit)
-}
 
-function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoint, skipSplit = false) {
-  const line = polylines.value.find((item) => item.id === lineId)
-  if (!line) {
-    return
-  }
-  if (skipSplit) {
-    selectFeature({ type: 'segment', lineId, segmentIndex })
-    return
-  }
-  if (segmentIndex < 0 || segmentIndex >= line.points.length - 1) {
-    return
-  }
-  line.points.splice(segmentIndex + 1, 0, createVertexPoint(point))
-  selectFeature({ type: 'segment', lineId, segmentIndex })
-  markPlanningDirty()
+  // Right-click is reserved for panning now; keep segment clicks as selection-only.
+  selectFeature({ type: 'segment', lineId: line.id, segmentIndex })
 }
 
 function startLineContinuation(lineId: string, vertexIndex: number) {
@@ -3769,7 +3711,7 @@ function handleImageLayerItemDragEnd() {
 }
 
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -3843,7 +3785,7 @@ function handleImageResizePointerDown(
   direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
   event: PointerEvent,
 ) {
-  if (tryBeginMiddlePan(event)) {
+  if (tryBeginRightPan(event)) {
     return
   }
   if (event.button !== 0) {
@@ -4097,7 +4039,6 @@ onMounted(() => {
   window.addEventListener('pointercancel', handlePointerUp)
   window.addEventListener('resize', updateEditorRect)
   window.addEventListener('keydown', handleKeydown)
-  window.addEventListener('keyup', handleKeyup)
 })
 
 onBeforeUnmount(() => {
@@ -4108,7 +4049,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointercancel', handlePointerUp)
   window.removeEventListener('resize', updateEditorRect)
   window.removeEventListener('keydown', handleKeydown)
-  window.removeEventListener('keyup', handleKeyup)
 })
 </script>
 
@@ -4489,8 +4429,10 @@ onBeforeUnmount(() => {
                         :key="`${poly.id}-density-dot-${idx}`"
                         :cx="p.x"
                         :cy="p.y"
-                        r="0.25"
-                        :fill="getLayerColor(poly.layerId, 0.18)"
+                        :r="scatterDensityDotRadiusWorld"
+                        :fill="getLayerColor(poly.layerId, 0.36)"
+                        :stroke="getLayerColor(poly.layerId, 0.78)"
+                        :stroke-width="scatterDensityDotStrokeWidthWorld"
                       />
                     </g>
 
@@ -5502,7 +5444,7 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   overflow: hidden;
   position: relative;
-  background-color: rgba(16, 19, 28, 0.85);
+  background-color: rgba(56, 66, 92, 0.82);
   border-top: 1px solid rgba(255, 255, 255, 0.03);
   touch-action: none;
 }
