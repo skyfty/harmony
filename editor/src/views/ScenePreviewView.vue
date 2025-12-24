@@ -683,11 +683,29 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+let cachedGroundNodeId: string | null = null
+let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let unsubscribe: (() => void) | null = null
 let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
+
+const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02
+const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON
+const CAMERA_DEPENDENT_ROTATION_EPSILON = 1e-4
+const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
+
+const MEMORY_STATS_UPDATE_INTERVAL_SECONDS = 0.5
+
+const cameraDependentUpdatePosition = new THREE.Vector3()
+const cameraDependentUpdateQuaternion = new THREE.Quaternion()
+const lastCameraDependentUpdatePosition = new THREE.Vector3()
+const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
+let cameraDependentUpdateInitialized = false
+let cameraDependentUpdateElapsed = 0
+
+let memoryStatsUpdateElapsed = MEMORY_STATS_UPDATE_INTERVAL_SECONDS
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -733,6 +751,59 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+
+function syncGroundCache(document: SceneJsonExportDocument | null): void {
+	cachedGroundNodeId = null
+	cachedGroundDynamicMesh = null
+	if (!document) {
+		return
+	}
+	const groundNode = findGroundNode(document.nodes)
+	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		return
+	}
+	cachedGroundNodeId = groundNode.id
+	cachedGroundDynamicMesh = groundNode.dynamicMesh
+}
+
+function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
+	cameraDependentUpdateElapsed += Math.max(0, delta)
+	activeCamera.updateMatrixWorld(true)
+	activeCamera.getWorldPosition(cameraDependentUpdatePosition)
+	activeCamera.getWorldQuaternion(cameraDependentUpdateQuaternion)
+
+	if (!cameraDependentUpdateInitialized) {
+		cameraDependentUpdateInitialized = true
+		cameraDependentUpdateElapsed = 0
+		lastCameraDependentUpdatePosition.copy(cameraDependentUpdatePosition)
+		lastCameraDependentUpdateQuaternion.copy(cameraDependentUpdateQuaternion)
+		return true
+	}
+
+	const movedSq = cameraDependentUpdatePosition.distanceToSquared(lastCameraDependentUpdatePosition)
+	const dot = Math.abs(cameraDependentUpdateQuaternion.dot(lastCameraDependentUpdateQuaternion))
+	const rotated = 1 - dot > CAMERA_DEPENDENT_ROTATION_EPSILON
+	const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ
+	const due = isPlaying.value && cameraDependentUpdateElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS
+
+	if (!moved && !rotated && !due) {
+		return false
+	}
+
+	cameraDependentUpdateElapsed = 0
+	lastCameraDependentUpdatePosition.copy(cameraDependentUpdatePosition)
+	lastCameraDependentUpdateQuaternion.copy(cameraDependentUpdateQuaternion)
+	return true
+}
+
+function updateMemoryStatsThrottled(delta: number): void {
+	memoryStatsUpdateElapsed += Math.max(0, delta)
+	if (memoryStatsUpdateElapsed < MEMORY_STATS_UPDATE_INTERVAL_SECONDS) {
+		return
+	}
+	memoryStatsUpdateElapsed = 0
+	updateMemoryStats()
+}
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
@@ -5026,18 +5097,18 @@ function startAnimationLoop() {
 			lastOrbitState.position.copy(activeCamera.position)
 			lastOrbitState.target.copy(mapControls.target)
 		}
-		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-		updateInstancedCullingAndLod()
-		updateBehaviorProximity()
-		// Keep ground chunk meshes in sync with camera position.
-		if (currentDocument) {
-			const groundNode = findGroundNode(currentDocument.nodes)
-			if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
-				const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+		const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
+		if (shouldUpdateCameraSystems) {
+			terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
+			updateInstancedCullingAndLod()
+			updateBehaviorProximity()
+			// Keep ground chunk meshes in sync with camera position.
+			if (cachedGroundNodeId && cachedGroundDynamicMesh) {
+				const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 				if (groundObject) {
-					updateGroundChunks(groundObject, groundNode.dynamicMesh, activeCamera)
+					updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
 					if (isGroundChunkStreamingDebugVisible.value) {
-						syncGroundChunkStreamingDebug(groundObject, groundNode.dynamicMesh)
+						syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh)
 					}
 				}
 			}
@@ -5050,7 +5121,7 @@ function startAnimationLoop() {
 
 		currentRenderer.render(currentScene, activeCamera)
 		fpsStats?.end()
-		updateMemoryStats()
+		updateMemoryStatsThrottled(delta)
 	}
 	renderLoop()
 }
@@ -5063,6 +5134,12 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	syncGroundCache(null)
+	cameraDependentUpdateInitialized = false
+	cameraDependentUpdateElapsed = 0
+	lastCameraDependentUpdatePosition.set(0, 0, 0)
+	lastCameraDependentUpdateQuaternion.identity()
+	memoryStatsUpdateElapsed = MEMORY_STATS_UPDATE_INTERVAL_SECONDS
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	nodeObjectMap.forEach((_object, nodeId) => {
@@ -7510,6 +7587,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetBehaviorRuntime()
 	previewComponentManager.reset()
 	rebuildPreviewNodeMap(document.nodes)
+	syncGroundCache(document)
 	refreshBehaviorProximityCandidates()
 
 	const pendingObjects = new Map<string, THREE.Object3D>()
