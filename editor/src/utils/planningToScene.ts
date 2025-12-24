@@ -788,7 +788,10 @@ function buildFloorDynamicMeshFromPlanningPolygon(options: {
   const center = computeFloorCenterFromWorldPoints(worldPoints)
   // Local vertices are in meters, and should reconstruct world points as:
   // world = node.position + local.
-  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, pt.z - center.z])
+  // Floor geometry rotates the XY shape onto the XZ plane with a -90deg X rotation,
+  // which would mirror the Z axis if we passed raw offsets. Invert Z here so the
+  // final world-space polygon matches planning coordinates.
+  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, -(pt.z - center.z)])
   const definition: FloorDynamicMesh = {
     type: 'Floor',
     vertices,
