@@ -696,6 +696,7 @@ let environmentMapLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
+let dynamicGroundCache: { nodeId: string; dynamicMesh: GroundDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
@@ -2529,6 +2530,19 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
     }
   }
   return null;
+}
+
+function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    dynamicGroundCache = null;
+    return;
+  }
+  const groundNode = findGroundNode(document.nodes);
+  if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    dynamicGroundCache = { nodeId: groundNode.id, dynamicMesh: groundNode.dynamicMesh };
+  } else {
+    dynamicGroundCache = null;
+  }
 }
 
 function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
@@ -6976,6 +6990,7 @@ function teardownRenderer() {
   canvasResult = null;
   setActiveMultiuserSceneId(null);
   currentDocument = null;
+  dynamicGroundCache = null;
   sceneGraphRoot = null;
   viewerResourceCache = null;
 }
@@ -7096,23 +7111,27 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderScope = effectScope();
 }
 
-async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
-  if (!renderContext) {
-    throw new Error('Render context missing');
-  }
-  const { scene, renderer, camera, controls } = renderContext;
-  activeCameraWatchTween = null;
-  const { canvas } = result;
-  currentDocument = payload.document;
-  setActiveMultiuserSceneId(payload.document.id ?? null);
-  resetProtagonistPoseState();
-  const environmentSettings = resolveDocumentEnvironment(payload.document);
-  if (behaviorAlertToken.value) {
-    resolveBehaviorToken(behaviorAlertToken.value, {
-      type: 'abort',
-      message: '场景重新初始化',
-    });
-  }
+// ------------------------------
+// Renderer initialization helpers
+// ------------------------------
+
+/**
+ * Reset the UI-facing preload state before starting to load/build the scene graph.
+ */
+function resetResourcePreloadState(): void {
+  resourcePreload.active = true;
+  resourcePreload.loaded = 0;
+  resourcePreload.total = 0;
+  resourcePreload.loadedBytes = 0;
+  resourcePreload.totalBytes = 0;
+  resourcePreload.label = '准备加载资源...';
+}
+
+/**
+ * Ensure the baseline lighting/sky objects exist for the new scene.
+ * This keeps the scene readable even before environment maps finish loading.
+ */
+function setupBaselineSceneLighting(scene: THREE.Scene): void {
   const ambientLight = ensureEnvironmentAmbientLight();
   if (ambientLight) {
     ambientLight.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR);
@@ -7124,14 +7143,18 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   scene.add(hemisphericLight);
 
   ensureSkyExists();
+}
 
-  resourcePreload.active = true;
-  resourcePreload.loaded = 0;
-  resourcePreload.total = 0;
-  resourcePreload.loadedBytes = 0;
-  resourcePreload.totalBytes = 0;
-  resourcePreload.label = '准备加载资源...';
-
+/**
+ * Build the SceneGraph (three.js object tree) and keep `resourcePreload` in sync.
+ * Returns null when build fails.
+ */
+async function buildSceneGraphWithProgress(
+  payload: ScenePreviewPayload,
+): Promise<{
+  graph: Awaited<ReturnType<typeof buildSceneGraph>>;
+  resourceCache: ResourceCache | null;
+} | null> {
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   let resourceCache: ResourceCache | null = null;
   try {
@@ -7144,16 +7167,20 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       onProgress: (info) => {
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
+
         if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {
           resourcePreload.totalBytes = info.bytesTotal;
         }
         if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
           resourcePreload.loadedBytes = info.bytesLoaded;
         }
+
         const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
         resourcePreload.label = info.message || fallbackLabel;
+
         const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
-        const stillLoadingByBytes = resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
+        const stillLoadingByBytes =
+          resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
         resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
       },
     };
@@ -7163,12 +7190,14 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     if (payload.resolveAssetUrl) {
       buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
     }
-  resourceCache = ensureResourceCache(payload.document, buildOptions);
-  viewerResourceCache = resourceCache;
-  graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
+
+    resourceCache = ensureResourceCache(payload.document, buildOptions);
+    viewerResourceCache = resourceCache;
+    graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
-    const fullyLoadedByBytes = resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes >= resourcePreload.totalBytes;
+    const fullyLoadedByBytes =
+      resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes >= resourcePreload.totalBytes;
     if (!resourcePreload.active || fullyLoadedByCount || fullyLoadedByBytes) {
       if (resourcePreload.total > 0) {
         resourcePreload.loaded = resourcePreload.total;
@@ -7180,69 +7209,111 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       resourcePreload.label = '';
     }
   }
+
   if (!graph) {
+    return null;
+  }
+  return { graph, resourceCache };
+}
+
+/**
+ * When lazy-loading meshes, we skip instancing for placeholder nodes (they will be instanced later).
+ */
+function collectInstancingSkipNodeIdsForLazyPlaceholders(root: THREE.Object3D): Set<string> | null {
+  if (!lazyLoadMeshesEnabled) {
+    return null;
+  }
+  const skipNodeIds = new Set<string>();
+  root.traverse((object: THREE.Object3D) => {
+    const nodeId = object.userData?.nodeId as string | undefined;
+    if (!nodeId) {
+      return;
+    }
+    const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+    if (lazyData?.placeholder) {
+      skipNodeIds.add(nodeId);
+    }
+  });
+  return skipNodeIds.size ? skipNodeIds : null;
+}
+
+async function prepareInstancedNodesIfPossible(
+  root: THREE.Object3D,
+  payload: ScenePreviewPayload,
+  resourceCache: ResourceCache | null,
+  skipNodeIds: Set<string> | null,
+): Promise<void> {
+  if (skipNodeIds?.size) {
+    skipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
+  }
+
+  if (!resourceCache) {
     return;
   }
 
-  if (graph.warnings.length) {
-    warnings.value = graph.warnings;
-  }
-  let instancingSkipNodeIds: Set<string> | null = null;
-  if (lazyLoadMeshesEnabled) {
-    instancingSkipNodeIds = new Set<string>();
-    graph.root.traverse((object: THREE.Object3D) => {
-      const nodeId = object.userData?.nodeId as string | undefined;
-      if (!nodeId) {
-        return;
-      }
-      const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
-      if (lazyData?.placeholder) {
-        instancingSkipNodeIds!.add(nodeId);
-      }
+  try {
+    await prepareInstancedNodesForGraph(root, payload.document, resourceCache, {
+      skipNodeIds: skipNodeIds ?? undefined,
     });
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to prepare instanced nodes', error);
   }
-  if (instancingSkipNodeIds?.size) {
-    instancingSkipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
-  }
+}
 
-  if (resourceCache) {
-    try {
-      await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache, {
-        skipNodeIds: instancingSkipNodeIds ?? undefined,
-      });
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to prepare instanced nodes', error);
-    }
-  }
-  sceneGraphRoot = graph.root;
-  scene.add(graph.root);
+/**
+ * Mount the graph into the scene and sync all subsystems that depend on the object tree.
+ */
+function mountGraphAndSyncSubsystems(
+  payload: ScenePreviewPayload,
+  root: THREE.Object3D,
+  resourceCache: ResourceCache | null,
+  canvas: any,
+  camera: THREE.PerspectiveCamera,
+): void {
+  sceneGraphRoot = root;
+  renderContext?.scene?.add(root);
+
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
-  indexSceneObjects(graph.root);
+  indexSceneObjects(root);
   refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
-  refreshAnimationControllers(graph.root);
+  refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
   initializeLazyPlaceholders(payload.document);
   syncPhysicsBodiesForDocument(payload.document);
   syncTerrainScatterInstances(payload.document, resourceCache);
+}
 
+/** Apply camera alignment, skybox and environment settings for the current document. */
+function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
   const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
   syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
 
-  const skyboxSettings = resolveSceneSkybox(payload.document);
+  const skyboxSettings = resolveSceneSkybox(document);
   applySkyboxSettings(skyboxSettings);
-  if (pendingSkyboxSettings) {
-    applySkyboxSettings(pendingSkyboxSettings);
-  }
 
-  void applyEnvironmentSettingsToScene(environmentSettings);
+  // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
+  // into `pendingEnvironmentSettings` when the render context is not ready.
+  void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
 
-  const width = canvas.width || canvas.clientWidth || 1;
-  const height = canvas.height || canvas.clientHeight || 1;
+  // Ensure camera projection matches the current canvas size.
+  const width = (canvasResult?.canvas?.width || canvasResult?.canvas?.clientWidth || 1) as number;
+  const height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 1) as number;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+}
 
+/**
+ * Start the render loop (per-frame updates + rendering). Uses Vue effect scope so it can be stopped.
+ */
+function startRenderLoop(
+  result: UseCanvasResult,
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+): void {
   if (!renderScope) {
     renderScope = effectScope();
   }
@@ -7250,6 +7321,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
+
+        // Sync multiuser avatars to the camera pose.
         if (renderContext && multiuserNodeObjects.size) {
           const cameraObj = renderContext.camera;
           multiuserNodeObjects.forEach((object) => {
@@ -7258,9 +7331,12 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
             object.updateMatrixWorld(true);
           });
         }
+
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
         }
+
+        // Camera tween has priority over user controls.
         if (activeCameraWatchTween && deltaSeconds > 0) {
           applyCameraWatchTween(deltaSeconds);
         } else {
@@ -7269,9 +7345,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
             controls.update();
           }
         }
+
         if (deltaSeconds > 0) {
           previewComponentManager.update(deltaSeconds);
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
+
           effectRuntimeTickers.forEach((tick) => {
             try {
               tick(deltaSeconds);
@@ -7279,26 +7357,29 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
               console.warn('更新特效动画失败', error);
             }
           });
+
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces();
           }
           stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
         }
+
         if (vehicleDriveActive.value) {
           updateVehicleDriveCamera(deltaSeconds);
         }
+
         updateBehaviorProximity();
-    // Keep chunked ground meshes in sync with camera position.
-    if (currentDocument) {
-      const groundNode = findGroundNode(currentDocument.nodes);
-      if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
-        const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
-        if (groundObject) {
-          updateGroundChunks(groundObject, groundNode.dynamicMesh, camera);
+
+        // Keep chunked ground meshes in sync with camera position.
+        const cachedGround = dynamicGroundCache;
+        if (cachedGround) {
+          const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
+          if (groundObject) {
+            updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+          }
         }
-      }
-    }
+
         updateLazyPlaceholders(deltaSeconds);
         terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         updateInstancedCullingAndLod();
@@ -7310,6 +7391,54 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       });
     });
   });
+}
+
+async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
+  if (!renderContext) {
+    throw new Error('Render context missing');
+  }
+  const { scene, renderer, camera, controls } = renderContext;
+  activeCameraWatchTween = null;
+  const { canvas } = result;
+
+  // Phase 1: bind state for the new payload.
+  currentDocument = payload.document;
+  refreshDynamicGroundCache(currentDocument);
+  setActiveMultiuserSceneId(payload.document.id ?? null);
+  resetProtagonistPoseState();
+  if (behaviorAlertToken.value) {
+    resolveBehaviorToken(behaviorAlertToken.value, {
+      type: 'abort',
+      message: '场景重新初始化',
+    });
+  }
+
+  // Phase 2: baseline scene lighting and sky.
+  setupBaselineSceneLighting(scene);
+
+  // Phase 3: build the scene graph (loads assets) with UI progress updates.
+  resetResourcePreloadState();
+  const buildResult = await buildSceneGraphWithProgress(payload);
+  if (!buildResult) {
+    return;
+  }
+  const { graph, resourceCache } = buildResult;
+  if (graph.warnings.length) {
+    warnings.value = graph.warnings;
+  }
+
+  // Phase 4: instancing preparation (skip lazy placeholders).
+  const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
+  await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
+
+  // Phase 5: mount graph and sync subsystems that depend on it.
+  mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+
+  // Phase 6: apply view settings (camera alignment, skybox, environment, projection).
+  applyDocumentViewSettings(payload.document, camera);
+
+  // Phase 7: start the render loop.
+  startRenderLoop(result, renderer, scene, camera, controls);
 }
 
 const handleResize: WindowResizeCallback = (_result) => {
