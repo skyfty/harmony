@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, GroundDynamicMesh, SceneNode } from '@harmony/schema'
+import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -13,7 +13,6 @@ import {
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
-import { createFloorGroup } from '@schema/floorMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
@@ -441,17 +440,6 @@ function polygonEdges(points: PlanningPoint[]): Array<{ start: PlanningPoint; en
   return edges
 }
 
-function clampFloorSmoothValue(value: unknown): number {
-  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0.5
-  if (raw <= 0) {
-    return 0
-  }
-  if (raw >= 1) {
-    return 1
-  }
-  return raw
-}
-
 function buildFloorWorldPointsFromPlanning(
   points: PlanningPoint[],
   groundWidth: number,
@@ -491,57 +479,6 @@ function buildFloorWorldPointsFromPlanning(
   }
 
   return worldPoints
-}
-
-function computeFloorCenterFromWorldPoints(points: Array<{ x: number; z: number }>) {
-  if (!points.length) {
-    return { x: 0, y: 0, z: 0 }
-  }
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-  points.forEach((pt) => {
-    minX = Math.min(minX, pt.x)
-    maxX = Math.max(maxX, pt.x)
-    minZ = Math.min(minZ, pt.z)
-    maxZ = Math.max(maxZ, pt.z)
-  })
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return { x: 0, y: 0, z: 0 }
-  }
-  return {
-    x: (minX + maxX) * 0.5,
-    y: 0,
-    z: (minZ + maxZ) * 0.5,
-  }
-}
-
-function buildFloorDynamicMeshFromPlanningPolygon(options: {
-  polygon: PlanningPolygonAny
-  groundWidth: number
-  groundDepth: number
-  smooth: number
-}): { center: { x: number; y: number; z: number }; definition: FloorDynamicMesh } | null {
-  const { polygon, groundWidth, groundDepth, smooth } = options
-  const worldPoints = buildFloorWorldPointsFromPlanning(polygon.points, groundWidth, groundDepth)
-  if (worldPoints.length < 3) {
-    return null
-  }
-  const center = computeFloorCenterFromWorldPoints(worldPoints)
-  // Local vertices are in meters, and should reconstruct world points as:
-  // world = node.position + local.
-  // Floor geometry rotates the XY shape onto the XZ plane with a -90deg X rotation,
-  // which would mirror the Z axis if we passed raw offsets. Invert Z here so the
-  // final world-space polygon matches planning coordinates.
-  const vertices: Array<[number, number]> = worldPoints.map((pt) => [pt.x - center.x, -(pt.z - center.z)])
-  const definition: FloorDynamicMesh = {
-    type: 'Floor',
-    vertices,
-    materialId: null,
-    smooth: clampFloorSmoothValue(smooth),
-  }
-  return { center, definition }
 }
 
 function normalizeScatter(raw: unknown): ScatterAssignment | null {
@@ -1024,45 +961,42 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
     } else if (kind === 'water') {
       const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) {
         updateProgressForUnit(`Converting water: ${poly.name?.trim() || poly.id}`)
-        const build = buildFloorDynamicMeshFromPlanningPolygon({
-          polygon: poly,
-          groundWidth,
-          groundDepth,
-          smooth: waterSmooth,
-        })
-        if (!build) {
+        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+        if (worldXZ.length < 3) {
           continue
         }
 
-        const waterObject = createFloorGroup(build.definition)
-        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-        const waterNode = sceneStore.addSceneNode({
-          nodeType: 'Mesh',
-          object: waterObject,
-          name: layerName ? `${layerName} Water` : 'Planning Water',
-          position: { x: build.center.x, y: build.center.y + 0.01, z: build.center.z },
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-          userData: {
-            source: PLANNING_CONVERSION_SOURCE,
-            planningLayerId: layerId,
-            kind: 'water',
-          },
+        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
+        const nodeName = poly.name?.trim()
+          ? poly.name.trim()
+          : (layerName ? `${layerName} Water` : 'Planning Water')
+
+        const waterNode = sceneStore.createFloorNode({
+          points: worldPoints,
+          name: nodeName,
         })
+
         if (!waterNode) {
           continue
         }
 
         sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
-        sceneStore.updateNodeDynamicMesh(waterNode.id, build.definition)
-        sceneStore.setNodeLocked(waterNode.id, true)
-        const floorComponent = sceneStore.addNodeComponent(waterNode.id, FLOOR_COMPONENT_TYPE)
-        if (floorComponent && typeof floorComponent === 'object' && typeof (floorComponent as any).id === 'string') {
-          sceneStore.updateNodeComponentProps(waterNode.id, (floorComponent as any).id, { smooth: waterSmooth })
+
+        const floorComponent = waterNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
+        if (floorComponent?.id) {
+          sceneStore.updateNodeComponentProps(waterNode.id, floorComponent.id, { smooth: waterSmooth })
         }
+
         sceneStore.addNodeComponent(waterNode.id, WATER_COMPONENT_TYPE)
+        sceneStore.updateNodeUserData(waterNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          kind: 'water',
+        })
+        sceneStore.setNodeLocked(waterNode.id, true)
       }
     } else if (kind === 'green') {
       for (const poly of group.polygons) { 
