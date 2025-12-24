@@ -141,7 +141,7 @@ type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
 type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
-const statusMessage = ref('等待场景数据...')
+const statusMessage = ref('Waiting for scene data...')
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
@@ -156,12 +156,13 @@ const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedCullingVisualizationVisibleCount = ref(0)
 const instancedCullingVisualizationTotalCount = ref(0)
+const isDebugMenuOpen = ref(false)
 const instancedCullingVisualizationLabel = computed(() => {
-	return `可见实例：${instancedCullingVisualizationVisibleCount.value} / ${instancedCullingVisualizationTotalCount.value}`
+	return `Visible instances: ${instancedCullingVisualizationVisibleCount.value} / ${instancedCullingVisualizationTotalCount.value}`
 })
 const groundChunkDebugStats = reactive({ loaded: 0, total: 0 })
 const groundChunkDebugLabel = computed(
-	() => `地面分块：${groundChunkDebugStats.loaded} / ${groundChunkDebugStats.total}`,
+	() => `Ground chunks: ${groundChunkDebugStats.loaded} / ${groundChunkDebugStats.total}`,
 )
 const isRigidbodyDebugVisible = computed(
 	() => isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value,
@@ -213,7 +214,6 @@ type ResourceProgressItem = {
 
 const resourceProgressItems = ref<ResourceProgressItem[]>([])
 const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
-const RESOURCE_PROGRESS_COMPLETE_PATTERNS = ['下载完成', '加载完成'] as const
 
 const assetCacheStore = useAssetCacheStore()
 // Adapter so the preview uses the shared Pinia-backed cache without duplicating downloads.
@@ -266,7 +266,7 @@ const resourceProgressBytesLabel = computed(() => {
 		return `${formatByteSize(resourceProgress.loadedBytes)} / ${formatByteSize(resourceProgress.totalBytes)}`
 	}
 	if (resourceProgress.total > 0) {
-		return `已加载 ${resourceProgress.loaded} / ${resourceProgress.total}`
+		return `Loaded ${resourceProgress.loaded} / ${resourceProgress.total}`
 	}
 	return ''
 })
@@ -306,9 +306,15 @@ function normalizeResourceProgressPercent(info: SceneGraphResourceProgressInfo, 
 	if (info.kind !== 'asset') {
 		return 100
 	}
-	if (info.message) {
-		const messageText = info.message
-		if (RESOURCE_PROGRESS_COMPLETE_PATTERNS.some((pattern) => messageText.includes(pattern))) {
+	if (typeof info.message === 'string' && info.message.trim().length) {
+		const messageText = info.message.toLowerCase()
+		if (
+			messageText.includes('complete') ||
+			messageText.includes('completed') ||
+			messageText.includes('loaded') ||
+			messageText.includes('finished') ||
+			messageText.includes('done')
+		) {
 			return 100
 		}
 	}
@@ -1431,8 +1437,8 @@ function updateSteeringAutoCenter(delta: number): void {
 const vehicleDriveCameraToggleConfig = computed(() => {
 	const followActive = vehicleDriveCameraMode.value === 'follow'
 	return followActive
-		? { icon: 'mdi-crosshairs-off', label: '取消跟随' }
-		: { icon: 'mdi-crosshairs-gps', label: '跟随驾驶' }
+		? { icon: 'mdi-crosshairs-off', label: 'Stop following' }
+		: { icon: 'mdi-crosshairs-gps', label: 'Follow driving' }
 })
 
 function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
@@ -1817,8 +1823,9 @@ function updateInstancedCullingAndLod(): void {
 			}
 		}
 
-		instancedCullingVisualizationTotalCount.value = visualizationIds.length
-		instancedCullingVisualizationVisibleCount.value = visualizationVisibleIds.size
+		const scatterStats = terrainScatterRuntime.getInstanceStats()
+		instancedCullingVisualizationTotalCount.value = visualizationIds.length + scatterStats.total
+		instancedCullingVisualizationVisibleCount.value = visualizationVisibleIds.size + scatterStats.visible
 		updateInstancedCullingVisualization(visualizationIds, visualizationObjects, visualizationVisibleIds)
 	}
 
@@ -2134,7 +2141,8 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 	if (instancedMeshes.includes(mesh)) {
 		return
 	}
-	// 共享几何体的 InstancedMesh 默认包围体过小，视锥裁剪会误删远离原点的实例
+	// InstancedMesh with shared geometry may have an undersized default bounding volume;
+	// frustum culling can incorrectly hide instances far from the origin.
 	mesh.frustumCulled = false
 	instancedMeshes.push(mesh)
 	instancedMeshGroup.add(mesh)
@@ -4041,10 +4049,10 @@ function startVehicleDriveMode(
 ): { success: boolean; message?: string } {
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (!targetNodeId) {
-		return { success: false, message: '未提供要驾驶的节点。' }
+		return { success: false, message: 'No node provided to drive.' }
 	}
 	if (vehicleDriveState.active) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶状态已被新的脚本替换。' } })
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
 	const ctx = camera && renderer
 		? { camera, mapControls: mapControls ?? undefined }
@@ -4186,17 +4194,17 @@ function alignCameraToVehicleExit(): boolean {
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (!targetNodeId) {
-		appendWarningMessage('未提供要驾驶的节点。')
-		resolveBehaviorToken(event.token, { type: 'fail', message: '未提供要驾驶的节点。' })
+		appendWarningMessage('No node provided to drive.')
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided to drive.' })
 		return
 	}
 	if (vehicleDriveState.active) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶状态已被新的脚本替换。' } })
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
 	if (pendingVehicleDriveEvent.value) {
 		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
 			type: 'abort',
-			message: '新的驾驶脚本已触发，已取消之前的驾驶请求。',
+			message: 'A new drive script was triggered; the previous request was cancelled.',
 		})
 	}
 	pendingVehicleDriveEvent.value = event
@@ -4209,7 +4217,7 @@ function handleVehicleDebusEvent(): void {
 	if (pendingVehicleDriveEvent.value) {
 		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
 			type: 'abort',
-			message: '驾驶请求已被终止。',
+			message: 'Drive request was terminated.',
 		})
 		pendingVehicleDriveEvent.value = null
 		vehicleDrivePromptBusy.value = false
@@ -4238,10 +4246,10 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	try {
 		const result = startVehicleDriveMode(event)
 		if (!result.success) {
-			appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
+			appendWarningMessage(result.message ?? 'Failed to start drive script.')
 			resolveBehaviorToken(event.token, {
 				type: 'fail',
-				message: result.message ?? '无法启动驾驶脚本。',
+				message: result.message ?? 'Failed to start drive script.',
 			})
 			pendingVehicleDriveEvent.value = null
 			return
@@ -4261,7 +4269,7 @@ function handleVehicleDriveExitClick(): void {
 	try {
 		const aligned = alignCameraToVehicleExit()
 		if (!aligned) {
-			appendWarningMessage('无法定位默认下车位置，将恢复原有视角。')
+			appendWarningMessage('Could not find the default exit position; restoring the previous view.')
 		}
 		handleHideVehicleCockpitEvent()
 		stopVehicleDriveMode({ resolution: { type: 'continue' } })
@@ -4286,7 +4294,7 @@ function handleVehicleDriveResetClick(): void {
 	}
 	const resetSuccess = resetActiveVehiclePose()
 	if (!resetSuccess) {
-		appendWarningMessage('无法重置车辆，请稍后再试。')
+		appendWarningMessage('Failed to reset vehicle. Please try again later.')
 		return
 	}
 	updateVehicleDriveCamera(0, { immediate: true })
@@ -4501,7 +4509,7 @@ function handleVehicleFollowDriveClick(event: MouseEvent) {
 	}
 	const result = startVehicleDriveMode(manualEvent)
 	if (!result.success) {
-		appendWarningMessage(result.message ?? '无法进入驾驶模式。')
+		appendWarningMessage(result.message ?? 'Failed to enter driving mode.')
 		if (previousControlMode !== 'third-person') {
 			controlMode.value = previousControlMode
 		}
@@ -4767,18 +4775,18 @@ function teardownStatsPanels(): void {
 
 function updateMemoryFallback(): void {
 	if (typeof performance === 'undefined') {
-		memoryFallbackLabel.value = '内存监控不可用'
+		memoryFallbackLabel.value = 'Memory monitoring unavailable'
 		return
 	}
 	const perfWithMemory = performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }
 	const memory = perfWithMemory.memory
 	if (!memory) {
-		memoryFallbackLabel.value = '内存监控不可用'
+		memoryFallbackLabel.value = 'Memory monitoring unavailable'
 		return
 	}
 	const used = formatByteSize(memory.usedJSHeapSize)
 	const limit = formatByteSize(memory.jsHeapSizeLimit)
-	const nextLabel = `内存：${used} / ${limit}`
+	const nextLabel = `Memory: ${used} / ${limit}`
 	if (memoryFallbackLabel.value !== nextLabel) {
 		memoryFallbackLabel.value = nextLabel
 	}
@@ -5051,7 +5059,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	})
 	nodeObjectMap.clear()
 	if (vehicleDriveState.active) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '场景已重置，驾驶结束。' } })
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Scene reset; driving ended.' } })
 	}
 	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
@@ -5797,7 +5805,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 
 function resetPhysicsWorld(): void {
 	if (vehicleDriveState.active) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '物理环境已重置。' } })
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Physics environment reset.' } })
 	}
 	const world = physicsWorld
 	if (world) {
@@ -6668,7 +6676,7 @@ function removeVehicleInstance(nodeId: string): void {
 		return
 	}
 	if (vehicleDriveState.active && vehicleDriveState.nodeId === nodeId) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆实例已被移除。' } })
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Vehicle instance was removed.' } })
 	}
 	if (physicsWorld) {
 		try {
@@ -6876,18 +6884,18 @@ function stepPhysicsWorld(delta: number): void {
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
-	// 仅在时间推进且存在车辆实例时更新
+	// Only update when time advances and vehicle instances exist.
 	if (delta <= 0 || !vehicleInstances.size) {
 		return
 	}
 	const safeDelta = Math.max(delta, 1e-6)
 	vehicleInstances.forEach((instance) => {
 		const { vehicle, wheelBindings, forwardAxis, axisUp } = instance
-		// 没有轮胎绑定则无需处理
+		// No wheel bindings, nothing to update.
 		if (!wheelBindings.length) {
 			return
 		}
-		// 只处理有前轮绑定的车辆以更新转向视觉
+		// Only process vehicles with front wheel bindings to update steering visuals.
 		const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId)
 		if (!hasFrontWheel) {
 			return
@@ -7447,7 +7455,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resourceProgress.total = 0
 	resourceProgress.loadedBytes = 0
 	resourceProgress.totalBytes = 0
-	resourceProgress.label = '准备加载资源...'
+	resourceProgress.label = 'Preparing resources...'
 	resourceProgressItems.value = []
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
@@ -7463,7 +7471,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 				if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
 					resourceProgress.loadedBytes = info.bytesLoaded
 				}
-				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
+				resourceProgress.label = info.message || (info.assetId ? `Loading ${info.assetId}` : '')
 				updateResourceProgressDetails(info)
 				const stillLoadingByCount = info.total > 0 && info.loaded < info.total
 				const stillLoadingByBytes = resourceProgress.totalBytes > 0 && resourceProgress.loadedBytes < resourceProgress.totalBytes
@@ -7583,7 +7591,7 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		return
 	}
 	isApplyingSnapshot = true
-	statusMessage.value = '同步场景数据...'
+	statusMessage.value = 'Syncing scene data...'
 	void updateScene(snapshot.document)
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
@@ -7591,7 +7599,7 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		})
 		.catch((error) => {
 			console.error('[ScenePreview] Failed to apply snapshot', error)
-			statusMessage.value = '加载场景失败，请稍后再试'
+			statusMessage.value = 'Failed to load scene. Please try again later.'
 		})
 		.finally(() => {
 			isApplyingSnapshot = false
@@ -7760,6 +7768,75 @@ onBeforeUnmount(() => {
 				{{ groundChunkDebugLabel }}
 			</div>
 		</div>
+		<div class="scene-preview__debug-menu">
+			<v-menu
+				v-model="isDebugMenuOpen"
+				location="bottom end"
+				offset="8"
+				:close-on-content-click="false"
+			>
+				<template #activator="{ props: menuProps }">
+					<v-btn
+						class="scene-preview__control-button"
+						v-bind="menuProps"
+						icon="mdi-bug-outline"
+						variant="tonal"
+						color="secondary"
+						size="small"
+						title="Debug options"
+						aria-label="Debug options"
+					/>
+				</template>
+				<v-card class="scene-preview__debug-menu-card" elevation="10">
+					<v-list density="compact" class="scene-preview__debug-list">
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Frustum culling visualization"
+								:model-value="isInstancedCullingVisualizationVisible"
+								hide-details
+								density="compact"
+								color="warning"
+								@update:model-value="toggleInstancedCullingVisualization"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Ground wireframe"
+								:model-value="isGroundWireframeVisible"
+								hide-details
+								density="compact"
+								color="warning"
+								@update:model-value="toggleGroundWireframeDebug"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Ground chunk debug"
+								:model-value="isGroundChunkStreamingDebugVisible"
+								hide-details
+								density="compact"
+								color="warning"
+								@update:model-value="toggleGroundChunkStreamingDebug"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Other rigidbody wireframe"
+								:model-value="isOtherRigidbodyWireframeVisible"
+								hide-details
+								density="compact"
+								color="warning"
+								@update:model-value="toggleOtherRigidbodyWireframeDebug"
+							/>
+						</v-list-item>
+					</v-list>
+				</v-card>
+			</v-menu>
+		</div>
 		<div
 			v-if="isInstancedCullingVisualizationVisible"
 			class="scene-preview__instanced-culling-label"
@@ -7778,7 +7855,7 @@ onBeforeUnmount(() => {
 			class="scene-preview__preload-overlay"
 		>
 			<v-card class="scene-preview__preload-card" elevation="12">
-				<div class="scene-preview__preload-title">资源加载中</div>
+				<div class="scene-preview__preload-title">Loading resources...</div>
 				<div class="scene-preview__progress">
 					<div class="scene-preview__progress-bar">
 						<div
@@ -7843,7 +7920,7 @@ onBeforeUnmount(() => {
 				size="small"
 				prepend-icon="mdi-update"
 			>
-				最近更新：{{ formattedLastUpdate }}
+				Last updated: {{ formattedLastUpdate }}
 			</v-chip>
 		</div>
 		<v-alert
@@ -7870,10 +7947,10 @@ onBeforeUnmount(() => {
 				:elevation="0"
 				:ripple="false"
 				:aria-pressed="cameraViewState.mode === 'watching'"
-				title="观察视角"
+				title="Watch view"
 				@click="handlePurposeWatchClick"
 			>
-				<span class="scene-preview__purpose-label">观察</span>
+				<span class="scene-preview__purpose-label">Watch</span>
 			</v-btn>
 			<v-btn
 				class="scene-preview__purpose-button scene-preview__purpose-button--level"
@@ -7884,10 +7961,10 @@ onBeforeUnmount(() => {
 				:elevation="0"
 				:ripple="false"
 				:aria-pressed="cameraViewState.mode === 'level'"
-				title="恢复平视"
+				title="Reset to level"
 				@click="handlePurposeResetClick"
 			>
-				<span class="scene-preview__purpose-label">平视</span>
+				<span class="scene-preview__purpose-label">Level</span>
 			</v-btn>
 		</div>
 		<v-btn
@@ -7901,7 +7978,7 @@ onBeforeUnmount(() => {
 			:disabled="vehicleDrivePrompt.busy"
 			@click="handleVehicleDrivePromptConfirm"
 		>
-			驾驶 {{ vehicleDrivePrompt.label }}
+			Drive {{ vehicleDrivePrompt.label }}
 		</v-btn>
 		<div
 			v-if="vehicleDriveUi.visible"
@@ -7946,7 +8023,7 @@ onBeforeUnmount(() => {
 							class="scene-preview__steering-wheel"
 							:style="vehicleSteeringWheelStyle"
 							role="slider"
-							aria-label="方向盘"
+							aria-label="Steering wheel"
 							aria-valuemin="-135"
 							aria-valuemax="135"
 							:aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
@@ -7969,8 +8046,8 @@ onBeforeUnmount(() => {
 							color="primary"
 							size="small"
 							icon="mdi-arrow-up-bold"
-							title="前进 (W)"
-							aria-label="前进"
+							title="Forward (W)"
+							aria-label="Forward"
 							@click.prevent
 							@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
 							@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
@@ -7984,8 +8061,8 @@ onBeforeUnmount(() => {
 							color="secondary"
 							size="small"
 							icon="mdi-arrow-down-bold"
-							title="后退 (S)"
-							aria-label="后退"
+							title="Reverse (S)"
+							aria-label="Reverse"
 							@click.prevent
 							@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
 							@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
@@ -7999,8 +8076,8 @@ onBeforeUnmount(() => {
 							color="error"
 							size="small"
 							icon="mdi-car-brake-alert"
-							title="刹车 (Space)"
-							aria-label="刹车"
+							title="Brake (Space)"
+							aria-label="Brake"
 							@click.prevent
 							@pointerdown.prevent="handleVehicleDriveControlPointer('brake', true, $event)"
 							@pointerup.prevent="handleVehicleDriveControlPointer('brake', false, $event)"
@@ -8013,8 +8090,8 @@ onBeforeUnmount(() => {
 							color="info"
 							size="small"
 							icon="mdi-backup-restore"
-							title="车辆重置"
-							aria-label="车辆重置"
+							title="Reset vehicle"
+							aria-label="Reset vehicle"
 							@click="handleVehicleDriveResetClick"
 						/>
 					</div>
@@ -8029,8 +8106,8 @@ onBeforeUnmount(() => {
 					variant="tonal"
 					color="primary"
 					size="small"
-					:aria-label="isPlaying ? '暂停动画' : '播放动画'"
-					:title="isPlaying ? '暂停动画' : '播放动画'"
+					:aria-label="isPlaying ? 'Pause animation' : 'Play animation'"
+					:title="isPlaying ? 'Pause animation' : 'Play animation'"
 					@click="togglePlayback"
 				/>
 				<v-btn-toggle
@@ -8046,16 +8123,16 @@ onBeforeUnmount(() => {
 						value="first-person"
 						icon="mdi-human-greeting"
 						size="small"
-						:aria-label="'第一人称视角'"
-						:title="'第一人称视角 (快捷键 1)'"
+						:aria-label="'First-person view'"
+						:title="'First-person view (Hotkey 1)'"
 					/>
 					<v-btn
 						value="third-person"
 						icon="mdi-compass"
 						size="small"
 
-						:aria-label="'第三人称视角'"
-						:title="'第三人称视角 (快捷键 3)'"
+						:aria-label="'Third-person view'"
+						:title="'Third-person view (Hotkey 3)'"
 					/>
 				</v-btn-toggle>
 				<v-menu
@@ -8074,8 +8151,8 @@ onBeforeUnmount(() => {
 							variant="tonal"
 							color="secondary"
 							size="small"
-							:aria-label="`调整音量 (${volumePercent}%)`"
-							:title="`调整音量 (${volumePercent}%)`"
+							:aria-label="`Adjust volume (${volumePercent}%)`"
+							:title="`Adjust volume (${volumePercent}%)`"
 						/>
 					</template>
 					<v-card class="scene-preview__volume-menu" elevation="8">
@@ -8096,49 +8173,9 @@ onBeforeUnmount(() => {
 					variant="tonal"
 					color="secondary"
 					size="small"
-					:aria-label="'截图 (快捷键 P)'"
-					:title="'截图 (快捷键 P)'"
+					:aria-label="'Screenshot (Hotkey P)'"
+					:title="'Screenshot (Hotkey P)'"
 					@click="captureScreenshot"
-				/>
-				<v-btn
-					class="scene-preview__control-button"
-					:icon="isInstancedCullingVisualizationVisible ? 'mdi-eye' : 'mdi-eye-off-outline'"
-					variant="tonal"
-					:color="isInstancedCullingVisualizationVisible ? 'warning' : 'secondary'"
-					size="small"
-					:aria-label="isInstancedCullingVisualizationVisible ? '关闭视锥剔除可视化' : '开启视锥剔除可视化'"
-					:title="isInstancedCullingVisualizationVisible ? '关闭视锥剔除可视化' : '开启视锥剔除可视化'"
-					@click="toggleInstancedCullingVisualization"
-				/>
-				<v-btn
-					class="scene-preview__control-button"
-					:icon="isGroundWireframeVisible ? 'mdi-grid' : 'mdi-grid-off'"
-					variant="tonal"
-					:color="isGroundWireframeVisible ? 'warning' : 'secondary'"
-					size="small"
-					:aria-label="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
-					:title="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
-					@click="toggleGroundWireframeDebug"
-				/>
-				<v-btn
-					class="scene-preview__control-button"
-					icon="mdi-vector-square"
-					variant="tonal"
-					:color="isGroundChunkStreamingDebugVisible ? 'warning' : 'secondary'"
-					size="small"
-					:aria-label="isGroundChunkStreamingDebugVisible ? '隐藏地面分块调试' : '显示地面分块调试'"
-					:title="isGroundChunkStreamingDebugVisible ? '隐藏地面分块调试' : '显示地面分块调试'"
-					@click="toggleGroundChunkStreamingDebug"
-				/>
-				<v-btn
-					class="scene-preview__control-button"
-					:icon="isOtherRigidbodyWireframeVisible ? 'mdi-cube-scan' : 'mdi-cube-outline'"
-					variant="tonal"
-					:color="isOtherRigidbodyWireframeVisible ? 'warning' : 'secondary'"
-					size="small"
-					:aria-label="isOtherRigidbodyWireframeVisible ? '隐藏其他刚体线框' : '显示其他刚体线框'"
-					:title="isOtherRigidbodyWireframeVisible ? '隐藏其他刚体线框' : '显示其他刚体线框'"
-					@click="toggleOtherRigidbodyWireframeDebug"
 				/>
 				<v-btn
 					class="scene-preview__control-button"
@@ -8146,8 +8183,8 @@ onBeforeUnmount(() => {
 					variant="tonal"
 					color="secondary"
 					size="small"
-					:aria-label="isFullscreen ? '退出全屏' : '全屏'"
-					:title="isFullscreen ? '退出全屏' : '全屏'"
+					:aria-label="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+					:title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
 					@click="toggleFullscreen"
 				/>
 			</div>
@@ -8945,6 +8982,28 @@ onBeforeUnmount(() => {
 	color: #f5f7ff;
 	backdrop-filter: blur(14px);
 	pointer-events: auto;
+}
+
+.scene-preview__debug-menu {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	z-index: 1200;
+	pointer-events: auto;
+}
+
+.scene-preview__debug-menu-card {
+	background: rgba(18, 18, 32, 0.94);
+	color: #f5f7ff;
+	min-width: 220px;
+}
+
+.scene-preview__debug-list {
+	padding: 8px 6px;
+}
+
+.scene-preview__debug-checkbox {
+	margin: 0;
 }
 
 .scene-preview__controls {

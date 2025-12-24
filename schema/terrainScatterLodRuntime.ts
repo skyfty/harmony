@@ -32,6 +32,7 @@ export type TerrainScatterLodRuntime = {
   ) => Promise<void>
   update: (camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null) => void
   dispose: () => void
+  getInstanceStats: () => { total: number; visible: number }
 }
 
 type GroundScatterEntry = {
@@ -544,9 +545,17 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
       })
   }
 
+  function getInstanceStats(): { total: number; visible: number } {
+    return {
+      total: runtimeInstances.size,
+      visible: visibleNodeIds.size,
+    }
+  }
+
   return {
     sync,
     update,
     dispose,
+    getInstanceStats,
   }
 }
