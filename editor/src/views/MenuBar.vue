@@ -95,11 +95,6 @@ function openPlanningDialog() {
                   <v-list-item @click="handleMenuAction('SaveAs')" class="menu-list-item">
                     Save as
                   </v-list-item>      
-                              <v-divider />
-
-                  <v-list-item @click="openPlanningDialog" class="menu-list-item">
-                    Planning
-                  </v-list-item>
                   <v-divider />
                   <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
                     Import
@@ -309,6 +304,18 @@ function openPlanningDialog() {
         >
           <v-icon start>mdi-content-save</v-icon>
           Save
+        </v-btn>
+        <v-btn
+          class="action-button"
+          variant="tonal"
+          color="secondary"
+          density="comfortable"
+          size="small"
+          rounded
+          @click="openPlanningDialog"
+        >
+          <v-icon start>mdi-lightbulb-outline</v-icon>
+          Planning
         </v-btn>
         <v-btn
           v-for="action in quickActions"
