@@ -1377,7 +1377,7 @@ function buildRoadDynamicMeshFromWorldPoints(
   const normalizedWidth = normalizeRoadWidth(width)
 
   const vertices = worldPoints.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
-  const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
+  const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
 
   const definition: RoadDynamicMesh = {
     type: 'Road',
@@ -1842,20 +1842,14 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
             return null
           }
-          return {
-            a,
-            b,
-            materialId: typeof segment.materialId === 'string' && segment.materialId.trim().length
-              ? String(segment.materialId)
-              : null,
-          }
+          return { a, b }
         })
-        .filter((segment: any): segment is { a: number; b: number; materialId: string | null } => !!segment)
+        .filter((segment: any): segment is { a: number; b: number } => !!segment)
 
       const effectiveSegments = segments.length
         ? segments
         : (effectiveVertices.length >= 2
-          ? Array.from({ length: effectiveVertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
+          ? Array.from({ length: effectiveVertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
           : [])
 
       return {

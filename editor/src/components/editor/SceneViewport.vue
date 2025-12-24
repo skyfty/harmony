@@ -504,12 +504,13 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
   return hashString(serialized)
 }
 
-function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh, junctionSmoothing: number | null): string {
+function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh, junctionSmoothing: number | null, materialConfigId: string | null): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
     Array.isArray(definition.segments) ? definition.segments : [],
     Number.isFinite(definition.width) ? definition.width : null,
     Number.isFinite(junctionSmoothing) ? junctionSmoothing : null,
+    typeof materialConfigId === 'string' ? materialConfigId : null,
   ])
   return hashString(serialized)
 }
@@ -522,6 +523,12 @@ function resolveRoadJunctionSmoothing(node: SceneNode): number {
     return ROAD_DEFAULT_JUNCTION_SMOOTHING
   }
   return Math.min(1, Math.max(0, value))
+}
+
+function resolveRoadMaterialConfigId(node: SceneNode): string | null {
+  const first = node.materials?.[0]
+  const id = typeof first?.id === 'string' ? first.id.trim() : ''
+  return id ? id : null
 }
 
 function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
@@ -6246,7 +6253,7 @@ function finalizeRoadBuildSession() {
       const base = node.dynamicMesh
       const vertices = Array.isArray(base.vertices) ? base.vertices.map((v) => [Number(v[0]), Number(v[1])] as [number, number]) : []
       const segments = Array.isArray(base.segments)
-        ? base.segments.map((s) => ({ a: Math.trunc(Number(s.a)), b: Math.trunc(Number(s.b)), materialId: typeof s.materialId === 'string' ? s.materialId : null }))
+        ? base.segments.map((s) => ({ a: Math.trunc(Number(s.a)), b: Math.trunc(Number(s.b)) }))
         : []
 
       const next: RoadDynamicMesh = {
@@ -6282,7 +6289,7 @@ function finalizeRoadBuildSession() {
           next.vertices.push([x, z])
         }
         if (nextIndex !== prevIndex) {
-          next.segments.push({ a: prevIndex, b: nextIndex, materialId: null })
+          next.segments.push({ a: prevIndex, b: nextIndex })
           prevIndex = nextIndex
         }
       }
@@ -7253,18 +7260,19 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   } else if (node.dynamicMesh?.type === 'Road') {
     const roadDefinition = node.dynamicMesh as RoadDynamicMesh
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)
+    const materialConfigId = resolveRoadMaterialConfigId(node)
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
-      roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing })
+      roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing, materialConfigId })
       roadGroup.userData.nodeId = node.id
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing, materialConfigId)
       object.add(roadGroup)
       userData.roadGroup = roadGroup
     } else {
       const groupData = roadGroup.userData ?? (roadGroup.userData = {})
-      const nextSignature = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
+      const nextSignature = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing, materialConfigId)
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateRoadGroup(roadGroup, roadDefinition, { junctionSmoothing })
+        updateRoadGroup(roadGroup, roadDefinition, { junctionSmoothing, materialConfigId })
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
       }
     }
@@ -7925,10 +7933,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = 'Road'
       const roadDefinition = node.dynamicMesh as RoadDynamicMesh
       const junctionSmoothing = resolveRoadJunctionSmoothing(node)
-      const roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing })
+      const materialConfigId = resolveRoadMaterialConfigId(node)
+      const roadGroup = createRoadGroup(roadDefinition, { junctionSmoothing, materialConfigId })
       roadGroup.removeFromParent()
       roadGroup.userData.nodeId = node.id
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing)
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition, junctionSmoothing, materialConfigId)
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
     } else if (node.dynamicMesh?.type === 'Floor') {

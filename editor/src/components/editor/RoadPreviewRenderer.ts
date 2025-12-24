@@ -159,7 +159,7 @@ function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.V
   const normalizedWidth = Number.isFinite(width) ? Math.max(0.2, width) : 2
   const vertices = combined.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
   const segments = vertices.length >= 2
-    ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
+    ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
     : []
   const definition: RoadDynamicMesh = {
     type: 'Road',

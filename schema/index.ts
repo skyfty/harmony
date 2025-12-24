@@ -837,8 +837,6 @@ export type RoadSegment = {
   a: number
   /** Index into `vertices`. */
   b: number
-  /** Optional material assignment token (editor-defined). */
-  materialId?: string | null
 }
 
 export interface RoadDynamicMesh {

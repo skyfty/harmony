@@ -8,7 +8,7 @@ import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING } from '@schema/co
 import type { RoadComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId, selectedRoadSegment } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const roadDynamicMesh = computed(() => {
   const mesh = selectedNode.value?.dynamicMesh
@@ -26,37 +26,16 @@ const roadComponent = computed(() => {
   return component as SceneNodeComponentState<RoadComponentProps>
 })
 
-const selectedSegmentIndex = computed(() => {
-  const selection = selectedRoadSegment.value
-  if (!selection) {
-    return null
-  }
-  if (!selectedNodeId.value || selection.nodeId !== selectedNodeId.value) {
-    return null
-  }
-  return selection.segmentIndex
-})
-
-const availableNodeMaterials = computed(() => {
-  const materials = selectedNode.value?.materials ?? []
-  return materials.map((entry) => ({
-    title: entry.name?.trim() ? entry.name : entry.id.slice(0, 8),
-    value: entry.id,
-  }))
-})
-
-const localMaterialId = ref<string | null>(null)
 const localWidth = ref<number>(2)
 const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
 const isSyncingFromScene = ref(false)
 
 watch(
-  () => ({ mesh: roadDynamicMesh.value, segmentIndex: selectedSegmentIndex.value }),
-  ({ mesh, segmentIndex }) => {
+  () => roadDynamicMesh.value,
+  (mesh) => {
     isSyncingFromScene.value = true
     if (!mesh) {
       localWidth.value = 2
-      localMaterialId.value = null
       nextTick(() => {
         isSyncingFromScene.value = false
       })
@@ -65,16 +44,6 @@ watch(
 
     const width = Number((mesh as RoadDynamicMesh).width)
     localWidth.value = Number.isFinite(width) ? Math.max(0.2, width) : 2
-
-    if (segmentIndex === null || segmentIndex < 0 || segmentIndex >= mesh.segments.length) {
-      localMaterialId.value = null
-      nextTick(() => {
-        isSyncingFromScene.value = false
-      })
-      return
-    }
-
-    localMaterialId.value = mesh.segments[segmentIndex]?.materialId ?? null
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -156,28 +125,6 @@ function applyWidthUpdate(rawValue: unknown) {
   sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
 }
 
-function applyMaterialIdUpdate(nextMaterialId: string | null) {
-  if (isSyncingFromScene.value) {
-    return
-  }
-  const nodeId = selectedNodeId.value
-  const mesh = roadDynamicMesh.value
-  const segmentIndex = selectedSegmentIndex.value
-  if (!nodeId || !mesh || segmentIndex === null) {
-    return
-  }
-  if (segmentIndex < 0 || segmentIndex >= mesh.segments.length) {
-    return
-  }
-
-  const nextMesh = JSON.parse(JSON.stringify(mesh)) as RoadDynamicMesh
-  const segment = nextMesh.segments[segmentIndex]
-  if (!segment) {
-    return
-  }
-  segment.materialId = nextMaterialId
-  sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
-}
 </script>
 
 <template>
@@ -185,10 +132,6 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
     <v-expansion-panel-title>
       <div class="road-panel-header">
         <span class="road-panel-title">Road</span>
-        <v-spacer />
-        <span v-if="selectedSegmentIndex !== null" class="road-panel-subtitle">
-          Segment #{{ selectedSegmentIndex }}
-        </span>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
@@ -217,16 +160,6 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
           min="0.2"
           step="0.1"
           @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
-        />
-
-        <v-select
-          :items="[{ title: 'None', value: null }, ...availableNodeMaterials]"
-          :model-value="localMaterialId"
-          label="Segment Material"
-          density="compact"
-          variant="underlined"
-          clearable
-          @update:modelValue="(v) => { localMaterialId = v; applyMaterialIdUpdate(v) }"
         />
       </div>
     </v-expansion-panel-text>

@@ -55,13 +55,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
       if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
         return null
       }
-      return {
-        a,
-        b,
-        materialId: typeof (segment as any).materialId === 'string' && (segment as any).materialId.trim().length
-          ? String((segment as any).materialId)
-          : null,
-      } as RoadSegment
+      return { a, b } as RoadSegment
     })
     .filter((segment): segment is RoadSegment => segment !== null)
 
@@ -106,7 +100,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
 export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponentProps {
   return {
     vertices: props.vertices.map((p) => [p[0], p[1]]),
-    segments: props.segments.map((s) => ({ a: s.a, b: s.b, materialId: s.materialId ?? null })),
+    segments: props.segments.map((s) => ({ a: s.a, b: s.b })),
     width: props.width,
     junctionSmoothing: props.junctionSmoothing,
     bodyAssetId: props.bodyAssetId ?? null,

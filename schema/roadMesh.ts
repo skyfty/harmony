@@ -8,6 +8,8 @@ export type RoadRenderAssetObjects = {
 
 export type RoadJunctionSmoothingOptions = {
   junctionSmoothing?: number
+  /** Optional node material selector id (editor-defined). */
+  materialConfigId?: string | null
 }
 
 const DEFAULT_COLOR = 0x4b4f55
@@ -46,7 +48,6 @@ function createSegmentMaterial(): THREE.MeshStandardMaterial {
 
 type RoadVertexJunctionInfo = {
   neighbors: Set<number>
-  materialIds: Set<string>
 }
 
 function clampJunctionSmoothing(value: unknown): number {
@@ -126,7 +127,7 @@ function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadV
 
   const junctions = new Map<number, RoadVertexJunctionInfo>()
 
-  const record = (index: number, neighbor: number, materialId: string | null) => {
+  const record = (index: number, neighbor: number) => {
     if (!Number.isFinite(index) || index < 0 || index >= vertices.length) {
       return
     }
@@ -134,11 +135,8 @@ function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadV
       return
     }
     const existing = junctions.get(index)
-    const info = existing ?? { neighbors: new Set<number>(), materialIds: new Set<string>() }
+    const info = existing ?? { neighbors: new Set<number>() }
     info.neighbors.add(neighbor)
-    if (materialId) {
-      info.materialIds.add(materialId)
-    }
     if (!existing) {
       junctions.set(index, info)
     }
@@ -150,10 +148,8 @@ function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadV
     if (a === b) {
       return
     }
-    const rawMaterialId = typeof segment?.materialId === 'string' ? segment.materialId.trim() : ''
-    const materialId = rawMaterialId || null
-    record(a, b, materialId)
-    record(b, a, materialId)
+    record(a, b)
+    record(b, a)
   })
 
   return junctions
@@ -242,8 +238,9 @@ function buildRoadTransitionMeshes(
     mesh.castShadow = false
     mesh.receiveShadow = true
     mesh.userData.roadTransitionIndex = vertexIndex
-    const materialId = info.materialIds.size === 1 ? Array.from(info.materialIds)[0] : null
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
+      ? options.materialConfigId
+      : null
     meshes.push(mesh)
   })
 
@@ -274,7 +271,7 @@ function directionToQuaternionFromXAxis(direction: THREE.Vector3): THREE.Quatern
 function forEachRoadSegment(
   definition: RoadDynamicMesh,
   visit: (
-    segment: { start: THREE.Vector3; end: THREE.Vector3; width: number; materialId: string | null },
+    segment: { start: THREE.Vector3; end: THREE.Vector3; width: number },
     index: number,
   ) => void,
 ): void {
@@ -293,8 +290,7 @@ function forEachRoadSegment(
     if (start.distanceToSquared(end) <= ROAD_EPSILON) {
       return
     }
-    const rawMaterialId = typeof segment.materialId === 'string' ? segment.materialId.trim() : ''
-    visit({ start, end, width, materialId: rawMaterialId || null }, index)
+    visit({ start, end, width }, index)
   })
 }
 
@@ -304,7 +300,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
 
   const material = createSegmentMaterial()
 
-  forEachRoadSegment(definition, ({ start, end, width, materialId }, index) => {
+  forEachRoadSegment(definition, ({ start, end, width }, index) => {
     const direction = end.clone().sub(start)
     const length = direction.length()
     if (length <= ROAD_EPSILON) {
@@ -329,7 +325,9 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     segmentGroup.name = `RoadSegmentGroup_${index + 1}`
     segmentGroup.userData.roadSegmentIndex = index
     mesh.userData.roadSegmentIndex = index
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
+      ? options.materialConfigId
+      : null
     segmentGroup.add(mesh)
     group.add(segmentGroup)
   })
