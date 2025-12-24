@@ -55,6 +55,10 @@ export type ConvertPlanningToSceneOptions = {
       width?: number
       name?: string
     }) => SceneNode | null
+    createFloorNode: (payload: {
+      points: Array<{ x: number; y: number; z: number }>
+      name?: string
+    }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
@@ -982,35 +986,40 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) {
         updateProgressForUnit(`Converting floor: ${poly.name?.trim() || poly.id}`)
-        const build = buildFloorDynamicMeshFromPlanningPolygon({
-          polygon: poly,
-          groundWidth,
-          groundDepth,
-          smooth: floorSmooth,
-        })
-        if (!build) {
+        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+        if (worldXZ.length < 3) {
           continue
         }
 
-        const floorObject = createFloorGroup(build.definition)
-        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-        const floorNode = sceneStore.addSceneNode({
-          nodeType: 'Mesh',
-          object: floorObject,
-          name: layerName ? `${layerName} Floor` : 'Planning Floor',
-          position: { x: build.center.x, y: build.center.y + 0.01, z: build.center.z },
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-          userData: {
-            source: PLANNING_CONVERSION_SOURCE,
-            planningLayerId: layerId,
-            kind: 'floor',
-          },
+        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
+        const nodeName = poly.name?.trim()
+          ? poly.name.trim()
+          : (layerName ? `${layerName} Floor` : 'Planning Floor')
+
+        const floorNode = sceneStore.createFloorNode({
+          points: worldPoints,
+          name: nodeName,
         })
+
+        if (!floorNode) {
+          continue
+        }
+
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
-        sceneStore.updateNodeDynamicMesh(floorNode.id, build.definition)
+
+        const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
+        if (floorComponent?.id) {
+          sceneStore.updateNodeComponentProps(floorNode.id, floorComponent.id, { smooth: floorSmooth })
+        }
+
+        sceneStore.updateNodeUserData(floorNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          kind: 'floor',
+        })
         sceneStore.setNodeLocked(floorNode.id, true)
       }
     } else if (kind === 'water') {
