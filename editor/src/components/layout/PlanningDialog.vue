@@ -768,6 +768,71 @@ const SCATTER_CONTROLS_SUSPEND_KEY = '__scatter-controls__'
 let scatterControlsPointerId: number | null = null
 let scatterControlsListenersAttached = false
 
+const scatterControlsTargetPolygonId = ref<string | null>(null)
+const scatterDensityPercentDraft = ref<number | null>(null)
+const scatterMinSpacingMetersDraft = ref<number | null>(null)
+
+const scatterControlsInteracting = computed(() =>
+  suspendedPolygonScatterDensityDotsKey.value?.polygonId === SCATTER_CONTROLS_SUSPEND_KEY,
+)
+
+function commitScatterControlsDraft() {
+  if (propertyPanelDisabled.value) {
+    scatterDensityPercentDraft.value = null
+    scatterMinSpacingMetersDraft.value = null
+    scatterControlsTargetPolygonId.value = null
+    return
+  }
+
+  const polygonId = scatterControlsTargetPolygonId.value
+  if (!polygonId) {
+    scatterDensityPercentDraft.value = null
+    scatterMinSpacingMetersDraft.value = null
+    return
+  }
+
+  const polygon = polygons.value.find((item) => item.id === polygonId)
+  if (!polygon?.scatter) {
+    scatterDensityPercentDraft.value = null
+    scatterMinSpacingMetersDraft.value = null
+    scatterControlsTargetPolygonId.value = null
+    return
+  }
+
+  // Only meaningful for green polygons (planning -> terrain scatter).
+  const layer = layers.value.find((item) => item.id === polygon.layerId)
+  if (layer?.kind !== 'green') {
+    scatterDensityPercentDraft.value = null
+    scatterMinSpacingMetersDraft.value = null
+    scatterControlsTargetPolygonId.value = null
+    return
+  }
+
+  let changed = false
+  if (typeof scatterDensityPercentDraft.value === 'number') {
+    const nextDensity = clampDensityPercent(scatterDensityPercentDraft.value)
+    if (polygon.scatter.densityPercent !== nextDensity) {
+      polygon.scatter.densityPercent = nextDensity
+      changed = true
+    }
+  }
+  if (typeof scatterMinSpacingMetersDraft.value === 'number') {
+    const nextSpacing = clampMinSpacingMeters(scatterMinSpacingMetersDraft.value)
+    if (polygon.scatter.minSpacingMeters !== nextSpacing) {
+      polygon.scatter.minSpacingMeters = nextSpacing
+      changed = true
+    }
+  }
+
+  scatterDensityPercentDraft.value = null
+  scatterMinSpacingMetersDraft.value = null
+  scatterControlsTargetPolygonId.value = null
+
+  if (changed) {
+    markPlanningDirty()
+  }
+}
+
 function handleScatterControlsBlur() {
   endScatterControlsInteraction()
 }
@@ -790,6 +855,10 @@ function detachScatterControlsPointerListeners() {
 }
 
 function beginScatterControlsInteraction(event: PointerEvent) {
+  if (!scatterDensityEnabled.value) {
+    return
+  }
+
   // Don't clobber a polygon drag suspension; that path manages its own resume.
   if (
     suspendPolygonScatterDensityDots.value &&
@@ -797,6 +866,11 @@ function beginScatterControlsInteraction(event: PointerEvent) {
   ) {
     return
   }
+
+  // Snapshot which polygon we're editing so we can commit on pointer-up.
+  scatterControlsTargetPolygonId.value = selectedPolygon.value?.id ?? null
+  scatterDensityPercentDraft.value = null
+  scatterMinSpacingMetersDraft.value = null
 
   suspendPolygonScatterDensityDots.value = true
   suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: SCATTER_CONTROLS_SUSPEND_KEY }
@@ -816,6 +890,9 @@ function endScatterControlsInteraction() {
     scatterControlsPointerId = null
     return
   }
+
+  // Commit while still suspended to avoid triggering expensive recompute per tick.
+  commitScatterControlsDraft()
 
   suspendPolygonScatterDensityDots.value = false
   suspendedPolygonScatterDensityDotsKey.value = null
@@ -3204,6 +3281,19 @@ const scatterDensityPercentModel = computed<number>({
   },
 })
 
+const scatterDensityPercentSliderModel = computed<number>({
+  get: () => (scatterControlsInteracting.value
+    ? (scatterDensityPercentDraft.value ?? scatterDensityPercentModel.value)
+    : scatterDensityPercentModel.value),
+  set: (value) => {
+    if (scatterControlsInteracting.value) {
+      scatterDensityPercentDraft.value = clampDensityPercent(value)
+      return
+    }
+    scatterDensityPercentModel.value = value
+  },
+})
+
 const scatterDensityEnabled = computed(() => {
   const target = selectedScatterTarget.value
   return !propertyPanelDisabled.value
@@ -3229,6 +3319,19 @@ const scatterMinSpacingMetersModel = computed<number>({
     }
     target.shape.scatter.minSpacingMeters = clampMinSpacingMeters(value)
     markPlanningDirty()
+  },
+})
+
+const scatterMinSpacingMetersSliderModel = computed<number>({
+  get: () => (scatterControlsInteracting.value
+    ? (scatterMinSpacingMetersDraft.value ?? scatterMinSpacingMetersModel.value)
+    : scatterMinSpacingMetersModel.value),
+  set: (value) => {
+    if (scatterControlsInteracting.value) {
+      scatterMinSpacingMetersDraft.value = clampMinSpacingMeters(value)
+      return
+    }
+    scatterMinSpacingMetersModel.value = value
   },
 })
 
@@ -5231,7 +5334,7 @@ onBeforeUnmount(() => {
                 <div class="property-panel__density-row">
                   <div @pointerdown.capture="beginScatterControlsInteraction">
                     <v-slider
-                      v-model="scatterDensityPercentModel"
+                      v-model="scatterDensityPercentSliderModel"
                       min="0"
                       max="100"
                       step="1"
@@ -5240,14 +5343,14 @@ onBeforeUnmount(() => {
                       :disabled="!scatterDensityEnabled"
                     />
                   </div>
-                  <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
+                  <div class="property-panel__density-value">{{ scatterDensityPercentSliderModel }}%</div>
                 </div>
 
                 <div class="property-panel__spacing-title">分布间隔</div>
                 <div class="property-panel__density-row">
                   <div @pointerdown.capture="beginScatterControlsInteraction">
                     <v-slider
-                      v-model="scatterMinSpacingMetersModel"
+                      v-model="scatterMinSpacingMetersSliderModel"
                       min="0"
                       max="10"
                       step="0.1"
@@ -5256,7 +5359,7 @@ onBeforeUnmount(() => {
                       :disabled="!scatterMinSpacingEnabled"
                     />
                   </div>
-                  <div class="property-panel__density-value">{{ scatterMinSpacingMetersModel }}m</div>
+                  <div class="property-panel__density-value">{{ scatterMinSpacingMetersSliderModel }}m</div>
                 </div>
               </div>
 
