@@ -216,6 +216,198 @@ function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry 
 }
 
 export function createGroundEditor(options: GroundEditorOptions) {
+	type GroundNormalsIndexType = 'u16' | 'u32'
+	type GroundNormalsComputeRequest = {
+		kind: 'compute-normals'
+		requestId: number
+		chunks: Array<{
+			key: string
+			positions: ArrayBuffer
+			indices: ArrayBuffer
+			indexType: GroundNormalsIndexType
+		}>
+	}
+	type GroundNormalsComputeResponse = {
+		kind: 'compute-normals-result'
+		requestId: number
+		results: Array<{ key: string; normals: ArrayBuffer }>
+		error?: string
+	}
+
+	let groundNormalsWorker: Worker | null = null
+	let groundNormalsRequestId = 0
+	let groundNormalsJobToken = 0
+	const pendingNormalsRequests = new Map<
+		number,
+		{
+			resolve: (response: GroundNormalsComputeResponse) => void
+			reject: (error: Error) => void
+		}
+	>()
+
+	function getGroundNormalsWorker(): Worker | null {
+		if (typeof Worker === 'undefined') {
+			return null
+		}
+		if (groundNormalsWorker) {
+			return groundNormalsWorker
+		}
+		try {
+			groundNormalsWorker = new Worker(new URL('@/workers/groundNormals.worker.ts', import.meta.url), {
+				type: 'module',
+			})
+			groundNormalsWorker.onmessage = (event: MessageEvent<GroundNormalsComputeResponse>) => {
+				const data = event.data
+				if (!data || data.kind !== 'compute-normals-result') {
+					return
+				}
+				const pending = pendingNormalsRequests.get(data.requestId)
+				if (!pending) {
+					return
+				}
+				pendingNormalsRequests.delete(data.requestId)
+				pending.resolve(data)
+			}
+			groundNormalsWorker.onerror = (event) => {
+				console.warn('地形法线 Worker 出错：', event)
+			}
+			return groundNormalsWorker
+		} catch (error) {
+			console.warn('无法初始化地形法线 Worker，将回退到主线程计算：', error)
+			groundNormalsWorker = null
+			return null
+		}
+	}
+
+	function cloneTypedArrayForTransfer<T extends ArrayBufferView>(array: T): T {
+		const ctor = array.constructor as { new (buffer: ArrayBufferLike): T }
+		const start = array.byteOffset
+		const end = array.byteOffset + array.byteLength
+		const slice = array.buffer.slice(start, end)
+		return new ctor(slice)
+	}
+
+	async function recomputeGroundChunkNormalsInWorker(params: {
+		groundObject: THREE.Object3D
+		definition: GroundDynamicMesh
+		region: GroundGeometryUpdateRegion | null
+		jobToken: number
+	}): Promise<void> {
+		const worker = getGroundNormalsWorker()
+		if (!worker) {
+			// Worker not available; fall back.
+			params.groundObject.traverse((child) => {
+				const mesh = child as THREE.Mesh
+				if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+					return
+				}
+				mesh.geometry.computeVertexNormals()
+			})
+			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+			return
+		}
+
+		const chunks: GroundNormalsComputeRequest['chunks'] = []
+		const meshesByKey = new Map<string, THREE.Mesh>()
+		params.groundObject.traverse((child) => {
+			const mesh = child as THREE.Mesh
+			if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+				return
+			}
+			const geometry = mesh.geometry as THREE.BufferGeometry
+			const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+			const indexAttr = geometry.getIndex() as THREE.BufferAttribute | null
+			if (!positionAttr || !indexAttr) {
+				return
+			}
+			const positions = positionAttr.array
+			const indices = indexAttr.array
+			if (!(positions instanceof Float32Array)) {
+				return
+			}
+			if (!(indices instanceof Uint16Array) && !(indices instanceof Uint32Array)) {
+				return
+			}
+
+			// If we have a region, only process overlapping chunks.
+			if (params.region) {
+				const chunk = mesh.userData?.groundChunk as
+					| { startRow: number; startColumn: number; rows: number; columns: number }
+					| undefined
+				if (chunk) {
+					const chunkMinRow = chunk.startRow
+					const chunkMaxRow = chunk.startRow + chunk.rows
+					const chunkMinColumn = chunk.startColumn
+					const chunkMaxColumn = chunk.startColumn + chunk.columns
+					const overlaps = !(
+						params.region.maxRow < chunkMinRow ||
+						params.region.minRow > chunkMaxRow ||
+						params.region.maxColumn < chunkMinColumn ||
+						params.region.minColumn > chunkMaxColumn
+					)
+					if (!overlaps) {
+						return
+					}
+				}
+			}
+
+			const positionsCopy = cloneTypedArrayForTransfer(positions)
+			const indicesCopy = cloneTypedArrayForTransfer(indices)
+			const key = mesh.uuid
+			meshesByKey.set(key, mesh)
+			chunks.push({
+				key,
+				positions: positionsCopy.buffer as ArrayBuffer,
+				indices: indicesCopy.buffer as ArrayBuffer,
+				indexType: indicesCopy instanceof Uint16Array ? 'u16' : 'u32',
+			})
+		})
+
+		if (!chunks.length) {
+			return
+		}
+
+		const requestId = (groundNormalsRequestId += 1)
+		const request: GroundNormalsComputeRequest = { kind: 'compute-normals', requestId, chunks }
+		const responsePromise = new Promise<GroundNormalsComputeResponse>((resolve, reject) => {
+			pendingNormalsRequests.set(requestId, { resolve, reject })
+			try {
+				worker.postMessage(request, [
+					...chunks.map((chunk) => chunk.positions as ArrayBuffer),
+					...chunks.map((chunk) => chunk.indices as ArrayBuffer),
+				])
+			} catch (error) {
+				pendingNormalsRequests.delete(requestId)
+				reject(error instanceof Error ? error : new Error(String(error)))
+			}
+		})
+
+		const response = await responsePromise
+		if (params.jobToken !== groundNormalsJobToken) {
+			// A newer sculpt finalize started; ignore stale results.
+			return
+		}
+		if (response.error) {
+			throw new Error(response.error)
+		}
+		for (const result of response.results) {
+			const mesh = meshesByKey.get(result.key)
+			if (!mesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+				continue
+			}
+			const geometry = mesh.geometry as THREE.BufferGeometry
+			const normals = new Float32Array(result.normals)
+			const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
+			if (normalAttr && normalAttr.array instanceof Float32Array && normalAttr.array.length === normals.length) {
+				;(normalAttr.array as Float32Array).set(normals)
+				normalAttr.needsUpdate = true
+			} else {
+				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+			}
+		}
+		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+	}
+
 	const assetCacheStore = useAssetCacheStore()
 	const brushMaterial = new THREE.MeshBasicMaterial({
 		color: 0x5fb0ff,
@@ -2014,42 +2206,36 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const selectedNode = options.sceneStore.selectedNode
 		if (selectedNode?.dynamicMesh?.type === 'Ground') {
+			const session = sculptSessionState?.nodeId === selectedNode.id ? sculptSessionState : null
+			const region = session?.affectedRegion ?? null
+			const dirty = Boolean(session?.dirty)
 			const groundObject = getGroundObject()
-			const region = sculptSessionState?.nodeId === selectedNode.id
-				? sculptSessionState?.affectedRegion
-				: null
+			if (!dirty) {
+				sculptSessionState = null
+				return true
+			}
 			if (groundObject) {
-				groundObject.traverse((child) => {
-					const mesh = child as THREE.Mesh
-					if (!mesh?.isMesh || !mesh.geometry) {
-						return
-					}
-					if (!region) {
-						mesh.geometry.computeVertexNormals()
-						return
-					}
-					const chunk = mesh.userData?.groundChunk as
-						| { startRow: number; startColumn: number; rows: number; columns: number }
-						| undefined
-					if (!chunk) {
-						mesh.geometry.computeVertexNormals()
-						return
-					}
-					const chunkMinRow = chunk.startRow
-					const chunkMaxRow = chunk.startRow + chunk.rows
-					const chunkMinColumn = chunk.startColumn
-					const chunkMaxColumn = chunk.startColumn + chunk.columns
-					const overlaps = !(
-						region.maxRow < chunkMinRow ||
-						region.minRow > chunkMaxRow ||
-						region.maxColumn < chunkMinColumn ||
-						region.minColumn > chunkMaxColumn
-					)
-					if (overlaps) {
-						mesh.geometry.computeVertexNormals()
+				const jobToken = (groundNormalsJobToken += 1)
+				void recomputeGroundChunkNormalsInWorker({
+					groundObject,
+					definition: selectedNode.dynamicMesh as GroundDynamicMesh,
+					region,
+					jobToken,
+				}).catch((error) => {
+					console.warn('地形法线异步构建失败，回退到主线程：', error)
+					try {
+						groundObject.traverse((child) => {
+							const mesh = child as THREE.Mesh
+							if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+								return
+							}
+							mesh.geometry.computeVertexNormals()
+						})
+						stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundDynamicMesh, region ?? null)
+					} catch (_error) {
+						/* noop */
 					}
 				})
-				stitchGroundChunkNormals(groundObject, selectedNode.dynamicMesh as GroundDynamicMesh, region ?? null)
 			}
 			commitSculptSession(selectedNode)
 		} else {

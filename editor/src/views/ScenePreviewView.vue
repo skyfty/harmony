@@ -7584,7 +7584,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetBehaviorRuntime()
 	previewComponentManager.reset()
 	rebuildPreviewNodeMap(document.nodes)
-	syncGroundCache(document)
 	refreshBehaviorProximityCandidates()
 
 	const pendingObjects = new Map<string, THREE.Object3D>()
@@ -7619,6 +7618,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	if (!currentDocument) {
 		disposeScene({ preservePreviewNodeMap: true })
+		currentDocument = document
+		syncGroundCache(document)
 		while (root.children.length) {
 			const child = root.children.shift()
 			if (!child) {
@@ -7627,7 +7628,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 			previewRoot.add(child)
 			registerSubtree(child, pendingObjects)
 		}
-		currentDocument = document
 		await syncTerrainScatterInstances(document, resourceCache)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
@@ -7640,6 +7640,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
 	}
+	syncGroundCache(document)
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument.nodes ?? [], pendingObjects)
 
 	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
