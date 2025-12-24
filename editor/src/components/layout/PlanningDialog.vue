@@ -4672,6 +4672,7 @@ onBeforeUnmount(() => {
                     <g
                       v-if="polygonScatterDensityDots[poly.id]?.length"
                       class="scatter-density-dots"
+                      :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }"
                       pointer-events="none"
                     >
                       <circle
@@ -5972,7 +5973,7 @@ onBeforeUnmount(() => {
 }
 
 .inactive-layer-feature {
-  opacity: 0.28;
+  opacity: 0.22;
 }
 
 .planning-polygon.draft {
