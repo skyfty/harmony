@@ -88,7 +88,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 const POISSON_CANDIDATES_PER_ACTIVE = 24
 
-type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water'
+type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -164,7 +164,7 @@ export function findPlanningConversionRootIds(nodes: SceneNode[]): string[] {
 }
 
 export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningToSceneOptions['sceneStore']) {
-  // 1) Remove previously converted scene nodes (walls/roads/buildings/etc.).
+  // 1) Remove previously converted scene nodes (walls/roads/floors/etc.).
   const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
   if (existingRoots.length) {
     sceneStore.removeSceneNodes(existingRoots)
@@ -191,10 +191,6 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
 
 function layerKindFromId(layerId: string): LayerKind | null {
   switch (layerId) {
-    case 'terrain-layer':
-      return 'terrain'
-    case 'building-layer':
-      return 'building'
     case 'road-layer':
       return 'road'
     case 'floor-layer':
@@ -210,7 +206,7 @@ function layerKindFromId(layerId: string): LayerKind | null {
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(terrain|building|road|floor|green|water|wall)-layer\b/i.exec(layerId)
+  const match = /^(road|floor|green|water|wall)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -227,7 +223,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['terrain-layer', 'building-layer', 'road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
+  return ['road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -238,9 +234,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
     if (typeof kind === 'string') {
       const normalized = kind.toLowerCase()
       if (
-        normalized === 'terrain'
-        || normalized === 'building'
-        || normalized === 'road'
+        normalized === 'road'
         || normalized === 'floor'
         || normalized === 'green'
         || normalized === 'water'
@@ -941,23 +935,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
     const group = featuresByLayer.get(layerId)!
 
-    if (kind === 'building') {
-      for (const poly of group.polygons) {
-        const segments = polygonEdges(poly.points).map((edge) => ({
-          start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
-          end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
-        }))
-        const wall = sceneStore.createWallNode({
-          segments,
-          dimensions: { height: 12, thickness: 0.2, width: 0.3 },
-          name: poly.name?.trim() ? `${poly.name.trim()} Wall` : 'Building Wall',
-        })
-        if (wall) {
-          sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
-        }
-        updateProgressForUnit(`Converting building: ${poly.name?.trim() || poly.id}`)
-      }
-    } else if (kind === 'road') {
+    if (kind === 'road') {
       const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
       const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
@@ -1278,10 +1256,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           }
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
-      }
-    } else if (kind === 'terrain') {
-      for (const poly of group.polygons) {
-        updateProgressForUnit(`Converting terrain: ${poly.name?.trim() || poly.id}`)
       }
     }
   }
