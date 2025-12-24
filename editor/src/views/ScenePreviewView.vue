@@ -113,7 +113,6 @@ import {
 	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
 	listRegisteredBehaviorActions,
-	listInteractableObjects,
 	updateBehaviorVisibility,
 	resetBehaviorRuntime,
 	removeBehaviorRuntimeListener,
@@ -401,6 +400,34 @@ const previewParentMap = new Map<string, string | null>()
 
 const behaviorRaycaster = new THREE.Raycaster()
 const behaviorPointer = new THREE.Vector2()
+
+const LAYER_BEHAVIOR_INTERACTIVE = 1
+const LAYER_VEHICLE_INTERACTIVE = 2
+
+function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): void {
+	const target = object ?? nodeObjectMap.get(nodeId)
+	if (!target) {
+		return
+	}
+
+	try {
+		const actions = listRegisteredBehaviorActions(nodeId)
+		if (Array.isArray(actions) && actions.includes('click')) {
+			target.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
+		} else {
+			target.layers.disable(LAYER_BEHAVIOR_INTERACTIVE)
+		}
+	} catch {
+		// keep layer state unchanged if behavior registry is unavailable
+	}
+
+	const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
+	if (vehicleNodeId) {
+		target.layers.enable(LAYER_VEHICLE_INTERACTIVE)
+	} else {
+		target.layers.disable(LAYER_VEHICLE_INTERACTIVE)
+	}
+}
 
 const behaviorAlertVisible = ref(false)
 const behaviorAlertTitle = ref('')
@@ -2220,6 +2247,7 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 	if (instancedMeshes.includes(mesh)) {
 		return
 	}
+	mesh.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
 	// InstancedMesh with shared geometry may have an undersized default bounding volume;
 	// frustum culling can incorrectly hide instances far from the origin.
 	mesh.frustumCulled = false
@@ -3621,6 +3649,7 @@ function refreshBehaviorProximityCandidates(): void {
 const behaviorRuntimeListener: BehaviorRuntimeListener = {
 	onRegistryChanged(nodeId) {
 		syncBehaviorProximityCandidate(nodeId)
+		syncInteractionLayersForNode(nodeId)
 	},
 }
 
@@ -4440,10 +4469,11 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 	}
 }
 
-function handleBehaviorClick(event: MouseEvent) {
+function handleCanvasClick(event: MouseEvent) {
 	const currentRenderer = renderer
 	const activeCamera = camera
-	if (!currentRenderer || !activeCamera || !scene) {
+	const currentScene = scene
+	if (!currentRenderer || !activeCamera || !currentScene) {
 		return
 	}
 	if (event.button !== 0) {
@@ -4452,49 +4482,93 @@ function handleBehaviorClick(event: MouseEvent) {
 	if (event.target !== currentRenderer.domElement) {
 		return
 	}
-	if (!hasRegisteredBehaviors()) {
-		return
-	}
+
 	const bounds = currentRenderer.domElement.getBoundingClientRect()
 	const width = bounds.width
 	const height = bounds.height
 	if (width <= 0 || height <= 0) {
 		return
 	}
+
 	behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
 	behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
 	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
-	const candidates = listInteractableObjects()
-	if (!candidates.length) {
-		return
-	}
-	const intersections = behaviorRaycaster.intersectObjects(candidates, true)
+	behaviorRaycaster.layers.set(LAYER_BEHAVIOR_INTERACTIVE)
+	behaviorRaycaster.layers.enable(LAYER_VEHICLE_INTERACTIVE)
+
+	const intersections = behaviorRaycaster.intersectObject(currentScene, true)
 	if (!intersections.length) {
 		return
 	}
-	let nodeId: string | null = null
-	let hitObject: THREE.Object3D | null = null
-	let hitPoint: THREE.Vector3 | null = null
+
+	let vehicleCandidateNodeId: string | null = null
 	for (const intersection of intersections) {
 		const resolvedId = resolveNodeIdFromIntersection(intersection)
-		if (resolvedId) {
-			nodeId = resolvedId
-			hitObject = nodeObjectMap.get(resolvedId) ?? intersection.object
-			hitPoint = intersection.point.clone()
-			break
+		if (!resolvedId) {
+			continue
+		}
+
+		// 1) Behavior click has priority.
+		if (hasRegisteredBehaviors()) {
+			const actions = listRegisteredBehaviorActions(resolvedId)
+			if (actions.includes('click')) {
+				const hitObject = nodeObjectMap.get(resolvedId) ?? intersection.object
+				const hitPoint = intersection.point
+				const results = triggerBehaviorAction(resolvedId, 'click', {
+					pointerEvent: event,
+					intersection: {
+						object: hitObject,
+						point: { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z },
+					},
+				})
+				processBehaviorEvents(results)
+				return
+			}
+		}
+
+		// 2) Otherwise, remember the closest vehicle candidate.
+		if (!vehicleCandidateNodeId) {
+			vehicleCandidateNodeId = resolveVehicleAncestorNodeId(resolvedId)
 		}
 	}
-	if (!nodeId || !hitObject || !hitPoint) {
+
+	if (!vehicleCandidateNodeId || vehicleDriveState.active) {
 		return
 	}
-	const results = triggerBehaviorAction(nodeId, 'click', {
-		pointerEvent: event,
-		intersection: {
-			object: hitObject,
-			point: { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z },
-		},
-	})
-	processBehaviorEvents(results)
+	const node = resolveNodeById(vehicleCandidateNodeId)
+	if (!node || !resolveVehicleComponent(node)) {
+		return
+	}
+	const actions = listRegisteredBehaviorActions(vehicleCandidateNodeId)
+	if (actions.includes('click')) {
+		return
+	}
+
+	const previousControlMode = controlMode.value
+	if (previousControlMode !== 'third-person') {
+		controlMode.value = 'third-person'
+	}
+	pendingVehicleDriveEvent.value = null
+	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
+		type: 'vehicle-drive',
+		nodeId: vehicleCandidateNodeId,
+		action: 'click',
+		sequenceId: '__manual_vehicle_drive__',
+		behaviorSequenceId: '__manual_vehicle_drive__',
+		behaviorId: '__manual_vehicle_drive__',
+		targetNodeId: vehicleCandidateNodeId,
+		seatNodeId: null,
+		token: '',
+	}
+	const result = startVehicleDriveMode(manualEvent)
+	if (!result.success) {
+		appendWarningMessage(result.message ?? 'Failed to enter driving mode.')
+		if (previousControlMode !== 'third-person') {
+			controlMode.value = previousControlMode
+		}
+		return
+	}
+	handleShowVehicleCockpitEvent()
 }
 
 function resetFirstPersonPointerDelta() {
@@ -4510,92 +4584,6 @@ function resetFirstPersonPointerDelta() {
 	}
 }
 
-function pickVehicleNodeIdFromPointer(event: MouseEvent): string | null {
-	const currentRenderer = renderer
-	const activeCamera = camera
-	if (!currentRenderer || !activeCamera) {
-		return null
-	}
-	if (event.button !== 0 || event.target !== currentRenderer.domElement) {
-		return null
-	}
-	const bounds = currentRenderer.domElement.getBoundingClientRect()
-	const width = bounds.width
-	const height = bounds.height
-	if (width <= 0 || height <= 0) {
-		return null
-	}
-	behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
-	behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
-	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
-	const pickableObjects: THREE.Object3D[] = []
-	nodeObjectMap.forEach((object) => {
-		if (!object) {
-			return
-		}
-		object.traverse((child) => {
-			const meshCandidate = child as THREE.Object3D & { isMesh?: boolean }
-			if ((meshCandidate as THREE.Mesh).isMesh && child.visible) {
-				pickableObjects.push(child)
-			}
-		})
-	})
-	if (!pickableObjects.length) {
-		return null
-	}
-	const intersections = behaviorRaycaster.intersectObjects(pickableObjects, true)
-	for (const intersection of intersections) {
-		const nodeId = resolveNodeIdFromIntersection(intersection)
-		const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
-		if (vehicleNodeId) {
-			return vehicleNodeId
-		}
-	}
-	return null
-}
-
-function handleVehicleFollowDriveClick(event: MouseEvent) {
-	if (vehicleDriveState.active) {
-		return
-	}
-	const nodeId = pickVehicleNodeIdFromPointer(event)
-	if (!nodeId) {
-		return
-	}
-	const node = resolveNodeById(nodeId)
-	if (!node || !resolveVehicleComponent(node)) {
-		return
-	}
-	const actions = listRegisteredBehaviorActions(nodeId)
-	if (actions.includes('click')) {
-		return
-	}
-	const previousControlMode = controlMode.value
-	if (previousControlMode !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
-	pendingVehicleDriveEvent.value = null
-	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
-		type: 'vehicle-drive',
-		nodeId,
-		action: 'click',
-		sequenceId: '__manual_vehicle_drive__',
-		behaviorSequenceId: '__manual_vehicle_drive__',
-		behaviorId: '__manual_vehicle_drive__',
-		targetNodeId: nodeId,
-		seatNodeId: null,
-		token: '',
-	}
-	const result = startVehicleDriveMode(manualEvent)
-	if (!result.success) {
-		appendWarningMessage(result.message ?? 'Failed to enter driving mode.')
-		if (previousControlMode !== 'third-person') {
-			controlMode.value = previousControlMode
-		}
-		return
-	}
-	handleShowVehicleCockpitEvent()
-}
 
 function syncFirstPersonOrientation() {
 	if (!firstPersonControls) {
@@ -4931,8 +4919,7 @@ function initRenderer() {
 	})
 	initControls()
 	updateCanvasCursor()
-	renderer.domElement.addEventListener('click', handleVehicleFollowDriveClick)
-	renderer.domElement.addEventListener('click', handleBehaviorClick)
+	renderer.domElement.addEventListener('click', handleCanvasClick)
 	handleResize()
 
 	window.addEventListener('resize', handleResize)
@@ -5130,7 +5117,7 @@ function startAnimationLoop() {
 
 		currentRenderer.render(currentScene, activeCamera)
 		fpsStats?.end()
-		updateMemoryStatsThrottled(delta)
+		updateMemoryStats()
 	}
 	renderLoop()
 }
@@ -5808,6 +5795,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 			ensureRigidbodyBindingForObject(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
+			syncInteractionLayersForNode(nodeId, child)
 			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
 			if (instancedAssetId) {
 				ensureInstancedMeshesRegistered(instancedAssetId)
@@ -7826,8 +7814,7 @@ onBeforeUnmount(() => {
 		mapControls = null
 	}
 	if (renderer) {
-		renderer.domElement.removeEventListener('click', handleVehicleFollowDriveClick)
-		renderer.domElement.removeEventListener('click', handleBehaviorClick)
+		renderer.domElement.removeEventListener('click', handleCanvasClick)
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
