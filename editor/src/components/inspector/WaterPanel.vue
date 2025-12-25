@@ -5,6 +5,8 @@ import type { SceneNodeComponentState } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   WATER_COMPONENT_TYPE,
+  WATER_PRESETS,
+  type WaterPresetId,
   type WaterComponentProps,
   clampWaterComponentProps,
   WATER_DEFAULT_DISTORTION_SCALE,
@@ -32,6 +34,14 @@ const waterComponent = computed(
 const componentEnabled = computed(() => waterComponent.value?.enabled !== false)
 
 const FLOW_DIRECTION_DECIMALS = 2
+
+const OPACITY_EPSILON = 1e-3
+
+const waterPresetOptions = computed(() =>
+  WATER_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
+)
+
+const selectedPreset = ref<WaterPresetId | null>(null)
 
 const localState = reactive({
   textureWidth: WATER_DEFAULT_TEXTURE_WIDTH,
@@ -74,6 +84,64 @@ function applyWaterPatch(patch: Partial<WaterComponentProps>) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
+}
+
+function toCssHex(color: number): string {
+  const normalized = Number.isFinite(color) ? Math.max(0, Math.min(0xffffff, Math.floor(color))) : 0
+  return `#${normalized.toString(16).padStart(6, '0')}`
+}
+
+function ensureEditablePrimaryMaterialId(nodeId: string): string | null {
+  const node = selectedNode.value
+  if (!node || node.id !== nodeId) {
+    return null
+  }
+  let primary = node.materials?.[0] ?? null
+  if (!primary) {
+    primary = sceneStore.addNodeMaterial(nodeId)
+  }
+  if (!primary) {
+    return null
+  }
+  if (primary.materialId) {
+    sceneStore.assignNodeMaterial(nodeId, primary.id, null)
+  }
+  return primary.id
+}
+
+function handlePresetChange(value: WaterPresetId | null) {
+  if (!componentEnabled.value) {
+    return
+  }
+  selectedPreset.value = value
+  if (!value) {
+    return
+  }
+  const preset = WATER_PRESETS.find((entry) => entry.id === value)
+  if (!preset) {
+    return
+  }
+
+  applyWaterPatch({
+    distortionScale: preset.distortionScale,
+    size: preset.size,
+    flowSpeed: preset.flowSpeed,
+    waveStrength: preset.waveStrength,
+  })
+
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return
+  }
+  const materialId = ensureEditablePrimaryMaterialId(nodeId)
+  if (!materialId) {
+    return
+  }
+  sceneStore.updateNodeMaterialProps(nodeId, materialId, {
+    color: toCssHex(preset.waterColor),
+    opacity: preset.alpha,
+    transparent: preset.alpha < 1 - OPACITY_EPSILON,
+  })
 }
 
 function toFixedNumber(value: number, decimals: number) {
@@ -230,6 +298,19 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="water-field-grid">
+        <v-select
+          class="water-preset-select"
+          label="Preset"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :items="waterPresetOptions"
+          item-title="label"
+          item-value="value"
+          :model-value="selectedPreset"
+          :disabled="!componentEnabled"
+          @update:modelValue="handlePresetChange"
+        />
         <v-text-field
           v-model.number="localState.textureWidth"
           :min="WATER_MIN_TEXTURE_SIZE"
@@ -331,6 +412,10 @@ function handleRemoveComponent() {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 0.5rem;
+}
+
+.water-preset-select {
+  grid-column: 1 / -1;
 }
 
 .water-flow-row {
