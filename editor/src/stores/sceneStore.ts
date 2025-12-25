@@ -1376,7 +1376,9 @@ function buildRoadDynamicMeshFromWorldPoints(
   const center = computeRoadCenter(worldPoints)
   const normalizedWidth = normalizeRoadWidth(width)
 
-  const vertices = worldPoints.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
+  // Keep the same coordinate convention as road preview + schema road mesh:
+  // local vertex[1] maps to world Z (no inversion), so finalized roads match the preview direction.
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
   const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
 
   const definition: RoadDynamicMesh = {
