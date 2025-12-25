@@ -640,7 +640,8 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   clouds: null,
 };
 
-const SCENE_VIEWER_EXPOSURE_BOOST = 1.5;
+
+const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
 const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 1.35;
 
 function resolveSceneExposure(exposure: unknown): number {

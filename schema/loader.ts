@@ -234,24 +234,6 @@ export default class Loader {
         break;
       }
 
-      case 'obj': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as string;
-          if (!contents) return;
-
-          const { OBJLoader } = await safeImport(
-            'three/examples/jsm/loaders/OBJLoader.js',
-            () => import('three/examples/jsm/loaders/OBJLoader.js'),
-          );
-
-          const object = new OBJLoader().parse(contents);
-          object.name = filename;
-          this.emit('loaded', object);
-        });
-        reader.readAsText(file);
-        break;
-      }
-
       case 'pcd': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
           const contents = event.target?.result as ArrayBuffer;
