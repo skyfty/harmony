@@ -58,10 +58,12 @@ import {
 	subscribeInstancedMeshes,
 	ensureInstancedMeshesRegistered,
 	allocateModelInstance,
+	getModelInstanceBinding,
 	releaseModelInstance,
 	updateModelInstanceMatrix,
 	findNodeIdForInstance,
 	type ModelInstanceGroup,
+	type ModelInstanceBinding,
 } from '@schema/modelObjectCache'
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -753,6 +755,33 @@ const instancedMatrixHelper = new THREE.Matrix4()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
+
+type InstancedMatrixCacheEntry = {
+	bindingKey: string
+	elements: Float32Array
+}
+
+const instancedMatrixCache = new Map<string, InstancedMatrixCacheEntry>()
+
+function buildModelInstanceBindingKey(binding: ModelInstanceBinding): string {
+	// Slot count is typically small (LOD variants), so a compact string key is fine.
+	return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
+}
+
+function matrixElementsEqual(a: Float32Array, b: ArrayLike<number>, epsilon = 1e-7): boolean {
+	for (let i = 0; i < 16; i += 1) {
+		if (Math.abs(a[i]! - (b[i] ?? 0)) > epsilon) {
+			return false
+		}
+	}
+	return true
+}
+
+function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): void {
+	for (let i = 0; i < 16; i += 1) {
+		target[i] = source[i] ?? 0
+	}
+}
 const rigidbodyDebugPositionHelper = new THREE.Vector3()
 const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
@@ -1975,6 +2004,7 @@ function updateInstancedCullingAndLod(): void {
 			if (object.userData.__harmonyCulled !== true) {
 				object.userData.__harmonyCulled = true
 			}
+			instancedMatrixCache.delete(nodeId)
 			releaseModelInstance(nodeId)
 			return
 		}
@@ -5177,6 +5207,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	syncGroundCache(null)
+	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
 	cameraDependentUpdateElapsed = 0
 	lastCameraDependentUpdatePosition.set(0, 0, 0)
@@ -5922,6 +5953,11 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		if (!nodeId) {
 			return
 		}
+		const binding = getModelInstanceBinding(nodeId)
+		if (!binding) {
+			instancedMatrixCache.delete(nodeId)
+			return
+		}
 		removeVehicleInstance(nodeId)
 		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 		const isVisible = target.visible !== false && target.userData?.__harmonyCulled !== true
@@ -5929,6 +5965,15 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 			instancedScaleHelper.setScalar(0)
 		}
 		instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		const bindingKey = buildModelInstanceBindingKey(binding)
+		const cached = instancedMatrixCache.get(nodeId)
+		if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, instancedMatrixHelper.elements)) {
+			return
+		}
+		const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
+		nextEntry.bindingKey = bindingKey
+		copyMatrixElements(nextEntry.elements, instancedMatrixHelper.elements)
+		instancedMatrixCache.set(nodeId, nextEntry)
 		updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
 	})
 }

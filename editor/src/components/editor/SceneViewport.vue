@@ -3266,7 +3266,7 @@ function initScene() {
     preserveDrawingBuffer: false,
   })
   const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-  renderer.setPixelRatio(pixelRatio)
+  renderer.setPixelRatio(Math.min(pixelRatio, 2))
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap

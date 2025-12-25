@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { updateModelInstanceMatrix } from '@schema/modelObjectCache'
+import { getModelInstanceBinding, updateModelInstanceMatrix, type ModelInstanceBinding } from '@schema/modelObjectCache'
 import type { SceneNode } from '@harmony/schema'
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
@@ -15,6 +15,50 @@ export function useInstancedMeshes(
   const instancedScaleHelper = new THREE.Vector3()
   const instancedPositionHelper = new THREE.Vector3()
   const instancedQuaternionHelper = new THREE.Quaternion()
+
+  type InstancedMatrixCacheEntry = {
+    bindingKey: string
+    elements: Float32Array
+  }
+
+  const instancedMatrixCache = new Map<string, InstancedMatrixCacheEntry>()
+
+  function buildModelInstanceBindingKey(binding: ModelInstanceBinding): string {
+    return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
+  }
+
+  function matrixElementsEqual(a: Float32Array, b: ArrayLike<number>, epsilon = 1e-7): boolean {
+    for (let i = 0; i < 16; i += 1) {
+      if (Math.abs(a[i]! - (b[i] ?? 0)) > epsilon) {
+        return false
+      }
+    }
+    return true
+  }
+
+  function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): void {
+    for (let i = 0; i < 16; i += 1) {
+      target[i] = source[i] ?? 0
+    }
+  }
+
+  function updateModelInstanceMatrixIfChanged(nodeId: string, matrix: THREE.Matrix4): void {
+    const binding = getModelInstanceBinding(nodeId)
+    if (!binding) {
+      instancedMatrixCache.delete(nodeId)
+      return
+    }
+    const bindingKey = buildModelInstanceBindingKey(binding)
+    const cached = instancedMatrixCache.get(nodeId)
+    if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, matrix.elements)) {
+      return
+    }
+    const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
+    nextEntry.bindingKey = bindingKey
+    copyMatrixElements(nextEntry.elements, matrix.elements)
+    instancedMatrixCache.set(nodeId, nextEntry)
+    updateModelInstanceMatrix(nodeId, matrix)
+  }
 
   function syncInstancedTransform(object: THREE.Object3D | null, includeChildren = false) {
     if (!object) {
@@ -33,7 +77,7 @@ export function useInstancedMeshes(
           object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
           instancedScaleHelper.setScalar(0)
           instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
         } else if (assetId && node) {
           syncContinuousInstancedModelCommitted({ node, object, assetId })
         } else {
@@ -43,7 +87,7 @@ export function useInstancedMeshes(
             instancedScaleHelper.setScalar(0)
           }
           instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
         }
         callbacks.syncInstancedOutlineEntryTransform(nodeId)
       }
@@ -70,7 +114,7 @@ export function useInstancedMeshes(
             current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
             instancedScaleHelper.setScalar(0)
             instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
           } else if (assetId && node) {
             syncContinuousInstancedModelCommitted({ node, object: current, assetId })
           } else {
@@ -80,7 +124,7 @@ export function useInstancedMeshes(
               instancedScaleHelper.setScalar(0)
             }
             instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
           }
           callbacks.syncInstancedOutlineEntryTransform(nodeId)
         }
@@ -113,6 +157,7 @@ export function useInstancedMeshes(
     instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
       instancedMeshGroup.remove(mesh)
     })
+    instancedMatrixCache.clear()
   }
 
   return {
