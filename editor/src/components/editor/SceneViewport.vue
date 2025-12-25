@@ -30,6 +30,7 @@ import type {
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
+  applyMaterialConfigToMaterial,
   disposeMaterialOverrides,
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
@@ -548,6 +549,41 @@ function resolveRoadMaterialConfigId(node: SceneNode): string | null {
   const first = node.materials?.[0]
   const id = typeof first?.id === 'string' ? first.id.trim() : ''
   return id ? id : null
+}
+
+function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
+  if (!Array.isArray(node.materials) || node.materials.length < 3) {
+    return
+  }
+
+  const shoulderConfig = node.materials[1]
+  const laneConfig = node.materials[2]
+  const applyConfigToMesh = (mesh: THREE.Mesh, config: SceneNodeMaterial) => {
+    if (!mesh.material) {
+      return
+    }
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const material of materials) {
+      if (!material) {
+        continue
+      }
+      applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+    }
+  }
+
+  if (shoulderConfig) {
+    const shoulder = roadGroup.getObjectByName('RoadShoulders') as THREE.Mesh | null
+    if (shoulder?.isMesh) {
+      applyConfigToMesh(shoulder, shoulderConfig)
+    }
+  }
+
+  if (laneConfig) {
+    const lane = roadGroup.getObjectByName('RoadLaneLines') as THREE.Mesh | null
+    if (lane?.isMesh) {
+      applyConfigToMesh(lane, laneConfig)
+    }
+  }
 }
 
 function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
@@ -3285,7 +3321,7 @@ function initScene() {
     preserveDrawingBuffer: false,
   })
   const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-  renderer.setPixelRatio(Math.min(pixelRatio, 2))
+  renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -7283,6 +7319,24 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
+  } else if (node.dynamicMesh?.type === 'Floor') {
+    const floorDefinition = node.dynamicMesh as FloorDynamicMesh
+    let floorGroup = userData.floorGroup as THREE.Group | undefined
+    if (!floorGroup) {
+      floorGroup = createFloorGroup(floorDefinition)
+      floorGroup.userData.nodeId = node.id
+      floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
+      object.add(floorGroup)
+      userData.floorGroup = floorGroup
+    } else {
+      const groupData = floorGroup.userData ?? (floorGroup.userData = {})
+      const nextSignature = computeFloorDynamicMeshSignature(floorDefinition)
+      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateFloorGroup(floorGroup, floorDefinition)
+        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
+
   } else if (node.dynamicMesh?.type === 'Road') {
     const roadDefinition = node.dynamicMesh as RoadDynamicMesh
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)
@@ -7325,31 +7379,17 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         ensureRoadVertexHandlesForSelectedNode()
       }
     }
-  } else if (node.dynamicMesh?.type === 'Floor') {
-    const floorDefinition = node.dynamicMesh as FloorDynamicMesh
-    let floorGroup = userData.floorGroup as THREE.Group | undefined
-    if (!floorGroup) {
-      floorGroup = createFloorGroup(floorDefinition)
-      floorGroup.userData.nodeId = node.id
-      floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
-      object.add(floorGroup)
-      userData.floorGroup = floorGroup
-    } else {
-      const groupData = floorGroup.userData ?? (floorGroup.userData = {})
-      const nextSignature = computeFloorDynamicMeshSignature(floorDefinition)
-      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateFloorGroup(floorGroup, floorDefinition)
-        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
-      }
+    if (roadGroup) {
+      applyRoadOverlayMaterials(node, roadGroup)
     }
-
-  } 
+  }
 
   if (node.materials && node.materials.length) {
     applyMaterialOverrides(object, node.materials, materialOverrideOptions)
   } else {
     resetMaterialOverrides(object)
   }
+
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
     applyWarpGatePlaceholderState(object, node)

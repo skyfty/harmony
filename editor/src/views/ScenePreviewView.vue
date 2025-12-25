@@ -2052,7 +2052,6 @@ function updateInstancedCullingAndLod(): void {
 			}
 		}
 
-		const scatterStats = terrainScatterRuntime.getInstanceStats()
 		updateInstancedCullingVisualization(visualizationIds, visualizationObjects, visualizationVisibleIds)
 	}
 
