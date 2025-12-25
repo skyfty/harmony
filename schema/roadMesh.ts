@@ -51,6 +51,34 @@ type RoadVertexJunctionInfo = {
   neighbors: Set<number>
 }
 
+function buildRoundedRectShape(length: number, width: number, cornerRadius: number): THREE.Shape {
+  const halfLength = length * 0.5
+  const halfWidth = width * 0.5
+  const radius = Math.max(0, Math.min(cornerRadius, halfLength, halfWidth))
+
+  const shape = new THREE.Shape()
+  if (radius <= 1e-6) {
+    shape.moveTo(-halfLength, -halfWidth)
+    shape.lineTo(halfLength, -halfWidth)
+    shape.lineTo(halfLength, halfWidth)
+    shape.lineTo(-halfLength, halfWidth)
+    shape.closePath()
+    return shape
+  }
+
+  shape.moveTo(-halfLength + radius, -halfWidth)
+  shape.lineTo(halfLength - radius, -halfWidth)
+  shape.absarc(halfLength - radius, -halfWidth + radius, radius, -Math.PI / 2, 0, false)
+  shape.lineTo(halfLength, halfWidth - radius)
+  shape.absarc(halfLength - radius, halfWidth - radius, radius, 0, Math.PI / 2, false)
+  shape.lineTo(-halfLength + radius, halfWidth)
+  shape.absarc(-halfLength + radius, halfWidth - radius, radius, Math.PI / 2, Math.PI, false)
+  shape.lineTo(-halfLength, -halfWidth + radius)
+  shape.absarc(-halfLength + radius, -halfWidth + radius, radius, Math.PI, 1.5 * Math.PI, false)
+  shape.closePath()
+  return shape
+}
+
 function clampJunctionSmoothing(value: unknown): number {
   const num = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(num)) {
@@ -68,6 +96,18 @@ function buildRoundedPolygonShape(points: THREE.Vector3[], cornerRadius: number)
   const n = pts.length
   if (n < 3) {
     return null
+  }
+
+  // Ensure consistent winding (CCW) so the generated face normal matches the road surface (+Y after rotateX).
+  // This keeps the transition mesh front face aligned with the road segment meshes.
+  let area = 0
+  for (let i = 0; i < n; i += 1) {
+    const a = pts[i]!
+    const b = pts[(i + 1) % n]!
+    area += a.x * b.y - b.x * a.y
+  }
+  if (area < 0) {
+    pts.reverse()
   }
 
   const radius = Number.isFinite(cornerRadius) ? Math.max(0, cornerRadius) : 0
@@ -207,20 +247,28 @@ function buildRoadTransitionGeometries(
       return
     }
 
-    // Sort all offset points around the junction center to build a non-self-intersecting contour.
-    const ordered = [...offsetEntries]
-      .flatMap((entry) => [entry.left, entry.right])
-      .filter((pt): pt is THREE.Vector3 => !!pt)
-      .map((pt) => ({
-        pt,
-        angle: Math.atan2(pt.z - center.z, pt.x - center.x),
-      }))
-      .sort((a, b) => a.angle - b.angle)
-      .map((entry) => entry.pt)
+    // Skip nearly-straight joins (no visible gap, avoids extra shading seams).
+    if (offsetEntries.length === 2) {
+      const a = offsetEntries[0]!
+      const b = offsetEntries[1]!
+      const va = a.left.clone().sub(center).normalize()
+      const vb = b.left.clone().sub(center).normalize()
+      const dot = va.dot(vb)
+      if (Number.isFinite(dot) && Math.abs(dot + 1) <= 1e-3) {
+        return
+      }
+    }
 
-    // Drop duplicates that can arise when segments are nearly colinear.
+    const sortedEntries = [...offsetEntries].sort((a, b) => a.angle - b.angle)
+    const outer = sortedEntries.map((entry) => entry.left)
+    const inner = sortedEntries.slice().reverse().map((entry) => entry.right)
+    const contour = [...outer, ...inner]
+
     const cleaned: THREE.Vector3[] = []
-    ordered.forEach((point) => {
+    contour.forEach((point) => {
+      if (!point) {
+        return
+      }
       const last = cleaned[cleaned.length - 1]
       if (last && last.distanceToSquared(point) <= 1e-6) {
         return
@@ -238,14 +286,15 @@ function buildRoadTransitionGeometries(
     }
 
     const geometry = new THREE.ShapeGeometry(shape)
-    geometry.rotateX(Math.PI / 2)
+    // Match road segment orientation so normals face +Y.
+    geometry.rotateX(-Math.PI / 2)
     geometries.push(geometry)
   })
 
   return geometries
 }
 
-function buildRoadSegmentGeometries(definition: RoadDynamicMesh): THREE.BufferGeometry[] {
+function buildRoadSegmentGeometries(definition: RoadDynamicMesh, junctionSmoothing: number): THREE.BufferGeometry[] {
   const geometries: THREE.BufferGeometry[] = []
   const position = new THREE.Vector3()
   const quaternion = new THREE.Quaternion()
@@ -258,7 +307,8 @@ function buildRoadSegmentGeometries(definition: RoadDynamicMesh): THREE.BufferGe
       return
     }
 
-    const geometry = new THREE.PlaneGeometry(length, width)
+    const cg = clampJunctionSmoothing(junctionSmoothing)
+    const geometry = new THREE.ShapeGeometry(buildRoundedRectShape(length, width, (width * 0.5) * cg))
     geometry.rotateX(-Math.PI / 2)
 
     position.copy(start).add(end).multiplyScalar(0.5)
@@ -276,8 +326,9 @@ function buildMergedRoadSurfaceGeometry(
   definition: RoadDynamicMesh,
   options: RoadJunctionSmoothingOptions = {},
 ): THREE.BufferGeometry | null {
-  const segmentGeometries = buildRoadSegmentGeometries(definition)
-  const transitionGeometries = buildRoadTransitionGeometries(definition, options)
+  const smoothing = clampJunctionSmoothing(options.junctionSmoothing)
+  const segmentGeometries = buildRoadSegmentGeometries(definition, smoothing)
+  const transitionGeometries = buildRoadTransitionGeometries(definition, { ...options, junctionSmoothing: smoothing })
   const all = [...segmentGeometries, ...transitionGeometries]
   if (!all.length) {
     return null
