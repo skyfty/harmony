@@ -564,7 +564,7 @@ const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : TH
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
-const debugEnabled = ref(false);
+const debugEnabled = ref(true);
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
@@ -7794,9 +7794,6 @@ function handleBack() {
 }
 
 onLoad((query) => {
-  const debugParam = typeof query?.debug === 'string' ? query.debug : '';
-  debugEnabled.value = debugParam === '1' || debugParam.toLowerCase() === 'true';
-
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
   ] = resolveDisplayBoardMediaSource;
