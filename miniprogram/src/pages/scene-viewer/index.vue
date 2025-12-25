@@ -562,7 +562,10 @@ const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?:
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 
-const debugOverlayVisible = ref(true);
+// Debug switch: when disabled, do not render the overlay and do not compute debug stats.
+// Enable temporarily via query param `?debug=1`.
+const debugEnabled = ref(false);
+const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
 
 const instancingDebug = reactive({
@@ -696,6 +699,9 @@ function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: G
 }
 
 function updateDebugFps(deltaSeconds: number): void {
+  if (!debugEnabled.value) {
+    return;
+  }
   if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
     return;
   }
@@ -713,6 +719,9 @@ function updateDebugFps(deltaSeconds: number): void {
 }
 
 function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void {
+  if (!debugEnabled.value) {
+    return;
+  }
   const now = Date.now();
   if (now - debugInstancingLastSyncAt < 250) {
     return;
@@ -744,6 +753,9 @@ function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void
 }
 
 function syncRendererDebug(renderer: THREE.WebGLRenderer): void {
+  if (!debugEnabled.value) {
+    return;
+  }
   const info = renderer.info;
   rendererDebug.calls = info?.render?.calls ?? 0;
   rendererDebug.triangles = info?.render?.triangles ?? 0;
@@ -756,6 +768,9 @@ function syncRendererDebug(renderer: THREE.WebGLRenderer): void {
 }
 
 function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): void {
+  if (!debugEnabled.value) {
+    return;
+  }
   const now = Date.now();
   if (now - debugGroundChunksLastSyncAt < 250) {
     return;
@@ -7625,7 +7640,9 @@ function startRenderLoop(
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
 
-        updateDebugFps(deltaSeconds);
+        if (debugEnabled.value) {
+          updateDebugFps(deltaSeconds);
+        }
 
         // Sync multiuser avatars to the camera pose.
         if (renderContext && multiuserNodeObjects.size) {
@@ -7682,7 +7699,9 @@ function startRenderLoop(
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
-            syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
+            if (debugEnabled.value) {
+              syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
+            }
           }
         }
 
@@ -7692,7 +7711,9 @@ function startRenderLoop(
         cloudRenderer?.update(deltaSeconds);
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
-        syncRendererDebug(renderer);
+        if (debugEnabled.value) {
+          syncRendererDebug(renderer);
+        }
       });
       onCleanup(() => {
         cancel();
@@ -7773,6 +7794,9 @@ function handleBack() {
 }
 
 onLoad((query) => {
+  const debugParam = typeof query?.debug === 'string' ? query.debug : '';
+  debugEnabled.value = debugParam === '1' || debugParam.toLowerCase() === 'true';
+
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
   ] = resolveDisplayBoardMediaSource;
