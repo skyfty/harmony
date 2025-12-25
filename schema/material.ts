@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
-  AssetCacheEntry,
   SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
@@ -12,6 +11,7 @@ import type {
   SceneNodeMaterial,
   SceneResourceSummaryEntry,
 } from '@harmony/schema';
+import type { AssetCacheEntry } from './assetCache';
 import type ResourceCache from './ResourceCache';
 import { hashString, stableSerialize } from './stableSerialize';
 

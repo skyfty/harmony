@@ -5290,8 +5290,8 @@ export async function calculateSceneResourceSummary(
     const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
 
     if (!bytes && options.embedResources) {
-      // If resources are embedded, prefer cached array buffer size if available.
-      bytes = cacheEntry?.arrayBuffer?.byteLength ?? bytes
+      // If resources are embedded, fall back to cached blob size if available.
+      bytes = cacheEntry?.blob?.size ?? bytes
     }
 
     if (bytes > 0) {

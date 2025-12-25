@@ -170,15 +170,17 @@ function safeParseLodPreset(raw: string): LodPresetData | null {
   }
 }
 
-function decodeAssetEntryText(entry: AssetCacheEntry): string | null {
-  if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+async function decodeAssetEntryText(entry: AssetCacheEntry): Promise<string | null> {
+  if (entry.blob) {
     try {
-      if (typeof TextDecoder !== 'undefined') {
-        return new TextDecoder().decode(new Uint8Array(entry.arrayBuffer))
+      if (typeof entry.blob.text === 'function') {
+        return await entry.blob.text()
       }
-      const buffer = (globalThis as any).Buffer as { from: (data: ArrayBuffer) => { toString: (enc: string) => string } } | undefined
-      if (buffer) {
-        return buffer.from(entry.arrayBuffer).toString('utf-8')
+      if (typeof entry.blob.arrayBuffer === 'function') {
+        const buffer = await entry.blob.arrayBuffer()
+        if (typeof TextDecoder !== 'undefined') {
+          return new TextDecoder().decode(new Uint8Array(buffer))
+        }
       }
     } catch {
       return null
@@ -192,7 +194,7 @@ async function loadLodPreset(resourceCache: ResourceCache, presetAssetId: string
   if (!entry) {
     return null
   }
-  const text = decodeAssetEntryText(entry)
+  const text = await decodeAssetEntryText(entry)
   if (!text) {
     return null
   }

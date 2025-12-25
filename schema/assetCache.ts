@@ -13,7 +13,6 @@ export interface AssetCacheEntry {
   error: string | null
   blob: Blob | null
   blobUrl: string | null
-  arrayBuffer: ArrayBuffer | null
   size: number
   lastUsedAt: number
   abortController: AbortController | null
@@ -123,7 +122,6 @@ export class AssetCache {
       entry.blobUrl = createObjectUrl(blob)
     }
 
-    entry.arrayBuffer = arrayBuffer
     entry.blob = blob
     entry.mimeType = payload.mimeType ?? blob?.type ?? entry.mimeType ?? null
     entry.filename = payload.filename ?? entry.filename ?? null
@@ -138,7 +136,6 @@ export class AssetCache {
     mimeType?: string | null
     filename?: string | null
     downloadUrl?: string | null
-    arrayBuffer?: ArrayBuffer | null
   } = {}): Promise<AssetCacheEntry> {
     const entry = this.ensureEntry(assetId)
     if (entry.blobUrl) {
@@ -150,7 +147,6 @@ export class AssetCache {
     entry.mimeType = payload.mimeType ?? blob.type ?? entry.mimeType ?? null
     entry.filename = payload.filename ?? entry.filename ?? (blob instanceof File ? blob.name : null)
     entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
-    entry.arrayBuffer = payload.arrayBuffer ?? (typeof blob.arrayBuffer === 'function' ? await blob.arrayBuffer() : null)
     entry.size = blob.size
     entry.blobUrl = createObjectUrl(blob)
     finalizeCachedEntry(entry)
@@ -175,7 +171,6 @@ export class AssetCache {
     entry.error = null
     entry.blob = null
     entry.blobUrl = null
-    entry.arrayBuffer = null
     entry.size = 0
     entry.mimeType = null
     entry.filename = null
@@ -202,7 +197,6 @@ export class AssetCache {
     }
     entry.blob = null
     entry.blobUrl = null
-    entry.arrayBuffer = null
     entry.status = 'idle'
     entry.progress = 0
     entry.error = null
@@ -382,7 +376,6 @@ function createEmptyEntry(assetId: string): AssetCacheEntry {
     error: null,
     blob: null,
     blobUrl: null,
-    arrayBuffer: null,
     size: 0,
     lastUsedAt: now(),
     abortController: null,
