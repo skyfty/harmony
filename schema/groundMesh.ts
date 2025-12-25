@@ -971,13 +971,13 @@ export function updateGroundChunks(
   definition: GroundDynamicMesh,
   camera: THREE.Camera | null,
   options: { radius?: number } = {},
-): void {
+): void {  
   const root = (target as THREE.Group)
   if (!root || !(root as any).isGroup) {
     return
   }
   const state = ensureGroundRuntimeState(root, definition)
-  const now = performance.now ? performance.now() : Date.now()
+  const now = Date.now()
   // Throttle chunk churn a bit.
   if (now - state.lastChunkUpdateAt < 120) {
     return

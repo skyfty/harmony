@@ -318,7 +318,6 @@ import {
   createTerrainScatterLodRuntime,
   createInstancedBvhFrustumCuller,
   type SceneGraphBuildOptions,
-  type SceneGraphResourceProgress,
 } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
