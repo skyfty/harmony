@@ -30,6 +30,8 @@ const ROAD_LANE_LINE_OFFSET_Y = 0.002
 const ROAD_SHOULDER_OFFSET_Y = 0.001
 const ROAD_OVERLAY_MIN_WIDTH = 0.01
 const ROAD_LANE_LINE_COLOR = 0x27ffff
+const ROAD_LANE_LINE_DASH_LENGTH = 2
+const ROAD_LANE_LINE_GAP_LENGTH = 1
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -405,6 +407,120 @@ function buildOverlayGeometry(
   return buildMultiCurveGeometry(curves, (curve) => buildOffsetStripGeometry(curve, width, offset))
 }
 
+function buildDashedCurveSegments(
+  curve: THREE.Curve<THREE.Vector3>,
+  width: number,
+  dashLength: number,
+  gapLength: number,
+): THREE.BufferGeometry | null {
+  const length = curve.getLength()
+  if (length <= ROAD_EPSILON) {
+    return null
+  }
+
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  const tangent = new THREE.Vector3()
+  const lateral = new THREE.Vector3()
+  const leftStart = new THREE.Vector3()
+  const rightStart = new THREE.Vector3()
+  const leftEnd = new THREE.Vector3()
+  const rightEnd = new THREE.Vector3()
+
+  const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+
+  let traveled = 0
+  let segmentIndex = 0
+  while (traveled < length - ROAD_EPSILON) {
+    const segmentEnd = Math.min(traveled + dashLength, length)
+    const startT = curve.getUtoTmapping(traveled / length, traveled)
+    const endT = curve.getUtoTmapping(segmentEnd / length, segmentEnd)
+    const startPoint = curve.getPoint(startT)
+    const endPoint = curve.getPoint(endT)
+    const midT = Math.min(1, Math.max(0, (startT + endT) * 0.5))
+
+    tangent.copy(curve.getTangent(midT))
+    tangent.y = 0
+    if (tangent.lengthSq() <= ROAD_EPSILON) {
+      tangent.set(0, 0, 1)
+    } else {
+      tangent.normalize()
+    }
+    lateral.set(-tangent.z, 0, tangent.x)
+
+    leftStart.copy(startPoint).addScaledVector(lateral, halfWidth)
+    rightStart.copy(startPoint).addScaledVector(lateral, -halfWidth)
+    leftEnd.copy(endPoint).addScaledVector(lateral, halfWidth)
+    rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
+
+    const base = segmentIndex * 4
+    positions.push(
+      leftStart.x,
+      leftStart.y,
+      leftStart.z,
+      rightStart.x,
+      rightStart.y,
+      rightStart.z,
+      leftEnd.x,
+      leftEnd.y,
+      leftEnd.z,
+      rightEnd.x,
+      rightEnd.y,
+      rightEnd.z,
+    )
+
+    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0)
+    uvs.push(0, 0, 1, 0, 0, 1, 1, 1)
+
+    indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+    segmentIndex += 1
+    traveled = segmentEnd + gapLength
+    if (segmentEnd >= length - ROAD_EPSILON) {
+      break
+    }
+  }
+
+  if (!positions.length) {
+    return null
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setIndex(indices)
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function buildLaneLineGeometry(
+  curves: RoadCurveDescriptor[],
+  width: number,
+): THREE.BufferGeometry | null {
+  const geometries: THREE.BufferGeometry[] = []
+  for (const descriptor of curves) {
+    const geometry = buildDashedCurveSegments(
+      descriptor.curve,
+      width,
+      ROAD_LANE_LINE_DASH_LENGTH,
+      ROAD_LANE_LINE_GAP_LENGTH,
+    )
+    if (geometry) {
+      geometries.push(geometry)
+    }
+  }
+  if (!geometries.length) {
+    return null
+  }
+  const merged = mergeGeometries(geometries, false)
+  geometries.forEach((geometry) => geometry.dispose())
+  return merged ?? null
+}
+
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
   clearGroupContent(group)
 
@@ -460,7 +576,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       ROAD_OVERLAY_MIN_WIDTH * 3,
       Math.min(ROAD_LANE_LINE_WIDTH, width * 0.12 + ROAD_OVERLAY_MIN_WIDTH),
     )
-    const laneGeometry = buildOverlayGeometry(curves, laneLineWidth, 0)
+    const laneGeometry = buildLaneLineGeometry(curves, laneLineWidth)
     if (laneGeometry) {
       const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
       laneMesh.name = 'RoadLaneLines'

@@ -1325,6 +1325,12 @@ function normalizeRoadWidth(value: unknown): number {
   return Math.max(ROAD_MIN_WIDTH, numeric)
 }
 
+const ROAD_CURVE_TENSION = 0.5
+const ROAD_CURVE_MIN_DIVISIONS = 4
+const ROAD_CURVE_MAX_DIVISIONS = 256
+const ROAD_CURVE_DIVISION_DENSITY = 8
+const ROAD_CURVE_EPSILON = 1e-6
+
 function buildRoadWorldPoints(points: Vector3Like[]): Vector3[] {
   const out: Vector3[] = []
   points.forEach((p) => {
@@ -1373,13 +1379,43 @@ function buildRoadDynamicMeshFromWorldPoints(
     return null
   }
 
-  const center = computeRoadCenter(worldPoints)
   const normalizedWidth = normalizeRoadWidth(width)
+  const closed =
+    worldPoints.length >= 3 &&
+    worldPoints[0]!.distanceToSquared(worldPoints[worldPoints.length - 1]!) <= ROAD_CURVE_EPSILON
 
-  // Keep the same coordinate convention as road preview + schema road mesh:
-  // local vertex[1] maps to world Z (no inversion), so finalized roads match the preview direction.
-  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
-  const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
+  const curve = new THREE.CatmullRomCurve3(worldPoints, closed, 'catmullrom')
+  curve.tension = ROAD_CURVE_TENSION
+
+  const length = Math.max(curve.getLength(), ROAD_CURVE_EPSILON)
+  const divisions = Math.max(
+    ROAD_CURVE_MIN_DIVISIONS,
+    Math.min(ROAD_CURVE_MAX_DIVISIONS, Math.ceil(length * ROAD_CURVE_DIVISION_DENSITY)),
+  )
+
+  const sampledPoints: Vector3[] = []
+  for (let i = 0; i <= divisions; i += 1) {
+    sampledPoints.push(curve.getPoint(i / divisions))
+  }
+
+  if (closed && sampledPoints.length > 1) {
+    sampledPoints.pop()
+  }
+
+  if (sampledPoints.length < 2) {
+    return null
+  }
+
+  const center = computeRoadCenter(sampledPoints)
+
+  const vertices = sampledPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const segments: Array<{ a: number; b: number }> = []
+  for (let index = 0; index < vertices.length - 1; index += 1) {
+    segments.push({ a: index, b: index + 1 })
+  }
+  if (closed && vertices.length >= 3) {
+    segments.push({ a: vertices.length - 1, b: 0 })
+  }
 
   const definition: RoadDynamicMesh = {
     type: 'Road',
