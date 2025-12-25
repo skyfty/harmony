@@ -17,10 +17,12 @@ export const WATER_DEFAULT_TEXTURE_HEIGHT = 512
 export const WATER_DEFAULT_DISTORTION_SCALE = 3.7
 export const WATER_DEFAULT_SIZE = 10
 export const WATER_DEFAULT_FLOW_SPEED = 1
+export const WATER_DEFAULT_WAVE_STRENGTH = 1
 export const WATER_MIN_TEXTURE_SIZE = 64
 export const WATER_MIN_DISTORTION_SCALE = 0
 export const WATER_MIN_SIZE = 1
 export const WATER_MIN_FLOW_SPEED = 0
+export const WATER_MIN_WAVE_STRENGTH = 0
 
 export interface FlowDirection {
   x: number
@@ -34,6 +36,7 @@ export interface WaterComponentProps {
   size: number
   flowDirection: FlowDirection
   flowSpeed: number
+  waveStrength: number
 }
 
 const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
@@ -110,6 +113,9 @@ export function clampWaterComponentProps(
   const flowSpeed = Number.isFinite(props?.flowSpeed)
     ? Math.max(WATER_MIN_FLOW_SPEED, props!.flowSpeed!)
     : WATER_DEFAULT_FLOW_SPEED
+  const waveStrength = Number.isFinite(props?.waveStrength)
+    ? Math.max(WATER_MIN_WAVE_STRENGTH, props!.waveStrength!)
+    : WATER_DEFAULT_WAVE_STRENGTH
   return {
     textureWidth: width,
     textureHeight: height,
@@ -117,6 +123,7 @@ export function clampWaterComponentProps(
     size,
     flowDirection: normalizedFlow,
     flowSpeed,
+    waveStrength,
   }
 }
 
@@ -128,6 +135,7 @@ export function cloneWaterComponentProps(props: WaterComponentProps): WaterCompo
     size: props.size,
     flowDirection: { x: props.flowDirection.x, y: props.flowDirection.y },
     flowSpeed: props.flowSpeed,
+    waveStrength: props.waveStrength,
   }
 }
 
@@ -304,8 +312,8 @@ class WaterComponent extends Component<WaterComponentProps> {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
       alpha: this.resolveMaterialAlpha(material),
-      waterColor:  0x001e0f,
-      distortionScale: props.distortionScale,
+      waterColor: this.resolveMaterialColor(material).getHex(),
+      distortionScale: Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength),
       waterNormals: normalTexture,
     })
     water.name = `${mesh.name ?? 'Water'} (Water)`
@@ -372,7 +380,7 @@ class WaterComponent extends Component<WaterComponentProps> {
       shaderMaterial.uniforms.alpha.value = this.resolveMaterialAlpha(material)
     }
     if (shaderMaterial.uniforms?.distortionScale) {
-      shaderMaterial.uniforms.distortionScale.value = props.distortionScale
+      shaderMaterial.uniforms.distortionScale.value = Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength)
     }
     if (shaderMaterial.uniforms?.size) {
       shaderMaterial.uniforms.size.value = props.size
@@ -507,3 +515,69 @@ export function createWaterComponentState(
 }
 
 export { waterComponentDefinition }
+
+export type WaterPresetId = 'lake' | 'ocean' | 'river' | 'pool' | 'deepSea'
+
+export interface WaterPresetDefinition {
+  id: WaterPresetId
+  label: string
+  alpha: number
+  waveStrength: number
+  waterColor: number
+  distortionScale: number
+  size: number
+  flowSpeed: number
+}
+
+export const WATER_PRESETS: WaterPresetDefinition[] = [
+  {
+    id: 'lake',
+    label: 'Lake',
+    alpha: 0.75,
+    waveStrength: 0.5,
+    waterColor: 0x006994,
+    distortionScale: 3.0,
+    size: 10.0,
+    flowSpeed: 1.0,
+  },
+  {
+    id: 'ocean',
+    label: 'Ocean',
+    alpha: 0.5,
+    waveStrength: 1.0,
+    waterColor: 0x003366,
+    distortionScale: 5.0,
+    size: 15.0,
+    flowSpeed: 1.5,
+  },
+  {
+    id: 'river',
+    label: 'River',
+    alpha: 0.8,
+    waveStrength: 0.3,
+    waterColor: 0x339966,
+    distortionScale: 2.0,
+    size: 8.0,
+    flowSpeed: 1.2,
+  },
+  {
+    id: 'pool',
+    label: 'Pool',
+    alpha: 0.9,
+    waveStrength: 0.1,
+    waterColor: 0x99ccff,
+    distortionScale: 1.0,
+    size: 5.0,
+    flowSpeed: 0.5,
+  },
+  {
+    id: 'deepSea',
+    label: 'Deep Sea',
+    alpha: 0.4,
+    waveStrength: 1.2,
+    waterColor: 0x001f3f,
+    distortionScale: 6.0,
+    size: 20.0,
+    flowSpeed: 1.8,
+  },
+]
