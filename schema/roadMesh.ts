@@ -9,6 +9,8 @@ export type RoadRenderAssetObjects = {
 
 export type RoadJunctionSmoothingOptions = {
   junctionSmoothing?: number
+  laneLines?: boolean
+  shoulders?: boolean
   /** Optional node material selector id (editor-defined). */
   materialConfigId?: string | null
 }
@@ -21,6 +23,12 @@ const ROAD_DEFAULT_WIDTH = 2
 const ROAD_MIN_DIVISIONS = 4
 const ROAD_MAX_DIVISIONS = 256
 const ROAD_DIVISION_DENSITY = 8
+const ROAD_LANE_LINE_WIDTH = 0.08
+const ROAD_SHOULDER_WIDTH = 0.35
+const ROAD_SHOULDER_GAP = 0.02
+const ROAD_LANE_LINE_OFFSET_Y = 0.002
+const ROAD_SHOULDER_OFFSET_Y = 0.001
+const ROAD_OVERLAY_MIN_WIDTH = 0.01
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -60,6 +68,37 @@ function createRoadMaterial(): THREE.MeshStandardMaterial {
   return material
 }
 
+function createLaneLineMaterial(): THREE.MeshBasicMaterial {
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xfff1a0,
+    transparent: true,
+    opacity: 0.9,
+  })
+  material.name = 'RoadLaneLineMaterial'
+  material.depthWrite = false
+  material.polygonOffset = true
+  material.polygonOffsetFactor = -2
+  material.polygonOffsetUnits = -2
+  material.toneMapped = false
+  return material
+}
+
+function createShoulderMaterial(): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xbcbcbc,
+    metalness: 0,
+    roughness: 0.9,
+    transparent: true,
+    opacity: 0.85,
+  })
+  material.name = 'RoadShoulderMaterial'
+  material.side = THREE.DoubleSide
+  material.polygonOffset = true
+  material.polygonOffsetFactor = -1
+  material.polygonOffsetUnits = -1
+  return material
+}
+
 function normalizeJunctionSmoothing(value?: number): number {
   const sanitized: number = Number.isFinite(value) ? (value as number) : 0
   return Math.max(0, Math.min(1, sanitized))
@@ -91,6 +130,15 @@ type SanitizedRoadSegment = {
 type RoadPath = {
   indices: number[]
   closed: boolean
+}
+
+type RoadBuildData = {
+  vertexVectors: Array<THREE.Vector3 | null>
+  paths: RoadPath[]
+}
+
+type RoadCurveDescriptor = {
+  curve: THREE.Curve<THREE.Vector3>
 }
 
 function buildAdjacencyMap(
@@ -199,73 +247,7 @@ function collectRoadPaths(
   return paths
 }
 
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-  if (points.length === 2) {
-    return new THREE.LineCurve3(points[0], points[1])
-  }
-  const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
-  curve.tension = Math.max(0, Math.min(1, tension))
-  return curve
-}
-
-function buildRoadStripGeometry(curve: THREE.Curve<THREE.Vector3>, width: number): THREE.BufferGeometry | null {
-  const length = curve.getLength()
-  if (length <= ROAD_EPSILON) {
-    return null
-  }
-
-  const divisions = Math.max(
-    ROAD_MIN_DIVISIONS,
-    Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY)),
-  )
-
-  const halfWidth = Math.max(ROAD_MIN_WIDTH * 0.5, width * 0.5)
-  const positions: number[] = []
-  const normals: number[] = []
-  const uvs: number[] = []
-  const indices: number[] = []
-
-  const center = new THREE.Vector3()
-  const tangent = new THREE.Vector3()
-  const lateral = new THREE.Vector3()
-  const left = new THREE.Vector3()
-  const right = new THREE.Vector3()
-
-  for (let i = 0; i <= divisions; i += 1) {
-    const t = i / divisions
-    center.copy(curve.getPoint(t))
-    tangent.copy(curve.getTangent(t))
-    tangent.y = 0
-    if (tangent.lengthSq() <= ROAD_EPSILON) {
-      tangent.set(0, 0, 1)
-    } else {
-      tangent.normalize()
-    }
-    lateral.set(-tangent.z, 0, tangent.x)
-    left.copy(center).addScaledVector(lateral, halfWidth)
-    right.copy(center).addScaledVector(lateral, -halfWidth)
-
-    positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
-    normals.push(0, 1, 0, 0, 1, 0)
-    uvs.push(t, 0, t, 1)
-
-    if (i < divisions) {
-      const base = i * 2
-      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry()
-  geometry.setIndex(indices)
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return geometry
-}
-
-function buildRoadGeometry(definition: RoadDynamicMesh, smoothing: number, width: number): THREE.BufferGeometry | null {
+function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null {
   const vertexVectors = sanitizeRoadVertices(definition.vertices)
   if (!vertexVectors.length) {
     return null
@@ -299,28 +281,126 @@ function buildRoadGeometry(definition: RoadDynamicMesh, smoothing: number, width
     return null
   }
 
-  const geometries: THREE.BufferGeometry[] = []
-  const tension = Math.max(0, Math.min(1, 1 - smoothing))
+  return { vertexVectors, paths }
+}
 
-  for (const path of paths) {
-    const points = path.indices.map((vertexIndex) => vertexVectors[vertexIndex]!)
+function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
+  if (points.length === 2) {
+    return new THREE.LineCurve3(points[0], points[1])
+  }
+  const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
+  curve.tension = Math.max(0, Math.min(1, tension))
+  return curve
+}
+
+function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
+  const tension = Math.max(0, Math.min(1, 1 - smoothing))
+  const curves: RoadCurveDescriptor[] = []
+  for (const path of buildData.paths) {
+    const points = path.indices
+      .map((vertexIndex) => buildData.vertexVectors[vertexIndex])
+      .filter((point): point is THREE.Vector3 => Boolean(point))
     if (points.length < 2) {
       continue
     }
     const curve = createRoadCurve(points, path.closed && points.length >= 3, tension)
-    const stripGeometry = buildRoadStripGeometry(curve, width)
-    if (stripGeometry) {
-      geometries.push(stripGeometry)
-    }
+    curves.push({ curve })
   }
+  return curves
+}
 
-  if (!geometries.length) {
+function buildOffsetStripGeometry(
+  curve: THREE.Curve<THREE.Vector3>,
+  width: number,
+  offset: number,
+): THREE.BufferGeometry | null {
+  const length = curve.getLength()
+  if (length <= ROAD_EPSILON) {
     return null
   }
 
+  const divisions = Math.max(
+    ROAD_MIN_DIVISIONS,
+    Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY)),
+  )
+
+  const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  const center = new THREE.Vector3()
+  const tangent = new THREE.Vector3()
+  const lateral = new THREE.Vector3()
+  const offsetCenter = new THREE.Vector3()
+  const left = new THREE.Vector3()
+  const right = new THREE.Vector3()
+
+  for (let i = 0; i <= divisions; i += 1) {
+    const t = i / divisions
+    center.copy(curve.getPoint(t))
+    tangent.copy(curve.getTangent(t))
+    tangent.y = 0
+    if (tangent.lengthSq() <= ROAD_EPSILON) {
+      tangent.set(0, 0, 1)
+    } else {
+      tangent.normalize()
+    }
+    lateral.set(-tangent.z, 0, tangent.x)
+    offsetCenter.copy(center).addScaledVector(lateral, offset)
+    left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
+    right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
+
+    positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
+    normals.push(0, 1, 0, 0, 1, 0)
+    uvs.push(t, 0, t, 1)
+
+    if (i < divisions) {
+      const base = i * 2
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setIndex(indices)
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function buildRoadStripGeometry(curve: THREE.Curve<THREE.Vector3>, width: number): THREE.BufferGeometry | null {
+  return buildOffsetStripGeometry(curve, width, 0)
+}
+
+function buildMultiCurveGeometry(
+  curves: RoadCurveDescriptor[],
+  builder: (curve: THREE.Curve<THREE.Vector3>) => THREE.BufferGeometry | null,
+): THREE.BufferGeometry | null {
+  const geometries: THREE.BufferGeometry[] = []
+  for (const descriptor of curves) {
+    const geometry = builder(descriptor.curve)
+    if (geometry) {
+      geometries.push(geometry)
+    }
+  }
+  if (!geometries.length) {
+    return null
+  }
   const merged = mergeGeometries(geometries, false)
   geometries.forEach((geometry) => geometry.dispose())
   return merged ?? null
+}
+
+function buildOverlayGeometry(
+  curves: RoadCurveDescriptor[],
+  width: number,
+  offset: number,
+): THREE.BufferGeometry | null {
+  return buildMultiCurveGeometry(curves, (curve) => buildOffsetStripGeometry(curve, width, offset))
 }
 
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
@@ -328,19 +408,64 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
 
   const smoothing = normalizeJunctionSmoothing(options.junctionSmoothing)
   const width = Math.max(ROAD_MIN_WIDTH, Number.isFinite(definition.width) ? definition.width : ROAD_DEFAULT_WIDTH)
-  const geometry = buildRoadGeometry(definition, smoothing, width)
-  if (!geometry) {
+  const buildData = collectRoadBuildData(definition)
+  if (!buildData) {
     return
   }
 
-  const mesh = new THREE.Mesh(geometry, createRoadMaterial())
-  mesh.name = 'RoadMesh'
-  mesh.castShadow = false
-  mesh.receiveShadow = true
+  const curves = buildRoadCurves(smoothing, buildData)
+  if (!curves.length) {
+    return
+  }
+
+  const roadGeometry = buildMultiCurveGeometry(curves, (curve) => buildRoadStripGeometry(curve, width))
+  if (!roadGeometry) {
+    return
+  }
+
+  const roadMesh = new THREE.Mesh(roadGeometry, createRoadMaterial())
+  roadMesh.name = 'RoadMesh'
+  roadMesh.castShadow = false
+  roadMesh.receiveShadow = true
+  group.add(roadMesh)
+
+  if (options.shoulders) {
+    const shoulderOffset = width * 0.5 + ROAD_SHOULDER_GAP + ROAD_SHOULDER_WIDTH * 0.5
+    const shoulderGeometries: THREE.BufferGeometry[] = []
+    const leftShoulder = buildOverlayGeometry(curves, ROAD_SHOULDER_WIDTH, shoulderOffset)
+    if (leftShoulder) {
+      shoulderGeometries.push(leftShoulder)
+    }
+    const rightShoulder = buildOverlayGeometry(curves, ROAD_SHOULDER_WIDTH, -shoulderOffset)
+    if (rightShoulder) {
+      shoulderGeometries.push(rightShoulder)
+    }
+    if (shoulderGeometries.length) {
+      const mergedShoulder = mergeGeometries(shoulderGeometries, false)
+      shoulderGeometries.forEach((geometry) => geometry.dispose())
+      if (mergedShoulder) {
+        const shoulderMesh = new THREE.Mesh(mergedShoulder, createShoulderMaterial())
+        shoulderMesh.name = 'RoadShoulders'
+        shoulderMesh.position.y = ROAD_SHOULDER_OFFSET_Y
+        group.add(shoulderMesh)
+      }
+    }
+  }
+
+  if (options.laneLines) {
+    const laneLineWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH, Math.min(ROAD_LANE_LINE_WIDTH, width * 0.1))
+    const laneGeometry = buildOverlayGeometry(curves, laneLineWidth, 0)
+    if (laneGeometry) {
+      const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
+      laneMesh.name = 'RoadLaneLines'
+      laneMesh.position.y = ROAD_LANE_LINE_OFFSET_Y
+      laneMesh.renderOrder = 1
+      group.add(laneMesh)
+    }
+  }
 
   const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
-  mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
-  group.add(mesh)
+  roadMesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
 }
 
 function ensureRoadContentGroup(root: THREE.Group): THREE.Group {

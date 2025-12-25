@@ -15,6 +15,8 @@ export interface RoadComponentProps {
   segments: RoadSegment[]
   width: number
   junctionSmoothing: number
+  laneLines: boolean
+  shoulders: boolean
   bodyAssetId?: string | null
 }
 
@@ -59,6 +61,9 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     })
     .filter((segment): segment is RoadSegment => segment !== null)
 
+  const laneLines = Boolean(props?.laneLines)
+  const shoulders = Boolean(props?.shoulders)
+
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
   }
@@ -68,6 +73,8 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     segments,
     width,
     junctionSmoothing,
+    laneLines,
+    shoulders,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
   }
 }
@@ -75,6 +82,8 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefined | null): RoadComponentProps {
   if (!mesh) {
     return {
+      laneLines: false,
+      shoulders: false,
       vertices: [],
       segments: [],
       width: ROAD_DEFAULT_WIDTH,
@@ -94,6 +103,8 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     segments: segments as any,
     width: mesh.width,
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
+    laneLines: false,
+    shoulders: false,
   })
 }
 
@@ -103,6 +114,8 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     segments: props.segments.map((s) => ({ a: s.a, b: s.b })),
     width: props.width,
     junctionSmoothing: props.junctionSmoothing,
+    laneLines: props.laneLines,
+    shoulders: props.shoulders,
     bodyAssetId: props.bodyAssetId ?? null,
   }
 }
@@ -132,6 +145,14 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       label: 'Dimensions',
       fields: [{ kind: 'number', key: 'width', label: 'Width (m)', min: ROAD_MIN_WIDTH, step: 0.1 }],
     },
+    {
+      id: 'details',
+      label: 'Details',
+      fields: [
+        { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
+        { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
+      ],
+    },
   ],
   canAttach(node: SceneNode) {
     return node.dynamicMesh?.type === 'Road'
@@ -157,6 +178,8 @@ export function createRoadComponentState(
     segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
     junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
+    laneLines: overrides?.laneLines ?? defaults.laneLines,
+    shoulders: overrides?.shoulders ?? defaults.shoulders,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
   })
   return {

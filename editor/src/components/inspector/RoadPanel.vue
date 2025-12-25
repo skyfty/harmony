@@ -28,6 +28,8 @@ const roadComponent = computed(() => {
 
 const localWidth = ref<number>(2)
 const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
+const localLaneLines = ref<boolean>(false)
+const localShoulders = ref<boolean>(false)
 const isSyncingFromScene = ref(false)
 
 watch(
@@ -57,6 +59,8 @@ watch(
     isSyncingFromScene.value = true
     if (!component) {
       localJunctionSmoothing.value = ROAD_DEFAULT_JUNCTION_SMOOTHING
+      localLaneLines.value = false
+      localShoulders.value = false
       nextTick(() => {
         isSyncingFromScene.value = false
       })
@@ -66,6 +70,8 @@ watch(
     const raw = component.props?.junctionSmoothing
     const value = typeof raw === 'number' ? raw : Number(raw)
     localJunctionSmoothing.value = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
+    localLaneLines.value = Boolean(component.props?.laneLines)
+    localShoulders.value = Boolean(component.props?.shoulders)
 
     nextTick(() => {
       isSyncingFromScene.value = false
@@ -73,6 +79,38 @@ watch(
   },
   { immediate: true },
 )
+
+function applyLaneLinesUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextState = Boolean(rawValue)
+  if (component.props.laneLines === nextState) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLines: nextState })
+}
+
+function applyShouldersUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextState = Boolean(rawValue)
+  if (component.props.shoulders === nextState) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulders: nextState })
+}
 
 const junctionSmoothingDisplay = computed(() => `${Math.round(localJunctionSmoothing.value * 100)}%`)
 
@@ -160,6 +198,18 @@ function applyWidthUpdate(rawValue: unknown) {
           min="0.2"
           step="0.1"
           @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
+        />
+        <v-switch
+          :model-value="localLaneLines"
+          density="compact"
+          label="Show Lane Lines"
+          @update:modelValue="(value) => { const next = Boolean(value); localLaneLines = next; applyLaneLinesUpdate(next) }"
+        />
+        <v-switch
+          :model-value="localShoulders"
+          density="compact"
+          label="Show Shoulders"
+          @update:modelValue="(value) => { const next = Boolean(value); localShoulders = next; applyShouldersUpdate(next) }"
         />
       </div>
     </v-expansion-panel-text>
