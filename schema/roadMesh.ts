@@ -207,20 +207,27 @@ function buildRoadTransitionGeometries(
       return
     }
 
-    const orderedLeft = [...offsetEntries].sort((a, b) => a.angle - b.angle).map((entry) => entry.left)
-    const orderedRight = [...offsetEntries].sort((a, b) => a.angle - b.angle).reverse().map((entry) => entry.right)
-    const loop = [...orderedLeft, ...orderedRight]
+    // Sort all offset points around the junction center to build a non-self-intersecting contour.
+    const ordered = [...offsetEntries]
+      .flatMap((entry) => [entry.left, entry.right])
+      .filter((pt): pt is THREE.Vector3 => !!pt)
+      .map((pt) => ({
+        pt,
+        angle: Math.atan2(pt.z - center.z, pt.x - center.x),
+      }))
+      .sort((a, b) => a.angle - b.angle)
+      .map((entry) => entry.pt)
+
+    // Drop duplicates that can arise when segments are nearly colinear.
     const cleaned: THREE.Vector3[] = []
-    loop.forEach((point) => {
-      if (!point) {
-        return
-      }
+    ordered.forEach((point) => {
       const last = cleaned[cleaned.length - 1]
       if (last && last.distanceToSquared(point) <= 1e-6) {
         return
       }
       cleaned.push(point)
     })
+
     if (cleaned.length < 3) {
       return
     }
