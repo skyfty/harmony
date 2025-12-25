@@ -73,11 +73,16 @@ export default class ResourceCache {
     if (entry.downloadUrl) {
       return { kind: 'remote-url', url: entry.downloadUrl };
     }
-    if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
-      return { kind: 'arraybuffer', data: entry.arrayBuffer };
-    }
     if (entry.blobUrl) {
       return { kind: 'remote-url', url: entry.blobUrl };
+    }
+    if (entry.blob) {
+      return {
+        kind: 'blob',
+        blob: entry.blob,
+        mimeType: entry.mimeType,
+        filename: entry.filename,
+      };
     }
     return null;
   }

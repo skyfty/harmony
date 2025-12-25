@@ -492,9 +492,6 @@ class SceneGraphBuilder {
     if (typeof entry.size === 'number' && entry.size > 0) {
       return entry.size;
     }
-    if (entry.arrayBuffer && entry.arrayBuffer.byteLength > 0) {
-      return entry.arrayBuffer.byteLength;
-    }
     if (entry.blob && typeof entry.blob.size === 'number' && entry.blob.size > 0) {
       return entry.blob.size;
     }

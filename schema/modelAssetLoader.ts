@@ -20,21 +20,6 @@ export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): Fi
     }
   }
 
-  if (entry.arrayBuffer) {
-    try {
-      return new File([entry.arrayBuffer], filename, { type: mimeType })
-    } catch (_error) {
-      if (typeof Blob !== 'undefined') {
-        try {
-          const blob = new Blob([entry.arrayBuffer], { type: mimeType })
-          return new File([blob], filename, { type: mimeType })
-        } catch (_innerError) {
-          /* noop */
-        }
-      }
-    }
-  }
-
   return null
 }
 

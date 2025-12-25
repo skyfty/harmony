@@ -2356,13 +2356,13 @@ function inferMimeTypeFromAssetId(assetId: string): string | null {
 	}
 	return null
 }
-function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: string): string {
+function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer | Blob, mimeHint?: string): string {
 	const cached = assetObjectUrlCache.get(assetId)
 	if (cached) {
 		return cached
 	}
 	const mimeType = mimeHint ?? inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream'
-	const blob = new Blob([data], { type: mimeType })
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mimeType })
 	const url = URL.createObjectURL(blob)
 	assetObjectUrlCache.set(assetId, url)
 	return url
@@ -2378,10 +2378,10 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 	if (entry.blobUrl) {
 		return { url: entry.blobUrl, mimeType }
 	}
-	if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
-		const url = getOrCreateObjectUrl(assetId, entry.arrayBuffer, mimeType ?? undefined)
-		return { url, mimeType }
-	}
+  if (entry.blob) {
+    const url = getOrCreateObjectUrl(assetId, entry.blob, mimeType ?? undefined)
+    return { url, mimeType }
+  }
 	return null
 }
 
@@ -2465,14 +2465,6 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
   }
   if (entry.downloadUrl) {
     return await fetchTextFromUrl(entry.downloadUrl);
-  }
-  if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
-    try {
-      return new TextDecoder().decode(entry.arrayBuffer);
-    } catch (error) {
-      console.warn('解码文本 ArrayBuffer 失败', error);
-      return null;
-    }
   }
   if (entry.blob && typeof entry.blob.text === 'function') {
     try {
