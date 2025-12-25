@@ -70,6 +70,7 @@ import {createPrimitiveMesh}  from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
+import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
@@ -6322,6 +6323,13 @@ function finalizeRoadBuildSession() {
     points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
     width: session.width,
   })
+
+  if (created) {
+    const roadMaterials = createRoadNodeMaterials()
+    if (roadMaterials.length) {
+      sceneStore.setNodeMaterials(created.id, roadMaterials)
+    }
+  }
 
   // Keep editing: select the newly created road so vertex handles show immediately.
   if (created?.dynamicMesh?.type === 'Road') {

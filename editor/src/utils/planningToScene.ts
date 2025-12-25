@@ -1,5 +1,9 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
+import type {
+  GroundDynamicMesh,
+  SceneNode,
+  SceneNodeMaterial,
+} from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -15,10 +19,11 @@ import {
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { generateUuid } from '@/utils/uuid'
 import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { FLOOR_COMPONENT_TYPE, ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING, WATER_COMPONENT_TYPE } from '@schema/components'
+import { createRoadNodeMaterials, ROAD_SURFACE_DEFAULT_COLOR } from '@/utils/roadNodeMaterials'
+import { generateUuid } from '@/utils/uuid'
 
 export type PlanningConversionProgress = {
   step: string
@@ -65,6 +70,7 @@ export type ConvertPlanningToSceneOptions = {
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
     setNodeLocked: (nodeId: string, locked: boolean) => void
     updateNodeUserData: (nodeId: string, userData: Record<string, unknown> | null) => void
+    setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
   }
   planningData: PlanningSceneData
@@ -257,6 +263,18 @@ function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layer
     const name = found?.name
     if (typeof name === 'string' && name.trim()) {
       return name.trim()
+    }
+  }
+  return null
+}
+
+function resolveLayerColorFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const color = found?.color
+    if (typeof color === 'string' && color.trim()) {
+      return color.trim()
     }
   }
   return null
@@ -880,6 +898,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
       const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+      const layerColor = resolveLayerColorFromPlanningData(planningData, layerId) ?? ROAD_SURFACE_DEFAULT_COLOR
 
       for (const line of group.polylines) {
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
@@ -905,6 +924,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
+
+        const planningMaterials = createRoadNodeMaterials(layerColor, layerName)
+        if (planningMaterials.length) {
+          sceneStore.setNodeMaterials(roadNode.id, planningMaterials)
+        }
 
         // Apply road-layer smoothing to the road component so the viewport can build
         // smoothed junction transition meshes (no dynamic mesh recompute here).

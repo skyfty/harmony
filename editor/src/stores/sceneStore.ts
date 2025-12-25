@@ -7767,6 +7767,30 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
+    setNodeMaterials(nodeId: string, materials: SceneNodeMaterial[]): boolean {
+      if (!materials?.length) {
+        return false
+      }
+
+      const clones = cloneNodeMaterials(materials)
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node)) {
+          return
+        }
+        node.materials = clones
+        updated = true
+      })
+
+      if (!updated) {
+        return false
+      }
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
     resetSharedMaterialAssignments(materialId: string) {
       if (!materialId || !nodeTreeIncludesMaterial(this.nodes, materialId)) {
         return false
