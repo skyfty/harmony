@@ -7,8 +7,8 @@ import {
   releaseModelInstancesForNode,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
+import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schema/wallMesh'
+import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
 export function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
@@ -45,6 +45,16 @@ function disposeWallGroupResources(group: THREE.Group): void {
       material.dispose()
     }
   })
+}
+
+function resolveWallSmoothingFromNode(node: SceneNode): number {
+  const component = node.components?.[WALL_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WallComponentProps>
+    | undefined
+  if (!component) {
+    return 0
+  }
+  return clampWallProps(component.props ?? null).smoothing
 }
 
 const wallSyncPosHelper = new THREE.Vector3()
@@ -239,7 +249,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const wallDefinition = node.dynamicMesh as WallDynamicMesh
-    wallGroup = createWallGroup(wallDefinition)
+    const smoothing = resolveWallSmoothingFromNode(node)
+    wallGroup = createWallGroup(wallDefinition, { smoothing })
     wallGroup.userData.nodeId = node.id
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition)
     container.add(wallGroup)
@@ -248,11 +259,16 @@ export function createWallRenderer(options: WallRendererOptions) {
     return wallGroup
   }
 
-  function updateWallGroupIfNeeded(wallGroup: THREE.Group, definition: WallDynamicMesh, signatureKey: string): void {
+  function updateWallGroupIfNeeded(
+    wallGroup: THREE.Group,
+    definition: WallDynamicMesh,
+    signatureKey: string,
+    options: WallRenderOptions = {},
+  ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
     const nextSignature = computeWallDynamicMeshSignature(definition)
     if (groupData[signatureKey] !== nextSignature) {
-      updateWallGroup(wallGroup, definition)
+      updateWallGroup(wallGroup, definition, options)
       groupData[signatureKey] = nextSignature
     }
   }
@@ -290,7 +306,12 @@ export function createWallRenderer(options: WallRendererOptions) {
 
       const wallGroup = ensureWallGroup(container, node, signatureKey)
       wallGroup.visible = true
-      updateWallGroupIfNeeded(wallGroup, node.dynamicMesh as WallDynamicMesh, signatureKey)
+      updateWallGroupIfNeeded(
+        wallGroup,
+        node.dynamicMesh as WallDynamicMesh,
+        signatureKey,
+        { smoothing: resolveWallSmoothingFromNode(node) },
+      )
       return
     }
 

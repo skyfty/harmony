@@ -1172,7 +1172,11 @@ class SceneGraphBuilder {
     const bodyObject = wallProps.bodyAssetId ? await this.loadAssetMesh(wallProps.bodyAssetId) : null;
     const jointObject = wallProps.jointAssetId ? await this.loadAssetMesh(wallProps.jointAssetId) : null;
 
-    const group = createWallRenderGroup(meshInfo, { bodyObject, jointObject });
+    const group = createWallRenderGroup(
+      meshInfo,
+      { bodyObject, jointObject },
+      { smoothing: wallProps.smoothing },
+    );
     group.name = node.name ?? (group.name || 'Wall');
     const materials = await this.resolveNodeMaterials(node);
     const materialAssignment = this.pickMaterialAssignment(materials);

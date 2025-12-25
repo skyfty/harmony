@@ -10,11 +10,13 @@ export const WALL_DEFAULT_THICKNESS = 0.2
 export const WALL_MIN_HEIGHT = 0.5
 export const WALL_MIN_WIDTH = 0.1
 export const WALL_MIN_THICKNESS = 0.05
+export const WALL_DEFAULT_SMOOTHING = 0
 
 export interface WallComponentProps {
   height: number
   width: number
   thickness: number
+  smoothing: number
   bodyAssetId?: string | null
   jointAssetId?: string | null
 }
@@ -29,6 +31,11 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const thickness = Number.isFinite(props?.thickness)
     ? Math.max(WALL_MIN_THICKNESS, props!.thickness!)
     : WALL_DEFAULT_THICKNESS
+  const smoothingRaw = (props as WallComponentProps | undefined)?.smoothing
+  const smoothingValue = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+  const smoothing = Number.isFinite(smoothingValue)
+    ? Math.min(1, Math.max(0, smoothingValue))
+    : WALL_DEFAULT_SMOOTHING
 
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
@@ -38,6 +45,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     height,
     width,
     thickness,
+    smoothing,
     bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
     jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
   }
@@ -49,6 +57,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
+      smoothing: WALL_DEFAULT_SMOOTHING,
       bodyAssetId: null,
       jointAssetId: null,
     }
@@ -58,6 +67,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     height: base?.height,
     width: (base as { width?: number })?.width,
     thickness: base?.thickness,
+    smoothing: WALL_DEFAULT_SMOOTHING,
   })
 }
 
@@ -66,6 +76,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     height: props.height,
     width: props.width,
     thickness: props.thickness,
+    smoothing: props.smoothing,
     bodyAssetId: props.bodyAssetId ?? null,
     jointAssetId: props.jointAssetId ?? null,
   }
@@ -124,6 +135,7 @@ export function createWallComponentState(
     height: overrides?.height ?? defaults.height,
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
+    smoothing: overrides?.smoothing ?? defaults.smoothing,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
   })

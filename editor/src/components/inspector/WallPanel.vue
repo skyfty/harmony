@@ -10,6 +10,7 @@ import {
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
+  WALL_DEFAULT_SMOOTHING,
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
@@ -22,6 +23,7 @@ const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore
 const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
+const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -66,6 +68,9 @@ watch(
     localHeight.value = props.height ?? WALL_DEFAULT_HEIGHT
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
+    localSmoothing.value = Number.isFinite(props.smoothing)
+      ? Math.min(1, Math.max(0, props.smoothing))
+      : WALL_DEFAULT_SMOOTHING
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -81,6 +86,8 @@ watch(selectedNode, () => {
   bodyFeedbackMessage.value = null
   jointFeedbackMessage.value = null
 })
+
+const smoothingDisplay = computed(() => `${Math.round(localSmoothing.value * 100)}%`)
 
 function serializeAssetDragPayload(raw: string | null): string | null {
   if (!raw) {
@@ -301,6 +308,32 @@ function applyDimensions() {
     })
   }
 }
+
+function applySmoothingUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.min(1, Math.max(0, value))
+  const current = typeof component.props?.smoothing === 'number'
+    ? component.props.smoothing
+    : WALL_DEFAULT_SMOOTHING
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  if (localSmoothing.value !== clamped) {
+    localSmoothing.value = clamped
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothing: clamped })
+}
 </script>
 
 <template>
@@ -347,6 +380,20 @@ function applyDimensions() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="wall-field-grid">
+        <div class="wall-field-labels">
+          <span>Corner Smoothness</span>
+          <span>{{ smoothingDisplay }}</span>
+        </div>
+        <v-slider
+          :model-value="localSmoothing"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          density="compact"
+          track-color="rgba(77, 208, 225, 0.4)"
+          color="primary"
+          @update:modelValue="(value) => { localSmoothing = Number(value); applySmoothingUpdate(value) }"
+        />
         <v-text-field
           v-model.number="localHeight"
           label="Height (m)"
@@ -456,6 +503,14 @@ function applyDimensions() {
   display: grid;
   gap: 0.2rem;
   margin: 0px 5px;
+}
+
+.wall-field-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  opacity: 0.9;
 }
 
 .hint-text {

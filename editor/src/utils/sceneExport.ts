@@ -29,6 +29,8 @@ import {
   type RigidbodyColliderType,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
+  WALL_COMPONENT_TYPE,
+  clampWallProps,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
@@ -744,8 +746,11 @@ function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
         ground.updateMatrixWorld(true)
         return ground
       }
-    case 'Wall':
-      return createWallGroup(mesh).clone(true)
+    case 'Wall': {
+      const component = node.components?.[WALL_COMPONENT_TYPE]
+      const smoothing = clampWallProps(component?.props ?? null).smoothing
+      return createWallGroup(mesh, { smoothing }).clone(true)
+    }
     case 'Road':
       return createRoadGroup(mesh).clone(true)
     default:

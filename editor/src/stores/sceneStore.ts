@@ -201,6 +201,7 @@ import {
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
+  WALL_DEFAULT_SMOOTHING,
   clampWallProps,
   cloneWallComponentProps,
   ROAD_DEFAULT_WIDTH,
@@ -1813,10 +1814,20 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
 
   const runtime = getRuntimeObject(node.id)
   if (runtime) {
-    updateWallGroup(runtime, node.dynamicMesh)
+    updateWallGroup(runtime, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
   }
 
   return true
+}
+
+function resolveWallSmoothing(node: SceneNode): number {
+  const component = node.components?.[WALL_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WallComponentProps>
+    | undefined
+  if (!component) {
+    return WALL_DEFAULT_SMOOTHING
+  }
+  return clampWallProps(component.props ?? null).smoothing
 }
 
 function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh | undefined {
@@ -3303,7 +3314,7 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
       ? createRoadGroup(meshDefinition as RoadDynamicMesh)
       : meshType === 'Floor'
         ? createFloorGroup(meshDefinition as FloorDynamicMesh)
-        : createWallGroup(meshDefinition as WallDynamicMesh)
+        : createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) })
 
     runtime.name = node.name ?? runtime.name
     prepareRuntimeObjectForNode(runtime)
@@ -11303,7 +11314,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const wallGroup = createWallGroup(build.definition)
+      const wallGroup = createWallGroup(build.definition, { smoothing: WALL_DEFAULT_SMOOTHING })
       const nodeName = payload.name ?? this.generateWallNodeName()
 
       this.captureHistorySnapshot()
@@ -11467,7 +11478,7 @@ export const useSceneStore = defineStore('scene', {
 
       const runtime = getRuntimeObject(nodeId)
       if (runtime) {
-        updateWallGroup(runtime, build.definition)
+        updateWallGroup(runtime, build.definition, { smoothing: resolveWallSmoothing(node) })
       }
       return true
     },
