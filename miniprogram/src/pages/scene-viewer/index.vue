@@ -357,6 +357,7 @@ import {
   subscribeInstancedMeshes,
   ensureInstancedMeshesRegistered,
   allocateModelInstance,
+  getModelInstanceBinding,
   releaseModelInstance,
   updateModelInstanceMatrix,
   findNodeIdForInstance,
@@ -3072,13 +3073,15 @@ function updateInstancedCullingAndLod(): void {
       applyInstancedLodSwitch(nodeId, object, desiredAssetId);
       return;
     }
+
+    const existingBinding = getModelInstanceBinding(nodeId);
+    const shouldForceUpload = !existingBinding || existingBinding.assetId !== desiredAssetId;
     const binding = allocateModelInstance(desiredAssetId, nodeId);
     if (!binding) {
       void ensureModelObjectCached(desiredAssetId, node);
       return;
     }
-    // Binding may be newly allocated or compacted; force one matrix upload.
-    syncInstancedTransform(object, true);
+    syncInstancedTransform(object, shouldForceUpload);
   });
 }
 
@@ -7305,14 +7308,17 @@ async function ensureRendererContext(result: UseCanvasResult) {
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   const { canvas } = result;
-  const pixelRatio =
+  const devicePixelRatio =
     result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
+  // WeChat mini-program adapter canvas is typically already in physical pixels.
+  // Applying DPR again explodes the render target size and kills FPS.
+  const pixelRatio = isWeChatMiniProgram ? 1 : Math.min(2, Math.max(1, devicePixelRatio));
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: true,
+    antialias: !isWeChatMiniProgram,
     alpha: true,
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -7320,7 +7326,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !isWeChatMiniProgram;
   pmremGenerator?.dispose();
   pmremGenerator = new THREE.PMREMGenerator(renderer);
 
