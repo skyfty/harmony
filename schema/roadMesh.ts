@@ -23,12 +23,13 @@ const ROAD_DEFAULT_WIDTH = 2
 const ROAD_MIN_DIVISIONS = 4
 const ROAD_MAX_DIVISIONS = 256
 const ROAD_DIVISION_DENSITY = 8
-const ROAD_LANE_LINE_WIDTH = 0.08
+const ROAD_LANE_LINE_WIDTH = 0.18
 const ROAD_SHOULDER_WIDTH = 0.35
 const ROAD_SHOULDER_GAP = 0.02
 const ROAD_LANE_LINE_OFFSET_Y = 0.002
 const ROAD_SHOULDER_OFFSET_Y = 0.001
 const ROAD_OVERLAY_MIN_WIDTH = 0.01
+const ROAD_LANE_LINE_COLOR = 0x27ffff
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -70,7 +71,7 @@ function createRoadMaterial(): THREE.MeshStandardMaterial {
 
 function createLaneLineMaterial(): THREE.MeshBasicMaterial {
   const material = new THREE.MeshBasicMaterial({
-    color: 0xfff1a0,
+    color: ROAD_LANE_LINE_COLOR,
     transparent: true,
     opacity: 0.9,
   })
@@ -80,12 +81,13 @@ function createLaneLineMaterial(): THREE.MeshBasicMaterial {
   material.polygonOffsetFactor = -2
   material.polygonOffsetUnits = -2
   material.toneMapped = false
+  material.depthTest = false
   return material
 }
 
 function createShoulderMaterial(): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
-    color: 0xbcbcbc,
+    color: 0xff0000,
     metalness: 0,
     roughness: 0.9,
     transparent: true,
@@ -447,19 +449,24 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
         const shoulderMesh = new THREE.Mesh(mergedShoulder, createShoulderMaterial())
         shoulderMesh.name = 'RoadShoulders'
         shoulderMesh.position.y = ROAD_SHOULDER_OFFSET_Y
+        shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
       }
     }
   }
 
   if (options.laneLines) {
-    const laneLineWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH, Math.min(ROAD_LANE_LINE_WIDTH, width * 0.1))
+    const laneLineWidth = Math.max(
+      ROAD_OVERLAY_MIN_WIDTH * 3,
+      Math.min(ROAD_LANE_LINE_WIDTH, width * 0.12 + ROAD_OVERLAY_MIN_WIDTH),
+    )
     const laneGeometry = buildOverlayGeometry(curves, laneLineWidth, 0)
     if (laneGeometry) {
       const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
       laneMesh.name = 'RoadLaneLines'
       laneMesh.position.y = ROAD_LANE_LINE_OFFSET_Y
-      laneMesh.renderOrder = 1
+      laneMesh.renderOrder = 1000
+      laneMesh.userData.overrideMaterial = true
       group.add(laneMesh)
     }
   }
