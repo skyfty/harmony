@@ -289,6 +289,21 @@
           <text class="viewer-drive-speed-gauge__unit">km/h</text>
         </view>
       </view>
+
+      <view v-if="debugOverlayVisible" class="viewer-debug-overlay">
+        <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
+        <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
+        <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
+        <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
+        <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
+        <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
+        <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
+        <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
+        <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
+        <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
+        <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+        <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -342,6 +357,7 @@ import {
   subscribeInstancedMeshes,
   ensureInstancedMeshesRegistered,
   allocateModelInstance,
+  getModelInstanceBinding,
   releaseModelInstance,
   updateModelInstanceMatrix,
   findNodeIdForInstance,
@@ -546,6 +562,255 @@ const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?:
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 
+// Debug switch: when disabled, do not render the overlay and do not compute debug stats.
+// Enable temporarily via query param `?debug=1`.
+const debugEnabled = ref(true);
+const debugOverlayVisible = computed(() => debugEnabled.value);
+const debugFps = ref(0);
+
+const instancingDebug = reactive({
+  instancedMeshAssets: 0,
+  instancedMeshActive: 0,
+  instancedInstanceCount: 0,
+  instanceMatrixUploadKb: 0,
+  lodTotal: 0,
+  lodVisible: 0,
+  scatterTotal: 0,
+  scatterVisible: 0,
+});
+
+const rendererDebug = reactive({
+  calls: 0,
+  triangles: 0,
+  geometries: 0,
+  textures: 0,
+  width: 0,
+  height: 0,
+  pixelRatio: 1,
+});
+
+type InstancedTransformCacheEntry = {
+  assetId: string | null;
+  visible: boolean;
+  elements: number[];
+};
+
+const instancedTransformCache = new Map<string, InstancedTransformCacheEntry>();
+
+function matricesAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-6): boolean {
+  for (let i = 0; i < 16; i += 1) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (Math.abs(av - bv) > epsilon) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const groundChunkDebug = reactive({
+  loaded: 0,
+  target: 0,
+  total: 0,
+  pending: 0,
+  unloaded: 0,
+});
+
+let debugFpsFrames = 0;
+let debugFpsAccumSeconds = 0;
+let debugFpsLastSyncAt = 0;
+
+let debugInstancingLastSyncAt = 0;
+let debugGroundChunksLastSyncAt = 0;
+let debugGroundUnloadedTotal = 0;
+let debugLastGroundChunkKeys: Set<string> | null = null;
+
+function clampInclusive(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
+}
+
+function resolveGroundChunkCells(definition: GroundDynamicMesh): number {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
+  const targetMeters = 100;
+  const candidate = Math.max(4, Math.round(targetMeters / Math.max(1e-6, cellSize)));
+  return Math.max(4, Math.min(512, Math.trunc(candidate)));
+}
+
+function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
+  const width = Number.isFinite(definition.width) ? definition.width : 0;
+  const depth = Number.isFinite(definition.depth) ? definition.depth : 0;
+  const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5;
+  return Math.max(80, Math.min(2000, Math.min(200, halfDiagonal)));
+}
+
+function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
+  const rows = Math.max(1, Math.trunc(definition.rows));
+  const columns = Math.max(1, Math.trunc(definition.columns));
+  const safeCells = Math.max(1, Math.trunc(chunkCells));
+  const rowChunks = Math.ceil(rows / safeCells);
+  const columnChunks = Math.ceil(columns / safeCells);
+  return Math.max(1, rowChunks * columnChunks);
+}
+
+function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): number {
+  const chunkCells = resolveGroundChunkCells(definition);
+  const rows = Math.max(1, Math.trunc(definition.rows));
+  const columns = Math.max(1, Math.trunc(definition.columns));
+  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells));
+  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells));
+
+  let localX = 0;
+  let localZ = 0;
+  if (camera) {
+    groundObject.updateMatrixWorld(true);
+    const cameraWorld = new THREE.Vector3();
+    camera.getWorldPosition(cameraWorld);
+    const cameraLocal = (groundObject as THREE.Group).worldToLocal(cameraWorld);
+    localX = cameraLocal.x;
+    localZ = cameraLocal.z;
+  }
+
+  const loadRadius = resolveGroundChunkRadius(definition);
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
+  const halfWidth = definition.width * 0.5;
+  const halfDepth = definition.depth * 0.5;
+
+  const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns);
+  const maxLoadColumn = clampInclusive(Math.ceil((localX + loadRadius + halfWidth) / cellSize), 0, columns);
+  const minLoadRow = clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize), 0, rows);
+  const maxLoadRow = clampInclusive(Math.ceil((localZ + loadRadius + halfDepth) / cellSize), 0, rows);
+
+  const minLoadChunkColumn = clampInclusive(Math.floor(minLoadColumn / chunkCells), 0, maxChunkColumnIndex);
+  const maxLoadChunkColumn = clampInclusive(Math.floor(maxLoadColumn / chunkCells), 0, maxChunkColumnIndex);
+  const minLoadChunkRow = clampInclusive(Math.floor(minLoadRow / chunkCells), 0, maxChunkRowIndex);
+  const maxLoadChunkRow = clampInclusive(Math.floor(maxLoadRow / chunkCells), 0, maxChunkRowIndex);
+
+  const count = (maxLoadChunkRow - minLoadChunkRow + 1) * (maxLoadChunkColumn - minLoadChunkColumn + 1);
+  return Math.max(1, count);
+}
+
+function updateDebugFps(deltaSeconds: number): void {
+  if (!debugEnabled.value) {
+    return;
+  }
+  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+    return;
+  }
+  debugFpsFrames += 1;
+  debugFpsAccumSeconds += deltaSeconds;
+  const now = Date.now();
+  if (now - debugFpsLastSyncAt < 500) {
+    return;
+  }
+  debugFpsLastSyncAt = now;
+  const fps = debugFpsFrames / Math.max(1e-6, debugFpsAccumSeconds);
+  debugFps.value = Math.max(0, Math.round(fps));
+  debugFpsFrames = 0;
+  debugFpsAccumSeconds = 0;
+}
+
+function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void {
+  if (!debugEnabled.value) {
+    return;
+  }
+  const now = Date.now();
+  if (now - debugInstancingLastSyncAt < 250) {
+    return;
+  }
+  debugInstancingLastSyncAt = now;
+  instancingDebug.instancedMeshAssets = instancedMeshes.length;
+
+  let activeMeshes = 0;
+  let instanceCountSum = 0;
+  instancedMeshes.forEach((mesh) => {
+    const count = typeof (mesh as any).count === 'number' ? (mesh as any).count as number : 0;
+    if (count > 0) {
+      activeMeshes += 1;
+      instanceCountSum += count;
+    }
+  });
+  instancingDebug.instancedMeshActive = activeMeshes;
+  instancingDebug.instancedInstanceCount = instanceCountSum;
+  // Worst-case estimate: three.js may upload the full instanceMatrix buffer when needsUpdate is set.
+  // DEFAULT_INSTANCE_CAPACITY is 2048 in modelObjectCache; matrix is 16 floats (4 bytes each).
+  const instanceMatrixBytesPerMesh = 2048 * 16 * 4;
+  instancingDebug.instanceMatrixUploadKb = Math.round((activeMeshes * instanceMatrixBytesPerMesh) / 1024);
+
+  instancingDebug.lodTotal = lodTotal;
+  instancingDebug.lodVisible = lodVisible;
+  const scatterStats = terrainScatterRuntime.getInstanceStats();
+  instancingDebug.scatterTotal = scatterStats.total;
+  instancingDebug.scatterVisible = scatterStats.visible;
+}
+
+function syncRendererDebug(renderer: THREE.WebGLRenderer): void {
+  if (!debugEnabled.value) {
+    return;
+  }
+  const info = renderer.info;
+  rendererDebug.calls = info?.render?.calls ?? 0;
+  rendererDebug.triangles = info?.render?.triangles ?? 0;
+  rendererDebug.geometries = info?.memory?.geometries ?? 0;
+  rendererDebug.textures = info?.memory?.textures ?? 0;
+  rendererDebug.pixelRatio = typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : 1;
+  // In mini-programs the canvas size is the most reliable viewport indicator.
+  rendererDebug.width = (canvasResult?.canvas?.width || canvasResult?.canvas?.clientWidth || 0) as number;
+  rendererDebug.height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 0) as number;
+}
+
+function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): void {
+  if (!debugEnabled.value) {
+    return;
+  }
+  const now = Date.now();
+  if (now - debugGroundChunksLastSyncAt < 250) {
+    return;
+  }
+  debugGroundChunksLastSyncAt = now;
+
+  const loadedKeys = new Set<string>();
+  groundObject.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh || !(mesh as any).isMesh) {
+      return;
+    }
+    const chunk = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null;
+    if (!chunk || typeof chunk.chunkRow !== 'number' || typeof chunk.chunkColumn !== 'number') {
+      return;
+    }
+    loadedKeys.add(`${chunk.chunkRow}:${chunk.chunkColumn}`);
+  });
+
+  if (debugLastGroundChunkKeys) {
+    let removed = 0;
+    debugLastGroundChunkKeys.forEach((key) => {
+      if (!loadedKeys.has(key)) {
+        removed += 1;
+      }
+    });
+    if (removed > 0) {
+      debugGroundUnloadedTotal += removed;
+    }
+  }
+  debugLastGroundChunkKeys = loadedKeys;
+
+  const chunkCells = resolveGroundChunkCells(definition);
+  groundChunkDebug.loaded = loadedKeys.size;
+  groundChunkDebug.total = computeTotalGroundChunkCount(definition, chunkCells);
+  groundChunkDebug.target = computeTargetLoadChunkCount(groundObject, definition, camera);
+  groundChunkDebug.pending = Math.max(0, groundChunkDebug.target - groundChunkDebug.loaded);
+  groundChunkDebug.unloaded = debugGroundUnloadedTotal;
+}
+
 const rgbeLoader = new RGBELoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const exrLoader = new EXRLoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const textureLoader = new THREE.TextureLoader();
@@ -621,7 +886,7 @@ const overlayLabel = computed(() => {
   return '';
 });
 
-const SKY_ENVIRONMENT_INTENSITY = 0.35;
+const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
@@ -630,7 +895,7 @@ const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
-  exposure: 0.6,
+  exposure: 0.7,
   turbidity: 4,
   rayleigh: 1.25,
   mieCoefficient: 0.0025,
@@ -639,10 +904,34 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   azimuth: 145,
   clouds: null,
 };
+
+
+const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
+const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 1.35;
+
+function resolveSceneExposure(exposure: unknown): number {
+  const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
+  return clampNumber(
+    base * SCENE_VIEWER_EXPOSURE_BOOST,
+    0.05,
+    5,
+    DEFAULT_SKYBOX_SETTINGS.exposure * SCENE_VIEWER_EXPOSURE_BOOST,
+  );
+}
+
+function resolveAmbientLightIntensity(intensity: unknown): number {
+  const base = clampNumber(intensity, 0, 5, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY);
+  return clampNumber(
+    base * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
+    0,
+    5,
+    DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
+  );
+}
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff';
-const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6;
+const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.75;
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02;
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81;
@@ -2701,7 +2990,7 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
     instancedBounds: serializeBoundingBox(cached.boundingBox),
     __harmonyInstancedRadius: cached.radius,
   };
-  syncInstancedTransform(object);
+  syncInstancedTransform(object, true);
 }
 
 function resolveInstancedProxyRadius(object: THREE.Object3D): number {
@@ -2774,6 +3063,8 @@ function updateInstancedCullingAndLod(): void {
     return { radius };
   });
 
+  syncInstancingDebugCounters(candidateIds.length, visibleIds.size);
+
   candidateIds.forEach((nodeId) => {
     const object = candidateObjects.get(nodeId);
     if (!object) {
@@ -2797,12 +3088,15 @@ function updateInstancedCullingAndLod(): void {
       applyInstancedLodSwitch(nodeId, object, desiredAssetId);
       return;
     }
+
+    const existingBinding = getModelInstanceBinding(nodeId);
+    const shouldForceUpload = !existingBinding || existingBinding.assetId !== desiredAssetId;
     const binding = allocateModelInstance(desiredAssetId, nodeId);
     if (!binding) {
       void ensureModelObjectCached(desiredAssetId, node);
       return;
     }
-    syncInstancedTransform(object);
+    syncInstancedTransform(object, shouldForceUpload);
   });
 }
 
@@ -4212,7 +4506,7 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
   });
 }
 
-function syncInstancedTransform(object: THREE.Object3D | null): void {
+function syncInstancedTransform(object: THREE.Object3D | null, force = false): void {
   if (!object) {
     return;
   }
@@ -4220,30 +4514,52 @@ function syncInstancedTransform(object: THREE.Object3D | null): void {
   // InstancedMesh 支持完整矩阵，但 decompose/compose 会丢失 shear，导致实例位置/朝向偏差。
   // 因此这里优先直接写入 matrixWorld，仅在需要“隐藏”(scale=0) 时才做分解。
   object.updateMatrixWorld(true);
-  const targets: THREE.Object3D[] = [];
-  object.traverse((child) => {
-    if (child.userData?.instancedAssetId) {
-      targets.push(child);
+
+  const handleTarget = (target: THREE.Object3D) => {
+    if (!target.userData?.instancedAssetId) {
+      return;
     }
-  });
-  if (!targets.length) {
-    return;
-  }
-  targets.forEach((target) => {
     const nodeId = target.userData?.nodeId as string | undefined;
     if (!nodeId) {
       return;
     }
     removeVehicleInstance(nodeId);
-    if (target.visible === false) {
+
+    const assetId = typeof target.userData?.instancedAssetId === 'string' ? (target.userData.instancedAssetId as string) : null;
+    const visible = target.visible !== false;
+
+    if (!visible) {
       target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
       instancedScaleHelper.setScalar(0);
       instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
     } else {
       instancedMatrixHelper.copy(target.matrixWorld);
     }
+
+    const cached = instancedTransformCache.get(nodeId) ?? null;
+    const shouldUpdate =
+      force ||
+      !cached ||
+      cached.visible !== visible ||
+      cached.assetId !== assetId ||
+      !matricesAlmostEqual(cached.elements, instancedMatrixHelper.elements);
+
+    if (!shouldUpdate) {
+      return;
+    }
+
     updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
-  });
+    instancedTransformCache.set(nodeId, {
+      assetId,
+      visible,
+      elements: Array.from(instancedMatrixHelper.elements),
+    });
+  };
+
+  // Fast path: instanced proxy itself.
+  handleTarget(object);
+  // Some objects (e.g. wheel visuals) may contain nested instanced proxies.
+  object.traverse(handleTarget);
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
@@ -6248,7 +6564,7 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
     return;
   }
   ambient.color.set(settings.ambientLightColor);
-  ambient.intensity = settings.ambientLightIntensity;
+  ambient.intensity = resolveAmbientLightIntensity(settings.ambientLightIntensity);
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
@@ -6431,7 +6747,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   if (!settings) {
     disposeSkyEnvironment();
     applySkyEnvironmentToScene();
-    renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
     return;
@@ -6463,7 +6779,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   assignUniform('mieCoefficient', settings.mieCoefficient);
   assignUniform('mieDirectionalG', settings.mieDirectionalG);
   updateSkyLighting(settings);
-  renderer.toneMappingExposure = settings.exposure;
+  renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
   if (!pmremGenerator && renderer) {
     pmremGenerator = new THREE.PMREMGenerator(renderer);
   }
@@ -7007,22 +7323,25 @@ async function ensureRendererContext(result: UseCanvasResult) {
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   const { canvas } = result;
-  const pixelRatio =
+  const devicePixelRatio =
     result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
+  // WeChat mini-program adapter canvas is typically already in physical pixels.
+  // Applying DPR again explodes the render target size and kills FPS.
+  const pixelRatio = isWeChatMiniProgram ? 1 : Math.min(2, Math.max(1, devicePixelRatio));
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: true,
+    antialias: !isWeChatMiniProgram,
     alpha: true,
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+  renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !isWeChatMiniProgram;
   pmremGenerator?.dispose();
   pmremGenerator = new THREE.PMREMGenerator(renderer);
 
@@ -7321,6 +7640,10 @@ function startRenderLoop(
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
 
+        if (debugEnabled.value) {
+          updateDebugFps(deltaSeconds);
+        }
+
         // Sync multiuser avatars to the camera pose.
         if (renderContext && multiuserNodeObjects.size) {
           const cameraObj = renderContext.camera;
@@ -7376,6 +7699,9 @@ function startRenderLoop(
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+            if (debugEnabled.value) {
+              syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
+            }
           }
         }
 
@@ -7384,6 +7710,10 @@ function startRenderLoop(
         updateInstancedCullingAndLod();
         cloudRenderer?.update(deltaSeconds);
         renderer.render(scene, camera);
+        // Pull renderer.info after rendering so calls/triangles reflect the current frame.
+        if (debugEnabled.value) {
+          syncRendererDebug(renderer);
+        }
       });
       onCleanup(() => {
         cancel();
@@ -7672,6 +8002,26 @@ onUnmounted(() => {
   position: relative;
   flex: 1;
   background-color: #e9eef5;
+}
+
+.viewer-debug-overlay {
+  position: absolute;
+  left: 12px;
+  top: calc(12px + var(--viewer-safe-area-top, 0px));
+  z-index: 1900;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(8, 12, 26, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(245, 250, 255, 0.92);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.viewer-debug-line {
+  display: block;
+  white-space: nowrap;
 }
 
 .viewer-canvas {
