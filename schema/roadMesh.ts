@@ -14,338 +14,334 @@ export type RoadJunctionSmoothingOptions = {
 }
 
 const DEFAULT_COLOR = 0x4b4f55
-
-// Lift the road surface slightly above the ground plane to avoid z-fighting.
 const ROAD_SURFACE_Y_OFFSET = 0.01
+const ROAD_EPSILON = 1e-6
+const ROAD_MIN_WIDTH = 0.2
+const ROAD_DEFAULT_WIDTH = 2
+const ROAD_MIN_DIVISIONS = 4
+const ROAD_MAX_DIVISIONS = 256
+const ROAD_DIVISION_DENSITY = 8
 
 function disposeObject3D(object: THREE.Object3D) {
-  object.traverse((child: THREE.Object3D) => {
+  object.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (mesh.isMesh) {
-      const geometry = mesh.geometry
-      if (geometry) {
-        geometry.dispose()
-      }
-      const material = mesh.material
-      if (Array.isArray(material)) {
-        material.forEach((entry: THREE.Material) => entry.dispose())
-      } else if (material) {
-        material.dispose()
-      }
+    if (!mesh?.isMesh) {
+      return
+    }
+    if (mesh.geometry) {
+      mesh.geometry.dispose()
+    }
+    const material = mesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose())
+    } else if (material) {
+      material.dispose()
     }
   })
 }
 
-function createSegmentMaterial(): THREE.MeshStandardMaterial {
+function clearGroupContent(group: THREE.Group) {
+  while (group.children.length) {
+    const child = group.children.pop()
+    if (child) {
+      disposeObject3D(child)
+    }
+  }
+}
+
+function createRoadMaterial(): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
     color: DEFAULT_COLOR,
-    metalness: 0,
-    roughness: 0.92,
+    metalness: 0.05,
+    roughness: 0.85,
   })
   material.name = 'RoadMaterial'
   material.side = THREE.DoubleSide
   return material
 }
 
-type RoadVertexJunctionInfo = {
-  neighbors: Set<number>
-}
-
-function clampJunctionSmoothing(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) {
+function normalizeJunctionSmoothing(value?: number): number {
+  if (!Number.isFinite(value)) {
     return 0
   }
-  return Math.min(1, Math.max(0, num))
+  return Math.max(0, Math.min(1, value))
 }
 
-function buildRoundedPolygonShape(points: THREE.Vector3[], cornerRadius: number): THREE.Shape | null {
-  if (!Array.isArray(points) || points.length < 3) {
-    return null
-  }
-
-  const pts = points.map((p) => new THREE.Vector2(Number(p.x), Number(p.z)))
-  const n = pts.length
-  if (n < 3) {
-    return null
-  }
-
-  const radius = Number.isFinite(cornerRadius) ? Math.max(0, cornerRadius) : 0
-
-  if (radius <= 1e-6) {
-    const shape = new THREE.Shape()
-    shape.moveTo(pts[0]!.x, pts[0]!.y)
-    for (let i = 1; i < n; i += 1) {
-      shape.lineTo(pts[i]!.x, pts[i]!.y)
-    }
-    shape.closePath()
-    return shape
-  }
-
-  type Corner = { corner: THREE.Vector2; inPt: THREE.Vector2; outPt: THREE.Vector2 }
-  const corners: Corner[] = []
-  const tmpA = new THREE.Vector2()
-  const tmpB = new THREE.Vector2()
-
-  for (let i = 0; i < n; i += 1) {
-    const prev = pts[(i - 1 + n) % n]!
-    const curr = pts[i]!
-    const next = pts[(i + 1) % n]!
-
-    tmpA.copy(prev).sub(curr)
-    tmpB.copy(next).sub(curr)
-    const lenA = tmpA.length()
-    const lenB = tmpB.length()
-    if (lenA <= 1e-6 || lenB <= 1e-6) {
-      corners.push({ corner: curr, inPt: curr, outPt: curr })
-      continue
-    }
-
-    tmpA.multiplyScalar(1 / lenA)
-    tmpB.multiplyScalar(1 / lenB)
-    const d = Math.min(radius, lenA * 0.45, lenB * 0.45)
-    const inPt = curr.clone().add(tmpA.clone().multiplyScalar(d))
-    const outPt = curr.clone().add(tmpB.clone().multiplyScalar(d))
-    corners.push({ corner: curr, inPt, outPt })
-  }
-
-  const shape = new THREE.Shape()
-  shape.moveTo(corners[0]!.outPt.x, corners[0]!.outPt.y)
-
-  for (let i = 1; i <= n; i += 1) {
-    const corner = corners[i % n]!
-    shape.lineTo(corner.inPt.x, corner.inPt.y)
-    shape.quadraticCurveTo(corner.corner.x, corner.corner.y, corner.outPt.x, corner.outPt.y)
-  }
-
-  shape.closePath()
-  return shape
-}
-
-function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadVertexJunctionInfo> {
-  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  const segments = Array.isArray(definition.segments) ? definition.segments : []
-
-  const junctions = new Map<number, RoadVertexJunctionInfo>()
-
-  const record = (index: number, neighbor: number) => {
-    if (!Number.isFinite(index) || index < 0 || index >= vertices.length) {
-      return
-    }
-    if (!Number.isFinite(neighbor) || neighbor < 0 || neighbor >= vertices.length) {
-      return
-    }
-    const existing = junctions.get(index)
-    const info = existing ?? { neighbors: new Set<number>() }
-    info.neighbors.add(neighbor)
-    if (!existing) {
-      junctions.set(index, info)
-    }
-  }
-
-  segments.forEach((segment) => {
-    const a = Math.trunc(Number(segment?.a))
-    const b = Math.trunc(Number(segment?.b))
-    if (a === b) {
-      return
-    }
-    record(a, b)
-    record(b, a)
-  })
-
-  return junctions
-}
-
-function buildRoadTransitionGeometries(
-  definition: RoadDynamicMesh,
-  options: RoadJunctionSmoothingOptions = {},
-): THREE.BufferGeometry[] {
-  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  const junctions = collectRoadJunctionInfo(definition)
-  if (!junctions.size) {
+function sanitizeRoadVertices(vertices: unknown): Array<THREE.Vector3 | null> {
+  if (!Array.isArray(vertices)) {
     return []
   }
-
-  const width = Number.isFinite(definition.width) ? Math.max(1e-3, definition.width) : 2
-  const halfWidth = width * 0.5
-  const junctionSmoothing = clampJunctionSmoothing(options.junctionSmoothing)
-  const cornerRadius = halfWidth * junctionSmoothing
-
-  const geometries: THREE.BufferGeometry[] = []
-
-  junctions.forEach((info, vertexIndex) => {
-    if (!info || info.neighbors.size < 2) {
-      return
+  return vertices.map((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      return null
     }
-    const vertex = vertices[vertexIndex]
-    if (!vertex || vertex.length < 2) {
-      return
+    const x = Number(entry[0])
+    const z = Number(entry[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return null
     }
-    const center = new THREE.Vector3(Number(vertex[0]), 0, Number(vertex[1]))
-
-    type OffsetEntry = { left: THREE.Vector3; right: THREE.Vector3; angle: number }
-    const offsetEntries: OffsetEntry[] = []
-    info.neighbors.forEach((neighborIndex) => {
-      const neighbor = vertices[neighborIndex]
-      if (!neighbor || neighbor.length < 2) {
-        return
-      }
-      const direction = new THREE.Vector3(neighbor[0] - vertex[0], 0, neighbor[1] - vertex[1])
-      const length = direction.length()
-      if (length <= ROAD_EPSILON) {
-        return
-      }
-      direction.normalize()
-      const perp = new THREE.Vector3(-direction.z, 0, direction.x)
-      const left = center.clone().add(perp.clone().multiplyScalar(halfWidth))
-      const right = center.clone().sub(perp.clone().multiplyScalar(halfWidth))
-      const angle = Math.atan2(perp.z, perp.x)
-      offsetEntries.push({ left, right, angle })
-    })
-
-    if (offsetEntries.length < 2) {
-      return
-    }
-
-    // Sort all offset points around the junction center to build a non-self-intersecting contour.
-    const ordered = [...offsetEntries]
-      .flatMap((entry) => [entry.left, entry.right])
-      .filter((pt): pt is THREE.Vector3 => !!pt)
-      .map((pt) => ({
-        pt,
-        angle: Math.atan2(pt.z - center.z, pt.x - center.x),
-      }))
-      .sort((a, b) => a.angle - b.angle)
-      .map((entry) => entry.pt)
-
-    // Drop duplicates that can arise when segments are nearly colinear.
-    const cleaned: THREE.Vector3[] = []
-    ordered.forEach((point) => {
-      const last = cleaned[cleaned.length - 1]
-      if (last && last.distanceToSquared(point) <= 1e-6) {
-        return
-      }
-      cleaned.push(point)
-    })
-
-    if (cleaned.length < 3) {
-      return
-    }
-
-    const shape = buildRoundedPolygonShape(cleaned, cornerRadius)
-    if (!shape) {
-      return
-    }
-
-    const geometry = new THREE.ShapeGeometry(shape)
-    geometry.rotateX(Math.PI / 2)
-    geometries.push(geometry)
+    return new THREE.Vector3(x, 0, z)
   })
-
-  return geometries
 }
 
-function buildRoadSegmentGeometries(definition: RoadDynamicMesh): THREE.BufferGeometry[] {
-  const geometries: THREE.BufferGeometry[] = []
-  const position = new THREE.Vector3()
-  const quaternion = new THREE.Quaternion()
-  const scale = new THREE.Vector3(1, 1, 1)
-
-  forEachRoadSegment(definition, ({ start, end, width }) => {
-    const direction = end.clone().sub(start)
-    const length = direction.length()
-    if (length <= ROAD_EPSILON) {
-      return
-    }
-
-    const geometry = new THREE.PlaneGeometry(length, width)
-    geometry.rotateX(-Math.PI / 2)
-
-    position.copy(start).add(end).multiplyScalar(0.5)
-    quaternion.copy(directionToQuaternionFromXAxis(new THREE.Vector3(direction.x, 0, direction.z)))
-
-    const matrix = new THREE.Matrix4().compose(position, quaternion, scale)
-    geometry.applyMatrix4(matrix)
-    geometries.push(geometry)
-  })
-
-  return geometries
+type SanitizedRoadSegment = {
+  a: number
+  b: number
+  segmentIndex: number
 }
 
-function buildMergedRoadSurfaceGeometry(
-  definition: RoadDynamicMesh,
-  options: RoadJunctionSmoothingOptions = {},
-): THREE.BufferGeometry | null {
-  const segmentGeometries = buildRoadSegmentGeometries(definition)
-  const transitionGeometries = buildRoadTransitionGeometries(definition, options)
-  const all = [...segmentGeometries, ...transitionGeometries]
-  if (!all.length) {
+type RoadPath = {
+  indices: number[]
+  closed: boolean
+}
+
+function buildAdjacencyMap(
+  segments: SanitizedRoadSegment[],
+): Map<number, Array<{ neighbor: number; segmentIndex: number }>> {
+  const adjacency = new Map<number, Array<{ neighbor: number; segmentIndex: number }>>()
+  const addEntry = (vertex: number, neighbor: number, segmentIndex: number) => {
+    const entries = adjacency.get(vertex) ?? []
+    entries.push({ neighbor, segmentIndex })
+    adjacency.set(vertex, entries)
+  }
+
+  for (const segment of segments) {
+    addEntry(segment.a, segment.b, segment.segmentIndex)
+    addEntry(segment.b, segment.a, segment.segmentIndex)
+  }
+
+  adjacency.forEach((entries) => entries.sort((a, b) => a.neighbor - b.neighbor))
+  return adjacency
+}
+
+function collectRoadPaths(
+  adjacency: Map<number, Array<{ neighbor: number; segmentIndex: number }>>,
+  segments: SanitizedRoadSegment[],
+): RoadPath[] {
+  const visited = new Set<number>()
+  const paths: RoadPath[] = []
+
+  const walk = (start: number, preferred?: number): number[] => {
+    const route: number[] = [start]
+    let current = start
+    let pending = preferred
+
+    while (true) {
+      const neighbors = adjacency.get(current)
+      if (!neighbors?.length) {
+        break
+      }
+      let nextEntry = undefined
+      if (pending !== undefined) {
+        nextEntry = neighbors.find((entry) => entry.segmentIndex === pending && !visited.has(entry.segmentIndex))
+        pending = undefined
+      }
+      if (!nextEntry) {
+        nextEntry = neighbors.find((entry) => !visited.has(entry.segmentIndex))
+      }
+      if (!nextEntry) {
+        break
+      }
+      visited.add(nextEntry.segmentIndex)
+      current = nextEntry.neighbor
+      route.push(current)
+    }
+
+    return route
+  }
+
+  const hasPending = (vertex: number) => {
+    const neighbors = adjacency.get(vertex)
+    return Boolean(neighbors?.some((entry) => !visited.has(entry.segmentIndex)))
+  }
+
+  const buildPath = (route: number[]): RoadPath | null => {
+    if (route.length < 2) {
+      return null
+    }
+    const cleaned = route.slice()
+    let closed = false
+    if (cleaned.length >= 3 && cleaned[0] === cleaned[cleaned.length - 1]) {
+      closed = true
+      cleaned.pop()
+    }
+    if (cleaned.length < 2) {
+      return null
+    }
+    return { indices: cleaned, closed }
+  }
+
+  const degrees = new Map<number, number>()
+  adjacency.forEach((entries, vertex) => degrees.set(vertex, entries.length))
+
+  const endpoints = Array.from(degrees.entries())
+    .filter(([, degree]) => degree === 1)
+    .map(([vertex]) => vertex)
+
+  for (const endpoint of endpoints) {
+    if (!hasPending(endpoint)) {
+      continue
+    }
+    const path = buildPath(walk(endpoint))
+    if (path) {
+      paths.push(path)
+    }
+  }
+
+  for (const segment of segments) {
+    if (visited.has(segment.segmentIndex)) {
+      continue
+    }
+    const path = buildPath(walk(segment.a, segment.segmentIndex))
+    if (path) {
+      paths.push(path)
+    }
+  }
+
+  return paths
+}
+
+function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
+  if (points.length === 2) {
+    return new THREE.LineCurve3(points[0], points[1])
+  }
+  const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
+  curve.tension = Math.max(0, Math.min(1, tension))
+  return curve
+}
+
+function buildRoadStripGeometry(curve: THREE.Curve<THREE.Vector3>, width: number): THREE.BufferGeometry | null {
+  const length = curve.getLength()
+  if (length <= ROAD_EPSILON) {
     return null
   }
 
-  const merged = mergeGeometries(all, false)
-  all.forEach((g) => g.dispose())
-  if (!merged) {
+  const divisions = Math.max(
+    ROAD_MIN_DIVISIONS,
+    Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY)),
+  )
+
+  const halfWidth = Math.max(ROAD_MIN_WIDTH * 0.5, width * 0.5)
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  const center = new THREE.Vector3()
+  const tangent = new THREE.Vector3()
+  const lateral = new THREE.Vector3()
+  const left = new THREE.Vector3()
+  const right = new THREE.Vector3()
+
+  for (let i = 0; i <= divisions; i += 1) {
+    const t = i / divisions
+    center.copy(curve.getPoint(t))
+    tangent.copy(curve.getTangent(t))
+    tangent.y = 0
+    if (tangent.lengthSq() <= ROAD_EPSILON) {
+      tangent.set(0, 0, 1)
+    } else {
+      tangent.normalize()
+    }
+    lateral.set(-tangent.z, 0, tangent.x)
+    left.copy(center).addScaledVector(lateral, halfWidth)
+    right.copy(center).addScaledVector(lateral, -halfWidth)
+
+    positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
+    normals.push(0, 1, 0, 0, 1, 0)
+    uvs.push(t, 0, t, 1)
+
+    if (i < divisions) {
+      const base = i * 2
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setIndex(indices)
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function buildRoadGeometry(definition: RoadDynamicMesh, smoothing: number, width: number): THREE.BufferGeometry | null {
+  const vertexVectors = sanitizeRoadVertices(definition.vertices)
+  if (!vertexVectors.length) {
     return null
   }
-  merged.computeVertexNormals()
-  return merged
-}
 
-const ROAD_EPSILON = 1e-6
+  const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
+  const sanitizedSegments: SanitizedRoadSegment[] = []
 
-function directionToQuaternionFromXAxis(direction: THREE.Vector3): THREE.Quaternion {
-  const base = new THREE.Vector3(1, 0, 0)
-  const target = direction.clone().normalize()
-  if (target.lengthSq() < ROAD_EPSILON) {
-    return new THREE.Quaternion()
-  }
-  return new THREE.Quaternion().setFromUnitVectors(base, target)
-}
-
-function forEachRoadSegment(
-  definition: RoadDynamicMesh,
-  visit: (
-    segment: { start: THREE.Vector3; end: THREE.Vector3; width: number },
-    index: number,
-  ) => void,
-): void {
-  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  const segments = Array.isArray(definition.segments) ? definition.segments : []
-  const width = Number.isFinite(definition.width) ? Math.max(1e-3, definition.width) : 2
-
-  segments.forEach((segment, index) => {
-    const a = vertices[segment.a]
-    const b = vertices[segment.b]
-    if (!a || !b || a.length < 2 || b.length < 2) {
+  rawSegments.forEach((segment, index) => {
+    const a = Number(segment.a)
+    const b = Number(segment.b)
+    if (!Number.isInteger(a) || !Number.isInteger(b)) {
       return
     }
-    const start = new THREE.Vector3(a[0] ?? 0, 0, a[1] ?? 0)
-    const end = new THREE.Vector3(b[0] ?? 0, 0, b[1] ?? 0)
-    if (start.distanceToSquared(end) <= ROAD_EPSILON) {
+    if (a < 0 || b < 0 || a >= vertexVectors.length || b >= vertexVectors.length) {
       return
     }
-    visit({ start, end, width }, index)
+    if (!vertexVectors[a] || !vertexVectors[b] || a === b) {
+      return
+    }
+    sanitizedSegments.push({ a, b, segmentIndex: index })
   })
+
+  if (!sanitizedSegments.length) {
+    return null
+  }
+
+  const adjacency = buildAdjacencyMap(sanitizedSegments)
+  const paths = collectRoadPaths(adjacency, sanitizedSegments)
+  if (!paths.length) {
+    return null
+  }
+
+  const geometries: THREE.BufferGeometry[] = []
+  const tension = Math.max(0, Math.min(1, 1 - smoothing))
+
+  for (const path of paths) {
+    const points = path.indices.map((vertexIndex) => vertexVectors[vertexIndex]!)
+    if (points.length < 2) {
+      continue
+    }
+    const curve = createRoadCurve(points, path.closed && points.length >= 3, tension)
+    const stripGeometry = buildRoadStripGeometry(curve, width)
+    if (stripGeometry) {
+      geometries.push(stripGeometry)
+    }
+  }
+
+  if (!geometries.length) {
+    return null
+  }
+
+  const merged = mergeGeometries(geometries, false)
+  geometries.forEach((geometry) => geometry.dispose())
+  return merged ?? null
 }
 
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
-  disposeObject3D(group)
-  group.clear()
+  clearGroupContent(group)
 
-  const geometry = buildMergedRoadSurfaceGeometry(definition, options)
+  const smoothing = normalizeJunctionSmoothing(options.junctionSmoothing)
+  const width = Math.max(ROAD_MIN_WIDTH, Number.isFinite(definition.width) ? definition.width : ROAD_DEFAULT_WIDTH)
+  const geometry = buildRoadGeometry(definition, smoothing, width)
   if (!geometry) {
     return
   }
 
-  const material = createSegmentMaterial()
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.name = 'RoadSurface'
+  const mesh = new THREE.Mesh(geometry, createRoadMaterial())
+  mesh.name = 'RoadMesh'
   mesh.castShadow = false
   mesh.receiveShadow = true
-  mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
-    ? options.materialConfigId
-    : null
+
+  const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
+  mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
   group.add(mesh)
 }
 
@@ -362,87 +358,6 @@ function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
   return content
 }
 
-function collectInstancableMeshes(object: THREE.Object3D): Array<THREE.Mesh> {
-  const meshes: Array<THREE.Mesh> = []
-  object.traverse((child: THREE.Object3D) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh || !(mesh as unknown as { isMesh?: boolean }).isMesh) {
-      return
-    }
-    if (!mesh.geometry || !mesh.material) {
-      return
-    }
-    meshes.push(mesh)
-  })
-  return meshes
-}
-
-function computeObjectBounds(object: THREE.Object3D): THREE.Box3 {
-  const box = new THREE.Box3()
-  box.setFromObject(object)
-  return box
-}
-
-function buildInstancedMeshesFromTemplate(
-  templateObject: THREE.Object3D,
-  instanceMatrices: THREE.Matrix4[],
-  options: { namePrefix: string },
-): THREE.Group | null {
-  const templates = collectInstancableMeshes(templateObject)
-  if (!templates.length || !instanceMatrices.length) {
-    return null
-  }
-
-  const group = new THREE.Group()
-  group.name = options.namePrefix
-
-  templates.forEach((template, index) => {
-    const instanced = new THREE.InstancedMesh(template.geometry, template.material as any, instanceMatrices.length)
-    instanced.name = `${options.namePrefix}_${index + 1}`
-    instanced.castShadow = template.castShadow
-    instanced.receiveShadow = template.receiveShadow
-    // For road bodies, instanceId aligns with segment index.
-    instanced.userData.roadSegmentIndexMode = 'instanceId'
-    for (let i = 0; i < instanceMatrices.length; i += 1) {
-      instanced.setMatrixAt(i, instanceMatrices[i]!)
-    }
-    instanced.instanceMatrix.needsUpdate = true
-    group.add(instanced)
-  })
-
-  return group
-}
-
-function computeRoadBodyInstanceMatrices(definition: RoadDynamicMesh, templateObject: THREE.Object3D): THREE.Matrix4[] {
-  const bounds = computeObjectBounds(templateObject)
-  const baseLength = Math.max(Math.abs(bounds.max.x - bounds.min.x), 1e-3)
-  const baseWidth = Math.max(
-    Math.max(Math.abs(bounds.max.z - bounds.min.z), Math.abs(bounds.max.y - bounds.min.y)),
-    1e-3,
-  )
-
-  const matrices: THREE.Matrix4[] = []
-  const position = new THREE.Vector3()
-  const scale = new THREE.Vector3()
-
-  forEachRoadSegment(definition, ({ start, end, width }) => {
-    const direction = end.clone().sub(start)
-    const length = direction.length()
-    if (length <= ROAD_EPSILON) {
-      return
-    }
-
-    const quaternion = directionToQuaternionFromXAxis(new THREE.Vector3(direction.x, 0, direction.z))
-    position.copy(start).add(end).multiplyScalar(0.5)
-    scale.set(length / baseLength, 1, width / baseWidth)
-
-    const matrix = new THREE.Matrix4().compose(position, quaternion, scale)
-    matrices.push(matrix)
-  })
-
-  return matrices
-}
-
 export function createRoadRenderGroup(
   definition: RoadDynamicMesh,
   assets: RoadRenderAssetObjects = {},
@@ -456,35 +371,11 @@ export function createRoadRenderGroup(
 
   let hasInstances = false
   if (assets.bodyObject) {
-    const matrices = computeRoadBodyInstanceMatrices(definition, assets.bodyObject)
-    const instancedGroup = buildInstancedMeshesFromTemplate(assets.bodyObject, matrices, { namePrefix: 'RoadBody' })
-    if (instancedGroup) {
-      hasInstances = true
-      content.add(instancedGroup)
-    }
+    // Placeholder for future instanced road assets.
   }
 
   if (!hasInstances) {
     rebuildRoadGroup(content, definition, options)
-  } else {
-    // Even when using asset instances, add a merged transition mesh so gaps at junctions are filled.
-    const transitionGeometries = buildRoadTransitionGeometries(definition, options)
-    if (transitionGeometries.length) {
-      const merged = mergeGeometries(transitionGeometries, false)
-      transitionGeometries.forEach((g) => g.dispose())
-      if (merged) {
-        merged.computeVertexNormals()
-        const material = createSegmentMaterial()
-        const mesh = new THREE.Mesh(merged, material)
-        mesh.name = 'RoadTransitions'
-        mesh.castShadow = false
-        mesh.receiveShadow = true
-        mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
-          ? options.materialConfigId
-          : null
-        content.add(mesh)
-      }
-    }
   }
 
   return group
