@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 export type RoadRenderAssetObjects = {
@@ -155,11 +156,10 @@ function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadV
   return junctions
 }
 
-function buildRoadTransitionMeshes(
+function buildRoadTransitionGeometries(
   definition: RoadDynamicMesh,
-  materialTemplate: THREE.MeshStandardMaterial,
   options: RoadJunctionSmoothingOptions = {},
-): THREE.Mesh[] {
+): THREE.BufferGeometry[] {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
   const junctions = collectRoadJunctionInfo(definition)
   if (!junctions.size) {
@@ -171,7 +171,7 @@ function buildRoadTransitionMeshes(
   const junctionSmoothing = clampJunctionSmoothing(options.junctionSmoothing)
   const cornerRadius = halfWidth * junctionSmoothing
 
-  const meshes: THREE.Mesh[] = []
+  const geometries: THREE.BufferGeometry[] = []
 
   junctions.forEach((info, vertexIndex) => {
     if (!info || info.neighbors.size < 2) {
@@ -232,29 +232,57 @@ function buildRoadTransitionMeshes(
 
     const geometry = new THREE.ShapeGeometry(shape)
     geometry.rotateX(Math.PI / 2)
-
-    const mesh = new THREE.Mesh(geometry, materialTemplate.clone())
-    mesh.name = `RoadTransition_${vertexIndex + 1}`
-    mesh.castShadow = false
-    mesh.receiveShadow = true
-    mesh.userData.roadTransitionIndex = vertexIndex
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
-      ? options.materialConfigId
-      : null
-    meshes.push(mesh)
+    geometries.push(geometry)
   })
 
-  return meshes
+  return geometries
 }
 
-function addRoadTransitionMeshes(
-  group: THREE.Group,
+function buildRoadSegmentGeometries(definition: RoadDynamicMesh): THREE.BufferGeometry[] {
+  const geometries: THREE.BufferGeometry[] = []
+  const position = new THREE.Vector3()
+  const quaternion = new THREE.Quaternion()
+  const scale = new THREE.Vector3(1, 1, 1)
+
+  forEachRoadSegment(definition, ({ start, end, width }) => {
+    const direction = end.clone().sub(start)
+    const length = direction.length()
+    if (length <= ROAD_EPSILON) {
+      return
+    }
+
+    const geometry = new THREE.PlaneGeometry(length, width)
+    geometry.rotateX(-Math.PI / 2)
+
+    position.copy(start).add(end).multiplyScalar(0.5)
+    quaternion.copy(directionToQuaternionFromXAxis(new THREE.Vector3(direction.x, 0, direction.z)))
+
+    const matrix = new THREE.Matrix4().compose(position, quaternion, scale)
+    geometry.applyMatrix4(matrix)
+    geometries.push(geometry)
+  })
+
+  return geometries
+}
+
+function buildMergedRoadSurfaceGeometry(
   definition: RoadDynamicMesh,
-  materialTemplate: THREE.MeshStandardMaterial,
   options: RoadJunctionSmoothingOptions = {},
-) {
-  const meshes = buildRoadTransitionMeshes(definition, materialTemplate, options)
-  meshes.forEach((mesh) => group.add(mesh))
+): THREE.BufferGeometry | null {
+  const segmentGeometries = buildRoadSegmentGeometries(definition)
+  const transitionGeometries = buildRoadTransitionGeometries(definition, options)
+  const all = [...segmentGeometries, ...transitionGeometries]
+  if (!all.length) {
+    return null
+  }
+
+  const merged = mergeGeometries(all, false)
+  all.forEach((g) => g.dispose())
+  if (!merged) {
+    return null
+  }
+  merged.computeVertexNormals()
+  return merged
 }
 
 const ROAD_EPSILON = 1e-6
@@ -298,42 +326,20 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   disposeObject3D(group)
   group.clear()
 
+  const geometry = buildMergedRoadSurfaceGeometry(definition, options)
+  if (!geometry) {
+    return
+  }
+
   const material = createSegmentMaterial()
-
-  forEachRoadSegment(definition, ({ start, end, width }, index) => {
-    const direction = end.clone().sub(start)
-    const length = direction.length()
-    if (length <= ROAD_EPSILON) {
-      return
-    }
-
-    const midpoint = start.clone().add(end).multiplyScalar(0.5)
-
-    const geometry = new THREE.PlaneGeometry(length, width)
-    geometry.rotateX(-Math.PI / 2)
-
-    const mesh = new THREE.Mesh(geometry, material.clone())
-    mesh.name = `RoadSegment_${index + 1}`
-    mesh.castShadow = false
-    mesh.receiveShadow = true
-
-    const quaternion = directionToQuaternionFromXAxis(new THREE.Vector3(direction.x, 0, direction.z))
-    mesh.position.copy(midpoint)
-    mesh.quaternion.copy(quaternion)
-
-    const segmentGroup = new THREE.Group()
-    segmentGroup.name = `RoadSegmentGroup_${index + 1}`
-    segmentGroup.userData.roadSegmentIndex = index
-    mesh.userData.roadSegmentIndex = index
-    mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
-      ? options.materialConfigId
-      : null
-    segmentGroup.add(mesh)
-    group.add(segmentGroup)
-  })
-
-  // Fill junction gaps between connected segments.
-  addRoadTransitionMeshes(group, definition, material, options)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.name = 'RoadSurface'
+  mesh.castShadow = false
+  mesh.receiveShadow = true
+  mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
+    ? options.materialConfigId
+    : null
+  group.add(mesh)
 }
 
 function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
@@ -454,8 +460,24 @@ export function createRoadRenderGroup(
   if (!hasInstances) {
     rebuildRoadGroup(content, definition, options)
   } else {
-    // Even when using asset instances, add transition meshes so gaps at junctions are filled.
-    addRoadTransitionMeshes(content, definition, createSegmentMaterial(), options)
+    // Even when using asset instances, add a merged transition mesh so gaps at junctions are filled.
+    const transitionGeometries = buildRoadTransitionGeometries(definition, options)
+    if (transitionGeometries.length) {
+      const merged = mergeGeometries(transitionGeometries, false)
+      transitionGeometries.forEach((g) => g.dispose())
+      if (merged) {
+        merged.computeVertexNormals()
+        const material = createSegmentMaterial()
+        const mesh = new THREE.Mesh(merged, material)
+        mesh.name = 'RoadTransitions'
+        mesh.castShadow = false
+        mesh.receiveShadow = true
+        mesh.userData[MATERIAL_CONFIG_ID_KEY] = typeof options.materialConfigId === 'string' && options.materialConfigId.trim().length
+          ? options.materialConfigId
+          : null
+        content.add(mesh)
+      }
+    }
   }
 
   return group
