@@ -45,7 +45,7 @@ import { createFileFromEntry } from './modelAssetLoader'
 import { loadObjectFromFile } from './assetImport'
 import { createGroundMesh, setGroundMaterial, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
-import { createRoadRenderGroup } from './roadMesh'
+import { createRoadRenderGroup, type RoadJunctionSmoothingOptions } from './roadMesh'
 import { createFloorRenderGroup } from './floorMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
@@ -1196,8 +1196,15 @@ class SceneGraphBuilder {
     const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined);
 
     const bodyObject = roadProps.bodyAssetId ? await this.loadAssetMesh(roadProps.bodyAssetId) : null;
+    const materialConfigId = this.resolveRoadMaterialConfigId(node);
+    const roadOptions: RoadJunctionSmoothingOptions = {
+      junctionSmoothing: roadProps.junctionSmoothing,
+      laneLines: roadProps.laneLines,
+      shoulders: roadProps.shoulders,
+      materialConfigId,
+    };
 
-    const group = createRoadRenderGroup(meshInfo, { bodyObject });
+    const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
     group.name = node.name ?? (group.name || 'Road');
 
     const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
@@ -1231,9 +1238,28 @@ class SceneGraphBuilder {
       });
     }
 
+    const applyOverlayMaterial = (meshName: string, material: THREE.Material | undefined) => {
+      if (!material) {
+        return;
+      }
+      const overlay = group.getObjectByName(meshName) as THREE.Mesh | null;
+      if (overlay?.isMesh) {
+        overlay.material = material;
+      }
+    };
+
+    applyOverlayMaterial('RoadShoulders', resolvedMaterials[1]);
+    applyOverlayMaterial('RoadLaneLines', resolvedMaterials[2]);
+
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
     return group;
+  }
+
+  private resolveRoadMaterialConfigId(node: SceneNodeWithExtras): string | null {
+    const first = node.materials?.[0];
+    const id = typeof first?.id === 'string' ? first.id.trim() : '';
+    return id ? id : null;
   }
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
