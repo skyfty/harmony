@@ -61,10 +61,8 @@ function createRoadMaterial(): THREE.MeshStandardMaterial {
 }
 
 function normalizeJunctionSmoothing(value?: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-  return Math.max(0, Math.min(1, value))
+  const sanitized: number = Number.isFinite(value) ? (value as number) : 0
+  return Math.max(0, Math.min(1, sanitized))
 }
 
 function sanitizeRoadVertices(vertices: unknown): Array<THREE.Vector3 | null> {
