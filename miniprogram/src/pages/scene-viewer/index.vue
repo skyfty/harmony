@@ -621,7 +621,7 @@ const overlayLabel = computed(() => {
   return '';
 });
 
-const SKY_ENVIRONMENT_INTENSITY = 0.35;
+const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
@@ -630,7 +630,7 @@ const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
-  exposure: 0.6,
+  exposure: 0.7,
   turbidity: 4,
   rayleigh: 1.25,
   mieCoefficient: 0.0025,
@@ -639,10 +639,33 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   azimuth: 145,
   clouds: null,
 };
+
+const SCENE_VIEWER_EXPOSURE_BOOST = 1.5;
+const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 1.35;
+
+function resolveSceneExposure(exposure: unknown): number {
+  const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
+  return clampNumber(
+    base * SCENE_VIEWER_EXPOSURE_BOOST,
+    0.05,
+    5,
+    DEFAULT_SKYBOX_SETTINGS.exposure * SCENE_VIEWER_EXPOSURE_BOOST,
+  );
+}
+
+function resolveAmbientLightIntensity(intensity: unknown): number {
+  const base = clampNumber(intensity, 0, 5, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY);
+  return clampNumber(
+    base * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
+    0,
+    5,
+    DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
+  );
+}
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff';
-const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6;
+const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.75;
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02;
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81;
@@ -6248,7 +6271,7 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
     return;
   }
   ambient.color.set(settings.ambientLightColor);
-  ambient.intensity = settings.ambientLightIntensity;
+  ambient.intensity = resolveAmbientLightIntensity(settings.ambientLightIntensity);
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
@@ -6431,7 +6454,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   if (!settings) {
     disposeSkyEnvironment();
     applySkyEnvironmentToScene();
-    renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
     return;
@@ -6463,7 +6486,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   assignUniform('mieCoefficient', settings.mieCoefficient);
   assignUniform('mieDirectionalG', settings.mieDirectionalG);
   updateSkyLighting(settings);
-  renderer.toneMappingExposure = settings.exposure;
+  renderer.toneMappingExposure = resolveSceneExposure(settings.exposure);
   if (!pmremGenerator && renderer) {
     pmremGenerator = new THREE.PMREMGenerator(renderer);
   }
@@ -7019,7 +7042,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+  renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
