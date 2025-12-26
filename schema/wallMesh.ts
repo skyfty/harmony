@@ -96,17 +96,24 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
     if (!start || !end) {
       continue
     }
-    if (!points.length || points[points.length - 1].distanceToSquared(start) > WALL_EPSILON) {
-      points.push(start)
-    }
-    if (!points.length || points[points.length - 1].distanceToSquared(end) > WALL_EPSILON) {
-      points.push(end)
-    }
+      if (points.length === 0) {
+        points.push(start)
+      } else if (points[points.length - 1]!.distanceToSquared(start) > WALL_EPSILON) {
+        points.push(start)
+      }
+
+      if (points.length === 0) {
+        points.push(end)
+      } else if (points[points.length - 1]!.distanceToSquared(end) > WALL_EPSILON) {
+        points.push(end)
+      }
   }
   if (points.length < 2) {
     return null
   }
-  const closed = points[0].distanceToSquared(points[points.length - 1]) <= WALL_EPSILON
+    const first = points[0]!
+    const last = points[points.length - 1]!
+    const closed = first.distanceToSquared(last) <= WALL_EPSILON
   if (closed && points.length > 1) {
     points.pop()
   }
@@ -116,21 +123,41 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
   return { points, closed }
 }
 
-function createWallCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-  if (points.length === 2) {
-    return new THREE.LineCurve3(points[0], points[1])
+  function createWallPolyline(points: THREE.Vector3[], closed: boolean): THREE.Curve<THREE.Vector3> {
+    const path = new THREE.CurvePath<THREE.Vector3>()
+    for (let i = 0; i < points.length - 1; i += 1) {
+      path.add(new THREE.LineCurve3(points[i]!, points[i + 1]!))
+    }
+    if (closed && points.length > 1) {
+      path.add(new THREE.LineCurve3(points[points.length - 1]!, points[0]!))
+    }
+    return path
   }
-  const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
-  curve.tension = Math.max(0, Math.min(1, tension))
-  return curve
-}
 
-function buildWallGeometry(
-  curve: THREE.Curve<THREE.Vector3>,
-  width: number,
-  height: number,
-  closed: boolean,
-): THREE.BufferGeometry | null {
+  function createWallCurve(points: THREE.Vector3[], closed: boolean, smoothing: number): THREE.Curve<THREE.Vector3> {
+    if (points.length === 2) {
+      return new THREE.LineCurve3(points[0], points[1])
+    }
+
+    // smoothing = 0 should keep hard corners (polyline).
+    if (smoothing <= WALL_EPSILON) {
+      return createWallPolyline(points, closed)
+    }
+
+    // For smoothing > 0, interpolate through points via Catmull-Rom.
+    // Use higher tension for less rounding, lower tension for more rounding.
+    const tension = THREE.MathUtils.clamp(1 - smoothing, 0, 1)
+    const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
+    curve.tension = tension
+    return curve
+  }
+
+  function buildWallGeometry(
+    curve: THREE.Curve<THREE.Vector3>,
+    width: number,
+    height: number,
+    closed: boolean,
+  ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= WALL_EPSILON) {
     return null
@@ -154,7 +181,7 @@ function buildWallGeometry(
   const tangent = new THREE.Vector3()
   const lateral = new THREE.Vector3()
 
-  for (let i = 0; i < sampleCount; i += 1) {
+    for (let i = 0; i < sampleCount; i += 1) {
     const t = i / divisions
     center.copy(curve.getPoint(t))
     tangent.copy(curve.getTangent(t))
@@ -172,40 +199,53 @@ function buildWallGeometry(
     const baseY = center.y
     const topY = baseY + heightValue
 
-    positions.push(left.x, baseY, left.z)
-    positions.push(right.x, baseY, right.z)
-    positions.push(left.x, topY, left.z)
-    positions.push(right.x, topY, right.z)
+      // Vertex order per sample: lb, rb, lt, rt (interleaved).
+      positions.push(left.x, baseY, left.z)
+      positions.push(right.x, baseY, right.z)
+      positions.push(left.x, topY, left.z)
+      positions.push(right.x, topY, right.z)
 
-    uvs.push(0, 0, 1, 0, 0, 1, 1, 1)
+      uvs.push(
+        0, 0,
+        1, 0,
+        0, 1,
+        1, 1,
+      )
   }
 
-  const stride = sampleCount
-  const loopCount = closed ? sampleCount : sampleCount - 1
-  for (let i = 0; i < loopCount; i += 1) {
-    const next = (i + 1) % sampleCount
-    const lb = i
-    const rb = stride + i
-    const lt = stride * 2 + i
-    const rt = stride * 3 + i
+    const loopCount = closed ? sampleCount : sampleCount - 1
+    for (let i = 0; i < loopCount; i += 1) {
+      const next = (i + 1) % sampleCount
 
-    const lbNext = next
-    const rbNext = stride + next
-    const ltNext = stride * 2 + next
-    const rtNext = stride * 3 + next
+      const base = i * 4
+      const baseNext = next * 4
 
-    indices.push(lb, lbNext, lt)
-    indices.push(lt, lbNext, ltNext)
+      const lb = base
+      const rb = base + 1
+      const lt = base + 2
+      const rt = base + 3
 
-    indices.push(rbNext, rb, rt)
-    indices.push(rt, rb, rtNext)
+      const lbNext = baseNext
+      const rbNext = baseNext + 1
+      const ltNext = baseNext + 2
+      const rtNext = baseNext + 3
 
-    indices.push(lt, ltNext, rt)
-    indices.push(rt, ltNext, rtNext)
+      // Left side
+      indices.push(lb, lbNext, lt)
+      indices.push(lt, lbNext, ltNext)
 
-    indices.push(rb, rbNext, lb)
-    indices.push(lb, rbNext, lbNext)
-  }
+      // Right side
+      indices.push(rbNext, rb, rt)
+      indices.push(rt, rb, rtNext)
+
+      // Top face
+      indices.push(lt, ltNext, rt)
+      indices.push(rt, ltNext, rtNext)
+
+      // Bottom face
+      indices.push(rb, rbNext, lb)
+      indices.push(lb, rbNext, lbNext)
+    }
 
   const geometry = new THREE.BufferGeometry()
   geometry.setIndex(indices)
@@ -239,9 +279,8 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh, optio
       : WALL_DEFAULT_HEIGHT,
   )
 
-  const smoothing = normalizeWallSmoothing(options.smoothing)
-  const tension = Math.max(0, Math.min(1, 1 - smoothing))
-  const curve = createWallCurve(path.points, path.closed, tension)
+    const smoothing = normalizeWallSmoothing(options.smoothing)
+    const curve = createWallCurve(path.points, path.closed, smoothing)
   const geometry = buildWallGeometry(curve, width, height, path.closed)
   if (!geometry) {
     return
