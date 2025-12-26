@@ -30,7 +30,9 @@ import {
 import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
-import { buildSceneGraph, createTerrainScatterLodRuntime, createInstancedBvhFrustumCuller, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
@@ -161,6 +163,7 @@ const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
@@ -684,6 +687,8 @@ const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
 const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
+const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
+const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3
@@ -698,6 +703,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	fogMode: 'none',
 	fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
 	fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
+	fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
+	fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
 	environmentMap: {
 		mode: 'skybox',
 		hdriAssetId: null,
@@ -2459,7 +2466,16 @@ function cloneEnvironmentSettingsLocal(
 		backgroundMode = 'solidColor'
 	}
 	const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
-	const fogMode = source?.fogMode === 'exp' ? 'exp' : 'none'
+	let fogMode: EnvironmentSettings['fogMode'] = 'none'
+	if (source?.fogMode === 'linear') {
+		fogMode = 'linear'
+	} else if (source?.fogMode === 'exp') {
+		fogMode = 'exp'
+	}
+
+	const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
+	const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
+	const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
 	return {
 		background: {
@@ -2477,6 +2493,8 @@ function cloneEnvironmentSettingsLocal(
 		fogMode,
 		fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
 		fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
+		fogNear,
+		fogFar: normalizedFogFar,
 		environmentMap: {
 			mode: environmentMapMode,
 			hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
@@ -5746,6 +5764,18 @@ function applyFogSettings(settings: EnvironmentSettings) {
 		return
 	}
 	const fogColor = new THREE.Color(settings.fogColor)
+	if (settings.fogMode === 'linear') {
+		const near = Math.max(0, settings.fogNear)
+		const far = Math.max(near + 0.001, settings.fogFar)
+		if (scene.fog instanceof THREE.Fog) {
+			scene.fog.color.copy(fogColor)
+			scene.fog.near = near
+			scene.fog.far = far
+		} else {
+			scene.fog = new THREE.Fog(fogColor, near, far)
+		}
+		return
+	}
 	const density = Math.max(0, settings.fogDensity)
 	if (scene.fog instanceof THREE.FogExp2) {
 		scene.fog.color.copy(fogColor)

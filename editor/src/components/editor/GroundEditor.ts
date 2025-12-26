@@ -45,7 +45,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
+import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 

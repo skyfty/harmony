@@ -3,8 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
-  EnvironmentMapMode,
   EnvironmentFogMode,
+  EnvironmentMapMode,
 } from '@/types/environment'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -44,7 +44,56 @@ const HDRI_ASSET_TYPE = 'hdri' as const
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
 
-const isFogEnabled = computed(() => environmentSettings.value.fogMode === 'exp')
+const isFogEnabled = computed(() => environmentSettings.value.fogMode !== 'none')
+const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
+const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
+
+const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
+  { title: 'No Fog', value: 'none' },
+  { title: 'Linear Fog', value: 'linear' },
+  { title: 'Exponential Fog', value: 'exp' },
+]
+
+type FogPreset = 'light' | 'medium' | 'heavy' | 'custom'
+
+const fogPresetOptions: Array<{ title: string; value: FogPreset }> = [
+  { title: 'Light Fog', value: 'light' },
+  { title: 'Medium Fog', value: 'medium' },
+  { title: 'Heavy Fog', value: 'heavy' },
+  { title: 'Custom', value: 'custom' },
+]
+
+const FOG_PRESET_COLOR = '#516175'
+const FOG_PRESET_DENSITY: Record<Exclude<FogPreset, 'custom'>, number> = {
+  light: 0.02,
+  medium: 0.05,
+  heavy: 0.1,
+}
+
+const DEFAULT_LINEAR_FOG_NEAR = 1
+const DEFAULT_LINEAR_FOG_FAR = 50
+
+const selectedFogPreset = computed<FogPreset>(() => {
+  if (environmentSettings.value.fogMode !== 'exp') {
+    return 'custom'
+  }
+  const normalizedColor = environmentSettings.value.fogColor.trim().toLowerCase()
+  const density = environmentSettings.value.fogDensity
+  const epsilon = 1e-6
+  const presetEntries: Array<{ preset: Exclude<FogPreset, 'custom'>; density: number }> = [
+    { preset: 'light', density: FOG_PRESET_DENSITY.light },
+    { preset: 'medium', density: FOG_PRESET_DENSITY.medium },
+    { preset: 'heavy', density: FOG_PRESET_DENSITY.heavy },
+  ]
+
+  for (const entry of presetEntries) {
+    if (normalizedColor === FOG_PRESET_COLOR && Math.abs(density - entry.density) <= epsilon) {
+      return entry.preset
+    }
+  }
+
+  return 'custom'
+})
 
 const backgroundAsset = computed(() => {
   const assetId = environmentSettings.value.background.hdriAssetId
@@ -99,12 +148,12 @@ const environmentPreviewStyle = computed(() => resolveAssetPreviewStyle(environm
 
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'background') {
-    return '选择背景 HDRI'
+    return 'Select Background HDRI'
   }
   if (assetDialogTarget.value === 'environment') {
-    return '选择环境贴图'
+    return 'Select Environment Map'
   }
-  return '选择资产'
+  return 'Select Asset'
 })
 
 watch(assetDialogVisible, (open) => {
@@ -248,12 +297,95 @@ function handleShadowsToggle(enabled: boolean | null) {
   sceneStore.setShadowsEnabled(enabled)
 }
 
-function handleFogToggle(enabled: boolean | null) {
-  const nextMode: EnvironmentFogMode = enabled ? 'exp' : 'none'
-  if (nextMode === environmentSettings.value.fogMode) {
+function handleFogModeChange(mode: EnvironmentFogMode | null) {
+  if (!mode || mode === environmentSettings.value.fogMode) {
     return
   }
-  sceneStore.patchEnvironmentSettings({ fogMode: nextMode })
+  if (mode === 'none') {
+    sceneStore.patchEnvironmentSettings({ fogMode: 'none' })
+    return
+  }
+  if (mode === 'linear') {
+    const near = Number.isFinite(environmentSettings.value.fogNear) ? environmentSettings.value.fogNear : DEFAULT_LINEAR_FOG_NEAR
+    const far = Number.isFinite(environmentSettings.value.fogFar) ? environmentSettings.value.fogFar : DEFAULT_LINEAR_FOG_FAR
+    sceneStore.patchEnvironmentSettings({
+      fogMode: 'linear',
+      fogNear: Math.max(0, near),
+      fogFar: Math.max(Math.max(0, near) + 0.001, far),
+    })
+    return
+  }
+  // exp
+  sceneStore.patchEnvironmentSettings({
+    fogMode: 'exp',
+    fogColor: environmentSettings.value.fogColor,
+    fogDensity: environmentSettings.value.fogDensity,
+  })
+}
+
+function applyFogPreset(preset: FogPreset | null) {
+  if (!preset) {
+    return
+  }
+  if (preset === 'custom') {
+    // Keep current values; just ensure exponential fog is active
+    if (environmentSettings.value.fogMode !== 'exp') {
+      sceneStore.patchEnvironmentSettings({ fogMode: 'exp' })
+    }
+    return
+  }
+  const nextDensity = FOG_PRESET_DENSITY[preset]
+  const shouldPatchMode = environmentSettings.value.fogMode !== 'exp'
+  const shouldPatchColor = environmentSettings.value.fogColor !== FOG_PRESET_COLOR
+  const shouldPatchDensity = Math.abs(environmentSettings.value.fogDensity - nextDensity) > 1e-6
+  if (!shouldPatchMode && !shouldPatchColor && !shouldPatchDensity) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    fogMode: 'exp',
+    fogColor: FOG_PRESET_COLOR,
+    fogDensity: nextDensity,
+  })
+}
+
+function handleFogNearInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(100000, numeric))
+  const nextFar = Math.max(clamped + 0.001, environmentSettings.value.fogFar)
+  if (Math.abs(clamped - environmentSettings.value.fogNear) < 1e-4 && Math.abs(nextFar - environmentSettings.value.fogFar) < 1e-4) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ fogNear: clamped, fogFar: nextFar })
+}
+
+function handleFogFarInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const minFar = environmentSettings.value.fogNear + 0.001
+  const clamped = Math.max(minFar, Math.min(100000, numeric))
+  if (Math.abs(clamped - environmentSettings.value.fogFar) < 1e-4) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ fogFar: clamped })
+}
+
+function formatFogNear(): string {
+  return environmentSettings.value.fogNear.toFixed(2)
+}
+
+function formatFogFar(): string {
+  return environmentSettings.value.fogFar.toFixed(2)
 }
 
 function handleFogDensityInput(value: unknown) {
@@ -845,18 +977,28 @@ function handleEnvironmentDrop(event: DragEvent) {
 
         <section class="environment-section">
           <div class="section-title">Fog</div>
-          <div class="toggle-row">
-            <span class="toggle-label">Enable Exponential Fog</span>
-            <v-switch
-              :model-value="isFogEnabled"
-              density="compact"
-              hide-details
-              color="primary"
-              size="small"
-              @update:model-value="handleFogToggle"
-            />
-          </div>
-          <div class="material-color" :class="{ 'is-disabled': !isFogEnabled }">
+          <v-select
+            :items="fogModeOptions"
+            :model-value="environmentSettings.fogMode"
+            density="compact"
+            hide-details
+            variant="underlined"
+            class="section-select"
+            @update:model-value="(mode) => handleFogModeChange(mode as EnvironmentFogMode | null)"
+          />
+
+          <v-select
+            v-if="isExponentialFog"
+            :items="fogPresetOptions"
+            :model-value="selectedFogPreset"
+            density="compact"
+            hide-details
+            variant="underlined"
+            class="section-select"
+            @update:model-value="(preset) => applyFogPreset(preset as FogPreset | null)"
+          />
+
+          <div v-if="isFogEnabled" class="material-color">
             <div class="color-input">
               <v-text-field
                 label="Fog Color"
@@ -865,7 +1007,6 @@ function handleEnvironmentDrop(event: DragEvent) {
                 variant="underlined"
                 hide-details
                 :model-value="environmentSettings.fogColor"
-                :disabled="!isFogEnabled"
                 @update:model-value="(value) => handleHexColorChange('fog', value)"
               />
               <v-menu
@@ -873,14 +1014,12 @@ function handleEnvironmentDrop(event: DragEvent) {
                 :close-on-content-click="false"
                 transition="scale-transition"
                 location="bottom start"
-                :disabled="!isFogEnabled"
               >
                 <template #activator="{ props: menuProps }">
                   <button
                     class="color-swatch"
                     type="button"
                     v-bind="menuProps"
-                    :disabled="!isFogEnabled"
                     :style="{ backgroundColor: environmentSettings.fogColor }"
                     title="Select fog color"
                   >
@@ -899,7 +1038,8 @@ function handleEnvironmentDrop(event: DragEvent) {
               </v-menu>
             </div>
           </div>
-          <div class="slider-row" :class="{ 'is-disabled': !isFogEnabled }">
+
+          <div v-if="isExponentialFog" class="slider-row">
             <v-text-field
               class="slider-input"
               label="Density"
@@ -912,8 +1052,40 @@ function handleEnvironmentDrop(event: DragEvent) {
               :max="1"
               :step="0.005"
               :model-value="formatFogDensity()"
-              :disabled="!isFogEnabled"
               @update:model-value="handleFogDensityInput"
+            />
+          </div>
+
+          <div v-if="isLinearFog" class="slider-row">
+            <v-text-field
+              class="slider-input"
+              label="Near"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="100000"
+              :step="0.1"
+              :model-value="formatFogNear()"
+              @update:model-value="handleFogNearInput"
+            />
+          </div>
+          <div v-if="isLinearFog" class="slider-row">
+            <v-text-field
+              class="slider-input"
+              label="Far"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="100000"
+              :step="0.1"
+              :model-value="formatFogFar()"
+              @update:model-value="handleFogFarInput"
             />
           </div>
         </section>
@@ -978,8 +1150,8 @@ function handleEnvironmentDrop(event: DragEvent) {
         :asset-type="HDRI_ASSET_TYPE"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"
-        confirm-text="选择"
-        cancel-text="取消"
+        confirm-text="Select"
+        cancel-text="Cancel"
         @update:asset="handleAssetDialogUpdate"
         @cancel="handleAssetDialogCancel"
       />

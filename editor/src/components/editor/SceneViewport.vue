@@ -65,7 +65,7 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { createInstancedBvhFrustumCuller } from '@schema/sceneGraph'
+import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
@@ -3910,6 +3910,20 @@ function applyFogSettings(settings: EnvironmentSettings) {
     return
   }
   const fogColor = new THREE.Color(settings.fogColor)
+
+  if (settings.fogMode === 'linear') {
+    const near = Math.max(0, settings.fogNear)
+    const far = Math.max(near + 0.001, settings.fogFar)
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color.copy(fogColor)
+      scene.fog.near = near
+      scene.fog.far = far
+    } else {
+      scene.fog = new THREE.Fog(fogColor, near, far)
+    }
+    return
+  }
+
   const density = Math.max(0, settings.fogDensity)
   if (scene.fog instanceof THREE.FogExp2) {
     scene.fog.color.copy(fogColor)
