@@ -25,6 +25,8 @@ type BuildTerrainGridResponse = {
 	requestId: number
 	minor: ArrayBuffer
 	major: ArrayBuffer
+	heightMin: number
+	heightMax: number
 	error?: string
 }
 
@@ -73,12 +75,17 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	const indices = new Uint32Array(message.heightIndices)
 	const values = new Float32Array(message.heightValues)
 	const count = Math.max(0, Math.min(message.heightEntryCount, indices.length, values.length))
+	let heightMin = 0
+	let heightMax = 0
 	for (let i = 0; i < count; i += 1) {
 		const idx = indices[i]!
 		const value = values[i]!
 		if (idx < heightGrid.length) {
 			heightGrid[idx] = value
 		}
+		// 地形未编辑的点隐含为 0，因此初始 min/max 从 0 开始即可。
+		heightMin = Math.min(heightMin, value)
+		heightMax = Math.max(heightMax, value)
 	}
 
 	const majorRows: number[] = []
@@ -188,6 +195,19 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	return { minor, major }
 }
 
+function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: number; heightMax: number } {
+	const values = new Float32Array(message.heightValues)
+	const count = Math.max(0, Math.min(message.heightEntryCount, values.length))
+	let heightMin = 0
+	let heightMax = 0
+	for (let i = 0; i < count; i += 1) {
+		const value = values[i]!
+		heightMin = Math.min(heightMin, value)
+		heightMax = Math.max(heightMax, value)
+	}
+	return { heightMin, heightMax }
+}
+
 self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 	const message = event.data
 	if (!message || message.kind !== 'build-terrain-grid') {
@@ -195,12 +215,15 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 	}
 
 	try {
+		const { heightMin, heightMax } = computeHeightRange(message)
 		const { minor, major } = buildGridSegmentsInWorker(message)
 		const response: BuildTerrainGridResponse = {
 			kind: 'build-terrain-grid-result',
 			requestId: message.requestId,
 			minor: minor.buffer as ArrayBuffer,
 			major: major.buffer as ArrayBuffer,
+			heightMin,
+			heightMax,
 		}
 		self.postMessage(response, [response.minor, response.major])
 	} catch (error) {
@@ -209,6 +232,8 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 			requestId: message.requestId,
 			minor: new ArrayBuffer(0),
 			major: new ArrayBuffer(0),
+			heightMin: 0,
+			heightMax: 0,
 			error: error instanceof Error ? error.message : String(error),
 		}
 		self.postMessage(response)

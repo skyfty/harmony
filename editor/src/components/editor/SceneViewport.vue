@@ -2641,13 +2641,17 @@ terrainGridHelper.name = 'TerrainGridHelper'
 const TERRAIN_GRID_BLOCK_CELLS = 64
 const TERRAIN_GRID_BLOCK_PADDING = 1
 const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 120
-const terrainGridRay = new THREE.Ray()
-const terrainGridPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-const terrainGridTempPoint = new THREE.Vector3()
-const terrainGridTempDir = new THREE.Vector3()
-const terrainGridNdcPoint = new THREE.Vector3()
+const TERRAIN_GRID_HEIGHT_MARGIN = 0.5
+const terrainGridFrustum = new THREE.Frustum()
+const terrainGridProjScreenMatrix = new THREE.Matrix4()
+const terrainGridBlockBox = new THREE.Box3()
+const terrainGridBoxMin = new THREE.Vector3()
+const terrainGridBoxMax = new THREE.Vector3()
 let terrainGridBaseSignature: string | null = null
 let terrainGridBaseDefinition: GroundDynamicMesh | null = null
+let terrainGridHeightMin = 0
+let terrainGridHeightMax = 0
+let terrainGridHasHeightRange = false
 let terrainGridCameraDirty = false
 let lastTerrainGridCameraRefresh = 0
 
@@ -2691,74 +2695,72 @@ function computeTerrainGridVisibleRange(definition: GroundDynamicMesh, currentCa
     return null
   }
 
-  const points: THREE.Vector3[] = []
-  const intersectNdc = (x: number, y: number) => {
-    if ((currentCamera as any).isOrthographicCamera) {
-      terrainGridNdcPoint.set(x, y, -1)
-      const origin = terrainGridNdcPoint.unproject(currentCamera)
-      currentCamera.getWorldDirection(terrainGridTempDir)
-      terrainGridRay.set(origin, terrainGridTempDir)
-    } else {
-      terrainGridNdcPoint.set(x, y, 0.5)
-      const worldPoint = terrainGridNdcPoint.unproject(currentCamera)
-      const origin = currentCamera.position
-      terrainGridTempDir.copy(worldPoint).sub(origin).normalize()
-      terrainGridRay.set(origin, terrainGridTempDir)
-    }
+  // 用相机视锥与“地形分块 AABB”做相交测试。
+  // 好处：天然考虑 near/far、透视/正交、以及地形高度范围（更稳，不会因为 y=0 平面假设而漏掉）。
+  terrainGridProjScreenMatrix.multiplyMatrices(currentCamera.projectionMatrix, currentCamera.matrixWorldInverse)
+  terrainGridFrustum.setFromProjectionMatrix(terrainGridProjScreenMatrix)
 
-    const hit = terrainGridRay.intersectPlane(terrainGridPlane, terrainGridTempPoint)
-    if (hit && Number.isFinite(hit.x) && Number.isFinite(hit.z)) {
-      points.push(hit.clone())
-    }
-  }
-
-  // 用视口四角的射线与 y=0 平面求交，得到一个近似可见的 XZ 包围盒。
-  intersectNdc(-1, -1)
-  intersectNdc(1, -1)
-  intersectNdc(-1, 1)
-  intersectNdc(1, 1)
-  if (points.length < 2) {
-    return null
-  }
-
-  let minX = Infinity
-  let maxX = -Infinity
-  let minZ = Infinity
-  let maxZ = -Infinity
-  for (const p of points) {
-    minX = Math.min(minX, p.x)
-    maxX = Math.max(maxX, p.x)
-    minZ = Math.min(minZ, p.z)
-    maxZ = Math.max(maxZ, p.z)
-  }
-
-  const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
-  const rawMinColumn = Math.floor((minX + halfWidth) / stepX)
-  const rawMaxColumn = Math.ceil((maxX + halfWidth) / stepX)
-  const rawMinRow = Math.floor((minZ + halfDepth) / stepZ)
-  const rawMaxRow = Math.ceil((maxZ + halfDepth) / stepZ)
-
-  const minColumn = clampInt(rawMinColumn, 0, columns)
-  const maxColumn = clampInt(rawMaxColumn, 0, columns)
-  const minRow = clampInt(rawMinRow, 0, rows)
-  const maxRow = clampInt(rawMaxRow, 0, rows)
-
-  if (maxColumn - minColumn <= 0 || maxRow - minRow <= 0) {
-    return null
-  }
-
-  // 分块量化：把视野范围对齐到固定 cell 块，减少相机轻微移动时的重算。
   const block = TERRAIN_GRID_BLOCK_CELLS
   const pad = TERRAIN_GRID_BLOCK_PADDING
-  const minBlockColumn = Math.floor(minColumn / block)
-  const maxBlockColumn = Math.floor(maxColumn / block)
-  const minBlockRow = Math.floor(minRow / block)
-  const maxBlockRow = Math.floor(maxRow / block)
+  const blockCountX = Math.ceil(columns / block)
+  const blockCountZ = Math.ceil(rows / block)
 
-  const qMinColumn = Math.max(0, (minBlockColumn - pad) * block)
-  const qMaxColumn = Math.min(columns, (maxBlockColumn + pad + 1) * block)
-  const qMinRow = Math.max(0, (minBlockRow - pad) * block)
-  const qMaxRow = Math.min(rows, (maxBlockRow + pad + 1) * block)
+  const heightRange = terrainGridHelper.getLastHeightRange()
+  if (heightRange) {
+    terrainGridHasHeightRange = true
+    terrainGridHeightMin = heightRange.min
+    terrainGridHeightMax = heightRange.max
+  }
+
+  // 在 worker 首次回传高度范围之前，使用一个“宁可多算也不漏算”的竖向范围。
+  // 这样能保证视锥-AABB 相交不会因为 y 范围太小而返回空。
+  const fallbackExtent = Number.isFinite((currentCamera as any).far) ? Math.max(200, (currentCamera as any).far) : 500
+  const boxMinY = terrainGridHasHeightRange
+    ? Math.min(terrainGridHeightMin, 0) - TERRAIN_GRID_HEIGHT_MARGIN
+    : -fallbackExtent
+  const boxMaxY = terrainGridHasHeightRange
+    ? Math.max(terrainGridHeightMax, 0) + TERRAIN_GRID_HEIGHT_MARGIN
+    : fallbackExtent
+
+  let minVisibleBlockX = Infinity
+  let maxVisibleBlockX = -Infinity
+  let minVisibleBlockZ = Infinity
+  let maxVisibleBlockZ = -Infinity
+
+  for (let bz = 0; bz < blockCountZ; bz += 1) {
+    const startRow = bz * block
+    const endRow = Math.min(rows, (bz + 1) * block)
+    const zMin = -halfDepth + startRow * stepZ
+    const zMax = -halfDepth + endRow * stepZ
+
+    for (let bx = 0; bx < blockCountX; bx += 1) {
+      const startColumn = bx * block
+      const endColumn = Math.min(columns, (bx + 1) * block)
+      const xMin = -halfWidth + startColumn * stepX
+      const xMax = -halfWidth + endColumn * stepX
+
+      terrainGridBoxMin.set(xMin, boxMinY, zMin)
+      terrainGridBoxMax.set(xMax, boxMaxY, zMax)
+      terrainGridBlockBox.set(terrainGridBoxMin, terrainGridBoxMax)
+
+      if (!terrainGridFrustum.intersectsBox(terrainGridBlockBox)) {
+        continue
+      }
+      minVisibleBlockX = Math.min(minVisibleBlockX, bx)
+      maxVisibleBlockX = Math.max(maxVisibleBlockX, bx)
+      minVisibleBlockZ = Math.min(minVisibleBlockZ, bz)
+      maxVisibleBlockZ = Math.max(maxVisibleBlockZ, bz)
+    }
+  }
+
+  if (!Number.isFinite(minVisibleBlockX) || !Number.isFinite(minVisibleBlockZ)) {
+    return null
+  }
+
+  const qMinColumn = Math.max(0, (minVisibleBlockX - pad) * block)
+  const qMaxColumn = Math.min(columns, (maxVisibleBlockX + pad + 1) * block)
+  const qMinRow = Math.max(0, (minVisibleBlockZ - pad) * block)
+  const qMaxRow = Math.min(rows, (maxVisibleBlockZ + pad + 1) * block)
 
   if (qMaxColumn - qMinColumn <= 0 || qMaxRow - qMinRow <= 0) {
     return null
@@ -2785,6 +2787,11 @@ function refreshTerrainGridHelper() {
   const definition = resolveGroundDynamicMeshDefinition()
   terrainGridBaseDefinition = definition
   terrainGridBaseSignature = definition ? computeGroundDynamicMeshSignature(definition) : null
+
+  terrainGridHasHeightRange = false
+  terrainGridHeightMin = 0
+  terrainGridHeightMax = 0
+
   refreshTerrainGridHelperWithCamera()
 }
 

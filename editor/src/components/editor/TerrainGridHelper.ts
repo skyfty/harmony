@@ -245,6 +245,8 @@ type TerrainGridBuildResponse = {
   requestId: number
   minor: ArrayBuffer
   major: ArrayBuffer
+  heightMin: number
+  heightMax: number
   error?: string
 }
 
@@ -256,6 +258,10 @@ export class TerrainGridHelper extends THREE.Object3D {
   private signature: string | null = null
   private pendingSignature: string | null = null
   private segmentCache = new Map<string, SegmentBuffers>()
+
+  private hasHeightRange = false
+  private heightMin = 0
+  private heightMax = 0
 
   private gridWorker: Worker | null = null
   private gridRequestId = 0
@@ -271,6 +277,13 @@ export class TerrainGridHelper extends THREE.Object3D {
   constructor() {
     super()
     this.name = 'TerrainGridHelper'
+  }
+
+  getLastHeightRange(): { min: number; max: number } | null {
+    if (!this.hasHeightRange) {
+      return null
+    }
+    return { min: this.heightMin, max: this.heightMax }
   }
 
   private getGridWorker(): Worker | null {
@@ -327,6 +340,8 @@ export class TerrainGridHelper extends THREE.Object3D {
     const heightIndices = new Uint32Array(keys.length)
     const heightValues = new Float32Array(keys.length)
     let count = 0
+    let minY = 0
+    let maxY = 0
     for (const key of keys) {
       const value = mapped[key]
       if (typeof value !== 'number') {
@@ -346,12 +361,16 @@ export class TerrainGridHelper extends THREE.Object3D {
       }
       heightIndices[count] = rowIndex * stride + columnIndex
       heightValues[count] = value
+      minY = Math.min(minY, value)
+      maxY = Math.max(maxY, value)
       count += 1
     }
     return {
       heightIndices,
       heightValues,
       heightEntryCount: count,
+      heightMin: minY,
+      heightMax: maxY,
     }
   }
 
@@ -393,6 +412,10 @@ export class TerrainGridHelper extends THREE.Object3D {
     const minColumn = visibleRange ? clampInt(visibleRange.minColumn, 0, columns) : 0
     const maxColumn = visibleRange ? clampInt(visibleRange.maxColumn, 0, columns) : columns
     const transfer = this.createHeightTransfer(definition, rows, columns)
+    // 即便 worker 还没返回，也可以先缓存一份高度范围（heightMap 未编辑的点隐含为 0）。
+    this.hasHeightRange = true
+    this.heightMin = transfer.heightMin
+    this.heightMax = transfer.heightMax
     const requestId = (this.gridRequestId += 1)
     const request: TerrainGridBuildRequest = {
       kind: 'build-terrain-grid',
@@ -431,6 +454,10 @@ export class TerrainGridHelper extends THREE.Object3D {
     if (response.error) {
       throw new Error(response.error)
     }
+
+    this.hasHeightRange = true
+    this.heightMin = typeof response.heightMin === 'number' ? response.heightMin : this.heightMin
+    this.heightMax = typeof response.heightMax === 'number' ? response.heightMax : this.heightMax
 
     const buffers: SegmentBuffers = {
       minor: new Float32Array(response.minor),
