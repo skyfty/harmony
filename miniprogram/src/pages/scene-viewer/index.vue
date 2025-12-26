@@ -1163,7 +1163,17 @@ const instancedCullingBox = new THREE.Box3();
 const instancedCullingSphere = new THREE.Sphere();
 const instancedCullingWorldPosition = new THREE.Vector3();
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
-const terrainScatterRuntime = createTerrainScatterLodRuntime();
+const terrainScatterRuntime = createTerrainScatterLodRuntime({
+  lodUpdateIntervalMs: 200,
+  visibilityUpdateIntervalMs: 33,
+  cullGraceMs: 300,
+  cullRadiusMultiplier: 1.2,
+  maxBindingChangesPerUpdate: 200,
+});
+const instancedCullingLastVisibleAt = new Map<string, number>();
+
+const INSTANCED_CULL_GRACE_MS = 250;
+const INSTANCED_CULL_RADIUS_MULTIPLIER = 1.15;
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const scatterLocalPositionHelper = new THREE.Vector3();
 const scatterLocalRotationHelper = new THREE.Euler();
@@ -3012,6 +3022,7 @@ function updateInstancedCullingAndLod(): void {
   if (!context) {
     return;
   }
+  const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const camera = context.camera;
   camera.updateMatrixWorld(true);
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -3051,7 +3062,7 @@ function updateInstancedCullingAndLod(): void {
     object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
     const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z);
     const baseRadius = resolveInstancedProxyRadius(object);
-    const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius;
+    const radius = (Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius) * INSTANCED_CULL_RADIUS_MULTIPLIER;
     return { radius };
   });
 
@@ -3068,9 +3079,15 @@ function updateInstancedCullingAndLod(): void {
     }
     const isVisible = visibleIds.has(nodeId);
     if (!isVisible) {
+      const lastSeen = instancedCullingLastVisibleAt.get(nodeId) ?? 0;
+      if (INSTANCED_CULL_GRACE_MS > 0 && now - lastSeen < INSTANCED_CULL_GRACE_MS) {
+        return;
+      }
       releaseModelInstance(nodeId);
       return;
     }
+
+    instancedCullingLastVisibleAt.set(nodeId, now);
     const desiredAssetId = resolveDesiredLodAssetId(node, object, camera);
     if (!desiredAssetId) {
       return;
