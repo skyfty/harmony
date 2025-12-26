@@ -569,19 +569,40 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
-  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? groundNode.dynamicMesh
+    : null
+
   const originX = Number(node.position?.x ?? 0)
   const originY = Number(node.position?.y ?? 0)
   const originZ = Number(node.position?.z ?? 0)
+  const yaw = Number(node.rotation?.y ?? 0)
+  const cosYaw = Math.cos(yaw)
+  const sinYaw = Math.sin(yaw)
+
+  const groundOriginX = Number(groundNode?.position?.x ?? 0)
+  const groundOriginY = Number(groundNode?.position?.y ?? 0)
+  const groundOriginZ = Number(groundNode?.position?.z ?? 0)
   return {
     junctionSmoothing,
     laneLines,
     shoulders,
     materialConfigId,
-    // Road vertices are stored in the node's local XZ plane; when sampling terrain height we must
-    // convert local -> world, then convert sampled world height -> local Y.
+    // Road vertices are stored in the node's local XZ plane.
+    // When sampling terrain height we must convert local -> world (include yaw), then sample ground in its local XZ,
+    // then convert sampled world height -> road local Y.
     heightSampler: groundDefinition
-      ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, originX + x, originZ + z) - originY)
+      ? ((x: number, z: number) => {
+          const rotatedX = x * cosYaw - z * sinYaw
+          const rotatedZ = x * sinYaw + z * cosYaw
+          const worldX = originX + rotatedX
+          const worldZ = originZ + rotatedZ
+          const groundLocalX = worldX - groundOriginX
+          const groundLocalZ = worldZ - groundOriginZ
+          const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+          return groundWorldY - originY
+        })
       : null,
   }
 }
@@ -7563,12 +7584,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const materialConfigId = resolveRoadMaterialConfigId(node)
     const groundDefinition = resolveGroundDynamicMeshDefinition()
     const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
-    const roadOptions = {
+    const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
       junctionSmoothing,
       laneLines,
       shoulders,
       materialConfigId,
-      heightSampler: groundDefinition ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, x, z)) : null,
+      heightSampler: null,
     }
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
@@ -8247,13 +8268,14 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const materialConfigId = resolveRoadMaterialConfigId(node)
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
-      const roadGroup = createRoadGroup(roadDefinition, {
+      const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
         junctionSmoothing,
         laneLines,
         shoulders,
         materialConfigId,
-        heightSampler: groundDefinition ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, x, z)) : null,
-      })
+        heightSampler: null,
+      }
+      const roadGroup = createRoadGroup(roadDefinition, roadOptions)
       roadGroup.removeFromParent()
       roadGroup.userData.nodeId = node.id
       roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(

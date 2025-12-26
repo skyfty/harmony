@@ -119,7 +119,7 @@ import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { applyGroundGeneration } from '@schema/groundMesh'
+import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   getCachedModelObject,
@@ -3297,7 +3297,69 @@ function ensureAiModelMeshRuntime(node: SceneNode): boolean {
   }
 }
 
-function ensureDynamicMeshRuntime(node: SceneNode): boolean {
+function resolveGroundNodeForHeightSampling(nodes: SceneNode[]): SceneNode | null {
+  const byId = findNodeById(nodes, GROUND_NODE_ID)
+  if (byId?.dynamicMesh?.type === 'Ground') {
+    return byId
+  }
+
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if (current.dynamicMesh?.type === 'Ground') {
+      return current
+    }
+    if (current.children?.length) {
+      stack.push(...current.children)
+    }
+  }
+
+  return null
+}
+
+function resolveRoadLocalHeightSampler(
+  roadNode: SceneNode,
+  groundNode: SceneNode | null,
+): ((x: number, z: number) => number) | null {
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? (groundNode.dynamicMesh as GroundDynamicMesh)
+    : null
+  if (!groundDefinition) {
+    return null
+  }
+
+  const roadPosition = (roadNode.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+  const roadRotation = (roadNode.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+  const roadOriginX = typeof roadPosition?.x === 'number' && Number.isFinite(roadPosition.x) ? roadPosition.x : 0
+  const roadOriginY = typeof roadPosition?.y === 'number' && Number.isFinite(roadPosition.y) ? roadPosition.y : 0
+  const roadOriginZ = typeof roadPosition?.z === 'number' && Number.isFinite(roadPosition.z) ? roadPosition.z : 0
+  const yaw = typeof roadRotation?.y === 'number' && Number.isFinite(roadRotation.y) ? roadRotation.y : 0
+  const cosYaw = Math.cos(yaw)
+  const sinYaw = Math.sin(yaw)
+
+  const groundPosition = (groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+  const groundOriginX = typeof groundPosition?.x === 'number' && Number.isFinite(groundPosition.x) ? groundPosition.x : 0
+  const groundOriginY = typeof groundPosition?.y === 'number' && Number.isFinite(groundPosition.y) ? groundPosition.y : 0
+  const groundOriginZ = typeof groundPosition?.z === 'number' && Number.isFinite(groundPosition.z) ? groundPosition.z : 0
+
+  return (x: number, z: number) => {
+    const rotatedX = x * cosYaw - z * sinYaw
+    const rotatedZ = x * sinYaw + z * cosYaw
+
+    const worldX = roadOriginX + rotatedX
+    const worldZ = roadOriginZ + rotatedZ
+
+    const groundLocalX = worldX - groundOriginX
+    const groundLocalZ = worldZ - groundOriginZ
+    const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+    return groundWorldY - roadOriginY
+  }
+}
+
+function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null): boolean {
   const meshDefinition = node.dynamicMesh
   if (!meshDefinition) {
     return false
@@ -3314,7 +3376,9 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
 
   try {
     const runtime = meshType === 'Road'
-      ? createRoadGroup(meshDefinition as RoadDynamicMesh)
+      ? createRoadGroup(meshDefinition as RoadDynamicMesh, {
+          heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
+        })
       : meshType === 'Floor'
         ? createFloorGroup(meshDefinition as FloorDynamicMesh)
         : createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) })
@@ -11124,9 +11188,10 @@ export const useSceneStore = defineStore('scene', {
 
     rebuildGeneratedMeshRuntimes() {
       let created = 0
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const visitNodes = (list: SceneNode[]) => {
         list.forEach((node) => {
-          const ensured = ensureDynamicMeshRuntime(node) || ensureAiModelMeshRuntime(node)
+          const ensured = ensureDynamicMeshRuntime(node, groundNode) || ensureAiModelMeshRuntime(node)
           if (ensured) {
             created += 1
           }
@@ -11371,7 +11436,32 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const roadGroup = createRoadGroup(build.definition)
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? (groundNode.dynamicMesh as GroundDynamicMesh)
+        : null
+
+      const groundPosition = (groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+      const groundOriginX = typeof groundPosition?.x === 'number' && Number.isFinite(groundPosition.x) ? groundPosition.x : 0
+      const groundOriginY = typeof groundPosition?.y === 'number' && Number.isFinite(groundPosition.y) ? groundPosition.y : 0
+      const groundOriginZ = typeof groundPosition?.z === 'number' && Number.isFinite(groundPosition.z) ? groundPosition.z : 0
+
+      const roadOriginX = build.center.x
+      const roadOriginY = build.center.y
+      const roadOriginZ = build.center.z
+
+      const roadGroup = createRoadGroup(build.definition, {
+        heightSampler: groundDefinition
+          ? ((x: number, z: number) => {
+              const worldX = roadOriginX + x
+              const worldZ = roadOriginZ + z
+              const groundLocalX = worldX - groundOriginX
+              const groundLocalZ = worldZ - groundOriginZ
+              const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+              return groundWorldY - roadOriginY
+            })
+          : null,
+      })
       const nodeName = payload.name ?? this.generateRoadNodeName()
 
       this.captureHistorySnapshot()

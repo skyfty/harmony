@@ -18,7 +18,7 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createGroundMesh, ensureAllGroundChunks } from '@schema/groundMesh'
+import { createGroundMesh, ensureAllGroundChunks, sampleGroundHeight } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
 import { createRoadGroup } from '@schema/roadMesh'
 import {
@@ -33,6 +33,23 @@ import {
   clampWallProps,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
+
+function findGroundNode(nodes: SceneNode[]): SceneNode | null {
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if (current.dynamicMesh?.type === 'Ground') {
+      return current
+    }
+    if (current.children?.length) {
+      stack.push(...current.children)
+    }
+  }
+  return null
+}
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -551,6 +568,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     return
   }
   const nodeLookup = buildSceneNodeLookup(nodes)
+  const groundNode = findGroundNode(nodes)
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
     const existingShape = (entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined)?.shape
@@ -563,7 +581,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       continue
     }
     let shape: RigidbodyPhysicsShape | null = null
-    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore)
+    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode)
     if (!samplingObject) {
       continue
     }
@@ -645,17 +663,18 @@ function mergeRigidbodyMetadata(
 async function buildRigidbodySamplingObject(
   node: SceneNode,
   assetCacheStore: ReturnType<typeof useAssetCacheStore>,
+  groundNode: SceneNode | null,
 ): Promise<THREE.Object3D | null> {
   let sourceObject: THREE.Object3D | null = null
   if (node.sourceAssetId) {
     sourceObject = await loadAssetObjectForNode(node, assetCacheStore)
   } else if (node.dynamicMesh?.type) {
-    sourceObject = buildDynamicMeshObject(node)
+    sourceObject = buildDynamicMeshObject(node, groundNode)
   } else if (node.nodeType === 'Group') {
     const empty = new THREE.Object3D()
     if (node.children && node.children.length > 0) {
       for (const child of node.children) {
-        const childObject = await buildRigidbodySamplingObject(child, assetCacheStore)
+        const childObject = await buildRigidbodySamplingObject(child, assetCacheStore, groundNode)
         if (!childObject) {
           continue
         }
@@ -733,7 +752,7 @@ async function loadAssetObjectForNode(
   return clone
 }
 
-function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
+function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): THREE.Object3D | null {
   const mesh = node.dynamicMesh
   if (!mesh) {
     return null
@@ -752,7 +771,40 @@ function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
       return createWallGroup(mesh, { smoothing }).clone(true)
     }
     case 'Road':
-      return createRoadGroup(mesh).clone(true)
+      {
+        const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+          ? (groundNode.dynamicMesh as GroundDynamicMesh)
+          : null
+
+        const roadPosition = node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
+        const roadRotation = node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined
+        const roadOriginX = getFiniteComponent(roadPosition?.x)
+        const roadOriginY = getFiniteComponent(roadPosition?.y)
+        const roadOriginZ = getFiniteComponent(roadPosition?.z)
+        const yaw = getFiniteComponent(roadRotation?.y)
+        const cosYaw = Math.cos(yaw)
+        const sinYaw = Math.sin(yaw)
+
+        const groundPosition = groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
+        const groundOriginX = getFiniteComponent(groundPosition?.x)
+        const groundOriginY = getFiniteComponent(groundPosition?.y)
+        const groundOriginZ = getFiniteComponent(groundPosition?.z)
+
+        return createRoadGroup(mesh, {
+          heightSampler: groundDefinition
+            ? ((x: number, z: number) => {
+                const rotatedX = x * cosYaw - z * sinYaw
+                const rotatedZ = x * sinYaw + z * cosYaw
+                const worldX = roadOriginX + rotatedX
+                const worldZ = roadOriginZ + rotatedZ
+                const groundLocalX = worldX - groundOriginX
+                const groundLocalZ = worldZ - groundOriginZ
+                const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+                return groundWorldY - roadOriginY
+              })
+            : null,
+        }).clone(true)
+      }
     default:
       return null
   }
