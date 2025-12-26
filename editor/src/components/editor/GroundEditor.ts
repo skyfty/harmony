@@ -1193,7 +1193,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			terrainScatter: snapshot,
 		}
 		groundNode.dynamicMesh = nextMesh
-		// options.sceneStore.updateNodeDynamicMesh(groundNode.id, nextMesh)
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
@@ -1234,16 +1233,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return sessionDefinition
 	}
 
-	function flushSculptPreviewToScene(definition: GroundDynamicMesh) {
-		if (!sculptSessionState) {
-			return
-		}
-		const node = getGroundNodeFromScene()
-		if (!node || node.id !== sculptSessionState.nodeId || node.dynamicMesh?.type !== 'Ground') {
-			return
-		}
-		options.sceneStore.updateNodeDynamicMesh(node.id, definition)
-	}
 
 	function commitSculptSession(selectedNode: SceneNode | null): boolean {
 		if (!sculptSessionState || !sculptSessionState.dirty) {

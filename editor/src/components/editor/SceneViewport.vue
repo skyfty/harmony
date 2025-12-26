@@ -96,7 +96,7 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { TerrainGridHelper } from './TerrainGridHelper'
+import { TerrainGridHelper, type TerrainGridVisibleRange } from './TerrainGridHelper'
 import { createWallPreviewRenderer } from './WallPreviewRenderer'
 import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
 import { createFloorBuildTool } from './FloorBuildTool'
@@ -2638,6 +2638,23 @@ function shouldDeferSceneGraphSync(): boolean {
 const terrainGridHelper = new TerrainGridHelper()
 terrainGridHelper.name = 'TerrainGridHelper'
 
+const TERRAIN_GRID_BLOCK_CELLS = 64
+const TERRAIN_GRID_BLOCK_PADDING = 1
+const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 120
+const TERRAIN_GRID_HEIGHT_MARGIN = 0.5
+const terrainGridFrustum = new THREE.Frustum()
+const terrainGridProjScreenMatrix = new THREE.Matrix4()
+const terrainGridBlockBox = new THREE.Box3()
+const terrainGridBoxMin = new THREE.Vector3()
+const terrainGridBoxMax = new THREE.Vector3()
+let terrainGridBaseSignature: string | null = null
+let terrainGridBaseDefinition: GroundDynamicMesh | null = null
+let terrainGridHeightMin = 0
+let terrainGridHeightMax = 0
+let terrainGridHasHeightRange = false
+let terrainGridCameraDirty = false
+let lastTerrainGridCameraRefresh = 0
+
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
 
@@ -2664,10 +2681,118 @@ function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
   return null
 }
 
+function computeTerrainGridVisibleRange(definition: GroundDynamicMesh, currentCamera: THREE.Camera): TerrainGridVisibleRange | null {
+  const columns = Math.max(1, Math.floor(definition.columns))
+  const rows = Math.max(1, Math.floor(definition.rows))
+  const cellSize = Math.max(1e-4, definition.cellSize)
+  const width = Math.max(Math.abs(definition.width), columns * cellSize)
+  const depth = Math.max(Math.abs(definition.depth), rows * cellSize)
+  const halfWidth = width * 0.5
+  const halfDepth = depth * 0.5
+  const stepX = columns > 0 ? width / columns : 0
+  const stepZ = rows > 0 ? depth / rows : 0
+  if (stepX <= 0 || stepZ <= 0) {
+    return null
+  }
+
+  // 用相机视锥与“地形分块 AABB”做相交测试。
+  // 好处：天然考虑 near/far、透视/正交、以及地形高度范围（更稳，不会因为 y=0 平面假设而漏掉）。
+  terrainGridProjScreenMatrix.multiplyMatrices(currentCamera.projectionMatrix, currentCamera.matrixWorldInverse)
+  terrainGridFrustum.setFromProjectionMatrix(terrainGridProjScreenMatrix)
+
+  const block = TERRAIN_GRID_BLOCK_CELLS
+  const pad = TERRAIN_GRID_BLOCK_PADDING
+  const blockCountX = Math.ceil(columns / block)
+  const blockCountZ = Math.ceil(rows / block)
+
+  const heightRange = terrainGridHelper.getLastHeightRange()
+  if (heightRange) {
+    terrainGridHasHeightRange = true
+    terrainGridHeightMin = heightRange.min
+    terrainGridHeightMax = heightRange.max
+  }
+
+  // 在 worker 首次回传高度范围之前，使用一个“宁可多算也不漏算”的竖向范围。
+  // 这样能保证视锥-AABB 相交不会因为 y 范围太小而返回空。
+  const fallbackExtent = Number.isFinite((currentCamera as any).far) ? Math.max(200, (currentCamera as any).far) : 500
+  const boxMinY = terrainGridHasHeightRange
+    ? Math.min(terrainGridHeightMin, 0) - TERRAIN_GRID_HEIGHT_MARGIN
+    : -fallbackExtent
+  const boxMaxY = terrainGridHasHeightRange
+    ? Math.max(terrainGridHeightMax, 0) + TERRAIN_GRID_HEIGHT_MARGIN
+    : fallbackExtent
+
+  let minVisibleBlockX = Infinity
+  let maxVisibleBlockX = -Infinity
+  let minVisibleBlockZ = Infinity
+  let maxVisibleBlockZ = -Infinity
+
+  for (let bz = 0; bz < blockCountZ; bz += 1) {
+    const startRow = bz * block
+    const endRow = Math.min(rows, (bz + 1) * block)
+    const zMin = -halfDepth + startRow * stepZ
+    const zMax = -halfDepth + endRow * stepZ
+
+    for (let bx = 0; bx < blockCountX; bx += 1) {
+      const startColumn = bx * block
+      const endColumn = Math.min(columns, (bx + 1) * block)
+      const xMin = -halfWidth + startColumn * stepX
+      const xMax = -halfWidth + endColumn * stepX
+
+      terrainGridBoxMin.set(xMin, boxMinY, zMin)
+      terrainGridBoxMax.set(xMax, boxMaxY, zMax)
+      terrainGridBlockBox.set(terrainGridBoxMin, terrainGridBoxMax)
+
+      if (!terrainGridFrustum.intersectsBox(terrainGridBlockBox)) {
+        continue
+      }
+      minVisibleBlockX = Math.min(minVisibleBlockX, bx)
+      maxVisibleBlockX = Math.max(maxVisibleBlockX, bx)
+      minVisibleBlockZ = Math.min(minVisibleBlockZ, bz)
+      maxVisibleBlockZ = Math.max(maxVisibleBlockZ, bz)
+    }
+  }
+
+  if (!Number.isFinite(minVisibleBlockX) || !Number.isFinite(minVisibleBlockZ)) {
+    return null
+  }
+
+  const qMinColumn = Math.max(0, (minVisibleBlockX - pad) * block)
+  const qMaxColumn = Math.min(columns, (maxVisibleBlockX + pad + 1) * block)
+  const qMinRow = Math.max(0, (minVisibleBlockZ - pad) * block)
+  const qMaxRow = Math.min(rows, (maxVisibleBlockZ + pad + 1) * block)
+
+  if (qMaxColumn - qMinColumn <= 0 || qMaxRow - qMinRow <= 0) {
+    return null
+  }
+
+  return { minRow: qMinRow, maxRow: qMaxRow, minColumn: qMinColumn, maxColumn: qMaxColumn }
+}
+
+function refreshTerrainGridHelperWithCamera() {
+  const definition = terrainGridBaseDefinition
+  if (!definition) {
+    terrainGridHelper.update(null, null)
+    return
+  }
+  const baseSignature = terrainGridBaseSignature ?? computeGroundDynamicMeshSignature(definition)
+  const range = camera ? computeTerrainGridVisibleRange(definition, camera) : null
+  const signature = range
+    ? `${baseSignature}|view:${range.minRow}-${range.maxRow}:${range.minColumn}-${range.maxColumn}`
+    : baseSignature
+  terrainGridHelper.update(definition, signature, range)
+}
+
 function refreshTerrainGridHelper() {
   const definition = resolveGroundDynamicMeshDefinition()
-  const signature = definition ? computeGroundDynamicMeshSignature(definition) : null
-  terrainGridHelper.update(definition, signature)
+  terrainGridBaseDefinition = definition
+  terrainGridBaseSignature = definition ? computeGroundDynamicMeshSignature(definition) : null
+
+  terrainGridHasHeightRange = false
+  terrainGridHeightMin = 0
+  terrainGridHeightMax = 0
+
+  refreshTerrainGridHelperWithCamera()
 }
 
 const dragPreviewGroup = new THREE.Group()
@@ -3362,6 +3487,7 @@ function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
 
   gizmoControls?.cameraUpdate()
+  terrainGridCameraDirty = true
 }
 
 function applyCameraControlMode(mode: CameraControlMode) {
@@ -4233,6 +4359,7 @@ function animate() {
     }
 
     controlsUpdated = true
+    terrainGridCameraDirty = true
 
     if (perspectiveCamera && camera !== perspectiveCamera) {
       perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
@@ -4250,6 +4377,15 @@ function animate() {
 
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
+  }
+
+  if (terrainGridCameraDirty) {
+    const now = performance.now()
+    if (now - lastTerrainGridCameraRefresh >= TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS) {
+      lastTerrainGridCameraRefresh = now
+      terrainGridCameraDirty = false
+      refreshTerrainGridHelperWithCamera()
+    }
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
