@@ -35,7 +35,32 @@ const ROAD_LANE_LINE_COLOR = 0x27ffff
 const ROAD_LANE_LINE_DASH_LENGTH = 2
 const ROAD_LANE_LINE_GAP_LENGTH = 1
 
-const ROAD_HEIGHT_SMOOTHING_PASSES = 3
+const ROAD_HEIGHT_SMOOTHING_MIN_PASSES = 3
+const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
+
+function computeHeightSmoothingPasses(divisions: number): number {
+  if (!Number.isFinite(divisions) || divisions <= 0) {
+    return ROAD_HEIGHT_SMOOTHING_MIN_PASSES
+  }
+  // More divisions means higher-frequency terrain sampling; increase smoothing to keep the road profile smooth.
+  const suggested = Math.round(divisions / 12)
+  return Math.max(ROAD_HEIGHT_SMOOTHING_MIN_PASSES, Math.min(ROAD_HEIGHT_SMOOTHING_MAX_PASSES, suggested))
+}
+
+function sampleHeightFromSeries(series: number[], t: number): number {
+  const maxIndex = series.length - 1
+  if (maxIndex <= 0) {
+    return series[0] ?? 0
+  }
+  const clampedT = Math.max(0, Math.min(1, t))
+  const scaled = clampedT * maxIndex
+  const i0 = Math.floor(scaled)
+  const i1 = Math.min(maxIndex, i0 + 1)
+  const alpha = scaled - i0
+  const v0 = series[i0] ?? 0
+  const v1 = series[i1] ?? v0
+  return v0 * (1 - alpha) + v1 * alpha
+}
 
 function smoothHeightSeries(values: number[], passes: number): number[] {
   const count = values.length
@@ -381,7 +406,7 @@ function buildOffsetStripGeometry(
       const sampled = sampler!(center.x, center.z)
       heights.push((Number.isFinite(sampled) ? sampled : 0) + yOffset)
     }
-    const smoothed = smoothHeightSeries(heights, ROAD_HEIGHT_SMOOTHING_PASSES)
+    const smoothed = smoothHeightSeries(heights, computeHeightSmoothingPasses(divisions))
     heights.length = 0
     heights.push(...smoothed)
   }
@@ -477,6 +502,25 @@ function buildDashedCurveSegments(
     return null
   }
 
+  const sampler = typeof heightSampler === 'function' ? heightSampler : null
+  const heightLut: number[] | null = sampler
+    ? (() => {
+        const divisions = Math.max(
+          ROAD_MIN_DIVISIONS,
+          Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY)),
+        )
+        const values: number[] = []
+        const point = new THREE.Vector3()
+        for (let i = 0; i <= divisions; i += 1) {
+          const t = i / divisions
+          point.copy(curve.getPoint(t))
+          const sampled = sampler(point.x, point.z)
+          values.push((Number.isFinite(sampled) ? sampled : 0) + yOffset)
+        }
+        return smoothHeightSeries(values, computeHeightSmoothingPasses(divisions))
+      })()
+    : null
+
   const positions: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
@@ -514,11 +558,9 @@ function buildDashedCurveSegments(
     leftEnd.copy(endPoint).addScaledVector(lateral, halfWidth)
     rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
 
-    if (heightSampler) {
-      const startYRaw = heightSampler(startPoint.x, startPoint.z)
-      const endYRaw = heightSampler(endPoint.x, endPoint.z)
-      const startY = (Number.isFinite(startYRaw) ? startYRaw : 0) + yOffset
-      const endY = (Number.isFinite(endYRaw) ? endYRaw : 0) + yOffset
+    if (heightLut) {
+      const startY = sampleHeightFromSeries(heightLut, startT)
+      const endY = sampleHeightFromSeries(heightLut, endT)
       leftStart.y = startY
       rightStart.y = startY
       leftEnd.y = endY
