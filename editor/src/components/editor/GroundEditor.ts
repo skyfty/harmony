@@ -123,6 +123,8 @@ const scatterCullingFrustum = new THREE.Frustum()
 const scatterFrustumCuller = createInstancedBvhFrustumCuller()
 const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
+	const sculptStrokePrevPointHelper = new THREE.Vector3()
+	const sculptStrokeNextPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -161,6 +163,8 @@ type SculptSessionState = {
 }
 
 let sculptSessionState: SculptSessionState | null = null
+	let sculptStrokePointerId: number | null = null
+	let sculptStrokeLastLocalPoint: THREE.Vector3 | null = null
 
 function mergeRegions(
 	current: GroundGeometryUpdateRegion | null,
@@ -2120,54 +2124,90 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const shape = getActiveBrushShape()
-		const flattenTargetHeight = operation === 'flatten'
-			? sampleGroundHeight(definition, localPoint.x, localPoint.z)
-			: operation === 'flatten-zero'
-				? 0
-				: undefined
+		const radius = options.brushRadius.value
 
-		const modified = sculptGround(definition, {
-			point: localPoint,
-			radius: options.brushRadius.value,
-			// Damp sculpt speed so height grows more gradually for finer control.
-			strength: options.brushStrength.value * 0.4,
-			shape,
-			operation,
-			targetHeight: flattenTargetHeight,
-		})
-
-		if (modified) {
-			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
-				sculptSessionState.dirty = true
-			}
-			const halfWidth = definition.width * 0.5
-			const halfDepth = definition.depth * 0.5
-			const cellSize = definition.cellSize
-			const radius = options.brushRadius.value
-			const minColumn = Math.floor((localPoint.x - radius + halfWidth) / cellSize)
-			const maxColumn = Math.ceil((localPoint.x + radius + halfWidth) / cellSize)
-			const minRow = Math.floor((localPoint.z - radius + halfDepth) / cellSize)
-			const maxRow = Math.ceil((localPoint.z + radius + halfDepth) / cellSize)
-			const region: GroundGeometryUpdateRegion = {
-				minRow: Math.max(0, minRow),
-				maxRow: Math.min(definition.rows, maxRow),
-				minColumn: Math.max(0, minColumn),
-				maxColumn: Math.min(definition.columns, maxColumn),
-			}
-			updateGroundMeshRegion(groundObject, definition, region)
-			// Stitch normals across chunk boundaries to prevent visible seams.
-			const padded: GroundGeometryUpdateRegion = {
-				minRow: Math.max(0, region.minRow - 2),
-				maxRow: Math.min(definition.rows, region.maxRow + 2),
-				minColumn: Math.max(0, region.minColumn - 2),
-				maxColumn: Math.min(definition.columns, region.maxColumn + 2),
-			}
-			stitchGroundChunkNormals(groundObject, definition, padded)
-			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
-				sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
-			}
-			flushSculptPreviewToScene(definition)
+		// If the pointer moves a large distance between frames, insert intermediate samples along the stroke
+		// to avoid sparse "control points" causing jagged edges.
+		const cellSize = definition.cellSize
+		const maxStep = Math.max(cellSize * 0.5, radius * 0.2, 0.05)
+		const prev = sculptStrokeLastLocalPoint
+		let steps = 1
+		if (prev && sculptStrokePointerId === event.pointerId) {
+			sculptStrokePrevPointHelper.copy(prev)
+			sculptStrokeNextPointHelper.copy(localPoint)
+			const dx = sculptStrokeNextPointHelper.x - sculptStrokePrevPointHelper.x
+			const dz = sculptStrokeNextPointHelper.z - sculptStrokePrevPointHelper.z
+			const dist = Math.hypot(dx, dz)
+			steps = Math.max(1, Math.ceil(dist / maxStep))
+			steps = Math.min(96, steps)
 		}
+
+		let anyModified = false
+		let mergedRegion: GroundGeometryUpdateRegion | null = null
+
+		for (let i = 0; i < steps; i += 1) {
+			const t = steps <= 1 ? 1 : (i + 1) / steps
+			const point = prev && sculptStrokePointerId === event.pointerId
+				? sculptStrokePrevPointHelper.clone().lerp(sculptStrokeNextPointHelper, t)
+				: localPoint
+
+			const targetHeight = operation === 'flatten'
+				? sampleGroundHeight(definition, point.x, point.z)
+				: operation === 'flatten-zero'
+					? 0
+					: undefined
+
+			const modified = sculptGround(definition, {
+				point,
+				radius,
+				// Damp sculpt speed so height grows more gradually for finer control.
+				strength: options.brushStrength.value * 0.4,
+				shape,
+				operation,
+				targetHeight,
+			})
+
+			if (modified) {
+				anyModified = true
+				const halfWidth = definition.width * 0.5
+				const halfDepth = definition.depth * 0.5
+				const minColumn = Math.floor((point.x - radius + halfWidth) / cellSize)
+				const maxColumn = Math.ceil((point.x + radius + halfWidth) / cellSize)
+				const minRow = Math.floor((point.z - radius + halfDepth) / cellSize)
+				const maxRow = Math.ceil((point.z + radius + halfDepth) / cellSize)
+				const region: GroundGeometryUpdateRegion = {
+					minRow: Math.max(0, minRow),
+					maxRow: Math.min(definition.rows, maxRow),
+					minColumn: Math.max(0, minColumn),
+					maxColumn: Math.min(definition.columns, maxColumn),
+				}
+				mergedRegion = mergeRegions(mergedRegion, region)
+			}
+		}
+
+		sculptStrokePointerId = event.pointerId
+		sculptStrokeLastLocalPoint = localPoint.clone()
+
+		if (!anyModified || !mergedRegion) {
+			return
+		}
+
+		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+			sculptSessionState.dirty = true
+		}
+		updateGroundMeshRegion(groundObject, definition, mergedRegion)
+		// Stitch normals across chunk boundaries to prevent visible seams.
+		const padded: GroundGeometryUpdateRegion = {
+			minRow: Math.max(0, mergedRegion.minRow - 2),
+			maxRow: Math.min(definition.rows, mergedRegion.maxRow + 2),
+			minColumn: Math.max(0, mergedRegion.minColumn - 2),
+			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
+		}
+		stitchGroundChunkNormals(groundObject, definition, padded)
+		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
+		}
+		flushSculptPreviewToScene(definition)
 	}
 
 	function refreshGroundMesh(definition: GroundDynamicMesh | null = getGroundDynamicMeshDefinition()) {
@@ -2194,6 +2234,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
+		sculptStrokePointerId = event.pointerId
+		sculptStrokeLastLocalPoint = null
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
@@ -2212,6 +2254,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		isSculpting.value = false
+		sculptStrokePointerId = null
+		sculptStrokeLastLocalPoint = null
 		try {
 			options.canvasRef.value?.releasePointerCapture(event.pointerId)
 		} catch (error) {
