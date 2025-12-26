@@ -142,14 +142,7 @@ export type MaterialBaselineState = {
   side?: THREE.Side
   aoMapIntensity?: number
   envMapIntensity?: number
-  map?: THREE.Texture | null
-  normalMap?: THREE.Texture | null
-  metalnessMap?: THREE.Texture | null
-  roughnessMap?: THREE.Texture | null
-  aoMap?: THREE.Texture | null
-  emissiveMap?: THREE.Texture | null
-  displacementMap?: THREE.Texture | null
-}
+} & Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
 
 export interface MaterialTextureAssignmentOptions {
   resolveTexture?: (ref: SceneMaterialTextureRef) => Promise<THREE.Texture | null>
@@ -698,6 +691,17 @@ function getMaterialBaseline(material: THREE.Material): MaterialBaselineState {
 
   const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean };
   const standard = material as THREE.MeshStandardMaterial & { emissive?: THREE.Color };
+
+  const textureBaseline: Partial<Record<MeshStandardTextureKey, THREE.Texture | null>> = {};
+  const textureSource = standard as unknown as Record<string, unknown>;
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    if (!(key in textureSource)) {
+      return;
+    }
+    const texture = textureSource[key];
+    textureBaseline[key] = texture instanceof THREE.Texture ? texture : (texture as THREE.Texture | null);
+  });
+
   state = {
     color: typed.color ? typed.color.clone() : undefined,
     opacity: material.opacity,
@@ -711,13 +715,7 @@ function getMaterialBaseline(material: THREE.Material): MaterialBaselineState {
     side: material.side,
     aoMapIntensity: 'aoMapIntensity' in standard ? standard.aoMapIntensity : undefined,
     envMapIntensity: 'envMapIntensity' in standard ? standard.envMapIntensity : undefined,
-    map: 'map' in standard ? standard.map ?? null : undefined,
-    normalMap: 'normalMap' in standard ? standard.normalMap ?? null : undefined,
-    metalnessMap: 'metalnessMap' in standard ? standard.metalnessMap ?? null : undefined,
-    roughnessMap: 'roughnessMap' in standard ? standard.roughnessMap ?? null : undefined,
-    aoMap: 'aoMap' in standard ? standard.aoMap ?? null : undefined,
-    emissiveMap: 'emissiveMap' in standard ? standard.emissiveMap ?? null : undefined,
-    displacementMap: 'displacementMap' in standard ? standard.displacementMap ?? null : undefined,
+    ...textureBaseline,
   };
   userData[MATERIAL_ORIGINAL_KEY] = state;
   return state;
@@ -964,27 +962,18 @@ export function restoreMaterialFromBaseline(material: THREE.Material): void {
   if (baseline.envMapIntensity !== undefined && 'envMapIntensity' in standard) {
     standard.envMapIntensity = baseline.envMapIntensity;
   }
-  if (baseline.map !== undefined && 'map' in standard) {
-    standard.map = baseline.map ?? null;
-  }
-  if (baseline.normalMap !== undefined && 'normalMap' in standard) {
-    standard.normalMap = baseline.normalMap ?? null;
-  }
-  if (baseline.metalnessMap !== undefined && 'metalnessMap' in standard) {
-    standard.metalnessMap = baseline.metalnessMap ?? null;
-  }
-  if (baseline.roughnessMap !== undefined && 'roughnessMap' in standard) {
-    standard.roughnessMap = baseline.roughnessMap ?? null;
-  }
-  if (baseline.aoMap !== undefined && 'aoMap' in standard) {
-    standard.aoMap = baseline.aoMap ?? null;
-  }
-  if (baseline.emissiveMap !== undefined && 'emissiveMap' in standard) {
-    standard.emissiveMap = baseline.emissiveMap ?? null;
-  }
-  if (baseline.displacementMap !== undefined && 'displacementMap' in standard) {
-    standard.displacementMap = baseline.displacementMap ?? null;
-  }
+
+  const standardRecord = standard as unknown as Record<string, unknown>;
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    const value = baseline[key];
+    if (value === undefined) {
+      return;
+    }
+    if (!(key in standardRecord)) {
+      return;
+    }
+    standardRecord[key] = value ?? null;
+  });
 
   const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined;
   const overrideState = typed.userData?.[TEXTURE_SLOT_OVERRIDES_KEY] as
