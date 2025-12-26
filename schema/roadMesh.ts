@@ -35,6 +35,33 @@ const ROAD_LANE_LINE_COLOR = 0x27ffff
 const ROAD_LANE_LINE_DASH_LENGTH = 2
 const ROAD_LANE_LINE_GAP_LENGTH = 1
 
+const ROAD_HEIGHT_SMOOTHING_PASSES = 3
+
+function smoothHeightSeries(values: number[], passes: number): number[] {
+  const count = values.length
+  if (count <= 2) {
+    return values
+  }
+  const iterations = Math.max(0, Math.min(12, Math.trunc(passes)))
+  if (iterations === 0) {
+    return values
+  }
+
+  let working = values.slice()
+  for (let pass = 0; pass < iterations; pass += 1) {
+    const next = working.slice()
+    for (let i = 1; i < count - 1; i += 1) {
+      const prev = working[i - 1]!
+      const cur = working[i]!
+      const nxt = working[i + 1]!
+      next[i] = prev * 0.25 + cur * 0.5 + nxt * 0.25
+    }
+    working = next
+  }
+
+  return working
+}
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -344,6 +371,21 @@ function buildOffsetStripGeometry(
   const left = new THREE.Vector3()
   const right = new THREE.Vector3()
 
+  const sampler = typeof heightSampler === 'function' ? heightSampler : null
+  const heights: number[] | null = sampler ? [] : null
+
+  if (heights) {
+    for (let i = 0; i <= divisions; i += 1) {
+      const t = i / divisions
+      center.copy(curve.getPoint(t))
+      const sampled = sampler!(center.x, center.z)
+      heights.push((Number.isFinite(sampled) ? sampled : 0) + yOffset)
+    }
+    const smoothed = smoothHeightSeries(heights, ROAD_HEIGHT_SMOOTHING_PASSES)
+    heights.length = 0
+    heights.push(...smoothed)
+  }
+
   for (let i = 0; i <= divisions; i += 1) {
     const t = i / divisions
     center.copy(curve.getPoint(t))
@@ -359,13 +401,11 @@ function buildOffsetStripGeometry(
     left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
     right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
 
-    if (heightSampler) {
-      left.y = heightSampler(left.x, left.z) + yOffset
-      right.y = heightSampler(right.x, right.z) + yOffset
-    } else {
-      left.y = yOffset
-      right.y = yOffset
-    }
+    // Terrain conformance uses a smoothed height sampled along the curve centerline.
+    // This keeps the road surface smooth and avoids jagged edges from per-vertex sampling.
+    const y = heights ? heights[i]! : yOffset
+    left.y = y
+    right.y = y
 
     positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
     uvs.push(t, 0, t, 1)
@@ -475,10 +515,14 @@ function buildDashedCurveSegments(
     rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
 
     if (heightSampler) {
-      leftStart.y = heightSampler(leftStart.x, leftStart.z) + yOffset
-      rightStart.y = heightSampler(rightStart.x, rightStart.z) + yOffset
-      leftEnd.y = heightSampler(leftEnd.x, leftEnd.z) + yOffset
-      rightEnd.y = heightSampler(rightEnd.x, rightEnd.z) + yOffset
+      const startYRaw = heightSampler(startPoint.x, startPoint.z)
+      const endYRaw = heightSampler(endPoint.x, endPoint.z)
+      const startY = (Number.isFinite(startYRaw) ? startYRaw : 0) + yOffset
+      const endY = (Number.isFinite(endYRaw) ? endYRaw : 0) + yOffset
+      leftStart.y = startY
+      rightStart.y = startY
+      leftEnd.y = endY
+      rightEnd.y = endY
     } else {
       leftStart.y = yOffset
       rightStart.y = yOffset
