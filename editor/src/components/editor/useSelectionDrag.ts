@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNode } from '@harmony/schema'
+import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
+import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
@@ -42,6 +43,47 @@ export function useSelectionDrag(
   const alignWorldPositionHelper = new THREE.Vector3()
   const alignDeltaHelper = new THREE.Vector3()
   const alignLocalPositionHelper = new THREE.Vector3()
+
+  function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
+    for (const node of nodes) {
+      if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
+        return node
+      }
+      if (node.children && node.children.length > 0) {
+        const nested = findGroundNodeInTree(node.children)
+        if (nested) {
+          return nested
+        }
+      }
+    }
+    return null
+  }
+
+  function resolveGroundHeightAtWorldXZ(worldX: number, worldZ: number): number {
+    const groundNode = findGroundNodeInTree(sceneStore.nodes)
+      ?? findGroundNodeInTree(sceneNodes)
+    const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+      ? (groundNode.dynamicMesh as GroundDynamicMesh)
+      : null
+    if (!groundDefinition) {
+      return 0
+    }
+
+    const groundOriginX = typeof groundNode?.position?.x === 'number' && Number.isFinite(groundNode.position.x)
+      ? groundNode.position.x
+      : Number(groundNode?.position?.x ?? 0)
+    const groundOriginY = typeof groundNode?.position?.y === 'number' && Number.isFinite(groundNode.position.y)
+      ? groundNode.position.y
+      : Number(groundNode?.position?.y ?? 0)
+    const groundOriginZ = typeof groundNode?.position?.z === 'number' && Number.isFinite(groundNode.position.z)
+      ? groundNode.position.z
+      : Number(groundNode?.position?.z ?? 0)
+
+    const groundLocalX = worldX - (Number.isFinite(groundOriginX) ? groundOriginX : 0)
+    const groundLocalZ = worldZ - (Number.isFinite(groundOriginZ) ? groundOriginZ : 0)
+    const groundWorldY = (Number.isFinite(groundOriginY) ? groundOriginY : 0) + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+    return Number.isFinite(groundWorldY) ? groundWorldY : 0
+  }
 
   function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
     if (!nodeId) {
@@ -216,12 +258,13 @@ export function useSelectionDrag(
         continue
       }
 
-      const deltaY = -dropBoundingBoxHelper.min.y
+      object.getWorldPosition(dropWorldPositionHelper)
+      const groundY = resolveGroundHeightAtWorldXZ(dropWorldPositionHelper.x, dropWorldPositionHelper.z)
+      const deltaY = groundY - dropBoundingBoxHelper.min.y
       if (Math.abs(deltaY) <= DROP_TO_GROUND_EPSILON) {
         continue
       }
 
-      object.getWorldPosition(dropWorldPositionHelper)
       dropWorldPositionHelper.y += deltaY
 
       dropLocalPositionHelper.copy(dropWorldPositionHelper)

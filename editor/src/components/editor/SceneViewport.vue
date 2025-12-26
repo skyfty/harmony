@@ -514,6 +514,7 @@ function computeRoadDynamicMeshSignature(
   laneLines: boolean,
   shoulders: boolean,
   groundSignature: string | null,
+  heightSamplerSignature: unknown,
 ): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
@@ -524,6 +525,7 @@ function computeRoadDynamicMeshSignature(
     Boolean(laneLines),
     Boolean(shoulders),
     typeof groundSignature === 'string' ? groundSignature : null,
+    heightSamplerSignature ?? null,
   ])
   return hashString(serialized)
 }
@@ -685,6 +687,9 @@ function smoothRoadCenterlineXZ(definition: RoadDynamicMesh, options: { pinnedIn
       const avgX = (v0[0] + v1[0]) * 0.5
       const avgZ = (v0[1] + v1[1]) * 0.5
       const cur = working[index]
+      if (!cur) {
+        continue
+      }
       next[index] = [cur[0] + (avgX - cur[0]) * alpha, cur[1] + (avgZ - cur[1]) * alpha]
     }
     working = next
@@ -1923,7 +1928,7 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
-const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+const instancedLodFrustumCuller: InstancedBvhFrustumCuller = createInstancedBvhFrustumCuller()
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
 
@@ -7591,6 +7596,13 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       materialConfigId,
       heightSampler: null,
     }
+
+    const groundNode = findGroundNodeInTree(sceneStore.nodes)
+    const heightSamplerSignature = {
+      roadPosition: node.position ?? null,
+      roadRotation: node.rotation ?? null,
+      groundPosition: groundNode?.position ?? null,
+    }
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
       roadGroup = createRoadGroup(roadDefinition, roadOptions)
@@ -7602,6 +7614,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       object.add(roadGroup)
       userData.roadGroup = roadGroup
@@ -7614,6 +7627,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateRoadGroup(roadGroup, roadDefinition, roadOptions)
@@ -8275,6 +8289,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         materialConfigId,
         heightSampler: null,
       }
+
+      const groundNode = findGroundNodeInTree(sceneStore.nodes)
+      const heightSamplerSignature = {
+        roadPosition: node.position ?? null,
+        roadRotation: node.rotation ?? null,
+        groundPosition: groundNode?.position ?? null,
+      }
       const roadGroup = createRoadGroup(roadDefinition, roadOptions)
       roadGroup.removeFromParent()
       roadGroup.userData.nodeId = node.id
@@ -8285,6 +8306,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
