@@ -22,8 +22,15 @@ function isAligned(coord: number, spacing: number): boolean {
   return distance < Math.max(spacing * 0.01, 1e-3)
 }
 
+export type TerrainGridVisibleRange = {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
 // 根据地形定义构建细线和粗线的顶点数组，用于后续 BufferGeometry。
-function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
+function buildGridSegments(definition: GroundDynamicMesh, visibleRange?: TerrainGridVisibleRange | null): SegmentBuffers {
   const columns = Math.max(1, Math.floor(definition.columns))
   const rows = Math.max(1, Math.floor(definition.rows))
   const cellSize = Math.max(1e-4, definition.cellSize)
@@ -33,6 +40,17 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
   const halfDepth = depth * 0.5
   const stepX = columns > 0 ? width / columns : 0
   const stepZ = rows > 0 ? depth / rows : 0
+
+  const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
+  const minRow = visibleRange ? clampInt(visibleRange.minRow, 0, rows) : 0
+  const maxRow = visibleRange ? clampInt(visibleRange.maxRow, 0, rows) : rows
+  const minColumn = visibleRange ? clampInt(visibleRange.minColumn, 0, columns) : 0
+  const maxColumn = visibleRange ? clampInt(visibleRange.maxColumn, 0, columns) : columns
+  const cellColumns = Math.max(0, maxColumn - minColumn)
+  const cellRows = Math.max(0, maxRow - minRow)
+  if (cellColumns === 0 || cellRows === 0) {
+    return { minor: new Float32Array(0), major: new Float32Array(0) }
+  }
 
   // 预计算每个网格点的世界坐标（避免在巨量循环里重复做加乘）。
   const xCoords = new Float32Array(columns + 1)
@@ -75,7 +93,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
   const majorColumns: number[] = []
   const minorColumns: number[] = []
 
-  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+  for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
     const z = zCoords[rowIndex]!
     if (isAligned(z, GRID_MAJOR_SPACING)) {
       majorRows.push(rowIndex)
@@ -84,7 +102,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
     }
   }
 
-  for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+  for (let columnIndex = minColumn; columnIndex <= maxColumn; columnIndex += 1) {
     const x = xCoords[columnIndex]!
     if (isAligned(x, GRID_MAJOR_SPACING)) {
       majorColumns.push(columnIndex)
@@ -93,8 +111,8 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
     }
   }
 
-  const majorSegmentCount = majorRows.length * columns + majorColumns.length * rows
-  const minorSegmentCount = minorRows.length * columns + minorColumns.length * rows
+  const majorSegmentCount = majorRows.length * cellColumns + majorColumns.length * cellRows
+  const minorSegmentCount = minorRows.length * cellColumns + minorColumns.length * cellRows
   const major = new Float32Array(majorSegmentCount * 6)
   const minor = new Float32Array(minorSegmentCount * 6)
 
@@ -124,7 +142,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
     const rowIndex = majorRows[i]!
     const z = zCoords[rowIndex]!
     const base = rowIndex * stride
-    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+    for (let columnIndex = minColumn; columnIndex < maxColumn; columnIndex += 1) {
       const ax = xCoords[columnIndex]!
       const bx = xCoords[columnIndex + 1]!
       const ay = heightGrid[base + columnIndex]! + LINE_OFFSET
@@ -138,7 +156,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
     const rowIndex = minorRows[i]!
     const z = zCoords[rowIndex]!
     const base = rowIndex * stride
-    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+    for (let columnIndex = minColumn; columnIndex < maxColumn; columnIndex += 1) {
       const ax = xCoords[columnIndex]!
       const bx = xCoords[columnIndex + 1]!
       const ay = heightGrid[base + columnIndex]! + LINE_OFFSET
@@ -152,7 +170,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
   for (let i = 0; i < majorColumns.length; i += 1) {
     const columnIndex = majorColumns[i]!
     const x = xCoords[columnIndex]!
-    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    for (let rowIndex = minRow; rowIndex < maxRow; rowIndex += 1) {
       const az = zCoords[rowIndex]!
       const bz = zCoords[rowIndex + 1]!
       const ay = heightGrid[rowIndex * stride + columnIndex]! + LINE_OFFSET
@@ -165,7 +183,7 @@ function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
   for (let i = 0; i < minorColumns.length; i += 1) {
     const columnIndex = minorColumns[i]!
     const x = xCoords[columnIndex]!
-    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    for (let rowIndex = minRow; rowIndex < maxRow; rowIndex += 1) {
       const az = zCoords[rowIndex]!
       const bz = zCoords[rowIndex + 1]!
       const ay = heightGrid[rowIndex * stride + columnIndex]! + LINE_OFFSET
@@ -202,23 +220,241 @@ function createLineSegments(positions: Float32Array, material: THREE.LineBasicMa
 
 type SegmentBuffers = { minor: Float32Array; major: Float32Array }
 
+type TerrainGridBuildRequest = {
+  kind: 'build-terrain-grid'
+  requestId: number
+  columns: number
+  rows: number
+  cellSize: number
+  width: number
+  depth: number
+  majorSpacing: number
+  minorSpacing: number
+  lineOffset: number
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  heightIndices: ArrayBuffer
+  heightValues: ArrayBuffer
+  heightEntryCount: number
+}
+
+type TerrainGridBuildResponse = {
+  kind: 'build-terrain-grid-result'
+  requestId: number
+  minor: ArrayBuffer
+  major: ArrayBuffer
+  error?: string
+}
+
 export class TerrainGridHelper extends THREE.Object3D {
   private minorLines: THREE.LineSegments | null = null
   private majorLines: THREE.LineSegments | null = null
   private minorMaterial = createLineMaterial(MINOR_COLOR, MINOR_LINE_WIDTH)
   private majorMaterial = createLineMaterial(MAJOR_COLOR, MAJOR_LINE_WIDTH)
   private signature: string | null = null
+  private pendingSignature: string | null = null
   private segmentCache = new Map<string, SegmentBuffers>()
+
+  private gridWorker: Worker | null = null
+  private gridRequestId = 0
+  private gridJobToken = 0
+  private pendingGridRequests = new Map<
+    number,
+    {
+      resolve: (response: TerrainGridBuildResponse) => void
+      reject: (error: Error) => void
+    }
+  >()
 
   constructor() {
     super()
     this.name = 'TerrainGridHelper'
   }
 
+  private getGridWorker(): Worker | null {
+    if (typeof Worker === 'undefined') {
+      return null
+    }
+    if (this.gridWorker) {
+      return this.gridWorker
+    }
+    try {
+      this.gridWorker = new Worker(new URL('@/workers/terrainGrid.worker.ts', import.meta.url), { type: 'module' })
+      this.gridWorker.onmessage = (event: MessageEvent<TerrainGridBuildResponse>) => {
+        const data = event.data
+        if (!data || data.kind !== 'build-terrain-grid-result') {
+          return
+        }
+        const pending = this.pendingGridRequests.get(data.requestId)
+        if (!pending) {
+          return
+        }
+        this.pendingGridRequests.delete(data.requestId)
+        pending.resolve(data)
+      }
+      this.gridWorker.onerror = (event) => {
+        console.warn('地形网格 Worker 出错：', event)
+      }
+      return this.gridWorker
+    } catch (error) {
+      console.warn('无法初始化地形网格 Worker，将回退到主线程生成：', error)
+      this.gridWorker = null
+      return null
+    }
+  }
+
+  private cancelPendingGridRequests(reason: string) {
+    for (const pending of this.pendingGridRequests.values()) {
+      pending.reject(new Error(reason))
+    }
+    this.pendingGridRequests.clear()
+  }
+
+  private resetGridWorker(reason: string) {
+    if (this.gridWorker) {
+      this.gridWorker.terminate()
+      this.gridWorker = null
+    }
+    this.cancelPendingGridRequests(reason)
+  }
+
+  private createHeightTransfer(definition: GroundDynamicMesh, rows: number, columns: number) {
+    const mapped = definition.heightMap ?? {}
+    const stride = columns + 1
+    const keys = Object.keys(mapped)
+    const heightIndices = new Uint32Array(keys.length)
+    const heightValues = new Float32Array(keys.length)
+    let count = 0
+    for (const key of keys) {
+      const value = mapped[key]
+      if (typeof value !== 'number') {
+        continue
+      }
+      const sepIndex = key.indexOf(':')
+      if (sepIndex <= 0) {
+        continue
+      }
+      const rowIndex = Number(key.slice(0, sepIndex))
+      const columnIndex = Number(key.slice(sepIndex + 1))
+      if (!Number.isFinite(rowIndex) || !Number.isFinite(columnIndex)) {
+        continue
+      }
+      if (rowIndex < 0 || rowIndex > rows || columnIndex < 0 || columnIndex > columns) {
+        continue
+      }
+      heightIndices[count] = rowIndex * stride + columnIndex
+      heightValues[count] = value
+      count += 1
+    }
+    return {
+      heightIndices,
+      heightValues,
+      heightEntryCount: count,
+    }
+  }
+
+  private async buildSegmentsAsync(
+    definition: GroundDynamicMesh,
+    cacheKey: string | null,
+    visibleRange?: TerrainGridVisibleRange | null,
+  ) {
+    // 每次开始一个新任务时都让旧任务失效（避免 worker 排队导致 CPU 被占满）。
+    const jobToken = (this.gridJobToken += 1)
+    this.resetGridWorker('replaced-by-new-request')
+    const worker = this.getGridWorker()
+    if (!worker) {
+      // Worker 不可用，回退到主线程（仍然可能很慢，但保证功能可用）。
+      const buffers = buildGridSegments(definition, visibleRange)
+      if (cacheKey) {
+        this.segmentCache.set(cacheKey, buffers)
+      }
+      if (jobToken !== this.gridJobToken || this.pendingSignature !== cacheKey) {
+        return
+      }
+      this.signature = cacheKey
+      this.pendingSignature = null
+      this.replaceLines(buffers.minor, this.minorLines, this.minorMaterial, (instance) => {
+        this.minorLines = instance
+      })
+      this.replaceLines(buffers.major, this.majorLines, this.majorMaterial, (instance) => {
+        this.majorLines = instance
+      })
+      this.setVisible(true)
+      return
+    }
+
+    const columns = Math.max(1, Math.floor(definition.columns))
+    const rows = Math.max(1, Math.floor(definition.rows))
+    const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
+    const minRow = visibleRange ? clampInt(visibleRange.minRow, 0, rows) : 0
+    const maxRow = visibleRange ? clampInt(visibleRange.maxRow, 0, rows) : rows
+    const minColumn = visibleRange ? clampInt(visibleRange.minColumn, 0, columns) : 0
+    const maxColumn = visibleRange ? clampInt(visibleRange.maxColumn, 0, columns) : columns
+    const transfer = this.createHeightTransfer(definition, rows, columns)
+    const requestId = (this.gridRequestId += 1)
+    const request: TerrainGridBuildRequest = {
+      kind: 'build-terrain-grid',
+      requestId,
+      columns: definition.columns,
+      rows: definition.rows,
+      cellSize: definition.cellSize,
+      width: definition.width,
+      depth: definition.depth,
+      majorSpacing: GRID_MAJOR_SPACING,
+      minorSpacing: GRID_MINOR_SPACING,
+      lineOffset: LINE_OFFSET,
+      minRow,
+      maxRow,
+      minColumn,
+      maxColumn,
+      heightIndices: transfer.heightIndices.buffer as ArrayBuffer,
+      heightValues: transfer.heightValues.buffer as ArrayBuffer,
+      heightEntryCount: transfer.heightEntryCount,
+    }
+
+    const responsePromise = new Promise<TerrainGridBuildResponse>((resolve, reject) => {
+      this.pendingGridRequests.set(requestId, { resolve, reject })
+      try {
+        worker.postMessage(request, [request.heightIndices, request.heightValues])
+      } catch (error) {
+        this.pendingGridRequests.delete(requestId)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+
+    const response = await responsePromise
+    if (jobToken !== this.gridJobToken || this.pendingSignature !== cacheKey) {
+      return
+    }
+    if (response.error) {
+      throw new Error(response.error)
+    }
+
+    const buffers: SegmentBuffers = {
+      minor: new Float32Array(response.minor),
+      major: new Float32Array(response.major),
+    }
+    if (cacheKey) {
+      this.segmentCache.set(cacheKey, buffers)
+    }
+    this.signature = cacheKey
+    this.pendingSignature = null
+    this.replaceLines(buffers.minor, this.minorLines, this.minorMaterial, (instance) => {
+      this.minorLines = instance
+    })
+    this.replaceLines(buffers.major, this.majorLines, this.majorMaterial, (instance) => {
+      this.majorLines = instance
+    })
+    this.setVisible(true)
+  }
+
   // 根据传入签名决定是否重建网格，仅在数据变化时更新时间开销较大的网格几何。
-  update(definition: GroundDynamicMesh | null, nextSignature: string | null) {
+  update(definition: GroundDynamicMesh | null, nextSignature: string | null, visibleRange?: TerrainGridVisibleRange | null) {
     if (!definition) {
       this.signature = null
+      this.pendingSignature = null
       this.setVisible(false)
       return
     }
@@ -228,10 +464,16 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
+    if (nextSignature && nextSignature === this.pendingSignature) {
+      this.setVisible(true)
+      return
+    }
+
     const cacheKey = nextSignature ?? null
     const cached = cacheKey ? this.segmentCache.get(cacheKey) : null
     if (cached) {
       this.signature = cacheKey
+      this.pendingSignature = null
       this.replaceLines(cached.minor, this.minorLines, this.minorMaterial, (instance) => {
         this.minorLines = instance
       })
@@ -242,21 +484,20 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
-    this.signature = cacheKey
-    const { minor: minorBuffer, major: majorBuffer } = buildGridSegments(definition)
-    if (cacheKey) {
-      this.segmentCache.set(cacheKey, { minor: minorBuffer, major: majorBuffer })
-    }
-    this.replaceLines(minorBuffer, this.minorLines, this.minorMaterial, (instance) => {
-      this.minorLines = instance
-    })
-    this.replaceLines(majorBuffer, this.majorLines, this.majorMaterial, (instance) => {
-      this.majorLines = instance
+    this.pendingSignature = cacheKey
+    this.setVisible(true)
+    this.buildSegmentsAsync(definition, cacheKey, visibleRange).catch((error) => {
+      // 异步失败不应打断编辑器；仅记录，后续更新会重试。
+      console.warn('生成地形网格失败：', error)
+      if (this.pendingSignature === cacheKey) {
+        this.pendingSignature = null
+      }
     })
   }
 
   // 释放所有资源，避免内存或 GPU 泄漏。
   dispose() {
+    this.resetGridWorker('disposed')
     this.minorLines?.geometry.dispose()
     this.majorLines?.geometry.dispose()
     this.minorLines?.removeFromParent()

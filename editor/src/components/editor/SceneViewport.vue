@@ -96,7 +96,7 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { TerrainGridHelper } from './TerrainGridHelper'
+import { TerrainGridHelper, type TerrainGridVisibleRange } from './TerrainGridHelper'
 import { createWallPreviewRenderer } from './WallPreviewRenderer'
 import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
 import { createFloorBuildTool } from './FloorBuildTool'
@@ -2638,6 +2638,19 @@ function shouldDeferSceneGraphSync(): boolean {
 const terrainGridHelper = new TerrainGridHelper()
 terrainGridHelper.name = 'TerrainGridHelper'
 
+const TERRAIN_GRID_BLOCK_CELLS = 64
+const TERRAIN_GRID_BLOCK_PADDING = 1
+const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 120
+const terrainGridRay = new THREE.Ray()
+const terrainGridPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const terrainGridTempPoint = new THREE.Vector3()
+const terrainGridTempDir = new THREE.Vector3()
+const terrainGridNdcPoint = new THREE.Vector3()
+let terrainGridBaseSignature: string | null = null
+let terrainGridBaseDefinition: GroundDynamicMesh | null = null
+let terrainGridCameraDirty = false
+let lastTerrainGridCameraRefresh = 0
+
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
 
@@ -2664,10 +2677,115 @@ function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
   return null
 }
 
+function computeTerrainGridVisibleRange(definition: GroundDynamicMesh, currentCamera: THREE.Camera): TerrainGridVisibleRange | null {
+  const columns = Math.max(1, Math.floor(definition.columns))
+  const rows = Math.max(1, Math.floor(definition.rows))
+  const cellSize = Math.max(1e-4, definition.cellSize)
+  const width = Math.max(Math.abs(definition.width), columns * cellSize)
+  const depth = Math.max(Math.abs(definition.depth), rows * cellSize)
+  const halfWidth = width * 0.5
+  const halfDepth = depth * 0.5
+  const stepX = columns > 0 ? width / columns : 0
+  const stepZ = rows > 0 ? depth / rows : 0
+  if (stepX <= 0 || stepZ <= 0) {
+    return null
+  }
+
+  const points: THREE.Vector3[] = []
+  const intersectNdc = (x: number, y: number) => {
+    if ((currentCamera as any).isOrthographicCamera) {
+      terrainGridNdcPoint.set(x, y, -1)
+      const origin = terrainGridNdcPoint.unproject(currentCamera)
+      currentCamera.getWorldDirection(terrainGridTempDir)
+      terrainGridRay.set(origin, terrainGridTempDir)
+    } else {
+      terrainGridNdcPoint.set(x, y, 0.5)
+      const worldPoint = terrainGridNdcPoint.unproject(currentCamera)
+      const origin = currentCamera.position
+      terrainGridTempDir.copy(worldPoint).sub(origin).normalize()
+      terrainGridRay.set(origin, terrainGridTempDir)
+    }
+
+    const hit = terrainGridRay.intersectPlane(terrainGridPlane, terrainGridTempPoint)
+    if (hit && Number.isFinite(hit.x) && Number.isFinite(hit.z)) {
+      points.push(hit.clone())
+    }
+  }
+
+  // 用视口四角的射线与 y=0 平面求交，得到一个近似可见的 XZ 包围盒。
+  intersectNdc(-1, -1)
+  intersectNdc(1, -1)
+  intersectNdc(-1, 1)
+  intersectNdc(1, 1)
+  if (points.length < 2) {
+    return null
+  }
+
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const p of points) {
+    minX = Math.min(minX, p.x)
+    maxX = Math.max(maxX, p.x)
+    minZ = Math.min(minZ, p.z)
+    maxZ = Math.max(maxZ, p.z)
+  }
+
+  const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)))
+  const rawMinColumn = Math.floor((minX + halfWidth) / stepX)
+  const rawMaxColumn = Math.ceil((maxX + halfWidth) / stepX)
+  const rawMinRow = Math.floor((minZ + halfDepth) / stepZ)
+  const rawMaxRow = Math.ceil((maxZ + halfDepth) / stepZ)
+
+  const minColumn = clampInt(rawMinColumn, 0, columns)
+  const maxColumn = clampInt(rawMaxColumn, 0, columns)
+  const minRow = clampInt(rawMinRow, 0, rows)
+  const maxRow = clampInt(rawMaxRow, 0, rows)
+
+  if (maxColumn - minColumn <= 0 || maxRow - minRow <= 0) {
+    return null
+  }
+
+  // 分块量化：把视野范围对齐到固定 cell 块，减少相机轻微移动时的重算。
+  const block = TERRAIN_GRID_BLOCK_CELLS
+  const pad = TERRAIN_GRID_BLOCK_PADDING
+  const minBlockColumn = Math.floor(minColumn / block)
+  const maxBlockColumn = Math.floor(maxColumn / block)
+  const minBlockRow = Math.floor(minRow / block)
+  const maxBlockRow = Math.floor(maxRow / block)
+
+  const qMinColumn = Math.max(0, (minBlockColumn - pad) * block)
+  const qMaxColumn = Math.min(columns, (maxBlockColumn + pad + 1) * block)
+  const qMinRow = Math.max(0, (minBlockRow - pad) * block)
+  const qMaxRow = Math.min(rows, (maxBlockRow + pad + 1) * block)
+
+  if (qMaxColumn - qMinColumn <= 0 || qMaxRow - qMinRow <= 0) {
+    return null
+  }
+
+  return { minRow: qMinRow, maxRow: qMaxRow, minColumn: qMinColumn, maxColumn: qMaxColumn }
+}
+
+function refreshTerrainGridHelperWithCamera() {
+  const definition = terrainGridBaseDefinition
+  if (!definition) {
+    terrainGridHelper.update(null, null)
+    return
+  }
+  const baseSignature = terrainGridBaseSignature ?? computeGroundDynamicMeshSignature(definition)
+  const range = camera ? computeTerrainGridVisibleRange(definition, camera) : null
+  const signature = range
+    ? `${baseSignature}|view:${range.minRow}-${range.maxRow}:${range.minColumn}-${range.maxColumn}`
+    : baseSignature
+  terrainGridHelper.update(definition, signature, range)
+}
+
 function refreshTerrainGridHelper() {
   const definition = resolveGroundDynamicMeshDefinition()
-  const signature = definition ? computeGroundDynamicMeshSignature(definition) : null
-  terrainGridHelper.update(definition, signature)
+  terrainGridBaseDefinition = definition
+  terrainGridBaseSignature = definition ? computeGroundDynamicMeshSignature(definition) : null
+  refreshTerrainGridHelperWithCamera()
 }
 
 const dragPreviewGroup = new THREE.Group()
@@ -3362,6 +3480,7 @@ function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
 
   gizmoControls?.cameraUpdate()
+  terrainGridCameraDirty = true
 }
 
 function applyCameraControlMode(mode: CameraControlMode) {
@@ -4233,6 +4352,7 @@ function animate() {
     }
 
     controlsUpdated = true
+    terrainGridCameraDirty = true
 
     if (perspectiveCamera && camera !== perspectiveCamera) {
       perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
@@ -4250,6 +4370,15 @@ function animate() {
 
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
+  }
+
+  if (terrainGridCameraDirty) {
+    const now = performance.now()
+    if (now - lastTerrainGridCameraRefresh >= TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS) {
+      lastTerrainGridCameraRefresh = now
+      terrainGridCameraDirty = false
+      refreshTerrainGridHelperWithCamera()
+    }
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
