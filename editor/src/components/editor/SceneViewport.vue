@@ -514,6 +514,7 @@ function computeRoadDynamicMeshSignature(
   laneLines: boolean,
   shoulders: boolean,
   groundSignature: string | null,
+  heightSamplerSignature: unknown,
 ): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
@@ -524,6 +525,7 @@ function computeRoadDynamicMeshSignature(
     Boolean(laneLines),
     Boolean(shoulders),
     typeof groundSignature === 'string' ? groundSignature : null,
+    heightSamplerSignature ?? null,
   ])
   return hashString(serialized)
 }
@@ -569,14 +571,133 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
-  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? groundNode.dynamicMesh
+    : null
+
+  const originX = Number(node.position?.x ?? 0)
+  const originY = Number(node.position?.y ?? 0)
+  const originZ = Number(node.position?.z ?? 0)
+  const yaw = Number(node.rotation?.y ?? 0)
+  const cosYaw = Math.cos(yaw)
+  const sinYaw = Math.sin(yaw)
+
+  const groundOriginX = Number(groundNode?.position?.x ?? 0)
+  const groundOriginY = Number(groundNode?.position?.y ?? 0)
+  const groundOriginZ = Number(groundNode?.position?.z ?? 0)
   return {
     junctionSmoothing,
     laneLines,
     shoulders,
     materialConfigId,
-    heightSampler: groundDefinition ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, x, z)) : null,
+    // Road vertices are stored in the node's local XZ plane.
+    // When sampling terrain height we must convert local -> world (include yaw), then sample ground in its local XZ,
+    // then convert sampled world height -> road local Y.
+    heightSampler: groundDefinition
+      ? ((x: number, z: number) => {
+          const rotatedX = x * cosYaw - z * sinYaw
+          const rotatedZ = x * sinYaw + z * cosYaw
+          const worldX = originX + rotatedX
+          const worldZ = originZ + rotatedZ
+          const groundLocalX = worldX - groundOriginX
+          const groundLocalZ = worldZ - groundOriginZ
+          const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+          return groundWorldY - originY
+        })
+      : null,
   }
+}
+
+function smoothRoadCenterlineXZ(definition: RoadDynamicMesh, options: { pinnedIndex: number; iterations?: number; alpha?: number }): RoadDynamicMesh {
+  const pinnedIndex = Math.trunc(options.pinnedIndex)
+  const iterations = Math.max(0, Math.min(24, Math.trunc(options.iterations ?? 6)))
+  const alpha = Math.max(0, Math.min(1, Number.isFinite(options.alpha) ? (options.alpha as number) : 0.35))
+
+  const vertices = Array.isArray(definition.vertices)
+    ? definition.vertices.map((v) => [Number(v?.[0]) || 0, Number(v?.[1]) || 0] as [number, number])
+    : ([] as Array<[number, number]>)
+  if (pinnedIndex < 0 || pinnedIndex >= vertices.length || iterations <= 0 || alpha <= 0) {
+    return definition
+  }
+
+  // Build adjacency from segments.
+  const adjacency = new Map<number, number[]>()
+  const degree = new Map<number, number>()
+  const segments = Array.isArray(definition.segments) ? definition.segments : []
+  for (const s of segments) {
+    const a = Math.trunc(Number((s as any)?.a))
+    const b = Math.trunc(Number((s as any)?.b))
+    if (!(a >= 0 && b >= 0)) {
+      continue
+    }
+    if (a >= vertices.length || b >= vertices.length || a === b) {
+      continue
+    }
+    const aList = adjacency.get(a) ?? []
+    if (!aList.includes(b)) aList.push(b)
+    adjacency.set(a, aList)
+    const bList = adjacency.get(b) ?? []
+    if (!bList.includes(a)) bList.push(a)
+    adjacency.set(b, bList)
+  }
+
+  for (const [index, neighbors] of adjacency.entries()) {
+    degree.set(index, neighbors.length)
+  }
+
+  // Only smooth within the connected component of the pinned vertex.
+  const component = new Set<number>()
+  const queue: number[] = [pinnedIndex]
+  component.add(pinnedIndex)
+  while (queue.length) {
+    const current = queue.shift()!
+    const neighbors = adjacency.get(current) ?? []
+    for (const n of neighbors) {
+      if (!component.has(n)) {
+        component.add(n)
+        queue.push(n)
+      }
+    }
+  }
+
+  let working = vertices
+  for (let pass = 0; pass < iterations; pass += 1) {
+    const next = working.map((v) => [v[0], v[1]] as [number, number])
+    for (const index of component) {
+      if (index === pinnedIndex) {
+        continue
+      }
+      const deg = degree.get(index) ?? 0
+      // Keep endpoints (deg=1) and junctions (deg!=2) fixed to preserve branching topology.
+      if (deg !== 2) {
+        continue
+      }
+      const neighbors = adjacency.get(index) ?? []
+      const n0 = neighbors[0]
+      const n1 = neighbors[1]
+      if (n0 == null || n1 == null) {
+        continue
+      }
+      const v0 = working[n0]
+      const v1 = working[n1]
+      if (!v0 || !v1) {
+        continue
+      }
+      const avgX = (v0[0] + v1[0]) * 0.5
+      const avgZ = (v0[1] + v1[1]) * 0.5
+      const cur = working[index]
+      if (!cur) {
+        continue
+      }
+      next[index] = [cur[0] + (avgX - cur[0]) * alpha, cur[1] + (avgZ - cur[1]) * alpha]
+    }
+    working = next
+  }
+
+  const nextDef = JSON.parse(JSON.stringify(definition)) as RoadDynamicMesh
+  nextDef.vertices = working
+  return nextDef
 }
 
 function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
@@ -1529,6 +1650,7 @@ type RoadVertexDragState = {
   startX: number
   startY: number
   moved: boolean
+  startVertex: [number, number]
   containerObject: THREE.Object3D
   roadGroup: THREE.Object3D
   baseDefinition: RoadDynamicMesh
@@ -1812,7 +1934,7 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
-const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+const instancedLodFrustumCuller: InstancedBvhFrustumCuller = createInstancedBvhFrustumCuller()
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
 
@@ -5097,6 +5219,11 @@ async function handlePointerDown(event: PointerEvent) {
             event.stopImmediatePropagation()
             return
           }
+          const baseVertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+          const baseVertex = baseVertices[handleHit.vertexIndex]
+          const startVertex: [number, number] = Array.isArray(baseVertex) && baseVertex.length >= 2
+            ? [Number(baseVertex[0]) || 0, Number(baseVertex[1]) || 0]
+            : [0, 0]
           roadVertexDragState = {
             pointerId: event.pointerId,
             nodeId: handleHit.nodeId,
@@ -5104,6 +5231,7 @@ async function handlePointerDown(event: PointerEvent) {
             startX: event.clientX,
             startY: event.clientY,
             moved: false,
+            startVertex,
             containerObject: runtime,
             roadGroup: roadGroupCandidate,
             baseDefinition: node.dynamicMesh,
@@ -5311,15 +5439,42 @@ function handlePointerMove(event: PointerEvent) {
     vertices[state.vertexIndex] = [local.x, local.z]
     working.vertices = vertices
 
-    const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
-    updateRoadGroup(state.roadGroup, working, roadOptions)
+    // Smooth the entire centerline in XZ while keeping the dragged vertex pinned.
+    state.workingDefinition = smoothRoadCenterlineXZ(state.workingDefinition, {
+      pinnedIndex: state.vertexIndex,
+      iterations: 6,
+      alpha: 0.35,
+    })
 
-    // Update handle mesh position if present.
+    // Treat any actual geometry change as a drag (prevents tiny mouse movement from being interpreted as a click -> branch).
+    const [startVX, startVZ] = state.startVertex
+    if (!state.moved) {
+      const ddx = local.x - startVX
+      const ddz = local.z - startVZ
+      if (ddx * ddx + ddz * ddz > 1e-8) {
+        state.moved = true
+      }
+    }
+
+    const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
+    updateRoadGroup(state.roadGroup, state.workingDefinition, roadOptions)
+
+    // Update all handle mesh positions if present (smoothing adjusts the whole path).
     const handles = state.containerObject.getObjectByName(ROAD_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
-      const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
-      if (mesh) {
-        mesh.position.set(local.x, ROAD_VERTEX_HANDLE_Y, local.z)
+      const nextVertices = Array.isArray(state.workingDefinition.vertices) ? state.workingDefinition.vertices : []
+      for (const child of handles.children) {
+        const index = Math.trunc(Number(child?.userData?.roadVertexIndex))
+        const v = nextVertices[index]
+        if (!Array.isArray(v) || v.length < 2) {
+          continue
+        }
+        const x = Number(v[0])
+        const z = Number(v[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          continue
+        }
+        child.position.set(x, ROAD_VERTEX_HANDLE_Y, z)
       }
     }
     return
@@ -5514,6 +5669,22 @@ function handlePointerUp(event: PointerEvent) {
       event.stopPropagation()
       event.stopImmediatePropagation()
       return
+    }
+
+    // No drag: ensure any preview mutations are reverted before treating this as a click.
+    try {
+      const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
+      updateRoadGroup(state.roadGroup, state.baseDefinition, roadOptions)
+      const handles = state.containerObject.getObjectByName(ROAD_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
+        if (mesh) {
+          const [vx, vz] = state.startVertex
+          mesh.position.set(vx, ROAD_VERTEX_HANDLE_Y, vz)
+        }
+      }
+    } catch {
+      /* noop */
     }
 
     // Click (no drag): start a branch build session from this vertex.
@@ -5750,6 +5921,32 @@ function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
+    const state = roadVertexDragState
+    roadVertexDragState = null
+    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+      canvasRef.value.releasePointerCapture(event.pointerId)
+    }
+    try {
+      const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
+      updateRoadGroup(state.roadGroup, state.baseDefinition, roadOptions)
+      const handles = state.containerObject.getObjectByName(ROAD_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
+        if (mesh) {
+          const [vx, vz] = state.startVertex
+          mesh.position.set(vx, ROAD_VERTEX_HANDLE_Y, vz)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (finalizeContinuousInstancedCreate(event, true)) {
     event.preventDefault()
     event.stopPropagation()
@@ -7407,12 +7604,19 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const materialConfigId = resolveRoadMaterialConfigId(node)
     const groundDefinition = resolveGroundDynamicMeshDefinition()
     const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
-    const roadOptions = {
+    const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
       junctionSmoothing,
       laneLines,
       shoulders,
       materialConfigId,
-      heightSampler: groundDefinition ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, x, z)) : null,
+      heightSampler: null,
+    }
+
+    const groundNode = findGroundNodeInTree(sceneStore.nodes)
+    const heightSamplerSignature = {
+      roadPosition: node.position ?? null,
+      roadRotation: node.rotation ?? null,
+      groundPosition: groundNode?.position ?? null,
     }
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
@@ -7425,6 +7629,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       object.add(roadGroup)
       userData.roadGroup = roadGroup
@@ -7437,6 +7642,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateRoadGroup(roadGroup, roadDefinition, roadOptions)
@@ -8091,13 +8297,21 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const materialConfigId = resolveRoadMaterialConfigId(node)
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
-      const roadGroup = createRoadGroup(roadDefinition, {
+      const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
         junctionSmoothing,
         laneLines,
         shoulders,
         materialConfigId,
-        heightSampler: groundDefinition ? ((x: number, z: number) => sampleGroundHeight(groundDefinition, x, z)) : null,
-      })
+        heightSampler: null,
+      }
+
+      const groundNode = findGroundNodeInTree(sceneStore.nodes)
+      const heightSamplerSignature = {
+        roadPosition: node.position ?? null,
+        roadRotation: node.rotation ?? null,
+        groundPosition: groundNode?.position ?? null,
+      }
+      const roadGroup = createRoadGroup(roadDefinition, roadOptions)
       roadGroup.removeFromParent()
       roadGroup.userData.nodeId = node.id
       roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(
@@ -8107,6 +8321,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         laneLines,
         shoulders,
         groundSignature,
+        heightSamplerSignature,
       )
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
