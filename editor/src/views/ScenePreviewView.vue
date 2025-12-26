@@ -24,7 +24,7 @@ import {
  
 import {
 	applyMaterialOverrides,
-	disposeMaterialOverrides,
+	disposeMaterialTextures,
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { EnvironmentBackgroundMode } from '@/types/environment'
@@ -140,8 +140,8 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 	cullGraceMs: 300,
 	cullRadiusMultiplier: 1.2,
 	maxBindingChangesPerUpdate: 200,
-})
-const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+	
+});
 
 type ControlMode = 'first-person' | 'third-person'
 type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
@@ -5978,44 +5978,6 @@ function disposeMaterialTextureCache() {
 	materialTextureCache.forEach((texture) => texture.dispose?.())
 	materialTextureCache.clear()
 	pendingMaterialTextureRequests.clear()
-}
-
-type MeshStandardTextureKey =
-	| 'map'
-	| 'normalMap'
-	| 'metalnessMap'
-	| 'roughnessMap'
-	| 'aoMap'
-	| 'emissiveMap'
-	| 'displacementMap'
-
-const STANDARD_TEXTURE_KEYS: MeshStandardTextureKey[] = [
-	'map',
-	'normalMap',
-	'metalnessMap',
-	'roughnessMap',
-	'aoMap',
-	'emissiveMap',
-	'displacementMap',
-]
-
-function disposeMaterialTextures(material: THREE.Material | null | undefined) {
-	if (!material) {
-		return
-	}
-	disposeMaterialOverrides(material)
-	const standard = material as THREE.MeshStandardMaterial &
-		Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
-	const materialRecord = standard as unknown as Record<string, unknown>
-	STANDARD_TEXTURE_KEYS.forEach((key) => {
-		const texture = standard[key]
-		if (texture && typeof texture.dispose === 'function') {
-			texture.dispose()
-		}
-		if (key in standard) {
-			materialRecord[key] = null
-		}
-	})
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
