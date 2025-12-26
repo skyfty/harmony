@@ -15,13 +15,15 @@ function isAligned(coord: number, spacing: number): boolean {
   if (spacing <= 0) {
     return false
   }
-  const mod = Math.abs(coord) % spacing
-  const distance = Math.min(mod, spacing - mod)
+  // 使用四舍五入求最近格点距离，避免 `%` 在大循环里带来的额外开销。
+  // 同时对浮点误差更友好：coord 接近 n * spacing 时都能正确命中。
+  const nearest = Math.round(coord / spacing) * spacing
+  const distance = Math.abs(coord - nearest)
   return distance < Math.max(spacing * 0.01, 1e-3)
 }
 
 // 根据地形定义构建细线和粗线的顶点数组，用于后续 BufferGeometry。
-function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; major: number[] } {
+function buildGridSegments(definition: GroundDynamicMesh): SegmentBuffers {
   const columns = Math.max(1, Math.floor(definition.columns))
   const rows = Math.max(1, Math.floor(definition.rows))
   const cellSize = Math.max(1e-4, definition.cellSize)
@@ -32,71 +34,148 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
   const stepX = columns > 0 ? width / columns : 0
   const stepZ = rows > 0 ? depth / rows : 0
 
-  const minorSegments: number[] = []
-  const majorSegments: number[] = []
+  // 预计算每个网格点的世界坐标（避免在巨量循环里重复做加乘）。
+  const xCoords = new Float32Array(columns + 1)
+  const zCoords = new Float32Array(rows + 1)
+  for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+    xCoords[columnIndex] = -halfWidth + columnIndex * stepX
+  }
+  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+    zCoords[rowIndex] = -halfDepth + rowIndex * stepZ
+  }
 
-  // 将 heightMap 转成固定大小的二维缓冲，避免在热循环内构建字符串键。
-  const heightBuffer: Float32Array[] = Array.from({ length: rows + 2 }, () => new Float32Array(columns + 2))
+  // 将 heightMap 解析为紧凑的一维 Float32Array。
+  // 关键优化点：只遍历 heightMap 实际存在的条目，而不是 rows*columns 全量拼 key 查表。
+  const stride = columns + 1
+  const heightGrid = new Float32Array((rows + 1) * stride)
   const mapped = definition.heightMap ?? {}
-  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
-    const rowBuffer = heightBuffer[rowIndex]!
-    for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
-      const key = `${rowIndex}:${columnIndex}`
-      const value = mapped[key]
-      rowBuffer[columnIndex] = typeof value === 'number' ? value : 0
-    }
-  }
-
-  // 将一条线段的两端坐标追加到指定的数组中。
-  const pushSegment = (target: number[], ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
-    target.push(ax, ay, az, bx, by, bz)
-  }
-
-  // 选择该坐标属于主网格、次网格还是不绘制。
-  const classifyLine = (coord: number) => {
-    if (isAligned(coord, GRID_MAJOR_SPACING)) {
-      return majorSegments
-    }
-    if (isAligned(coord, GRID_MINOR_SPACING)) {
-      return minorSegments
-    }
-    return null
-  }
-
-  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
-    const z = -halfDepth + rowIndex * stepZ
-    const target = classifyLine(z)
-    if (!target) {
+  for (const key of Object.keys(mapped)) {
+    const value = mapped[key]
+    if (typeof value !== 'number') {
       continue
     }
-    const rowHeights = heightBuffer[rowIndex]!
-    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
-      const ax = -halfWidth + columnIndex * stepX
-      const bx = ax + stepX
-      const ay = rowHeights[columnIndex]! + LINE_OFFSET
-      const by = rowHeights[columnIndex + 1]! + LINE_OFFSET
-      pushSegment(target, ax, ay, z, bx, by, z)
+    const sepIndex = key.indexOf(':')
+    if (sepIndex <= 0) {
+      continue
+    }
+    const rowIndex = Number(key.slice(0, sepIndex))
+    const columnIndex = Number(key.slice(sepIndex + 1))
+    if (!Number.isFinite(rowIndex) || !Number.isFinite(columnIndex)) {
+      continue
+    }
+    if (rowIndex < 0 || rowIndex > rows || columnIndex < 0 || columnIndex > columns) {
+      continue
+    }
+    heightGrid[rowIndex * stride + columnIndex] = value
+  }
+
+  // 先收集需要绘制的行/列索引，避免后续循环里反复判断对齐。
+  const majorRows: number[] = []
+  const minorRows: number[] = []
+  const majorColumns: number[] = []
+  const minorColumns: number[] = []
+
+  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+    const z = zCoords[rowIndex]!
+    if (isAligned(z, GRID_MAJOR_SPACING)) {
+      majorRows.push(rowIndex)
+    } else if (isAligned(z, GRID_MINOR_SPACING)) {
+      minorRows.push(rowIndex)
     }
   }
 
   for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
-    const x = -halfWidth + columnIndex * stepX
-    const target = classifyLine(x)
-    if (!target) {
-      continue
-    }
-    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
-      const az = -halfDepth + rowIndex * stepZ
-      const bz = az + stepZ
-      const currentHeights = heightBuffer[rowIndex]!
-      const nextHeights = heightBuffer[rowIndex + 1]!
-      const ay = currentHeights[columnIndex]! + LINE_OFFSET
-      const by = nextHeights[columnIndex]! + LINE_OFFSET
-      pushSegment(target, x, ay, az, x, by, bz)
+    const x = xCoords[columnIndex]!
+    if (isAligned(x, GRID_MAJOR_SPACING)) {
+      majorColumns.push(columnIndex)
+    } else if (isAligned(x, GRID_MINOR_SPACING)) {
+      minorColumns.push(columnIndex)
     }
   }
 
-  return { minor: minorSegments, major: majorSegments }
+  const majorSegmentCount = majorRows.length * columns + majorColumns.length * rows
+  const minorSegmentCount = minorRows.length * columns + minorColumns.length * rows
+  const major = new Float32Array(majorSegmentCount * 6)
+  const minor = new Float32Array(minorSegmentCount * 6)
+
+  let majorOffset = 0
+  let minorOffset = 0
+
+  const writeSegment = (
+    target: Float32Array,
+    offset: number,
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+  ) => {
+    target[offset] = ax
+    target[offset + 1] = ay
+    target[offset + 2] = az
+    target[offset + 3] = bx
+    target[offset + 4] = by
+    target[offset + 5] = bz
+  }
+
+  // 水平线：固定 rowIndex，沿 X 方向按 cell 分段。
+  for (let i = 0; i < majorRows.length; i += 1) {
+    const rowIndex = majorRows[i]!
+    const z = zCoords[rowIndex]!
+    const base = rowIndex * stride
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const ax = xCoords[columnIndex]!
+      const bx = xCoords[columnIndex + 1]!
+      const ay = heightGrid[base + columnIndex]! + LINE_OFFSET
+      const by = heightGrid[base + columnIndex + 1]! + LINE_OFFSET
+      writeSegment(major, majorOffset, ax, ay, z, bx, by, z)
+      majorOffset += 6
+    }
+  }
+
+  for (let i = 0; i < minorRows.length; i += 1) {
+    const rowIndex = minorRows[i]!
+    const z = zCoords[rowIndex]!
+    const base = rowIndex * stride
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const ax = xCoords[columnIndex]!
+      const bx = xCoords[columnIndex + 1]!
+      const ay = heightGrid[base + columnIndex]! + LINE_OFFSET
+      const by = heightGrid[base + columnIndex + 1]! + LINE_OFFSET
+      writeSegment(minor, minorOffset, ax, ay, z, bx, by, z)
+      minorOffset += 6
+    }
+  }
+
+  // 垂直线：固定 columnIndex，沿 Z 方向按 cell 分段。
+  for (let i = 0; i < majorColumns.length; i += 1) {
+    const columnIndex = majorColumns[i]!
+    const x = xCoords[columnIndex]!
+    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+      const az = zCoords[rowIndex]!
+      const bz = zCoords[rowIndex + 1]!
+      const ay = heightGrid[rowIndex * stride + columnIndex]! + LINE_OFFSET
+      const by = heightGrid[(rowIndex + 1) * stride + columnIndex]! + LINE_OFFSET
+      writeSegment(major, majorOffset, x, ay, az, x, by, bz)
+      majorOffset += 6
+    }
+  }
+
+  for (let i = 0; i < minorColumns.length; i += 1) {
+    const columnIndex = minorColumns[i]!
+    const x = xCoords[columnIndex]!
+    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+      const az = zCoords[rowIndex]!
+      const bz = zCoords[rowIndex + 1]!
+      const ay = heightGrid[rowIndex * stride + columnIndex]! + LINE_OFFSET
+      const by = heightGrid[(rowIndex + 1) * stride + columnIndex]! + LINE_OFFSET
+      writeSegment(minor, minorOffset, x, ay, az, x, by, bz)
+      minorOffset += 6
+    }
+  }
+
+  return { minor, major }
 }
 
 // 创建一个简单的线材质，关闭深度写入以及色调映射以避免与地形冲突。
@@ -164,9 +243,7 @@ export class TerrainGridHelper extends THREE.Object3D {
     }
 
     this.signature = cacheKey
-    const { minor, major } = buildGridSegments(definition)
-    const minorBuffer = new Float32Array(minor)
-    const majorBuffer = new Float32Array(major)
+    const { minor: minorBuffer, major: majorBuffer } = buildGridSegments(definition)
     if (cacheKey) {
       this.segmentCache.set(cacheKey, { minor: minorBuffer, major: majorBuffer })
     }
