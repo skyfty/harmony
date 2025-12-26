@@ -10,7 +10,7 @@ export const WALL_DEFAULT_THICKNESS = 0.2
 export const WALL_MIN_HEIGHT = 0.5
 export const WALL_MIN_WIDTH = 0.1
 export const WALL_MIN_THICKNESS = 0.05
-export const WALL_DEFAULT_SMOOTHING = 0
+export const WALL_DEFAULT_SMOOTHING = 0.05
 
 export interface WallComponentProps {
   height: number

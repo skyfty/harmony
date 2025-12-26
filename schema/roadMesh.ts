@@ -13,6 +13,8 @@ export type RoadJunctionSmoothingOptions = {
   shoulders?: boolean
   /** Optional node material selector id (editor-defined). */
   materialConfigId?: string | null
+  /** Optional height sampler (world/local XZ -> height Y). When omitted, roads are built flat at y=0. */
+  heightSampler?: ((x: number, z: number) => number) | null
 }
 
 const DEFAULT_COLOR = 0x4b4f55
@@ -317,6 +319,8 @@ function buildOffsetStripGeometry(
   curve: THREE.Curve<THREE.Vector3>,
   width: number,
   offset: number,
+  heightSampler?: ((x: number, z: number) => number) | null,
+  yOffset = 0,
 ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= ROAD_EPSILON) {
@@ -330,7 +334,6 @@ function buildOffsetStripGeometry(
 
   const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
   const positions: number[] = []
-  const normals: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
 
@@ -356,8 +359,15 @@ function buildOffsetStripGeometry(
     left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
     right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
 
+    if (heightSampler) {
+      left.y = heightSampler(left.x, left.z) + yOffset
+      right.y = heightSampler(right.x, right.z) + yOffset
+    } else {
+      left.y = yOffset
+      right.y = yOffset
+    }
+
     positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
-    normals.push(0, 1, 0, 0, 1, 0)
     uvs.push(t, 0, t, 1)
 
     if (i < divisions) {
@@ -369,15 +379,20 @@ function buildOffsetStripGeometry(
   const geometry = new THREE.BufferGeometry()
   geometry.setIndex(indices)
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
 }
 
-function buildRoadStripGeometry(curve: THREE.Curve<THREE.Vector3>, width: number): THREE.BufferGeometry | null {
-  return buildOffsetStripGeometry(curve, width, 0)
+function buildRoadStripGeometry(
+  curve: THREE.Curve<THREE.Vector3>,
+  width: number,
+  heightSampler?: ((x: number, z: number) => number) | null,
+  yOffset = 0,
+): THREE.BufferGeometry | null {
+  return buildOffsetStripGeometry(curve, width, 0, heightSampler, yOffset)
 }
 
 function buildMultiCurveGeometry(
@@ -403,8 +418,10 @@ function buildOverlayGeometry(
   curves: RoadCurveDescriptor[],
   width: number,
   offset: number,
+  heightSampler?: ((x: number, z: number) => number) | null,
+  yOffset = 0,
 ): THREE.BufferGeometry | null {
-  return buildMultiCurveGeometry(curves, (curve) => buildOffsetStripGeometry(curve, width, offset))
+  return buildMultiCurveGeometry(curves, (curve) => buildOffsetStripGeometry(curve, width, offset, heightSampler, yOffset))
 }
 
 function buildDashedCurveSegments(
@@ -412,6 +429,8 @@ function buildDashedCurveSegments(
   width: number,
   dashLength: number,
   gapLength: number,
+  heightSampler?: ((x: number, z: number) => number) | null,
+  yOffset = 0,
 ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= ROAD_EPSILON) {
@@ -419,7 +438,6 @@ function buildDashedCurveSegments(
   }
 
   const positions: number[] = []
-  const normals: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
 
@@ -456,6 +474,18 @@ function buildDashedCurveSegments(
     leftEnd.copy(endPoint).addScaledVector(lateral, halfWidth)
     rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
 
+    if (heightSampler) {
+      leftStart.y = heightSampler(leftStart.x, leftStart.z) + yOffset
+      rightStart.y = heightSampler(rightStart.x, rightStart.z) + yOffset
+      leftEnd.y = heightSampler(leftEnd.x, leftEnd.z) + yOffset
+      rightEnd.y = heightSampler(rightEnd.x, rightEnd.z) + yOffset
+    } else {
+      leftStart.y = yOffset
+      rightStart.y = yOffset
+      leftEnd.y = yOffset
+      rightEnd.y = yOffset
+    }
+
     const base = segmentIndex * 4
     positions.push(
       leftStart.x,
@@ -471,8 +501,6 @@ function buildDashedCurveSegments(
       rightEnd.y,
       rightEnd.z,
     )
-
-    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0)
     uvs.push(0, 0, 1, 0, 0, 1, 1, 1)
 
     indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
@@ -490,8 +518,8 @@ function buildDashedCurveSegments(
   const geometry = new THREE.BufferGeometry()
   geometry.setIndex(indices)
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
@@ -500,6 +528,8 @@ function buildDashedCurveSegments(
 function buildLaneLineGeometry(
   curves: RoadCurveDescriptor[],
   width: number,
+  heightSampler?: ((x: number, z: number) => number) | null,
+  yOffset = 0,
 ): THREE.BufferGeometry | null {
   const geometries: THREE.BufferGeometry[] = []
   for (const descriptor of curves) {
@@ -508,6 +538,8 @@ function buildLaneLineGeometry(
       width,
       ROAD_LANE_LINE_DASH_LENGTH,
       ROAD_LANE_LINE_GAP_LENGTH,
+      heightSampler,
+      yOffset,
     )
     if (geometry) {
       geometries.push(geometry)
@@ -536,7 +568,11 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     return
   }
 
-  const roadGeometry = buildMultiCurveGeometry(curves, (curve) => buildRoadStripGeometry(curve, width))
+  const heightSampler = typeof options.heightSampler === 'function' ? options.heightSampler : null
+
+  const roadGeometry = buildMultiCurveGeometry(curves, (curve) =>
+    buildRoadStripGeometry(curve, width, heightSampler, ROAD_SURFACE_Y_OFFSET),
+  )
   if (!roadGeometry) {
     return
   }
@@ -550,11 +586,23 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   if (options.shoulders) {
     const shoulderOffset = width * 0.5 + ROAD_SHOULDER_GAP + ROAD_SHOULDER_WIDTH * 0.5
     const shoulderGeometries: THREE.BufferGeometry[] = []
-    const leftShoulder = buildOverlayGeometry(curves, ROAD_SHOULDER_WIDTH, shoulderOffset)
+    const leftShoulder = buildOverlayGeometry(
+      curves,
+      ROAD_SHOULDER_WIDTH,
+      shoulderOffset,
+      heightSampler,
+      ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y,
+    )
     if (leftShoulder) {
       shoulderGeometries.push(leftShoulder)
     }
-    const rightShoulder = buildOverlayGeometry(curves, ROAD_SHOULDER_WIDTH, -shoulderOffset)
+    const rightShoulder = buildOverlayGeometry(
+      curves,
+      ROAD_SHOULDER_WIDTH,
+      -shoulderOffset,
+      heightSampler,
+      ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y,
+    )
     if (rightShoulder) {
       shoulderGeometries.push(rightShoulder)
     }
@@ -564,7 +612,6 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       if (mergedShoulder) {
         const shoulderMesh = new THREE.Mesh(mergedShoulder, createShoulderMaterial())
         shoulderMesh.name = 'RoadShoulders'
-        shoulderMesh.position.y = ROAD_SHOULDER_OFFSET_Y
         shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
       }
@@ -576,11 +623,15 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       ROAD_OVERLAY_MIN_WIDTH * 3,
       Math.min(ROAD_LANE_LINE_WIDTH, width * 0.12 + ROAD_OVERLAY_MIN_WIDTH),
     )
-    const laneGeometry = buildLaneLineGeometry(curves, laneLineWidth)
+    const laneGeometry = buildLaneLineGeometry(
+      curves,
+      laneLineWidth,
+      heightSampler,
+      ROAD_SURFACE_Y_OFFSET + ROAD_LANE_LINE_OFFSET_Y,
+    )
     if (laneGeometry) {
       const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
       laneMesh.name = 'RoadLaneLines'
-      laneMesh.position.y = ROAD_LANE_LINE_OFFSET_Y
       laneMesh.renderOrder = 1000
       laneMesh.userData.overrideMaterial = true
       group.add(laneMesh)
@@ -599,7 +650,6 @@ function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
 
   const content = new THREE.Group()
   content.name = '__RoadContent'
-  content.position.y = ROAD_SURFACE_Y_OFFSET
   root.add(content)
   return content
 }

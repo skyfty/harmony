@@ -171,7 +171,11 @@ function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.V
   return { center, definition }
 }
 
-export function createRoadPreviewRenderer(options: { rootGroup: THREE.Group }): RoadPreviewRenderer {
+export function createRoadPreviewRenderer(options: {
+  rootGroup: THREE.Group
+  /** Optional sampler in world XZ coordinates. */
+  heightSampler?: ((x: number, z: number) => number) | null
+}): RoadPreviewRenderer {
   let needsSync = false
   let signature: string | null = null
 
@@ -211,14 +215,18 @@ export function createRoadPreviewRenderer(options: { rootGroup: THREE.Group }): 
     }
     signature = nextSignature
 
+    const localHeightSampler = options.heightSampler
+      ? ((x: number, z: number) => options.heightSampler!(x + build.center.x, z + build.center.z))
+      : null
+
     if (!session.previewGroup) {
-      const preview = createRoadGroup(build.definition)
+      const preview = createRoadGroup(build.definition, { heightSampler: localHeightSampler })
       applyRoadPreviewStyling(preview)
       preview.userData.isRoadPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
-      updateRoadGroup(session.previewGroup, build.definition)
+      updateRoadGroup(session.previewGroup, build.definition, { heightSampler: localHeightSampler })
       applyRoadPreviewStyling(session.previewGroup)
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)

@@ -43,7 +43,7 @@ import {
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
 import { loadObjectFromFile } from './assetImport'
-import { createGroundMesh, setGroundMaterial, updateGroundMesh } from './groundMesh'
+import { createGroundMesh, sampleGroundHeight, setGroundMaterial, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
 import { createRoadRenderGroup, type RoadJunctionSmoothingOptions } from './roadMesh'
 import { createFloorRenderGroup } from './floorMesh'
@@ -68,6 +68,24 @@ type SceneNodeWithExtras = SceneNode & {
   components?: SceneNodeComponentMap;
   editorFlags?: SceneNodeEditorFlags;
 };
+
+function findGroundDynamicMeshInNodes(nodes: SceneNodeWithExtras[]): GroundDynamicMesh | null {
+  const stack: SceneNodeWithExtras[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()!
+    const mesh = node.dynamicMesh as unknown
+    if (mesh && (mesh as any).type === 'Ground') {
+      return mesh as GroundDynamicMesh
+    }
+    const children = Array.isArray((node as any).children) ? ((node as any).children as SceneNodeWithExtras[]) : []
+    if (children.length) {
+      for (const child of children) {
+        stack.push(child)
+      }
+    }
+  }
+  return null
+}
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -1315,6 +1333,12 @@ class SceneGraphBuilder {
       shoulders: roadProps.shoulders,
       materialConfigId,
     };
+
+    const documentNodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
+    const groundMesh = findGroundDynamicMeshInNodes(documentNodes);
+    if (groundMesh) {
+      roadOptions.heightSampler = (x: number, z: number) => sampleGroundHeight(groundMesh, x, z);
+    }
 
     const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
     group.name = node.name ?? (group.name || 'Road');

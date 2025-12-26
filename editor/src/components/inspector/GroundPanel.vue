@@ -71,6 +71,7 @@ const terrainOperations: Array<{ value: GroundSculptOperation; label: string; ic
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
   { value: 'smooth', label: 'Smooth', icon: 'mdi-water-percent' },
   { value: 'flatten', label: 'Flatten', icon: 'mdi-ruler' },
+  { value: 'flatten-zero', label: 'Flatten to Zero', icon: 'mdi-border-bottom-variant' },
   { value: 'raise', label: 'Raise', icon: 'mdi-tray-arrow-up' },
 ]
 

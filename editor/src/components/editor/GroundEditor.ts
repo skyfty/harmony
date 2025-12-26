@@ -2109,9 +2109,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const shape = getActiveBrushShape()
-		const flattenReference = operation === 'flatten'
+		const flattenTargetHeight = operation === 'flatten'
 			? sampleGroundHeight(definition, localPoint.x, localPoint.z)
-			: undefined
+			: operation === 'flatten-zero'
+				? 0
+				: undefined
 
 		const modified = sculptGround(definition, {
 			point: localPoint,
@@ -2120,7 +2122,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			strength: options.brushStrength.value * 0.4,
 			shape,
 			operation,
-			targetHeight: flattenReference,
+			targetHeight: flattenTargetHeight,
 		})
 
 		if (modified) {
