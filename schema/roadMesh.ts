@@ -62,9 +62,9 @@ function sampleHeightFromSeries(series: number[], t: number): number {
   return v0 * (1 - alpha) + v1 * alpha
 }
 
-function smoothHeightSeries(values: number[], passes: number): number[] {
+function smoothHeightSeries(values: number[], passes: number, minimums: number[]): number[] {
   const count = values.length
-  if (count <= 2) {
+  if (count <= 2 || minimums.length !== count) {
     return values
   }
   const iterations = Math.max(0, Math.min(12, Math.trunc(passes)))
@@ -79,8 +79,11 @@ function smoothHeightSeries(values: number[], passes: number): number[] {
       const prev = working[i - 1]!
       const cur = working[i]!
       const nxt = working[i + 1]!
-      next[i] = prev * 0.25 + cur * 0.5 + nxt * 0.25
+      next[i] = Math.max(minimums[i]!, prev * 0.25 + cur * 0.5 + nxt * 0.25)
     }
+    // Clamp endpoints as well, in case callers modify them.
+    next[0] = Math.max(minimums[0]!, next[0]!)
+    next[count - 1] = Math.max(minimums[count - 1]!, next[count - 1]!)
     working = next
   }
 
@@ -398,15 +401,38 @@ function buildOffsetStripGeometry(
 
   const sampler = typeof heightSampler === 'function' ? heightSampler : null
   const heights: number[] | null = sampler ? [] : null
+  const minHeights: number[] | null = sampler ? [] : null
 
-  if (heights) {
+  if (heights && minHeights) {
     for (let i = 0; i <= divisions; i += 1) {
       const t = i / divisions
       center.copy(curve.getPoint(t))
-      const sampled = sampler!(center.x, center.z)
-      heights.push((Number.isFinite(sampled) ? sampled : 0) + yOffset)
+
+      tangent.copy(curve.getTangent(t))
+      tangent.y = 0
+      if (tangent.lengthSq() <= ROAD_EPSILON) {
+        tangent.set(0, 0, 1)
+      } else {
+        tangent.normalize()
+      }
+      lateral.set(-tangent.z, 0, tangent.x)
+
+      offsetCenter.copy(center).addScaledVector(lateral, offset)
+      left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
+      right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
+
+      const sampledCenter = sampler!(offsetCenter.x, offsetCenter.z)
+      const sampledLeft = sampler!(left.x, left.z)
+      const sampledRight = sampler!(right.x, right.z)
+      const centerY = Number.isFinite(sampledCenter) ? sampledCenter : 0
+      const leftY = Number.isFinite(sampledLeft) ? sampledLeft : 0
+      const rightY = Number.isFinite(sampledRight) ? sampledRight : 0
+      const envelope = Math.max(centerY, leftY, rightY) + yOffset
+      heights.push(envelope)
+      minHeights.push(envelope)
     }
-    const smoothed = smoothHeightSeries(heights, computeHeightSmoothingPasses(divisions))
+
+    const smoothed = smoothHeightSeries(heights, computeHeightSmoothingPasses(divisions), minHeights)
     heights.length = 0
     heights.push(...smoothed)
   }
@@ -510,14 +536,40 @@ function buildDashedCurveSegments(
           Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY)),
         )
         const values: number[] = []
+        const minimums: number[] = []
         const point = new THREE.Vector3()
+        const tangent = new THREE.Vector3()
+        const lateral = new THREE.Vector3()
+        const left = new THREE.Vector3()
+        const right = new THREE.Vector3()
+        const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
         for (let i = 0; i <= divisions; i += 1) {
           const t = i / divisions
           point.copy(curve.getPoint(t))
-          const sampled = sampler(point.x, point.z)
-          values.push((Number.isFinite(sampled) ? sampled : 0) + yOffset)
+
+          tangent.copy(curve.getTangent(t))
+          tangent.y = 0
+          if (tangent.lengthSq() <= ROAD_EPSILON) {
+            tangent.set(0, 0, 1)
+          } else {
+            tangent.normalize()
+          }
+          lateral.set(-tangent.z, 0, tangent.x)
+
+          left.copy(point).addScaledVector(lateral, halfWidth)
+          right.copy(point).addScaledVector(lateral, -halfWidth)
+
+          const sampledCenter = sampler(point.x, point.z)
+          const sampledLeft = sampler(left.x, left.z)
+          const sampledRight = sampler(right.x, right.z)
+          const centerY = Number.isFinite(sampledCenter) ? sampledCenter : 0
+          const leftY = Number.isFinite(sampledLeft) ? sampledLeft : 0
+          const rightY = Number.isFinite(sampledRight) ? sampledRight : 0
+          const envelope = Math.max(centerY, leftY, rightY) + yOffset
+          values.push(envelope)
+          minimums.push(envelope)
         }
-        return smoothHeightSeries(values, computeHeightSmoothingPasses(divisions))
+        return smoothHeightSeries(values, computeHeightSmoothingPasses(divisions), minimums)
       })()
     : null
 
