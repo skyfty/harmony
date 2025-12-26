@@ -9,6 +9,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { disposeMaterialTextures } from '@schema/material'
 import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@harmony/schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 
@@ -50,39 +51,6 @@ function disposeObject(object: THREE.Object3D | null): void {
         disposeMaterialTextures(mat)
         mat.dispose?.()
       })
-    }
-  })
-}
-
-function disposeMaterialTextures(material: THREE.Material | null | undefined): void {
-  if (!material) {
-    return
-  }
-  type TextureKey =
-    | 'map'
-    | 'envMap'
-    | 'normalMap'
-    | 'metalnessMap'
-    | 'roughnessMap'
-    | 'aoMap'
-    | 'emissiveMap'
-
-  const typed = material as THREE.Material & Partial<Record<TextureKey, THREE.Texture | null>>
-
-  const textureKeys: TextureKey[] = [
-    'map',
-    'envMap',
-    'normalMap',
-    'metalnessMap',
-    'roughnessMap',
-    'aoMap',
-    'emissiveMap',
-  ]
-  textureKeys.forEach((key) => {
-    const texture = typed[key]
-    if (texture && texture instanceof THREE.Texture) {
-      texture.dispose()
-      typed[key] = null
     }
   })
 }

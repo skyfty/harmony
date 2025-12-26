@@ -454,7 +454,7 @@ import {
 } from '@schema/behaviors/runtime';
 import {
   applyMaterialOverrides,
-  disposeMaterialOverrides,
+  disposeMaterialTextures,
   type MaterialTextureAssignmentOptions,
 } from '@schema/material';
 
@@ -7102,44 +7102,6 @@ async function startRenderIfReady() {
     loading.value = false;
     initializing = false;
   }
-}
-
-type MeshStandardTextureKey =
-  | 'map'
-  | 'normalMap'
-  | 'metalnessMap'
-  | 'roughnessMap'
-  | 'aoMap'
-  | 'emissiveMap'
-  | 'displacementMap';
-
-const STANDARD_TEXTURE_KEYS: MeshStandardTextureKey[] = [
-  'map',
-  'normalMap',
-  'metalnessMap',
-  'roughnessMap',
-  'aoMap',
-  'emissiveMap',
-  'displacementMap',
-];
-
-function disposeMaterialTextures(material: THREE.Material | null | undefined): void {
-  if (!material) {
-    return;
-  }
-  disposeMaterialOverrides(material);
-  const standard = material as THREE.MeshStandardMaterial &
-    Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
-  const materialRecord = standard as unknown as Record<string, unknown>;
-  STANDARD_TEXTURE_KEYS.forEach((key) => {
-    const texture = standard[key];
-    if (texture && typeof texture.dispose === 'function') {
-      texture.dispose();
-    }
-    if (key in standard) {
-      materialRecord[key] = null;
-    }
-  });
 }
 
 function disposeObject(object: THREE.Object3D) {

@@ -26,12 +26,43 @@ export interface SceneMaterialFactoryOptions {
 
 export type MeshStandardTextureKey =
   | 'map'
+  | 'envMap'
   | 'normalMap'
   | 'metalnessMap'
   | 'roughnessMap'
   | 'aoMap'
   | 'emissiveMap'
   | 'displacementMap'
+
+export const STANDARD_TEXTURE_KEYS: MeshStandardTextureKey[] = [
+  'map',
+  'envMap',
+  'normalMap',
+  'metalnessMap',
+  'roughnessMap',
+  'aoMap',
+  'emissiveMap',
+  'displacementMap',
+];
+
+export function disposeMaterialTextures(material: THREE.Material | null | undefined): void {
+  if (!material) {
+    return;
+  }
+  disposeMaterialOverrides(material);
+  const standard = material as THREE.MeshStandardMaterial &
+    Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
+  const materialRecord = standard as unknown as Record<string, unknown>;
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    const texture = standard[key];
+    if (texture && typeof texture.dispose === 'function') {
+      texture.dispose();
+    }
+    if (key in standard) {
+      materialRecord[key] = null;
+    }
+  });
+}
 
 export const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
   keyof SceneMaterialTextureSlotMap,
