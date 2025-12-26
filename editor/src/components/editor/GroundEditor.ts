@@ -1200,6 +1200,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return sessionDefinition
 	}
 
+	function flushSculptPreviewToScene(definition: GroundDynamicMesh) {
+		if (!sculptSessionState) {
+			return
+		}
+		const node = getGroundNodeFromScene()
+		if (!node || node.id !== sculptSessionState.nodeId || node.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		options.sceneStore.updateNodeDynamicMesh(node.id, definition)
+	}
+
 	function commitSculptSession(selectedNode: SceneNode | null): boolean {
 		if (!sculptSessionState || !sculptSessionState.dirty) {
 			sculptSessionState = null
@@ -2155,6 +2166,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
 			}
+			flushSculptPreviewToScene(definition)
 		}
 	}
 
@@ -2615,3 +2627,4 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		dispose,
 	}
 }
+
