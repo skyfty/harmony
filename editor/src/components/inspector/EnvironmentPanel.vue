@@ -32,7 +32,6 @@ const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMod
 
 const backgroundColorMenuOpen = ref(false)
 const ambientColorMenuOpen = ref(false)
-const fogColorMenuOpen = ref(false)
 
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
@@ -44,7 +43,6 @@ const HDRI_ASSET_TYPE = 'hdri' as const
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
 
-const isFogEnabled = computed(() => environmentSettings.value.fogMode !== 'none')
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
 
@@ -54,44 +52,68 @@ const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
   { title: 'Exponential Fog', value: 'exp' },
 ]
 
-type FogPreset = 'light' | 'medium' | 'heavy' | 'custom'
+type LinearFogPreset = 'light' | 'medium' | 'heavy' | 'custom'
+type ExpFogPreset = 'light' | 'medium' | 'heavy' | 'custom'
 
-const fogPresetOptions: Array<{ title: string; value: FogPreset }> = [
+const linearFogPresetOptions: Array<{ title: string; value: LinearFogPreset }> = [
   { title: 'Light Fog', value: 'light' },
   { title: 'Medium Fog', value: 'medium' },
   { title: 'Heavy Fog', value: 'heavy' },
   { title: 'Custom', value: 'custom' },
 ]
 
-const FOG_PRESET_COLOR = '#516175'
-const FOG_PRESET_DENSITY: Record<Exclude<FogPreset, 'custom'>, number> = {
-  light: 0.02,
-  medium: 0.05,
-  heavy: 0.1,
+const expFogPresetOptions: Array<{ title: string; value: ExpFogPreset }> = [
+  { title: 'Light Fog', value: 'light' },
+  { title: 'Medium Fog', value: 'medium' },
+  { title: 'Heavy Fog', value: 'heavy' },
+  { title: 'Custom', value: 'custom' },
+]
+
+const LINEAR_FOG_PRESETS: Record<Exclude<LinearFogPreset, 'custom'>, { near: number; far: number }> = {
+  light: { near: 100, far: 500 },
+  medium: { near: 50, far: 300 },
+  heavy: { near: 10, far: 100 },
+}
+
+const EXP_FOG_PRESETS: Record<Exclude<ExpFogPreset, 'custom'>, { density: number }> = {
+  light: { density: 0.001 },
+  medium: { density: 0.01 },
+  heavy: { density: 0.1 },
 }
 
 const DEFAULT_LINEAR_FOG_NEAR = 1
 const DEFAULT_LINEAR_FOG_FAR = 50
 
-const selectedFogPreset = computed<FogPreset>(() => {
+const selectedLinearFogPreset = computed<LinearFogPreset>(() => {
+  if (environmentSettings.value.fogMode !== 'linear') {
+    return 'custom'
+  }
+  const epsilon = 1e-6
+  const near = environmentSettings.value.fogNear
+  const far = environmentSettings.value.fogFar
+  const presets: Array<Exclude<LinearFogPreset, 'custom'>> = ['light', 'medium', 'heavy']
+  for (const preset of presets) {
+    const presetSettings = LINEAR_FOG_PRESETS[preset]
+    if (Math.abs(near - presetSettings.near) <= epsilon && Math.abs(far - presetSettings.far) <= epsilon) {
+      return preset
+    }
+  }
+  return 'custom'
+})
+
+const selectedExpFogPreset = computed<ExpFogPreset>(() => {
   if (environmentSettings.value.fogMode !== 'exp') {
     return 'custom'
   }
-  const normalizedColor = environmentSettings.value.fogColor.trim().toLowerCase()
-  const density = environmentSettings.value.fogDensity
   const epsilon = 1e-6
-  const presetEntries: Array<{ preset: Exclude<FogPreset, 'custom'>; density: number }> = [
-    { preset: 'light', density: FOG_PRESET_DENSITY.light },
-    { preset: 'medium', density: FOG_PRESET_DENSITY.medium },
-    { preset: 'heavy', density: FOG_PRESET_DENSITY.heavy },
-  ]
-
-  for (const entry of presetEntries) {
-    if (normalizedColor === FOG_PRESET_COLOR && Math.abs(density - entry.density) <= epsilon) {
-      return entry.preset
+  const density = environmentSettings.value.fogDensity
+  const presets: Array<Exclude<ExpFogPreset, 'custom'>> = ['light', 'medium', 'heavy']
+  for (const preset of presets) {
+    const presetSettings = EXP_FOG_PRESETS[preset]
+    if (Math.abs(density - presetSettings.density) <= epsilon) {
+      return preset
     }
   }
-
   return 'custom'
 })
 
@@ -182,6 +204,19 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hexValue.toLowerCase()}`
 }
 
+watch(
+  () => environmentSettings.value.ambientLightColor,
+  (value) => {
+    const currentFogColor = environmentSettings.value.fogColor
+    const normalized = normalizeHexColor(value, currentFogColor)
+    if (normalized === currentFogColor) {
+      return
+    }
+    sceneStore.patchEnvironmentSettings({ fogColor: normalized })
+  },
+  { immediate: true },
+)
+
 function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
@@ -196,7 +231,7 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   })
 }
 
-function handleHexColorChange(target: 'background' | 'ambient' | 'fog', value: string | null) {
+function handleHexColorChange(target: 'background' | 'ambient', value: string | null) {
   if (typeof value !== 'string') {
     return
   }
@@ -221,18 +256,12 @@ function handleHexColorChange(target: 'background' | 'ambient' | 'fog', value: s
     if (normalized === current) {
       return
     }
-    sceneStore.patchEnvironmentSettings({ ambientLightColor: normalized })
+    sceneStore.patchEnvironmentSettings({ ambientLightColor: normalized, fogColor: normalized })
     return
   }
-  const current = environmentSettings.value.fogColor
-  const normalized = normalizeHexColor(value, current)
-  if (normalized === current) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ fogColor: normalized })
 }
 
-function handleColorPickerInput(target: 'background' | 'ambient' | 'fog', value: string | null) {
+function handleColorPickerInput(target: 'background' | 'ambient', value: string | null) {
   handleHexColorChange(target, value)
 }
 
@@ -306,8 +335,9 @@ function handleFogModeChange(mode: EnvironmentFogMode | null) {
     return
   }
   if (mode === 'linear') {
-    const near = Number.isFinite(environmentSettings.value.fogNear) ? environmentSettings.value.fogNear : DEFAULT_LINEAR_FOG_NEAR
-    const far = Number.isFinite(environmentSettings.value.fogFar) ? environmentSettings.value.fogFar : DEFAULT_LINEAR_FOG_FAR
+    const presetSettings = LINEAR_FOG_PRESETS.light
+    const near = Number.isFinite(presetSettings.near) ? presetSettings.near : DEFAULT_LINEAR_FOG_NEAR
+    const far = Number.isFinite(presetSettings.far) ? presetSettings.far : DEFAULT_LINEAR_FOG_FAR
     sceneStore.patchEnvironmentSettings({
       fogMode: 'linear',
       fogNear: Math.max(0, near),
@@ -316,34 +346,64 @@ function handleFogModeChange(mode: EnvironmentFogMode | null) {
     return
   }
   // exp
+  const expPreset = EXP_FOG_PRESETS.light
   sceneStore.patchEnvironmentSettings({
     fogMode: 'exp',
-    fogColor: environmentSettings.value.fogColor,
-    fogDensity: environmentSettings.value.fogDensity,
+    fogDensity: expPreset.density,
   })
 }
 
-function applyFogPreset(preset: FogPreset | null) {
-  if (!preset) {
+function applyLinearFogPreset(preset: unknown) {
+  if (preset === null || preset === undefined) {
     return
   }
   if (preset === 'custom') {
-    // Keep current values; just ensure exponential fog is active
+    if (environmentSettings.value.fogMode !== 'linear') {
+      sceneStore.patchEnvironmentSettings({ fogMode: 'linear' })
+    }
+    return
+  }
+  if (preset !== 'light' && preset !== 'medium' && preset !== 'heavy') {
+    return
+  }
+  const presetSettings = LINEAR_FOG_PRESETS[preset]
+  const nextNear = Math.max(0, presetSettings.near)
+  const nextFar = Math.max(nextNear + 0.001, presetSettings.far)
+  const shouldPatchMode = environmentSettings.value.fogMode !== 'linear'
+  const shouldPatchNear = Math.abs(environmentSettings.value.fogNear - nextNear) > 1e-6
+  const shouldPatchFar = Math.abs(environmentSettings.value.fogFar - nextFar) > 1e-6
+  if (!shouldPatchMode && !shouldPatchNear && !shouldPatchFar) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    fogMode: 'linear',
+    fogNear: nextNear,
+    fogFar: nextFar,
+  })
+}
+
+function applyExpFogPreset(preset: unknown) {
+  if (preset === null || preset === undefined) {
+    return
+  }
+  if (preset === 'custom') {
     if (environmentSettings.value.fogMode !== 'exp') {
       sceneStore.patchEnvironmentSettings({ fogMode: 'exp' })
     }
     return
   }
-  const nextDensity = FOG_PRESET_DENSITY[preset]
+  if (preset !== 'light' && preset !== 'medium' && preset !== 'heavy') {
+    return
+  }
+  const presetSettings = EXP_FOG_PRESETS[preset]
+  const nextDensity = presetSettings.density
   const shouldPatchMode = environmentSettings.value.fogMode !== 'exp'
-  const shouldPatchColor = environmentSettings.value.fogColor !== FOG_PRESET_COLOR
   const shouldPatchDensity = Math.abs(environmentSettings.value.fogDensity - nextDensity) > 1e-6
-  if (!shouldPatchMode && !shouldPatchColor && !shouldPatchDensity) {
+  if (!shouldPatchMode && !shouldPatchDensity) {
     return
   }
   sceneStore.patchEnvironmentSettings({
     fogMode: 'exp',
-    fogColor: FOG_PRESET_COLOR,
     fogDensity: nextDensity,
   })
 }
@@ -988,56 +1048,26 @@ function handleEnvironmentDrop(event: DragEvent) {
           />
 
           <v-select
-            v-if="isExponentialFog"
-            :items="fogPresetOptions"
-            :model-value="selectedFogPreset"
+            v-if="isLinearFog"
+            :items="linearFogPresetOptions"
+            :model-value="selectedLinearFogPreset"
             density="compact"
             hide-details
             variant="underlined"
             class="section-select"
-            @update:model-value="(preset) => applyFogPreset(preset as FogPreset | null)"
+            @update:model-value="applyLinearFogPreset"
           />
 
-          <div v-if="isFogEnabled" class="material-color">
-            <div class="color-input">
-              <v-text-field
-                label="Fog Color"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                hide-details
-                :model-value="environmentSettings.fogColor"
-                @update:model-value="(value) => handleHexColorChange('fog', value)"
-              />
-              <v-menu
-                v-model="fogColorMenuOpen"
-                :close-on-content-click="false"
-                transition="scale-transition"
-                location="bottom start"
-              >
-                <template #activator="{ props: menuProps }">
-                  <button
-                    class="color-swatch"
-                    type="button"
-                    v-bind="menuProps"
-                    :style="{ backgroundColor: environmentSettings.fogColor }"
-                    title="Select fog color"
-                  >
-                    <span class="sr-only">Select fog color</span>
-                  </button>
-                </template>
-                <div class="color-picker">
-                  <v-color-picker
-                    :model-value="environmentSettings.fogColor"
-                    mode="hex"
-                    :modes="['hex']"
-                    hide-inputs
-                    @update:model-value="(value) => handleColorPickerInput('fog', value)"
-                  />
-                </div>
-              </v-menu>
-            </div>
-          </div>
+          <v-select
+            v-if="isExponentialFog"
+            :items="expFogPresetOptions"
+            :model-value="selectedExpFogPreset"
+            density="compact"
+            hide-details
+            variant="underlined"
+            class="section-select"
+            @update:model-value="applyExpFogPreset"
+          />
 
           <div v-if="isExponentialFog" class="slider-row">
             <v-text-field
