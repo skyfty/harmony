@@ -19,7 +19,7 @@ export function stableSerialize(value: unknown): string {
     return value ? 'true' : 'false'
   }
   if (typeof value === 'string') {
-    return JSON.stringify(value)
+    return value
   }
   if (value === null || value === undefined) {
     return 'null'
