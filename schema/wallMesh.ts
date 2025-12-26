@@ -17,10 +17,9 @@ const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_DEFAULT_HEIGHT = 3
 const WALL_DEFAULT_WIDTH = 0.2
-const WALL_MIN_DIVISIONS = 4
-const WALL_MAX_DIVISIONS = 256
-const WALL_DIVISION_DENSITY = 8
 const WALL_EPSILON = 1e-6
+  const WALL_MAX_ADAPTIVE_DEPTH = 10
+  const WALL_MAX_SAMPLE_POINTS = 512
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -72,6 +71,77 @@ type WallPath = {
   points: THREE.Vector3[]
   closed: boolean
 }
+
+  function simplifyWallPolylinePoints(points: THREE.Vector3[], closed: boolean): THREE.Vector3[] {
+    if (points.length < 3) {
+      return points.slice()
+    }
+
+    const planarDir = (from: THREE.Vector3, to: THREE.Vector3, out: THREE.Vector3): boolean => {
+      out.subVectors(to, from)
+      out.y = 0
+      const lenSq = out.lengthSq()
+      if (lenSq <= WALL_EPSILON) {
+        return false
+      }
+      out.multiplyScalar(1 / Math.sqrt(lenSq))
+      return true
+    }
+
+    const simplified: THREE.Vector3[] = []
+    const dirA = new THREE.Vector3()
+    const dirB = new THREE.Vector3()
+
+    const count = points.length
+    const lastIndex = count - 1
+
+    const startIndex = 0
+    const endIndex = lastIndex
+
+    for (let i = 0; i < count; i += 1) {
+      const prevIndex = i === 0 ? (closed ? lastIndex : 0) : i - 1
+      const nextIndex = i === lastIndex ? (closed ? 0 : lastIndex) : i + 1
+
+      const prev = points[prevIndex]!
+      const curr = points[i]!
+      const next = points[nextIndex]!
+
+      if (!closed && (i === startIndex || i === endIndex)) {
+        simplified.push(curr)
+        continue
+      }
+
+      if (!planarDir(prev, curr, dirA) || !planarDir(curr, next, dirB)) {
+        simplified.push(curr)
+        continue
+      }
+
+      // If nearly collinear in XZ plane, drop the middle point.
+      const crossY = dirA.x * dirB.z - dirA.z * dirB.x
+      const dot = THREE.MathUtils.clamp(dirA.dot(dirB), -1, 1)
+      if (Math.abs(crossY) < 1e-4 && dot > 0.9995) {
+        continue
+      }
+
+      simplified.push(curr)
+    }
+
+    // Ensure open polylines keep endpoints.
+    if (!closed) {
+      if (!simplified.length || simplified[0]!.distanceToSquared(points[0]!) > WALL_EPSILON) {
+        simplified.unshift(points[0]!)
+      }
+      if (simplified[simplified.length - 1]!.distanceToSquared(points[lastIndex]!) > WALL_EPSILON) {
+        simplified.push(points[lastIndex]!)
+      }
+    }
+
+    // Closed rings: avoid degeneracy.
+    if (simplified.length >= 3) {
+      return simplified
+    }
+    return points.slice()
+  }
 
 function normalizeWallPoint(value: unknown): THREE.Vector3 | null {
   const candidate = value as { x?: unknown; y?: unknown; z?: unknown } | null
@@ -152,24 +222,87 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
     return curve
   }
 
-  function buildWallGeometry(
+  function distancePointToSegmentXZ(point: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
+    const ax = a.x
+    const az = a.z
+    const bx = b.x
+    const bz = b.z
+    const px = point.x
+    const pz = point.z
+    const abx = bx - ax
+    const abz = bz - az
+    const apx = px - ax
+    const apz = pz - az
+
+    const abLenSq = abx * abx + abz * abz
+    if (abLenSq <= WALL_EPSILON) {
+      const dx = px - ax
+      const dz = pz - az
+      return Math.sqrt(dx * dx + dz * dz)
+    }
+    const t = THREE.MathUtils.clamp((apx * abx + apz * abz) / abLenSq, 0, 1)
+    const cx = ax + abx * t
+    const cz = az + abz * t
+    const dx = px - cx
+    const dz = pz - cz
+    return Math.sqrt(dx * dx + dz * dz)
+  }
+
+  function computeAdaptiveWallSamplePoints(
     curve: THREE.Curve<THREE.Vector3>,
+    height: number,
+    smoothing: number,
+    closed: boolean,
+  ): THREE.Vector3[] {
+    const rawHeight = Math.max(WALL_MIN_HEIGHT, height)
+    // Higher walls and higher smoothing get a tighter tolerance (more detail).
+    const base = 0.06
+    const heightFactor = 1 / Math.max(1, rawHeight)
+    const smoothingFactor = THREE.MathUtils.lerp(1.2, 0.6, THREE.MathUtils.clamp(smoothing, 0, 1))
+    const maxError = THREE.MathUtils.clamp(base * heightFactor * smoothingFactor, 0.01, 0.08)
+
+    const points: THREE.Vector3[] = []
+
+    const recurse = (t0: number, p0: THREE.Vector3, t1: number, p1: THREE.Vector3, depth: number) => {
+      if (points.length >= WALL_MAX_SAMPLE_POINTS) {
+        points.push(p1)
+        return
+      }
+      const tm = (t0 + t1) * 0.5
+      const pm = curve.getPoint(tm)
+      const error = distancePointToSegmentXZ(pm, p0, p1)
+      if (depth >= WALL_MAX_ADAPTIVE_DEPTH || error <= maxError) {
+        points.push(p1)
+        return
+      }
+      recurse(t0, p0, tm, pm, depth + 1)
+      recurse(tm, pm, t1, p1, depth + 1)
+    }
+
+    const pStart = curve.getPoint(0)
+    const pEnd = curve.getPoint(1)
+    points.push(pStart)
+    recurse(0, pStart, 1, pEnd, 0)
+
+    if (closed && points.length > 2) {
+      // If start and end are effectively identical, drop the duplicate.
+      if (points[0]!.distanceToSquared(points[points.length - 1]!) <= WALL_EPSILON) {
+        points.pop()
+      }
+    }
+
+    return points
+  }
+
+  function buildWallGeometryFromPoints(
+    centers: THREE.Vector3[],
     width: number,
     height: number,
     closed: boolean,
   ): THREE.BufferGeometry | null {
-  const length = curve.getLength()
-  if (length <= WALL_EPSILON) {
-    return null
-  }
-  const divisions = Math.max(
-    WALL_MIN_DIVISIONS,
-    Math.min(WALL_MAX_DIVISIONS, Math.ceil(length * WALL_DIVISION_DENSITY)),
-  )
-  const sampleCount = divisions + 1
-  if (sampleCount < 2) {
-    return null
-  }
+    if (centers.length < 2) {
+      return null
+    }
   const halfWidth = Math.max(WALL_EPSILON, width * 0.5)
   const heightValue = Math.max(WALL_MIN_HEIGHT, height)
 
@@ -181,11 +314,15 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
   const tangent = new THREE.Vector3()
   const lateral = new THREE.Vector3()
 
+    const sampleCount = centers.length
     for (let i = 0; i < sampleCount; i += 1) {
-    const t = i / divisions
-    center.copy(curve.getPoint(t))
-    tangent.copy(curve.getTangent(t))
-    tangent.y = 0
+      center.copy(centers[i]!)
+
+      // Tangent from neighboring samples (stable for polylines + adaptive samples).
+      const prev = centers[i === 0 ? (closed ? sampleCount - 1 : 0) : i - 1]!
+      const next = centers[i === sampleCount - 1 ? (closed ? 0 : sampleCount - 1) : i + 1]!
+      tangent.subVectors(next, prev)
+      tangent.y = 0
     if (tangent.lengthSq() <= WALL_EPSILON) {
       tangent.set(1, 0, 0)
     } else {
@@ -280,8 +417,16 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh, optio
   )
 
     const smoothing = normalizeWallSmoothing(options.smoothing)
-    const curve = createWallCurve(path.points, path.closed, smoothing)
-  const geometry = buildWallGeometry(curve, width, height, path.closed)
+    let centers: THREE.Vector3[]
+    if (smoothing <= WALL_EPSILON) {
+      // Default: keep corners sharp and avoid extra triangles on long straight runs.
+      centers = simplifyWallPolylinePoints(path.points, path.closed)
+    } else {
+      const curve = createWallCurve(path.points, path.closed, smoothing)
+      centers = computeAdaptiveWallSamplePoints(curve, height, smoothing, path.closed)
+    }
+
+    const geometry = buildWallGeometryFromPoints(centers, width, height, path.closed)
   if (!geometry) {
     return
   }
