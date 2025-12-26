@@ -124,39 +124,6 @@ const scatterFrustumCuller = createInstancedBvhFrustumCuller()
 const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 
-const groundEditorPerfNow = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
-const groundEditorDebugEnabled = (() => {
-	try {
-		const globalFlag = Boolean((globalThis as any).__HARMONY_GROUND_DEBUG)
-		const storageFlag = typeof localStorage !== 'undefined' && localStorage.getItem('harmony:groundDebug') === '1'
-		return globalFlag || storageFlag
-	} catch (_error) {
-		return false
-	}
-})()
-
-function groundEditorDebug(label: string, data?: unknown) {
-	if (!groundEditorDebugEnabled) return
-	if (data === undefined) {
-		console.debug(`[GroundEditor] ${label}`)
-		return
-	}
-	console.debug(`[GroundEditor] ${label}`, data)
-}
-
-function estimateSparseMapSize(map: Record<string, unknown> | null | undefined, limit = 8000): { count: number; hasMore: boolean } {
-	if (!map) return { count: 0, hasMore: false }
-	let count = 0
-	// Avoid a full scan; large terrains can have huge sparse maps.
-	for (const _key in map) {
-		count += 1
-		if (count >= limit) {
-			return { count, hasMore: true }
-		}
-	}
-	return { count, hasMore: false }
-}
-
 type ScatterSessionState = {
 	pointerId: number
 	asset: ProjectAsset
@@ -349,7 +316,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		jobToken: number
 		touchedChunkKeys?: Set<string> | null
 	}): Promise<void> {
-		const t0 = groundEditorPerfNow()
 		const worker = getGroundNormalsWorker()
 		if (!worker) {
 			// Worker not available; fall back.
@@ -361,22 +327,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				mesh.geometry.computeVertexNormals()
 			})
 			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
-			if (groundEditorDebugEnabled) {
-				groundEditorDebug('normals(worker-unavailable,fallback)', {
-					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-					region: params.region,
-				})
-			}
 			return
 		}
 
 		const chunkCells = resolveChunkCellsForDefinition(params.definition)
 		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
-		const tGather = groundEditorPerfNow()
 		const chunks: GroundNormalsComputeRequest['chunks'] = []
 		const meshesByKey = new Map<string, THREE.Mesh>()
-		let totalPositionsBytes = 0
-		let totalIndicesBytes = 0
 		params.groundObject.traverse((child) => {
 			const mesh = child as THREE.Mesh
 			if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
@@ -428,8 +385,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 			const positionsCopy = cloneTypedArrayForTransfer(positions)
 			const indicesCopy = cloneTypedArrayForTransfer(indices)
-			totalPositionsBytes += positionsCopy.byteLength
-			totalIndicesBytes += indicesCopy.byteLength
 			const key = mesh.uuid
 			meshesByKey.set(key, mesh)
 			chunks.push({
@@ -441,18 +396,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (!chunks.length) {
-			if (groundEditorDebugEnabled) {
-				groundEditorDebug('normals(worker-skip,no-chunks)', {
-					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-					filterKeys: filterKeys ? filterKeys.size : 0,
-					region: params.region,
-				})
-			}
 			return
 		}
-		const gatherMs = groundEditorPerfNow() - tGather
-
-		const tPost = groundEditorPerfNow()
 		const requestId = (groundNormalsRequestId += 1)
 		const request: GroundNormalsComputeRequest = { kind: 'compute-normals', requestId, chunks }
 		const responsePromise = new Promise<GroundNormalsComputeResponse>((resolve, reject) => {
@@ -469,7 +414,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		const response = await responsePromise
-		const postAndWaitMs = groundEditorPerfNow() - tPost
 		if (params.jobToken !== groundNormalsJobToken) {
 			// A newer sculpt finalize started; ignore stale results.
 			return
@@ -493,21 +437,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
-		if (groundEditorDebugEnabled) {
-			groundEditorDebug('normals(worker-done)', {
-				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-				gatherMs: Number(gatherMs.toFixed(2)),
-				postAndWaitMs: Number(postAndWaitMs.toFixed(2)),
-				chunks: chunks.length,
-				bytes: {
-					positions: totalPositionsBytes,
-					indices: totalIndicesBytes,
-					total: totalPositionsBytes + totalIndicesBytes,
-				},
-				filterKeys: filterKeys ? filterKeys.size : 0,
-				region: params.region,
-			})
-		}
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -1286,14 +1215,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
 		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
 		const clonedHeightMap = definition.heightMap
-		if (groundEditorDebugEnabled) {
-			const estimate = estimateSparseMapSize(clonedHeightMap as any)
-			groundEditorDebug('ensureSculptSession(heightMap-size-estimate)', {
-				nodeId,
-				count: estimate.count,
-				hasMore: estimate.hasMore,
-			})
-		}
 		const sessionDefinition: GroundDynamicMesh = {
 			...definition,
 			heightMap: clonedHeightMap,
@@ -2207,7 +2128,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function performSculpt(event: PointerEvent) {
 		if (!brushMesh.visible) return
-		const t0 = groundEditorPerfNow()
 
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
@@ -2220,9 +2140,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundObject = getGroundObject()
 		if (!groundObject) return
-		const tChunks = groundEditorPerfNow()
 		updateGroundChunks(groundObject, definition, options.getCamera())
-		const chunksMs = groundEditorPerfNow() - tChunks
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -2249,7 +2167,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (modified) {
-			const tRegion = groundEditorPerfNow()
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.dirty = true
 			}
@@ -2275,24 +2192,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				addTouchedChunkKeys(sculptSessionState, definition, region)
 			}
 			flushSculptPreviewToScene(definition)
-			if (groundEditorDebugEnabled) {
-				groundEditorDebug('performSculpt(modified)', {
-					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-					chunksMs: Number(chunksMs.toFixed(2)),
-					regionMs: Number((groundEditorPerfNow() - tRegion).toFixed(2)),
-					region,
-					brush: {
-						radius: options.brushRadius.value,
-						strength: options.brushStrength.value,
-						operation: event.shiftKey ? 'depress(shift)' : options.brushOperation.value,
-					},
-				})
-			}
-		} else if (groundEditorDebugEnabled) {
-			groundEditorDebug('performSculpt(no-change)', {
-				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-				chunksMs: Number(chunksMs.toFixed(2)),
-			})
 		}
 	}
 
@@ -2315,7 +2214,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
 			return false
 		}
-		const t0 = groundEditorPerfNow()
 
 		const definition = groundNode.dynamicMesh as GroundDynamicMesh
 		ensureSculptSession(definition, groundNode.id)
@@ -2325,18 +2223,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.stopPropagation()
 		event.stopImmediatePropagation()
 		performSculpt(event)
-		if (groundEditorDebugEnabled) {
-			groundEditorDebug('beginSculpt(total)', {
-				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
-				ground: {
-					width: definition.width,
-					depth: definition.depth,
-					rows: definition.rows,
-					columns: definition.columns,
-					cellSize: definition.cellSize,
-				},
-			})
-		}
 		try {
 			options.canvasRef.value?.setPointerCapture(event.pointerId)
 		} catch (error) {
@@ -2403,6 +2289,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.activeBuildTool.value !== 'ground') {
 			return false
 		}
+
 
 		if (event.button === 2) {
 			const hasSelection = groundSelection.value || groundSelectionDragState
