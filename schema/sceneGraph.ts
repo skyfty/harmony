@@ -118,6 +118,8 @@ class SceneGraphBuilder {
   private progressLoaded = 0;
   private readonly assetSizeMap = new Map<string, number>();
   private readonly assetLoadedMap = new Map<string, number>();
+  private readonly expectedDownloadAssetIds = new Set<string>();
+  private readonly preloadedAssetIds = new Set<string>();
   private progressBytesTotal = 0;
   private progressBytesLoaded = 0;
   constructor(
@@ -154,39 +156,134 @@ class SceneGraphBuilder {
     });
     this.onProgress = options.onProgress;
 
+    const materials = Array.isArray(document.materials) ? (document.materials as SceneMaterial[]) : [];
+    const nodes = Array.isArray(document.nodes) ? (document.nodes as SceneNodeWithExtras[]) : [];
+    this.computeExpectedDownloadAssetIds(nodes, materials);
+
     const summary = document.resourceSummary;
     if (summary && Array.isArray(summary.assets)) {
       let aggregatedTotal = 0;
-      let aggregatedPreloaded = 0;
 
       summary.assets.forEach((entry) => {
         if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
           return;
         }
+
+        const assetId = entry.assetId.trim();
+        if (!assetId) {
+          return;
+        }
+
+        if (this.isSummaryAssetPreloaded(entry)) {
+          this.preloadedAssetIds.add(assetId);
+        }
+
+        // Only count assets expected to be requested during build.
+        if (!this.expectedDownloadAssetIds.has(assetId)) {
+          return;
+        }
+
         const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
         if (size > 0) {
-          this.assetSizeMap.set(entry.assetId, size);
+          this.assetSizeMap.set(assetId, size);
         }
-        aggregatedTotal += size;
-        
-        if (this.isSummaryAssetPreloaded(entry)) {
-          this.assetLoadedMap.set(entry.assetId, size);
-          aggregatedPreloaded += size;
+
+        // Only network/downloaded assets should contribute to total bytes.
+        if (!this.preloadedAssetIds.has(assetId)) {
+          aggregatedTotal += size;
         }
       });
 
       this.progressBytesTotal = aggregatedTotal;
+      this.progressBytesLoaded = 0;
+    }
+  }
 
-      const fallbackEmbedded = Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
-        ? Math.min(summary.embeddedBytes, aggregatedTotal)
-        : 0;
-      const resolvedPreloaded = aggregatedPreloaded > 0 ? aggregatedPreloaded : fallbackEmbedded;
+  private computeExpectedDownloadAssetIds(nodes: SceneNodeWithExtras[], materials: SceneMaterial[]): void {
+    this.expectedDownloadAssetIds.clear();
 
-      if (resolvedPreloaded > 0) {
-        const cappedPreloaded = aggregatedTotal > 0 ? Math.min(resolvedPreloaded, aggregatedTotal) : resolvedPreloaded;
-        this.progressBytesLoaded = cappedPreloaded;
+    const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
+    textureAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+
+    // Preload meshes (depends on lazyLoadMeshes and document.assetPreload).
+    const preloadMeshAssetIds = this.getMeshPreloadIds(nodes);
+    preloadMeshAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+
+    // Meshes that will be loaded during build even when lazy-load placeholders exist.
+    const buildMeshAssetIds = this.collectBuildTimeMeshAssetIds(nodes);
+    buildMeshAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+  }
+
+  private collectBuildTimeMeshAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>();
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
+
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+
+      const explicitType = typeof node.nodeType === 'string' ? node.nodeType : '';
+      const normalizedType = explicitType.toLowerCase();
+
+      // Nodes that never load meshes on themselves.
+      if (normalizedType === 'light' || normalizedType === 'camera') {
+        // Still traverse children.
+      } else if (normalizedType === 'warpgate' || this.hasEnabledWarpGateComponent(node)) {
+        // Still traverse children.
+      } else if (normalizedType === 'guideboard' || this.hasEnabledGuideboardComponent(node)) {
+        // Still traverse children.
+      } else if (normalizedType === 'group') {
+        const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+        if (assetId) {
+          const outline = this.resolveOutlineMeshForNode(node);
+          const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+          if (!shouldLazySkip) {
+            ids.add(assetId);
+          }
+        }
+      } else if (normalizedType === 'mesh') {
+        const meshInfo = node.dynamicMesh;
+
+        if (meshInfo?.type === 'Wall') {
+          const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+            | SceneNodeComponentState<WallComponentProps>
+            | undefined;
+          // Mirrors buildWallMesh: clamp props regardless, ids only when present.
+          const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+          if (props.bodyAssetId) {
+            ids.add(props.bodyAssetId);
+          }
+          if (props.jointAssetId) {
+            ids.add(props.jointAssetId);
+          }
+        } else if (meshInfo?.type === 'Road') {
+          const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
+            | SceneNodeComponentState<RoadComponentProps>
+            | undefined;
+          const props = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined);
+          if (props.bodyAssetId) {
+            ids.add(props.bodyAssetId);
+          }
+        } else if (!meshInfo || !meshInfo.type || meshInfo.type === 'Mesh') {
+          const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+          if (assetId) {
+            const outline = this.resolveOutlineMeshForNode(node);
+            const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+            if (!shouldLazySkip) {
+              ids.add(assetId);
+            }
+          }
+        }
+      }
+
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
       }
     }
+
+    return Array.from(ids);
   }
 
   async build(): Promise<THREE.Group> {
@@ -502,13 +599,18 @@ class SceneGraphBuilder {
     if (!assetId || size <= 0) {
       return;
     }
+    if (!this.expectedDownloadAssetIds.has(assetId)) {
+      this.expectedDownloadAssetIds.add(assetId);
+    }
     const previous = this.assetSizeMap.get(assetId) ?? 0;
     if (size > previous) {
       this.assetSizeMap.set(assetId, size);
       const delta = size - previous;
-      this.progressBytesTotal += delta;
-      if (this.progressBytesLoaded > this.progressBytesTotal) {
-        this.progressBytesLoaded = this.progressBytesTotal;
+      if (!this.preloadedAssetIds.has(assetId)) {
+        this.progressBytesTotal += delta;
+        if (this.progressBytesLoaded > this.progressBytesTotal) {
+          this.progressBytesLoaded = this.progressBytesTotal;
+        }
       }
     } else if (!this.assetSizeMap.has(assetId)) {
       this.assetSizeMap.set(assetId, size);
@@ -517,6 +619,9 @@ class SceneGraphBuilder {
 
   private updateAssetLoadedBytes(assetId: string, loadedBytes: number): void {
     if (!assetId || loadedBytes < 0) {
+      return;
+    }
+    if (this.preloadedAssetIds.has(assetId)) {
       return;
     }
     const size = this.assetSizeMap.get(assetId) ?? 0;
@@ -535,6 +640,12 @@ class SceneGraphBuilder {
     if (!assetId || !entry) {
       return;
     }
+
+    // If something is actually requested during build, ensure it's tracked.
+    if (!this.expectedDownloadAssetIds.has(assetId)) {
+      this.expectedDownloadAssetIds.add(assetId);
+    }
+
     const size = this.resolveEntrySize(entry);
     if (size > 0) {
       this.updateAssetSize(assetId, size);
