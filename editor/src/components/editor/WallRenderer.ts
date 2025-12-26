@@ -11,8 +11,14 @@ import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schem
 import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
-export function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
-  const serialized = stableSerialize(definition.segments ?? [])
+export function computeWallDynamicMeshSignature(
+  definition: WallDynamicMesh,
+  options: { smoothing?: number } = {},
+): string {
+  const serialized = stableSerialize({
+    segments: definition.segments ?? [],
+    smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
+  })
   return hashString(serialized)
 }
 
@@ -252,7 +258,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const smoothing = resolveWallSmoothingFromNode(node)
     wallGroup = createWallGroup(wallDefinition, { smoothing })
     wallGroup.userData.nodeId = node.id
-    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition)
+    wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, { smoothing })
     container.add(wallGroup)
     userData.wallGroup = wallGroup
     userData.dynamicMeshType = 'Wall'
@@ -266,7 +272,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     options: WallRenderOptions = {},
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
-    const nextSignature = computeWallDynamicMeshSignature(definition)
+      const nextSignature = computeWallDynamicMeshSignature(definition, { smoothing: options.smoothing })
     if (groupData[signatureKey] !== nextSignature) {
       updateWallGroup(wallGroup, definition, options)
       groupData[signatureKey] = nextSignature

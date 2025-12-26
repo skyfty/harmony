@@ -215,8 +215,8 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
     }
 
     // For smoothing > 0, interpolate through points via Catmull-Rom.
-    // Use higher tension for less rounding, lower tension for more rounding.
-    const tension = THREE.MathUtils.clamp(1 - smoothing, 0, 1)
+    // Map smoothing so that larger values round corners more.
+    const tension = THREE.MathUtils.clamp(smoothing, 0, 1)
     const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
     curve.tension = tension
     return curve

@@ -1783,30 +1783,16 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
   if (node.dynamicMesh?.type !== 'Wall' || !node.dynamicMesh.segments.length) {
     return false
   }
-
   const normalized = clampWallProps(props)
-  let changed = false
   const nextSegments = node.dynamicMesh.segments.map((segment) => {
     const next = {
       ...segment,
       height: normalized.height,
       width: normalized.width,
-      thickness: normalized.thickness,
-    }
-    if (
-      segment.height !== next.height ||
-      segment.width !== next.width ||
-      segment.thickness !== next.thickness
-    ) {
-      changed = true
+      thickness: normalized.thickness
     }
     return next
   })
-
-  if (!changed) {
-    return false
-  }
-
   node.dynamicMesh = {
     type: 'Wall',
     segments: nextSegments,
@@ -11721,11 +11707,15 @@ export const useSceneStore = defineStore('scene', {
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasJointAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'jointAssetId')
+        const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
 
         const merged = clampWallProps({
           height: (typedPatch.height as number | undefined) ?? currentProps.height,
           width: (typedPatch.width as number | undefined) ?? currentProps.width,
           thickness: (typedPatch.thickness as number | undefined) ?? currentProps.thickness,
+          smoothing: hasSmoothing
+            ? (typedPatch.smoothing as number | undefined)
+            : currentProps.smoothing,
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
@@ -11738,6 +11728,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.height - merged.height) <= 1e-4 &&
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
+          Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null)
         if (unchanged) {
