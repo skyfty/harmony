@@ -2237,7 +2237,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
 		}
-		flushSculptPreviewToScene(definition)
 	}
 
 	function refreshGroundMesh(definition: GroundDynamicMesh | null = getGroundDynamicMeshDefinition()) {
