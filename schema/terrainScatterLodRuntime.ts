@@ -35,6 +35,19 @@ export type TerrainScatterLodRuntime = {
   getInstanceStats: () => { total: number; visible: number }
 }
 
+export type TerrainScatterLodRuntimeOptions = {
+  // How often to run LOD switching (async asset work). Default: 200ms.
+  lodUpdateIntervalMs?: number
+  // How often to run frustum culling + matrix refresh. Default: equals lodUpdateIntervalMs (preserves legacy behavior).
+  visibilityUpdateIntervalMs?: number
+  // Spatial hysteresis: expand each instance culling sphere radius.
+  cullRadiusMultiplier?: number
+  // Temporal hysteresis: keep recently-visible instances allocated for a while after leaving the frustum.
+  cullGraceMs?: number
+  // Budget how many allocate/release operations can happen per visibility update.
+  maxBindingChangesPerUpdate?: number
+}
+
 type GroundScatterEntry = {
   nodeId: string
   snapshot: TerrainScatterStoreSnapshot
@@ -255,21 +268,48 @@ async function ensureModelInstanceGroup(assetId: string, resourceCache: Resource
   }
 }
 
-export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: number } = {}): TerrainScatterLodRuntime {
-  const lodUpdateIntervalMs = Number.isFinite(options.lodUpdateIntervalMs) && (options.lodUpdateIntervalMs as number) > 0
-    ? (options.lodUpdateIntervalMs as number)
-    : 200
+export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntimeOptions = {}): TerrainScatterLodRuntime {
+  const typedOptions = options as TerrainScatterLodRuntimeOptions
+
+  const lodUpdateIntervalMs =
+    Number.isFinite(typedOptions.lodUpdateIntervalMs) && (typedOptions.lodUpdateIntervalMs as number) > 0
+      ? (typedOptions.lodUpdateIntervalMs as number)
+      : 200
+
+  const visibilityUpdateIntervalMs =
+    Number.isFinite(typedOptions.visibilityUpdateIntervalMs) && (typedOptions.visibilityUpdateIntervalMs as number) >= 0
+      ? (typedOptions.visibilityUpdateIntervalMs as number)
+      : lodUpdateIntervalMs
+
+  const cullRadiusMultiplier =
+    Number.isFinite(typedOptions.cullRadiusMultiplier) && (typedOptions.cullRadiusMultiplier as number) > 0
+      ? (typedOptions.cullRadiusMultiplier as number)
+      : 1
+
+  const cullGraceMs =
+    Number.isFinite(typedOptions.cullGraceMs) && (typedOptions.cullGraceMs as number) > 0
+      ? (typedOptions.cullGraceMs as number)
+      : 0
+
+  const maxBindingChangesPerUpdate =
+    Number.isFinite(typedOptions.maxBindingChangesPerUpdate) && (typedOptions.maxBindingChangesPerUpdate as number) > 0
+      ? (typedOptions.maxBindingChangesPerUpdate as number)
+      : Number.POSITIVE_INFINITY
 
   let resourceCache: ResourceCache | null = null
   const allocatedNodeIds = new Set<string>()
   const visibleNodeIds = new Set<string>()
   const runtimeInstances = new Map<string, ScatterRuntimeInstance>()
 
+  const lastVisibleAt = new Map<string, number>()
+  let lastFrustumVisibleIds: Set<string> = new Set<string>()
+
   const lodPresetCache = new Map<string, LodPresetData | null>()
   const pendingLodPresetLoads = new Map<string, Promise<void>>()
 
+  let lastVisibilityUpdateAt = 0
   let lastLodUpdateAt = 0
-  let pendingUpdate: Promise<void> | null = null
+  let pendingLodUpdate: Promise<void> | null = null
 
   function dispose(): void {
     allocatedNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
@@ -279,8 +319,11 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     resourceCache = null
     lodPresetCache.clear()
     pendingLodPresetLoads.clear()
-    pendingUpdate = null
+    pendingLodUpdate = null
     lastLodUpdateAt = 0
+    lastVisibilityUpdateAt = 0
+    lastVisibleAt.clear()
+    lastFrustumVisibleIds = new Set<string>()
   }
 
   async function ensureLodPresetCached(presetAssetId: string): Promise<void> {
@@ -406,7 +449,8 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
       const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
       const scale = runtime.instance.localScale
       const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
-      const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1)
+      const radius =
+        baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
 
       scatterCullingSphere.center.copy(scatterWorldPositionHelper)
       scatterCullingSphere.radius = radius
@@ -419,16 +463,41 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     return visibleIds
   }
 
+  function nowMs(): number {
+    return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+  }
+
   function applyCullingAndUpdateVisibleMatrices(
     visibleIds: Set<string>,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
   ): void {
+    const now = nowMs()
+
+    // Update last-seen timestamps for frustum-visible instances.
+    visibleIds.forEach((nodeId) => {
+      lastVisibleAt.set(nodeId, now)
+    })
+    lastFrustumVisibleIds = visibleIds
+
     // Release instances that were visible but are now culled.
+    let bindingChanges = 0
+
     for (const nodeId of Array.from(visibleNodeIds.values())) {
       if (visibleIds.has(nodeId)) {
         continue
       }
+
+      const lastSeen = lastVisibleAt.get(nodeId) ?? 0
+      if (cullGraceMs > 0 && now - lastSeen < cullGraceMs) {
+        continue
+      }
+
+      if (bindingChanges >= maxBindingChangesPerUpdate) {
+        continue
+      }
+
       releaseModelInstance(nodeId)
+      bindingChanges += 1
       allocatedNodeIds.delete(nodeId)
       visibleNodeIds.delete(nodeId)
     }
@@ -442,10 +511,14 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
 
       // If this is a newly visible instance, ensure it is allocated.
       if (!visibleNodeIds.has(nodeId)) {
+        if (bindingChanges >= maxBindingChangesPerUpdate) {
+          return
+        }
         const binding = allocateModelInstance(runtime.boundAssetId, runtime.nodeId)
         if (!binding) {
           return
         }
+        bindingChanges += 1
         allocatedNodeIds.add(runtime.nodeId)
         visibleNodeIds.add(runtime.nodeId)
       }
@@ -460,16 +533,11 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
     })
   }
 
-  async function updateInternal(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): Promise<void> {
+  async function updateInternalLod(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): Promise<void> {
     const cache = resourceCache
     if (!cache) {
       return
     }
-
-    // Apply frustum culling and refresh instance matrices every frame.
-    // LOD switching remains throttled to avoid excessive async asset work.
-    const visibleIds = computeVisibleScatterIds(camera, resolveGroundMeshObject)
-    applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject)
 
     const cameraPosition = (camera as THREE.Camera & { position: THREE.Vector3 }).position
     if (!cameraPosition || typeof cameraPosition.distanceTo !== 'function') {
@@ -480,6 +548,11 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
       // Frustum culling is applied each frame in `update()`. Here we only handle LOD switching,
       // and must not resurrect instances that have been culled since the last visibility update.
       if (!allocatedNodeIds.has(runtime.nodeId)) {
+        continue
+      }
+
+      // Avoid LOD churn for grace-kept instances that are currently outside the frustum.
+      if (!lastFrustumVisibleIds.has(runtime.nodeId)) {
         continue
       }
 
@@ -529,21 +602,29 @@ export function createTerrainScatterLodRuntime(options: { lodUpdateIntervalMs?: 
   }
 
   function update(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
-    const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+    const now = nowMs()
 
-    if (pendingUpdate) {
+    // Fast path: update frustum culling + visible matrices (sync) at its own cadence.
+    if (now - lastVisibilityUpdateAt >= visibilityUpdateIntervalMs) {
+      lastVisibilityUpdateAt = now
+      const visibleIds = computeVisibleScatterIds(camera, resolveGroundMeshObject)
+      applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject)
+    }
+
+    // Slow path: LOD switching (async) at its own cadence.
+    if (pendingLodUpdate) {
       return
     }
     if (now - lastLodUpdateAt < lodUpdateIntervalMs) {
       return
     }
     lastLodUpdateAt = now
-    pendingUpdate = updateInternal(camera, resolveGroundMeshObject)
+    pendingLodUpdate = updateInternalLod(camera, resolveGroundMeshObject)
       .catch((error) => {
         console.warn('[TerrainScatterLOD] Failed to update scatter LOD', error)
       })
       .finally(() => {
-        pendingUpdate = null
+        pendingLodUpdate = null
       })
   }
 

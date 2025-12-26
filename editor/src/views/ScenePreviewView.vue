@@ -134,7 +134,13 @@ import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 
 
-const terrainScatterRuntime = createTerrainScatterLodRuntime()
+const terrainScatterRuntime = createTerrainScatterLodRuntime({
+	lodUpdateIntervalMs: 200,
+	visibilityUpdateIntervalMs: 33,
+	cullGraceMs: 300,
+	cullRadiusMultiplier: 1.2,
+	maxBindingChangesPerUpdate: 200,
+})
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 
 type ControlMode = 'first-person' | 'third-person'
