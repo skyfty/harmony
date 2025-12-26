@@ -331,9 +331,9 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import {
   buildSceneGraph,
   createTerrainScatterLodRuntime,
-  createInstancedBvhFrustumCuller,
   type SceneGraphBuildOptions,
 } from '@schema/sceneGraph';
+import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { isGroundDynamicMesh } from '@schema/groundHeightfield';

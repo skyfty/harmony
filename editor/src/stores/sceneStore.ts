@@ -2047,6 +2047,8 @@ const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
 const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
+const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
+const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3
@@ -2062,6 +2064,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogMode: 'none',
   fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
+  fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
+  fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
   environmentMap: {
     mode: 'skybox',
     hdriAssetId: null,
@@ -2114,7 +2118,16 @@ function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | Enviro
     backgroundMode = 'solidColor'
   }
   const environmentMapMode: EnvironmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
-  const fogMode: EnvironmentFogMode = source?.fogMode === 'exp' ? 'exp' : 'none'
+  let fogMode: EnvironmentFogMode = 'none'
+  if (source?.fogMode === 'linear') {
+    fogMode = 'linear'
+  } else if (source?.fogMode === 'exp') {
+    fogMode = 'exp'
+  }
+
+  const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
+  const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
+  const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
   return {
     background: {
@@ -2127,6 +2140,8 @@ function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | Enviro
     fogMode,
     fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
     fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
+    fogNear,
+    fogFar: normalizedFogFar,
     environmentMap: {
       mode: environmentMapMode,
       hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
@@ -2223,6 +2238,8 @@ function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings
     a.fogMode === b.fogMode &&
     a.fogColor === b.fogColor &&
     Math.abs(a.fogDensity - b.fogDensity) <= epsilon &&
+    Math.abs(a.fogNear - b.fogNear) <= epsilon &&
+    Math.abs(a.fogFar - b.fogFar) <= epsilon &&
     a.environmentMap.mode === b.environmentMap.mode &&
     a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId &&
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&

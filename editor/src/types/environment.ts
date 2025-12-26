@@ -1,5 +1,5 @@
 export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
-export type EnvironmentFogMode = 'none' | 'exp'
+export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 
 export interface EnvironmentBackgroundSettings {
@@ -20,6 +20,8 @@ export interface EnvironmentSettings {
   fogMode: EnvironmentFogMode
   fogColor: string
   fogDensity: number
+  fogNear: number
+  fogFar: number
   environmentMap: EnvironmentMapSettings
   gravityStrength: number
   collisionRestitution: number
