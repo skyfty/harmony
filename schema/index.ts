@@ -796,7 +796,7 @@ export interface GroundGenerationSettings {
   mode?: GroundGenerationMode
 }
 
-export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten'
+export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
 export interface GroundDynamicMesh {
   type: 'Ground'

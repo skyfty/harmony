@@ -701,6 +701,10 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               const reference = targetHeight ?? currentHeight
               const flattenFactor = Math.min(1, strength * 0.4)
               nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+            } else if (operation === 'flatten-zero') {
+              const reference = targetHeight ?? 0
+              const flattenFactor = Math.min(1, 0.2 + strength * 0.3)
+              nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
             } else {
               const direction = operation === 'depress' ? -1 : 1
               const offset = direction * strength * influence * 0.3
@@ -711,6 +715,41 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
             modified = true
           }
       }
+  }
+  if (operation === 'flatten-zero') {
+    const smoothingBand = Math.max(cellSize * 1.5, radius * 0.35)
+    if (smoothingBand > 0) {
+      const bandRows = Math.ceil(smoothingBand / cellSize)
+      const smoothingRadius = radius + smoothingBand
+      const smoothingStrengthBase = Math.min(1, 0.2 + strength * 0.15)
+      const smoothingMinRow = Math.max(0, minRow - bandRows)
+      const smoothingMaxRow = Math.min(rows, maxRow + bandRows)
+      const smoothingMinCol = Math.max(0, minCol - bandRows)
+      const smoothingMaxCol = Math.min(columns, maxCol + bandRows)
+      for (let row = smoothingMinRow; row <= smoothingMaxRow; row++) {
+        for (let col = smoothingMinCol; col <= smoothingMaxCol; col++) {
+          const x = -halfWidth + col * cellSize
+          const z = -halfDepth + row * cellSize
+          const dx = x - localX
+          const dz = z - localZ
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist <= radius || dist > smoothingRadius) {
+            continue
+          }
+          const taper = 1 - (dist - radius) / smoothingBand
+          const smoothingFactor = smoothingStrengthBase * taper
+          if (smoothingFactor <= 0) {
+            continue
+          }
+          const key = groundVertexKey(row, col)
+          const currentHeight = heightMap[key] ?? 0
+          const average = sampleNeighborAverage(definition, row, col, rows, columns)
+          const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
+          setHeightMapValue(heightMap, key, smoothedHeight)
+          modified = true
+        }
+      }
+    }
   }
   if (modified) {
     definition.heightMap = heightMap
