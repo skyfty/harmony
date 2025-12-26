@@ -928,6 +928,7 @@ function updateChunkGeometryRegion(
   definition: GroundDynamicMesh,
   spec: GroundChunkSpec,
   region: GroundGeometryUpdateRegion,
+  options: { computeNormals?: boolean } = {},
 ): boolean {
   const chunkColumns = Math.max(1, Math.trunc(spec.columns))
   const chunkRows = Math.max(1, Math.trunc(spec.rows))
@@ -960,7 +961,9 @@ function updateChunkGeometryRegion(
     }
   }
   positionAttr.needsUpdate = true
-  geometry.computeVertexNormals()
+  if (options.computeNormals !== false) {
+    geometry.computeVertexNormals()
+  }
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return true
@@ -1185,7 +1188,12 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
   applyGroundTextureToObject(group, definition)
 }
 
-export function updateGroundMeshRegion(target: THREE.Object3D, definition: GroundDynamicMesh, region: GroundGeometryUpdateRegion): boolean {
+export function updateGroundMeshRegion(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  region: GroundGeometryUpdateRegion,
+  options: { computeNormals?: boolean } = {},
+): boolean {
   const group = target as THREE.Group
   if (!(group as any)?.isGroup) {
     return false
@@ -1209,7 +1217,7 @@ export function updateGroundMeshRegion(target: THREE.Object3D, definition: Groun
     if (!(geometry instanceof THREE.BufferGeometry)) {
       return
     }
-    const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, region)
+    const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, region, options)
     updated = updated || ok
   })
   return updated

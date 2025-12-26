@@ -28,22 +28,24 @@ function computeVertexNormalsIndexed(
 	indices: Uint16Array | Uint32Array,
 ): Float32Array {
 	const normals = new Float32Array(positions.length)
+
+	// Accumulate face normals per vertex.
 	for (let i = 0; i < indices.length; i += 3) {
-		const ia = indices[i]!
-		const ib = indices[i + 1]!
-		const ic = indices[i + 2]!
+		const ia3 = indices[i] * 3
+		const ib3 = indices[i + 1] * 3
+		const ic3 = indices[i + 2] * 3
 
-		const ax = positions[ia * 3] ?? 0
-		const ay = positions[ia * 3 + 1] ?? 0
-		const az = positions[ia * 3 + 2] ?? 0
+		const ax = positions[ia3]
+		const ay = positions[ia3 + 1]
+		const az = positions[ia3 + 2]
 
-		const bx = positions[ib * 3] ?? 0
-		const by = positions[ib * 3 + 1] ?? 0
-		const bz = positions[ib * 3 + 2] ?? 0
+		const bx = positions[ib3]
+		const by = positions[ib3 + 1]
+		const bz = positions[ib3 + 2]
 
-		const cx = positions[ic * 3] ?? 0
-		const cy = positions[ic * 3 + 1] ?? 0
-		const cz = positions[ic * 3 + 2] ?? 0
+		const cx = positions[ic3]
+		const cy = positions[ic3 + 1]
+		const cz = positions[ic3 + 2]
 
 		const abx = bx - ax
 		const aby = by - ay
@@ -58,27 +60,29 @@ function computeVertexNormalsIndexed(
 		const ny = abz * acx - abx * acz
 		const nz = abx * acy - aby * acx
 
-		normals[ia * 3] = (normals[ia * 3] ?? 0) + nx
-		normals[ia * 3 + 1] = (normals[ia * 3 + 1] ?? 0) + ny
-		normals[ia * 3 + 2] = (normals[ia * 3 + 2] ?? 0) + nz
+		normals[ia3] += nx
+		normals[ia3 + 1] += ny
+		normals[ia3 + 2] += nz
 
-		normals[ib * 3] = (normals[ib * 3] ?? 0) + nx
-		normals[ib * 3 + 1] = (normals[ib * 3 + 1] ?? 0) + ny
-		normals[ib * 3 + 2] = (normals[ib * 3 + 2] ?? 0) + nz
+		normals[ib3] += nx
+		normals[ib3 + 1] += ny
+		normals[ib3 + 2] += nz
 
-		normals[ic * 3] = (normals[ic * 3] ?? 0) + nx
-		normals[ic * 3 + 1] = (normals[ic * 3 + 1] ?? 0) + ny
-		normals[ic * 3 + 2] = (normals[ic * 3 + 2] ?? 0) + nz
+		normals[ic3] += nx
+		normals[ic3 + 1] += ny
+		normals[ic3 + 2] += nz
 	}
 
+	// Normalize.
 	for (let i = 0; i < normals.length; i += 3) {
-		const x = normals[i] ?? 0
-		const y = normals[i + 1] ?? 0
-		const z = normals[i + 2] ?? 0
-		const len = Math.hypot(x, y, z) || 1
-		normals[i] = x / len
-		normals[i + 1] = y / len
-		normals[i + 2] = z / len
+		const x = normals[i]
+		const y = normals[i + 1]
+		const z = normals[i + 2]
+		const lenSq = x * x + y * y + z * z
+		const invLen = 1 / Math.sqrt(lenSq || 1)
+		normals[i] = x * invLen
+		normals[i + 1] = y * invLen
+		normals[i + 2] = z * invLen
 	}
 
 	return normals

@@ -65,7 +65,7 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
@@ -1692,7 +1692,13 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   if (!hit) {
     return false
   }
-  const workingDefinition = JSON.parse(JSON.stringify(node.dynamicMesh ?? {})) as FloorDynamicMesh
+  const base = node.dynamicMesh && typeof node.dynamicMesh === 'object' ? (node.dynamicMesh as FloorDynamicMesh) : null
+  const startVertices = base ? cloneFloorVertices(base) : ([] as Array<[number, number]>)
+  const workingDefinition: FloorDynamicMesh = {
+    type: 'Floor',
+    vertices: startVertices.map(([x, z]) => [x, z] as [number, number]),
+    ...(base ? { materialId: base.materialId ?? null, smooth: base.smooth } : {}),
+  }
   floorEdgeDragState = {
     pointerId: event.pointerId,
     nodeId: selectedId,
@@ -1702,7 +1708,7 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
     moved: false,
     runtimeObject: runtime,
     workingDefinition,
-    startVertices: cloneFloorVertices(node.dynamicMesh as FloorDynamicMesh),
+    startVertices,
     perp: hit.perp.clone(),
     referencePoint: hit.referencePoint.clone(),
     initialProjection: hit.initialProjection,
@@ -5101,7 +5107,16 @@ async function handlePointerDown(event: PointerEvent) {
             containerObject: runtime,
             roadGroup: roadGroupCandidate,
             baseDefinition: node.dynamicMesh,
-            workingDefinition: JSON.parse(JSON.stringify(node.dynamicMesh)) as RoadDynamicMesh,
+            workingDefinition: {
+              ...node.dynamicMesh,
+              vertices: (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []).map(
+                ([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number],
+              ),
+              segments: (Array.isArray(node.dynamicMesh.segments) ? node.dynamicMesh.segments : []).map((seg) => ({
+                a: Number((seg as any).a) || 0,
+                b: Number((seg as any).b) || 0,
+              })),
+            },
           }
           try {
             canvasRef.value.setPointerCapture(event.pointerId)

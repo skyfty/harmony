@@ -528,34 +528,24 @@ function cloneComponentProps<T>(props: T): T {
   if (props === null || props === undefined) {
     return props
   }
-  try {
-    return structuredClone(props)
-  } catch (_error) {
-    return JSON.parse(JSON.stringify(props)) as T
+
+  // Direct-update mode: avoid deep clones (JSON / structuredClone) to prevent large stalls and
+  // keep update semantics as "mutate properties".
+  if (Array.isArray(props)) {
+    return [...props] as unknown as T
   }
+  if (typeof props === 'object') {
+    return { ...(props as any) } as T
+  }
+  return props
 }
 
 function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?: NodeComponentType): SceneNodeComponentState<any> {
   const resolvedType = (typeOverride ?? state.type) as NodeComponentType
   const resolvedId = typeof state.id === 'string' && state.id.trim().length ? state.id : generateUuid()
-  
-  // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
-  let clonedMetadata: Record<string, unknown> | undefined
-  if (state.metadata) {
-    try {
-      clonedMetadata = structuredClone(state.metadata)
-    } catch (_error) {
-      // 如果 structuredClone 失败，尝试使用 JSON 序列化
-      try {
-        clonedMetadata = JSON.parse(JSON.stringify(state.metadata)) as Record<string, unknown>
-      } catch (_jsonError) {
-        // 如果都失败了，使用浅拷贝作为最后手段
-        console.warn('Failed to deeply clone component metadata, using shallow copy', _jsonError)
-        clonedMetadata = { ...state.metadata }
-      }
-    }
-  }
-  
+
+  const clonedMetadata: Record<string, unknown> | undefined = state.metadata
+
   return {
     id: resolvedId,
     type: resolvedType,
@@ -621,20 +611,7 @@ function normalizeNodeComponents(
       }),
     )
 
-    // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existing?.metadata) {
-      try {
-        clonedMetadata = structuredClone(existing.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existing.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone wall component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existing.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
 
     normalized[WALL_COMPONENT_TYPE] = {
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
@@ -657,19 +634,7 @@ function normalizeNodeComponents(
       }),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existing?.metadata) {
-      try {
-        clonedMetadata = structuredClone(existing.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existing.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone floor component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existing.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
 
     normalized[FLOOR_COMPONENT_TYPE] = {
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
@@ -689,19 +654,7 @@ function normalizeNodeComponents(
       clampDisplayBoardComponentProps(existingDisplayBoard.props as Partial<DisplayBoardComponentProps>),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existingDisplayBoard.metadata) {
-      try {
-        clonedMetadata = structuredClone(existingDisplayBoard.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existingDisplayBoard.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone display board component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existingDisplayBoard.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existingDisplayBoard.metadata
 
     normalized[DISPLAY_BOARD_COMPONENT_TYPE] = {
       id: existingDisplayBoard.id && existingDisplayBoard.id.trim().length ? existingDisplayBoard.id : generateUuid(),
@@ -724,19 +677,7 @@ function normalizeNodeComponents(
       clampGuideboardComponentProps(existingGuideboard.props as Partial<GuideboardComponentProps>),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existingGuideboard.metadata) {
-      try {
-        clonedMetadata = structuredClone(existingGuideboard.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existingGuideboard.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone guideboard component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existingGuideboard.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existingGuideboard.metadata
 
     normalized[GUIDEBOARD_COMPONENT_TYPE] = {
       id: existingGuideboard.id && existingGuideboard.id.trim().length ? existingGuideboard.id : generateUuid(),
@@ -759,19 +700,7 @@ function normalizeNodeComponents(
       clampViewPointComponentProps(existingViewPoint.props as Partial<ViewPointComponentProps>),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existingViewPoint.metadata) {
-      try {
-        clonedMetadata = structuredClone(existingViewPoint.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existingViewPoint.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone view point component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existingViewPoint.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existingViewPoint.metadata
 
     normalized[VIEW_POINT_COMPONENT_TYPE] = {
       id: existingViewPoint.id && existingViewPoint.id.trim().length ? existingViewPoint.id : generateUuid(),
@@ -794,19 +723,7 @@ function normalizeNodeComponents(
       clampWarpGateComponentProps(existingWarpGate.props as Partial<WarpGateComponentProps>),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existingWarpGate.metadata) {
-      try {
-        clonedMetadata = structuredClone(existingWarpGate.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existingWarpGate.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone warp gate component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existingWarpGate.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existingWarpGate.metadata
 
     normalized[WARP_GATE_COMPONENT_TYPE] = {
       id: existingWarpGate.id && existingWarpGate.id.trim().length ? existingWarpGate.id : generateUuid(),
@@ -829,19 +746,7 @@ function normalizeNodeComponents(
       clampEffectComponentProps(existingEffect.props as Partial<EffectComponentProps>),
     )
 
-    let clonedMetadata: Record<string, unknown> | undefined
-    if (existingEffect.metadata) {
-      try {
-        clonedMetadata = structuredClone(existingEffect.metadata)
-      } catch (_error) {
-        try {
-          clonedMetadata = JSON.parse(JSON.stringify(existingEffect.metadata)) as Record<string, unknown>
-        } catch (_jsonError) {
-          console.warn('Failed to deeply clone effect component metadata, using shallow copy', _jsonError)
-          clonedMetadata = { ...existingEffect.metadata }
-        }
-      }
-    }
+    const clonedMetadata: Record<string, unknown> | undefined = existingEffect.metadata
 
     normalized[EFFECT_COMPONENT_TYPE] = {
       id: existingEffect.id && existingEffect.id.trim().length ? existingEffect.id : generateUuid(),
@@ -6284,15 +6189,7 @@ function createSceneDocument(
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
   let resourceSummary: SceneResourceSummary | undefined
   if (options.resourceSummary) {
-    try {
-      resourceSummary = structuredClone(options.resourceSummary)
-    } catch (_error) {
-      try {
-        resourceSummary = JSON.parse(JSON.stringify(options.resourceSummary)) as SceneResourceSummary
-      } catch (_jsonError) {
-        resourceSummary = { ...options.resourceSummary }
-      }
-    }
+    resourceSummary = options.resourceSummary
   }
   const legacyViewport = options.viewportSettings as LegacyViewportSettings | undefined
   const skybox = cloneSceneSkybox(options.skybox ?? legacyViewport?.skybox ?? null)
@@ -7559,7 +7456,48 @@ export const useSceneStore = defineStore('scene', {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
       visitNode(this.nodes, nodeId, (node) => {
-        node.dynamicMesh = JSON.parse(JSON.stringify(dynamicMesh))
+        // PERF: Avoid JSON stringify/parse deep clones.
+        // Dynamic meshes (especially Ground.heightMap) can be very large and deep cloning can stall the UI.
+        // Instead, update the existing dynamicMesh in-place when possible.
+
+        if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+          node.dynamicMesh = dynamicMesh
+          return
+        }
+
+        const incoming = dynamicMesh as Record<string, any>
+        const existing = node.dynamicMesh
+
+        // If we don't have an object mesh to update, fall back to a shallow assignment.
+        if (!existing || typeof existing !== 'object') {
+          ;(node as any).dynamicMesh = { ...incoming }
+          return
+        }
+
+        const existingRecord = existing as Record<string, any>
+
+        const incomingType = typeof incoming.type === 'string' ? incoming.type : null
+        const existingType = typeof existingRecord.type === 'string' ? existingRecord.type : null
+
+        // Type mismatch: replace reference (shallow) to keep semantics correct.
+        if (incomingType && existingType && incomingType !== existingType) {
+          ;(node as any).dynamicMesh = { ...incoming }
+          return
+        }
+
+        // If incoming has a `type`, treat it as a full definition and sync keys.
+        // Otherwise treat it as a patch and just assign the provided keys.
+        if (incomingType) {
+          for (const key of Object.keys(existingRecord)) {
+            if (!(key in incoming)) {
+              delete existingRecord[key]
+            }
+          }
+        }
+
+        for (const [key, value] of Object.entries(incoming)) {
+          existingRecord[key] = value
+        }
       })
       this.nodes = [...this.nodes]
     },
@@ -11530,20 +11468,7 @@ export const useSceneStore = defineStore('scene', {
           return
         }
 
-        // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
-        let clonedMetadata: Record<string, unknown> | undefined
-        if (previous?.metadata) {
-          try {
-            clonedMetadata = structuredClone(previous.metadata)
-          } catch (_error) {
-            try {
-              clonedMetadata = JSON.parse(JSON.stringify(previous.metadata)) as Record<string, unknown>
-            } catch (_jsonError) {
-              console.warn('Failed to deeply clone wall component metadata, using shallow copy', _jsonError)
-              clonedMetadata = { ...previous.metadata }
-            }
-          }
-        }
+        const clonedMetadata: Record<string, unknown> | undefined = previous?.metadata
 
         const nextComponents: SceneNodeComponentMap = { ...(target.components ?? {}) }
         nextComponents[WALL_COMPONENT_TYPE] = {
@@ -11955,22 +11880,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       
-      // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
-      let clonedMetadata: Record<string, unknown> | undefined
-      if (metadata) {
-        try {
-          clonedMetadata = structuredClone(metadata)
-        } catch (_error) {
-          // 如果 structuredClone 失败，尝试使用 JSON 序列化
-          try {
-            clonedMetadata = JSON.parse(JSON.stringify(metadata)) as Record<string, unknown>
-          } catch (_jsonError) {
-            // 如果都失败了，使用浅拷贝作为最后手段
-            console.warn('Failed to deeply clone component metadata, using shallow copy', _jsonError)
-            clonedMetadata = { ...metadata }
-          }
-        }
-      }
+      const clonedMetadata: Record<string, unknown> | undefined = metadata
 
       visitNode(this.nodes, nodeId, (node) => {
         const current = findComponentEntryById(node.components, componentId)

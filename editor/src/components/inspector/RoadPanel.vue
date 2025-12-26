@@ -158,9 +158,7 @@ function applyWidthUpdate(rawValue: unknown) {
     return
   }
 
-  const nextMesh = JSON.parse(JSON.stringify(mesh)) as RoadDynamicMesh
-  nextMesh.width = clamped
-  sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+  sceneStore.updateNodeDynamicMesh(nodeId, { width: clamped })
 }
 
 </script>

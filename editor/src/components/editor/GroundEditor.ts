@@ -45,7 +45,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -124,6 +124,39 @@ const scatterFrustumCuller = createInstancedBvhFrustumCuller()
 const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 
+const groundEditorPerfNow = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
+const groundEditorDebugEnabled = (() => {
+	try {
+		const globalFlag = Boolean((globalThis as any).__HARMONY_GROUND_DEBUG)
+		const storageFlag = typeof localStorage !== 'undefined' && localStorage.getItem('harmony:groundDebug') === '1'
+		return globalFlag || storageFlag
+	} catch (_error) {
+		return false
+	}
+})()
+
+function groundEditorDebug(label: string, data?: unknown) {
+	if (!groundEditorDebugEnabled) return
+	if (data === undefined) {
+		console.debug(`[GroundEditor] ${label}`)
+		return
+	}
+	console.debug(`[GroundEditor] ${label}`, data)
+}
+
+function estimateSparseMapSize(map: Record<string, unknown> | null | undefined, limit = 8000): { count: number; hasMore: boolean } {
+	if (!map) return { count: 0, hasMore: false }
+	let count = 0
+	// Avoid a full scan; large terrains can have huge sparse maps.
+	for (const _key in map) {
+		count += 1
+		if (count >= limit) {
+			return { count, hasMore: true }
+		}
+	}
+	return { count, hasMore: false }
+}
+
 type ScatterSessionState = {
 	pointerId: number
 	asset: ProjectAsset
@@ -158,6 +191,7 @@ type SculptSessionState = {
 	heightMap: GroundDynamicMesh['heightMap']
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
+	touchedChunkKeys: Set<string>
 }
 
 let sculptSessionState: SculptSessionState | null = null
@@ -174,6 +208,27 @@ function mergeRegions(
 		maxRow: Math.max(current.maxRow, next.maxRow),
 		minColumn: Math.min(current.minColumn, next.minColumn),
 		maxColumn: Math.max(current.maxColumn, next.maxColumn),
+	}
+}
+
+function resolveChunkCellsForDefinition(definition: GroundDynamicMesh): number {
+	// Keep in sync with schema/groundMesh.ts (DEFAULT_GROUND_CHUNK_CELLS / cellSize).
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	const targetMeters = 100
+	const candidate = Math.max(4, Math.round(targetMeters / Math.max(1e-6, cellSize)))
+	return Math.max(4, Math.min(512, Math.trunc(candidate)))
+}
+
+function addTouchedChunkKeys(state: SculptSessionState, definition: GroundDynamicMesh, region: GroundGeometryUpdateRegion) {
+	const chunkCells = resolveChunkCellsForDefinition(definition)
+	const minCr = Math.max(0, Math.floor(region.minRow / chunkCells))
+	const maxCr = Math.max(0, Math.floor(region.maxRow / chunkCells))
+	const minCc = Math.max(0, Math.floor(region.minColumn / chunkCells))
+	const maxCc = Math.max(0, Math.floor(region.maxColumn / chunkCells))
+	for (let cr = minCr; cr <= maxCr; cr += 1) {
+		for (let cc = minCc; cc <= maxCc; cc += 1) {
+			state.touchedChunkKeys.add(`${cr}:${cc}`)
+		}
 	}
 }
 
@@ -292,7 +347,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundDynamicMesh
 		region: GroundGeometryUpdateRegion | null
 		jobToken: number
+		touchedChunkKeys?: Set<string> | null
 	}): Promise<void> {
+		const t0 = groundEditorPerfNow()
 		const worker = getGroundNormalsWorker()
 		if (!worker) {
 			// Worker not available; fall back.
@@ -304,11 +361,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				mesh.geometry.computeVertexNormals()
 			})
 			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+			if (groundEditorDebugEnabled) {
+				groundEditorDebug('normals(worker-unavailable,fallback)', {
+					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+					region: params.region,
+				})
+			}
 			return
 		}
 
+		const chunkCells = resolveChunkCellsForDefinition(params.definition)
+		const filterKeys = params.touchedChunkKeys && params.touchedChunkKeys.size ? params.touchedChunkKeys : null
+		const tGather = groundEditorPerfNow()
 		const chunks: GroundNormalsComputeRequest['chunks'] = []
 		const meshesByKey = new Map<string, THREE.Mesh>()
+		let totalPositionsBytes = 0
+		let totalIndicesBytes = 0
 		params.groundObject.traverse((child) => {
 			const mesh = child as THREE.Mesh
 			if (!mesh?.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
@@ -329,30 +397,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 
-			// If we have a region, only process overlapping chunks.
-			if (params.region) {
-				const chunk = mesh.userData?.groundChunk as
-					| { startRow: number; startColumn: number; rows: number; columns: number }
-					| undefined
-				if (chunk) {
-					const chunkMinRow = chunk.startRow
-					const chunkMaxRow = chunk.startRow + chunk.rows
-					const chunkMinColumn = chunk.startColumn
-					const chunkMaxColumn = chunk.startColumn + chunk.columns
-					const overlaps = !(
-						params.region.maxRow < chunkMinRow ||
-						params.region.minRow > chunkMaxRow ||
-						params.region.maxColumn < chunkMinColumn ||
-						params.region.minColumn > chunkMaxColumn
-					)
-					if (!overlaps) {
-						return
-					}
+			const chunk = mesh.userData?.groundChunk as
+				| { startRow: number; startColumn: number; rows: number; columns: number }
+				| undefined
+
+			// Prefer touched-chunk filtering (more precise than a bounding rectangle).
+			if (filterKeys && chunk) {
+				const cr = Math.floor(Math.max(0, chunk.startRow) / chunkCells)
+				const cc = Math.floor(Math.max(0, chunk.startColumn) / chunkCells)
+				const ck = `${cr}:${cc}`
+				if (!filterKeys.has(ck)) {
+					return
+				}
+			} else if (params.region && chunk) {
+				// Fall back to region overlap filtering.
+				const chunkMinRow = chunk.startRow
+				const chunkMaxRow = chunk.startRow + chunk.rows
+				const chunkMinColumn = chunk.startColumn
+				const chunkMaxColumn = chunk.startColumn + chunk.columns
+				const overlaps = !(
+					params.region.maxRow < chunkMinRow ||
+					params.region.minRow > chunkMaxRow ||
+					params.region.maxColumn < chunkMinColumn ||
+					params.region.minColumn > chunkMaxColumn
+				)
+				if (!overlaps) {
+					return
 				}
 			}
 
 			const positionsCopy = cloneTypedArrayForTransfer(positions)
 			const indicesCopy = cloneTypedArrayForTransfer(indices)
+			totalPositionsBytes += positionsCopy.byteLength
+			totalIndicesBytes += indicesCopy.byteLength
 			const key = mesh.uuid
 			meshesByKey.set(key, mesh)
 			chunks.push({
@@ -364,9 +441,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (!chunks.length) {
+			if (groundEditorDebugEnabled) {
+				groundEditorDebug('normals(worker-skip,no-chunks)', {
+					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+					filterKeys: filterKeys ? filterKeys.size : 0,
+					region: params.region,
+				})
+			}
 			return
 		}
+		const gatherMs = groundEditorPerfNow() - tGather
 
+		const tPost = groundEditorPerfNow()
 		const requestId = (groundNormalsRequestId += 1)
 		const request: GroundNormalsComputeRequest = { kind: 'compute-normals', requestId, chunks }
 		const responsePromise = new Promise<GroundNormalsComputeResponse>((resolve, reject) => {
@@ -383,6 +469,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		const response = await responsePromise
+		const postAndWaitMs = groundEditorPerfNow() - tPost
 		if (params.jobToken !== groundNormalsJobToken) {
 			// A newer sculpt finalize started; ignore stale results.
 			return
@@ -406,6 +493,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+		if (groundEditorDebugEnabled) {
+			groundEditorDebug('normals(worker-done)', {
+				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+				gatherMs: Number(gatherMs.toFixed(2)),
+				postAndWaitMs: Number(postAndWaitMs.toFixed(2)),
+				chunks: chunks.length,
+				bytes: {
+					positions: totalPositionsBytes,
+					indices: totalIndicesBytes,
+					total: totalPositionsBytes + totalIndicesBytes,
+				},
+				filterKeys: filterKeys ? filterKeys.size : 0,
+				region: params.region,
+			})
+		}
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -1177,15 +1279,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
-	function cloneHeightMap(heightMap: GroundDynamicMesh['heightMap']): GroundDynamicMesh['heightMap'] {
-		return { ...heightMap }
-	}
-
 	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
 		}
-		const clonedHeightMap = cloneHeightMap(definition.heightMap)
+		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
+		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
+		const clonedHeightMap = definition.heightMap
+		if (groundEditorDebugEnabled) {
+			const estimate = estimateSparseMapSize(clonedHeightMap as any)
+			groundEditorDebug('ensureSculptSession(heightMap-size-estimate)', {
+				nodeId,
+				count: estimate.count,
+				hasMore: estimate.hasMore,
+			})
+		}
 		const sessionDefinition: GroundDynamicMesh = {
 			...definition,
 			heightMap: clonedHeightMap,
@@ -1196,6 +1304,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			heightMap: clonedHeightMap,
 			dirty: false,
 			affectedRegion: null,
+			touchedChunkKeys: new Set<string>(),
 		}
 		return sessionDefinition
 	}
@@ -2098,6 +2207,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function performSculpt(event: PointerEvent) {
 		if (!brushMesh.visible) return
+		const t0 = groundEditorPerfNow()
 
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
@@ -2110,7 +2220,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundObject = getGroundObject()
 		if (!groundObject) return
+		const tChunks = groundEditorPerfNow()
 		updateGroundChunks(groundObject, definition, options.getCamera())
+		const chunksMs = groundEditorPerfNow() - tChunks
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -2137,6 +2249,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (modified) {
+			const tRegion = groundEditorPerfNow()
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.dirty = true
 			}
@@ -2154,19 +2267,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				minColumn: Math.max(0, minColumn),
 				maxColumn: Math.min(definition.columns, maxColumn),
 			}
-			updateGroundMeshRegion(groundObject, definition, region)
-			// Stitch normals across chunk boundaries to prevent visible seams.
-			const padded: GroundGeometryUpdateRegion = {
-				minRow: Math.max(0, region.minRow - 2),
-				maxRow: Math.min(definition.rows, region.maxRow + 2),
-				minColumn: Math.max(0, region.minColumn - 2),
-				maxColumn: Math.min(definition.columns, region.maxColumn + 2),
-			}
-			stitchGroundChunkNormals(groundObject, definition, padded)
+			// Sculpt-time perf: recomputing vertex normals per stroke can be very expensive on large terrains.
+			// We skip live normal recomputation and rely on finalize (worker) to rebuild normals for the affected region.
+			updateGroundMeshRegion(groundObject, definition, region, { computeNormals: false })
 			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
+				addTouchedChunkKeys(sculptSessionState, definition, region)
 			}
 			flushSculptPreviewToScene(definition)
+			if (groundEditorDebugEnabled) {
+				groundEditorDebug('performSculpt(modified)', {
+					ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+					chunksMs: Number(chunksMs.toFixed(2)),
+					regionMs: Number((groundEditorPerfNow() - tRegion).toFixed(2)),
+					region,
+					brush: {
+						radius: options.brushRadius.value,
+						strength: options.brushStrength.value,
+						operation: event.shiftKey ? 'depress(shift)' : options.brushOperation.value,
+					},
+				})
+			}
+		} else if (groundEditorDebugEnabled) {
+			groundEditorDebug('performSculpt(no-change)', {
+				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+				chunksMs: Number(chunksMs.toFixed(2)),
+			})
 		}
 	}
 
@@ -2189,6 +2315,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
 			return false
 		}
+		const t0 = groundEditorPerfNow()
 
 		const definition = groundNode.dynamicMesh as GroundDynamicMesh
 		ensureSculptSession(definition, groundNode.id)
@@ -2198,6 +2325,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.stopPropagation()
 		event.stopImmediatePropagation()
 		performSculpt(event)
+		if (groundEditorDebugEnabled) {
+			groundEditorDebug('beginSculpt(total)', {
+				ms: Number((groundEditorPerfNow() - t0).toFixed(2)),
+				ground: {
+					width: definition.width,
+					depth: definition.depth,
+					rows: definition.rows,
+					columns: definition.columns,
+					cellSize: definition.cellSize,
+				},
+			})
+		}
 		try {
 			options.canvasRef.value?.setPointerCapture(event.pointerId)
 		} catch (error) {
@@ -2222,6 +2361,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (selectedNode?.dynamicMesh?.type === 'Ground') {
 			const session = sculptSessionState?.nodeId === selectedNode.id ? sculptSessionState : null
 			const region = session?.affectedRegion ?? null
+				const touchedChunkKeys = session?.touchedChunkKeys ?? null
 			const dirty = Boolean(session?.dirty)
 			const groundObject = getGroundObject()
 			if (!dirty) {
@@ -2234,6 +2374,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					groundObject,
 					definition: selectedNode.dynamicMesh as GroundDynamicMesh,
 					region,
+						touchedChunkKeys,
 					jobToken,
 				}).catch((error) => {
 					console.warn('地形法线异步构建失败，回退到主线程：', error)

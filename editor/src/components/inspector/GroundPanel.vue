@@ -103,7 +103,18 @@ function detectManualEdits(definition: GroundDynamicMesh): boolean {
     return hasVariation
   }
 
-  const scratch = JSON.parse(JSON.stringify(definition)) as GroundDynamicMesh
+  // Avoid deep-cloning large Ground definitions. We only need a scratch mesh with
+  // matching dimensions + generation settings and a fresh heightMap to generate into.
+  const scratch: GroundDynamicMesh = {
+    type: 'Ground',
+    width: definition.width,
+    depth: definition.depth,
+    rows: definition.rows,
+    columns: definition.columns,
+    cellSize: definition.cellSize,
+    heightMap: {},
+    generation: definition.generation ? { ...definition.generation } : null,
+  }
   if (!scratch.generation) {
     definition.hasManualEdits = false
     return false
@@ -145,20 +156,30 @@ function applyGenerationPatch(patch: Partial<GroundGenerationSettings>) {
   if (!node || node.dynamicMesh?.type !== 'Ground') {
     return
   }
-  const clonedDefinition = JSON.parse(JSON.stringify(node.dynamicMesh)) as GroundDynamicMesh
+  const definition = node.dynamicMesh as GroundDynamicMesh
   const nextGeneration: GroundGenerationSettings = {
-    ...buildGenerationPayload(node.dynamicMesh as GroundDynamicMesh),
+    ...buildGenerationPayload(definition),
     ...patch,
   }
-  nextGeneration.worldWidth = clonedDefinition.width
-  nextGeneration.worldDepth = clonedDefinition.depth
-  const canRegenerate = !detectManualEdits(clonedDefinition)
+  nextGeneration.worldWidth = definition.width
+  nextGeneration.worldDepth = definition.depth
+  const canRegenerate = !detectManualEdits(definition)
   if (canRegenerate) {
-    applyGroundGeneration(clonedDefinition, nextGeneration)
+    // Regenerate into a fresh heightMap (do not clone existing heightMap).
+    const scratch: GroundDynamicMesh = {
+      ...definition,
+      heightMap: {},
+      generation: nextGeneration,
+    }
+    applyGroundGeneration(scratch, nextGeneration)
+    sceneStore.updateNodeDynamicMesh(node.id, {
+      generation: nextGeneration,
+      heightMap: scratch.heightMap,
+      hasManualEdits: false,
+    })
   } else {
-    clonedDefinition.generation = nextGeneration
+    sceneStore.updateNodeDynamicMesh(node.id, { generation: nextGeneration })
   }
-  sceneStore.updateNodeDynamicMesh(node.id, clonedDefinition)
 }
 
 watch(
