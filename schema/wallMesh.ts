@@ -18,8 +18,8 @@ const WALL_MIN_WIDTH = 0.1
 const WALL_DEFAULT_HEIGHT = 3
 const WALL_DEFAULT_WIDTH = 0.2
 const WALL_EPSILON = 1e-6
-  const WALL_MAX_ADAPTIVE_DEPTH = 10
-  const WALL_MAX_SAMPLE_POINTS = 512
+const WALL_MAX_ADAPTIVE_DEPTH = 10
+const WALL_MAX_SAMPLE_POINTS = 512
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -55,7 +55,11 @@ function createWallMaterial(): THREE.MeshStandardMaterial {
     roughness: 0.85,
   })
   material.name = 'WallMaterial'
-  material.side = THREE.DoubleSide
+  // Keep walls single-sided; geometry winding/normals must face outward.
+  material.side = THREE.FrontSide
+  material.transparent = false
+  material.opacity = 1
+  material.depthWrite = true
   return material
 }
 
@@ -303,16 +307,20 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
     if (centers.length < 2) {
       return null
     }
-  const halfWidth = Math.max(WALL_EPSILON, width * 0.5)
-  const heightValue = Math.max(WALL_MIN_HEIGHT, height)
+    const halfWidth = Math.max(WALL_EPSILON, width * 0.5)
+    const heightValue = Math.max(WALL_MIN_HEIGHT, height)
 
-  const positions: number[] = []
-  const uvs: number[] = []
-  const indices: number[] = []
+    const positions: number[] = []
+    const uvs: number[] = []
+    const indices: number[] = []
 
-  const center = new THREE.Vector3()
-  const tangent = new THREE.Vector3()
-  const lateral = new THREE.Vector3()
+    const center = new THREE.Vector3()
+    const tangent = new THREE.Vector3()
+    const lateral = new THREE.Vector3()
+    const prevLateral = new THREE.Vector3()
+    const hasPrevLateral = { value: false }
+    const leftPos = new THREE.Vector3()
+    const rightPos = new THREE.Vector3()
 
     const sampleCount = centers.length
     for (let i = 0; i < sampleCount; i += 1) {
@@ -323,24 +331,37 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
       const next = centers[i === sampleCount - 1 ? (closed ? 0 : sampleCount - 1) : i + 1]!
       tangent.subVectors(next, prev)
       tangent.y = 0
-    if (tangent.lengthSq() <= WALL_EPSILON) {
-      tangent.set(1, 0, 0)
-    } else {
-      tangent.normalize()
-    }
-    lateral.set(-tangent.z, 0, tangent.x)
-    lateral.normalize()
+      if (tangent.lengthSq() <= WALL_EPSILON) {
+        tangent.set(1, 0, 0)
+      } else {
+        tangent.normalize()
+      }
 
-    const left = center.clone().addScaledVector(lateral, halfWidth)
-    const right = center.clone().addScaledVector(lateral, -halfWidth)
-    const baseY = center.y
-    const topY = baseY + heightValue
+      lateral.set(-tangent.z, 0, tangent.x)
+      if (lateral.lengthSq() <= WALL_EPSILON) {
+        lateral.set(0, 0, 1)
+      } else {
+        lateral.normalize()
+      }
+
+      // Enforce a consistent lateral direction along the path to avoid
+      // frame flips that can invert winding and make some faces disappear.
+      if (hasPrevLateral.value && prevLateral.dot(lateral) < 0) {
+        lateral.multiplyScalar(-1)
+      }
+      prevLateral.copy(lateral)
+      hasPrevLateral.value = true
+
+      leftPos.copy(center).addScaledVector(lateral, halfWidth)
+      rightPos.copy(center).addScaledVector(lateral, -halfWidth)
+      const baseY = center.y
+      const topY = baseY + heightValue
 
       // Vertex order per sample: lb, rb, lt, rt (interleaved).
-      positions.push(left.x, baseY, left.z)
-      positions.push(right.x, baseY, right.z)
-      positions.push(left.x, topY, left.z)
-      positions.push(right.x, topY, right.z)
+      positions.push(leftPos.x, baseY, leftPos.z)
+      positions.push(rightPos.x, baseY, rightPos.z)
+      positions.push(leftPos.x, topY, leftPos.z)
+      positions.push(rightPos.x, topY, rightPos.z)
 
       uvs.push(
         0, 0,
@@ -372,8 +393,8 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
       indices.push(lt, lbNext, ltNext)
 
       // Right side
-      indices.push(rbNext, rb, rt)
-      indices.push(rt, rb, rtNext)
+      indices.push(rb, rt, rbNext)
+      indices.push(rt, rtNext, rbNext)
 
       // Top face
       indices.push(lt, ltNext, rt)
@@ -384,14 +405,14 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
       indices.push(lb, rbNext, lbNext)
     }
 
-  const geometry = new THREE.BufferGeometry()
-  geometry.setIndex(indices)
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  geometry.computeVertexNormals()
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return geometry
+    const geometry = new THREE.BufferGeometry()
+    geometry.setIndex(indices)
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+    return geometry
 }
 
 function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh, options: WallRenderOptions = {}) {
