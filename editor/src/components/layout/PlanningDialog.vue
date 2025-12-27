@@ -10,7 +10,7 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
-import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
+import { generateFpsScatterPointsInPolygon } from '@/utils/scatterSampling'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -518,147 +518,6 @@ function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desir
   }
 }
 
-const POISSON_CANDIDATES_PER_ACTIVE = 24
-
-function computeBoundingBox(points: PlanningPoint[]) {
-  if (!Array.isArray(points) || points.length === 0) return null
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  for (const p of points) {
-    minX = Math.min(minX, p.x)
-    minY = Math.min(minY, p.y)
-    maxX = Math.max(maxX, p.x)
-    maxY = Math.max(maxY, p.y)
-  }
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
-  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY }
-}
-
-function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): PlanningPoint | null {
-  const uniform = sampleUniformPointInPolygon(polygon, random)
-  if (uniform) return uniform
-
-  // Fallback: rejection sampling within bounding box.
-  const bbox = computeBoundingBox(polygon)
-  if (!bbox) return null
-  if (!Number.isFinite(bbox.width) || !Number.isFinite(bbox.height) || bbox.width <= 0 || bbox.height <= 0) return null
-
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const p = { x: bbox.minX + bbox.width * random(), y: bbox.minY + bbox.height * random() }
-    if (isPointInPolygon(p, polygon)) return p
-  }
-  return null
-}
-
-function poissonSampleInPolygon(
-  polygon: PlanningPoint[],
-  minDistance: number,
-  random: () => number,
-  maxPoints: number,
-): PlanningPoint[] {
-  if (!Array.isArray(polygon) || polygon.length < 3) return []
-  if (!Number.isFinite(minDistance) || minDistance <= 0) return []
-  if (!Number.isFinite(maxPoints) || maxPoints <= 0) return []
-
-  const bbox = computeBoundingBox(polygon)
-  if (!bbox || bbox.width <= 0 || bbox.height <= 0) return []
-
-  const cellSize = minDistance / Math.SQRT2
-  const gridWidth = Math.max(1, Math.ceil(bbox.width / cellSize))
-  const gridHeight = Math.max(1, Math.ceil(bbox.height / cellSize))
-  const grid = new Int32Array(gridWidth * gridHeight)
-  grid.fill(-1)
-
-  const points: PlanningPoint[] = []
-  const active: number[] = []
-
-  const toGridX = (x: number) => Math.floor((x - bbox.minX) / cellSize)
-  const toGridY = (y: number) => Math.floor((y - bbox.minY) / cellSize)
-  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx
-
-  const insertPoint = (p: PlanningPoint) => {
-    points.push(p)
-    const index = points.length - 1
-    active.push(index)
-    const gx = Math.min(gridWidth - 1, Math.max(0, toGridX(p.x)))
-    const gy = Math.min(gridHeight - 1, Math.max(0, toGridY(p.y)))
-    grid[gridIndex(gx, gy)] = index
-  }
-
-  const hasNeighborWithin = (p: PlanningPoint): boolean => {
-    const gx = toGridX(p.x)
-    const gy = toGridY(p.y)
-    const radius = 2
-    const minSq = minDistance * minDistance
-    for (let y = Math.max(0, gy - radius); y <= Math.min(gridHeight - 1, gy + radius); y += 1) {
-      for (let x = Math.max(0, gx - radius); x <= Math.min(gridWidth - 1, gx + radius); x += 1) {
-        const storedIndex = grid[gridIndex(x, y)]
-        if (storedIndex == null || storedIndex === -1) continue
-        const other = points[storedIndex]
-        if (!other) continue
-        const dx = other.x - p.x
-        const dy = other.y - p.y
-        if (dx * dx + dy * dy < minSq) return true
-      }
-    }
-    return false
-  }
-
-  const start = samplePointInPolygon(polygon, random)
-  if (!start) return []
-  insertPoint(start)
-
-  while (active.length && points.length < maxPoints) {
-    const activeIndex = Math.floor(random() * active.length)
-    const baseIndex = active[activeIndex]!
-    const base = points[baseIndex]!
-
-    let found = false
-    for (let attempt = 0; attempt < POISSON_CANDIDATES_PER_ACTIVE; attempt += 1) {
-      const angle = random() * Math.PI * 2
-      const radius = minDistance * (1 + random())
-      const candidate: PlanningPoint = {
-        x: base.x + Math.cos(angle) * radius,
-        y: base.y + Math.sin(angle) * radius,
-      }
-      if (candidate.x < bbox.minX || candidate.x > bbox.maxX || candidate.y < bbox.minY || candidate.y > bbox.maxY) {
-        continue
-      }
-      if (!isPointInPolygon(candidate, polygon)) {
-        continue
-      }
-      if (hasNeighborWithin(candidate)) {
-        continue
-      }
-      insertPoint(candidate)
-      found = true
-      break
-    }
-
-    if (!found) {
-      active[activeIndex] = active[active.length - 1]!
-      active.pop()
-    }
-  }
-
-  return points
-}
-
-function takeRandomSubset<T>(items: T[], count: number, random: () => number): T[] {
-  if (count <= 0) return []
-  if (items.length <= count) return items.slice()
-  const arr = items.slice()
-  for (let i = 0; i < count; i += 1) {
-    const j = i + Math.floor(random() * (arr.length - i))
-    const tmp = arr[i]
-    arr[i] = arr[j]!
-    arr[j] = tmp!
-  }
-  arr.length = count
-  return arr
-}
 
 function polylineLength(points: PlanningPoint[]) {
   if (points.length < 2) return 0
@@ -998,16 +857,14 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const cappedTarget = Math.min(800, targetDots)
     const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}`))
 
-    // Use Poisson disk sampling for a more even distribution, while ensuring
-    // dots always stay inside the planned polygon region.
     const minDistanceForDots = Math.max(minDistance, 0.05)
-    const candidates = poissonSampleInPolygon(
-      poly.points,
-      minDistanceForDots,
+    const selected = generateFpsScatterPointsInPolygon({
+      polygon: poly.points,
+      targetCount: cappedTarget,
+      minDistance: minDistanceForDots,
       random,
-      Math.min(1500, Math.max(1, Math.ceil(cappedTarget * 1.6))),
-    )
-    const selected = candidates.length > cappedTarget ? takeRandomSubset(candidates, cappedTarget, random) : candidates
+      maxCandidates: Math.min(4000, Math.max(800, Math.ceil(cappedTarget * 6))),
+    })
     polygonScatterDensityDotsCache.set(poly.id, { key: cacheKey, dots: selected })
     if (selected.length) {
       result[poly.id] = selected
