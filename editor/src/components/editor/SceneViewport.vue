@@ -861,6 +861,18 @@ const canDropSelection = computed(() =>
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
+const buildToolCursorClass = computed(() => {
+  if (activeBuildTool.value === 'wall') {
+    return 'cursor-wall'
+  }
+  if (activeBuildTool.value === 'road') {
+    return 'cursor-road'
+  }
+  if (activeBuildTool.value === 'floor') {
+    return 'cursor-floor'
+  }
+  return null
+})
 const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
@@ -9116,7 +9128,7 @@ defineExpose<SceneViewportHandle>({
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
-      <canvas ref="canvasRef" class="viewport-canvas" />
+      <canvas ref="canvasRef" :class="['viewport-canvas', buildToolCursorClass]" />
     </div>
     <input
       ref="groundTextureInputRef"
@@ -9228,6 +9240,21 @@ defineExpose<SceneViewportHandle>({
 
 .viewport-canvas:active {
   cursor: grabbing;
+}
+
+.viewport-canvas.cursor-wall,
+.viewport-canvas.cursor-wall:active {
+  cursor: url('/cursors/wall.cur'), url('/cursors/wall.png') 16 16, crosshair !important;
+}
+
+.viewport-canvas.cursor-road,
+.viewport-canvas.cursor-road:active {
+  cursor: url('/cursors/road.cur'), url('/cursors/road.png') 16 16, cell !important;
+}
+
+.viewport-canvas.cursor-floor,
+.viewport-canvas.cursor-floor:active {
+  cursor: url('/cursors/floor.cur'), url('/cursors/floor.png') 16 16, copy !important;
 }
 
 .protagonist-preview {
