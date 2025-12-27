@@ -69,14 +69,17 @@ type SceneNodeWithExtras = SceneNode & {
   editorFlags?: SceneNodeEditorFlags;
 };
 
-function findGroundDynamicMeshInNodes(nodes: SceneNodeWithExtras[]): GroundDynamicMesh | null {
-  const stack: SceneNodeWithExtras[] = [...nodes]
+function findGroundNodeAndMeshInNodes(
+  nodes: SceneNodeWithExtras[],
+): { node: SceneNodeWithExtras; mesh: GroundDynamicMesh } | null {
+  const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
   while (stack.length) {
     const node = stack.pop()!
     const mesh = node.dynamicMesh as unknown
     if (mesh && (mesh as any).type === 'Ground') {
-      return mesh as GroundDynamicMesh
+      return { node, mesh: mesh as GroundDynamicMesh }
     }
+
     const children = Array.isArray((node as any).children) ? ((node as any).children as SceneNodeWithExtras[]) : []
     if (children.length) {
       for (const child of children) {
@@ -1335,9 +1338,34 @@ class SceneGraphBuilder {
     };
 
     const documentNodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    const groundMesh = findGroundDynamicMeshInNodes(documentNodes);
-    if (groundMesh) {
-      roadOptions.heightSampler = (x: number, z: number) => sampleGroundHeight(groundMesh, x, z);
+    const ground = findGroundNodeAndMeshInNodes(documentNodes);
+    if (ground) {
+      const roadPosition = (node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined;
+      const roadRotation = (node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined;
+      const roadOriginX = typeof roadPosition?.x === 'number' && Number.isFinite(roadPosition.x) ? roadPosition.x : 0;
+      const roadOriginY = typeof roadPosition?.y === 'number' && Number.isFinite(roadPosition.y) ? roadPosition.y : 0;
+      const roadOriginZ = typeof roadPosition?.z === 'number' && Number.isFinite(roadPosition.z) ? roadPosition.z : 0;
+      const yaw = typeof roadRotation?.y === 'number' && Number.isFinite(roadRotation.y) ? roadRotation.y : 0;
+      const cosYaw = Math.cos(yaw);
+      const sinYaw = Math.sin(yaw);
+
+      const groundPosition = (ground.node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined;
+      const groundOriginX = typeof groundPosition?.x === 'number' && Number.isFinite(groundPosition.x) ? groundPosition.x : 0;
+      const groundOriginY = typeof groundPosition?.y === 'number' && Number.isFinite(groundPosition.y) ? groundPosition.y : 0;
+      const groundOriginZ = typeof groundPosition?.z === 'number' && Number.isFinite(groundPosition.z) ? groundPosition.z : 0;
+
+      roadOptions.heightSampler = (x: number, z: number) => {
+        const rotatedX = x * cosYaw - z * sinYaw;
+        const rotatedZ = x * sinYaw + z * cosYaw;
+
+        const worldX = roadOriginX + rotatedX;
+        const worldZ = roadOriginZ + rotatedZ;
+
+        const groundLocalX = worldX - groundOriginX;
+        const groundLocalZ = worldZ - groundOriginZ;
+        const groundWorldY = groundOriginY + sampleGroundHeight(ground.mesh, groundLocalX, groundLocalZ);
+        return groundWorldY - roadOriginY;
+      };
     }
 
     const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
