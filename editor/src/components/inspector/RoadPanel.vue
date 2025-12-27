@@ -30,6 +30,11 @@ const localWidth = ref<number>(2)
 const localJunctionSmoothing = ref<number>(ROAD_DEFAULT_JUNCTION_SMOOTHING)
 const localLaneLines = ref<boolean>(false)
 const localShoulders = ref<boolean>(false)
+const localSamplingDensityFactor = ref<number>(1.0)
+const localSmoothingStrengthFactor = ref<number>(1.0)
+const localMinClearance = ref<number>(0.01)
+const localLaneLineWidth = ref<number | undefined>(undefined)
+const localShoulderWidth = ref<number | undefined>(undefined)
 const isSyncingFromScene = ref(false)
 
 watch(
@@ -61,6 +66,11 @@ watch(
       localJunctionSmoothing.value = ROAD_DEFAULT_JUNCTION_SMOOTHING
       localLaneLines.value = false
       localShoulders.value = false
+      localSamplingDensityFactor.value = 1.0
+      localSmoothingStrengthFactor.value = 1.0
+      localMinClearance.value = 0.01
+      localLaneLineWidth.value = undefined
+      localShoulderWidth.value = undefined
       nextTick(() => {
         isSyncingFromScene.value = false
       })
@@ -72,6 +82,21 @@ watch(
     localJunctionSmoothing.value = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
     localLaneLines.value = Boolean(component.props?.laneLines)
     localShoulders.value = Boolean(component.props?.shoulders)
+
+    const samplingDensity = component.props?.samplingDensityFactor
+    localSamplingDensityFactor.value = Number.isFinite(samplingDensity) ? Math.max(0.1, Math.min(5, samplingDensity!)) : 1.0
+
+    const smoothingStrength = component.props?.smoothingStrengthFactor
+    localSmoothingStrengthFactor.value = Number.isFinite(smoothingStrength) ? Math.max(0.1, Math.min(5, smoothingStrength!)) : 1.0
+
+    const minClearance = component.props?.minClearance
+    localMinClearance.value = Number.isFinite(minClearance) ? Math.max(0, Math.min(2, minClearance!)) : 0.01
+
+    const laneLineWidth = component.props?.laneLineWidth
+    localLaneLineWidth.value = Number.isFinite(laneLineWidth) && laneLineWidth! > 0.01 ? laneLineWidth : undefined
+
+    const shoulderWidth = component.props?.shoulderWidth
+    localShoulderWidth.value = Number.isFinite(shoulderWidth) && shoulderWidth! > 0.01 ? shoulderWidth : undefined
 
     nextTick(() => {
       isSyncingFromScene.value = false
@@ -113,6 +138,9 @@ function applyShouldersUpdate(rawValue: unknown) {
 }
 
 const junctionSmoothingDisplay = computed(() => `${Math.round(localJunctionSmoothing.value * 100)}%`)
+const samplingDensityDisplay = computed(() => localSamplingDensityFactor.value.toFixed(2))
+const smoothingStrengthDisplay = computed(() => localSmoothingStrengthFactor.value.toFixed(2))
+const minClearanceDisplay = computed(() => `${(localMinClearance.value * 100).toFixed(1)} cm`)
 
 function applyJunctionSmoothingUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
@@ -161,6 +189,105 @@ function applyWidthUpdate(rawValue: unknown) {
   sceneStore.updateNodeDynamicMesh(nodeId, { width: clamped })
 }
 
+function applySamplingDensityUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.max(0.1, Math.min(5, value))
+  const current = component.props?.samplingDensityFactor ?? 1.0
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { samplingDensityFactor: clamped })
+}
+
+function applySmoothingStrengthUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.max(0.1, Math.min(5, value))
+  const current = component.props?.smoothingStrengthFactor ?? 1.0
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothingStrengthFactor: clamped })
+}
+
+function applyMinClearanceUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(2, value))
+  const current = component.props?.minClearance ?? 0.01
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { minClearance: clamped })
+}
+
+function applyLaneLineWidthUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  const nextValue = Number.isFinite(value) && value > 0.01 ? Math.max(0.01, Math.min(1, value)) : undefined
+  const current = component.props?.laneLineWidth
+  if (nextValue === current || (nextValue === undefined && current === undefined)) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLineWidth: nextValue })
+}
+
+function applyShoulderWidthUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = roadComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  const nextValue = Number.isFinite(value) && value > 0.01 ? Math.max(0.01, Math.min(2, value)) : undefined
+  const current = component.props?.shoulderWidth
+  if (nextValue === current || (nextValue === undefined && current === undefined)) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulderWidth: nextValue })
+}
+
 </script>
 
 <template>
@@ -197,17 +324,100 @@ function applyWidthUpdate(rawValue: unknown) {
           step="0.1"
           @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
         />
+
         <v-switch
           :model-value="localLaneLines"
           density="compact"
           label="Show Lane Lines"
           @update:modelValue="(value) => { const next = Boolean(value); localLaneLines = next; applyLaneLinesUpdate(next) }"
         />
+
         <v-switch
           :model-value="localShoulders"
           density="compact"
           label="Show Shoulders"
           @update:modelValue="(value) => { const next = Boolean(value); localShoulders = next; applyShouldersUpdate(next) }"
+        />
+
+        <v-divider class="my-2" />
+
+        <div class="road-section-header">Terrain Adaptation</div>
+
+        <div class="road-field-labels">
+          <span>Sampling Density</span>
+          <span>{{ samplingDensityDisplay }}</span>
+        </div>
+        <v-slider
+          :model-value="localSamplingDensityFactor"
+          :min="0.1"
+          :max="5"
+          :step="0.1"
+          density="compact"
+          track-color="rgba(77, 208, 225, 0.4)"
+          color="primary"
+          @update:modelValue="(value) => { localSamplingDensityFactor = Number(value); applySamplingDensityUpdate(value) }"
+        />
+
+        <div class="road-field-labels">
+          <span>Smoothing Strength</span>
+          <span>{{ smoothingStrengthDisplay }}</span>
+        </div>
+        <v-slider
+          :model-value="localSmoothingStrengthFactor"
+          :min="0.1"
+          :max="5"
+          :step="0.1"
+          density="compact"
+          track-color="rgba(77, 208, 225, 0.4)"
+          color="primary"
+          @update:modelValue="(value) => { localSmoothingStrengthFactor = Number(value); applySmoothingStrengthUpdate(value) }"
+        />
+
+        <div class="road-field-labels">
+          <span>Min Clearance</span>
+          <span>{{ minClearanceDisplay }}</span>
+        </div>
+        <v-slider
+          :model-value="localMinClearance"
+          :min="0"
+          :max="2"
+          :step="0.01"
+          density="compact"
+          track-color="rgba(77, 208, 225, 0.4)"
+          color="primary"
+          @update:modelValue="(value) => { localMinClearance = Number(value); applyMinClearanceUpdate(value) }"
+        />
+
+        <v-divider class="my-2" />
+
+        <div class="road-section-header">Overlay Dimensions</div>
+
+        <v-text-field
+          :model-value="localLaneLineWidth"
+          type="number"
+          label="Lane Line Width (m)"
+          density="compact"
+          variant="underlined"
+          min="0.01"
+          max="1"
+          step="0.01"
+          placeholder="Auto"
+          clearable
+          @update:modelValue="(v) => { localLaneLineWidth = v ? Number(v) : undefined; applyLaneLineWidthUpdate(v) }"
+        />
+
+        <v-text-field
+          :model-value="localShoulderWidth"
+          type="number"
+          label="Shoulder Width (m)"
+          density="compact"
+          variant="underlined"
+          min="0.01"
+          max="2"
+          step="0.01"
+          placeholder="Auto"
+          clearable
+          @update:modelValue="(v) => { localShoulderWidth = v ? Number(v) : undefined; applyShoulderWidthUpdate(v) }"
         />
       </div>
     </v-expansion-panel-text>
@@ -248,5 +458,13 @@ function applyWidthUpdate(rawValue: unknown) {
   align-items: center;
   font-size: 0.85rem;
   opacity: 0.9;
+}
+
+.road-section-header {
+  font-size: 0.9rem;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-top: 0.4rem;
+  margin-bottom: 0.2rem;
 }
 </style>

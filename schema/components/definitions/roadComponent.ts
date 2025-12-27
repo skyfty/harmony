@@ -18,6 +18,16 @@ export interface RoadComponentProps {
   laneLines: boolean
   shoulders: boolean
   bodyAssetId?: string | null
+  /** Sampling density factor for terrain-conforming road (higher = more sample points). Default 1.0 */
+  samplingDensityFactor?: number
+  /** Smoothing strength factor for terrain-adaptive height smoothing (higher = smoother). Default 1.0 */
+  smoothingStrengthFactor?: number
+  /** Minimum clearance/offset above terrain surface (meters). Default 0.01 */
+  minClearance?: number
+  /** Lane line strip width (meters). Default from ROAD_LANE_LINE_WIDTH constant */
+  laneLineWidth?: number
+  /** Shoulder strip width (meters). Default from ROAD_SHOULDER_WIDTH constant */
+  shoulderWidth?: number
 }
 
 function normalizePoint(value: unknown): RoadPoint2D | null {
@@ -68,6 +78,31 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     return typeof value === 'string' && value.trim().length ? value : null
   }
 
+  const samplingDensityFactorRaw = (props as RoadComponentProps | undefined)?.samplingDensityFactor
+  const samplingDensityFactor = Number.isFinite(samplingDensityFactorRaw)
+    ? Math.max(0.1, Math.min(5, samplingDensityFactorRaw as number))
+    : 1.0
+
+  const smoothingStrengthFactorRaw = (props as RoadComponentProps | undefined)?.smoothingStrengthFactor
+  const smoothingStrengthFactor = Number.isFinite(smoothingStrengthFactorRaw)
+    ? Math.max(0.1, Math.min(5, smoothingStrengthFactorRaw as number))
+    : 1.0
+
+  const minClearanceRaw = (props as RoadComponentProps | undefined)?.minClearance
+  const minClearance = Number.isFinite(minClearanceRaw)
+    ? Math.max(0, Math.min(2, minClearanceRaw as number))
+    : 0.01
+
+  const laneLineWidthRaw = (props as RoadComponentProps | undefined)?.laneLineWidth
+  const laneLineWidth = Number.isFinite(laneLineWidthRaw)
+    ? Math.max(0.01, Math.min(1, laneLineWidthRaw as number))
+    : undefined
+
+  const shoulderWidthRaw = (props as RoadComponentProps | undefined)?.shoulderWidth
+  const shoulderWidth = Number.isFinite(shoulderWidthRaw)
+    ? Math.max(0.01, Math.min(2, shoulderWidthRaw as number))
+    : undefined
+
   return {
     vertices,
     segments,
@@ -76,6 +111,11 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     laneLines,
     shoulders,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
+    samplingDensityFactor,
+    smoothingStrengthFactor,
+    minClearance,
+    laneLineWidth,
+    shoulderWidth,
   }
 }
 
@@ -89,6 +129,9 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       width: ROAD_DEFAULT_WIDTH,
       junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
+      samplingDensityFactor: 1.0,
+      smoothingStrengthFactor: 1.0,
+      minClearance: 0.01,
     }
   }
 
@@ -105,6 +148,9 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
     laneLines: false,
     shoulders: false,
+    samplingDensityFactor: 1.0,
+    smoothingStrengthFactor: 1.0,
+    minClearance: 0.01,
   })
 }
 
@@ -117,6 +163,11 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     laneLines: props.laneLines,
     shoulders: props.shoulders,
     bodyAssetId: props.bodyAssetId ?? null,
+    samplingDensityFactor: props.samplingDensityFactor ?? 1.0,
+    smoothingStrengthFactor: props.smoothingStrengthFactor ?? 1.0,
+    minClearance: props.minClearance ?? 0.01,
+    laneLineWidth: props.laneLineWidth,
+    shoulderWidth: props.shoulderWidth,
   }
 }
 
@@ -181,6 +232,11 @@ export function createRoadComponentState(
     laneLines: overrides?.laneLines ?? defaults.laneLines,
     shoulders: overrides?.shoulders ?? defaults.shoulders,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    samplingDensityFactor: overrides?.samplingDensityFactor ?? defaults.samplingDensityFactor,
+    smoothingStrengthFactor: overrides?.smoothingStrengthFactor ?? defaults.smoothingStrengthFactor,
+    minClearance: overrides?.minClearance ?? defaults.minClearance,
+    laneLineWidth: overrides?.laneLineWidth ?? defaults.laneLineWidth,
+    shoulderWidth: overrides?.shoulderWidth ?? defaults.shoulderWidth,
   })
   return {
     id: options.id ?? '',

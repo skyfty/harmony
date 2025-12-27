@@ -562,11 +562,17 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   shoulders: boolean
   materialConfigId: string | null
   heightSampler: ((x: number, z: number) => number) | null
+  samplingDensityFactor?: number
+  smoothingStrengthFactor?: number
+  minClearance?: number
+  laneLineWidth?: number
+  shoulderWidth?: number
 } | null {
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!node || node.dynamicMesh?.type !== 'Road') {
     return null
   }
+  const component = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
   const junctionSmoothing = resolveRoadJunctionSmoothing(node)
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
@@ -586,11 +592,23 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const groundOriginX = Number(groundNode?.position?.x ?? 0)
   const groundOriginY = Number(groundNode?.position?.y ?? 0)
   const groundOriginZ = Number(groundNode?.position?.z ?? 0)
+
+  const samplingDensityFactor = component?.props?.samplingDensityFactor
+  const smoothingStrengthFactor = component?.props?.smoothingStrengthFactor
+  const minClearance = component?.props?.minClearance
+  const laneLineWidth = component?.props?.laneLineWidth
+  const shoulderWidth = component?.props?.shoulderWidth
+
   return {
     junctionSmoothing,
     laneLines,
     shoulders,
     materialConfigId,
+    samplingDensityFactor,
+    smoothingStrengthFactor,
+    minClearance,
+    laneLineWidth,
+    shoulderWidth,
     // Road vertices are stored in the node's local XZ plane.
     // When sampling terrain height we must convert local -> world (include yaw), then sample ground in its local XZ,
     // then convert sampled world height -> road local Y.
