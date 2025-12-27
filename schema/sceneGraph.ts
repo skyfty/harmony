@@ -1268,11 +1268,13 @@ class SceneGraphBuilder {
     });
 
     const materials = await this.resolveNodeMaterials(node);
-    const resolvedMaterial = this.pickMaterialAssignment(materials);
+    const resolvedAssignment = this.pickMaterialAssignment(materials);
+    const resolvedMaterial = Array.isArray(resolvedAssignment) ? resolvedAssignment[0] : resolvedAssignment;
     if (resolvedMaterial) {
-      setGroundMaterial(groundObject, resolvedMaterial);
+      const groundMaterial = resolvedMaterial.clone();
+      setGroundMaterial(groundObject, groundMaterial);
       if (groundTexture) {
-        this.assignTextureToMaterial(resolvedMaterial, groundTexture);
+        this.assignTextureToMaterial(groundMaterial, groundTexture);
       }
     }
 
