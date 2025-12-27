@@ -11,6 +11,7 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import type { ProjectAsset } from '@/types/project-asset'
+import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
@@ -283,7 +284,7 @@ function handleScatterAssetSelect(
               <v-slider
                 v-model="scatterBrushRadiusModel"
                 :min="0.1"
-                :max="5"
+                :max="SCATTER_BRUSH_RADIUS_MAX"
                 :step="0.1"
                 density="compact"
                 track-color="rgba(77, 208, 225, 0.4)"

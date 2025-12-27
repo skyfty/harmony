@@ -38,6 +38,7 @@ import {
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
+import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -125,7 +126,7 @@ function clampFinite(value: unknown, fallback: number): number {
 
 function clampScatterBrushRadius(value: unknown): number {
 	const num = clampFinite(value, 0.5)
-	return Math.min(5, Math.max(0.1, num))
+	return Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, num))
 }
 
 function computeScatterMinSpacingFromModel(modelGroup: ModelInstanceGroup, maxScale: number): number {
@@ -161,10 +162,99 @@ type ScatterSessionState = {
 	store: TerrainScatterStore
 	layer: TerrainScatterLayer
 	modelGroup: ModelInstanceGroup
+	chunkCells: number
+	neighborIndex: Map<string, TerrainScatterInstance[]>
 	lastPoint: THREE.Vector3 | null
 }
 
 let scatterSession: ScatterSessionState | null = null
+
+const SCATTER_MAX_PER_STAMP = 25
+const SCATTER_PACKING_FACTOR = 0.6
+const SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX = 256
+const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
+const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
+
+function getScatterChunkKeyFromLocal(
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+	localX: number,
+	localZ: number,
+): { key: string; chunkRow: number; chunkColumn: number } {
+	const halfWidth = definition.width * 0.5
+	const halfDepth = definition.depth * 0.5
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	const normalizedColumn = (localX + halfWidth) / cellSize
+	const normalizedRow = (localZ + halfDepth) / cellSize
+	const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
+	const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
+	const chunkRow = Math.floor(row / Math.max(1, chunkCells))
+	const chunkColumn = Math.floor(column / Math.max(1, chunkCells))
+	return { key: `${chunkRow}:${chunkColumn}`, chunkRow, chunkColumn }
+}
+
+function buildScatterNeighborIndex(layer: TerrainScatterLayer, definition: GroundDynamicMesh, chunkCells: number) {
+	const map = new Map<string, TerrainScatterInstance[]>()
+	for (const instance of layer.instances) {
+		const local = instance.localPosition
+		const { key } = getScatterChunkKeyFromLocal(definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
+		const bucket = map.get(key)
+		if (bucket) {
+			bucket.push(instance)
+		} else {
+			map.set(key, [instance])
+		}
+	}
+	return map
+}
+
+function addScatterInstanceToNeighborIndex(session: ScatterSessionState, instance: TerrainScatterInstance): void {
+	const local = instance.localPosition
+	const { key } = getScatterChunkKeyFromLocal(session.definition, session.chunkCells, local?.x ?? 0, local?.z ?? 0)
+	const bucket = session.neighborIndex.get(key)
+	if (bucket) {
+		bucket.push(instance)
+	} else {
+		session.neighborIndex.set(key, [instance])
+	}
+}
+
+function isScatterPlacementAvailableByIndex(
+	session: ScatterSessionState,
+	localX: number,
+	localZ: number,
+	spacingSq: number,
+	stampBudget: { totalChecks: number },
+): boolean {
+	const { chunkRow, chunkColumn } = getScatterChunkKeyFromLocal(session.definition, session.chunkCells, localX, localZ)
+	let candidateChecks = 0
+	for (let dr = -1; dr <= 1; dr += 1) {
+		for (let dc = -1; dc <= 1; dc += 1) {
+			const key = `${chunkRow + dr}:${chunkColumn + dc}`
+			const bucket = session.neighborIndex.get(key)
+			if (!bucket || !bucket.length) {
+				continue
+			}
+			for (const instance of bucket) {
+				candidateChecks += 1
+				stampBudget.totalChecks += 1
+				if (
+					candidateChecks > SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX ||
+					stampBudget.totalChecks > SCATTER_EXISTING_CHECKS_PER_STAMP_MAX
+				) {
+					return false
+				}
+				const local = instance.localPosition
+				const dx = (local?.x ?? 0) - localX
+				const dz = (local?.z ?? 0) - localZ
+				if (dx * dx + dz * dz < spacingSq) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
 type ScatterEraseState = {
 	pointerId: number
 	definition: GroundDynamicMesh
@@ -1333,6 +1423,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		mesh.updateMatrixWorld(true)
 		scatterPlacementCandidateLocalHelper.copy(point)
 		mesh.worldToLocal(scatterPlacementCandidateLocalHelper)
+		const budget = { totalChecks: 0 }
+		if (session.neighborIndex && session.neighborIndex.size) {
+			return isScatterPlacementAvailableByIndex(
+				session,
+				scatterPlacementCandidateLocalHelper.x,
+				scatterPlacementCandidateLocalHelper.z,
+				threshold,
+				budget,
+			)
+		}
 		for (const instance of layer.instances) {
 			const local = instance.localPosition
 			const dx = (local?.x ?? 0) - scatterPlacementCandidateLocalHelper.x
@@ -1357,7 +1457,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return localPoint
 	}
 
-	function applyScatterPlacement(worldPoint: THREE.Vector3, spacing: number): boolean {
+	function applyScatterPlacement(worldPoint: THREE.Vector3): boolean {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return false
 		}
@@ -1405,6 +1505,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), scatterSession.bindingAssetId)
+		addScatterInstanceToNeighborIndex(scatterSession, stored)
 		return true
 	}
 
@@ -1414,21 +1515,34 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const radius = scatterSession.radius
 		const spacing = scatterSession.spacing
+		const spacingSq = spacing * spacing
 
 		// Try to place a bounded number of instances per stamp for performance.
 		const targetCount = scatterSession.targetCountPerStamp
-		const maxAttempts = Math.min(220, Math.max(40, targetCount * 18))
+		const maxAttempts = Math.min(SCATTER_SAMPLE_ATTEMPTS_MAX, Math.max(80, targetCount * 40))
 
 		const accepted: THREE.Vector3[] = []
+		// Guarantee center placement (strategy A: allow overlap with existing instances).
+		const centerProjected = projectScatterPoint(worldCenterPoint)
+		if (!centerProjected) {
+			return []
+		}
+		accepted.push(centerProjected.clone())
+
+		// Budget for overlap checks against existing instances.
+		const existingBudget = { totalChecks: 0 }
+		// Avoid repeated matrix updates during sampling.
+		scatterSession.groundMesh.updateMatrixWorld(true)
+
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			const u = Math.random()
 			const v = Math.random()
 			const r = Math.sqrt(u) * radius
 			const theta = v * Math.PI * 2
 			scatterPlacementCandidateWorldHelper.set(
-				worldCenterPoint.x + Math.cos(theta) * r,
-				worldCenterPoint.y,
-				worldCenterPoint.z + Math.sin(theta) * r,
+				centerProjected.x + Math.cos(theta) * r,
+				centerProjected.y,
+				centerProjected.z + Math.sin(theta) * r,
 			)
 			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
 			if (!projected) {
@@ -1439,12 +1553,33 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			for (const point of accepted) {
 				const dx = point.x - projected.x
 				const dz = point.z - projected.z
-				if (dx * dx + dz * dz < spacing * spacing) {
+				if (dx * dx + dz * dz < spacingSq) {
 					ok = false
 					break
 				}
 			}
 			if (!ok) {
+				continue
+			}
+
+			// Avoid overlaps with existing instances (ground-local XZ plane).
+			scatterPlacementCandidateLocalHelper.copy(projected)
+			scatterSession.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
+			if (
+				scatterSession.neighborIndex &&
+				scatterSession.neighborIndex.size &&
+				!isScatterPlacementAvailableByIndex(
+					scatterSession,
+					scatterPlacementCandidateLocalHelper.x,
+					scatterPlacementCandidateLocalHelper.z,
+					spacingSq,
+					existingBudget,
+				)
+			) {
+				continue
+			}
+			// Fallback if index not present.
+			if (!scatterSession.neighborIndex.size && !isScatterPlacementAvailable(projected, spacing, scatterSession)) {
 				continue
 			}
 			accepted.push(projected.clone())
@@ -1456,10 +1591,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return
 		}
-		const spacing = scatterSession.spacing
 		const points = sampleScatterPointsInBrush(worldCenterPoint)
 		for (const point of points) {
-			applyScatterPlacement(point, spacing)
+			applyScatterPlacement(point)
 		}
 	}
 
@@ -1521,13 +1655,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
-		const minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
+		let minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
+		// If the asset units are mismatched (e.g. authored in cm but treated as meters), the bbox-derived
+		// spacing can dwarf the brush radius and collapse the stamp count to 1. Clamp to keep the tool usable.
+		if (minSpacing > effectiveRadius * 2) {
+			minSpacing = Math.max(0.01, effectiveRadius * 0.9)
+		}
 		const area = Math.PI * effectiveRadius * effectiveRadius
 		const maxNonOverlapping = Math.max(1, Math.floor(area / Math.max(minSpacing * minSpacing, 1e-4)))
 		// Use a conservative packing factor so distribution stays "natural".
-		const targetCountPerStamp = Math.min(25, Math.max(1, Math.floor(maxNonOverlapping * 0.6)))
-		const spacingFromCount = Math.sqrt(area / targetCountPerStamp)
-		const effectiveSpacing = Math.max(minSpacing, spacingFromCount)
+		const targetCountPerStamp = Math.min(
+			SCATTER_MAX_PER_STAMP,
+			Math.max(1, Math.floor(maxNonOverlapping * SCATTER_PACKING_FACTOR)),
+		)
+		const effectiveSpacing = minSpacing
+		const chunkCells = resolveChunkCellsForDefinition(definition)
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
@@ -1544,6 +1686,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			store: ensureScatterStoreRef(),
 			layer,
 			modelGroup: scatterModelGroup,
+			chunkCells,
+			neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 			lastPoint: null,
 		}
 		traceScatterPath(scatterPointerHelper.clone())
@@ -1749,12 +1893,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function resolveScatterEraseRadius(): number {
 		const candidate = Number(options.scatterEraseRadius.value)
-		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
+		return Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
 	}
 
 	function resolveScatterBrushRadius(): number {
 		const candidate = Number(options.scatterBrushRadius.value)
-		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
+		return Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
 	}
 
 	function clearScatterInstances(): boolean {
