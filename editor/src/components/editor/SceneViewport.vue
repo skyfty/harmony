@@ -5541,6 +5541,19 @@ async function handlePointerDown(event: PointerEvent) {
 
   const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
 
+  const allowBoundingBoxDragFallback = (() => {
+    if (!currentPrimaryId) {
+      return true
+    }
+    const node = findSceneNode(sceneStore.nodes, currentPrimaryId)
+    // Roads can be highly concave (e.g. arcs). Using an AABB allows drag-starts from empty space
+    // inside the road's bounding box, which feels like dragging "through" the road.
+    if (node?.dynamicMesh?.type === 'Road') {
+      return false
+    }
+    return true
+  })()
+
   let dragHit = hit
   if (button === 0 && props.activeTool === 'select') {
     if (dragHit && currentPrimaryId && dragHit.nodeId !== currentPrimaryId) {
@@ -5557,7 +5570,9 @@ async function handlePointerDown(event: PointerEvent) {
       }
     }
     if (!dragHit) {
-      dragHit = pickActiveSelectionBoundingBoxHit(event)
+      if (allowBoundingBoxDragFallback) {
+        dragHit = pickActiveSelectionBoundingBoxHit(event)
+      }
     }
   }
 
