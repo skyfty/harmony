@@ -1096,6 +1096,14 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
       return;
     }
 
+    const overrideMaterial = Boolean(mesh.userData?.overrideMaterial);
+    if (overrideMaterial) {
+      if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
+        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+      }
+      return;
+    }
+
     const currentMaterial = mesh.material;
     if (!currentMaterial) {
       if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
