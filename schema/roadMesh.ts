@@ -99,6 +99,17 @@ function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): 
   return Math.max(ROAD_HEIGHT_SMOOTHING_MIN_PASSES, Math.min(ROAD_HEIGHT_SMOOTHING_MAX_PASSES, suggested))
 }
 
+function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): number {
+  if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
+    return ROAD_MIN_DIVISIONS
+  }
+  const densityFactor = Math.max(0.1, Math.min(5, Number.isFinite(samplingDensityFactor) ? samplingDensityFactor : 1.0))
+  return Math.max(
+    ROAD_MIN_DIVISIONS,
+    Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
+  )
+}
+
 function sampleHeightFromSeries(series: number[], t: number): number {
   const maxIndex = series.length - 1
   if (maxIndex <= 0) {
@@ -429,17 +440,17 @@ function buildOffsetStripGeometry(
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  sharedHeightSeries?: number[] | null,
 ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= ROAD_EPSILON) {
     return null
   }
 
-  const densityFactor = Math.max(0.1, Math.min(5, Number.isFinite(options.samplingDensityFactor) ? options.samplingDensityFactor! : 1.0))
-  const divisions = Math.max(
-    ROAD_MIN_DIVISIONS,
-    Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
-  )
+  const useSharedHeightSeries = Array.isArray(sharedHeightSeries) && sharedHeightSeries.length >= 2
+  const divisions = useSharedHeightSeries
+    ? sharedHeightSeries.length - 1
+    : computeRoadDivisions(length, options.samplingDensityFactor)
 
   const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
   const positions: number[] = []
@@ -454,11 +465,11 @@ function buildOffsetStripGeometry(
   const right = new THREE.Vector3()
 
   const sampler = typeof heightSampler === 'function' ? heightSampler : null
-  const heights: number[] | null = sampler ? [] : null
-  const minHeights: number[] | null = sampler ? [] : null
+  const heights: number[] | null = useSharedHeightSeries ? (sharedHeightSeries as number[]) : (sampler ? [] : null)
+  const minHeights: number[] | null = useSharedHeightSeries ? null : (sampler ? [] : null)
   const extraClearance = Number.isFinite(options.minClearance) ? Math.max(0, options.minClearance!) : 0
 
-  if (heights && minHeights) {
+  if (!useSharedHeightSeries && heights && minHeights) {
     for (let i = 0; i <= divisions; i += 1) {
       const t = i / divisions
       center.copy(curve.getPoint(t))
@@ -509,7 +520,9 @@ function buildOffsetStripGeometry(
 
     // Terrain conformance uses a smoothed height sampled along the curve centerline.
     // This keeps the road surface smooth and avoids jagged edges from per-vertex sampling.
-    const y = heights ? heights[i]! : yOffset
+    const y = heights
+      ? (useSharedHeightSeries ? heights[i]! + yOffset : heights[i]!)
+      : yOffset
     left.y = y
     right.y = y
 
@@ -538,8 +551,9 @@ function buildRoadStripGeometry(
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  sharedHeightSeries?: number[] | null,
 ): THREE.BufferGeometry | null {
-  return buildOffsetStripGeometry(curve, width, 0, heightSampler, yOffset, options)
+  return buildOffsetStripGeometry(curve, width, 0, heightSampler, yOffset, options, sharedHeightSeries)
 }
 
 function buildMultiCurveGeometry(
@@ -569,10 +583,16 @@ function buildOverlayGeometry(
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  sharedHeightSeriesList?: Array<number[] | null>,
 ): THREE.BufferGeometry | null {
+  let curveIndex = 0
   return buildMultiCurveGeometry(
     curves,
-    (curve) => buildOffsetStripGeometry(curve, width, offset, heightSampler, yOffset, options),
+    (curve) => {
+      const shared = Array.isArray(sharedHeightSeriesList) ? (sharedHeightSeriesList[curveIndex] ?? null) : null
+      curveIndex += 1
+      return buildOffsetStripGeometry(curve, width, offset, heightSampler, yOffset, options, shared)
+    },
     options,
   )
 }
@@ -585,21 +605,21 @@ function buildDashedCurveSegments(
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  sharedHeightSeries?: number[] | null,
 ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= ROAD_EPSILON) {
     return null
   }
 
+  const useSharedHeightSeries = Array.isArray(sharedHeightSeries) && sharedHeightSeries.length >= 2
   const sampler = typeof heightSampler === 'function' ? heightSampler : null
-  const densityFactor = Math.max(0.1, Math.min(5, Number.isFinite(options.samplingDensityFactor) ? options.samplingDensityFactor! : 1.0))
   const extraClearance = Number.isFinite(options.minClearance) ? Math.max(0, options.minClearance!) : 0
-  const heightLut: number[] | null = sampler
+  const heightLut: number[] | null = useSharedHeightSeries
+    ? (sharedHeightSeries as number[])
+    : sampler
     ? (() => {
-        const divisions = Math.max(
-          ROAD_MIN_DIVISIONS,
-          Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
-        )
+        const divisions = computeRoadDivisions(length, options.samplingDensityFactor)
         const values: number[] = []
         const minimums: number[] = []
         const point = new THREE.Vector3()
@@ -676,8 +696,12 @@ function buildDashedCurveSegments(
     rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
 
     if (heightLut) {
-      const startY = sampleHeightFromSeries(heightLut, startT)
-      const endY = sampleHeightFromSeries(heightLut, endT)
+      const startY = useSharedHeightSeries
+        ? sampleHeightFromSeries(heightLut, startT) + yOffset
+        : sampleHeightFromSeries(heightLut, startT)
+      const endY = useSharedHeightSeries
+        ? sampleHeightFromSeries(heightLut, endT) + yOffset
+        : sampleHeightFromSeries(heightLut, endT)
       leftStart.y = startY
       rightStart.y = startY
       leftEnd.y = endY
@@ -734,9 +758,12 @@ function buildLaneLineGeometry(
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  sharedHeightSeriesList?: Array<number[] | null>,
 ): THREE.BufferGeometry | null {
   const geometries: THREE.BufferGeometry[] = []
+  let curveIndex = 0
   for (const descriptor of curves) {
+    const shared = Array.isArray(sharedHeightSeriesList) ? (sharedHeightSeriesList[curveIndex] ?? null) : null
     const geometry = buildDashedCurveSegments(
       descriptor.curve,
       width,
@@ -745,10 +772,12 @@ function buildLaneLineGeometry(
       heightSampler,
       yOffset,
       options,
+      shared,
     )
     if (geometry) {
       geometries.push(geometry)
     }
+    curveIndex += 1
   }
   if (!geometries.length) {
     return null
@@ -780,9 +809,83 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   const minClearance = options.minClearance ?? 0
   const meshOptions = { samplingDensityFactor, smoothingStrengthFactor, minClearance }
 
+  const sharedHeightSeriesList: Array<number[] | null> | null = heightSampler
+    ? (() => {
+        const extraClearance = Number.isFinite(minClearance) ? Math.max(0, minClearance) : 0
+
+        const shoulderWidth = Number.isFinite(options.shoulderWidth) && options.shoulderWidth! > 0.01
+          ? options.shoulderWidth!
+          : ROAD_SHOULDER_WIDTH
+        const shoulderOffset = width * 0.5 + ROAD_SHOULDER_GAP + shoulderWidth * 0.5
+
+        const envelopeHalfWidth = options.shoulders
+          ? Math.max(Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5), shoulderOffset + shoulderWidth * 0.5)
+          : Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+
+        const point = new THREE.Vector3()
+        const tangent = new THREE.Vector3()
+        const lateral = new THREE.Vector3()
+        const left = new THREE.Vector3()
+        const right = new THREE.Vector3()
+
+        return curves.map((descriptor) => {
+          const curve = descriptor.curve
+          const length = curve.getLength()
+          if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
+            return null
+          }
+          const divisions = computeRoadDivisions(length, samplingDensityFactor)
+
+          const values: number[] = []
+          const minimums: number[] = []
+          for (let i = 0; i <= divisions; i += 1) {
+            const t = i / divisions
+            point.copy(curve.getPoint(t))
+
+            tangent.copy(curve.getTangent(t))
+            tangent.y = 0
+            if (tangent.lengthSq() <= ROAD_EPSILON) {
+              tangent.set(0, 0, 1)
+            } else {
+              tangent.normalize()
+            }
+            lateral.set(-tangent.z, 0, tangent.x)
+
+            left.copy(point).addScaledVector(lateral, envelopeHalfWidth)
+            right.copy(point).addScaledVector(lateral, -envelopeHalfWidth)
+
+            const sampledCenter = heightSampler(point.x, point.z)
+            const sampledLeft = heightSampler(left.x, left.z)
+            const sampledRight = heightSampler(right.x, right.z)
+            const centerY = Number.isFinite(sampledCenter) ? sampledCenter : 0
+            const leftY = Number.isFinite(sampledLeft) ? sampledLeft : 0
+            const rightY = Number.isFinite(sampledRight) ? sampledRight : 0
+
+            const envelope = Math.max(centerY, leftY, rightY) + ROAD_SURFACE_Y_OFFSET + extraClearance
+            values.push(envelope)
+            minimums.push(envelope)
+          }
+
+          return smoothHeightSeries(
+            values,
+            computeHeightSmoothingPasses(divisions, smoothingStrengthFactor),
+            minimums,
+          )
+        })
+      })()
+    : null
+
   const roadGeometry = buildMultiCurveGeometry(
     curves,
-    (curve) => buildRoadStripGeometry(curve, width, heightSampler, ROAD_SURFACE_Y_OFFSET, meshOptions),
+    (() => {
+      let curveIndex = 0
+      return (curve: THREE.Curve<THREE.Vector3>) => {
+        const shared = sharedHeightSeriesList ? (sharedHeightSeriesList[curveIndex] ?? null) : null
+        curveIndex += 1
+        const yOffset = shared ? 0 : ROAD_SURFACE_Y_OFFSET
+        return buildRoadStripGeometry(curve, width, heightSampler, yOffset, meshOptions, shared)
+      }
+    })(),
     meshOptions,
   )
   if (!roadGeometry) {
@@ -801,13 +904,17 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       : ROAD_SHOULDER_WIDTH
     const shoulderOffset = width * 0.5 + ROAD_SHOULDER_GAP + shoulderWidth * 0.5
     const shoulderGeometries: THREE.BufferGeometry[] = []
+    const shoulderYOffset = sharedHeightSeriesList
+      ? ROAD_SHOULDER_OFFSET_Y
+      : ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y
     const leftShoulder = buildOverlayGeometry(
       curves,
       shoulderWidth,
       shoulderOffset,
       heightSampler,
-      ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y,
+      shoulderYOffset,
       meshOptions,
+      sharedHeightSeriesList ?? undefined,
     )
     if (leftShoulder) {
       shoulderGeometries.push(leftShoulder)
@@ -817,8 +924,9 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       shoulderWidth,
       -shoulderOffset,
       heightSampler,
-      ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y,
+      shoulderYOffset,
       meshOptions,
+      sharedHeightSeriesList ?? undefined,
     )
     if (rightShoulder) {
       shoulderGeometries.push(rightShoulder)
@@ -846,8 +954,9 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       curves,
       laneLineWidth,
       heightSampler,
-      ROAD_SURFACE_Y_OFFSET + ROAD_LANE_LINE_OFFSET_Y,
+      sharedHeightSeriesList ? ROAD_LANE_LINE_OFFSET_Y : ROAD_SURFACE_Y_OFFSET + ROAD_LANE_LINE_OFFSET_Y,
       meshOptions,
+      sharedHeightSeriesList ?? undefined,
     )
     if (laneGeometry) {
       const laneMesh = new THREE.Mesh(laneGeometry, createLaneLineMaterial())
