@@ -1333,6 +1333,11 @@ class SceneGraphBuilder {
       laneLines: roadProps.laneLines,
       shoulders: roadProps.shoulders,
       materialConfigId,
+      samplingDensityFactor: roadProps.samplingDensityFactor,
+      smoothingStrengthFactor: roadProps.smoothingStrengthFactor,
+      minClearance: roadProps.minClearance,
+      laneLineWidth: roadProps.laneLineWidth,
+      shoulderWidth: roadProps.shoulderWidth,
     };
 
     const documentNodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
