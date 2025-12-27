@@ -1365,9 +1365,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!projected) {
 			return false
 		}
-		if (!isScatterPlacementAvailable(projected, spacing, scatterSession)) {
-			return false
-		}
 		const localPoint = projected.clone()
 		scatterSession.groundMesh.worldToLocal(localPoint)
 		const scaleFactor = THREE.MathUtils.lerp(scatterSession.minScale, scatterSession.maxScale, Math.random())
@@ -1448,9 +1445,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 			}
 			if (!ok) {
-				continue
-			}
-			if (!isScatterPlacementAvailable(projected, spacing, scatterSession)) {
 				continue
 			}
 			accepted.push(projected.clone())
