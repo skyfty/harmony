@@ -13,6 +13,7 @@
         :color="activeBuildTool === tool.id ? 'primary' : undefined"
         :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
         :title="tool.label"
+        :disabled="buildToolsDisabled"
         @click="handleBuildToolToggle(tool.id)"
       />
       <v-divider vertical />
@@ -233,7 +234,8 @@ import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 
-const props = defineProps<{
+const props = withDefaults(
+  defineProps<{
   showGrid: boolean
   showAxes: boolean
   canDropSelection: boolean
@@ -243,10 +245,15 @@ const props = defineProps<{
   canClearAllScatterInstances: boolean
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
+  buildToolsDisabled?: boolean
   scatterEraseModeActive: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
-}>()
+  }>(),
+  {
+    buildToolsDisabled: false,
+  },
+)
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
@@ -273,6 +280,7 @@ const {
   scatterEraseModeActive,
   cameraControlMode,
   activeBuildTool,
+  buildToolsDisabled,
   scatterEraseRadius,
   scatterEraseMenuOpen,
 } = toRefs(props)
@@ -436,6 +444,9 @@ function emitAlign(mode: AlignMode) {
 }
 
 function handleBuildToolToggle(tool: BuildTool) {
+  if (buildToolsDisabled.value) {
+    return
+  }
   const next = activeBuildTool.value === tool ? null : tool
   emit('change-build-tool', next)
 }

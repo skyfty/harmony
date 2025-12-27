@@ -877,6 +877,9 @@ const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 
+const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
+const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
+
 const instancedMeshRevision = ref(0)
 const hasInstancedMeshes = computed(() => {
   void instancedMeshRevision.value
@@ -1910,6 +1913,92 @@ let roadRightClickState: {
   startY: number
   moved: boolean
 } | null = null
+
+const RIGHT_DOUBLE_CLICK_MS = 320
+
+type BuildToolRightClickDragState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+type BuildToolRightClickCandidate = {
+  atMs: number
+  x: number
+  y: number
+}
+
+let buildToolRightClickDragState: BuildToolRightClickDragState | null = null
+let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
+
+type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor'
+
+function isBuildToolBlockedDuringGroundSculptConfig(
+  tool: BuildTool | null,
+): tool is GroundSculptBlockedBuildTool {
+  return tool === 'wall' || tool === 'road' || tool === 'floor'
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+}
+
+function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
+  if (event.button !== 2) {
+    return false
+  }
+
+  if (isAltOverrideActive) {
+    buildToolRightClickCandidate = null
+    return false
+  }
+
+  const tool = activeBuildTool.value
+  if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
+    buildToolRightClickCandidate = null
+    return false
+  }
+
+  const dragState = buildToolRightClickDragState
+  const clickWasDrag = dragState?.pointerId === event.pointerId ? dragState.moved : false
+
+  // Clear the drag tracker on mouse-up so it doesn't leak across interactions.
+  if (dragState?.pointerId === event.pointerId) {
+    buildToolRightClickDragState = null
+  }
+
+  // Don't treat drags as clicks; let camera controls + existing finalize logic proceed.
+  if (clickWasDrag) {
+    buildToolRightClickCandidate = null
+    return false
+  }
+
+  const now = nowMs()
+  const previous = buildToolRightClickCandidate
+  if (previous && now - previous.atMs <= RIGHT_DOUBLE_CLICK_MS) {
+    const dx = event.clientX - previous.x
+    const dy = event.clientY - previous.y
+    if (Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      buildToolRightClickCandidate = null
+      roadRightClickState = null
+      const handled = cancelActiveBuildOperation()
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return handled
+    }
+  }
+
+  buildToolRightClickCandidate = {
+    atMs: now,
+    x: event.clientX,
+    y: event.clientY,
+  }
+  return false
+}
 
 const wallPreviewRenderer = createWallPreviewRenderer({
   rootGroup,
@@ -5365,6 +5454,12 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     if (button === 2) {
+      buildToolRightClickDragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
       pointerTrackingState = null
       return
     }
@@ -5390,6 +5485,12 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     if (button === 2) {
+      buildToolRightClickDragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
       pointerTrackingState = null
       return
     }
@@ -5472,6 +5573,12 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     if (button === 2) {
+      buildToolRightClickDragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
       pointerTrackingState = null
       return
     }
@@ -5778,6 +5885,14 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (buildToolRightClickDragState && event.pointerId === buildToolRightClickDragState.pointerId && !buildToolRightClickDragState.moved) {
+    const dx = event.clientX - buildToolRightClickDragState.startX
+    const dy = event.clientY - buildToolRightClickDragState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      buildToolRightClickDragState.moved = true
+    }
+  }
+
   if (roadRightClickState && event.pointerId === roadRightClickState.pointerId && !roadRightClickState.moved) {
     const dx = event.clientX - roadRightClickState.startX
     const dy = event.clientY - roadRightClickState.startY
@@ -5979,6 +6094,10 @@ function handlePointerUp(event: PointerEvent) {
   }
 
   const overrideActive = isAltOverrideActive
+
+  if (event.button === 2 && maybeCancelBuildToolOnRightDoubleClick(event)) {
+    return
+  }
 
   if (handleGroundEditorPointerUp(event)) {
     return
@@ -6897,6 +7016,9 @@ function cancelActiveBuildOperation(): boolean {
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
+  if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool) && isGroundSculptConfigMode.value) {
+    return
+  }
   if (activeBuildTool.value === 'floor' && tool !== 'floor') {
     floorBuildTool.cancel()
   }
@@ -9018,6 +9140,10 @@ watch(
 
 watch(activeBuildTool, (tool) => {
   handleGroundEditorBuildToolChange(tool)
+  if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
+    buildToolRightClickCandidate = null
+    buildToolRightClickDragState = null
+  }
   if (tool !== 'wall') {
     cancelWallDrag()
     clearWallBuildSession()
@@ -9027,6 +9153,19 @@ watch(activeBuildTool, (tool) => {
     clearRoadBuildSession()
   }
 })
+
+watch(
+  isGroundSculptConfigMode,
+  (enabled, previous) => {
+    if (!enabled || previous) {
+      return
+    }
+    const tool = activeBuildTool.value
+    if (isBuildToolBlockedDuringGroundSculptConfig(tool)) {
+      cancelActiveBuildOperation()
+    }
+  },
+)
 
 watch(
   () => props.focusRequestId,
@@ -9096,6 +9235,7 @@ defineExpose<SceneViewportHandle>({
         :scatter-erase-mode-active="scatterEraseModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
+        :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
