@@ -934,6 +934,7 @@ const selectedPolyline = computed(() => {
   return null
 })
 const BASE_PIXELS_PER_METER = 10
+const PLANNING_RULER_THICKNESS_PX = 34
 const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
 const VERTEX_HANDLE_DIAMETER_PX = 10
@@ -1919,6 +1920,7 @@ const editorBackgroundStyle = computed(() => {
     backgroundImage:
       'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.04) 75%), linear-gradient(180deg, rgba(255,255,255,0.04) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.04) 75%)',
     backgroundSize: '48px 48px',
+    '--planning-ruler-thickness': `${PLANNING_RULER_THICKNESS_PX}px`,
   }
 })
 
@@ -4924,6 +4926,7 @@ onBeforeUnmount(() => {
               :center-offset="stageCenterOffset"
               :offset="viewTransform.offset"
               :canvas-size="effectiveCanvasSize"
+              :thickness="PLANNING_RULER_THICKNESS_PX"
               @guide-drag="handleRulerGuideDrag"
             />
             <div class="canvas-viewport">
@@ -6134,7 +6137,7 @@ onBeforeUnmount(() => {
 
 .scale-bar-overlay {
   position: absolute;
-  left: 12px;
+  left: calc(12px + var(--planning-ruler-thickness, 0px));
   bottom: 12px;
   z-index: 6500;
   pointer-events: none;

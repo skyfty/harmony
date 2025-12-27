@@ -9,6 +9,7 @@ const props = defineProps<{
   centerOffset: { x: number; y: number }
   offset: { x: number; y: number }
   canvasSize: { width: number; height: number }
+  thickness?: number
 }>()
 
 const emit = defineEmits<{
@@ -18,7 +19,10 @@ const emit = defineEmits<{
   ): void
 }>()
 
-const RULER_THICKNESS = 26
+const thickness = computed(() => {
+  const raw = Number(props.thickness ?? 34)
+  return Number.isFinite(raw) ? Math.max(18, Math.min(64, Math.round(raw))) : 34
+})
 
 const topCanvasRef = ref<HTMLCanvasElement | null>(null)
 const leftCanvasRef = ref<HTMLCanvasElement | null>(null)
@@ -65,8 +69,9 @@ function drawTopRuler() {
   const canvas = topCanvasRef.value
   if (!canvas) return
 
-  const cssWidth = Math.max(0, props.viewportWidth - RULER_THICKNESS)
-  const cssHeight = RULER_THICKNESS
+  const rulerThickness = thickness.value
+  const cssWidth = Math.max(0, props.viewportWidth - rulerThickness)
+  const cssHeight = rulerThickness
   const setup = setupCanvas(canvas, cssWidth, cssHeight)
   if (!setup) return
   const { ctx, width, height } = setup
@@ -85,8 +90,8 @@ function drawTopRuler() {
   const ppm = props.renderScale
   const steps = computeRulerSteps(ppm)
 
-  const visibleMin = worldFromScreenX(0)
-  const visibleMax = worldFromScreenX(width)
+  const visibleMin = worldFromScreenX(rulerThickness)
+  const visibleMax = worldFromScreenX(rulerThickness + width)
 
   const ticks = generateTicks({
     visibleMinMeters: visibleMin,
@@ -101,7 +106,7 @@ function drawTopRuler() {
   ctx.lineWidth = 1
   for (const t of ticks.minor) {
     const x = (t.valueMeters + props.offset.x) * ppm + props.centerOffset.x
-    const sx = x - RULER_THICKNESS // top ruler starts after corner
+    const sx = x - rulerThickness // top ruler starts after corner
     if (sx < 0 || sx > width) continue
     ctx.beginPath()
     ctx.moveTo(Math.round(sx) + 0.5, height)
@@ -117,7 +122,7 @@ function drawTopRuler() {
 
   for (const t of ticks.major) {
     const x = (t.valueMeters + props.offset.x) * ppm + props.centerOffset.x
-    const sx = x - RULER_THICKNESS
+    const sx = x - rulerThickness
     if (sx < -1 || sx > width + 1) continue
     const px = Math.round(sx) + 0.5
     ctx.beginPath()
@@ -136,8 +141,9 @@ function drawLeftRuler() {
   const canvas = leftCanvasRef.value
   if (!canvas) return
 
-  const cssWidth = RULER_THICKNESS
-  const cssHeight = Math.max(0, props.viewportHeight - RULER_THICKNESS)
+  const rulerThickness = thickness.value
+  const cssWidth = rulerThickness
+  const cssHeight = Math.max(0, props.viewportHeight - rulerThickness)
   const setup = setupCanvas(canvas, cssWidth, cssHeight)
   if (!setup) return
   const { ctx, width, height } = setup
@@ -156,8 +162,8 @@ function drawLeftRuler() {
   const ppm = props.renderScale
   const steps = computeRulerSteps(ppm)
 
-  const visibleMin = worldFromScreenY(0)
-  const visibleMax = worldFromScreenY(height)
+  const visibleMin = worldFromScreenY(rulerThickness)
+  const visibleMax = worldFromScreenY(rulerThickness + height)
 
   const ticks = generateTicks({
     visibleMinMeters: visibleMin,
@@ -172,7 +178,7 @@ function drawLeftRuler() {
   ctx.lineWidth = 1
   for (const t of ticks.minor) {
     const y = (t.valueMeters + props.offset.y) * ppm + props.centerOffset.y
-    const sy = y - RULER_THICKNESS
+    const sy = y - rulerThickness
     if (sy < 0 || sy > height) continue
     ctx.beginPath()
     ctx.moveTo(width, Math.round(sy) + 0.5)
@@ -183,12 +189,15 @@ function drawLeftRuler() {
   // Major ticks + labels
   ctx.strokeStyle = 'rgba(244, 246, 251, 0.65)'
   ctx.fillStyle = 'rgba(244, 246, 251, 0.92)'
-  ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif'
+  const baseFont = '11px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif'
+  const smallFont = '9px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif'
+  ctx.font = baseFont
+  ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
 
   for (const t of ticks.major) {
     const y = (t.valueMeters + props.offset.y) * ppm + props.centerOffset.y
-    const sy = y - RULER_THICKNESS
+    const sy = y - rulerThickness
     if (sy < -1 || sy > height + 1) continue
     const py = Math.round(sy) + 0.5
     ctx.beginPath()
@@ -198,11 +207,13 @@ function drawLeftRuler() {
 
     const label = formatMetersValue(t.valueMeters, steps.majorStepMeters)
     if (label) {
-      ctx.save()
-      ctx.translate(2, py)
-      ctx.rotate(-Math.PI / 2)
-      ctx.fillText(label, 0, 0)
-      ctx.restore()
+      // Keep labels fully visible inside the ruler width.
+      ctx.font = baseFont
+      const maxLabelWidth = Math.max(0, width - 14)
+      if (ctx.measureText(label).width > maxLabelWidth) {
+        ctx.font = smallFont
+      }
+      ctx.fillText(label, width - 12, py)
     }
   }
 }
@@ -271,24 +282,24 @@ onBeforeUnmount(() => {
 })
 
 const topCanvasStyle = computed(() => ({
-  left: `${RULER_THICKNESS}px`,
+  left: `${thickness.value}px`,
   top: '0px',
-  width: `${Math.max(0, props.viewportWidth - RULER_THICKNESS)}px`,
-  height: `${RULER_THICKNESS}px`,
+  width: `${Math.max(0, props.viewportWidth - thickness.value)}px`,
+  height: `${thickness.value}px`,
 }))
 
 const leftCanvasStyle = computed(() => ({
   left: '0px',
-  top: `${RULER_THICKNESS}px`,
-  width: `${RULER_THICKNESS}px`,
-  height: `${Math.max(0, props.viewportHeight - RULER_THICKNESS)}px`,
+  top: `${thickness.value}px`,
+  width: `${thickness.value}px`,
+  height: `${Math.max(0, props.viewportHeight - thickness.value)}px`,
 }))
 
 const cornerStyle = computed(() => ({
   left: '0px',
   top: '0px',
-  width: `${RULER_THICKNESS}px`,
-  height: `${RULER_THICKNESS}px`,
+  width: `${thickness.value}px`,
+  height: `${thickness.value}px`,
 }))
 </script>
 
