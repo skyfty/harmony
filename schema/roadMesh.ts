@@ -1,7 +1,48 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from '@harmony/schema'
+import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
+import { sampleGroundHeight } from './groundMesh'
+
+export function resolveRoadLocalHeightSampler(
+  roadNode: SceneNode,
+  groundNode: SceneNode | null | undefined,
+): ((x: number, z: number) => number) | null {
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? (groundNode.dynamicMesh as GroundDynamicMesh)
+    : null
+  if (!groundDefinition) {
+    return null
+  }
+
+  const roadPosition = (roadNode.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+  const roadRotation = (roadNode.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+
+  const roadOriginX = typeof roadPosition?.x === 'number' && Number.isFinite(roadPosition.x) ? roadPosition.x : 0
+  const roadOriginY = typeof roadPosition?.y === 'number' && Number.isFinite(roadPosition.y) ? roadPosition.y : 0
+  const roadOriginZ = typeof roadPosition?.z === 'number' && Number.isFinite(roadPosition.z) ? roadPosition.z : 0
+  const yaw = typeof roadRotation?.y === 'number' && Number.isFinite(roadRotation.y) ? roadRotation.y : 0
+  const cosYaw = Math.cos(yaw)
+  const sinYaw = Math.sin(yaw)
+
+  const groundPosition = (groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
+  const groundOriginX = typeof groundPosition?.x === 'number' && Number.isFinite(groundPosition.x) ? groundPosition.x : 0
+  const groundOriginY = typeof groundPosition?.y === 'number' && Number.isFinite(groundPosition.y) ? groundPosition.y : 0
+  const groundOriginZ = typeof groundPosition?.z === 'number' && Number.isFinite(groundPosition.z) ? groundPosition.z : 0
+
+  return (x: number, z: number) => {
+    const rotatedX = x * cosYaw - z * sinYaw
+    const rotatedZ = x * sinYaw + z * cosYaw
+
+    const worldX = roadOriginX + rotatedX
+    const worldZ = roadOriginZ + rotatedZ
+
+    const groundLocalX = worldX - groundOriginX
+    const groundLocalZ = worldZ - groundOriginZ
+    const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+    return groundWorldY - roadOriginY
+  }
+}
 
 export type RoadRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
