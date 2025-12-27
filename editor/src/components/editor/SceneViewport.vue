@@ -5548,7 +5548,7 @@ async function handlePointerDown(event: PointerEvent) {
     const node = findSceneNode(sceneStore.nodes, currentPrimaryId)
     // Roads can be highly concave (e.g. arcs). Using an AABB allows drag-starts from empty space
     // inside the road's bounding box, which feels like dragging "through" the road.
-    if (node?.dynamicMesh?.type === 'Road') {
+    if (node?.dynamicMesh?.type === 'Road' || node?.dynamicMesh?.type === 'Wall') {
       return false
     }
     return true
