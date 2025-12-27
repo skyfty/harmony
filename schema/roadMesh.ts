@@ -87,6 +87,9 @@ const ROAD_LANE_LINE_COLOR = 0x27ffff
 const ROAD_HEIGHT_SMOOTHING_MIN_PASSES = 3
 const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 
+const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
+const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
+
 function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): number {
   if (!Number.isFinite(divisions) || divisions <= 0) {
     return ROAD_HEIGHT_SMOOTHING_MIN_PASSES
@@ -121,16 +124,71 @@ function smoothHeightSeries(values: number[], passes: number, minimums: number[]
   let working = values.slice()
   for (let pass = 0; pass < iterations; pass += 1) {
     const next = working.slice()
-    for (let i = 1; i < count - 1; i += 1) {
-      const prev = working[i - 1]!
-      const cur = working[i]!
-      const nxt = working[i + 1]!
-      next[i] = Math.max(minimums[i]!, prev * 0.25 + cur * 0.5 + nxt * 0.25)
+    if (count >= 5) {
+      // A slightly wider kernel reduces the “stair-step” look when sampling rough terrain.
+      // Gaussian-ish weights: [1, 4, 6, 4, 1] / 16
+      for (let i = 2; i < count - 2; i += 1) {
+        const a = working[i - 2]!
+        const b = working[i - 1]!
+        const c = working[i]!
+        const d = working[i + 1]!
+        const e = working[i + 2]!
+        next[i] = Math.max(minimums[i]!, (a + b * 4 + c * 6 + d * 4 + e) / 16)
+      }
+      // Near endpoints, fall back to 3-tap smoothing.
+      for (let i = 1; i < Math.min(2, count - 1); i += 1) {
+        const prev = working[i - 1]!
+        const cur = working[i]!
+        const nxt = working[i + 1]!
+        next[i] = Math.max(minimums[i]!, prev * 0.25 + cur * 0.5 + nxt * 0.25)
+      }
+      for (let i = Math.max(count - 2, 1); i < count - 1; i += 1) {
+        const prev = working[i - 1]!
+        const cur = working[i]!
+        const nxt = working[i + 1]!
+        next[i] = Math.max(minimums[i]!, prev * 0.25 + cur * 0.5 + nxt * 0.25)
+      }
+    } else {
+      for (let i = 1; i < count - 1; i += 1) {
+        const prev = working[i - 1]!
+        const cur = working[i]!
+        const nxt = working[i + 1]!
+        next[i] = Math.max(minimums[i]!, prev * 0.25 + cur * 0.5 + nxt * 0.25)
+      }
     }
     // Clamp endpoints as well, in case callers modify them.
     next[0] = Math.max(minimums[0]!, next[0]!)
     next[count - 1] = Math.max(minimums[count - 1]!, next[count - 1]!)
     working = next
+  }
+
+  return working
+}
+
+function clampHeightSeriesSlope(values: number[], minimums: number[], maxDeltaY: number): number[] {
+  const count = values.length
+  if (count <= 2 || minimums.length !== count) {
+    return values
+  }
+  const delta = Number.isFinite(maxDeltaY) ? Math.max(0, maxDeltaY) : 0
+  if (delta <= 0) {
+    return values
+  }
+
+  const working = values.slice()
+
+  for (let i = 1; i < count; i += 1) {
+    const prev = working[i - 1]!
+    const cur = working[i]!
+    const clamped = Math.min(prev + delta, Math.max(prev - delta, cur))
+    working[i] = Math.max(minimums[i]!, clamped)
+  }
+
+  for (let i = count - 2; i >= 0; i -= 1) {
+    const next = working[i + 1]!
+    const cur = working[i]!
+    const clamped = Math.min(next + delta, Math.max(next - delta, cur))
+    working[i] = Math.max(minimums[i]!, clamped)
   }
 
   return working
@@ -455,9 +513,9 @@ function buildOffsetStripGeometry(
   if (!useSharedHeightSeries && heights && minHeights) {
     for (let i = 0; i <= divisions; i += 1) {
       const t = i / divisions
-      center.copy(curve.getPoint(t))
+      center.copy(curve.getPointAt(t))
 
-      tangent.copy(curve.getTangent(t))
+      tangent.copy(curve.getTangentAt(t))
       tangent.y = 0
       if (tangent.lengthSq() <= ROAD_EPSILON) {
         tangent.set(0, 0, 1)
@@ -488,8 +546,8 @@ function buildOffsetStripGeometry(
 
   for (let i = 0; i <= divisions; i += 1) {
     const t = i / divisions
-    center.copy(curve.getPoint(t))
-    tangent.copy(curve.getTangent(t))
+    center.copy(curve.getPointAt(t))
+    tangent.copy(curve.getTangentAt(t))
     tangent.y = 0
     if (tangent.lengthSq() <= ROAD_EPSILON) {
       tangent.set(0, 0, 1)
@@ -641,13 +699,18 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
           }
           const divisions = computeRoadDivisions(length, samplingDensityFactor)
 
+          const maxDeltaY = Math.max(
+            ROAD_HEIGHT_SLOPE_MIN_DELTA_Y,
+            (length / Math.max(1, divisions)) * ROAD_HEIGHT_SLOPE_MAX_GRADE,
+          )
+
           const values: number[] = []
           const minimums: number[] = []
           for (let i = 0; i <= divisions; i += 1) {
             const t = i / divisions
-            point.copy(curve.getPoint(t))
+            point.copy(curve.getPointAt(t))
 
-            tangent.copy(curve.getTangent(t))
+            tangent.copy(curve.getTangentAt(t))
             tangent.y = 0
             if (tangent.lengthSq() <= ROAD_EPSILON) {
               tangent.set(0, 0, 1)
@@ -671,11 +734,13 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
             minimums.push(envelope)
           }
 
-          return smoothHeightSeries(
+          const smoothed = smoothHeightSeries(
             values,
             computeHeightSmoothingPasses(divisions, smoothingStrengthFactor),
             minimums,
           )
+          // Limit extreme per-segment slopes after smoothing to reduce visible kinks.
+          return clampHeightSeriesSlope(smoothed, minimums, maxDeltaY)
         })
       })()
     : null
