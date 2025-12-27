@@ -472,12 +472,33 @@ function ensureChunkMesh(
   }
   const spec = computeChunkSpec(definition, chunkRow, chunkColumn, state.chunkCells)
   const geometry = buildGroundChunkGeometry(definition, spec)
-  // Material gets assigned by caller; default to a placeholder MeshStandardMaterial.
-  const material = new THREE.MeshStandardMaterial({
-    color: '#707070',
-    roughness: 0.85,
-    metalness: 0.05,
-  })
+  const cachedMaterialValue = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
+  const cachedMaterial = Array.isArray(cachedMaterialValue)
+    ? (cachedMaterialValue[0] as THREE.Material | undefined)
+    : (cachedMaterialValue as THREE.Material | undefined)
+
+  let material: THREE.Material | undefined = cachedMaterial
+  if (!material) {
+    const firstExistingChunk = state.chunks.values().next().value as GroundChunkRuntime | undefined
+    const existingMaterial = firstExistingChunk?.mesh?.material
+    material = Array.isArray(existingMaterial) ? (existingMaterial[0] as THREE.Material | undefined) : (existingMaterial as THREE.Material | undefined)
+  }
+
+  if (!material && cachedPrototypeMesh) {
+    const prototypeMaterial = cachedPrototypeMesh.material
+    material = Array.isArray(prototypeMaterial)
+      ? (prototypeMaterial[0] as THREE.Material | undefined)
+      : (prototypeMaterial as THREE.Material | undefined)
+  }
+
+  // Fallback placeholder (shared material should be set/cached by SceneGraph/editor).
+  if (!material) {
+    material = new THREE.MeshStandardMaterial({
+      color: '#707070',
+      roughness: 0.85,
+      metalness: 0.05,
+    })
+  }
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
   mesh.receiveShadow = true
@@ -1000,10 +1021,18 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
 }
 
 export function setGroundMaterial(target: THREE.Object3D, material: THREE.Material | THREE.Material[]): void {
+  const resolvedMaterial = Array.isArray(material) ? material[0] : material
+  if (!resolvedMaterial) {
+    return
+  }
+
+  const userData = (target.userData ??= {}) as Record<string, unknown>
+  userData.groundMaterial = resolvedMaterial
+
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
-      mesh.material = material
+      mesh.material = resolvedMaterial
     }
   })
 }
