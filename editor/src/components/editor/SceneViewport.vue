@@ -513,6 +513,11 @@ function computeRoadDynamicMeshSignature(
   materialConfigId: string | null,
   laneLines: boolean,
   shoulders: boolean,
+  samplingDensityFactor: number | null,
+  smoothingStrengthFactor: number | null,
+  minClearance: number | null,
+  laneLineWidth: number | null,
+  shoulderWidth: number | null,
   groundSignature: string | null,
   heightSamplerSignature: unknown,
 ): string {
@@ -524,6 +529,11 @@ function computeRoadDynamicMeshSignature(
     typeof materialConfigId === 'string' ? materialConfigId : null,
     Boolean(laneLines),
     Boolean(shoulders),
+    Number.isFinite(samplingDensityFactor) ? samplingDensityFactor : null,
+    Number.isFinite(smoothingStrengthFactor) ? smoothingStrengthFactor : null,
+    Number.isFinite(minClearance) ? minClearance : null,
+    Number.isFinite(laneLineWidth) ? laneLineWidth : null,
+    Number.isFinite(shoulderWidth) ? shoulderWidth : null,
     typeof groundSignature === 'string' ? groundSignature : null,
     heightSamplerSignature ?? null,
   ])
@@ -593,11 +603,29 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const groundOriginY = Number(groundNode?.position?.y ?? 0)
   const groundOriginZ = Number(groundNode?.position?.z ?? 0)
 
-  const samplingDensityFactor = component?.props?.samplingDensityFactor
-  const smoothingStrengthFactor = component?.props?.smoothingStrengthFactor
-  const minClearance = component?.props?.minClearance
-  const laneLineWidth = component?.props?.laneLineWidth
-  const shoulderWidth = component?.props?.shoulderWidth
+  const samplingDensityFactorRaw = component?.props?.samplingDensityFactor
+  const samplingDensityFactorValue = typeof samplingDensityFactorRaw === 'number'
+    ? samplingDensityFactorRaw
+    : Number(samplingDensityFactorRaw)
+  const samplingDensityFactor = Number.isFinite(samplingDensityFactorValue) ? samplingDensityFactorValue : undefined
+
+  const smoothingStrengthFactorRaw = component?.props?.smoothingStrengthFactor
+  const smoothingStrengthFactorValue = typeof smoothingStrengthFactorRaw === 'number'
+    ? smoothingStrengthFactorRaw
+    : Number(smoothingStrengthFactorRaw)
+  const smoothingStrengthFactor = Number.isFinite(smoothingStrengthFactorValue) ? smoothingStrengthFactorValue : undefined
+
+  const minClearanceRaw = component?.props?.minClearance
+  const minClearanceValue = typeof minClearanceRaw === 'number' ? minClearanceRaw : Number(minClearanceRaw)
+  const minClearance = Number.isFinite(minClearanceValue) ? minClearanceValue : undefined
+
+  const laneLineWidthRaw = component?.props?.laneLineWidth
+  const laneLineWidthValue = typeof laneLineWidthRaw === 'number' ? laneLineWidthRaw : Number(laneLineWidthRaw)
+  const laneLineWidth = Number.isFinite(laneLineWidthValue) ? laneLineWidthValue : undefined
+
+  const shoulderWidthRaw = component?.props?.shoulderWidth
+  const shoulderWidthValue = typeof shoulderWidthRaw === 'number' ? shoulderWidthRaw : Number(shoulderWidthRaw)
+  const shoulderWidth = Number.isFinite(shoulderWidthValue) ? shoulderWidthValue : undefined
 
   return {
     junctionSmoothing,
@@ -7781,6 +7809,11 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         materialConfigId,
         laneLines,
         shoulders,
+        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
+        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
+        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
+        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
+        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
         groundSignature,
         heightSamplerSignature,
       )
@@ -7794,6 +7827,11 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         materialConfigId,
         laneLines,
         shoulders,
+        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
+        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
+        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
+        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
+        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
         groundSignature,
         heightSamplerSignature,
       )
@@ -8473,6 +8511,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         materialConfigId,
         laneLines,
         shoulders,
+        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
+        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
+        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
+        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
+        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
         groundSignature,
         heightSamplerSignature,
       )

@@ -83,20 +83,25 @@ watch(
     localLaneLines.value = Boolean(component.props?.laneLines)
     localShoulders.value = Boolean(component.props?.shoulders)
 
-    const samplingDensity = component.props?.samplingDensityFactor
-    localSamplingDensityFactor.value = Number.isFinite(samplingDensity) ? Math.max(0.1, Math.min(5, samplingDensity!)) : 1.0
+    const samplingDensityRaw = component.props?.samplingDensityFactor
+    const samplingDensity = typeof samplingDensityRaw === 'number' ? samplingDensityRaw : Number(samplingDensityRaw)
+    localSamplingDensityFactor.value = Number.isFinite(samplingDensity) ? Math.max(0.1, Math.min(5, samplingDensity)) : 1.0
 
-    const smoothingStrength = component.props?.smoothingStrengthFactor
-    localSmoothingStrengthFactor.value = Number.isFinite(smoothingStrength) ? Math.max(0.1, Math.min(5, smoothingStrength!)) : 1.0
+    const smoothingStrengthRaw = component.props?.smoothingStrengthFactor
+    const smoothingStrength = typeof smoothingStrengthRaw === 'number' ? smoothingStrengthRaw : Number(smoothingStrengthRaw)
+    localSmoothingStrengthFactor.value = Number.isFinite(smoothingStrength) ? Math.max(0.1, Math.min(5, smoothingStrength)) : 1.0
 
-    const minClearance = component.props?.minClearance
-    localMinClearance.value = Number.isFinite(minClearance) ? Math.max(0, Math.min(2, minClearance!)) : 0.01
+    const minClearanceRaw = component.props?.minClearance
+    const minClearance = typeof minClearanceRaw === 'number' ? minClearanceRaw : Number(minClearanceRaw)
+    localMinClearance.value = Number.isFinite(minClearance) ? Math.max(0, Math.min(2, minClearance)) : 0.01
 
-    const laneLineWidth = component.props?.laneLineWidth
-    localLaneLineWidth.value = Number.isFinite(laneLineWidth) && laneLineWidth! > 0.01 ? laneLineWidth : undefined
+    const laneLineWidthRaw = component.props?.laneLineWidth
+    const laneLineWidth = typeof laneLineWidthRaw === 'number' ? laneLineWidthRaw : Number(laneLineWidthRaw)
+    localLaneLineWidth.value = Number.isFinite(laneLineWidth) && laneLineWidth > 0.01 ? laneLineWidth : undefined
 
-    const shoulderWidth = component.props?.shoulderWidth
-    localShoulderWidth.value = Number.isFinite(shoulderWidth) && shoulderWidth! > 0.01 ? shoulderWidth : undefined
+    const shoulderWidthRaw = component.props?.shoulderWidth
+    const shoulderWidth = typeof shoulderWidthRaw === 'number' ? shoulderWidthRaw : Number(shoulderWidthRaw)
+    localShoulderWidth.value = Number.isFinite(shoulderWidth) && shoulderWidth > 0.01 ? shoulderWidth : undefined
 
     nextTick(() => {
       isSyncingFromScene.value = false
@@ -263,8 +268,12 @@ function applyLaneLineWidthUpdate(rawValue: unknown) {
   }
   const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
   const nextValue = Number.isFinite(value) && value > 0.01 ? Math.max(0.01, Math.min(1, value)) : undefined
-  const current = component.props?.laneLineWidth
-  if (nextValue === current || (nextValue === undefined && current === undefined)) {
+  const currentRaw = component.props?.laneLineWidth
+  const current = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw)
+  if (
+    (nextValue === undefined && !Number.isFinite(current))
+    || (nextValue !== undefined && Number.isFinite(current) && Math.abs(current - nextValue) <= 1e-6)
+  ) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLineWidth: nextValue })
@@ -281,8 +290,12 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
   }
   const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
   const nextValue = Number.isFinite(value) && value > 0.01 ? Math.max(0.01, Math.min(2, value)) : undefined
-  const current = component.props?.shoulderWidth
-  if (nextValue === current || (nextValue === undefined && current === undefined)) {
+  const currentRaw = component.props?.shoulderWidth
+  const current = typeof currentRaw === 'number' ? currentRaw : Number(currentRaw)
+  if (
+    (nextValue === undefined && !Number.isFinite(current))
+    || (nextValue !== undefined && Number.isFinite(current) && Math.abs(current - nextValue) <= 1e-6)
+  ) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulderWidth: nextValue })
