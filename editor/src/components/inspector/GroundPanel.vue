@@ -15,7 +15,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterBrushRadius } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterBrushRadius } =
   storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
@@ -54,17 +54,10 @@ const groundPanelTabModel = computed<GroundPanelTab>({
   set: (value) => terrainStore.setGroundPanelTab(value),
 })
 
-const scatterSpacingModel = computed({
-  get: () => scatterSpacing.value,
-  set: (value: number) => terrainStore.setScatterSpacing(Number(value)),
-})
-
 const scatterBrushRadiusModel = computed({
   get: () => scatterBrushRadius.value,
   set: (value: number) => terrainStore.setScatterBrushRadius(Number(value)),
 })
-
-const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
 const scatterBrushRadiusDisplay = computed(() => scatterBrushRadius.value.toFixed(2))
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
@@ -282,22 +275,6 @@ function handleScatterAssetSelect(
             v-if="groundPanelTabModel !== 'terrain'"
             class="scatter-spacing-panel"
           >
-            <div class="scatter-spacing-item">
-              <div class="scatter-spacing-labels">
-                <span>Scatter Spacing</span>
-                <span>{{ scatterSpacingDisplay }} m</span>
-              </div>
-              <v-slider
-                v-model="scatterSpacingModel"
-                :min="0.1"
-                :max="2"
-                :step="0.05"
-                density="compact"
-                track-color="rgba(77, 208, 225, 0.4)"
-                color="primary"
-              />
-            </div>
-
             <div class="scatter-spacing-item">
               <div class="scatter-spacing-labels">
                 <span>Brush Radius</span>

@@ -252,7 +252,7 @@ const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterSpacing, scatterBrushRadius, scatterEraseRadius } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterBrushRadius, scatterEraseRadius } =
   storeToRefs(terrainStore)
 
 const groundTerrainScatterUpdatedAt = computed(() => {
@@ -887,7 +887,6 @@ const groundEditor = createGroundEditor({
   groundPanelTab,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
-  scatterSpacing,
   scatterBrushRadius,
   scatterEraseRadius,
   activeBuildTool,
@@ -1952,7 +1951,7 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
-const instancedLodFrustumCuller: InstancedBvhFrustumCuller = createInstancedBvhFrustumCuller()
+const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
 
@@ -2114,7 +2113,7 @@ function updateInstancedCullingAndLod(): void {
 
   candidateIds.sort()
   instancedLodFrustumCuller.setIds(candidateIds)
-  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
+  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id: string, centerTarget: THREE.Vector3) => {
     const object = candidateObjects.get(id)
     if (!object) {
       return null
