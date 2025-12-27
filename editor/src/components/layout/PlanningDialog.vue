@@ -82,10 +82,10 @@ interface PlanningScatterAssignment {
   thumbnail: string | null
   /** 0-100, default 50. Used to scale generated scatter count. */
   densityPercent: number
-  /** 0-10 meters, default 1. Used as a minimum distance between instances. */
-  minSpacingMeters: number
   /** Model bounding-box footprint area (m^2), used for capacity estimation. */
   footprintAreaM2: number
+  /** Model bounding-box max side length (m), used to avoid overlap in dot preview. */
+  footprintMaxSizeM: number
 }
 
 interface PlanningPolygon {
@@ -292,12 +292,6 @@ function clampDensityPercent(value: unknown): number {
   return Math.round(clampNumber(num, 0, 100))
 }
 
-function clampMinSpacingMeters(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) return 1
-  return Math.round(clampNumber(num, 0, 10) * 10) / 10
-}
-
 function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
   const preset = terrainScatterPresets[category]
   const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
@@ -310,6 +304,37 @@ function clampFootprintAreaM2(category: TerrainScatterCategory, value: unknown):
     return defaultFootprintAreaM2(category)
   }
   return Math.min(1e6, Math.max(0.0001, num))
+}
+
+function defaultFootprintMaxSizeM(category: TerrainScatterCategory): number {
+  const preset = terrainScatterPresets[category]
+  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
+  return Math.max(0.05, spacing)
+}
+
+function clampFootprintMaxSizeM(category: TerrainScatterCategory, value: unknown, fallbackAreaM2?: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num <= 0) {
+    if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
+      return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
+    }
+    return defaultFootprintMaxSizeM(category)
+  }
+  return Math.min(1000, Math.max(0.01, num))
+}
+
+function estimateFootprintDiagonalM(footprintAreaM2: number, footprintMaxSizeM: number): number {
+  const area = Number.isFinite(footprintAreaM2) ? footprintAreaM2 : 0
+  const maxSide = Number.isFinite(footprintMaxSizeM) ? footprintMaxSizeM : 0
+  if (area <= 0 || maxSide <= 0) {
+    return 0
+  }
+  // Given area = a*b and maxSide = max(a,b), infer the other side and compute diagonal.
+  const otherSide = area / maxSide
+  if (!Number.isFinite(otherSide) || otherSide <= 0) {
+    return 0
+  }
+  return Math.sqrt(maxSide * maxSide + otherSide * otherSide)
 }
 
 function hashSeedFromString(value: string): number {
@@ -770,7 +795,6 @@ let scatterControlsListenersAttached = false
 
 const scatterControlsTargetPolygonId = ref<string | null>(null)
 const scatterDensityPercentDraft = ref<number | null>(null)
-const scatterMinSpacingMetersDraft = ref<number | null>(null)
 
 const scatterControlsInteracting = computed(() =>
   suspendedPolygonScatterDensityDotsKey.value?.polygonId === SCATTER_CONTROLS_SUSPEND_KEY,
@@ -779,7 +803,6 @@ const scatterControlsInteracting = computed(() =>
 function commitScatterControlsDraft() {
   if (propertyPanelDisabled.value) {
     scatterDensityPercentDraft.value = null
-    scatterMinSpacingMetersDraft.value = null
     scatterControlsTargetPolygonId.value = null
     return
   }
@@ -787,14 +810,12 @@ function commitScatterControlsDraft() {
   const polygonId = scatterControlsTargetPolygonId.value
   if (!polygonId) {
     scatterDensityPercentDraft.value = null
-    scatterMinSpacingMetersDraft.value = null
     return
   }
 
   const polygon = polygons.value.find((item) => item.id === polygonId)
   if (!polygon?.scatter) {
     scatterDensityPercentDraft.value = null
-    scatterMinSpacingMetersDraft.value = null
     scatterControlsTargetPolygonId.value = null
     return
   }
@@ -803,7 +824,6 @@ function commitScatterControlsDraft() {
   const layer = layers.value.find((item) => item.id === polygon.layerId)
   if (layer?.kind !== 'green') {
     scatterDensityPercentDraft.value = null
-    scatterMinSpacingMetersDraft.value = null
     scatterControlsTargetPolygonId.value = null
     return
   }
@@ -816,16 +836,8 @@ function commitScatterControlsDraft() {
       changed = true
     }
   }
-  if (typeof scatterMinSpacingMetersDraft.value === 'number') {
-    const nextSpacing = clampMinSpacingMeters(scatterMinSpacingMetersDraft.value)
-    if (polygon.scatter.minSpacingMeters !== nextSpacing) {
-      polygon.scatter.minSpacingMeters = nextSpacing
-      changed = true
-    }
-  }
 
   scatterDensityPercentDraft.value = null
-  scatterMinSpacingMetersDraft.value = null
   scatterControlsTargetPolygonId.value = null
 
   if (changed) {
@@ -870,7 +882,6 @@ function beginScatterControlsInteraction(event: PointerEvent) {
   // Snapshot which polygon we're editing so we can commit on pointer-up.
   scatterControlsTargetPolygonId.value = selectedPolygon.value?.id ?? null
   scatterDensityPercentDraft.value = null
-  scatterMinSpacingMetersDraft.value = null
 
   suspendPolygonScatterDensityDots.value = true
   suspendedPolygonScatterDensityDotsKey.value = { pointerId: event.pointerId, polygonId: SCATTER_CONTROLS_SUSPEND_KEY }
@@ -940,14 +951,13 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
-
-    const minSpacingMeters = clampMinSpacingMeters(poly.scatter.minSpacingMeters)
     const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.category, poly.scatter.footprintAreaM2)
+    const footprintMaxSizeM = clampFootprintMaxSizeM(poly.scatter.category, poly.scatter.footprintMaxSizeM, footprintAreaM2)
     const preset = terrainScatterPresets[poly.scatter.category]
-    const avgScale = preset ? (preset.minScale + preset.maxScale) * 0.5 : 1
-    const effectiveFootprintAreaM2 = footprintAreaM2 * avgScale * avgScale
-
-    const minDistance = Math.max(minSpacingMeters, Math.sqrt(effectiveFootprintAreaM2))
+    const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
+    const baseDiagonal = estimateFootprintDiagonalM(footprintAreaM2, footprintMaxSizeM)
+    const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScale)
+    const effectiveFootprintAreaM2 = footprintAreaM2 * maxScale * maxScale
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       polygonScatterDensityDotsCache.delete(poly.id)
@@ -960,9 +970,9 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     }
 
     // Capacity model (same idea as conversion):
-    // max = floor(polygonArea / max(modelFootprintArea, spacing^2))
+    // max = floor(polygonArea / modelFootprintArea)
     // target = round(max * densityPercent/100)
-    const perInstanceArea = Math.max(effectiveFootprintAreaM2, minSpacingMeters * minSpacingMeters)
+    const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM)
     const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
     const targetDots = Math.round((maxByArea * densityPercent) / 100)
     if (targetDots <= 0) {
@@ -970,8 +980,12 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
+    // Derive a spacing from (area, targetDots), but never smaller than the model bounding box.
+    const spacingFromCount = Math.sqrt(area / Math.max(1, targetDots))
+    const minDistance = Math.max(spacingFromCount, effectiveDiagonalM)
+
     const pointsHash = hashPlanningPoints(poly.points)
-    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${minSpacingMeters}|${Math.round(footprintAreaM2 * 1000)}`
+    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}`
     const cached = polygonScatterDensityDotsCache.get(poly.id)
     if (cached?.key === cacheKey) {
       if (cached.dots.length) {
@@ -982,7 +996,7 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
 
     // Preview should stay responsive.
     const cappedTarget = Math.min(800, targetDots)
-    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${minSpacingMeters}:${Math.round(footprintAreaM2 * 1000)}`))
+    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}`))
 
     // Use Poisson disk sampling for a more even distribution, while ensuring
     // dots always stay inside the planned polygon region.
@@ -1293,8 +1307,8 @@ function buildPlanningSnapshot() {
           name: poly.scatter.name,
           thumbnail: poly.scatter.thumbnail,
           densityPercent: clampDensityPercent(poly.scatter.densityPercent),
-          minSpacingMeters: clampMinSpacingMeters(poly.scatter.minSpacingMeters),
           footprintAreaM2: clampFootprintAreaM2(poly.scatter.category, poly.scatter.footprintAreaM2),
+          footprintMaxSizeM: clampFootprintMaxSizeM(poly.scatter.category, poly.scatter.footprintMaxSizeM, poly.scatter.footprintAreaM2),
         }
         : undefined,
     })),
@@ -1311,8 +1325,8 @@ function buildPlanningSnapshot() {
           name: line.scatter.name,
           thumbnail: line.scatter.thumbnail,
           densityPercent: clampDensityPercent(line.scatter.densityPercent),
-          minSpacingMeters: clampMinSpacingMeters(line.scatter.minSpacingMeters),
           footprintAreaM2: clampFootprintAreaM2(line.scatter.category, line.scatter.footprintAreaM2),
+          footprintMaxSizeM: clampFootprintMaxSizeM(line.scatter.category, line.scatter.footprintMaxSizeM, line.scatter.footprintAreaM2),
         }
         : undefined,
     })),
@@ -1489,8 +1503,8 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
   const name = typeof payload.name === 'string' ? payload.name : 'Scatter 预设'
   const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
   const densityPercent = clampDensityPercent(payload.densityPercent)
-  const minSpacingMeters = clampMinSpacingMeters(payload.minSpacingMeters)
   const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
+  const footprintMaxSizeM = clampFootprintMaxSizeM(category, payload.footprintMaxSizeM, footprintAreaM2)
   return {
     providerAssetId,
     assetId,
@@ -1498,8 +1512,8 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
     name,
     thumbnail: thumb,
     densityPercent,
-    minSpacingMeters,
     footprintAreaM2,
+    footprintMaxSizeM,
   }
 }
 
@@ -3240,7 +3254,6 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
   }
   const thumbnail = payload.asset.thumbnail ?? null
   const existingDensity = target.shape.scatter?.densityPercent
-  const existingMinSpacing = target.shape.scatter?.minSpacingMeters
 
   const length = payload.asset.dimensionLength ?? null
   const width = payload.asset.dimensionWidth ?? null
@@ -3248,6 +3261,10 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
     ? length * width
     : undefined
   const footprintAreaM2 = clampFootprintAreaM2(category, rawArea)
+  const rawMaxSize = (typeof length === 'number' && typeof width === 'number' && Number.isFinite(length) && Number.isFinite(width) && length > 0 && width > 0)
+    ? Math.max(length, width)
+    : undefined
+  const footprintMaxSizeM = clampFootprintMaxSizeM(category, rawMaxSize, footprintAreaM2)
 
   target.shape.scatter = {
     providerAssetId: payload.providerAssetId,
@@ -3256,8 +3273,8 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
     name: payload.asset.name,
     thumbnail,
     densityPercent: clampDensityPercent(existingDensity),
-    minSpacingMeters: clampMinSpacingMeters(existingMinSpacing),
     footprintAreaM2,
+    footprintMaxSizeM,
   }
   markPlanningDirty()
 }
@@ -3302,40 +3319,6 @@ const scatterDensityEnabled = computed(() => {
     && target.layer?.kind === 'green'
     && !!target.shape.scatter
 })
-
-const scatterMinSpacingMetersModel = computed<number>({
-  get: () => clampMinSpacingMeters(selectedScatterAssignment.value?.minSpacingMeters),
-  set: (value) => {
-    if (propertyPanelDisabled.value) {
-      return
-    }
-    const target = selectedScatterTarget.value
-    if (!target?.shape.scatter) {
-      return
-    }
-    // Only meaningful for green polygons (planning -> terrain scatter).
-    if (target.type !== 'polygon' || target.layer?.kind !== 'green') {
-      return
-    }
-    target.shape.scatter.minSpacingMeters = clampMinSpacingMeters(value)
-    markPlanningDirty()
-  },
-})
-
-const scatterMinSpacingMetersSliderModel = computed<number>({
-  get: () => (scatterControlsInteracting.value
-    ? (scatterMinSpacingMetersDraft.value ?? scatterMinSpacingMetersModel.value)
-    : scatterMinSpacingMetersModel.value),
-  set: (value) => {
-    if (scatterControlsInteracting.value) {
-      scatterMinSpacingMetersDraft.value = clampMinSpacingMeters(value)
-      return
-    }
-    scatterMinSpacingMetersModel.value = value
-  },
-})
-
-const scatterMinSpacingEnabled = computed(() => scatterDensityEnabled.value)
 
 function clearSelectedScatterAssignment() {
   if (propertyPanelDisabled.value) {
@@ -5344,22 +5327,6 @@ onBeforeUnmount(() => {
                     />
                   </div>
                   <div class="property-panel__density-value">{{ scatterDensityPercentSliderModel }}%</div>
-                </div>
-
-                <div class="property-panel__spacing-title">分布间隔</div>
-                <div class="property-panel__density-row">
-                  <div @pointerdown.capture="beginScatterControlsInteraction">
-                    <v-slider
-                      v-model="scatterMinSpacingMetersSliderModel"
-                      min="0"
-                      max="10"
-                      step="0.1"
-                      density="compact"
-                      hide-details
-                      :disabled="!scatterMinSpacingEnabled"
-                    />
-                  </div>
-                  <div class="property-panel__density-value">{{ scatterMinSpacingMetersSliderModel }}m</div>
                 </div>
               </div>
 

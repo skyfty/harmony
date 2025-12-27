@@ -131,8 +131,10 @@ function clampScatterBrushRadius(value: unknown): number {
 function computeScatterMinSpacingFromModel(modelGroup: ModelInstanceGroup, maxScale: number): number {
 	const scale = Number.isFinite(maxScale) && maxScale > 0 ? maxScale : 1
 	modelGroup.boundingBox.getSize(scatterBboxSizeHelper)
-	const base = Math.max(0.01, Math.max(scatterBboxSizeHelper.x, scatterBboxSizeHelper.z))
-	// Minimum spacing must be at least the (XZ) bounding box span so instances don't overlap.
+	const x = Math.max(0.01, scatterBboxSizeHelper.x)
+	const z = Math.max(0.01, scatterBboxSizeHelper.z)
+	// Use bounding-circle diameter in XZ (box diagonal) so instances can't overlap even when rotated.
+	const base = Math.sqrt(x * x + z * z)
 	return Math.max(0.01, base * scale)
 }
 const scatterCullingProjView = new THREE.Matrix4()
