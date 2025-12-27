@@ -157,6 +157,19 @@ function clampFootprintMaxSizeM(category: TerrainScatterCategory, value: unknown
   return Math.min(1000, Math.max(0.01, num))
 }
 
+function estimateFootprintDiagonalM(footprintAreaM2: number, footprintMaxSizeM: number): number {
+  const area = Number.isFinite(footprintAreaM2) ? footprintAreaM2 : 0
+  const maxSide = Number.isFinite(footprintMaxSizeM) ? footprintMaxSizeM : 0
+  if (area <= 0 || maxSide <= 0) {
+    return 0
+  }
+  const otherSide = area / maxSide
+  if (!Number.isFinite(otherSide) || otherSide <= 0) {
+    return 0
+  }
+  return Math.sqrt(maxSide * maxSide + otherSide * otherSide)
+}
+
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
   options.onProgress?.({ step, progress: clampProgress(progress) })
 }
@@ -1071,14 +1084,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
           const minScaleForCapacity = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : presetMinScale
           const maxScaleForCapacity = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : presetMaxScale
-          const avgScale = (minScaleForCapacity + maxScaleForCapacity) * 0.5
           const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.category, scatter.footprintAreaM2)
           const baseFootprintMaxSizeM = clampFootprintMaxSizeM(scatter.category, scatter.footprintMaxSizeM, baseFootprintAreaM2)
-          const effectiveFootprintAreaM2 = baseFootprintAreaM2 * avgScale * avgScale
-          const effectiveFootprintMaxSizeM = baseFootprintMaxSizeM * avgScale
+          const baseDiagonal = estimateFootprintDiagonalM(baseFootprintAreaM2, baseFootprintMaxSizeM)
+          const effectiveFootprintAreaM2 = baseFootprintAreaM2 * maxScaleForCapacity * maxScaleForCapacity
+          const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScaleForCapacity)
 
           const area = polygonArea2D(poly.points)
-          const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveFootprintMaxSizeM * effectiveFootprintMaxSizeM, 1e-6)
+          const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM, 1e-6)
           const maxByArea = (Number.isFinite(area) && area > 0 && perInstanceArea > 1e-6)
             ? Math.floor(area / perInstanceArea)
             : 0
@@ -1109,7 +1122,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const spacingFromCount = (Number.isFinite(area) && area > 0)
               ? Math.sqrt(area / targetCount)
               : 0
-            const minDistance = Math.max(spacingFromCount, effectiveFootprintMaxSizeM, 0.05)
+            const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, 0.05)
 
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))

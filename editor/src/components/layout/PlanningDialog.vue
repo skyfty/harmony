@@ -323,6 +323,20 @@ function clampFootprintMaxSizeM(category: TerrainScatterCategory, value: unknown
   return Math.min(1000, Math.max(0.01, num))
 }
 
+function estimateFootprintDiagonalM(footprintAreaM2: number, footprintMaxSizeM: number): number {
+  const area = Number.isFinite(footprintAreaM2) ? footprintAreaM2 : 0
+  const maxSide = Number.isFinite(footprintMaxSizeM) ? footprintMaxSizeM : 0
+  if (area <= 0 || maxSide <= 0) {
+    return 0
+  }
+  // Given area = a*b and maxSide = max(a,b), infer the other side and compute diagonal.
+  const otherSide = area / maxSide
+  if (!Number.isFinite(otherSide) || otherSide <= 0) {
+    return 0
+  }
+  return Math.sqrt(maxSide * maxSide + otherSide * otherSide)
+}
+
 function hashSeedFromString(value: string): number {
   // FNV-1a 32bit
   let hash = 2166136261
@@ -940,9 +954,10 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.category, poly.scatter.footprintAreaM2)
     const footprintMaxSizeM = clampFootprintMaxSizeM(poly.scatter.category, poly.scatter.footprintMaxSizeM, footprintAreaM2)
     const preset = terrainScatterPresets[poly.scatter.category]
-    const avgScale = preset ? (preset.minScale + preset.maxScale) * 0.5 : 1
-    const effectiveFootprintAreaM2 = footprintAreaM2 * avgScale * avgScale
-    const effectiveFootprintMaxSizeM = footprintMaxSizeM * avgScale
+    const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
+    const baseDiagonal = estimateFootprintDiagonalM(footprintAreaM2, footprintMaxSizeM)
+    const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScale)
+    const effectiveFootprintAreaM2 = footprintAreaM2 * maxScale * maxScale
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       polygonScatterDensityDotsCache.delete(poly.id)
@@ -957,7 +972,7 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     // Capacity model (same idea as conversion):
     // max = floor(polygonArea / modelFootprintArea)
     // target = round(max * densityPercent/100)
-    const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveFootprintMaxSizeM * effectiveFootprintMaxSizeM)
+    const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM)
     const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
     const targetDots = Math.round((maxByArea * densityPercent) / 100)
     if (targetDots <= 0) {
@@ -967,7 +982,7 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
 
     // Derive a spacing from (area, targetDots), but never smaller than the model bounding box.
     const spacingFromCount = Math.sqrt(area / Math.max(1, targetDots))
-    const minDistance = Math.max(spacingFromCount, effectiveFootprintMaxSizeM)
+    const minDistance = Math.max(spacingFromCount, effectiveDiagonalM)
 
     const pointsHash = hashPlanningPoints(poly.points)
     const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}`
