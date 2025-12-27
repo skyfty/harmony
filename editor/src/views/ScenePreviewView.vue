@@ -31,7 +31,7 @@ import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
-import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'

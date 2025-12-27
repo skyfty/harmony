@@ -16,7 +16,6 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterCategory = ref<TerrainScatterCategory>('flora')
   const scatterSelectedAsset = ref<ProjectAsset | null>(null)
   const scatterProviderAssetId = ref<string | null>(null)
-  const scatterSpacing = ref(0.5)
   // Scatter placement brush radius (visual only). Kept independent from terrain sculpt brush and erase radius.
   const scatterBrushRadius = ref(0.5)
   const scatterEraseRadius = ref(1)
@@ -45,10 +44,6 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterProviderAssetId.value = payload.providerAssetId ?? null
   }
 
-  function setScatterSpacing(value: number) {
-    scatterSpacing.value = Math.min(2, Math.max(0.1, value))
-  }
-
   function setScatterBrushRadius(value: number) {
     scatterBrushRadius.value = Math.min(5, Math.max(0.1, value))
   }
@@ -69,14 +64,12 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterProviderAssetId,
     scatterPreset,
     scatterModeActive,
-    scatterSpacing,
     scatterBrushRadius,
     scatterEraseRadius,
     setBrushOperation,
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,
-    setScatterSpacing,
     setScatterBrushRadius,
     setScatterEraseRadius,
   }

@@ -86,7 +86,6 @@ export type GroundEditorOptions = {
 	groundPanelTab: Ref<GroundPanelTab>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
-	scatterSpacing: Ref<number>
 	scatterBrushRadius: Ref<number>
 	scatterEraseRadius: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
@@ -113,18 +112,36 @@ const groundPointerHelper = new THREE.Vector3()
 const scatterPointerHelper = new THREE.Vector3()
 const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
-const scatterPlacementCenterLocalHelper = new THREE.Vector3()
 const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
 const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+const scatterBboxSizeHelper = new THREE.Vector3()
+
+function clampFinite(value: unknown, fallback: number): number {
+	const num = typeof value === 'number' ? value : Number(value)
+	return Number.isFinite(num) ? num : fallback
+}
+
+function clampScatterBrushRadius(value: unknown): number {
+	const num = clampFinite(value, 0.5)
+	return Math.min(5, Math.max(0.1, num))
+}
+
+function computeScatterMinSpacingFromModel(modelGroup: ModelInstanceGroup, maxScale: number): number {
+	const scale = Number.isFinite(maxScale) && maxScale > 0 ? maxScale : 1
+	modelGroup.boundingBox.getSize(scatterBboxSizeHelper)
+	const base = Math.max(0.01, Math.max(scatterBboxSizeHelper.x, scatterBboxSizeHelper.z))
+	// Minimum spacing must be at least the (XZ) bounding box span so instances don't overlap.
+	return Math.max(0.01, base * scale)
+}
 const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
 const scatterFrustumCuller = createInstancedBvhFrustumCuller()
 const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
-	const sculptStrokePrevPointHelper = new THREE.Vector3()
-	const sculptStrokeNextPointHelper = new THREE.Vector3()
+const sculptStrokePrevPointHelper = new THREE.Vector3()
+const sculptStrokeNextPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -136,6 +153,7 @@ type ScatterSessionState = {
 	groundMesh: THREE.Object3D
 	spacing: number
 	radius: number
+	targetCountPerStamp: number
 	minScale: number
 	maxScale: number
 	store: TerrainScatterStore
@@ -188,19 +206,6 @@ function resolveChunkCellsForDefinition(definition: GroundDynamicMesh): number {
 	const targetMeters = 100
 	const candidate = Math.max(4, Math.round(targetMeters / Math.max(1e-6, cellSize)))
 	return Math.max(4, Math.min(512, Math.trunc(candidate)))
-}
-
-function addTouchedChunkKeys(state: SculptSessionState, definition: GroundDynamicMesh, region: GroundGeometryUpdateRegion) {
-	const chunkCells = resolveChunkCellsForDefinition(definition)
-	const minCr = Math.max(0, Math.floor(region.minRow / chunkCells))
-	const maxCr = Math.max(0, Math.floor(region.maxRow / chunkCells))
-	const minCc = Math.max(0, Math.floor(region.minColumn / chunkCells))
-	const maxCc = Math.max(0, Math.floor(region.maxColumn / chunkCells))
-	for (let cr = minCr; cr <= maxCr; cr += 1) {
-		for (let cc = minCc; cc <= maxCc; cc += 1) {
-			state.touchedChunkKeys.add(`${cr}:${cc}`)
-		}
-	}
 }
 
 function createStarShape(points = 5, outerRadius = 1, innerRadius = 0.5): THREE.Shape {
@@ -1324,9 +1329,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const threshold = spacing * spacing
 		const mesh = session.groundMesh
 		mesh.updateMatrixWorld(true)
+		scatterPlacementCandidateLocalHelper.copy(point)
+		mesh.worldToLocal(scatterPlacementCandidateLocalHelper)
 		for (const instance of layer.instances) {
-			const position = getScatterInstanceWorldPosition(instance, mesh, scatterInstanceWorldPositionHelper)
-			if (position.distanceToSquared(point) < threshold) {
+			const local = instance.localPosition
+			const dx = (local?.x ?? 0) - scatterPlacementCandidateLocalHelper.x
+			const dz = (local?.z ?? 0) - scatterPlacementCandidateLocalHelper.z
+			if (dx * dx + dz * dz < threshold) {
 				return false
 			}
 		}
@@ -1346,7 +1355,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return localPoint
 	}
 
-	function applyScatterPlacement(worldPoint: THREE.Vector3): boolean {
+	function applyScatterPlacement(worldPoint: THREE.Vector3, spacing: number): boolean {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return false
 		}
@@ -1354,7 +1363,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!projected) {
 			return false
 		}
-		if (!isScatterPlacementAvailable(projected, scatterSession.spacing, scatterSession)) {
+		if (!isScatterPlacementAvailable(projected, spacing, scatterSession)) {
 			return false
 		}
 		const localPoint = projected.clone()
@@ -1400,89 +1409,61 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function generateScatterClusterPoints(center: THREE.Vector3, radius: number, spacing: number): THREE.Vector3[] {
-		if (radius <= spacing * 0.25) {
-			return [center.clone()]
+	function sampleScatterPointsInBrush(worldCenterPoint: THREE.Vector3): THREE.Vector3[] {
+		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
+			return []
 		}
-		const maxPoints = Math.min(12, Math.max(2, Math.round((Math.PI * radius * radius) / Math.max(spacing * spacing, 0.01))))
-		const points: THREE.Vector3[] = [center.clone()]
-		const maxAttempts = maxPoints * 4
-		for (let attempt = 0; attempt < maxAttempts && points.length < maxPoints; attempt += 1) {
-			const distance = Math.random() * radius
-			const angle = Math.random() * Math.PI * 2
-			const candidate = center.clone().add(new THREE.Vector3(Math.cos(angle) * distance, 0, Math.sin(angle) * distance))
-			if (points.every((point) => point.distanceToSquared(candidate) >= spacing * spacing * 0.5)) {
-				points.push(candidate)
-			}
-		}
-		return points
-	}
+		const radius = scatterSession.radius
+		const spacing = scatterSession.spacing
 
-	function applyScatterPlacementCluster(center: THREE.Vector3): boolean {
-		if (!scatterSession) {
-			return false
+		// Try to place a bounded number of instances per stamp for performance.
+		const targetCount = scatterSession.targetCountPerStamp
+		const maxAttempts = Math.min(220, Math.max(40, targetCount * 18))
+
+		const accepted: THREE.Vector3[] = []
+		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
+			const u = Math.random()
+			const v = Math.random()
+			const r = Math.sqrt(u) * radius
+			const theta = v * Math.PI * 2
+			scatterPlacementCandidateWorldHelper.set(
+				worldCenterPoint.x + Math.cos(theta) * r,
+				worldCenterPoint.y,
+				worldCenterPoint.z + Math.sin(theta) * r,
+			)
+			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+			if (!projected) {
+				continue
+			}
+			// Avoid overlaps within this stamp (XZ plane).
+			let ok = true
+			for (const point of accepted) {
+				const dx = point.x - projected.x
+				const dz = point.z - projected.z
+				if (dx * dx + dz * dz < spacing * spacing) {
+					ok = false
+					break
+				}
+			}
+			if (!ok) {
+				continue
+			}
+			if (!isScatterPlacementAvailable(projected, spacing, scatterSession)) {
+				continue
+			}
+			accepted.push(projected.clone())
 		}
-		const points = generateScatterClusterPoints(center, scatterSession.radius, scatterSession.spacing)
-		let placed = false
-		for (const point of points) {
-			placed = applyScatterPlacement(point) || placed
-		}
-		return placed
+		return accepted
 	}
 	
 	function paintScatterStamp(worldCenterPoint: THREE.Vector3): void {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return
 		}
-		const radius = resolveScatterBrushRadius()
 		const spacing = scatterSession.spacing
-
-		// Estimate how many instances to try to place per stamp.
-		// Brush radius controls the area; spacing controls density.
-		const area = Math.PI * radius * radius
-		const attemptsTarget = Math.min(25, Math.max(1, Math.floor((area / (spacing * spacing)) * 0.25)))
-		const maxAttempts = Math.min(150, Math.max(20, attemptsTarget * 8))
-
-		let placed = applyScatterPlacement(worldCenterPoint) ? 1 : 0
-		if (placed >= attemptsTarget) {
-			return
-		}
-
-		const { groundMesh, definition } = scatterSession
-		groundMesh.updateMatrixWorld(true)
-		scatterPlacementCenterLocalHelper.copy(worldCenterPoint)
-		groundMesh.worldToLocal(scatterPlacementCenterLocalHelper)
-
-		for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-			if (!scatterSession) {
-				return
-			}
-			const u = Math.random()
-			const v = Math.random()
-			const r = Math.sqrt(u) * radius
-			const theta = v * Math.PI * 2
-			const dx = Math.cos(theta) * r
-			const dz = Math.sin(theta) * r
-
-			scatterPlacementCandidateLocalHelper.set(
-				scatterPlacementCenterLocalHelper.x + dx,
-				0,
-				scatterPlacementCenterLocalHelper.z + dz,
-			)
-			scatterPlacementCandidateLocalHelper.y = sampleGroundHeight(
-				definition,
-				scatterPlacementCandidateLocalHelper.x,
-				scatterPlacementCandidateLocalHelper.z,
-			)
-
-			scatterPlacementCandidateWorldHelper.copy(scatterPlacementCandidateLocalHelper)
-			groundMesh.localToWorld(scatterPlacementCandidateWorldHelper)
-			if (applyScatterPlacement(scatterPlacementCandidateWorldHelper)) {
-				placed += 1
-				if (placed >= attemptsTarget) {
-					return
-				}
-			}
+		const points = sampleScatterPointsInBrush(worldCenterPoint)
+		for (const point of points) {
+			applyScatterPlacement(point, spacing)
 		}
 	}
 
@@ -1491,16 +1472,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		if (!scatterSession.lastPoint) {
-			if (applyScatterPlacementCluster(targetPoint)) {
-				scatterSession.lastPoint = targetPoint.clone()
-			}
 			scatterSession.lastPoint = targetPoint.clone()
 			paintScatterStamp(targetPoint)
 			return
 		}
 		scatterDirectionHelper.copy(targetPoint).sub(scatterSession.lastPoint)
 		const distance = scatterDirectionHelper.length()
-		const stepDistance = Math.max(scatterSession.spacing, resolveScatterBrushRadius() * 0.5)
+		const stepDistance = Math.max(scatterSession.spacing, scatterSession.radius * 0.6)
 		if (distance < stepDistance * 0.35) {
 			return
 		}
@@ -1509,17 +1487,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		for (let index = 1; index <= steps; index += 1) {
 			scatterPlacementHelper
 				.copy(scatterSession.lastPoint)
-				.addScaledVector(scatterDirectionHelper, scatterSession.spacing * index)
-			if (applyScatterPlacementCluster(scatterPlacementHelper)) {
-				scatterSession.lastPoint = scatterPlacementHelper.clone()
-			}
+				.addScaledVector(scatterDirectionHelper, stepDistance * index)
+			paintScatterStamp(scatterPlacementHelper)
 		}
-		const remainder = distance - steps * scatterSession.spacing
-		if (remainder >= scatterSession.spacing * 0.4) {
-			if (applyScatterPlacementCluster(targetPoint)) {
-				scatterSession.lastPoint = targetPoint.clone()
-			}
-		}
+		scatterSession.lastPoint = targetPoint.clone()
+		paintScatterStamp(targetPoint)
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
@@ -1552,14 +1524,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
 			return false
 		}
-		const customSpacing = Number.isFinite(options.scatterSpacing.value)
-			? options.scatterSpacing.value
-			: preset.spacing
-		const effectiveSpacing = Math.min(2, Math.max(0.1, customSpacing))
-		const customRadius = Number.isFinite(options.scatterBrushRadius.value)
-			? options.scatterBrushRadius.value
-			: 0.5
-		const effectiveRadius = Math.min(2, Math.max(0.1, customRadius))
+		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
+		const minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
+		const area = Math.PI * effectiveRadius * effectiveRadius
+		const maxNonOverlapping = Math.max(1, Math.floor(area / Math.max(minSpacing * minSpacing, 1e-4)))
+		// Use a conservative packing factor so distribution stays "natural".
+		const targetCountPerStamp = Math.min(25, Math.max(1, Math.floor(maxNonOverlapping * 0.6)))
+		const spacingFromCount = Math.sqrt(area / targetCountPerStamp)
+		const effectiveSpacing = Math.max(minSpacing, spacingFromCount)
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
@@ -1570,6 +1542,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundMesh,
 			spacing: effectiveSpacing,
 			radius: effectiveRadius,
+			targetCountPerStamp,
 			minScale: preset.minScale,
 			maxScale: preset.maxScale,
 			store: ensureScatterStoreRef(),

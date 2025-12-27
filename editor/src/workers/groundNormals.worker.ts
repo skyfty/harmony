@@ -31,21 +31,27 @@ function computeVertexNormalsIndexed(
 
 	// Accumulate face normals per vertex.
 	for (let i = 0; i < indices.length; i += 3) {
-		const ia3 = indices[i] * 3
-		const ib3 = indices[i + 1] * 3
-		const ic3 = indices[i + 2] * 3
+		const ia = indices[i]
+		const ib = indices[i + 1]
+		const ic = indices[i + 2]
+		if (ia === undefined || ib === undefined || ic === undefined) {
+			continue
+		}
+		const ia3 = ia * 3
+		const ib3 = ib * 3
+		const ic3 = ic * 3
 
-		const ax = positions[ia3]
-		const ay = positions[ia3 + 1]
-		const az = positions[ia3 + 2]
+		const ax = positions[ia3] ?? 0
+		const ay = positions[ia3 + 1] ?? 0
+		const az = positions[ia3 + 2] ?? 0
 
-		const bx = positions[ib3]
-		const by = positions[ib3 + 1]
-		const bz = positions[ib3 + 2]
+		const bx = positions[ib3] ?? 0
+		const by = positions[ib3 + 1] ?? 0
+		const bz = positions[ib3 + 2] ?? 0
 
-		const cx = positions[ic3]
-		const cy = positions[ic3 + 1]
-		const cz = positions[ic3 + 2]
+		const cx = positions[ic3] ?? 0
+		const cy = positions[ic3 + 1] ?? 0
+		const cz = positions[ic3 + 2] ?? 0
 
 		const abx = bx - ax
 		const aby = by - ay
@@ -60,24 +66,24 @@ function computeVertexNormalsIndexed(
 		const ny = abz * acx - abx * acz
 		const nz = abx * acy - aby * acx
 
-		normals[ia3] += nx
-		normals[ia3 + 1] += ny
-		normals[ia3 + 2] += nz
+		normals[ia3] = (normals[ia3] ?? 0) + nx
+		normals[ia3 + 1] = (normals[ia3 + 1] ?? 0) + ny
+		normals[ia3 + 2] = (normals[ia3 + 2] ?? 0) + nz
 
-		normals[ib3] += nx
-		normals[ib3 + 1] += ny
-		normals[ib3 + 2] += nz
+		normals[ib3] = (normals[ib3] ?? 0) + nx
+		normals[ib3 + 1] = (normals[ib3 + 1] ?? 0) + ny
+		normals[ib3 + 2] = (normals[ib3 + 2] ?? 0) + nz
 
-		normals[ic3] += nx
-		normals[ic3 + 1] += ny
-		normals[ic3 + 2] += nz
+		normals[ic3] = (normals[ic3] ?? 0) + nx
+		normals[ic3 + 1] = (normals[ic3 + 1] ?? 0) + ny
+		normals[ic3 + 2] = (normals[ic3 + 2] ?? 0) + nz
 	}
 
 	// Normalize.
 	for (let i = 0; i < normals.length; i += 3) {
-		const x = normals[i]
-		const y = normals[i + 1]
-		const z = normals[i + 2]
+		const x = normals[i] ?? 0
+		const y = normals[i + 1] ?? 0
+		const z = normals[i + 2] ?? 0
 		const lenSq = x * x + y * y + z * z
 		const invLen = 1 / Math.sqrt(lenSq || 1)
 		normals[i] = x * invLen
