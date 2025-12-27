@@ -19,7 +19,7 @@ import {
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
+import { buildRandom, generateFpsScatterPointsInPolygon, hashSeedFromString } from '@/utils/scatterSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { FLOOR_COMPONENT_TYPE, ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING, WATER_COMPONENT_TYPE } from '@schema/components'
 import { createRoadNodeMaterials, ROAD_SURFACE_DEFAULT_COLOR } from '@/utils/roadNodeMaterials'
@@ -95,7 +95,6 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 }
 
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
-const POISSON_CANDIDATES_PER_ACTIVE = 24
 
 type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water'
 
@@ -540,16 +539,6 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
 }
 
-function hashSeedFromString(value: string): number {
-  // FNV-1a 32bit
-  let hash = 2166136261
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
 function polygonArea2D(points: PlanningPoint[]): number {
   if (points.length < 3) return 0
   let sum = 0
@@ -559,22 +548,6 @@ function polygonArea2D(points: PlanningPoint[]): number {
     sum += a.x * b.y - b.x * a.y
   }
   return Math.abs(sum) * 0.5
-}
-
-function pointInPolygon(point: PlanningPoint, polygon: PlanningPoint[]): boolean {
-  // Ray casting
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const xi = polygon[i]!.x
-    const yi = polygon[i]!.y
-    const xj = polygon[j]!.x
-    const yj = polygon[j]!.y
-
-    const intersect = yi > point.y !== yj > point.y
-      && point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-12) + xi
-    if (intersect) inside = !inside
-  }
-  return inside
 }
 
 function ensureScatterStore(groundNodeId: string, snapshot: any | null | undefined): TerrainScatterStore {
@@ -625,168 +598,6 @@ function removePlanningScatterLayers(store: TerrainScatterStore) {
     }
   })
   layersToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
-}
-
-function buildRandom(seed: number) {
-  // LCG
-  let s = seed % 2147483647
-  if (s <= 0) s += 2147483646
-  return () => {
-    s = (s * 16807) % 2147483647
-    return (s - 1) / 2147483646
-  }
-}
-
-function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): PlanningPoint | null {
-  const uniform = sampleUniformPointInPolygon(polygon, random)
-  if (uniform) return uniform
-
-  // Fallback: rejection sampling within bounding box.
-  // This is still uniform over the polygon area (conditional on acceptance), but can be slower for thin shapes.
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  polygon.forEach((p) => {
-    minX = Math.min(minX, p.x)
-    minY = Math.min(minY, p.y)
-    maxX = Math.max(maxX, p.x)
-    maxY = Math.max(maxY, p.y)
-  })
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-    return null
-  }
-
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const p = { x: minX + (maxX - minX) * random(), y: minY + (maxY - minY) * random() }
-    if (pointInPolygon(p, polygon)) return p
-  }
-  return null
-}
-
-function takeRandomSubset<T>(items: T[], count: number, random: () => number): T[] {
-  if (count <= 0) return []
-  if (items.length <= count) return items.slice()
-  const arr = items.slice()
-  // Partial Fisher–Yates shuffle.
-  for (let i = 0; i < count; i += 1) {
-    const j = i + Math.floor(random() * (arr.length - i))
-    const tmp = arr[i]
-    arr[i] = arr[j]!
-    arr[j] = tmp!
-  }
-  arr.length = count
-  return arr
-}
-
-function computeBoundingBox(points: PlanningPoint[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  if (!Array.isArray(points) || points.length === 0) return null
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  for (const p of points) {
-    minX = Math.min(minX, p.x)
-    minY = Math.min(minY, p.y)
-    maxX = Math.max(maxX, p.x)
-    maxY = Math.max(maxY, p.y)
-  }
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
-  return { minX, minY, maxX, maxY }
-}
-
-function poissonSampleInPolygon(
-  polygon: PlanningPoint[],
-  minDistance: number,
-  random: () => number,
-  maxPoints: number,
-): PlanningPoint[] {
-  if (!Array.isArray(polygon) || polygon.length < 3) return []
-  if (!Number.isFinite(minDistance) || minDistance <= 0) return []
-  if (!Number.isFinite(maxPoints) || maxPoints <= 0) return []
-
-  const bbox = computeBoundingBox(polygon)
-  if (!bbox) return []
-
-  const cellSize = minDistance / Math.SQRT2
-  const gridWidth = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) / cellSize))
-  const gridHeight = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) / cellSize))
-  const grid = new Int32Array(gridWidth * gridHeight)
-  grid.fill(-1)
-
-  const points: PlanningPoint[] = []
-  const active: number[] = []
-
-  const toGridX = (x: number) => Math.floor((x - bbox.minX) / cellSize)
-  const toGridY = (y: number) => Math.floor((y - bbox.minY) / cellSize)
-  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx
-
-  const insertPoint = (p: PlanningPoint) => {
-    points.push(p)
-    const index = points.length - 1
-    active.push(index)
-    const gx = THREE.MathUtils.clamp(toGridX(p.x), 0, gridWidth - 1)
-    const gy = THREE.MathUtils.clamp(toGridY(p.y), 0, gridHeight - 1)
-    grid[gridIndex(gx, gy)] = index
-  }
-
-  const hasNeighborWithin = (p: PlanningPoint): boolean => {
-    const gx = toGridX(p.x)
-    const gy = toGridY(p.y)
-    const radius = 2
-    const minSq = minDistance * minDistance
-    for (let y = Math.max(0, gy - radius); y <= Math.min(gridHeight - 1, gy + radius); y += 1) {
-      for (let x = Math.max(0, gx - radius); x <= Math.min(gridWidth - 1, gx + radius); x += 1) {
-        const storedIndex = grid[gridIndex(x, y)]
-        if (storedIndex == null || storedIndex === -1) continue
-        const other = points[storedIndex]
-        if (!other) continue
-        const dx = other.x - p.x
-        const dy = other.y - p.y
-        if (dx * dx + dy * dy < minSq) return true
-      }
-    }
-    return false
-  }
-
-  const start = samplePointInPolygon(polygon, random)
-  if (!start) return []
-  insertPoint(start)
-
-  while (active.length && points.length < maxPoints) {
-    const activeIndex = Math.floor(random() * active.length)
-    const baseIndex = active[activeIndex]!
-    const base = points[baseIndex]!
-
-    let found = false
-    for (let attempt = 0; attempt < POISSON_CANDIDATES_PER_ACTIVE; attempt += 1) {
-      const angle = random() * Math.PI * 2
-      const radius = minDistance * (1 + random())
-      const candidate: PlanningPoint = {
-        x: base.x + Math.cos(angle) * radius,
-        y: base.y + Math.sin(angle) * radius,
-      }
-      if (candidate.x < bbox.minX || candidate.x > bbox.maxX || candidate.y < bbox.minY || candidate.y > bbox.maxY) {
-        continue
-      }
-      if (!pointInPolygon(candidate, polygon)) {
-        continue
-      }
-      if (hasNeighborWithin(candidate)) {
-        continue
-      }
-      insertPoint(candidate)
-      found = true
-      break
-    }
-
-    if (!found) {
-      active[activeIndex] = active[active.length - 1]!
-      active.pop()
-    }
-  }
-
-  return points
 }
 
 function upsertPlanningScatterLayer(
@@ -1130,16 +941,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const randomPoints = buildRandom(seedBase)
             const randomProps = buildRandom(hashSeedFromString(`${seedBase}:props`))
 
-            const candidates = poissonSampleInPolygon(
-              poly.points,
+            const maxCandidates = Math.min(8000, Math.max(600, Math.ceil(targetCount * 6)))
+            const selected = generateFpsScatterPointsInPolygon({
+              polygon: poly.points,
+              targetCount,
               minDistance,
-              randomPoints,
-              Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(1, Math.ceil(targetCount * 1.6))),
-            )
-
-            // If we generated more than we need, choose a random subset.
-            // This avoids biases from consuming the Poisson sequence in generation order.
-            const selected = takeRandomSubset(candidates, targetCount, randomPoints)
+              random: randomPoints,
+              maxCandidates,
+            })
 
             const minScale = minScaleForCapacity
             const maxScale = maxScaleForCapacity
