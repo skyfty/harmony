@@ -66,7 +66,18 @@ export interface PlanningSceneData {
   activeLayerId?: string
   layers?: PlanningLayerState[]
   viewTransform?: { scale: number; offset: { x: number; y: number } }
+  /** Optional reference guides (axis-aligned) in world meters. */
+  guides?: PlanningGuideData[]
   polygons: PlanningPolygonData[]
   polylines: PlanningPolylineData[]
   images: PlanningImageData[]
+}
+
+export type PlanningGuideAxis = 'x' | 'y'
+
+export interface PlanningGuideData {
+  id: string
+  axis: PlanningGuideAxis
+  /** World coordinate in meters. Can be negative. */
+  value: number
 }

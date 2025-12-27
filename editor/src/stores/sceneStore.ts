@@ -6316,6 +6316,7 @@ function isPlanningDataEmpty(data: PlanningSceneData): boolean {
     (!data.images || data.images.length === 0)
     && (!data.polygons || data.polygons.length === 0)
     && (!data.polylines || data.polylines.length === 0)
+    && (!data.guides || data.guides.length === 0)
   )
 }
 

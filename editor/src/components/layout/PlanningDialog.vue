@@ -6,6 +6,7 @@ import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
+import PlanningRulers from '@/components/layout/PlanningRulers.vue'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -124,6 +125,15 @@ interface PlanningImage {
   alignMarker?: { x: number; y: number }
 }
 
+type PlanningGuideAxis = 'x' | 'y'
+
+interface PlanningGuide {
+  id: string
+  axis: PlanningGuideAxis
+  /** World coordinate in meters. Can be negative. */
+  value: number
+}
+
 type SelectedFeature =
   | { type: 'polygon'; id: string }
   | { type: 'polyline'; id: string }
@@ -206,6 +216,8 @@ const lineDraftHoverPoint = ref<PlanningPoint | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
+const planningGuides = ref<PlanningGuide[]>([])
+const guideDraft = ref<PlanningGuide | null>(null)
 // 列表显示顺序与画布遮挡顺序保持一致：上层在列表更靠前。
 // 画布采用 DOM 顺序叠放（数组越靠后越上层），因此列表需要反向展示。
 const planningImagesForList = computed(() => [...planningImages.value].reverse())
@@ -1129,6 +1141,41 @@ function markPlanningDirty() {
   planningDirty = true
 }
 
+type RulerGuideDragPhase = 'start' | 'move' | 'end' | 'cancel'
+type RulerGuideDragEvent = {
+  phase: RulerGuideDragPhase
+  axis: PlanningGuideAxis
+  clientX: number
+  clientY: number
+}
+
+function handleRulerGuideDrag(event: RulerGuideDragEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (event.phase === 'cancel') {
+    guideDraft.value = null
+    return
+  }
+
+  const world = clientToWorld(event.clientX, event.clientY)
+  const value = event.axis === 'x' ? world.x : world.y
+  if (!Number.isFinite(value)) {
+    return
+  }
+
+  if (event.phase === 'start' || event.phase === 'move') {
+    guideDraft.value = { id: 'draft', axis: event.axis, value }
+    return
+  }
+
+  if (event.phase === 'end') {
+    planningGuides.value.push({ id: createId('guide'), axis: event.axis, value })
+    guideDraft.value = null
+    markPlanningDirty()
+  }
+}
+
 function buildPlanningSnapshot() {
   return {
     version: 1 as const,
@@ -1151,6 +1198,7 @@ function buildPlanningSnapshot() {
       scale: viewTransform.scale,
       offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
     },
+    guides: planningGuides.value.map((g) => ({ id: g.id, axis: g.axis, value: g.value })),
     polygons: polygons.value.map((poly) => ({
       id: poly.id,
       name: poly.name,
@@ -1205,7 +1253,12 @@ function buildPlanningSnapshot() {
 }
 
 function isPlanningSnapshotEmpty(snapshot: ReturnType<typeof buildPlanningSnapshot>) {
-  return snapshot.images.length === 0 && snapshot.polygons.length === 0 && snapshot.polylines.length === 0
+  return (
+    snapshot.images.length === 0
+    && snapshot.polygons.length === 0
+    && snapshot.polylines.length === 0
+    && (!snapshot.guides || snapshot.guides.length === 0)
+  )
 }
 
 function safeJsonStringify(value: unknown): string | null {
@@ -1333,6 +1386,8 @@ async function handleConvertTo3DScene() {
 
 function resetPlanningState() {
   planningImages.value = []
+  planningGuides.value = []
+  guideDraft.value = null
   polygons.value = []
   polylines.value = []
   polygonDraftPoints.value = []
@@ -1344,6 +1399,20 @@ function resetPlanningState() {
   viewTransform.scale = 1
   viewTransform.offset.x = 0
   viewTransform.offset.y = 0
+}
+
+function normalizeGuide(raw: unknown): PlanningGuide | null {
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const payload = raw as Record<string, unknown>
+  const axis = payload.axis === 'x' || payload.axis === 'y' ? (payload.axis as PlanningGuideAxis) : null
+  const value = Number(payload.value)
+  if (!axis || !Number.isFinite(value)) {
+    return null
+  }
+  const id = typeof payload.id === 'string' ? payload.id : createId('guide')
+  return { id, axis, value }
 }
 
 function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | undefined {
@@ -1382,6 +1451,10 @@ function loadPlanningFromScene() {
     void nextTick(() => fitViewToCanvas({ markDirty: false }))
     planningDirty = false
     return
+  }
+
+  if (Array.isArray((data as any).guides)) {
+    planningGuides.value = ((data as any).guides as unknown[]).map(normalizeGuide).filter((g): g is PlanningGuide => !!g)
   }
 
   if (data.activeLayerId) {
@@ -2428,6 +2501,30 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
   }
 }
 
+function getGuidesOverlayStyle(): CSSProperties {
+  const base = effectiveCanvasPixelSize.value
+  return {
+    width: `${base.width}px`,
+    height: `${base.height}px`,
+  }
+}
+
+function getGuideLineStyle(guide: PlanningGuide): CSSProperties {
+  const base = effectiveCanvasPixelSize.value
+  if (guide.axis === 'x') {
+    return {
+      left: `${guide.value * BASE_PIXELS_PER_METER}px`,
+      top: '0px',
+      height: `${base.height}px`,
+    }
+  }
+  return {
+    left: '0px',
+    top: `${guide.value * BASE_PIXELS_PER_METER}px`,
+    width: `${base.width}px`,
+  }
+}
+
 function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties {
   const accent = getImageAccentColor(image.id)
   return {
@@ -2659,6 +2756,10 @@ function pickTopmostActivePolyline(point: PlanningPoint): { line: PlanningPolyli
 }
 
 function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
+  return clientToWorld(event.clientX, event.clientY)
+}
+
+function clientToWorld(clientX: number, clientY: number): PlanningPoint {
   // 使用实时的 DOMRect，避免 rect 缓存滞后导致绘制/选择坐标错位。
   const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
@@ -2666,8 +2767,8 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   }
   const scale = renderScale.value
   const center = computeStageCenterOffset(rect, scale)
-  const x = (event.clientX - rect.left - center.x) / scale - viewTransform.offset.x
-  const y = (event.clientY - rect.top - center.y) / scale - viewTransform.offset.y
+  const x = (clientX - rect.left - center.x) / scale - viewTransform.offset.x
+  const y = (clientY - rect.top - center.y) / scale - viewTransform.offset.y
   return { x, y }
 }
 
@@ -4816,6 +4917,15 @@ onBeforeUnmount(() => {
             @wheel.prevent="handleWheel"
             @contextmenu.prevent="handleEditorContextMenu"
           >
+            <PlanningRulers
+              :viewport-width="editorRect?.width ?? 0"
+              :viewport-height="editorRect?.height ?? 0"
+              :render-scale="renderScale"
+              :center-offset="stageCenterOffset"
+              :offset="viewTransform.offset"
+              :canvas-size="effectiveCanvasSize"
+              @guide-drag="handleRulerGuideDrag"
+            />
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
 
@@ -5068,6 +5178,22 @@ onBeforeUnmount(() => {
                     />
                   </g>
                 </svg>
+
+                <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
+                  <div
+                    v-for="guide in planningGuides"
+                    :key="guide.id"
+                    class="planning-guide-line"
+                    :class="`planning-guide-line--${guide.axis}`"
+                    :style="getGuideLineStyle(guide)"
+                  />
+                  <div
+                    v-if="guideDraft"
+                    class="planning-guide-line planning-guide-line--draft"
+                    :class="`planning-guide-line--${guideDraft.axis}`"
+                    :style="getGuideLineStyle(guideDraft)"
+                  />
+                </div>
                 <div
                   v-for="(image, index) in planningImages"
                   :key="image.id"
@@ -5966,6 +6092,31 @@ onBeforeUnmount(() => {
   left: 0;
   z-index: 5000;
   pointer-events: none;
+}
+
+.planning-guides-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.planning-guide-line {
+  position: absolute;
+  background: rgba(244, 246, 251, 0.5);
+}
+
+.planning-guide-line--x {
+  width: 1px;
+}
+
+.planning-guide-line--y {
+  height: 1px;
+}
+
+.planning-guide-line--draft {
+  background: rgba(244, 246, 251, 0.75);
 }
 
 .canvas-boundary-overlay {
