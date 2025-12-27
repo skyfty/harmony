@@ -83,8 +83,6 @@ const ROAD_LANE_LINE_OFFSET_Y = 0.002
 const ROAD_SHOULDER_OFFSET_Y = 0.001
 const ROAD_OVERLAY_MIN_WIDTH = 0.01
 const ROAD_LANE_LINE_COLOR = 0x27ffff
-const ROAD_LANE_LINE_DASH_LENGTH = 2
-const ROAD_LANE_LINE_GAP_LENGTH = 1
 
 const ROAD_HEIGHT_SMOOTHING_MIN_PASSES = 3
 const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
@@ -108,21 +106,6 @@ function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): numb
     ROAD_MIN_DIVISIONS,
     Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
   )
-}
-
-function sampleHeightFromSeries(series: number[], t: number): number {
-  const maxIndex = series.length - 1
-  if (maxIndex <= 0) {
-    return series[0] ?? 0
-  }
-  const clampedT = Math.max(0, Math.min(1, t))
-  const scaled = clampedT * maxIndex
-  const i0 = Math.floor(scaled)
-  const i1 = Math.min(maxIndex, i0 + 1)
-  const alpha = scaled - i0
-  const v0 = series[i0] ?? 0
-  const v1 = series[i1] ?? v0
-  return v0 * (1 - alpha) + v1 * alpha
 }
 
 function smoothHeightSeries(values: number[], passes: number, minimums: number[]): number[] {
@@ -597,161 +580,6 @@ function buildOverlayGeometry(
   )
 }
 
-function buildDashedCurveSegments(
-  curve: THREE.Curve<THREE.Vector3>,
-  width: number,
-  dashLength: number,
-  gapLength: number,
-  heightSampler?: ((x: number, z: number) => number) | null,
-  yOffset = 0,
-  options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
-  sharedHeightSeries?: number[] | null,
-): THREE.BufferGeometry | null {
-  const length = curve.getLength()
-  if (length <= ROAD_EPSILON) {
-    return null
-  }
-
-  const useSharedHeightSeries = Array.isArray(sharedHeightSeries) && sharedHeightSeries.length >= 2
-  const sampler = typeof heightSampler === 'function' ? heightSampler : null
-  const extraClearance = Number.isFinite(options.minClearance) ? Math.max(0, options.minClearance!) : 0
-  const heightLut: number[] | null = useSharedHeightSeries
-    ? (sharedHeightSeries as number[])
-    : sampler
-    ? (() => {
-        const divisions = computeRoadDivisions(length, options.samplingDensityFactor)
-        const values: number[] = []
-        const minimums: number[] = []
-        const point = new THREE.Vector3()
-        const tangent = new THREE.Vector3()
-        const lateral = new THREE.Vector3()
-        const left = new THREE.Vector3()
-        const right = new THREE.Vector3()
-        const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
-        for (let i = 0; i <= divisions; i += 1) {
-          const t = i / divisions
-          point.copy(curve.getPoint(t))
-
-          tangent.copy(curve.getTangent(t))
-          tangent.y = 0
-          if (tangent.lengthSq() <= ROAD_EPSILON) {
-            tangent.set(0, 0, 1)
-          } else {
-            tangent.normalize()
-          }
-          lateral.set(-tangent.z, 0, tangent.x)
-
-          left.copy(point).addScaledVector(lateral, halfWidth)
-          right.copy(point).addScaledVector(lateral, -halfWidth)
-
-          const sampledCenter = sampler(point.x, point.z)
-          const sampledLeft = sampler(left.x, left.z)
-          const sampledRight = sampler(right.x, right.z)
-          const centerY = Number.isFinite(sampledCenter) ? sampledCenter : 0
-          const leftY = Number.isFinite(sampledLeft) ? sampledLeft : 0
-          const rightY = Number.isFinite(sampledRight) ? sampledRight : 0
-          const envelope = Math.max(centerY, leftY, rightY) + yOffset + extraClearance
-          values.push(envelope)
-          minimums.push(envelope)
-        }
-        return smoothHeightSeries(values, computeHeightSmoothingPasses(divisions, options.smoothingStrengthFactor), minimums)
-      })()
-    : null
-
-  const positions: number[] = []
-  const uvs: number[] = []
-  const indices: number[] = []
-
-  const tangent = new THREE.Vector3()
-  const lateral = new THREE.Vector3()
-  const leftStart = new THREE.Vector3()
-  const rightStart = new THREE.Vector3()
-  const leftEnd = new THREE.Vector3()
-  const rightEnd = new THREE.Vector3()
-
-  const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
-
-  let traveled = 0
-  let segmentIndex = 0
-  while (traveled < length - ROAD_EPSILON) {
-    const segmentEnd = Math.min(traveled + dashLength, length)
-    const startT = curve.getUtoTmapping(traveled / length, traveled)
-    const endT = curve.getUtoTmapping(segmentEnd / length, segmentEnd)
-    const startPoint = curve.getPoint(startT)
-    const endPoint = curve.getPoint(endT)
-    const midT = Math.min(1, Math.max(0, (startT + endT) * 0.5))
-
-    tangent.copy(curve.getTangent(midT))
-    tangent.y = 0
-    if (tangent.lengthSq() <= ROAD_EPSILON) {
-      tangent.set(0, 0, 1)
-    } else {
-      tangent.normalize()
-    }
-    lateral.set(-tangent.z, 0, tangent.x)
-
-    leftStart.copy(startPoint).addScaledVector(lateral, halfWidth)
-    rightStart.copy(startPoint).addScaledVector(lateral, -halfWidth)
-    leftEnd.copy(endPoint).addScaledVector(lateral, halfWidth)
-    rightEnd.copy(endPoint).addScaledVector(lateral, -halfWidth)
-
-    if (heightLut) {
-      const startY = useSharedHeightSeries
-        ? sampleHeightFromSeries(heightLut, startT) + yOffset
-        : sampleHeightFromSeries(heightLut, startT)
-      const endY = useSharedHeightSeries
-        ? sampleHeightFromSeries(heightLut, endT) + yOffset
-        : sampleHeightFromSeries(heightLut, endT)
-      leftStart.y = startY
-      rightStart.y = startY
-      leftEnd.y = endY
-      rightEnd.y = endY
-    } else {
-      leftStart.y = yOffset
-      rightStart.y = yOffset
-      leftEnd.y = yOffset
-      rightEnd.y = yOffset
-    }
-
-    const base = segmentIndex * 4
-    positions.push(
-      leftStart.x,
-      leftStart.y,
-      leftStart.z,
-      rightStart.x,
-      rightStart.y,
-      rightStart.z,
-      leftEnd.x,
-      leftEnd.y,
-      leftEnd.z,
-      rightEnd.x,
-      rightEnd.y,
-      rightEnd.z,
-    )
-    uvs.push(0, 0, 1, 0, 0, 1, 1, 1)
-
-    indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
-    segmentIndex += 1
-    traveled = segmentEnd + gapLength
-    if (segmentEnd >= length - ROAD_EPSILON) {
-      break
-    }
-  }
-
-  if (!positions.length) {
-    return null
-  }
-
-  const geometry = new THREE.BufferGeometry()
-  geometry.setIndex(indices)
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  geometry.computeVertexNormals()
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return geometry
-}
-
 function buildLaneLineGeometry(
   curves: RoadCurveDescriptor[],
   width: number,
@@ -760,31 +588,8 @@ function buildLaneLineGeometry(
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
   sharedHeightSeriesList?: Array<number[] | null>,
 ): THREE.BufferGeometry | null {
-  const geometries: THREE.BufferGeometry[] = []
-  let curveIndex = 0
-  for (const descriptor of curves) {
-    const shared = Array.isArray(sharedHeightSeriesList) ? (sharedHeightSeriesList[curveIndex] ?? null) : null
-    const geometry = buildDashedCurveSegments(
-      descriptor.curve,
-      width,
-      ROAD_LANE_LINE_DASH_LENGTH,
-      ROAD_LANE_LINE_GAP_LENGTH,
-      heightSampler,
-      yOffset,
-      options,
-      shared,
-    )
-    if (geometry) {
-      geometries.push(geometry)
-    }
-    curveIndex += 1
-  }
-  if (!geometries.length) {
-    return null
-  }
-  const merged = mergeGeometries(geometries, false)
-  geometries.forEach((geometry) => geometry.dispose())
-  return merged ?? null
+  // Center lane line should follow the road surface profile exactly (like shoulders).
+  return buildOverlayGeometry(curves, width, 0, heightSampler, yOffset, options, sharedHeightSeriesList)
 }
 
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
