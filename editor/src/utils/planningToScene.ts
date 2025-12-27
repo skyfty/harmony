@@ -122,14 +122,8 @@ type ScatterAssignment = {
   category: TerrainScatterCategory
   name?: string
   densityPercent?: number
-  minSpacingMeters?: number
   footprintAreaM2?: number
-}
-
-function clampMinSpacingMeters(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) return 1
-  return Math.round(THREE.MathUtils.clamp(num, 0, 10) * 10) / 10
+  footprintMaxSizeM?: number
 }
 
 function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
@@ -144,6 +138,23 @@ function clampFootprintAreaM2(category: TerrainScatterCategory, value: unknown):
     return defaultFootprintAreaM2(category)
   }
   return Math.min(1e6, Math.max(0.0001, num))
+}
+
+function defaultFootprintMaxSizeM(category: TerrainScatterCategory): number {
+  const preset = terrainScatterPresets[category]
+  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
+  return Math.max(0.05, spacing)
+}
+
+function clampFootprintMaxSizeM(category: TerrainScatterCategory, value: unknown, fallbackAreaM2?: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num <= 0) {
+    if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
+      return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
+    }
+    return defaultFootprintMaxSizeM(category)
+  }
+  return Math.min(1000, Math.max(0.01, num))
 }
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
@@ -511,9 +522,9 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   const normalizedDensity = Number.isFinite(densityPercent)
     ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
     : 50
-  const minSpacingMeters = clampMinSpacingMeters(payload.minSpacingMeters)
   const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
-  return { assetId, category, name, densityPercent: normalizedDensity, minSpacingMeters, footprintAreaM2 }
+  const footprintMaxSizeM = clampFootprintMaxSizeM(category, payload.footprintMaxSizeM, footprintAreaM2)
+  return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
 }
 
 function hashSeedFromString(value: string): number {
@@ -1052,22 +1063,22 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           }
 
           const densityPercent = Number.isFinite(scatter.densityPercent) ? Number(scatter.densityPercent) : 50
-          const userMinSpacing = clampMinSpacingMeters(scatter.minSpacingMeters)
 
           // Estimate capacity from:
           // - polygon area
           // - model footprint (bounding-box base area)
-          // - user minimum spacing
           const presetMinScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 1
           const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
           const minScaleForCapacity = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : presetMinScale
           const maxScaleForCapacity = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : presetMaxScale
           const avgScale = (minScaleForCapacity + maxScaleForCapacity) * 0.5
           const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.category, scatter.footprintAreaM2)
+          const baseFootprintMaxSizeM = clampFootprintMaxSizeM(scatter.category, scatter.footprintMaxSizeM, baseFootprintAreaM2)
           const effectiveFootprintAreaM2 = baseFootprintAreaM2 * avgScale * avgScale
+          const effectiveFootprintMaxSizeM = baseFootprintMaxSizeM * avgScale
 
           const area = polygonArea2D(poly.points)
-          const perInstanceArea = Math.max(effectiveFootprintAreaM2, userMinSpacing * userMinSpacing)
+          const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveFootprintMaxSizeM * effectiveFootprintMaxSizeM, 1e-6)
           const maxByArea = (Number.isFinite(area) && area > 0 && perInstanceArea > 1e-6)
             ? Math.floor(area / perInstanceArea)
             : 0
@@ -1094,9 +1105,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
             continue
           }
-
-          const minDistance = Math.max(userMinSpacing, Math.sqrt(effectiveFootprintAreaM2), 0.05)
           if (targetCount > 0) {
+            const spacingFromCount = (Number.isFinite(area) && area > 0)
+              ? Math.sqrt(area / targetCount)
+              : 0
+            const minDistance = Math.max(spacingFromCount, effectiveFootprintMaxSizeM, 0.05)
+
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))
               : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
