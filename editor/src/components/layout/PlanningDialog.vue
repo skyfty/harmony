@@ -933,6 +933,38 @@ const selectedPolyline = computed(() => {
   }
   return null
 })
+
+const selectedPolygonAreaM2 = computed(() => {
+  const poly = selectedPolygon.value
+  if (!poly) return null
+  const area = polygonArea(poly.points)
+  return Number.isFinite(area) ? area : null
+})
+
+const selectedPolylineLengthM = computed(() => {
+  const line = selectedPolyline.value
+  if (!line) return null
+  const length = polylineLength(line.points)
+  return Number.isFinite(length) ? length : null
+})
+
+const selectedMeasurementTitle = computed(() => {
+  if (selectedPolygonAreaM2.value !== null) return '占用面积'
+  if (selectedPolylineLengthM.value !== null) return '长度'
+  return ''
+})
+
+const selectedMeasurementSuffix = computed(() => {
+  if (selectedPolygonAreaM2.value !== null) return 'm²'
+  if (selectedPolylineLengthM.value !== null) return 'm'
+  return ''
+})
+
+const selectedMeasurementValueText = computed(() => {
+  if (selectedPolygonAreaM2.value !== null) return selectedPolygonAreaM2.value.toFixed(2)
+  if (selectedPolylineLengthM.value !== null) return selectedPolylineLengthM.value.toFixed(2)
+  return ''
+})
 const BASE_PIXELS_PER_METER = 10
 const PLANNING_RULER_THICKNESS_PX = 34
 const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
@@ -5268,6 +5300,20 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
+            <div v-if="selectedMeasurementTitle" class="property-panel__density">
+              <div class="property-panel__density-title">{{ selectedMeasurementTitle }}</div>
+              <div class="property-panel__density-row">
+                <v-text-field
+                  :model-value="selectedMeasurementValueText"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  readonly
+                  :suffix="selectedMeasurementSuffix"
+                />
+              </div>
+            </div>
+
             <template v-if="propertyPanelLayerKind === 'green'">
               <div class="property-panel__scatter-preview">
                 <div class="scatter-preview__thumbnail">
