@@ -77,6 +77,8 @@ const ROAD_MIN_DIVISIONS = 4
 const ROAD_MAX_DIVISIONS = 256
 const ROAD_DIVISION_DENSITY = 8
 const ROAD_LANE_LINE_WIDTH = 0.18
+const ROAD_LANE_LINE_DASH_LENGTH = 2.0
+const ROAD_LANE_LINE_GAP_LENGTH = 2.0
 const ROAD_SHOULDER_WIDTH = 0.35
 const ROAD_SHOULDER_GAP = 0.02
 const ROAD_LANE_LINE_OFFSET_Y = 0.002
@@ -482,6 +484,7 @@ function buildOffsetStripGeometry(
   yOffset = 0,
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
   sharedHeightSeries?: number[] | null,
+  dashPattern?: { dashLength: number; gapLength: number } | null,
 ): THREE.BufferGeometry | null {
   const length = curve.getLength()
   if (length <= ROAD_EPSILON) {
@@ -509,6 +512,15 @@ function buildOffsetStripGeometry(
   const heights: number[] | null = useSharedHeightSeries ? (sharedHeightSeries as number[]) : (sampler ? [] : null)
   const minHeights: number[] | null = useSharedHeightSeries ? null : (sampler ? [] : null)
   const extraClearance = Number.isFinite(options.minClearance) ? Math.max(0, options.minClearance!) : 0
+
+  const dash = dashPattern
+    && Number.isFinite(dashPattern.dashLength)
+    && Number.isFinite(dashPattern.gapLength)
+    && dashPattern.dashLength > ROAD_EPSILON
+    && dashPattern.gapLength >= 0
+    ? { dashLength: dashPattern.dashLength, gapLength: dashPattern.gapLength }
+    : null
+  const dashPeriod = dash ? dash.dashLength + dash.gapLength : 0
 
   if (!useSharedHeightSeries && heights && minHeights) {
     for (let i = 0; i <= divisions; i += 1) {
@@ -572,7 +584,17 @@ function buildOffsetStripGeometry(
 
     if (i < divisions) {
       const base = i * 2
-      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+      if (!dash || dashPeriod <= ROAD_EPSILON) {
+        indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+      } else {
+        const startDistance = (i / divisions) * length
+        const endDistance = ((i + 1) / divisions) * length
+        const midDistance = (startDistance + endDistance) * 0.5
+        const phase = ((midDistance % dashPeriod) + dashPeriod) % dashPeriod
+        if (phase < dash.dashLength) {
+          indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+        }
+      }
     }
   }
 
@@ -646,8 +668,26 @@ function buildLaneLineGeometry(
   options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
   sharedHeightSeriesList?: Array<number[] | null>,
 ): THREE.BufferGeometry | null {
-  // Center lane line should follow the road surface profile exactly (like shoulders).
-  return buildOverlayGeometry(curves, width, 0, heightSampler, yOffset, options, sharedHeightSeriesList)
+  // Center lane line should follow the road surface profile exactly (like shoulders), but be dashed.
+  let curveIndex = 0
+  return buildMultiCurveGeometry(
+    curves,
+    (curve) => {
+      const shared = Array.isArray(sharedHeightSeriesList) ? (sharedHeightSeriesList[curveIndex] ?? null) : null
+      curveIndex += 1
+      return buildOffsetStripGeometry(
+        curve,
+        width,
+        0,
+        heightSampler,
+        yOffset,
+        options,
+        shared,
+        { dashLength: ROAD_LANE_LINE_DASH_LENGTH, gapLength: ROAD_LANE_LINE_GAP_LENGTH },
+      )
+    },
+    options,
+  )
 }
 
 function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, options: RoadJunctionSmoothingOptions = {}) {
