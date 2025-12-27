@@ -43,9 +43,9 @@ import {
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
 import { loadObjectFromFile } from './assetImport'
-import { createGroundMesh, sampleGroundHeight, setGroundMaterial, updateGroundMesh } from './groundMesh'
+import { createGroundMesh, setGroundMaterial, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
-import { createRoadRenderGroup, type RoadJunctionSmoothingOptions } from './roadMesh'
+import { createRoadRenderGroup, resolveRoadLocalHeightSampler, type RoadJunctionSmoothingOptions } from './roadMesh'
 import { createFloorRenderGroup } from './floorMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
@@ -69,14 +69,15 @@ type SceneNodeWithExtras = SceneNode & {
   editorFlags?: SceneNodeEditorFlags;
 };
 
-function findGroundDynamicMeshInNodes(nodes: SceneNodeWithExtras[]): GroundDynamicMesh | null {
-  const stack: SceneNodeWithExtras[] = [...nodes]
+function findGroundNodeInNodes(nodes: SceneNodeWithExtras[]): SceneNodeWithExtras | null {
+  const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
   while (stack.length) {
     const node = stack.pop()!
     const mesh = node.dynamicMesh as unknown
     if (mesh && (mesh as any).type === 'Ground') {
-      return mesh as GroundDynamicMesh
+      return node
     }
+
     const children = Array.isArray((node as any).children) ? ((node as any).children as SceneNodeWithExtras[]) : []
     if (children.length) {
       for (const child of children) {
@@ -1335,10 +1336,8 @@ class SceneGraphBuilder {
     };
 
     const documentNodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    const groundMesh = findGroundDynamicMeshInNodes(documentNodes);
-    if (groundMesh) {
-      roadOptions.heightSampler = (x: number, z: number) => sampleGroundHeight(groundMesh, x, z);
-    }
+    const groundNode = findGroundNodeInNodes(documentNodes);
+    roadOptions.heightSampler = resolveRoadLocalHeightSampler(node, groundNode);
 
     const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
     group.name = node.name ?? (group.name || 'Road');

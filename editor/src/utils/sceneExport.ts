@@ -18,9 +18,9 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createGroundMesh, ensureAllGroundChunks, sampleGroundHeight } from '@schema/groundMesh'
+import { createGroundMesh, ensureAllGroundChunks } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
-import { createRoadGroup } from '@schema/roadMesh'
+import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -772,37 +772,8 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
     }
     case 'Road':
       {
-        const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-          ? (groundNode.dynamicMesh as GroundDynamicMesh)
-          : null
-
-        const roadPosition = node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
-        const roadRotation = node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined
-        const roadOriginX = getFiniteComponent(roadPosition?.x)
-        const roadOriginY = getFiniteComponent(roadPosition?.y)
-        const roadOriginZ = getFiniteComponent(roadPosition?.z)
-        const yaw = getFiniteComponent(roadRotation?.y)
-        const cosYaw = Math.cos(yaw)
-        const sinYaw = Math.sin(yaw)
-
-        const groundPosition = groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
-        const groundOriginX = getFiniteComponent(groundPosition?.x)
-        const groundOriginY = getFiniteComponent(groundPosition?.y)
-        const groundOriginZ = getFiniteComponent(groundPosition?.z)
-
         return createRoadGroup(mesh, {
-          heightSampler: groundDefinition
-            ? ((x: number, z: number) => {
-                const rotatedX = x * cosYaw - z * sinYaw
-                const rotatedZ = x * sinYaw + z * cosYaw
-                const worldX = roadOriginX + rotatedX
-                const worldZ = roadOriginZ + rotatedZ
-                const groundLocalX = worldX - groundOriginX
-                const groundLocalZ = worldZ - groundOriginZ
-                const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
-                return groundWorldY - roadOriginY
-              })
-            : null,
+          heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
         }).clone(true)
       }
     default:
