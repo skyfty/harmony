@@ -36,7 +36,7 @@ export {
 } from './roadHeightfield'
 
 export type RoadHeightfieldDebugSegment = {
-	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
+	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' | 'box' }>
 }
 
 export type RoadHeightfieldDebugEntry = {
@@ -64,41 +64,59 @@ export function resolveRoadHeightfieldDebugSegments(params: {
 	}
 	const segments: RoadHeightfieldDebugSegment[] = []
 	bodies.forEach((body) => {
-		const shape = body.shapes.find((candidate) => candidate instanceof CANNON.Heightfield) as
+		const heightfieldShape = body.shapes.find((candidate) => candidate instanceof CANNON.Heightfield) as
 			| CANNON.Heightfield
 			| undefined
-		if (!shape) {
-			return
-		}
-		const matrixSource = (shape as any).data as unknown
-		const elementSize = (shape as any).elementSize as unknown
-		if (!Array.isArray(matrixSource) || typeof elementSize !== 'number' || !Number.isFinite(elementSize) || elementSize <= 0) {
-			return
-		}
-		let rowCount = 0
-		matrixSource.forEach((column) => {
-			if (Array.isArray(column) && column.length > rowCount) {
-				rowCount = column.length
+		if (heightfieldShape) {
+			const matrixSource = (heightfieldShape as any).data as unknown
+			const elementSize = (heightfieldShape as any).elementSize as unknown
+			if (!Array.isArray(matrixSource) || typeof elementSize !== 'number' || !Number.isFinite(elementSize) || elementSize <= 0) {
+				return
 			}
-		})
-		if (matrixSource.length < 2 || rowCount < 2) {
+			let rowCount = 0
+			matrixSource.forEach((column) => {
+				if (Array.isArray(column) && column.length > rowCount) {
+					rowCount = column.length
+				}
+			})
+			if (matrixSource.length < 2 || rowCount < 2) {
+				return
+			}
+			const matrix: number[][] = matrixSource.map((column) => {
+				if (!Array.isArray(column)) {
+					return []
+				}
+				return column.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0))
+			})
+			const width = (matrix.length - 1) * elementSize
+			const depth = (rowCount - 1) * elementSize
+			segments.push({
+				shape: {
+					kind: 'heightfield',
+					matrix,
+					elementSize,
+					width,
+					depth,
+					offset: [0, 0, 0],
+					scaleNormalized: false,
+				},
+			})
 			return
 		}
-		const matrix: number[][] = matrixSource.map((column) => {
-			if (!Array.isArray(column)) {
-				return []
-			}
-			return column.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0))
-		})
-		const width = (matrix.length - 1) * elementSize
-		const depth = (rowCount - 1) * elementSize
+		const boxShape = body.shapes.find((candidate) => candidate instanceof CANNON.Box) as CANNON.Box | undefined
+		if (!boxShape) {
+			return
+		}
+		const hx = (boxShape as any).halfExtents?.x as unknown
+		const hy = (boxShape as any).halfExtents?.y as unknown
+		const hz = (boxShape as any).halfExtents?.z as unknown
+		if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+			return
+		}
 		segments.push({
 			shape: {
-				kind: 'heightfield',
-				matrix,
-				elementSize,
-				width,
-				depth,
+				kind: 'box',
+				halfExtents: [hx as number, hy as number, hz as number],
 				offset: [0, 0, 0],
 				scaleNormalized: false,
 			},

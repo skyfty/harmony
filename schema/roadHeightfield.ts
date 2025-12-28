@@ -118,9 +118,16 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		const forward = new THREE.Vector3()
 		const centerPoint = new THREE.Vector3()
 		while (startIndex < divisions && totalBodies < maxBodies) {
-			const endIndex = Math.min(divisions, startIndex + divisionsPerTile)
+			let endIndex = Math.min(divisions, startIndex + divisionsPerTile)
 			const startU = startIndex / divisions
-			const endU = endIndex / divisions
+			let endU = endIndex / divisions
+			let headingDelta = computeHeadingDeltaRad(curve, startU, endU)
+			// Reduce tile length on bends so the collider aligns to the curved road surface.
+			while (endIndex - startIndex > 1 && headingDelta > ROAD_TILE_MAX_HEADING_DELTA_RAD) {
+				endIndex = startIndex + Math.max(1, Math.ceil((endIndex - startIndex) * 0.5))
+				endU = endIndex / divisions
+				headingDelta = computeHeadingDeltaRad(curve, startU, endU)
+			}
 			curve.getPointAt(startU, p0)
 			curve.getPointAt(endU, p1)
 			forward.copy(p1).sub(p0)
@@ -135,25 +142,40 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 			}
 			centerPoint.copy(p0).add(p1).multiplyScalar(0.5)
 			const tileLength = Math.max((endIndex - startIndex) * stepDistance, forwardLen)
-			const rows = Math.max(2, Math.ceil(tileLength / elementSize))
-			const columns = Math.max(2, Math.ceil(roadWidth / elementSize))
-			const shape = buildHeightfieldShapeFromSeries({
-				startIndex,
-				endIndex,
-				rows,
-				columns,
-				elementSize,
-				heights: smoothedHeights,
-				minimums,
-			})
-			if (!shape) {
-				startIndex = endIndex
-				continue
-			}
-
+			const heightDelta = computeHeightDelta(smoothedHeights, startIndex, endIndex)
+			const isStraightEnough = headingDelta <= ROAD_STRAIGHT_MAX_HEADING_DELTA_RAD
+			const isFlatEnough = heightDelta <= ROAD_FLAT_MAX_HEIGHT_DELTA
 			const tileObject = new THREE.Object3D()
-			tileObject.position.set(centerPoint.x, 0, centerPoint.z)
 			tileObject.rotation.set(0, yaw, 0)
+			let shape: RigidbodyPhysicsShape | null = null
+			if (isStraightEnough && isFlatEnough) {
+				const avgHeight = computeHeightAverage(smoothedHeights, startIndex, endIndex)
+				const thickness = ROAD_BOX_THICKNESS
+				tileObject.position.set(centerPoint.x, avgHeight - thickness * 0.5, centerPoint.z)
+				shape = {
+					kind: 'box',
+					halfExtents: [roadWidth * 0.5, thickness * 0.5, tileLength * 0.5],
+					offset: [0, 0, 0],
+					scaleNormalized: false,
+				}
+			} else {
+				tileObject.position.set(centerPoint.x, 0, centerPoint.z)
+				const rows = Math.max(2, Math.ceil(tileLength / elementSize))
+				const columns = Math.max(2, Math.ceil(roadWidth / elementSize))
+				shape = buildHeightfieldShapeFromSeries({
+					startIndex,
+					endIndex,
+					rows,
+					columns,
+					elementSize,
+					heights: smoothedHeights,
+					minimums,
+				})
+				if (!shape) {
+					startIndex = endIndex
+					continue
+				}
+			}
 			roadObject.add(tileObject)
 			tileObject.updateMatrixWorld(true)
 			const bodyResult = createBody(roadNode, rigidbodyComponent, shape, tileObject)
@@ -204,6 +226,78 @@ const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
+
+// Hybrid collision tuning:
+// - Straight + near-flat tiles use a thin box collider (cheap).
+// - Curved/undulating tiles fall back to segmented heightfields (accurate).
+// - Tile length is adaptively reduced on bends to keep chord approximation tight.
+const ROAD_TILE_MAX_HEADING_DELTA_RAD = (8 * Math.PI) / 180
+const ROAD_STRAIGHT_MAX_HEADING_DELTA_RAD = (2 * Math.PI) / 180
+const ROAD_FLAT_MAX_HEIGHT_DELTA = 0.02
+const ROAD_BOX_THICKNESS = 0.2
+
+function normalizeAngleRad(angle: number): number {
+	if (!Number.isFinite(angle)) {
+		return 0
+	}
+	let value = angle
+	while (value > Math.PI) {
+		value -= Math.PI * 2
+	}
+	while (value < -Math.PI) {
+		value += Math.PI * 2
+	}
+	return value
+}
+
+function computeHeadingDeltaRad(curve: THREE.Curve<THREE.Vector3>, startU: number, endU: number): number {
+	const t0 = curve.getTangentAt(Math.max(0, Math.min(1, startU)))
+	const t1 = curve.getTangentAt(Math.max(0, Math.min(1, endU)))
+	const a0 = Math.atan2(t0.x, t0.z)
+	const a1 = Math.atan2(t1.x, t1.z)
+	return Math.abs(normalizeAngleRad(a1 - a0))
+}
+
+function computeHeightDelta(values: number[], startIndex: number, endIndex: number): number {
+	if (!values.length) {
+		return 0
+	}
+	const i0 = Math.max(0, Math.min(values.length - 1, startIndex))
+	const i1 = Math.max(i0, Math.min(values.length - 1, endIndex))
+	let min = Number.POSITIVE_INFINITY
+	let max = Number.NEGATIVE_INFINITY
+	for (let i = i0; i <= i1; i += 1) {
+		const v = values[i]
+		const value = typeof v === 'number' && Number.isFinite(v) ? v : 0
+		if (value < min) {
+			min = value
+		}
+		if (value > max) {
+			max = value
+		}
+	}
+	if (!Number.isFinite(min) || !Number.isFinite(max)) {
+		return 0
+	}
+	return max - min
+}
+
+function computeHeightAverage(values: number[], startIndex: number, endIndex: number): number {
+	if (!values.length) {
+		return 0
+	}
+	const i0 = Math.max(0, Math.min(values.length - 1, startIndex))
+	const i1 = Math.max(i0, Math.min(values.length - 1, endIndex))
+	let sum = 0
+	let count = 0
+	for (let i = i0; i <= i1; i += 1) {
+		const v = values[i]
+		const value = typeof v === 'number' && Number.isFinite(v) ? v : 0
+		sum += value
+		count += 1
+	}
+	return count ? sum / count : 0
+}
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
 	const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback

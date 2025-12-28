@@ -6898,7 +6898,7 @@ function ensureRoadHeightfieldDebugHelper(
 	// Heightfield debug segments are generated in world units.
 	helperGroup.scale.set(1, 1, 1)
 	debugEntry.segments.forEach((segment, index) => {
-		const lines = buildHeightfieldDebugLines(segment.shape)
+		const lines = buildRigidbodyDebugLineSegments(segment.shape)
 		if (!lines) {
 			return
 		}
@@ -6906,6 +6906,7 @@ function ensureRoadHeightfieldDebugHelper(
 		lines.renderOrder = 9999
 		const segmentGroup = new THREE.Group()
 		segmentGroup.name = `HeightfieldDebugSegment:${nodeId}:${index}`
+		;(segmentGroup as any).__harmonyRoadSegmentKind = segment.shape.kind
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
 	})
@@ -7000,9 +7001,12 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 				body.quaternion.z,
 				body.quaternion.w,
 			)
-			// Heightfields are rotated -90° around X in physics; undo that here so the debug
-			// geometry (built in render-space convention) lies on the surface.
-			rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
+			const segmentKind = (child as any).__harmonyRoadSegmentKind as string | undefined
+			if (segmentKind === 'heightfield') {
+				// Heightfields are rotated -90° around X in physics; undo that here so the debug
+				// geometry (built in render-space convention) lies on the surface.
+				rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
+			}
 			child.quaternion.copy(rigidbodyDebugQuaternionHelper)
 			child.scale.copy(helper.scale)
 			child.updateMatrixWorld(true)
