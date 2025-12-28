@@ -17,6 +17,11 @@ export interface WallComponentProps {
   width: number
   thickness: number
   smoothing: number
+  /**
+   * When enabled, the wall is rendered as an invisible "air wall".
+   * The mesh structure should still exist for rigidbody collision generation.
+   */
+  isAirWall: boolean
   bodyAssetId?: string | null
   jointAssetId?: string | null
 }
@@ -41,11 +46,15 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     return typeof value === 'string' && value.trim().length ? value : null
   }
 
+  const isAirWall = (props as WallComponentProps | undefined)?.isAirWall
+  const normalizedIsAirWall = Boolean(isAirWall)
+
   return {
     height,
     width,
     thickness,
     smoothing,
+    isAirWall: normalizedIsAirWall,
     bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
     jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
   }
@@ -58,6 +67,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
       smoothing: WALL_DEFAULT_SMOOTHING,
+      isAirWall: false,
       bodyAssetId: null,
       jointAssetId: null,
     }
@@ -68,6 +78,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     width: (base as { width?: number })?.width,
     thickness: base?.thickness,
     smoothing: WALL_DEFAULT_SMOOTHING,
+    isAirWall: false,
   })
 }
 
@@ -77,6 +88,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     width: props.width,
     thickness: props.thickness,
     smoothing: props.smoothing,
+    isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
     jointAssetId: props.jointAssetId ?? null,
   }
@@ -102,6 +114,13 @@ const wallComponentDefinition: ComponentDefinition<WallComponentProps> = {
   icon: 'mdi-wall',
   order: 50,
   inspector: [
+    {
+      id: 'rendering',
+      label: 'Rendering',
+      fields: [
+        { kind: 'boolean', key: 'isAirWall', label: 'Air Wall (invisible)' },
+      ],
+    },
     {
       id: 'dimensions',
       label: 'Dimensions',
@@ -136,6 +155,7 @@ export function createWallComponentState(
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
     smoothing: overrides?.smoothing ?? defaults.smoothing,
+    isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
   })

@@ -214,6 +214,17 @@ export type RigidbodyInstance = {
 	syncObjectFromBody?: boolean
 }
 
+/**
+ * Optional userData flag applied by the scene graph for "air wall" render objects.
+ * Air walls are invisible meshes that may still be used for collision generation.
+ */
+export const PHYSICS_AIR_WALL_USERDATA_KEY = 'isAirWall'
+
+export function isAirWallRenderObject(object: THREE.Object3D | null | undefined): boolean {
+	const userData = (object as any)?.userData as Record<string, unknown> | undefined
+	return Boolean(userData && userData[PHYSICS_AIR_WALL_USERDATA_KEY] === true)
+}
+
 export type GroundHeightfieldCacheEntry = {
 	signature: string
 	shape: CANNON.Heightfield

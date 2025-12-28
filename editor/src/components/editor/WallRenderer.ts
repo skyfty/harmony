@@ -11,6 +11,71 @@ import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schem
 import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
+const AIR_WALL_OPACITY = 0.35
+const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
+
+type AirWallMaterialOriginalState = {
+  transparent?: boolean
+  opacity?: number
+  depthWrite?: boolean
+}
+
+function applyAirWallMaterialOverride(material: THREE.Material, isAirWall: boolean): void {
+  const mat = material as THREE.Material & {
+    transparent?: boolean
+    opacity?: number
+    depthWrite?: boolean
+    userData?: Record<string, unknown>
+  }
+  const userData = (mat.userData ??= {})
+
+  if (isAirWall) {
+    if (!userData[AIR_WALL_MATERIAL_ORIGINAL_KEY]) {
+      const snapshot: AirWallMaterialOriginalState = {
+        transparent: Boolean(mat.transparent),
+        opacity: typeof mat.opacity === 'number' ? mat.opacity : 1,
+        depthWrite: typeof mat.depthWrite === 'boolean' ? mat.depthWrite : true,
+      }
+      userData[AIR_WALL_MATERIAL_ORIGINAL_KEY] = snapshot
+    }
+    mat.transparent = true
+    mat.opacity = AIR_WALL_OPACITY
+    mat.depthWrite = false
+    return
+  }
+
+  const original = userData[AIR_WALL_MATERIAL_ORIGINAL_KEY] as AirWallMaterialOriginalState | undefined
+  if (!original) {
+    return
+  }
+  mat.transparent = Boolean(original.transparent)
+  mat.opacity = typeof original.opacity === 'number' ? original.opacity : 1
+  mat.depthWrite = typeof original.depthWrite === 'boolean' ? original.depthWrite : true
+  delete userData[AIR_WALL_MATERIAL_ORIGINAL_KEY]
+}
+
+function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boolean): void {
+  group.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+      return
+    }
+    const tag = (mesh.userData as any)?.dynamicMeshType
+    if (tag !== 'Wall') {
+      return
+    }
+    const material = (mesh as unknown as { material?: THREE.Material | THREE.Material[] | null }).material
+    if (!material) {
+      return
+    }
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry && applyAirWallMaterialOverride(entry, isAirWall))
+      return
+    }
+    applyAirWallMaterialOverride(material, isAirWall)
+  })
+}
+
 export function computeWallDynamicMeshSignature(
   definition: WallDynamicMesh,
   options: { smoothing?: number } = {},
@@ -299,6 +364,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       | SceneNodeComponentState<WallComponentProps>
       | undefined
 
+    const isAirWall = Boolean((wallComponent?.props as any)?.isAirWall)
+
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const jointAssetId = wallComponent?.props?.jointAssetId ?? null
     const wantsInstancing = Boolean(bodyAssetId || jointAssetId)
@@ -318,6 +385,9 @@ export function createWallRenderer(options: WallRendererOptions) {
         signatureKey,
         { smoothing: resolveWallSmoothingFromNode(node) },
       )
+
+      // Editor-only visual: air walls are semi-transparent so they can be distinguished.
+      applyAirWallVisualToWallGroup(wallGroup, isAirWall)
       return
     }
 

@@ -370,7 +370,7 @@ class WorkerSlot {
             return
           }
 
-          const timeoutMs = 60_000
+          const timeoutMs = 1200_000
           this.activeTimeoutHandle = setTimeout(() => {
             if (this.activeRequestId === task.requestId) {
               this.debugLog(`watchdog timeout after ${timeoutMs}ms`)
