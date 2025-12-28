@@ -7,6 +7,7 @@ export type PlaceholderOverlayControllerDeps = {
   getSceneNodes: () => SceneNode[]
   getCamera: () => THREE.Camera | null
   objectMap: Map<string, THREE.Object3D>
+  getThumbnailUrl?: (node: SceneNode) => string | null
 }
 
 export function usePlaceholderOverlayController(deps: PlaceholderOverlayControllerDeps) {
@@ -24,15 +25,18 @@ export function usePlaceholderOverlayController(deps: PlaceholderOverlayControll
           activeIds.add(node.id)
           const progress = Math.min(100, Math.max(0, node.downloadProgress ?? 0))
           const error = node.downloadError ?? null
+          const thumbnail = deps.getThumbnailUrl?.(node) ?? null
           const existing = placeholderOverlays[node.id]
           if (existing) {
             existing.name = node.name
+            existing.thumbnail = thumbnail
             existing.progress = progress
             existing.error = error
           } else {
             placeholderOverlays[node.id] = {
               id: node.id,
               name: node.name,
+              thumbnail,
               progress,
               error,
               visible: true,

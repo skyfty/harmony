@@ -1368,7 +1368,23 @@ const {
   getSceneNodes: () => props.sceneNodes,
   getCamera: () => camera,
   objectMap,
+  getThumbnailUrl: (node) => {
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+    if (!assetId) {
+      return null
+    }
+    const asset = sceneStore.getAsset(assetId)
+    return asset?.thumbnail ?? null
+  },
 })
+
+function handlePlaceholderRetry(nodeId: string) {
+  void sceneStore.retryPlaceholderNodeDownload(nodeId)
+}
+
+function handlePlaceholderCancelDelete(nodeId: string) {
+  sceneStore.cancelAndDeletePlaceholderNode(nodeId)
+}
 
 // Some TS configs don't count template refs as usage.
 void overlayContainerRef
@@ -9263,7 +9279,11 @@ defineExpose<SceneViewportHandle>({
       @drop="handleViewportDrop"
     >
       <div ref="overlayContainerRef" class="placeholder-overlay-layer">
-        <PlaceholderOverlayList :overlays="placeholderOverlayList" />
+        <PlaceholderOverlayList
+          :overlays="placeholderOverlayList"
+          @retry="handlePlaceholderRetry"
+          @cancel-delete="handlePlaceholderCancelDelete"
+        />
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>

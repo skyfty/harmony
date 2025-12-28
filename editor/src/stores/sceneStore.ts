@@ -10423,6 +10423,68 @@ export const useSceneStore = defineStore('scene', {
       placeholderDownloadWatchers.set(nodeId, stop)
     },
 
+    async retryPlaceholderNodeDownload(nodeId: string): Promise<boolean> {
+      const placeholder = findNodeById(this.nodes, nodeId)
+      if (!placeholder || !placeholder.isPlaceholder) {
+        return false
+      }
+
+      const assetId = typeof placeholder.sourceAssetId === 'string' ? placeholder.sourceAssetId : ''
+      if (!assetId) {
+        placeholder.downloadStatus = 'error'
+        placeholder.downloadError = '缺少资源 ID，无法重试'
+        this.nodes = [...this.nodes]
+        return false
+      }
+
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        placeholder.downloadStatus = 'error'
+        placeholder.downloadError = '资源不存在，无法重试'
+        this.nodes = [...this.nodes]
+        return false
+      }
+
+      const assetCache = useAssetCacheStore()
+
+      placeholder.downloadStatus = 'downloading'
+      placeholder.downloadProgress = 0
+      placeholder.downloadError = null
+      this.nodes = [...this.nodes]
+
+      this.observeAssetDownloadForNode(nodeId, asset)
+      assetCache.setError(asset.id, null)
+
+      try {
+        await assetCache.downloaProjectAsset(asset)
+        return true
+      } catch (error) {
+        const target = findNodeById(this.nodes, nodeId)
+        if (target) {
+          target.downloadStatus = 'error'
+          target.downloadError = (error as Error).message ?? '资源下载失败'
+          this.nodes = [...this.nodes]
+        }
+        return false
+      }
+    },
+
+    cancelAndDeletePlaceholderNode(nodeId: string): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        return false
+      }
+
+      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+      if (assetId) {
+        const assetCache = useAssetCacheStore()
+        assetCache.cancelDownload(assetId)
+      }
+
+      this.removeSceneNodes([nodeId])
+      return true
+    },
+
     async finalizePlaceholderNode(nodeId: string, asset: ProjectAsset) {
       const assetCache = useAssetCacheStore()
       const placeholder = findNodeById(this.nodes, nodeId)
