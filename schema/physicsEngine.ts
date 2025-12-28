@@ -22,6 +22,13 @@ import {
 import type { GroundHeightfieldData } from './groundHeightfield'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
+export {
+	buildRoadHeightfieldBodies,
+	isRoadDynamicMesh,
+	type RoadHeightfieldBodiesEntry,
+	type RoadHeightfieldBuildParams,
+} from './roadHeightfield'
+
 export type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion
 	cannonInverse: CANNON.Quaternion
@@ -31,9 +38,16 @@ export type RigidbodyOrientationAdjustment = {
 
 export type RigidbodyInstance = {
 	nodeId: string
+	/** Primary body for legacy callers (vehicles, etc). */
 	body: CANNON.Body
+	/** All bodies that represent this node in the physics world. For most nodes this is `[body]`. */
+	bodies: CANNON.Body[]
 	object: THREE.Object3D | null
 	orientationAdjustment: RigidbodyOrientationAdjustment | null
+	/** Optional signature for multi-body/static regeneration (e.g. Road segmented heightfield). */
+	signature?: string
+	/** If false, we should not copy the physics body transform back onto the render object. */
+	syncObjectFromBody?: boolean
 }
 
 export type GroundHeightfieldCacheEntry = {
@@ -66,6 +80,20 @@ export type EnsurePhysicsWorldParams = {
 	contactSettings: PhysicsContactSettings
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
+}
+
+export function removeRigidbodyInstanceBodies(world: CANNON.World | null | undefined, instance: RigidbodyInstance | null | undefined): void {
+	if (!world || !instance) {
+		return
+	}
+	const bodies = Array.isArray(instance.bodies) && instance.bodies.length ? instance.bodies : [instance.body]
+	bodies.forEach((body) => {
+		try {
+			world.removeBody(body)
+		} catch (error) {
+			console.warn('[PhysicsEngine] Failed to remove body', error)
+		}
+	})
 }
 
 const groundHeightfieldOrientation = new CANNON.Quaternion()

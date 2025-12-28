@@ -340,10 +340,13 @@ import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
+  buildRoadHeightfieldBodies,
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
   syncBodyFromObject as syncSharedBodyFromObject,
   syncObjectFromBody as syncSharedObjectFromBody,
+  removeRigidbodyInstanceBodies,
+  isRoadDynamicMesh,
   type GroundHeightfieldCacheEntry,
   type PhysicsContactSettings,
   type RigidbodyInstance,
@@ -3537,13 +3540,7 @@ function resetPhysicsWorld(): void {
         console.warn('[SceneViewer] Failed to remove vehicle', error);
       }
     });
-    rigidbodyInstances.forEach(({ body }) => {
-      try {
-        world.removeBody(body);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to remove rigidbody', error);
-      }
-    });
+    rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance));
     airWallBodies.forEach((body) => {
       try {
         world.removeBody(body);
@@ -3599,14 +3596,66 @@ function removeRigidbodyInstance(nodeId: string): void {
   if (!entry) {
     return;
   }
-  try {
-    physicsWorld?.removeBody(entry.body);
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to remove rigidbody instance', error);
-  }
+  removeRigidbodyInstanceBodies(physicsWorld, entry);
   rigidbodyInstances.delete(nodeId);
   groundHeightfieldCache.delete(nodeId);
   removeVehicleInstance(nodeId);
+}
+
+function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeComponentState<RigidbodyComponentProps>, object: THREE.Object3D) {
+  if (!physicsWorld || !currentDocument) {
+    return;
+  }
+  if (!isRoadDynamicMesh(node.dynamicMesh)) {
+    removeRigidbodyInstance(node.id);
+    return;
+  }
+  if ((component.props as RigidbodyComponentProps | undefined)?.bodyType !== 'STATIC') {
+    removeRigidbodyInstance(node.id);
+    return;
+  }
+  const groundNode = findGroundNode(currentDocument.nodes);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    removeRigidbodyInstance(node.id);
+    return;
+  }
+  const world = ensurePhysicsWorld();
+  const entry = buildRoadHeightfieldBodies({
+    roadNode: node,
+    rigidbodyComponent: component,
+    roadObject: object,
+    groundNode,
+    world,
+    createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
+  });
+  if (!entry || !entry.bodies.length) {
+    removeRigidbodyInstance(node.id);
+    return;
+  }
+  const existing = rigidbodyInstances.get(node.id);
+  if (existing?.signature === entry.signature) {
+    entry.bodies.forEach((body) => {
+      try {
+        world.removeBody(body);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to rollback road heightfield body', error);
+      }
+    });
+    existing.object = object;
+    return;
+  }
+  if (existing) {
+    removeRigidbodyInstance(node.id);
+  }
+  rigidbodyInstances.set(node.id, {
+    nodeId: node.id,
+    body: entry.bodies[0] as CANNON.Body,
+    bodies: entry.bodies,
+    object,
+    orientationAdjustment: null,
+    signature: entry.signature,
+    syncObjectFromBody: false,
+  });
 }
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
@@ -3835,6 +3884,10 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   if (!node || !component || !object) {
     return;
   }
+  if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
+    ensureRoadRigidbodyInstance(node, component, object);
+    return;
+  }
   if (!shapeDefinition && requiresMetadata) {
     return;
   }
@@ -3853,6 +3906,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   rigidbodyInstances.set(nodeId, {
     nodeId,
     body: bodyEntry.body,
+    bodies: [bodyEntry.body],
     object,
     orientationAdjustment: bodyEntry.orientationAdjustment,
   });
@@ -3936,12 +3990,16 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     if (!component || !object) {
       return;
     }
+    if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
+      ensureRoadRigidbodyInstance(node, component, object);
+      return;
+    }
     if (!shapeDefinition && requiresMetadata) {
       return;
     }
     const existing = rigidbodyInstances.get(node.id);
     if (existing) {
-      world.removeBody(existing.body);
+      removeRigidbodyInstanceBodies(world, existing);
       rigidbodyInstances.delete(node.id);
     }
     const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object);
@@ -3952,13 +4010,14 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     rigidbodyInstances.set(node.id, {
       nodeId: node.id,
       body: bodyEntry.body,
+      bodies: [bodyEntry.body],
       object,
       orientationAdjustment: bodyEntry.orientationAdjustment,
     });
   });
   rigidbodyInstances.forEach((entry, nodeId) => {
     if (!desiredIds.has(nodeId)) {
-      world.removeBody(entry.body);
+      removeRigidbodyInstanceBodies(world, entry);
       rigidbodyInstances.delete(nodeId);
     }
   });
@@ -3980,7 +4039,12 @@ function stepPhysicsWorld(delta: number): void {
   } catch (error) {
     console.warn('[SceneViewer] Physics step failed', error);
   }
-  rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform));
+  rigidbodyInstances.forEach((entry) => {
+    if (entry.syncObjectFromBody === false) {
+      return;
+    }
+    syncSharedObjectFromBody(entry, syncInstancedTransform);
+  });
   // updateVehicleWheelVisuals(delta);
 }
 

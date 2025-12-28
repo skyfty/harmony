@@ -43,10 +43,13 @@ import {
 import { updateGroundChunks } from '@schema/groundMesh'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
+	buildRoadHeightfieldBodies,
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
 	syncObjectFromBody as syncSharedObjectFromBody,
+	removeRigidbodyInstanceBodies,
+	isRoadDynamicMesh,
 	type GroundHeightfieldCacheEntry,
 	type PhysicsContactSettings,
 	type RigidbodyInstance,
@@ -6194,13 +6197,7 @@ function resetPhysicsWorld(): void {
 				console.warn('[ScenePreview] Failed to remove vehicle', error)
 			}
 		})
-		rigidbodyInstances.forEach(({ body }) => {
-			try {
-				world.removeBody(body)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove rigidbody', error)
-			}
-		})
+		rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance))
 		airWallBodies.forEach((body) => {
 			try {
 				world.removeBody(body)
@@ -6340,16 +6337,64 @@ function createRigidbodyBody(
 	)
 }
 
+function ensureRoadRigidbodyInstance(
+	node: SceneNode,
+	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>,
+	object: THREE.Object3D,
+): void {
+	if (!physicsWorld || !currentDocument) {
+		return
+	}
+	const groundNode = findGroundNode(currentDocument.nodes)
+	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		removeRigidbodyInstance(node.id)
+		return
+	}
+	const world = ensurePhysicsWorld()
+	const entry = buildRoadHeightfieldBodies({
+		roadNode: node,
+		rigidbodyComponent,
+		roadObject: object,
+		groundNode,
+		world,
+		createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
+	})
+	if (!entry || !entry.bodies.length) {
+		removeRigidbodyInstance(node.id)
+		return
+	}
+	const existing = rigidbodyInstances.get(node.id)
+	if (existing?.signature === entry.signature) {
+		entry.bodies.forEach((body) => {
+			try {
+				world.removeBody(body)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to rollback road heightfield body', error)
+			}
+		})
+		existing.object = object
+		return
+	}
+	if (existing) {
+		removeRigidbodyInstance(node.id)
+	}
+	rigidbodyInstances.set(node.id, {
+		nodeId: node.id,
+		body: entry.bodies[0] as CANNON.Body,
+		bodies: entry.bodies,
+		object,
+		orientationAdjustment: null,
+		signature: entry.signature,
+		syncObjectFromBody: false,
+	})
+}
+
 function removeRigidbodyInstance(nodeId: string): void {
 	const entry = rigidbodyInstances.get(nodeId)
 	if (!entry) {
 		return
 	}
-	try {
-		physicsWorld?.removeBody(entry.body)
-	} catch (error) {
-		console.warn('[ScenePreview] Failed to remove rigidbody instance', error)
-	}
+	removeRigidbodyInstanceBodies(physicsWorld, entry)
 	rigidbodyInstances.delete(nodeId)
 	groundHeightfieldCache.delete(nodeId)
 	removeVehicleInstance(nodeId)
@@ -6830,13 +6875,91 @@ function ensureRigidbodyDebugHelperForShape(
 	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
 }
 
+function ensureRoadHeightfieldDebugHelper(
+	nodeId: string,
+	entry: { signature: string; bodies: CANNON.Body[] },
+): void {
+	const signature = `road-heightfield:${entry.signature}`
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature) {
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const container = ensureRigidbodyDebugGroup()
+	if (!container) {
+		return
+	}
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	helperGroup.visible = false
+	// Road heightfields are generated in world units.
+	helperGroup.scale.set(1, 1, 1)
+
+	for (let bodyIndex = 0; bodyIndex < entry.bodies.length; bodyIndex += 1) {
+		const body = entry.bodies[bodyIndex]
+		if (!body) {
+			continue
+		}
+		const rawShape = body.shapes?.[0]
+		const matrix = (rawShape as any)?.data as unknown
+		const elementSize = (rawShape as any)?.elementSize as unknown
+		if (!Array.isArray(matrix) || typeof elementSize !== 'number' || !Number.isFinite(elementSize) || elementSize <= 0) {
+			continue
+		}
+		const columnCount = matrix.length
+		const rowCount = Array.isArray(matrix[0]) ? (matrix[0] as any[]).length : 0
+		if (columnCount < 2 || rowCount < 2) {
+			continue
+		}
+		const width = (columnCount - 1) * elementSize
+		const depth = (rowCount - 1) * elementSize
+		const shapeDefinition: RigidbodyPhysicsShape = {
+			kind: 'heightfield',
+			matrix: matrix as number[][],
+			elementSize,
+			width,
+			depth,
+			scaleNormalized: false,
+		}
+		const lines = buildHeightfieldDebugLines(shapeDefinition)
+		if (!lines) {
+			continue
+		}
+		lines.name = `RoadHeightfieldDebugLines:${nodeId}:${bodyIndex}`
+		lines.renderOrder = 9999
+		const segmentGroup = new THREE.Group()
+		segmentGroup.name = `RoadHeightfieldDebugSegment:${nodeId}:${bodyIndex}`
+		segmentGroup.add(lines)
+		helperGroup.add(segmentGroup)
+	}
+
+	container.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category: 'rigidbody', scale: new THREE.Vector3(1, 1, 1) })
+}
+
 function refreshRigidbodyDebugHelper(nodeId: string): void {
 	if (!isRigidbodyDebugVisible.value) {
 		return
 	}
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
+	const isRoadNode = Boolean(node && isRoadDynamicMesh(node.dynamicMesh))
+	const roadInstance = isRoadNode ? rigidbodyInstances.get(nodeId) ?? null : null
+	const roadEntry =
+		roadInstance && roadInstance.signature && Array.isArray(roadInstance.bodies) && roadInstance.bodies.length
+			? { signature: roadInstance.signature, bodies: roadInstance.bodies }
+			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
+	if (roadEntry) {
+		const category: RigidbodyDebugHelperCategory = 'rigidbody'
+		if (!isRigidbodyDebugCategoryVisible(category)) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		ensureRoadHeightfieldDebugHelper(nodeId, roadEntry)
+		updateRigidbodyDebugHelperTransform(nodeId)
+		return
+	}
 	let shapeDefinition = extractRigidbodyShape(component)
 	if (!shapeDefinition && isGroundNode && node) {
 		shapeDefinition = buildHeightfieldShapeFromGroundNode(node)
@@ -6868,6 +6991,34 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	}
 	const helper = rigidbodyDebugHelpers.get(nodeId)
 	if (!helper) {
+		return
+	}
+	const node = resolveNodeById(nodeId)
+	const instance = rigidbodyInstances.get(nodeId) ?? null
+	const roadEntry =
+		node && isRoadDynamicMesh(node.dynamicMesh) && instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length
+			? { signature: instance.signature, bodies: instance.bodies }
+			: null
+	if (roadEntry) {
+		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
+		const object = nodeObjectMap.get(nodeId) ?? null
+		const visible = object ? object.visible !== false : true
+		helper.group.visible = visible && categoryEnabled
+		if (!helper.group.visible) {
+			return
+		}
+		const children = helper.group.children
+		for (let i = 0; i < Math.min(children.length, roadEntry.bodies.length); i += 1) {
+			const child = children[i]
+			const body = roadEntry.bodies[i]
+			if (!child || !body) {
+				continue
+			}
+			child.position.set(body.position.x, body.position.y, body.position.z)
+			child.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+			child.scale.copy(helper.scale)
+			child.updateMatrixWorld(true)
+		}
 		return
 	}
 	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
@@ -7097,6 +7248,11 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	if (!node || !component || !object) {
 		return
 	}
+	if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
+		ensureRoadRigidbodyInstance(node, component, object)
+		refreshRigidbodyDebugHelper(nodeId)
+		return
+	}
 	if (!shapeDefinition && requiresMetadata) {
 		return
 	}
@@ -7116,6 +7272,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	rigidbodyInstances.set(nodeId, {
 		nodeId,
 		body: bodyEntry.body,
+		bodies: [bodyEntry.body],
 		object,
 		orientationAdjustment: bodyEntry.orientationAdjustment,
 	})
@@ -7207,12 +7364,17 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		if (!component || !object) {
 			return
 		}
+		if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
+			ensureRoadRigidbodyInstance(node, component, object)
+			refreshRigidbodyDebugHelper(node.id)
+			return
+		}
 		if (!shapeDefinition && requiresMetadata) {
 			return
 		}
 		const existing = rigidbodyInstances.get(node.id)
 		if (existing) {
-			world.removeBody(existing.body)
+			removeRigidbodyInstanceBodies(world, existing)
 			rigidbodyInstances.delete(node.id)
 		}
 		const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
@@ -7223,6 +7385,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		rigidbodyInstances.set(node.id, {
 			nodeId: node.id,
 			body: bodyEntry.body,
+			bodies: [bodyEntry.body],
 			object,
 			orientationAdjustment: bodyEntry.orientationAdjustment,
 		})
@@ -7230,7 +7393,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	})
 	rigidbodyInstances.forEach((entry, nodeId) => {
 		if (!desiredIds.has(nodeId)) {
-			world.removeBody(entry.body)
+			removeRigidbodyInstanceBodies(world, entry)
 			rigidbodyInstances.delete(nodeId)
 			removeRigidbodyDebugHelper(nodeId)
 		}
@@ -7254,7 +7417,12 @@ function stepPhysicsWorld(delta: number): void {
 	} catch (error) {
 		console.warn('[ScenePreview] Physics step failed', error)
 	}
-	rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform))
+	rigidbodyInstances.forEach((entry) => {
+		if (entry.syncObjectFromBody === false) {
+			return
+		}
+		syncSharedObjectFromBody(entry, syncInstancedTransform)
+	})
 	if (ENABLE_VEHICLE_WHEEL_VISUALS) {
 		updateVehicleWheelVisuals(delta)
 	}
