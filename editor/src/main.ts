@@ -9,7 +9,8 @@ import { useConsoleStore } from '@/stores/consoleStore'
 import './style.css'
 import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
-import { configureAssetDownloadWorker } from '@schema/assetCache'
+import { configureAssetBlobDownloader } from '@schema/assetCache'
+import { createWorkerAssetBlobDownloader } from '@/utils/assetDownloadWorkerPool'
 
 async function preloadRuntimeConfig() {
 	try {
@@ -25,17 +26,26 @@ async function preloadRuntimeConfig() {
 	}
 }
 
-preloadRuntimeConfig().finally(async () => {
-	configureAssetDownloadWorker(() => {
-		if (typeof Worker === 'undefined') {
-			return null
-		}
-		try {
-			return new Worker(new URL('@schema/assetDownload.worker.ts', import.meta.url), { type: 'module' })
-		} catch {
-			return null
-		}
-	})
+
+;(async () => {
+	try {
+		await preloadRuntimeConfig()
+	} catch (err) {
+		console.warn('[editor] runtime config preload failed', err)
+	}
+
+	configureAssetBlobDownloader(
+		createWorkerAssetBlobDownloader(() => {
+			if (typeof Worker === 'undefined') {
+				return null
+			}
+			try {
+				return new Worker(new URL('./workers/assetDownload.worker.ts', import.meta.url), { type: 'module' })
+			} catch {
+				return null
+			}
+		}),
+	)
 
 	const app = createApp(App)
 	const pinia = createPinia()
@@ -53,4 +63,5 @@ preloadRuntimeConfig().finally(async () => {
 	await authStore.initialize()
 
 	app.mount('#app')
-})
+
+})()
