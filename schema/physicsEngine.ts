@@ -22,6 +22,12 @@ import {
 import type { GroundHeightfieldData } from './groundHeightfield'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
+import {
+	buildRoadHeightfieldBodies as buildRoadHeightfieldBodiesInternal,
+	isRoadDynamicMesh as isRoadDynamicMeshInternal,
+	type RoadHeightfieldBodiesEntry,
+} from './roadHeightfield'
+
 export {
 	buildRoadHeightfieldBodies,
 	isRoadDynamicMesh,
@@ -29,16 +35,163 @@ export {
 	type RoadHeightfieldBuildParams,
 } from './roadHeightfield'
 
-export {
-	buildRoadHeightfieldDebugSegmentsFromBodies,
-	ensureRoadHeightfieldRigidbodyInstance,
-	resolveRoadHeightfieldDebugSegments,
-	type EnsureRoadHeightfieldRigidbodyInstanceParams,
-	type EnsureRoadHeightfieldRigidbodyInstanceResult,
-	type RoadHeightfieldDebugCache,
-	type RoadHeightfieldDebugSegment,
-	type RoadHeightfieldDebugSegmentsEntry,
-} from './heightfieldPhysics'
+export type RoadHeightfieldDebugSegment = {
+	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
+}
+
+export type RoadHeightfieldDebugEntry = {
+	signature: string
+	segments: RoadHeightfieldDebugSegment[]
+}
+
+export type RoadHeightfieldDebugCache = Map<string, RoadHeightfieldDebugEntry>
+
+export function resolveRoadHeightfieldDebugSegments(params: {
+	nodeId: string
+	signature: string
+	bodies: CANNON.Body[]
+	cache: RoadHeightfieldDebugCache
+	debugEnabled: boolean
+}): RoadHeightfieldDebugEntry | null {
+	const { nodeId, signature, bodies, cache, debugEnabled } = params
+	if (!debugEnabled) {
+		cache.delete(nodeId)
+		return null
+	}
+	const cached = cache.get(nodeId)
+	if (cached && cached.signature === signature) {
+		return cached
+	}
+	const segments: RoadHeightfieldDebugSegment[] = []
+	bodies.forEach((body) => {
+		const shape = body.shapes.find((candidate) => candidate instanceof CANNON.Heightfield) as
+			| CANNON.Heightfield
+			| undefined
+		if (!shape) {
+			return
+		}
+		const matrixSource = (shape as any).data as unknown
+		const elementSize = (shape as any).elementSize as unknown
+		if (!Array.isArray(matrixSource) || typeof elementSize !== 'number' || !Number.isFinite(elementSize) || elementSize <= 0) {
+			return
+		}
+		let rowCount = 0
+		matrixSource.forEach((column) => {
+			if (Array.isArray(column) && column.length > rowCount) {
+				rowCount = column.length
+			}
+		})
+		if (matrixSource.length < 2 || rowCount < 2) {
+			return
+		}
+		const matrix: number[][] = matrixSource.map((column) => {
+			if (!Array.isArray(column)) {
+				return []
+			}
+			return column.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0))
+		})
+		const width = (matrix.length - 1) * elementSize
+		const depth = (rowCount - 1) * elementSize
+		segments.push({
+			shape: {
+				kind: 'heightfield',
+				matrix,
+				elementSize,
+				width,
+				depth,
+				offset: [0, 0, 0],
+				scaleNormalized: false,
+			},
+		})
+	})
+	const entry: RoadHeightfieldDebugEntry = { signature, segments }
+	cache.set(nodeId, entry)
+	return entry
+}
+
+export function ensureRoadHeightfieldRigidbodyInstance(params: {
+	roadNode: SceneNode
+	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
+	roadObject: THREE.Object3D
+	groundNode: SceneNode
+	world: CANNON.World
+	existingInstance: RigidbodyInstance | null
+	createBody: (
+		node: SceneNode,
+		component: SceneNodeComponentState<RigidbodyComponentProps>,
+		shapeDefinition: RigidbodyPhysicsShape | null,
+		object: THREE.Object3D,
+	) => { body: CANNON.Body } | null
+	loggerTag?: string
+	maxSegments?: number
+}): { instance: RigidbodyInstance | null; shouldRemoveExisting: boolean } {
+	const {
+		roadNode,
+		rigidbodyComponent,
+		roadObject,
+		groundNode,
+		world,
+		existingInstance,
+		createBody,
+		loggerTag,
+		maxSegments,
+	} = params
+
+	if (!isRoadDynamicMeshInternal(roadNode.dynamicMesh)) {
+		return { instance: null, shouldRemoveExisting: true }
+	}
+	if (!isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		return { instance: null, shouldRemoveExisting: true }
+	}
+	const props = rigidbodyComponent.props as RigidbodyComponentProps | undefined
+	if (props?.bodyType !== 'STATIC') {
+		return { instance: null, shouldRemoveExisting: true }
+	}
+
+	const built: RoadHeightfieldBodiesEntry | null = buildRoadHeightfieldBodiesInternal({
+		roadNode,
+		rigidbodyComponent,
+		roadObject,
+		groundNode,
+		world,
+		createBody,
+		maxSegments,
+	})
+
+	if (!built || !built.bodies.length) {
+		// Keep existing bodies (if any) when build fails, to avoid dropping collisions.
+		return { instance: null, shouldRemoveExisting: false }
+	}
+
+	if (existingInstance && existingInstance.signature === built.signature) {
+		const existingBodies = Array.isArray(existingInstance.bodies) ? existingInstance.bodies : []
+		if (existingBodies.length === built.bodies.length && existingBodies.length > 0) {
+			return { instance: existingInstance, shouldRemoveExisting: false }
+		}
+	}
+
+	if (existingInstance) {
+		removeRigidbodyInstanceBodies(world, existingInstance)
+	}
+	for (const body of built.bodies) {
+		try {
+			world.addBody(body)
+		} catch (error) {
+			warn(loggerTag, 'Failed to add road heightfield body', error)
+		}
+	}
+
+	const instance: RigidbodyInstance = {
+		nodeId: roadNode.id,
+		body: built.bodies[0]!,
+		bodies: built.bodies,
+		object: roadObject,
+		orientationAdjustment: null,
+		signature: built.signature,
+		syncObjectFromBody: false,
+	}
+	return { instance, shouldRemoveExisting: false }
+}
 
 export type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion

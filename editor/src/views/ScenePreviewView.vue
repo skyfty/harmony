@@ -925,6 +925,10 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
+const heightfieldDebugOrientationInverse = new THREE.Quaternion().setFromAxisAngle(
+	new THREE.Vector3(1, 0, 0),
+	Math.PI / 2,
+)
 const airWallDebugMaterial = new THREE.MeshBasicMaterial({
 	color: 0x80c7ff,
 	transparent: true,
@@ -6990,7 +6994,16 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 				continue
 			}
 			child.position.set(body.position.x, body.position.y, body.position.z)
-			child.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+			rigidbodyDebugQuaternionHelper.set(
+				body.quaternion.x,
+				body.quaternion.y,
+				body.quaternion.z,
+				body.quaternion.w,
+			)
+			// Heightfields are rotated -90° around X in physics; undo that here so the debug
+			// geometry (built in render-space convention) lies on the surface.
+			rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
+			child.quaternion.copy(rigidbodyDebugQuaternionHelper)
 			child.scale.copy(helper.scale)
 			child.updateMatrixWorld(true)
 		}
@@ -8445,7 +8458,7 @@ onBeforeUnmount(() => {
 						<v-list-item>
 							<v-checkbox
 								class="scene-preview__debug-checkbox"
-								label="Ground wireframe"
+								label="Ground rigidbody wireframe"
 								:model-value="isGroundWireframeVisible"
 								hide-details
 								density="compact"

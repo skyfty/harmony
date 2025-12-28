@@ -106,7 +106,7 @@ function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): numb
   if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
     return ROAD_MIN_DIVISIONS
   }
-  const densityFactor = Math.max(0.1, Math.min(5, Number.isFinite(samplingDensityFactor) ? samplingDensityFactor : 1.0))
+  const densityFactor = Math.max(0.1, Math.min(10, Number.isFinite(samplingDensityFactor) ? samplingDensityFactor : 1.0))
   return Math.max(
     ROAD_MIN_DIVISIONS,
     Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
