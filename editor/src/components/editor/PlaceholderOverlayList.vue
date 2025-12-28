@@ -13,6 +13,18 @@ defineEmits<{
 function handleThumbnailError(overlay: PlaceholderOverlayState) {
   overlay.thumbnail = null
 }
+
+const RING_RADIUS = 16
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
+function ringStrokeStyle(progress: number) {
+  const clamped = Math.min(100, Math.max(0, progress))
+  const offset = RING_CIRCUMFERENCE * (1 - clamped / 100)
+  return {
+    strokeDasharray: `${RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`,
+    strokeDashoffset: `${offset}`,
+  }
+}
 </script>
 
 <template>
@@ -35,6 +47,22 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
         draggable="false"
         @error="handleThumbnailError(overlay)"
       />
+
+      <div v-if="!overlay.error && overlay.progress < 100" class="placeholder-overlay-thumb-center" aria-hidden="true">
+        <div class="placeholder-overlay-ring-wrap">
+          <svg class="placeholder-overlay-ring" viewBox="0 0 40 40">
+            <circle class="placeholder-overlay-ring-track" cx="20" cy="20" r="16" />
+            <circle
+              class="placeholder-overlay-ring-value"
+              cx="20"
+              cy="20"
+              r="16"
+              :style="ringStrokeStyle(overlay.progress)"
+            />
+          </svg>
+          <div class="placeholder-overlay-ring-label">{{ Math.round(overlay.progress) }}%</div>
+        </div>
+      </div>
 
       <div class="placeholder-overlay-thumb-actions">
         <button
@@ -70,21 +98,9 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
       </div>
     </div>
 
-    <div class="placeholder-overlay-info" :class="{ 'has-error': !!overlay.error }">
-      <div class="placeholder-overlay-name" :title="overlay.name">{{ overlay.name }}</div>
-
-      <div v-if="overlay.error" class="placeholder-overlay-error-row">
+    <div v-if="overlay.error" class="placeholder-overlay-info has-error">
+      <div class="placeholder-overlay-error-row">
         <div class="placeholder-overlay-error-text" :title="overlay.error">{{ overlay.error }}</div>
-      </div>
-
-      <div v-else class="placeholder-overlay-progress">
-        <div class="placeholder-overlay-progress-bar">
-          <div
-            class="placeholder-overlay-progress-value"
-            :style="{ width: `${Math.min(100, Math.max(0, overlay.progress))}%` }"
-          ></div>
-        </div>
-        <div class="placeholder-overlay-percent">{{ Math.round(overlay.progress) }}%</div>
       </div>
     </div>
   </div>
@@ -94,7 +110,7 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
 .placeholder-overlay-card {
   position: absolute;
   transform: translate(-50%, -110%);
-  width: 148px;
+  width: 100px;
   color: #e9ecf1;
   transition: opacity 120ms ease;
   opacity: 1;
@@ -103,18 +119,19 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
 
 .placeholder-overlay-thumb {
   position: relative;
-  width: 144px;
-  height: 72px;
+  width: 96px;
+  height: 96px;
   border-radius: 10px;
   overflow: hidden;
-  background-color: rgba(13, 17, 23, 0.92);
+  background-color: rgba(13, 17, 23, 0.55);
   border: 1px solid rgba(77, 208, 225, 0.35);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
 }
 
 .placeholder-overlay-thumb.is-empty {
-  background-color: rgba(13, 17, 23, 0.5);
+  background-color: rgba(13, 17, 23, 0.4);
 }
 
 .placeholder-overlay-thumb > img {
@@ -136,11 +153,61 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
   pointer-events: none;
   transition: opacity 140ms ease;
   background: rgba(0, 0, 0, 0.18);
+  z-index: 2;
 }
 
 .placeholder-overlay-thumb:hover .placeholder-overlay-thumb-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+.placeholder-overlay-thumb-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.placeholder-overlay-ring-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+}
+
+.placeholder-overlay-ring {
+  width: 44px;
+  height: 44px;
+  display: block;
+}
+
+.placeholder-overlay-ring-track {
+  fill: transparent;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 3;
+}
+
+.placeholder-overlay-ring-value {
+  fill: transparent;
+  stroke: rgba(0, 188, 212, 0.92);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 20px 20px;
+}
+
+.placeholder-overlay-ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.92);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
 }
 
 .placeholder-overlay-card.is-hidden {
@@ -164,45 +231,6 @@ function handleThumbnailError(overlay: PlaceholderOverlayState) {
   background-color: rgba(13, 17, 23, 0.72);
 }
 
-.placeholder-overlay-name {
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 0;
-  line-height: 1.2;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.placeholder-overlay-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.placeholder-overlay-progress-bar {
-  position: relative;
-  height: 4px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.14);
-}
-
-.placeholder-overlay-progress-value {
-  position: absolute;
-  inset: 0;
-  width: 0;
-  background: linear-gradient(90deg, rgba(0, 188, 212, 0.9), rgba(0, 131, 143, 0.9));
-}
-
-.placeholder-overlay-percent {
-  text-align: right;
-  font-size: 11px;
-  color: #4dd0e1;
-  font-weight: 500;
-}
 
 .placeholder-overlay-error-row {
   margin-top: 8px;
