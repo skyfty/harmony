@@ -129,7 +129,7 @@
               <v-slider
                 v-model="scatterEraseRadiusModel"
                 :min="0.1"
-                :max="5"
+                :max="SCATTER_BRUSH_RADIUS_MAX"
                 :step="0.1"
                 density="compact"
                 track-color="rgba(255,255,255,0.25)"
@@ -233,6 +233,7 @@ import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
+import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 const props = withDefaults(
   defineProps<{

@@ -4,6 +4,7 @@ import type { GroundSculptOperation } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 export type GroundPanelTab = 'terrain' | TerrainScatterCategory
 
@@ -45,11 +46,11 @@ export const useTerrainStore = defineStore('terrain', () => {
   }
 
   function setScatterBrushRadius(value: number) {
-    scatterBrushRadius.value = Math.min(5, Math.max(0.1, value))
+    scatterBrushRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))
   }
 
   function setScatterEraseRadius(value: number) {
-    scatterEraseRadius.value = Math.min(5, Math.max(0.1, value))
+    scatterEraseRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))
   }
   
   return {
