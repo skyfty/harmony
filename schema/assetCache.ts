@@ -47,19 +47,29 @@ export interface AssetBlobPayload {
   url: string
 }
 
-export type AssetDownloadWorkerFactory = () => Worker | null
-
-let assetDownloadWorkerFactory: AssetDownloadWorkerFactory | null = null
-
 /**
- * Optional: configure a Web Worker factory used for downloading assets.
+ * Optional: configure a custom downloader implementation.
  *
- * - Browser only; other environments will ignore it.
- * - The factory should return a NEW worker per call (recommended), because the default client
- *   implementation assumes a single in-flight request per worker.
+ * The editor app can inject a worker-based downloader to keep downloads off the main thread.
+ * Other runtimes can ignore this.
  */
-export function configureAssetDownloadWorker(factory: AssetDownloadWorkerFactory | null): void {
-  assetDownloadWorkerFactory = factory
+export type AssetBlobDownloader = (
+  urlCandidates: string[],
+  controller: AbortController,
+  onProgress: (value: number) => void,
+) => Promise<AssetBlobPayload>
+
+let assetBlobDownloader: AssetBlobDownloader | null = null
+
+export function configureAssetBlobDownloader(downloader: AssetBlobDownloader | null): void {
+  assetBlobDownloader = downloader
+}
+
+export class AssetDownloadWorkerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AssetDownloadWorkerUnavailableError'
+  }
 }
 
 interface UniRequestTask {
@@ -478,9 +488,9 @@ export async function fetchAssetBlob(
   const streamingFetchSupported = typeof fetch === 'function' && supportsResponseBodyStream()
   const isBrowserEnvironment = typeof window !== 'undefined' && typeof document !== 'undefined'
 
-  if (isBrowserEnvironment && assetDownloadWorkerFactory && typeof Worker !== 'undefined') {
+  if (isBrowserEnvironment && assetBlobDownloader) {
     try {
-      return await fetchAssetBlobViaWorker(candidates, controller, onProgress)
+      return await assetBlobDownloader(candidates, controller, onProgress)
     } catch (error) {
       if (!(error instanceof AssetDownloadWorkerUnavailableError)) {
         throw error instanceof Error ? error : new Error(String(error))
@@ -542,181 +552,6 @@ export async function fetchAssetBlob(
   }
 
   throw new Error('资源下载失败（当前环境不支持下载）')
-}
-
-class AssetDownloadWorkerUnavailableError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'AssetDownloadWorkerUnavailableError'
-  }
-}
-
-type AssetDownloadWorkerRequest = {
-  kind: 'asset-download'
-  requestId: number
-  urlCandidates: string[]
-}
-
-type AssetDownloadWorkerAbort = {
-  kind: 'asset-download-abort'
-  requestId: number
-}
-
-type AssetDownloadWorkerProgress = {
-  kind: 'asset-download-progress'
-  requestId: number
-  progress: number
-}
-
-type AssetDownloadWorkerResult = {
-  kind: 'asset-download-result'
-  requestId: number
-  arrayBuffer: ArrayBuffer
-  mimeType: string | null
-  filename: string | null
-  url: string
-}
-
-type AssetDownloadWorkerError = {
-  kind: 'asset-download-error'
-  requestId: number
-  error: string
-}
-
-type AssetDownloadWorkerResponse =
-  | AssetDownloadWorkerProgress
-  | AssetDownloadWorkerResult
-  | AssetDownloadWorkerError
-
-let assetDownloadWorkerRequestId = 0
-
-async function fetchAssetBlobViaWorker(
-  urlCandidates: string[],
-  controller: AbortController,
-  onProgress: (value: number) => void,
-): Promise<AssetBlobPayload> {
-  const factory = assetDownloadWorkerFactory
-  if (!factory) {
-    throw new AssetDownloadWorkerUnavailableError('asset download worker is not configured')
-  }
-  let createdWorker: Worker | null = null
-  try {
-    createdWorker = factory()
-  } catch (error) {
-    throw new AssetDownloadWorkerUnavailableError(
-      error instanceof Error ? error.message : 'asset download worker factory failed',
-    )
-  }
-  if (!createdWorker) {
-    throw new AssetDownloadWorkerUnavailableError('asset download worker is not available')
-  }
-
-  const activeWorker: Worker = createdWorker
-
-  const requestId = (assetDownloadWorkerRequestId += 1)
-
-  return await new Promise<AssetBlobPayload>((resolve, reject) => {
-    let settled = false
-
-    const cleanup = () => {
-      activeWorker.removeEventListener('message', onMessage as EventListener)
-      activeWorker.removeEventListener('error', onError as EventListener)
-      activeWorker.removeEventListener('messageerror', onMessageError as EventListener)
-      try {
-        activeWorker.terminate()
-      } catch (_error) {
-        /* noop */
-      }
-    }
-
-    const settleReject = (error: unknown) => {
-      if (settled) {
-        return
-      }
-      settled = true
-      controller.signal.removeEventListener('abort', onAbort)
-      cleanup()
-      reject(error instanceof Error ? error : new Error(String(error)))
-    }
-
-    const settleResolve = (payload: AssetBlobPayload) => {
-      if (settled) {
-        return
-      }
-      settled = true
-      controller.signal.removeEventListener('abort', onAbort)
-      cleanup()
-      resolve(payload)
-    }
-
-    const onAbort = () => {
-      if (settled) {
-        return
-      }
-      try {
-        activeWorker.postMessage({ kind: 'asset-download-abort', requestId } satisfies AssetDownloadWorkerAbort)
-      } catch (_error) {
-        /* noop */
-      }
-      settleReject(createAbortError())
-    }
-
-    const onError = (event: ErrorEvent) => {
-      settleReject(event.error ?? new Error(event.message || 'asset download worker error'))
-    }
-
-    const onMessageError = () => {
-      settleReject(new Error('asset download worker messageerror'))
-    }
-
-    const onMessage = (event: MessageEvent<AssetDownloadWorkerResponse>) => {
-      const message = event.data
-      if (!message || message.requestId !== requestId) {
-        return
-      }
-      if (message.kind === 'asset-download-progress') {
-        const progress = Number.isFinite(message.progress) ? message.progress : 0
-        onProgress(Math.max(0, Math.min(100, Math.round(progress))))
-        return
-      }
-      if (message.kind === 'asset-download-error') {
-        settleReject(new Error(message.error || '资源下载失败'))
-        return
-      }
-      if (message.kind === 'asset-download-result') {
-        onProgress(100)
-        const type = message.mimeType ?? ''
-        const blob = new Blob([message.arrayBuffer], type ? { type } : undefined)
-        settleResolve({
-          blob,
-          mimeType: message.mimeType ?? null,
-          filename: message.filename ?? null,
-          url: message.url,
-        })
-      }
-    }
-
-    activeWorker.addEventListener('message', onMessage as unknown as EventListener)
-    activeWorker.addEventListener('error', onError as unknown as EventListener)
-    activeWorker.addEventListener('messageerror', onMessageError as unknown as EventListener)
-
-    controller.signal.addEventListener('abort', onAbort)
-    if (controller.signal.aborted) {
-      onAbort()
-      return
-    }
-
-    const request: AssetDownloadWorkerRequest = {
-      kind: 'asset-download',
-      requestId,
-      urlCandidates,
-    }
-    try {
-      activeWorker.postMessage(request)
-    } catch (error) {
-      settleReject(new AssetDownloadWorkerUnavailableError(error instanceof Error ? error.message : String(error)))
-    }
-  })
 }
 
 async function readBlobWithProgress(

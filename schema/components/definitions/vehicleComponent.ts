@@ -73,9 +73,9 @@ function clampVectorLike(value: unknown, fallback: Vector3Like): Vector3Like {
   return createVector(fx, fy, fz)
 }
 
-export const DEFAULT_RIGHT_AXIS = 0
+export const DEFAULT_RIGHT_AXIS = 2
 export const DEFAULT_UP_AXIS = 1
-export const DEFAULT_FORWARD_AXIS = 2
+export const DEFAULT_FORWARD_AXIS = 0
 export const DEFAULT_RADIUS = 0.5
 export const DEFAULT_DIRECTION: Vector3Like = createVector(0, -1, 0)
 export const DEFAULT_AXLE: Vector3Like = createVector(0, 0, 1)
