@@ -1319,6 +1319,14 @@ class SceneGraphBuilder {
     }
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
+
+    // Air wall: keep mesh hierarchy (for rigidbody generation), but hide it from rendering.
+    if (wallProps.isAirWall) {
+      group.visible = false;
+    }
+
+    // Tag for downstream systems (physics/debug tooling) if needed.
+    group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall) };
     return group;
   }
 

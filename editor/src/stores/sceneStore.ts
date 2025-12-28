@@ -11764,6 +11764,7 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasJointAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'jointAssetId')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
+        const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
 
         const merged = clampWallProps({
           height: (typedPatch.height as number | undefined) ?? currentProps.height,
@@ -11772,6 +11773,9 @@ export const useSceneStore = defineStore('scene', {
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
+          isAirWall: hasIsAirWall
+            ? (typedPatch.isAirWall as boolean | undefined)
+            : currentProps.isAirWall,
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
@@ -11785,6 +11789,7 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
+          currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null)
         if (unchanged) {

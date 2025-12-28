@@ -24,6 +24,7 @@ const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
+const localIsAirWall = ref<boolean>(false)
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -68,6 +69,7 @@ watch(
     localHeight.value = props.height ?? WALL_DEFAULT_HEIGHT
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
+    localIsAirWall.value = Boolean((props as any).isAirWall)
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
@@ -334,6 +336,26 @@ function applySmoothingUpdate(rawValue: unknown) {
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothing: clamped })
 }
+
+function applyAirWallUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue = Boolean(rawValue)
+  const current = Boolean((component.props as any)?.isAirWall)
+  if (nextValue === current) {
+    return
+  }
+  if (localIsAirWall.value !== nextValue) {
+    localIsAirWall.value = nextValue
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { isAirWall: nextValue } as any)
+}
 </script>
 
 <template>
@@ -380,6 +402,14 @@ function applySmoothingUpdate(rawValue: unknown) {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="wall-field-grid">
+        <v-switch
+          :model-value="localIsAirWall"
+          label="是否空气墙（不可见）"
+          density="compact"
+          inset
+          hide-details
+          @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
+        />
         <div class="wall-field-labels">
           <span>Corner Smoothness</span>
           <span>{{ smoothingDisplay }}</span>
