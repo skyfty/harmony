@@ -29,6 +29,17 @@ export {
 	type RoadHeightfieldBuildParams,
 } from './roadHeightfield'
 
+export {
+	buildRoadHeightfieldDebugSegmentsFromBodies,
+	ensureRoadHeightfieldRigidbodyInstance,
+	resolveRoadHeightfieldDebugSegments,
+	type EnsureRoadHeightfieldRigidbodyInstanceParams,
+	type EnsureRoadHeightfieldRigidbodyInstanceResult,
+	type RoadHeightfieldDebugCache,
+	type RoadHeightfieldDebugSegment,
+	type RoadHeightfieldDebugSegmentsEntry,
+} from './heightfieldPhysics'
+
 export type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion
 	cannonInverse: CANNON.Quaternion

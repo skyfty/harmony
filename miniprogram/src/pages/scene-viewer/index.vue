@@ -340,12 +340,12 @@ import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
-  buildRoadHeightfieldBodies,
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
   syncBodyFromObject as syncSharedBodyFromObject,
   syncObjectFromBody as syncSharedObjectFromBody,
   removeRigidbodyInstanceBodies,
+  ensureRoadHeightfieldRigidbodyInstance,
   isRoadDynamicMesh,
   type GroundHeightfieldCacheEntry,
   type PhysicsContactSettings,
@@ -3620,42 +3620,24 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     return;
   }
   const world = ensurePhysicsWorld();
-  const entry = buildRoadHeightfieldBodies({
+  const existing = rigidbodyInstances.get(node.id) ?? null;
+  const result = ensureRoadHeightfieldRigidbodyInstance({
     roadNode: node,
     rigidbodyComponent: component,
     roadObject: object,
     groundNode,
     world,
+    existingInstance: existing,
     createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
+    loggerTag: '[SceneViewer]',
   });
-  if (!entry || !entry.bodies.length) {
-    removeRigidbodyInstance(node.id);
+  if (!result.instance) {
+    if (result.shouldRemoveExisting) {
+      removeRigidbodyInstance(node.id);
+    }
     return;
   }
-  const existing = rigidbodyInstances.get(node.id);
-  if (existing?.signature === entry.signature) {
-    entry.bodies.forEach((body) => {
-      try {
-        world.removeBody(body);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to rollback road heightfield body', error);
-      }
-    });
-    existing.object = object;
-    return;
-  }
-  if (existing) {
-    removeRigidbodyInstance(node.id);
-  }
-  rigidbodyInstances.set(node.id, {
-    nodeId: node.id,
-    body: entry.bodies[0] as CANNON.Body,
-    bodies: entry.bodies,
-    object,
-    orientationAdjustment: null,
-    signature: entry.signature,
-    syncObjectFromBody: false,
-  });
+  rigidbodyInstances.set(node.id, result.instance);
 }
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
