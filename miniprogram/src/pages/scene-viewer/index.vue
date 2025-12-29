@@ -1191,6 +1191,7 @@ const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
+const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
@@ -3558,6 +3559,7 @@ function resetPhysicsWorld(): void {
   airWallBodies.clear();
   physicsWorld = null;
   groundHeightfieldCache.clear();
+  wallTrimeshCache.clear();
   rigidbodyMaterialCache.clear();
   rigidbodyContactMaterialKeys.clear();
   vehicleDriveActive.value = false;
@@ -3587,6 +3589,7 @@ function createRigidbodyBody(
     {
       world,
       groundHeightfieldCache,
+      wallTrimeshCache,
       rigidbodyMaterialCache,
       rigidbodyContactMaterialKeys,
       contactSettings: physicsContactSettings,
@@ -3603,6 +3606,7 @@ function removeRigidbodyInstance(nodeId: string): void {
   removeRigidbodyInstanceBodies(physicsWorld, entry);
   rigidbodyInstances.delete(nodeId);
   groundHeightfieldCache.delete(nodeId);
+  wallTrimeshCache.delete(nodeId);
   removeVehicleInstance(nodeId);
 }
 
