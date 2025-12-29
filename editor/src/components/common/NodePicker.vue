@@ -18,6 +18,7 @@ const props = withDefaults(
     pickHint?: string
     selectionHint?: string
     placeholder?: string
+    tip?: boolean
     disabled?: boolean
   }>(),
   {
@@ -25,6 +26,7 @@ const props = withDefaults(
     pickHint: 'Select a node',
     selectionHint: '',
     placeholder: '未选择节点',
+    tip: true,
     disabled: false,
   },
 )
@@ -107,6 +109,17 @@ const placeholderText = computed(() => {
 const isDisabled = computed(() => props.disabled)
 
 const displayValue = computed(() => selectedNodeName.value ?? props.modelValue ?? null)
+
+const tooltipText = computed(() => {
+  if (!props.tip || !hasSelection.value) {
+    return ''
+  }
+  const value = displayValue.value
+  if (value === null || value === undefined) {
+    return ''
+  }
+  return String(value)
+})
 
 function extractDraggedNodeId(event: DragEvent): string | null {
   const transfer = event.dataTransfer
@@ -343,14 +356,29 @@ onBeforeUnmount(() => {
         :disabled="isDisabled"
         @click="startPicking"
       />
-      <span
-        v-if="hasSelection"
-        class="node-picker__value"
-        :class="{ 'node-picker__value--interactive': !isDisabled }"
-        @click="handleValueClick"
-      >
-        {{ displayValue }}
-      </span>
+      <template v-if="hasSelection">
+        <v-tooltip v-if="tip && tooltipText" location="top">
+          <template #activator="{ props: activatorProps }">
+            <span
+              class="node-picker__value"
+              :class="{ 'node-picker__value--interactive': !isDisabled }"
+              v-bind="activatorProps"
+              @click="handleValueClick"
+            >
+              {{ displayValue }}
+            </span>
+          </template>
+          <span>{{ tooltipText }}</span>
+        </v-tooltip>
+        <span
+          v-else
+          class="node-picker__value"
+          :class="{ 'node-picker__value--interactive': !isDisabled }"
+          @click="handleValueClick"
+        >
+          {{ displayValue }}
+        </span>
+      </template>
       <span v-else class="node-picker__placeholder">{{ placeholderText }}</span>
       <span v-if="!hasSelection" class="node-picker__spacer" />
       <v-btn
@@ -400,9 +428,14 @@ onBeforeUnmount(() => {
 }
 
 .node-picker__value {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.95rem;
   font-weight: 600;
   color: rgba(233, 236, 241, 0.92);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-picker__value--interactive {
