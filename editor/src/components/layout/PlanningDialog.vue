@@ -81,7 +81,7 @@ interface PlanningScatterAssignment {
   category: TerrainScatterCategory
   name: string
   thumbnail: string | null
-  /** 0-100, default 50. Used to scale generated scatter count. */
+  /** 0-100. Default is 2 for green polygons, otherwise 50. Used to scale generated scatter count. */
   densityPercent: number
   /** Model bounding-box footprint area (m^2), used for capacity estimation. */
   footprintAreaM2: number
@@ -3246,6 +3246,7 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
   }
   const thumbnail = payload.asset.thumbnail ?? null
   const existingDensity = target.shape.scatter?.densityPercent
+  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 2 : 50
 
   const length = payload.asset.dimensionLength ?? null
   const width = payload.asset.dimensionWidth ?? null
@@ -3264,7 +3265,7 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
     category,
     name: payload.asset.name,
     thumbnail,
-    densityPercent: clampDensityPercent(existingDensity),
+    densityPercent: clampDensityPercent(typeof existingDensity === 'number' ? existingDensity : defaultDensity),
     footprintAreaM2,
     footprintMaxSizeM,
   }
