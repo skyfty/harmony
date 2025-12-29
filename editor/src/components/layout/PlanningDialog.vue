@@ -202,7 +202,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
-  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 3, wallThicknessMeters: 0.15 },
+  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15 },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -1551,7 +1551,7 @@ function loadPlanningFromScene() {
             wallHeightMeters:
               typeof (raw as any).wallHeightMeters === 'number'
                 ? Number((raw as any).wallHeightMeters)
-                : ((kind ?? preset?.kind) === 'wall' ? 3 : undefined),
+                : ((kind ?? preset?.kind) === 'wall' ? 8 : undefined),
             wallThicknessMeters:
               typeof (raw as any).wallThicknessMeters === 'number'
                 ? Number((raw as any).wallThicknessMeters)
@@ -1962,9 +1962,9 @@ const floorSmoothModel = computed({
 const wallHeightMetersModel = computed({
   get: () => {
     const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'wall') return 3
-    const raw = Number(layer.wallHeightMeters ?? 3)
-    return Number.isFinite(raw) && raw > 0 ? raw : 3
+    if (!layer || layer.kind !== 'wall') return 8
+    const raw = Number(layer.wallHeightMeters ?? 8)
+    return Number.isFinite(raw) && raw > 0 ? raw : 8
   },
   set: (value: number) => {
     if (propertyPanelDisabled.value) return

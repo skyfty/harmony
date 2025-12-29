@@ -99,6 +99,7 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
+	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
@@ -6092,10 +6093,20 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				syncInstancedTransform(child)
 			}
 			const nodeState = resolveNodeById(nodeId)
+			const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+			const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall)
 			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)
 			if (initialVisibility !== null) {
 				child.visible = initialVisibility
 				updateBehaviorVisibility(nodeId, child.visible)
+				syncInstancedTransform(child)
+			}
+
+			// Ensure air walls remain invisible even in preview.
+			// Collision is handled by physics bodies and is unaffected by render visibility.
+			if (isAirWall) {
+				child.visible = false
+				updateBehaviorVisibility(nodeId, false)
 				syncInstancedTransform(child)
 			}
 				if (child.userData?.protagonist) {

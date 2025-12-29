@@ -348,6 +348,7 @@ import {
   ensureRoadHeightfieldRigidbodyInstance,
   isRoadDynamicMesh,
   type GroundHeightfieldCacheEntry,
+  type WallTrimeshCacheEntry,
   type PhysicsContactSettings,
   type RigidbodyInstance,
   type RigidbodyMaterialEntry,
@@ -409,6 +410,7 @@ import {
   RIGIDBODY_METADATA_KEY,
   VEHICLE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
+  WALL_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   clampVehicleComponentProps,
@@ -937,6 +939,8 @@ const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff';
 const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.75;
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02;
+const DEFAULT_ENVIRONMENT_FOG_NEAR = 1;
+const DEFAULT_ENVIRONMENT_FOG_FAR = 50;
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81;
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2;
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3;
@@ -951,6 +955,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogMode: 'none',
   fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
+  fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
+  fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
   environmentMap: {
     mode: 'skybox',
     hdriAssetId: null,
@@ -1932,7 +1938,16 @@ function cloneEnvironmentSettingsLocal(
     backgroundMode = 'solidColor';
   }
   const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox';
-  const fogMode = source?.fogMode === 'exp' ? 'exp' : 'none';
+  let fogMode: EnvironmentSettings['fogMode'] = 'none';
+  if (source?.fogMode === 'linear') {
+    fogMode = 'linear';
+  } else if (source?.fogMode === 'exp') {
+    fogMode = 'exp';
+  }
+
+  const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR);
+  const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR);
+  const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001;
 
   return {
     background: {
@@ -1950,6 +1965,8 @@ function cloneEnvironmentSettingsLocal(
     fogMode,
     fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
     fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
+    fogNear,
+    fogFar: normalizedFogFar,
     environmentMap: {
       mode: environmentMapMode,
       hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
@@ -3402,6 +3419,13 @@ function indexSceneObjects(root: THREE.Object3D) {
         object.visible = guideboardVisibility;
         updateBehaviorVisibility(nodeId, object.visible);
       }
+
+      const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined;
+      const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall);
+      if (isAirWall) {
+        object.visible = false;
+        updateBehaviorVisibility(nodeId, false);
+      }
     }
   });
 }
@@ -3435,6 +3459,13 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     if (guideboardVisibility !== null) {
       object.visible = guideboardVisibility;
       updateBehaviorVisibility(nodeId, object.visible);
+    }
+
+    const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined;
+    const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall);
+    if (isAirWall) {
+      object.visible = false;
+      updateBehaviorVisibility(nodeId, false);
     }
     if (nodeState) {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);

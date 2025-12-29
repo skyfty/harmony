@@ -442,7 +442,7 @@ function resolveWallHeightFromPlanningData(planningData: PlanningSceneData, laye
       return Math.min(100, Math.max(0.1, height))
     }
   }
-  return 3
+  return 8
 }
 
 function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
@@ -783,6 +783,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundNodeId = groundNode?.id ?? 'ground'
   const groundDynamicMesh = groundNode?.dynamicMesh
   const groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
+
+  const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
   const store = ensureScatterStore(groundNodeId, (groundDynamicMesh as any)?.terrainScatter)
   if (options.overwriteExisting) {
     removePlanningScatterLayers(store)
@@ -932,10 +934,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         sceneStore.setNodeLocked(waterNode.id, true)
 
         if (Boolean((poly as any).airWallEnabled)) {
-          const segments = polygonEdges(poly.points).map((edge) => ({
-            start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
-            end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
-          }))
+          const segments = polygonEdges(poly.points).map((edge) => {
+            const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
+            const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
+            start.y = groundHeightAt(start.x, start.z)
+            end.y = groundHeightAt(end.x, end.z)
+            return { start, end }
+          })
           createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
@@ -954,10 +959,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           const baseName = poly.name?.trim()
             ? poly.name.trim()
             : (layerName ? `${layerName} Green` : 'Planning Green')
-          const segments = polygonEdges(poly.points).map((edge) => ({
-            start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
-            end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
-          }))
+          const segments = polygonEdges(poly.points).map((edge) => {
+            const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
+            const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
+            start.y = groundHeightAt(start.x, start.z)
+            end.y = groundHeightAt(end.x, end.z)
+            return { start, end }
+          })
           createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
@@ -1137,10 +1145,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
         for (let i = 0; i < line.points.length - 1; i += 1) {
-          segments.push({
-            start: toWorldPoint(line.points[i]!, groundWidth, groundDepth, 0),
-            end: toWorldPoint(line.points[i + 1]!, groundWidth, groundDepth, 0),
-          })
+          const start = toWorldPoint(line.points[i]!, groundWidth, groundDepth, 0)
+          const end = toWorldPoint(line.points[i + 1]!, groundWidth, groundDepth, 0)
+          start.y = groundHeightAt(start.x, start.z)
+          end.y = groundHeightAt(end.x, end.z)
+          segments.push({ start, end })
         }
         if (segments.length) {
           const smoothing = clampWallCornerSmoothness((line as PlanningPolylineAny).cornerSmoothness)
@@ -1167,10 +1176,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
 
       for (const poly of group.polygons) {
-        const segments = polygonEdges(poly.points).map((edge) => ({
-          start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
-          end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
-        }))
+        const segments = polygonEdges(poly.points).map((edge) => {
+          const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
+          const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
+          start.y = groundHeightAt(start.x, start.z)
+          end.y = groundHeightAt(end.x, end.z)
+          return { start, end }
+        })
         if (segments.length) {
           const wall = sceneStore.createWallNode({
             segments,
