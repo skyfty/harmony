@@ -10,7 +10,6 @@ import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
 import SeriesSelector from '@/components/common/SeriesSelector.vue'
 import AssetPreviewRenderer from '@/components/common/AssetPreviewRenderer.vue'
 import { buildCategoryPathString } from '@/utils/categoryPath'
-import { deserializeLodPreset } from '@/utils/lodPreset'
 import {
   createAssetTag,
   fetchAssetTags,
@@ -105,8 +104,6 @@ type UploadAssetEntry = {
   aiLoading: boolean
   hasPendingChanges: boolean
   terrainScatterPreset: TerrainScatterCategory | null
-  lodPresetStatus: 'unknown' | 'loading' | 'lod' | 'not-lod'
-  lodPresetFirstModelAssetId: string | null
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -266,34 +263,11 @@ function handleEntryScatterPresetChange(
   markEntryDirty(entry)
 }
 
-function resolveEffectiveUploadDisplayType(entry: UploadAssetEntry): ProjectAsset['type'] {
-  // LOD presets are stored as prefab files but should behave like meshes for preview/selection.
-  return entry.lodPresetStatus === 'lod' ? 'mesh' : entry.asset.type
-}
-
-function resolveLodPresetPrimaryModelAsset(entry: UploadAssetEntry): ProjectAsset | null {
-  if (entry.lodPresetStatus !== 'lod') {
-    return null
-  }
-  const id = entry.lodPresetFirstModelAssetId
-  if (!id) {
-    return null
-  }
-  return sceneStore.getAsset(id) ?? null
-}
-
-function resolvePreviewAsset(entry: UploadAssetEntry): ProjectAsset {
-  const primary = resolveLodPresetPrimaryModelAsset(entry)
-  return primary ?? entry.asset
-}
-
 function entryColorPreview(entry: UploadAssetEntry): string {
-  const previewAsset = resolvePreviewAsset(entry)
-  const fallbackType = resolveEffectiveUploadDisplayType(entry)
   return (
     normalizeHexColor(entry.color) ??
-    normalizeHexColor(previewAsset.color ?? null) ??
-    TYPE_COLOR_FALLBACK[fallbackType] ??
+    normalizeHexColor(entry.asset.color ?? null) ??
+    TYPE_COLOR_FALLBACK[entry.asset.type] ??
     '#455A64'
   )
 }
@@ -484,36 +458,6 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     aiLoading: false,
     hasPendingChanges: false,
     terrainScatterPreset: asset.terrainScatterPreset ?? null,
-    lodPresetStatus: 'unknown',
-    lodPresetFirstModelAssetId: null,
-  }
-}
-
-function isPotentialLodPresetAsset(asset: ProjectAsset): boolean {
-  // LOD presets are stored as JSON assets (typically with a .lod extension).
-  return asset.type === 'prefab'
-}
-
-async function ensureLodPresetResolved(entry: UploadAssetEntry): Promise<void> {
-  if (!entry || !isPotentialLodPresetAsset(entry.asset)) {
-    return
-  }
-  if (entry.lodPresetStatus !== 'unknown') {
-    return
-  }
-
-  entry.lodPresetStatus = 'loading'
-  try {
-    const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
-    const file = await createUploadFileFromCache(asset)
-    const text = await file.text()
-    const preset = deserializeLodPreset(text)
-    const first = preset.props.levels?.[0]
-    entry.lodPresetFirstModelAssetId = typeof first?.modelAssetId === 'string' ? first.modelAssetId : null
-    entry.lodPresetStatus = 'lod'
-  } catch (error) {
-    entry.lodPresetFirstModelAssetId = null
-    entry.lodPresetStatus = 'not-lod'
   }
 }
 
@@ -533,7 +477,7 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
     const result = await generateAssetTagSuggestions({
       name: preferredName,
       description,
-      assetType: resolveEffectiveUploadDisplayType(entry),
+      assetType: entry.asset.type,
       extraHints: buildExtraHints(entry),
     })
     const added = integrateSuggestedTags(entry, result.tags ?? [])
@@ -865,11 +809,11 @@ watch(
       uploadEntries.value = props.assets.map((asset) => createUploadEntry(asset))
       activeEntryId.value = uploadEntries.value[0]?.assetId ?? null
       uploadError.value = null
-      void nextTick(() => {
-        void loadServerTags()
-        void loadResourceCategories()
-        void loadAssetSeries()
-      })
+      // void nextTick(() => {
+      //   void loadServerTags()
+      //   void loadResourceCategories()
+      //   void loadAssetSeries()
+      // })
     } else if (!uploadSubmitting.value) {
       resetUploadState()
     }
@@ -888,18 +832,6 @@ watch(
       return
     }
     activeEntryId.value = ids[0] ?? null
-  },
-  { immediate: true },
-)
-
-watch(
-  () => activeEntryId.value,
-  () => {
-    const entry = activeEntry.value
-    if (!entry) {
-      return
-    }
-    void ensureLodPresetResolved(entry)
   },
   { immediate: true },
 )
@@ -1145,7 +1077,7 @@ function handleUploadAll(): void {
                     <div class="upload-entry__name">{{ entry.asset.name }}</div>
                     <div class="upload-entry__meta">Local ID: {{ entry.assetId }}</div>
                   </div>
-                  <v-chip size="small" color="primary" variant="tonal">{{ resolveEffectiveUploadDisplayType(entry) }}</v-chip>
+                  <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
                 </div>
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
 
@@ -1389,39 +1321,14 @@ function handleUploadAll(): void {
                   </div>
                   <div class="upload-entry__preview-pane">
                     <div class="upload-preview-wrapper">
-                      <template v-if="entry.lodPresetStatus === 'lod'">
-                        <template v-if="resolveLodPresetPrimaryModelAsset(entry)">
-                          <AssetPreviewRenderer
-                            :asset="resolvePreviewAsset(entry)"
-                            :primary-color="entry.color || resolvePreviewAsset(entry).color || null"
-                            :ref="(instance) => registerPreviewRef(entry.assetId, instance as InstanceType<typeof AssetPreviewRenderer> | null)"
-                            @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
-                            @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
-                          />
-                        </template>
-                        <template v-else>
-                          <div class="upload-preview__lod">
-                            <div class="upload-preview__lod-fallback">
-                              <v-icon size="40" color="primary">mdi-image-outline</v-icon>
-                              <div class="upload-preview__lod-fallback-hint">No model in first LOD level</div>
-                            </div>
-                          </div>
-                        </template>
-                      </template>
-                      <template v-else>
-                        <AssetPreviewRenderer
-                          :asset="entry.asset"
-                          :primary-color="entry.color || entry.asset.color || null"
-                          :ref="(instance) => registerPreviewRef(entry.assetId, instance as InstanceType<typeof AssetPreviewRenderer> | null)"
-                          @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
-                          @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
-                        />
-                      </template>
-
-                      <div
-                        v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type) && (entry.lodPresetStatus !== 'lod' || !!resolveLodPresetPrimaryModelAsset(entry))"
-                        class="upload-preview__actions"
-                      >
+                      <AssetPreviewRenderer
+                        :asset="entry.asset"
+                        :primary-color="entry.color || entry.asset.color || null"
+                        :ref="(instance) => registerPreviewRef(entry.assetId, instance as InstanceType<typeof AssetPreviewRenderer> | null)"
+                        @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
+                        @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
+                      />
+                      <div v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type)" class="upload-preview__actions">
                         <v-btn
                           color="primary"
                           variant="tonal"
@@ -1678,37 +1585,6 @@ function handleUploadAll(): void {
 .upload-preview-wrapper {
   position: relative;
   width: 100%;
-}
-
-.upload-preview__lod {
-  width: 100%;
-  min-height: 320px;
-  border-radius: 12px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(20, 24, 30, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.upload-preview__lod-image {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.upload-preview__lod-fallback {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: rgba(233, 236, 241, 0.72);
-}
-
-.upload-preview__lod-fallback-hint {
-  font-size: 0.9rem;
 }
 
 .upload-preview__actions {
