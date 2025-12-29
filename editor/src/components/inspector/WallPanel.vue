@@ -402,13 +402,6 @@ function applyAirWallUpdate(rawValue: unknown) {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="wall-field-grid">
-        <v-switch
-          :model-value="localIsAirWall"
-          label="Air Wall"
-          density="compact"
-          hide-details
-          @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
-        />
         <div class="wall-field-labels">
           <span>Corner Smoothness</span>
           <span>{{ smoothingDisplay }}</span>
@@ -461,6 +454,13 @@ function applyAirWallUpdate(rawValue: unknown) {
           min="0.05"
           @blur="applyDimensions"
           @keydown.enter.prevent="applyDimensions"
+        />
+        <v-switch
+          :model-value="localIsAirWall"
+          label="Air Wall"
+          density="compact"
+          hide-details
+          @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
         />
       </div>
 
