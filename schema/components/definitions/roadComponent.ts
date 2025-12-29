@@ -80,7 +80,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 
   const samplingDensityFactorRaw = (props as RoadComponentProps | undefined)?.samplingDensityFactor
   const samplingDensityFactor = Number.isFinite(samplingDensityFactorRaw)
-    ? Math.max(0.1, Math.min(5, samplingDensityFactorRaw as number))
+    ? Math.max(0.1, Math.min(10, samplingDensityFactorRaw as number))
     : 1.0
 
   const smoothingStrengthFactorRaw = (props as RoadComponentProps | undefined)?.smoothingStrengthFactor

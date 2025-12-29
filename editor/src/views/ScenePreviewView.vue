@@ -43,18 +43,20 @@ import {
 import { updateGroundChunks } from '@schema/groundMesh'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
-	buildRoadHeightfieldBodies,
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
 	syncObjectFromBody as syncSharedObjectFromBody,
 	removeRigidbodyInstanceBodies,
+	ensureRoadHeightfieldRigidbodyInstance,
+	resolveRoadHeightfieldDebugSegments,
 	isRoadDynamicMesh,
 	type GroundHeightfieldCacheEntry,
 	type PhysicsContactSettings,
 	type RigidbodyInstance,
 	type RigidbodyMaterialEntry,
 	type RigidbodyOrientationAdjustment,
+	type RoadHeightfieldDebugCache,
 } from '@schema/physicsEngine'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
@@ -913,6 +915,7 @@ const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
+const roadHeightfieldDebugCache: RoadHeightfieldDebugCache = new Map()
 let rigidbodyDebugGroup: THREE.Group | null = null
 let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
@@ -922,6 +925,10 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
+const heightfieldDebugOrientationInverse = new THREE.Quaternion().setFromAxisAngle(
+	new THREE.Vector3(1, 0, 0),
+	Math.PI / 2,
+)
 const airWallDebugMaterial = new THREE.MeshBasicMaterial({
 	color: 0x80c7ff,
 	transparent: true,
@@ -3036,6 +3043,7 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 		return
 	}
 	disposeRigidbodyDebugHelpers()
+	roadHeightfieldDebugCache.clear()
 	setAirWallDebugVisibility(false)
 })
 
@@ -6351,42 +6359,25 @@ function ensureRoadRigidbodyInstance(
 		return
 	}
 	const world = ensurePhysicsWorld()
-	const entry = buildRoadHeightfieldBodies({
+	const existing = rigidbodyInstances.get(node.id) ?? null
+	const result = ensureRoadHeightfieldRigidbodyInstance({
 		roadNode: node,
 		rigidbodyComponent,
 		roadObject: object,
 		groundNode,
 		world,
+		existingInstance: existing,
 		createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
+		loggerTag: '[ScenePreview]',
 	})
-	if (!entry || !entry.bodies.length) {
-		removeRigidbodyInstance(node.id)
+	if (!result.instance) {
+		if (result.shouldRemoveExisting) {
+			removeRigidbodyInstance(node.id)
+		}
 		return
 	}
-	const existing = rigidbodyInstances.get(node.id)
-	if (existing?.signature === entry.signature) {
-		entry.bodies.forEach((body) => {
-			try {
-				world.removeBody(body)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to rollback road heightfield body', error)
-			}
-		})
-		existing.object = object
-		return
-	}
-	if (existing) {
-		removeRigidbodyInstance(node.id)
-	}
-	rigidbodyInstances.set(node.id, {
-		nodeId: node.id,
-		body: entry.bodies[0] as CANNON.Body,
-		bodies: entry.bodies,
-		object,
-		orientationAdjustment: null,
-		signature: entry.signature,
-		syncObjectFromBody: false,
-	})
+	// Ensure the instance map is up-to-date for both reuse and replacement cases.
+	rigidbodyInstances.set(node.id, result.instance)
 }
 
 function removeRigidbodyInstance(nodeId: string): void {
@@ -6397,6 +6388,7 @@ function removeRigidbodyInstance(nodeId: string): void {
 	removeRigidbodyInstanceBodies(physicsWorld, entry)
 	rigidbodyInstances.delete(nodeId)
 	groundHeightfieldCache.delete(nodeId)
+	roadHeightfieldDebugCache.delete(nodeId)
 	removeVehicleInstance(nodeId)
 }
 
@@ -6879,7 +6871,18 @@ function ensureRoadHeightfieldDebugHelper(
 	nodeId: string,
 	entry: { signature: string; bodies: CANNON.Body[] },
 ): void {
-	const signature = `road-heightfield:${entry.signature}`
+	const debugEntry = resolveRoadHeightfieldDebugSegments({
+		nodeId,
+		signature: entry.signature,
+		bodies: entry.bodies,
+		cache: roadHeightfieldDebugCache,
+		debugEnabled: isRigidbodyDebugVisible.value,
+	})
+	if (!debugEntry) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	const signature = `heightfield-segments:${debugEntry.signature}`
 	const existing = rigidbodyDebugHelpers.get(nodeId)
 	if (existing?.signature === signature) {
 		return
@@ -6892,49 +6895,28 @@ function ensureRoadHeightfieldDebugHelper(
 	const helperGroup = new THREE.Group()
 	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
 	helperGroup.visible = false
-	// Road heightfields are generated in world units.
+	// Heightfield debug segments are generated in world units.
 	helperGroup.scale.set(1, 1, 1)
-
-	for (let bodyIndex = 0; bodyIndex < entry.bodies.length; bodyIndex += 1) {
-		const body = entry.bodies[bodyIndex]
-		if (!body) {
-			continue
-		}
-		const rawShape = body.shapes?.[0]
-		const matrix = (rawShape as any)?.data as unknown
-		const elementSize = (rawShape as any)?.elementSize as unknown
-		if (!Array.isArray(matrix) || typeof elementSize !== 'number' || !Number.isFinite(elementSize) || elementSize <= 0) {
-			continue
-		}
-		const columnCount = matrix.length
-		const rowCount = Array.isArray(matrix[0]) ? (matrix[0] as any[]).length : 0
-		if (columnCount < 2 || rowCount < 2) {
-			continue
-		}
-		const width = (columnCount - 1) * elementSize
-		const depth = (rowCount - 1) * elementSize
-		const shapeDefinition: RigidbodyPhysicsShape = {
-			kind: 'heightfield',
-			matrix: matrix as number[][],
-			elementSize,
-			width,
-			depth,
-			scaleNormalized: false,
-		}
-		const lines = buildHeightfieldDebugLines(shapeDefinition)
+	debugEntry.segments.forEach((segment, index) => {
+		const lines = buildRigidbodyDebugLineSegments(segment.shape)
 		if (!lines) {
-			continue
+			return
 		}
-		lines.name = `RoadHeightfieldDebugLines:${nodeId}:${bodyIndex}`
+		lines.name = `HeightfieldDebugLines:${nodeId}:${index}`
 		lines.renderOrder = 9999
 		const segmentGroup = new THREE.Group()
-		segmentGroup.name = `RoadHeightfieldDebugSegment:${nodeId}:${bodyIndex}`
+		segmentGroup.name = `HeightfieldDebugSegment:${nodeId}:${index}`
+		;(segmentGroup as any).__harmonyRoadSegmentKind = segment.shape.kind
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
-	}
-
+	})
 	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category: 'rigidbody', scale: new THREE.Vector3(1, 1, 1) })
+	rigidbodyDebugHelpers.set(nodeId, {
+		group: helperGroup,
+		signature,
+		category: 'rigidbody',
+		scale: new THREE.Vector3(1, 1, 1),
+	})
 }
 
 function refreshRigidbodyDebugHelper(nodeId: string): void {
@@ -6943,11 +6925,10 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	}
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
-	const isRoadNode = Boolean(node && isRoadDynamicMesh(node.dynamicMesh))
-	const roadInstance = isRoadNode ? rigidbodyInstances.get(nodeId) ?? null : null
+	const instance = rigidbodyInstances.get(nodeId) ?? null
 	const roadEntry =
-		roadInstance && roadInstance.signature && Array.isArray(roadInstance.bodies) && roadInstance.bodies.length
-			? { signature: roadInstance.signature, bodies: roadInstance.bodies }
+		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
+			? { signature: instance.signature, bodies: instance.bodies }
 			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
 	if (roadEntry) {
@@ -6993,13 +6974,12 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	if (!helper) {
 		return
 	}
-	const node = resolveNodeById(nodeId)
 	const instance = rigidbodyInstances.get(nodeId) ?? null
-	const roadEntry =
-		node && isRoadDynamicMesh(node.dynamicMesh) && instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length
+	const multiBodyEntry =
+		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
 			? { signature: instance.signature, bodies: instance.bodies }
 			: null
-	if (roadEntry) {
+	if (multiBodyEntry) {
 		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
 		const object = nodeObjectMap.get(nodeId) ?? null
 		const visible = object ? object.visible !== false : true
@@ -7008,14 +6988,26 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 			return
 		}
 		const children = helper.group.children
-		for (let i = 0; i < Math.min(children.length, roadEntry.bodies.length); i += 1) {
+		for (let i = 0; i < Math.min(children.length, multiBodyEntry.bodies.length); i += 1) {
 			const child = children[i]
-			const body = roadEntry.bodies[i]
+			const body = multiBodyEntry.bodies[i]
 			if (!child || !body) {
 				continue
 			}
 			child.position.set(body.position.x, body.position.y, body.position.z)
-			child.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+			rigidbodyDebugQuaternionHelper.set(
+				body.quaternion.x,
+				body.quaternion.y,
+				body.quaternion.z,
+				body.quaternion.w,
+			)
+			const segmentKind = (child as any).__harmonyRoadSegmentKind as string | undefined
+			if (segmentKind === 'heightfield') {
+				// Heightfields are rotated -90° around X in physics; undo that here so the debug
+				// geometry (built in render-space convention) lies on the surface.
+				rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
+			}
+			child.quaternion.copy(rigidbodyDebugQuaternionHelper)
 			child.scale.copy(helper.scale)
 			child.updateMatrixWorld(true)
 		}
@@ -8470,7 +8462,7 @@ onBeforeUnmount(() => {
 						<v-list-item>
 							<v-checkbox
 								class="scene-preview__debug-checkbox"
-								label="Ground wireframe"
+								label="Ground rigidbody wireframe"
 								:model-value="isGroundWireframeVisible"
 								hide-details
 								density="compact"
