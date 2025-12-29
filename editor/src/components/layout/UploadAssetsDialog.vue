@@ -571,6 +571,9 @@ async function loadServerTags(options: { force?: boolean } = {}) {
   }
 }
 
+// Keep for future use; referenced to satisfy TS noUnusedLocals.
+void loadServerTags
+
 async function loadResourceCategories(options: { force?: boolean } = {}) {
   const force = options.force ?? false
   if (resourceCategoriesLoading.value) return

@@ -21,12 +21,23 @@ const WALL_EPSILON = 1e-6
 const WALL_MAX_ADAPTIVE_DEPTH = 10
 const WALL_MAX_SAMPLE_POINTS = 512
 
+const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
+const WALL_INSTANCING_DIR_EPSILON = 1e-6
+const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
+const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
       return
     }
+
+    const userData = (mesh.userData ?? {}) as Record<string, unknown>
+    if (userData[WALL_SKIP_DISPOSE_USERDATA_KEY]) {
+      return
+    }
+
     if (mesh.geometry) {
       mesh.geometry.dispose()
     }
@@ -41,11 +52,188 @@ function disposeObject3D(object: THREE.Object3D) {
 
 function clearGroupContent(group: THREE.Group) {
   while (group.children.length) {
-    const child = group.children.pop()
-    if (child) {
-      disposeObject3D(child)
+    const child = group.children[group.children.length - 1]
+    if (!child) {
+      break
+    }
+    group.remove(child)
+    disposeObject3D(child)
+  }
+}
+
+type InstancedAssetTemplate = {
+  geometry: THREE.BufferGeometry
+  material: THREE.Material
+  /** Transform from template mesh local space into the asset root local space. */
+  meshToRoot: THREE.Matrix4
+  /** AABB of template geometry after meshToRoot (in root local space). */
+  bounds: THREE.Box3
+  baseSize: THREE.Vector3
+}
+
+function findFirstInstancableMesh(root: THREE.Object3D): THREE.Mesh | null {
+  let found: THREE.Mesh | null = null
+  root.traverse((child) => {
+    if (found) {
+      return
+    }
+    const candidate = child as unknown as THREE.Mesh
+    if (!candidate || !(candidate as any).isMesh) {
+      return
+    }
+    // Skinned meshes are not safe to instance.
+    if ((candidate as any).isSkinnedMesh) {
+      return
+    }
+    const geometry = (candidate as any).geometry as THREE.BufferGeometry | undefined
+    if (!geometry || !(geometry as any).isBufferGeometry) {
+      return
+    }
+    const material = (candidate as any).material as THREE.Material | THREE.Material[] | undefined
+    if (!material || Array.isArray(material)) {
+      return
+    }
+    found = candidate
+  })
+  return found
+}
+
+function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemplate | null {
+  root.updateMatrixWorld(true)
+  const mesh = findFirstInstancableMesh(root)
+  if (!mesh) {
+    return null
+  }
+
+  const geometry = mesh.geometry as THREE.BufferGeometry
+  if (!geometry.boundingBox) {
+    geometry.computeBoundingBox()
+  }
+  if (!geometry.boundingBox) {
+    return null
+  }
+
+  const material = mesh.material as THREE.Material
+  const rootWorldInv = new THREE.Matrix4().copy(root.matrixWorld).invert()
+  const meshToRoot = new THREE.Matrix4().multiplyMatrices(rootWorldInv, mesh.matrixWorld)
+
+  const bounds = geometry.boundingBox.clone().applyMatrix4(meshToRoot)
+  const baseSize = bounds.getSize(new THREE.Vector3())
+  return { geometry, material, meshToRoot, bounds, baseSize }
+}
+
+function computeWallBodyInstanceMatrices(definition: WallDynamicMesh, template: InstancedAssetTemplate): THREE.Matrix4[] {
+  const matrices: THREE.Matrix4[] = []
+
+  const tileLengthLocal = Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, Math.abs(template.baseSize.x))
+  const minAlongAxis = template.bounds.min.x
+
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const dir = new THREE.Vector3()
+  const unitDir = new THREE.Vector3()
+  const minPoint = new THREE.Vector3()
+  const offset = new THREE.Vector3()
+  const pos = new THREE.Vector3()
+  const quat = new THREE.Quaternion()
+  const scale = new THREE.Vector3(1, 1, 1)
+  const localMatrix = new THREE.Matrix4()
+
+  for (const segment of definition.segments ?? []) {
+    start.set(segment.start.x, segment.start.y, segment.start.z)
+    end.set(segment.end.x, segment.end.y, segment.end.z)
+
+    dir.subVectors(end, start)
+    dir.y = 0
+    const lengthLocal = dir.length()
+    if (lengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
+      continue
+    }
+
+    unitDir.copy(dir).multiplyScalar(1 / lengthLocal)
+
+    const instanceCount = lengthLocal <= tileLengthLocal + WALL_INSTANCING_DIR_EPSILON
+      ? 1
+      : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
+    const totalCoveredLocal = instanceCount * tileLengthLocal
+    const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
+
+    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), unitDir)
+
+    for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
+      const along = startOffsetLocal + instanceIndex * tileLengthLocal
+      minPoint.copy(start).addScaledVector(unitDir, along)
+
+      // Align the template's local min face (bounds.min.x) to the desired min point.
+      offset.set(minAlongAxis, 0, 0)
+      offset.applyQuaternion(quat)
+      pos.copy(minPoint).sub(offset)
+
+      localMatrix.compose(pos, quat, scale)
+      localMatrix.multiply(template.meshToRoot)
+      matrices.push(new THREE.Matrix4().copy(localMatrix))
     }
   }
+
+  return matrices
+}
+
+function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template: InstancedAssetTemplate): THREE.Matrix4[] {
+  const matrices: THREE.Matrix4[] = []
+  const segments = definition.segments ?? []
+  if (segments.length < 2) {
+    return matrices
+  }
+
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const incoming = new THREE.Vector3()
+  const outgoing = new THREE.Vector3()
+  const bisector = new THREE.Vector3()
+  const quat = new THREE.Quaternion()
+  const pos = new THREE.Vector3()
+  const scale = new THREE.Vector3(1, 1, 1)
+  const localMatrix = new THREE.Matrix4()
+
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const current = segments[i]!
+    const next = segments[i + 1]!
+
+    start.set(current.start.x, current.start.y, current.start.z)
+    end.set(current.end.x, current.end.y, current.end.z)
+    incoming.subVectors(end, start)
+    incoming.y = 0
+
+    start.set(next.start.x, next.start.y, next.start.z)
+    end.set(next.end.x, next.end.y, next.end.z)
+    outgoing.subVectors(end, start)
+    outgoing.y = 0
+
+    if (incoming.lengthSq() < WALL_INSTANCING_DIR_EPSILON || outgoing.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
+      continue
+    }
+    incoming.normalize()
+    outgoing.normalize()
+
+    const dot = THREE.MathUtils.clamp(incoming.dot(outgoing), -1, 1)
+    const angle = Math.acos(dot)
+    if (!Number.isFinite(angle) || angle < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
+      continue
+    }
+
+    bisector.copy(incoming).add(outgoing)
+    if (bisector.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
+      bisector.copy(outgoing)
+    }
+
+    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), bisector.normalize())
+    pos.set(current.end.x, current.end.y, current.end.z)
+    localMatrix.compose(pos, quat, scale)
+    localMatrix.multiply(template.meshToRoot)
+    matrices.push(new THREE.Matrix4().copy(localMatrix))
+  }
+
+  return matrices
 }
 
 function createWallMaterial(): THREE.MeshStandardMaterial {
@@ -415,7 +603,12 @@ function collectWallPath(definition: WallDynamicMesh): WallPath | null {
     return geometry
 }
 
-function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh, options: WallRenderOptions = {}) {
+function rebuildWallGroup(
+  group: THREE.Group,
+  definition: WallDynamicMesh,
+  assets: WallRenderAssetObjects = {},
+  options: WallRenderOptions = {},
+) {
   clearGroupContent(group)
 
   const path = collectWallPath(definition)
@@ -458,18 +651,56 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh, optio
   const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
   mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
   group.add(mesh)
+
+  const bodyTemplate = assets.bodyObject ? extractInstancedAssetTemplate(assets.bodyObject) : null
+  const jointTemplate = assets.jointObject ? extractInstancedAssetTemplate(assets.jointObject) : null
+
+  if (bodyTemplate) {
+    const localMatrices = computeWallBodyInstanceMatrices(definition, bodyTemplate)
+    if (localMatrices.length > 0) {
+      const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
+      instanced.name = 'WallBodyInstances'
+      instanced.userData.dynamicMeshType = 'WallAsset'
+      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      for (let i = 0; i < localMatrices.length; i += 1) {
+        instanced.setMatrixAt(i, localMatrices[i]!)
+      }
+      instanced.instanceMatrix.needsUpdate = true
+      group.add(instanced)
+
+      // Keep procedural wall mesh for physics generation, but hide it visually.
+      mesh.visible = false
+    }
+  }
+
+  if (jointTemplate) {
+    const localMatrices = computeWallJointInstanceMatrices(definition, jointTemplate)
+    if (localMatrices.length > 0) {
+      const instanced = new THREE.InstancedMesh(jointTemplate.geometry, jointTemplate.material, localMatrices.length)
+      instanced.name = 'WallJointInstances'
+      instanced.userData.dynamicMeshType = 'WallAsset'
+      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      for (let i = 0; i < localMatrices.length; i += 1) {
+        instanced.setMatrixAt(i, localMatrices[i]!)
+      }
+      instanced.instanceMatrix.needsUpdate = true
+      group.add(instanced)
+    }
+  }
 }
 
 export function createWallRenderGroup(
   definition: WallDynamicMesh,
-  _assets: WallRenderAssetObjects = {},
+  assets: WallRenderAssetObjects = {},
   options: WallRenderOptions = {},
 ): THREE.Group {
   const group = new THREE.Group()
   group.name = 'WallGroup'
   group.userData.dynamicMeshType = 'Wall'
 
-  rebuildWallGroup(group, definition, options)
+  // Store asset references so updateWallGroup can rebuild consistently.
+  group.userData.wallRenderAssets = assets
+  rebuildWallGroup(group, definition, assets, options)
   return group
 }
 
@@ -486,6 +717,7 @@ export function updateWallGroup(
   if (!group || !group.isGroup) {
     return false
   }
-  rebuildWallGroup(group, definition, options)
+  const assets = (group.userData?.wallRenderAssets ?? {}) as WallRenderAssetObjects
+  rebuildWallGroup(group, definition, assets, options)
   return true
 }

@@ -1312,7 +1312,12 @@ class SceneGraphBuilder {
     if (materialAssignment) {
       group.traverse((child: THREE.Object3D) => {
         const mesh = child as THREE.Mesh;
-        if ((mesh as any)?.isMesh) {
+        if (!(mesh as any)?.isMesh) {
+          return;
+        }
+        const tag = (mesh.userData as any)?.dynamicMeshType;
+        // Only override the procedural wall mesh material; asset instances should keep their own materials.
+        if (tag === 'Wall') {
           mesh.material = materialAssignment;
         }
       });

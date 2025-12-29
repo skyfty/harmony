@@ -154,25 +154,6 @@ function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z'
   return new THREE.Quaternion().setFromUnitVectors(base, target)
 }
 
-function resolveWallBodyLengthAxis(
-  baseSize: THREE.Vector3,
-  wallWidth: number,
-): 'x' | 'z' {
-  const width = Math.max(1e-6, Math.abs(wallWidth))
-  const dx = Math.abs(Math.abs(baseSize.x) - width)
-  const dz = Math.abs(Math.abs(baseSize.z) - width)
-
-  // If one horizontal axis closely matches the wall width, treat that as thickness.
-  // The remaining horizontal axis becomes the length axis.
-  if (dx < dz) {
-    return 'z'
-  }
-  if (dz < dx) {
-    return 'x'
-  }
-  return 'x'
-}
-
 export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
 
@@ -191,13 +172,11 @@ export function createWallRenderer(options: WallRendererOptions) {
         return
       }
 
-      const lengthAxis = resolveWallBodyLengthAxis(baseSize, segment.width)
-      const baseAxisForQuaternion: 'x' | 'z' = lengthAxis
-      const tileLengthLocal = Math.max(
-        1e-4,
-        lengthAxis === 'x' ? Math.abs(baseSize.x) : Math.abs(baseSize.z),
-      )
-      const minAlongAxis = lengthAxis === 'x' ? bounds.min.x : bounds.min.z
+      // Convention: model local +X is the "along-wall" axis.
+      // Keep editor behavior aligned with schema-side wall instancing.
+      const baseAxisForQuaternion: 'x' = 'x'
+      const tileLengthLocal = Math.max(1e-4, Math.abs(baseSize.x))
+      const minAlongAxis = bounds.min.x
 
       wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
 
@@ -215,9 +194,9 @@ export function createWallRenderer(options: WallRendererOptions) {
 
         // Place the model so that its local min face along the length axis matches the desired min point.
         wallSyncLocalOffsetHelper.set(
-          lengthAxis === 'x' ? minAlongAxis : 0,
+          minAlongAxis,
           0,
-          lengthAxis === 'z' ? minAlongAxis : 0,
+          0,
         )
         wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
         wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
