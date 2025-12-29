@@ -249,6 +249,13 @@ export type GroundHeightfieldCacheEntry = {
 	offset: [number, number, number]
 }
 
+export type WallTrimeshCacheEntry = {
+	signature: string
+	shape: CANNON.Trimesh
+}
+
+export type WallTrimeshCache = Map<string, WallTrimeshCacheEntry>
+
 export type RigidbodyMaterialEntry = {
 	material: CANNON.Material
 	friction: number
@@ -312,6 +319,11 @@ const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
 const syncBodyQuaternionHelper = new THREE.Quaternion()
 const bodyQuaternionHelper = new THREE.Quaternion()
+const wallRootPositionHelper = new THREE.Vector3()
+const wallRootQuaternionHelper = new THREE.Quaternion()
+const wallRootQuaternionInverseHelper = new THREE.Quaternion()
+const wallVertexWorldHelper = new THREE.Vector3()
+const wallVertexLocalHelper = new THREE.Vector3()
 const cylinderShapeRotationHelper = new CANNON.Quaternion()
 cylinderShapeRotationHelper.setFromEuler(Math.PI / 2, 0, 0)
 const cylinderShapeOffsetHelper = new CANNON.Vec3()
@@ -321,6 +333,130 @@ type LoggerTag = string | undefined
 function warn(loggerTag: LoggerTag, message: string, ...args: unknown[]): void {
 	const prefix = loggerTag ?? '[PhysicsEngine]'
 	console.warn(`${prefix} ${message}`, ...args)
+}
+
+function isWallDynamicMesh(mesh: unknown): mesh is { type: 'Wall' } {
+	const typed = mesh as { type?: unknown } | null | undefined
+	return Boolean(typed && typed.type === 'Wall')
+}
+
+function resolveWallShape(params: {
+	node: SceneNode
+	object: THREE.Object3D
+	cache: WallTrimeshCache
+	loggerTag?: LoggerTag
+}): WallTrimeshCacheEntry | null {
+	const { node, object, cache, loggerTag } = params
+	const nodeId = node.id
+	if (!nodeId) {
+		return null
+	}
+
+	object.updateMatrixWorld(true)
+	object.matrixWorld.decompose(wallRootPositionHelper, wallRootQuaternionHelper, physicsScaleHelper)
+	wallRootQuaternionInverseHelper.copy(wallRootQuaternionHelper).invert()
+
+	let wallMesh: THREE.Mesh | null = null
+	object.traverse((child) => {
+		if (wallMesh) {
+			return
+		}
+		const mesh = child as unknown as THREE.Mesh
+		if (!mesh || !(mesh as any).isMesh) {
+			return
+		}
+		const userData = (mesh as any).userData as Record<string, unknown> | undefined
+		const dynamicMeshType = typeof userData?.dynamicMeshType === 'string' ? (userData.dynamicMeshType as string) : ''
+		if (mesh.name === 'WallMesh' || dynamicMeshType === 'Wall') {
+			wallMesh = mesh
+		}
+	})
+
+	if (!wallMesh) {
+		cache.delete(nodeId)
+		return null
+	}
+	const geometry = (wallMesh as any).geometry as THREE.BufferGeometry | undefined
+	if (!geometry) {
+		cache.delete(nodeId)
+		return null
+	}
+	const positionAttribute = geometry.getAttribute('position') as THREE.BufferAttribute | null
+	if (!positionAttribute || positionAttribute.itemSize < 3 || positionAttribute.count < 3) {
+		cache.delete(nodeId)
+		return null
+	}
+
+	// Build vertices in the wall root's local frame (translation+rotation removed),
+	// with scale baked into vertex positions (Cannon bodies ignore scale).
+	const vertexCount = positionAttribute.count
+	const vertices: number[] = new Array(vertexCount * 3)
+	const positionArray = positionAttribute.array as ArrayLike<number>
+	for (let i = 0; i < vertexCount; i += 1) {
+		const base = i * 3
+		wallVertexLocalHelper.set(
+			Number(positionArray[base] ?? 0),
+			Number(positionArray[base + 1] ?? 0),
+			Number(positionArray[base + 2] ?? 0),
+		)
+		wallVertexWorldHelper.copy(wallVertexLocalHelper).applyMatrix4(wallMesh.matrixWorld)
+		wallVertexWorldHelper.sub(wallRootPositionHelper).applyQuaternion(wallRootQuaternionInverseHelper)
+		vertices[base] = wallVertexWorldHelper.x
+		vertices[base + 1] = wallVertexWorldHelper.y
+		vertices[base + 2] = wallVertexWorldHelper.z
+	}
+
+	const indexAttribute = geometry.getIndex() as THREE.BufferAttribute | null
+	let indices: number[]
+	if (indexAttribute && indexAttribute.count >= 3) {
+		const indexArray = indexAttribute.array as ArrayLike<number>
+		indices = new Array(indexAttribute.count)
+		for (let i = 0; i < indexAttribute.count; i += 1) {
+			indices[i] = (Number(indexArray[i] ?? 0) | 0) >>> 0
+		}
+	} else {
+		const triangleCount = Math.floor(vertexCount / 3)
+		if (triangleCount <= 0) {
+			cache.delete(nodeId)
+			return null
+		}
+		indices = new Array(triangleCount * 3)
+		for (let i = 0; i < triangleCount * 3; i += 1) {
+			indices[i] = i
+		}
+	}
+
+	// Signature for caching: quantize to reduce float jitter.
+	const cached = cache.get(nodeId)
+	const quantize = 1000
+	let hash = 2166136261
+	const fnv = (value: number) => {
+		hash ^= value
+		hash = Math.imul(hash, 16777619) >>> 0
+	}
+	for (let i = 0; i < vertices.length; i += 1) {
+		const v = vertices[i] ?? 0
+		const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
+		fnv(q | 0)
+	}
+	for (let i = 0; i < indices.length; i += 1) {
+		fnv((indices[i] ?? 0) | 0)
+	}
+	const signature = `${vertices.length}:${indices.length}:${hash.toString(16)}`
+	if (cached && cached.signature === signature) {
+		return cached
+	}
+
+	try {
+		const shape = new CANNON.Trimesh(vertices, indices)
+		const entry: WallTrimeshCacheEntry = { signature, shape }
+		cache.set(nodeId, entry)
+		return entry
+	} catch (error) {
+		warn(loggerTag, 'Failed to build wall trimesh', error)
+		cache.delete(nodeId)
+		return null
+	}
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -732,6 +868,7 @@ type CreateRigidbodyBodyInput = {
 export type CreateRigidbodyBodyOptions = {
 	world: CANNON.World
 	groundHeightfieldCache: Map<string, GroundHeightfieldCacheEntry>
+	wallTrimeshCache?: WallTrimeshCache
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
 	contactSettings: PhysicsContactSettings
@@ -746,6 +883,7 @@ export function createRigidbodyBody(
 	const {
 		world,
 		groundHeightfieldCache,
+		wallTrimeshCache,
 		rigidbodyMaterialCache,
 		rigidbodyContactMaterialKeys,
 		contactSettings,
@@ -765,6 +903,13 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
+	if (!resolvedShape && isWallDynamicMesh(node.dynamicMesh) && wallTrimeshCache) {
+		const entry = resolveWallShape({ node, object, cache: wallTrimeshCache, loggerTag })
+		if (entry) {
+			resolvedShape = entry.shape
+			offsetTuple = null
+		}
+	}
 	if (!resolvedShape && shapeDefinition) {
 		resolvedShape = createCannonShape(shapeDefinition, loggerTag, shapeScale)
 		offsetTuple = shapeDefinition.offset ?? null
@@ -776,10 +921,12 @@ export function createRigidbodyBody(
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
-	const isDynamic = props.bodyType === 'DYNAMIC'
+	const isWall = isWallDynamicMesh(node.dynamicMesh)
+	const effectiveBodyType: RigidbodyComponentProps['bodyType'] = isWall ? 'STATIC' : props.bodyType
+	const isDynamic = effectiveBodyType === 'DYNAMIC'
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
-	body.type = mapBodyType(props.bodyType)
+	body.type = mapBodyType(effectiveBodyType)
 	body.material = ensureRigidbodyMaterial({
 		world,
 		rigidbodyMaterialCache,
