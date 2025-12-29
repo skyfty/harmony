@@ -192,14 +192,14 @@ const rendererDebug = reactive({
 	triangles: 0,
 	geometries: 0,
 	textures: 0,
-})
+	})
 
-const instancingDebug = reactive({
-	instancedMeshAssets: 0,
-	instancedMeshActive: 0,
-	instancedInstanceCount: 0,
-	instanceMatrixUploadKb: 0,
-	lodVisible: 0,
+	const instancingDebug = reactive({
+		instancedMesh: 0,
+		instancedActive: 0,
+		instancedInstanceCount: 0,
+		instanceMatrixUploadKb: 0,
+		lodVisible: 0,
 	lodTotal: 0,
 	scatterVisible: 0,
 	scatterTotal: 0,
@@ -230,6 +230,8 @@ function appendWarningMessage(message: string): void {
 	}
 	warningMessages.value = [...existing, trimmed]
 }
+
+
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
 const memoryFallbackLabel = ref<string | null>(null)
@@ -2141,8 +2143,8 @@ function updateInstancedCullingAndLod(): void {
 			}
 			instanceCount += Math.max(0, Math.trunc(mesh.count))
 		}
-		instancingDebug.instancedMeshAssets = totalMeshes
-		instancingDebug.instancedMeshActive = activeMeshes
+		instancingDebug.instancedMesh = totalMeshes
+		instancingDebug.instancedActive = activeMeshes
 		instancingDebug.instancedInstanceCount = instanceCount
 		instancingDebug.lodTotal = instancedLodTotalCount.value
 		instancingDebug.lodVisible = instancedLodVisibleCount.value
@@ -3070,8 +3072,8 @@ watch(isInstancingDebugVisible, (visible) => {
 		return
 	}
 	instancedMatrixUploadMeshes.clear()
-	instancingDebug.instancedMeshAssets = 0
-	instancingDebug.instancedMeshActive = 0
+	instancingDebug.instancedMesh = 0
+	instancingDebug.instancedActive = 0
 	instancingDebug.instancedInstanceCount = 0
 	instancingDebug.instanceMatrixUploadKb = 0
 	instancingDebug.lodVisible = 0
@@ -6028,8 +6030,18 @@ function disposeMaterialTextureCache() {
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
+	const skipDispose = (object.userData as Record<string, unknown> | undefined)?.__harmonySkipDispose === true
+	if (skipDispose) {
+		return
+	}
+
 	const mesh = object as THREE.Mesh
 	if ((mesh as any).isMesh) {
+		// Instanced meshes (especially those backed by shared asset cache geometry/materials)
+		// must not dispose shared resources here, otherwise later scene rebuilds will render nothing.
+		if ((mesh as any).isInstancedMesh) {
+			return
+		}
 		mesh.geometry?.dispose?.()
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 		materials.forEach((material) => {
@@ -6074,6 +6086,13 @@ function removeNodeSubtree(nodeId: string) {
 
 function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Object3D>) {
 	object.traverse((child) => {
+		// Keep InstancedMesh visible: default bounding volumes can be too small,
+		// causing frustum culling to hide instances far from origin.
+		if ((child as any).isInstancedMesh) {
+			child.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
+			;(child as THREE.Object3D & { frustumCulled?: boolean }).frustumCulled = false
+		}
+
 		const nodeId = child.userData?.nodeId as string | undefined
 		if (nodeId) {
 			const existing = nodeObjectMap.get(nodeId)
@@ -8201,6 +8220,7 @@ async function applyInitialDocumentGraph(
 	currentDocument = document
 	syncGroundCache(document)
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
@@ -8245,6 +8265,7 @@ async function applyIncrementalDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	// (instancing trace removed)
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
@@ -8306,6 +8327,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		return
 	}
 	const { root, warnings } = graphResult
+	// (instancing trace removed)
 	warningMessages.value = warnings
 	dismissBehaviorAlert()
 	resetBehaviorRuntime()
@@ -8536,10 +8558,10 @@ onBeforeUnmount(() => {
 				<template v-if="isInstancingDebugVisible">
 					<div class="scene-preview__stats-fallback">[Instancing]</div>
 					<div class="scene-preview__stats-fallback">
-						InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}
+						InstancedMeshes: {{ instancingDebug.instancedMesh }}
 					</div>
 					<div class="scene-preview__stats-fallback">
-						Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}
+						Instanced active: {{ instancingDebug.instancedActive }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}

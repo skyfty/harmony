@@ -136,6 +136,7 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
+  clampWallProps,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -7923,7 +7924,32 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
+    const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined
+    const wallProps = clampWallProps(wallComponent?.props as Partial<WallComponentProps> | null | undefined)
+    const bodyAssetId = wallProps.bodyAssetId ?? null
+    const jointAssetId = wallProps.jointAssetId ?? null
+    if (bodyAssetId && !getCachedModelObject(bodyAssetId)) {
+      void ensureModelObjectCached(bodyAssetId)
+    }
+    if (jointAssetId && !getCachedModelObject(jointAssetId)) {
+      void ensureModelObjectCached(jointAssetId)
+    }
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
+    // --- 修复: 主动分配instanced mesh实例并写入userData，保证instanced mesh attach ---
+    if (bodyAssetId && getCachedModelObject(bodyAssetId)) {
+      // 分配实例绑定
+      const binding = allocateModelInstance(bodyAssetId, node.id)
+      if (binding) {
+        object.userData = {
+          ...(object.userData ?? {}),
+          instancedAssetId: bodyAssetId,
+          instancedBounds: getCachedModelObject(bodyAssetId)?.boundingBox,
+        }
+        syncInstancedTransform(object)
+      }
+    }
   } else if (node.dynamicMesh?.type === 'Floor') {
     const floorDefinition = node.dynamicMesh as FloorDynamicMesh
     let floorGroup = userData.floorGroup as THREE.Group | undefined
@@ -8643,6 +8669,19 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = 'Ground'
     } else if (node.dynamicMesh?.type === 'Wall') {
       containerData.dynamicMeshType = 'Wall'
+
+      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
+        | SceneNodeComponentState<WallComponentProps>
+        | undefined
+      const wallProps = clampWallProps(wallComponent?.props as Partial<WallComponentProps> | null | undefined)
+      const bodyAssetId = wallProps.bodyAssetId ?? null
+      const jointAssetId = wallProps.jointAssetId ?? null
+      if (bodyAssetId && !getCachedModelObject(bodyAssetId)) {
+        void ensureModelObjectCached(bodyAssetId)
+      }
+      if (jointAssetId && !getCachedModelObject(jointAssetId)) {
+        void ensureModelObjectCached(jointAssetId)
+      }
       wallRenderer.syncWallContainer(container, node, DYNAMIC_MESH_SIGNATURE_KEY)
     } else if (node.dynamicMesh?.type === 'Road') {
       containerData.dynamicMeshType = 'Road'

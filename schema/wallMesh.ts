@@ -63,7 +63,7 @@ function clearGroupContent(group: THREE.Group) {
 
 type InstancedAssetTemplate = {
   geometry: THREE.BufferGeometry
-  material: THREE.Material
+  material: THREE.Material | THREE.Material[]
   /** Transform from template mesh local space into the asset root local space. */
   meshToRoot: THREE.Matrix4
   /** AABB of template geometry after meshToRoot (in root local space). */
@@ -90,7 +90,10 @@ function findFirstInstancableMesh(root: THREE.Object3D): THREE.Mesh | null {
       return
     }
     const material = (candidate as any).material as THREE.Material | THREE.Material[] | undefined
-    if (!material || Array.isArray(material)) {
+    if (!material) {
+      return
+    }
+    if (Array.isArray(material) && material.length === 0) {
       return
     }
     found = candidate
@@ -113,7 +116,7 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
     return null
   }
 
-  const material = mesh.material as THREE.Material
+  const material = mesh.material as THREE.Material | THREE.Material[]
   const rootWorldInv = new THREE.Matrix4().copy(root.matrixWorld).invert()
   const meshToRoot = new THREE.Matrix4().multiplyMatrices(rootWorldInv, mesh.matrixWorld)
 

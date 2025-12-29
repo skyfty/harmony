@@ -370,10 +370,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    // Instanced rendering is enabled: ensure dynamic wall mesh group is not present.
-    removeWallGroup(container)
-
-    // Ensure assets are loaded; when asset rendering is enabled we do NOT fall back to WallDynamicMesh.
+    // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = bodyAssetId && !getCachedModelObject(bodyAssetId)
     const needsJointLoad = jointAssetId && !getCachedModelObject(jointAssetId)
     if (bodyAssetId && needsBodyLoad) {
@@ -383,8 +380,26 @@ export function createWallRenderer(options: WallRendererOptions) {
       scheduleWallAssetLoad(jointAssetId, node.id)
     }
     if (needsBodyLoad || needsJointLoad) {
+      // While loading, keep the default wall mesh visible (avoid disappearing walls).
+      // Also release any stale instanced bindings from previous assets.
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      options.removeInstancedPickProxy(container)
+
+      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        node.dynamicMesh as WallDynamicMesh,
+        signatureKey,
+        { smoothing: resolveWallSmoothingFromNode(node) },
+      )
+      applyAirWallVisualToWallGroup(wallGroup, isAirWall)
       return
     }
+
+    // Assets are ready: switch to instanced rendering and remove the procedural wall group.
+    removeWallGroup(container)
 
     const definition = node.dynamicMesh as WallDynamicMesh
     const primaryAssetId = bodyAssetId ?? jointAssetId
