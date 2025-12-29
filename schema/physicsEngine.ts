@@ -340,6 +340,25 @@ function isWallDynamicMesh(mesh: unknown): mesh is { type: 'Wall' } {
 	return Boolean(typed && typed.type === 'Wall')
 }
 
+function findWallRenderMesh(object: THREE.Object3D): THREE.Mesh | null {
+	let found: THREE.Mesh | null = null
+	object.traverse((child) => {
+		if (found) {
+			return
+		}
+		const candidate = child as unknown as THREE.Mesh
+		if (!candidate || !(candidate as any).isMesh) {
+			return
+		}
+		const userData = (candidate as any).userData as Record<string, unknown> | undefined
+		const dynamicMeshType = typeof userData?.dynamicMeshType === 'string' ? (userData.dynamicMeshType as string) : ''
+		if (candidate.name === 'WallMesh' || dynamicMeshType === 'Wall') {
+			found = candidate
+		}
+	})
+	return found
+}
+
 function resolveWallShape(params: {
 	node: SceneNode
 	object: THREE.Object3D
@@ -356,21 +375,7 @@ function resolveWallShape(params: {
 	object.matrixWorld.decompose(wallRootPositionHelper, wallRootQuaternionHelper, physicsScaleHelper)
 	wallRootQuaternionInverseHelper.copy(wallRootQuaternionHelper).invert()
 
-	let wallMesh: THREE.Mesh | null = null
-	object.traverse((child) => {
-		if (wallMesh) {
-			return
-		}
-		const mesh = child as unknown as THREE.Mesh
-		if (!mesh || !(mesh as any).isMesh) {
-			return
-		}
-		const userData = (mesh as any).userData as Record<string, unknown> | undefined
-		const dynamicMeshType = typeof userData?.dynamicMeshType === 'string' ? (userData.dynamicMeshType as string) : ''
-		if (mesh.name === 'WallMesh' || dynamicMeshType === 'Wall') {
-			wallMesh = mesh
-		}
-	})
+	const wallMesh = findWallRenderMesh(object)
 
 	if (!wallMesh) {
 		cache.delete(nodeId)

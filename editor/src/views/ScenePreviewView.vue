@@ -6762,6 +6762,58 @@ function buildHeightfieldDebugLines(
 	return lines
 }
 
+function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | null {
+	const vertices = (trimesh as any).vertices as ArrayLike<number> | undefined
+	const indices = (trimesh as any).indices as ArrayLike<number> | undefined
+	if (!vertices || !indices) {
+		return null
+	}
+	const vertexCount = Math.floor(vertices.length / 3)
+	if (vertexCount < 3 || indices.length < 3) {
+		return null
+	}
+	const baseGeometry = new THREE.BufferGeometry()
+	const positions = new Float32Array(vertexCount * 3)
+	for (let i = 0; i < positions.length; i += 1) {
+		positions[i] = Number(vertices[i] ?? 0)
+	}
+	// Use 32-bit indices; avoids overflow for large meshes.
+	const indexArray = new Uint32Array(indices.length)
+	for (let i = 0; i < indexArray.length; i += 1) {
+		indexArray[i] = (Number(indices[i] ?? 0) | 0) >>> 0
+	}
+	baseGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+	baseGeometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
+	const edges = new THREE.EdgesGeometry(baseGeometry)
+	baseGeometry.dispose()
+	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function computeTrimeshSignature(trimesh: CANNON.Trimesh): string {
+	const vertices = (trimesh as any).vertices as ArrayLike<number> | undefined
+	const indices = (trimesh as any).indices as ArrayLike<number> | undefined
+	if (!vertices || !indices) {
+		return 'trimesh:0:0:0'
+	}
+	const quantize = 1000
+	let hash = 2166136261
+	const fnv = (value: number) => {
+		hash ^= value
+		hash = Math.imul(hash, 16777619) >>> 0
+	}
+	for (let i = 0; i < vertices.length; i += 1) {
+		const v = Number(vertices[i] ?? 0)
+		const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
+		fnv(q | 0)
+	}
+	for (let i = 0; i < indices.length; i += 1) {
+		fnv((Number(indices[i] ?? 0) | 0) >>> 0)
+	}
+	return `trimesh:${vertices.length}:${indices.length}:${hash.toString(16)}`
+}
+
 function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.LineSegments | null {
 	if (shape.kind === 'box') {
 		return buildBoxDebugLines(shape)
@@ -6872,6 +6924,38 @@ function ensureRigidbodyDebugHelperForShape(
 	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
 }
 
+function ensureRigidbodyDebugHelperForTrimesh(
+	nodeId: string,
+	trimesh: CANNON.Trimesh,
+	category: RigidbodyDebugHelperCategory,
+): void {
+	const signature = computeTrimeshSignature(trimesh)
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature) {
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const container = ensureRigidbodyDebugGroup()
+	if (!container) {
+		return
+	}
+	const lineSegments = buildTrimeshDebugLines(trimesh)
+	if (!lineSegments) {
+		return
+	}
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
+	lineSegments.renderOrder = 9999
+	// Trimesh vertices are already in body-local coordinates; scale is baked.
+	lineSegments.position.set(0, 0, 0)
+	helperGroup.add(lineSegments)
+	helperGroup.visible = false
+	helperGroup.scale.set(1, 1, 1)
+	container.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: new THREE.Vector3(1, 1, 1) })
+}
+
 function ensureRoadHeightfieldDebugHelper(
 	nodeId: string,
 	entry: { signature: string; bodies: CANNON.Body[] },
@@ -6931,11 +7015,26 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
 	const instance = rigidbodyInstances.get(nodeId) ?? null
+	const isWallNode = Boolean(node && (node.dynamicMesh as any)?.type === 'Wall')
 	const roadEntry =
 		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
 			? { signature: instance.signature, bodies: instance.bodies }
 			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
+	if (isWallNode && instance) {
+		const category: RigidbodyDebugHelperCategory = 'rigidbody'
+		if (!isRigidbodyDebugCategoryVisible(category)) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		const trimesh = instance.body.shapes.find((shape) => shape instanceof CANNON.Trimesh) as CANNON.Trimesh | undefined
+		if (trimesh) {
+			ensureRigidbodyDebugHelperForTrimesh(nodeId, trimesh, category)
+			updateRigidbodyDebugHelperTransform(nodeId)
+			return
+		}
+		// Fall through to component-defined shape if wall body wasn't a trimesh.
+	}
 	if (roadEntry) {
 		const category: RigidbodyDebugHelperCategory = 'rigidbody'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
