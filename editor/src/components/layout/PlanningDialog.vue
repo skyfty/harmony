@@ -12,6 +12,7 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { generateFpsScatterPointsInPolygon } from '@/utils/scatterSampling'
+import { WALL_DEFAULT_SMOOTHING } from '@schema/components'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -103,6 +104,8 @@ interface PlanningPolyline {
   layerId: string
   points: PlanningPoint[]
   scatter?: PlanningScatterAssignment
+  /** 0-1. Only meaningful when layer kind is 'wall'. */
+  cornerSmoothness?: number
 }
 
 type ScatterTarget =
@@ -302,6 +305,12 @@ function clampDensityPercent(value: unknown): number {
   const num = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(num)) return 50
   return Math.round(clampNumber(num, 0, 100))
+}
+
+function clampWallCornerSmoothness(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return WALL_DEFAULT_SMOOTHING
+  return Math.min(1, Math.max(0, num))
 }
 
 function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
@@ -972,7 +981,6 @@ const selectedMeasurementValueText = computed(() => {
 })
 const BASE_PIXELS_PER_METER = 10
 const PLANNING_RULER_THICKNESS_PX = 34
-const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
 const VERTEX_HANDLE_DIAMETER_PX = 10
 const VERTEX_HANDLE_RADIUS_PX = VERTEX_HANDLE_DIAMETER_PX / 2
@@ -1260,6 +1268,9 @@ function buildPlanningSnapshot() {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
+      cornerSmoothness: getLayerKind(line.layerId) === 'wall'
+        ? clampWallCornerSmoothness(line.cornerSmoothness)
+        : undefined,
       scatter: line.scatter
         ? {
           providerAssetId: line.scatter.providerAssetId,
@@ -1627,6 +1638,9 @@ function loadPlanningFromScene() {
         name: line.name,
         layerId: line.layerId,
         points,
+        cornerSmoothness: getLayerKind(line.layerId) === 'wall'
+          ? clampWallCornerSmoothness((line as any).cornerSmoothness)
+          : undefined,
         scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
       }
     })
@@ -1952,6 +1966,27 @@ const wallThicknessMetersModel = computed({
   },
 })
 
+const wallCornerSmoothnessModel = computed({
+  get: () => {
+    const target = selectedScatterTarget.value
+    if (!target || target.type !== 'polyline' || target.layer?.kind !== 'wall') {
+      return WALL_DEFAULT_SMOOTHING
+    }
+    return clampWallCornerSmoothness((target.shape as PlanningPolyline).cornerSmoothness)
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const target = selectedScatterTarget.value
+    if (!target || target.type !== 'polyline' || target.layer?.kind !== 'wall') {
+      return
+    }
+    ;(target.shape as PlanningPolyline).cornerSmoothness = clampWallCornerSmoothness(value)
+    markPlanningDirty()
+  },
+})
+
+const wallCornerSmoothnessDisplay = computed(() => `${Math.round(wallCornerSmoothnessModel.value * 100)}%`)
+
 const editorBackgroundStyle = computed(() => {
   return {
     backgroundImage:
@@ -2136,8 +2171,29 @@ function getPolylineStrokeWidth(layerId: string, isSelected = false) {
     const clamped = Math.min(10, Math.max(0.1, width))
     return isSelected ? clamped * selectedScale : clamped
   }
+  if (kind === 'wall') {
+    const base = 3.2
+    return isSelected ? base * selectedScale : base
+  }
   const base = 1.05
   return isSelected ? base * selectedScale : base
+}
+
+function getPolylineHitRadiusWorld(line: PlanningPolyline, isSelected = false): number {
+  const strokeWidthWorld = getPolylineVisibleStrokeWidthWorld(line.layerId, isSelected)
+  const kind = getLayerKind(line.layerId)
+  const extraPx = kind === 'wall' ? 8 : 5
+  const extraWorld = pxToWorld(extraPx)
+  return Math.max(0.0001, strokeWidthWorld / 2 + extraWorld)
+}
+
+function getPolylineStrokeLinejoin(line: PlanningPolyline): 'round' | 'inherit' | 'miter' | 'bevel' | undefined {
+  const kind = getLayerKind(line.layerId)
+  if (kind !== 'wall') {
+    return undefined
+  }
+  const smoothing = clampWallCornerSmoothness(line.cornerSmoothness)
+  return smoothing > 0 ? 'round' : 'miter'
 }
 
 function getPolylineVisibleStrokeWidthWorld(layerId: string, isSelected = false) {
@@ -2737,10 +2793,12 @@ function hitTestPolyline(point: PlanningPoint): PlanningPolyline | null {
     if (!visibleLayerIds.value.has(line.layerId)) {
       continue
     }
+    const radius = getPolylineHitRadiusWorld(line, selectedFeature.value?.type === 'polyline' && selectedFeature.value.id === line.id)
+    const radiusSq = radius * radius
     const segments = getLineSegments(line)
     for (const segment of segments) {
       const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
-      if (distSq <= POLYLINE_HIT_RADIUS_SQ) {
+      if (distSq <= radiusSq) {
         return line
       }
     }
@@ -2779,6 +2837,8 @@ function pickTopmostActivePolyline(point: PlanningPoint): { line: PlanningPolyli
     if (!isActiveLayer(line.layerId)) {
       continue
     }
+    const radius = getPolylineHitRadiusWorld(line, selectedFeature.value?.type === 'polyline' && selectedFeature.value.id === line.id)
+    const radiusSq = radius * radius
     const segments = getLineSegments(line)
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index]
@@ -2786,7 +2846,7 @@ function pickTopmostActivePolyline(point: PlanningPoint): { line: PlanningPolyli
         continue
       }
       const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
-      if (distSq <= POLYLINE_HIT_RADIUS_SQ) {
+      if (distSq <= radiusSq) {
         return { line, segmentIndex: index }
       }
     }
@@ -2994,11 +3054,15 @@ function startLineDraft(point: PlanningPoint) {
       if (newPoint === sourcePoint) {
         return
       }
+      const sourceKind = getLayerKind(sourceLine.layerId)
       const newLine: PlanningPolyline = {
         id: createId('line'),
         name: `${getLayerName(sourceLine.layerId)} 线段 ${lineCounter.value++}`,
         layerId: sourceLine.layerId,
         points: [sourcePoint, newPoint],
+        cornerSmoothness: sourceKind === 'wall'
+          ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
+          : undefined,
       }
       polylines.value = [...polylines.value, newLine]
       activeLayerId.value = sourceLine.layerId
@@ -3015,11 +3079,13 @@ function startLineDraft(point: PlanningPoint) {
   const nextPoint = reusePoint ?? createVertexPoint(point)
   const draftLine = getDraftLine()
   if (!draftLine) {
+    const targetKind = getLayerKind(targetLayerId)
     const newLine: PlanningPolyline = {
       id: createId('line'),
       name: `${getLayerName(targetLayerId)} 线段 ${lineCounter.value++}`,
       layerId: targetLayerId,
       points: [nextPoint],
+      cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
     }
     polylines.value = [...polylines.value, newLine]
     lineDraft.value = { lineId: newLine.id, layerId: targetLayerId }
@@ -5048,6 +5114,8 @@ onBeforeUnmount(() => {
                       :stroke="getPolylineStroke(line.layerId)"
                       :stroke-dasharray="getPolylineStrokeDasharray(line.layerId)"
                       :vector-effect="getPolylineVectorEffect(line.layerId)"
+                      :stroke-linejoin="getPolylineStrokeLinejoin(line)"
+                      stroke-linecap="round"
                       :stroke-width="getPolylineStrokeWidth(
                         line.layerId,
                         (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
@@ -5504,6 +5572,21 @@ onBeforeUnmount(() => {
                     suffix="m"
                   />
                 </div>
+
+                <template v-if="selectedScatterTarget && selectedScatterTarget.type === 'polyline'">
+                  <div class="property-panel__spacing-title">Corner Smoothness</div>
+                  <div class="property-panel__density-row">
+                    <v-slider
+                      v-model="wallCornerSmoothnessModel"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      density="compact"
+                      hide-details
+                    />
+                    <div class="property-panel__density-value">{{ wallCornerSmoothnessDisplay }}</div>
+                  </div>
+                </template>
               </div>
             </template>
 

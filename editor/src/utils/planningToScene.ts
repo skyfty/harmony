@@ -21,7 +21,15 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildRandom, generateFpsScatterPointsInPolygon, hashSeedFromString } from '@/utils/scatterSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
-import { FLOOR_COMPONENT_TYPE, ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING, WATER_COMPONENT_TYPE } from '@schema/components'
+import {
+  FLOOR_COMPONENT_TYPE,
+  ROAD_COMPONENT_TYPE,
+  ROAD_DEFAULT_JUNCTION_SMOOTHING,
+  RIGIDBODY_COMPONENT_TYPE,
+  WATER_COMPONENT_TYPE,
+  WALL_COMPONENT_TYPE,
+  WALL_DEFAULT_SMOOTHING,
+} from '@schema/components'
 import { createRoadNodeMaterials, ROAD_SURFACE_DEFAULT_COLOR } from '@/utils/roadNodeMaterials'
 import { generateUuid } from '@/utils/uuid'
 
@@ -114,6 +122,28 @@ type PlanningPolylineAny = {
   layerId: string
   points: PlanningPoint[]
   scatter?: unknown
+  cornerSmoothness?: unknown
+}
+
+function clampWallCornerSmoothness(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return WALL_DEFAULT_SMOOTHING
+  }
+  return Math.min(1, Math.max(0, num))
+}
+
+function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
+  const existing = (node.components as any)?.[RIGIDBODY_COMPONENT_TYPE] as { id?: string } | undefined
+  if (existing?.id) {
+    sceneStore.updateNodeComponentProps(node.id, existing.id, { bodyType: 'STATIC', mass: 0 })
+    return
+  }
+
+  const created = sceneStore.addNodeComponent(node.id, RIGIDBODY_COMPONENT_TYPE) as { id?: string } | null
+  if (created?.id) {
+    sceneStore.updateNodeComponentProps(node.id, created.id, { bodyType: 'STATIC', mass: 0 })
+  }
 }
 
 type ScatterAssignment = {
@@ -1030,6 +1060,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           })
         }
         if (segments.length) {
+          const smoothing = clampWallCornerSmoothness((line as PlanningPolylineAny).cornerSmoothness)
           const wall = sceneStore.createWallNode({
             segments,
             dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
@@ -1038,6 +1069,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
             sceneStore.setNodeLocked(wall.id, true)
+            ensureStaticRigidbody(sceneStore, wall)
+
+            const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
+            if (component?.id) {
+              sceneStore.updateNodeComponentProps(wall.id, component.id, { smoothing })
+            }
           }
         }
         updateProgressForUnit(`Converting wall: ${line.name?.trim() || line.id}`)
@@ -1057,6 +1094,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
             sceneStore.setNodeLocked(wall.id, true)
+            ensureStaticRigidbody(sceneStore, wall)
           }
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)

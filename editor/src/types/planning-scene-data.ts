@@ -17,6 +17,8 @@ export interface PlanningPolylineData {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** 0-1. Only meaningful when layer kind is 'wall'. */
+  cornerSmoothness?: number
 }
 
 export interface PlanningImageData {
