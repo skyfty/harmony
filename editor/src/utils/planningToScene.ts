@@ -897,6 +897,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           const baseDiagonal = estimateFootprintDiagonalM(baseFootprintAreaM2, baseFootprintMaxSizeM)
           const effectiveFootprintAreaM2 = baseFootprintAreaM2 * maxScaleForCapacity * maxScaleForCapacity
           const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScaleForCapacity)
+          // Treat the (scaled) max side length as an approximate "diameter" for overlap avoidance.
+          const effectiveModelDiameterM = Math.max(0.01, baseFootprintMaxSizeM * maxScaleForCapacity)
 
           const area = polygonArea2D(poly.points)
           const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM, 1e-6)
@@ -930,7 +932,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const spacingFromCount = (Number.isFinite(area) && area > 0)
               ? Math.sqrt(area / targetCount)
               : 0
-            const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, 0.05)
+            const densityNormalized = THREE.MathUtils.clamp(densityPercent, 0.0001, 100)
+            const spacingFromDensity = 100 / densityNormalized
+            const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, spacingFromDensity + effectiveModelDiameterM, 0.05)
 
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))

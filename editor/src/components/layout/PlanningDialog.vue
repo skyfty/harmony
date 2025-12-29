@@ -81,7 +81,7 @@ interface PlanningScatterAssignment {
   category: TerrainScatterCategory
   name: string
   thumbnail: string | null
-  /** 0-100. Default is 2 for green polygons, otherwise 50. Used to scale generated scatter count. */
+  /** 0-100. Default is 19 for green polygons, otherwise 50. Used to scale generated scatter count. */
   densityPercent: number
   /** Model bounding-box footprint area (m^2), used for capacity estimation. */
   footprintAreaM2: number
@@ -829,6 +829,8 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const baseDiagonal = estimateFootprintDiagonalM(footprintAreaM2, footprintMaxSizeM)
     const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScale)
     const effectiveFootprintAreaM2 = footprintAreaM2 * maxScale * maxScale
+    // Treat the (scaled) max side length as an approximate "diameter" to keep instances from overlapping.
+    const effectiveModelDiameterM = Math.max(0.01, footprintMaxSizeM * maxScale)
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       polygonScatterDensityDotsCache.delete(poly.id)
@@ -853,7 +855,10 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
 
     // Derive a spacing from (area, targetDots), but never smaller than the model bounding box.
     const spacingFromCount = Math.sqrt(area / Math.max(1, targetDots))
-    const minDistance = Math.max(spacingFromCount, effectiveDiagonalM)
+    // Density-to-spacing rule (user expectation): baseSpacing = 100/densityPercent meters.
+    // Then add model diameter so instances don't overlap.
+    const spacingFromDensity = 100 / Math.max(0.0001, densityPercent)
+    const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, spacingFromDensity + effectiveModelDiameterM)
 
     const pointsHash = hashPlanningPoints(poly.points)
     const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}`
@@ -3246,7 +3251,7 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
   }
   const thumbnail = payload.asset.thumbnail ?? null
   const existingDensity = target.shape.scatter?.densityPercent
-  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 2 : 50
+  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 19 : 50
 
   const length = payload.asset.dimensionLength ?? null
   const width = payload.asset.dimensionWidth ?? null
