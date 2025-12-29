@@ -1192,11 +1192,6 @@ class SceneGraphBuilder {
   private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
     const entry = await this.resourceCache.acquireAssetEntry(assetId);
     if (!entry) {
-	  const traceFlag = (globalThis as typeof globalThis & { __HARMONY_TRACE_INSTANCING?: unknown }).__HARMONY_TRACE_INSTANCING;
-	  const traceEnabled = traceFlag === true || traceFlag === 'true' || traceFlag === 1;
-	  if (traceEnabled) {
-	    console.debug('[SceneGraph][InstancingTrace] fetchAndParseMesh: missing asset entry', { assetId });
-	  }
       return null;
     }
 
@@ -1303,54 +1298,8 @@ class SceneGraphBuilder {
       | undefined;
     const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
 
-    const traceFlag = (globalThis as typeof globalThis & { __HARMONY_TRACE_INSTANCING?: unknown }).__HARMONY_TRACE_INSTANCING;
-    const traceEnabled = traceFlag === true || traceFlag === 'true' || traceFlag === 1;
-    if (traceEnabled) {
-      console.debug('[SceneGraph][InstancingTrace] buildWallMesh', {
-        nodeId: node.id,
-        nodeName: node.name ?? '',
-        bodyAssetId: wallProps.bodyAssetId ?? null,
-        jointAssetId: wallProps.jointAssetId ?? null,
-        isAirWall: Boolean(wallProps.isAirWall),
-      });
-    }
-
     const bodyObject = wallProps.bodyAssetId ? await this.loadAssetMesh(wallProps.bodyAssetId) : null;
     const jointObject = wallProps.jointAssetId ? await this.loadAssetMesh(wallProps.jointAssetId) : null;
-
-    if (traceEnabled) {
-      const describe = (object: THREE.Object3D | null) => {
-        if (!object) {
-          return { ok: false };
-        }
-        let meshCount = 0;
-        let skinnedCount = 0;
-        let multiMaterialCount = 0;
-        const meshNames: string[] = [];
-        object.traverse((child) => {
-          const mesh = child as unknown as THREE.Mesh;
-          if (!(mesh as any)?.isMesh) {
-            return;
-          }
-          meshCount += 1;
-          if ((mesh as any).isSkinnedMesh) {
-            skinnedCount += 1;
-          }
-          const material = (mesh as any).material as THREE.Material | THREE.Material[] | undefined;
-          if (Array.isArray(material)) {
-            multiMaterialCount += 1;
-          }
-          if (meshNames.length < 5) {
-            meshNames.push(mesh.name || '(unnamed)');
-          }
-        });
-        return { ok: true, meshCount, skinnedCount, multiMaterialCount, meshNames };
-      };
-      console.debug('[SceneGraph][InstancingTrace] wall asset load results', {
-        body: describe(bodyObject),
-        joint: describe(jointObject),
-      });
-    }
 
     const group = createWallRenderGroup(
       meshInfo,
