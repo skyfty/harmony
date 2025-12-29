@@ -71,6 +71,52 @@ type InstancedAssetTemplate = {
   baseSize: THREE.Vector3
 }
 
+function isWallInstancingTraceEnabled(): boolean {
+  const flag = (globalThis as typeof globalThis & { __HARMONY_TRACE_INSTANCING?: unknown }).__HARMONY_TRACE_INSTANCING
+  return flag === true || flag === 'true' || flag === 1
+}
+
+function collectInstancedAssetTemplateFailureReasons(root: THREE.Object3D): Array<{ name: string; reason: string }> {
+  const reasons: Array<{ name: string; reason: string }> = []
+  root.traverse((child) => {
+    if (reasons.length >= 8) {
+      return
+    }
+    const candidate = child as unknown as THREE.Mesh
+    if (!candidate || !(candidate as any).isMesh) {
+      return
+    }
+    if ((candidate as any).isSkinnedMesh) {
+      reasons.push({ name: candidate.name || '(unnamed)', reason: 'skinned-mesh' })
+      return
+    }
+    const geometry = (candidate as any).geometry as THREE.BufferGeometry | undefined
+    if (!geometry || !(geometry as any).isBufferGeometry) {
+      reasons.push({ name: candidate.name || '(unnamed)', reason: 'missing-buffer-geometry' })
+      return
+    }
+    const material = (candidate as any).material as THREE.Material | THREE.Material[] | undefined
+    if (!material) {
+      reasons.push({ name: candidate.name || '(unnamed)', reason: 'missing-material' })
+      return
+    }
+    if (Array.isArray(material)) {
+      reasons.push({ name: candidate.name || '(unnamed)', reason: 'multi-material (array)' })
+      return
+    }
+    reasons.push({ name: candidate.name || '(unnamed)', reason: 'instancable (unexpectedly rejected later?)' })
+  })
+  return reasons
+}
+
+function debugExplainInstancedAssetTemplateFailure(root: THREE.Object3D, label: string): void {
+  if (!isWallInstancingTraceEnabled()) {
+    return
+  }
+  const reasons = collectInstancedAssetTemplateFailureReasons(root)
+  console.debug('[WallMesh][InstancingTrace] %s: no instancable mesh found; sample reasons:', label, reasons)
+}
+
 function findFirstInstancableMesh(root: THREE.Object3D): THREE.Mesh | null {
   let found: THREE.Mesh | null = null
   root.traverse((child) => {
@@ -102,6 +148,7 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
   root.updateMatrixWorld(true)
   const mesh = findFirstInstancableMesh(root)
   if (!mesh) {
+    debugExplainInstancedAssetTemplateFailure(root, 'extractInstancedAssetTemplate')
     return null
   }
 
@@ -110,6 +157,11 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
     geometry.computeBoundingBox()
   }
   if (!geometry.boundingBox) {
+    if (isWallInstancingTraceEnabled()) {
+      console.debug('[WallMesh][InstancingTrace] extractInstancedAssetTemplate: missing boundingBox after compute', {
+        meshName: mesh.name,
+      })
+    }
     return null
   }
 
@@ -611,6 +663,12 @@ function rebuildWallGroup(
 ) {
   clearGroupContent(group)
 
+  // Always reset diagnostics so callers can inspect what happened during this rebuild.
+  group.userData.wallInstancingDebug = {
+    body: null as null | { hasObject: boolean; hasTemplate: boolean; instanceCount: number; reasons?: Array<{ name: string; reason: string }> },
+    joint: null as null | { hasObject: boolean; hasTemplate: boolean; instanceCount: number; reasons?: Array<{ name: string; reason: string }> },
+  }
+
   const path = collectWallPath(definition)
   if (!path) {
     return
@@ -655,8 +713,32 @@ function rebuildWallGroup(
   const bodyTemplate = assets.bodyObject ? extractInstancedAssetTemplate(assets.bodyObject) : null
   const jointTemplate = assets.jointObject ? extractInstancedAssetTemplate(assets.jointObject) : null
 
+  if (isWallInstancingTraceEnabled()) {
+    console.debug('[WallMesh][InstancingTrace] rebuildWallGroup assets', {
+      hasBodyObject: Boolean(assets.bodyObject),
+      hasJointObject: Boolean(assets.jointObject),
+      hasBodyTemplate: Boolean(bodyTemplate),
+      hasJointTemplate: Boolean(jointTemplate),
+    })
+  }
+
+  if (assets.bodyObject && !bodyTemplate) {
+    const reasons = collectInstancedAssetTemplateFailureReasons(assets.bodyObject)
+    ;(group.userData.wallInstancingDebug as any).body = { hasObject: true, hasTemplate: false, instanceCount: 0, reasons }
+    debugExplainInstancedAssetTemplateFailure(assets.bodyObject, 'bodyAsset')
+  }
+  if (assets.jointObject && !jointTemplate) {
+    const reasons = collectInstancedAssetTemplateFailureReasons(assets.jointObject)
+    ;(group.userData.wallInstancingDebug as any).joint = { hasObject: true, hasTemplate: false, instanceCount: 0, reasons }
+    debugExplainInstancedAssetTemplateFailure(assets.jointObject, 'jointAsset')
+  }
+
   if (bodyTemplate) {
     const localMatrices = computeWallBodyInstanceMatrices(definition, bodyTemplate)
+    ;(group.userData.wallInstancingDebug as any).body = { hasObject: true, hasTemplate: true, instanceCount: localMatrices.length }
+	  if (isWallInstancingTraceEnabled()) {
+	    console.debug('[WallMesh][InstancingTrace] body instances', { count: localMatrices.length })
+	  }
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyInstances'
@@ -675,6 +757,10 @@ function rebuildWallGroup(
 
   if (jointTemplate) {
     const localMatrices = computeWallJointInstanceMatrices(definition, jointTemplate)
+    ;(group.userData.wallInstancingDebug as any).joint = { hasObject: true, hasTemplate: true, instanceCount: localMatrices.length }
+	  if (isWallInstancingTraceEnabled()) {
+	    console.debug('[WallMesh][InstancingTrace] joint instances', { count: localMatrices.length })
+	  }
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(jointTemplate.geometry, jointTemplate.material, localMatrices.length)
       instanced.name = 'WallJointInstances'

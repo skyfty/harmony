@@ -91,6 +91,7 @@ import {
 	waterComponentDefinition,
 	protagonistComponentDefinition,
 	lodComponentDefinition,
+	WALL_COMPONENT_TYPE,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -104,6 +105,7 @@ import {
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
 	clampLodComponentProps,
+	clampWallProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
@@ -196,6 +198,8 @@ const rendererDebug = reactive({
 const instancingDebug = reactive({
 	instancedMeshAssets: 0,
 	instancedMeshActive: 0,
+	instancedMeshSceneTree: 0,
+	instancedMeshSceneTreeActive: 0,
 	instancedInstanceCount: 0,
 	instanceMatrixUploadKb: 0,
 	lodVisible: 0,
@@ -203,6 +207,25 @@ const instancingDebug = reactive({
 	scatterVisible: 0,
 	scatterTotal: 0,
 })
+
+function countSceneTreeInstancedMeshes(root: THREE.Object3D | null): { total: number; active: number } {
+	if (!root) {
+		return { total: 0, active: 0 }
+	}
+	let total = 0
+	let active = 0
+	root.traverse((object) => {
+		const mesh = object as unknown as THREE.InstancedMesh
+		if (!(mesh as any)?.isInstancedMesh) {
+			return
+		}
+		total += 1
+		if (mesh.count > 0) {
+			active += 1
+		}
+	})
+	return { total, active }
+}
 
 const groundChunkDebug = reactive({
 	loaded: 0,
@@ -228,6 +251,130 @@ function appendWarningMessage(message: string): void {
 		return
 	}
 	warningMessages.value = [...existing, trimmed]
+}
+
+function isInstancingTraceEnabled(): boolean {
+	const flag = (globalThis as typeof globalThis & { __HARMONY_TRACE_INSTANCING?: unknown }).__HARMONY_TRACE_INSTANCING
+	return flag === true || flag === 'true' || flag === 1
+}
+
+function summarizeInstancedMeshes(root: THREE.Object3D | null, label: string): { total: number; active: number } {
+	const counts = countSceneTreeInstancedMeshes(root)
+	if (isInstancingTraceEnabled()) {
+		console.debug('[ScenePreview][InstancingTrace] %s InstancedMeshes total=%d active=%d', label, counts.total, counts.active)
+	}
+	return counts
+}
+
+function collectWallNodes(document: SceneJsonExportDocument): SceneNode[] {
+	const nodes: SceneNode[] = []
+	const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.dynamicMesh?.type === 'Wall') {
+			nodes.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return nodes
+}
+
+function traceWallInstancing(document: SceneJsonExportDocument, phase: string, builtRoot?: THREE.Object3D | null): void {
+	if (!isInstancingTraceEnabled()) {
+		return
+	}
+	const wallNodes = collectWallNodes(document)
+	let withBody = 0
+	let withJoint = 0
+	let withAny = 0
+	const samples: Array<{ id: string; name: string; body: string | null; joint: string | null; enabled: boolean }> = []
+	for (let i = 0; i < wallNodes.length; i += 1) {
+		const node = wallNodes[i]
+		if (!node) {
+			continue
+		}
+		const component = (node.components?.[WALL_COMPONENT_TYPE] ?? null) as any
+		const enabled = component?.enabled !== false
+		const props = clampWallProps(component?.props ?? null)
+		const body = props.bodyAssetId ?? null
+		const joint = props.jointAssetId ?? null
+		if (body) {
+			withBody += 1
+		}
+		if (joint) {
+			withJoint += 1
+		}
+		if (body || joint) {
+			withAny += 1
+			if (samples.length < 10) {
+				samples.push({ id: node.id, name: node.name ?? '', body, joint, enabled })
+			}
+		}
+	}
+
+	console.debug(
+		'[ScenePreview][InstancingTrace] phase=%s walls=%d wallsWithAny=%d (body=%d joint=%d)',
+		phase,
+		wallNodes.length,
+		withAny,
+		withBody,
+		withJoint,
+	)
+	if (samples.length) {
+		console.debug('[ScenePreview][InstancingTrace] wall samples (first 10):', samples)
+	}
+
+	summarizeInstancedMeshes(builtRoot ?? null, 'builtRoot')
+	summarizeInstancedMeshes(rootGroup ?? null, 'previewRoot(rootGroup)')
+	summarizeInstancedMeshes(instancedMeshGroup ?? null, 'subscribedGroup(instancedMeshGroup)')
+
+	if (builtRoot) {
+		const wallDebugEntries: Array<{ name: string; nodeId?: string; debug: unknown }> = []
+		builtRoot.traverse((object) => {
+			if (wallDebugEntries.length >= 5) {
+				return
+			}
+			const tag = object.userData?.dynamicMeshType as string | undefined
+			if (tag !== 'Wall') {
+				return
+			}
+			const debug = object.userData?.wallInstancingDebug
+			if (!debug) {
+				return
+			}
+			wallDebugEntries.push({ name: object.name, nodeId: object.userData?.nodeId as string | undefined, debug })
+		})
+		if (wallDebugEntries.length) {
+			console.debug('[ScenePreview][InstancingTrace] wallInstancingDebug (first 5):', wallDebugEntries)
+		}
+	}
+
+	if (builtRoot) {
+		const instancedSamples: Array<{ name: string; nodeId?: string; parent?: string; userDataKeys: string[] }> = []
+		builtRoot.traverse((object) => {
+			if (instancedSamples.length >= 10) {
+				return
+			}
+			if (!(object as any).isInstancedMesh) {
+				return
+			}
+			const nodeId = object.userData?.nodeId as string | undefined
+			instancedSamples.push({
+				name: object.name,
+				nodeId,
+				parent: object.parent?.name,
+				userDataKeys: Object.keys(object.userData ?? {}),
+			})
+		})
+		if (instancedSamples.length) {
+			console.debug('[ScenePreview][InstancingTrace] builtRoot InstancedMesh samples (first 10):', instancedSamples)
+		}
+	}
 }
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
@@ -2140,8 +2287,11 @@ function updateInstancedCullingAndLod(): void {
 			}
 			instanceCount += Math.max(0, Math.trunc(mesh.count))
 		}
+		const sceneTreeCounts = countSceneTreeInstancedMeshes(rootGroup)
 		instancingDebug.instancedMeshAssets = totalMeshes
 		instancingDebug.instancedMeshActive = activeMeshes
+		instancingDebug.instancedMeshSceneTree = sceneTreeCounts.total
+		instancingDebug.instancedMeshSceneTreeActive = sceneTreeCounts.active
 		instancingDebug.instancedInstanceCount = instanceCount
 		instancingDebug.lodTotal = instancedLodTotalCount.value
 		instancingDebug.lodVisible = instancedLodVisibleCount.value
@@ -3071,6 +3221,8 @@ watch(isInstancingDebugVisible, (visible) => {
 	instancedMatrixUploadMeshes.clear()
 	instancingDebug.instancedMeshAssets = 0
 	instancingDebug.instancedMeshActive = 0
+	instancingDebug.instancedMeshSceneTree = 0
+	instancingDebug.instancedMeshSceneTreeActive = 0
 	instancingDebug.instancedInstanceCount = 0
 	instancingDebug.instanceMatrixUploadKb = 0
 	instancingDebug.lodVisible = 0
@@ -6027,8 +6179,18 @@ function disposeMaterialTextureCache() {
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
+	const skipDispose = (object.userData as Record<string, unknown> | undefined)?.__harmonySkipDispose === true
+	if (skipDispose) {
+		return
+	}
+
 	const mesh = object as THREE.Mesh
 	if ((mesh as any).isMesh) {
+		// Instanced meshes (especially those backed by shared asset cache geometry/materials)
+		// must not dispose shared resources here, otherwise later scene rebuilds will render nothing.
+		if ((mesh as any).isInstancedMesh) {
+			return
+		}
 		mesh.geometry?.dispose?.()
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 		materials.forEach((material) => {
@@ -6073,6 +6235,13 @@ function removeNodeSubtree(nodeId: string) {
 
 function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Object3D>) {
 	object.traverse((child) => {
+		// Keep InstancedMesh visible: default bounding volumes can be too small,
+		// causing frustum culling to hide instances far from origin.
+		if ((child as any).isInstancedMesh) {
+			child.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
+			;(child as THREE.Object3D & { frustumCulled?: boolean }).frustumCulled = false
+		}
+
 		const nodeId = child.userData?.nodeId as string | undefined
 		if (nodeId) {
 			const existing = nodeObjectMap.get(nodeId)
@@ -8190,6 +8359,7 @@ async function applyInitialDocumentGraph(
 	currentDocument = document
 	syncGroundCache(document)
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	traceWallInstancing(document, 'after-attachBuiltRootToPreview', previewRoot)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
@@ -8234,6 +8404,7 @@ async function applyIncrementalDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	traceWallInstancing(document, 'after-applyIncrementalDocumentGraph', previewRoot)
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
@@ -8295,6 +8466,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		return
 	}
 	const { root, warnings } = graphResult
+	traceWallInstancing(document, 'after-buildSceneGraph', root)
 	warningMessages.value = warnings
 	dismissBehaviorAlert()
 	resetBehaviorRuntime()
@@ -8525,10 +8697,10 @@ onBeforeUnmount(() => {
 				<template v-if="isInstancingDebugVisible">
 					<div class="scene-preview__stats-fallback">[Instancing]</div>
 					<div class="scene-preview__stats-fallback">
-						InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}
+						InstancedMeshes (subscribed/scene): {{ instancingDebug.instancedMeshAssets }} / {{ instancingDebug.instancedMeshSceneTree }}
 					</div>
 					<div class="scene-preview__stats-fallback">
-						Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}
+						Instanced active (subscribed/scene): {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshSceneTreeActive }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}
