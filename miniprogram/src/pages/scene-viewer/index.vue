@@ -910,7 +910,7 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
-const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 1.35;
+const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 6;
 
 function resolveSceneExposure(exposure: unknown): number {
   const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
@@ -6638,6 +6638,10 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
   }
   ambient.color.set(settings.ambientLightColor);
   ambient.intensity = resolveAmbientLightIntensity(settings.ambientLightIntensity);
+  console.log('[Environment] Applied ambient light settings', {
+    color: ambient.color.getHexString(),
+    intensity: ambient.intensity,
+  });
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
