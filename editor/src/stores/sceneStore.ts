@@ -606,6 +606,7 @@ function normalizeNodeComponents(
         height: (existing?.props as { height?: number })?.height ?? baseProps.height,
         width: (existing?.props as { width?: number })?.width ?? baseProps.width,
         thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+        isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         jointAssetId: (existingProps as { jointAssetId?: string | null }).jointAssetId ?? baseProps.jointAssetId,
       }),
@@ -1705,9 +1706,13 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
 
   const runtime = getRuntimeObject(node.id)
   if (runtime) {
-    updateWallGroup(runtime, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+    runtime.traverse((child) => {
+      if (child.type === 'Group' && child.name === 'WallGroup' && child.userData.dynamicMeshType ==='Wall') {
+          updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+          return false;
+      }
+    });
   }
-
   return true
 }
 
@@ -3241,13 +3246,16 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
   }
 
   try {
-    const runtime = meshType === 'Road'
-      ? createRoadGroup(meshDefinition as RoadDynamicMesh, {
-          heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
-        })
-      : meshType === 'Floor'
-        ? createFloorGroup(meshDefinition as FloorDynamicMesh)
-        : createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) })
+    let runtime: Object3D;
+    if (meshType === 'Road') {
+      runtime = createRoadGroup(meshDefinition as RoadDynamicMesh, {
+        heightSampler: resolveRoadLocalHeightSampler(node, groundNode),
+      });
+    } else if (meshType === 'Floor') {
+      runtime = createFloorGroup(meshDefinition as FloorDynamicMesh);
+    } else {
+      runtime = createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) });
+    }
 
     runtime.name = node.name ?? runtime.name
     prepareRuntimeObjectForNode(runtime)
@@ -6798,7 +6806,6 @@ export const useSceneStore = defineStore('scene', {
       }
       this.skybox = cloneSceneSkybox(this.skybox)
       this.shadowsEnabled = normalizeShadowsEnabledInput(this.shadowsEnabled)
-      void this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
     },
     async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean } = {}) {
       if (runtimeRefreshInFlight) {
@@ -13048,10 +13055,7 @@ export const useSceneStore = defineStore('scene', {
           this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
           this.resourceProviderId = fallback.resourceProviderId
           this.hasUnsavedChanges = false
-          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false, skipComponentSync: options.skipComponentSync })
-        } else {
-          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false, skipComponentSync: options.skipComponentSync })
-        }
+        } 
       } finally {
         this.isSceneReady = true
       }

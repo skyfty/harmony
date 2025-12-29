@@ -7740,7 +7740,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	const guideboardVisibility = resolveGuideboardInitialVisibility(node)
 	if (guideboardVisibility !== null) {
 		object.visible = guideboardVisibility
-	} else if (node.editorFlags?.editorOnly) {
+	} else if (node.editorFlags?.editorOnly || object.userData?.hidden === true) {
 		object.visible = false
 	} else if (typeof node.visible === 'boolean') {
 		object.visible = node.visible

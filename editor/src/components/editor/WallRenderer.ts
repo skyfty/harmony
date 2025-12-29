@@ -38,7 +38,6 @@ function applyAirWallMaterialOverride(material: THREE.Material, isAirWall: boole
       }
       userData[AIR_WALL_MATERIAL_ORIGINAL_KEY] = snapshot
     }
-    mat.transparent = true
     mat.opacity = AIR_WALL_OPACITY
     mat.depthWrite = false
     return

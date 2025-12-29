@@ -1331,7 +1331,7 @@ class SceneGraphBuilder {
     }
 
     // Tag for downstream systems (physics/debug tooling) if needed.
-    group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall) };
+    group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall), hidden: Boolean(wallProps.isAirWall) };
     return group;
   }
 
