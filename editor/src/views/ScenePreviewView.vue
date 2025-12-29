@@ -7493,7 +7493,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 			// Wheel roll based on chassis travel.
 			if (signedTravel !== 0) {
 				const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
-				const rollDelta = signedTravel / radius
+				// Sign convention: for our wheel assets, forward travel should spin the wheel forward.
+				// If visuals appear reversed, flip the travel-derived roll sign here.
+				const rollDelta = -signedTravel / radius
 				if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
 					binding.spinAngle += rollDelta
 					// Keep angles bounded to avoid float growth.
