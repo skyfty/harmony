@@ -5309,6 +5309,7 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	applyVehicleDriveForces()
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
+	updateVehicleWheelVisuals(delta)
 }
 
 /**
@@ -7415,9 +7416,6 @@ function stepPhysicsWorld(delta: number): void {
 		}
 		syncSharedObjectFromBody(entry, syncInstancedTransform)
 	})
-	if (ENABLE_VEHICLE_WHEEL_VISUALS) {
-		updateVehicleWheelVisuals(delta)
-	}
 }
 
 function updateVehicleWheelVisuals(delta: number): void {

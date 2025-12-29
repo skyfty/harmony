@@ -4027,7 +4027,6 @@ function stepPhysicsWorld(delta: number): void {
     }
     syncSharedObjectFromBody(entry, syncInstancedTransform);
   });
-  // updateVehicleWheelVisuals(delta);
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -7706,6 +7705,7 @@ function startRenderLoop(
           }
           stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
+          updateVehicleWheelVisuals(deltaSeconds);
         }
 
         if (vehicleDriveActive.value) {
