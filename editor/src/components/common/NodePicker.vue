@@ -351,12 +351,6 @@ onBeforeUnmount(() => {
       >
         {{ displayValue }}
       </span>
-      <span
-        v-if="hasSelection"
-        class="node-picker__placeholder node-picker__placeholder--suffix"
-      >
-        {{ placeholderText }}
-      </span>
       <span v-else class="node-picker__placeholder">{{ placeholderText }}</span>
       <span v-if="!hasSelection" class="node-picker__spacer" />
       <v-btn

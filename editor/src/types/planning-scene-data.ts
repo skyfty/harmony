@@ -10,6 +10,8 @@ export interface PlanningPolygonData {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** Optional; when true conversion may create/mark an air wall for this feature. */
+  airWallEnabled?: boolean
 }
 
 export interface PlanningPolylineData {
@@ -19,6 +21,8 @@ export interface PlanningPolylineData {
   points: PlanningPoint[]
   /** 0-1. Only meaningful when layer kind is 'wall'. */
   cornerSmoothness?: number
+  /** Optional; when true conversion may create/mark an air wall for this feature. */
+  airWallEnabled?: boolean
 }
 
 export interface PlanningImageData {

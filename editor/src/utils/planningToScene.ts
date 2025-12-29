@@ -90,6 +90,12 @@ const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
 
+// Air walls are invisible collision boundaries.
+// Use fixed dimensions (do not depend on wall-layer settings).
+const AIR_WALL_HEIGHT_M = 3
+const AIR_WALL_THICKNESS_M = 0.02
+const AIR_WALL_WIDTH_M = 0.25
+
 function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdatedAt: unknown): number {
   const prev = Number(previousSnapshot?.metadata?.updatedAt)
   const next = Number(nextUpdatedAt)
@@ -114,6 +120,7 @@ type PlanningPolygonAny = {
   layerId: string
   points: PlanningPoint[]
   scatter?: unknown
+  airWallEnabled?: unknown
 }
 
 type PlanningPolylineAny = {
@@ -123,6 +130,46 @@ type PlanningPolylineAny = {
   points: PlanningPoint[]
   scatter?: unknown
   cornerSmoothness?: unknown
+  airWallEnabled?: unknown
+}
+
+function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
+  const component = (node.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
+  if (component?.id) {
+    sceneStore.updateNodeComponentProps(node.id, component.id, { isAirWall: true })
+  }
+  ensureStaticRigidbody(sceneStore, node)
+}
+
+function createAirWallFromSegments(options: {
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore']
+  rootNodeId: string
+  name: string
+  planningLayerId: string
+  ownerFeatureId: string
+  ownerFeatureKind: 'water' | 'green'
+  segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
+}) {
+  const { sceneStore, rootNodeId, name, planningLayerId, ownerFeatureId, ownerFeatureKind, segments } = options
+  if (!segments.length) return null
+  const wall = sceneStore.createWallNode({
+    segments,
+    dimensions: { height: AIR_WALL_HEIGHT_M, thickness: AIR_WALL_THICKNESS_M, width: AIR_WALL_WIDTH_M },
+    name,
+  })
+  if (!wall) return null
+
+  sceneStore.moveNode({ nodeId: wall.id, targetId: rootNodeId, position: 'inside' })
+  sceneStore.setNodeLocked(wall.id, true)
+  ensureAirWall(sceneStore, wall)
+  sceneStore.updateNodeUserData(wall.id, {
+    source: PLANNING_CONVERSION_SOURCE,
+    planningLayerId,
+    kind: 'airWall',
+    ownerFeatureId,
+    ownerFeatureKind,
+  })
+  return wall
 }
 
 function clampWallCornerSmoothness(value: unknown): number {
@@ -883,9 +930,45 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           kind: 'water',
         })
         sceneStore.setNodeLocked(waterNode.id, true)
+
+        if (Boolean((poly as any).airWallEnabled)) {
+          const segments = polygonEdges(poly.points).map((edge) => ({
+            start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
+            end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
+          }))
+          createAirWallFromSegments({
+            sceneStore,
+            rootNodeId: root.id,
+            name: `${nodeName} (Air Wall)`,
+            planningLayerId: layerId,
+            ownerFeatureId: poly.id,
+            ownerFeatureKind: 'water',
+            segments,
+          })
+        }
       }
     } else if (kind === 'green') {
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) { 
+        if (Boolean((poly as any).airWallEnabled)) {
+          const baseName = poly.name?.trim()
+            ? poly.name.trim()
+            : (layerName ? `${layerName} Green` : 'Planning Green')
+          const segments = polygonEdges(poly.points).map((edge) => ({
+            start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
+            end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
+          }))
+          createAirWallFromSegments({
+            sceneStore,
+            rootNodeId: root.id,
+            name: `${baseName} (Air Wall)`,
+            planningLayerId: layerId,
+            ownerFeatureId: poly.id,
+            ownerFeatureKind: 'green',
+            segments,
+          })
+        }
+
         const scatter = normalizeScatter(poly.scatter)
         if (scatter) {
           const preset = terrainScatterPresets[scatter.category] ?? {
@@ -1073,7 +1156,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
             const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
             if (component?.id) {
-              sceneStore.updateNodeComponentProps(wall.id, component.id, { smoothing })
+              sceneStore.updateNodeComponentProps(wall.id, component.id, {
+                smoothing,
+                isAirWall: Boolean((line as any).airWallEnabled) || undefined,
+              })
             }
           }
         }
@@ -1095,6 +1181,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
+
+            if (Boolean((poly as any).airWallEnabled)) {
+              ensureAirWall(sceneStore, wall)
+            }
           }
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)

@@ -96,6 +96,8 @@ interface PlanningPolygon {
   layerId: string
   points: PlanningPoint[]
   scatter?: PlanningScatterAssignment
+  /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
+  airWallEnabled?: boolean
 }
 
 interface PlanningPolyline {
@@ -106,6 +108,8 @@ interface PlanningPolyline {
   scatter?: PlanningScatterAssignment
   /** 0-1. Only meaningful when layer kind is 'wall'. */
   cornerSmoothness?: number
+  /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
+  airWallEnabled?: boolean
 }
 
 type ScatterTarget =
@@ -1250,6 +1254,7 @@ function buildPlanningSnapshot() {
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      airWallEnabled: poly.airWallEnabled ? true : undefined,
       scatter: poly.scatter
         ? {
           providerAssetId: poly.scatter.providerAssetId,
@@ -1271,6 +1276,7 @@ function buildPlanningSnapshot() {
       cornerSmoothness: getLayerKind(line.layerId) === 'wall'
         ? clampWallCornerSmoothness(line.cornerSmoothness)
         : undefined,
+      airWallEnabled: line.airWallEnabled ? true : undefined,
       scatter: line.scatter
         ? {
           providerAssetId: line.scatter.providerAssetId,
@@ -1600,6 +1606,7 @@ function loadPlanningFromScene() {
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      airWallEnabled: Boolean((poly as any).airWallEnabled),
       scatter: normalizeScatterAssignment((poly as Record<string, unknown>).scatter),
     }))
     : []
@@ -1641,6 +1648,7 @@ function loadPlanningFromScene() {
         cornerSmoothness: getLayerKind(line.layerId) === 'wall'
           ? clampWallCornerSmoothness((line as any).cornerSmoothness)
           : undefined,
+        airWallEnabled: Boolean((line as any).airWallEnabled),
         scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
       }
     })
@@ -1853,6 +1861,27 @@ const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !
 
 const propertyPanelLayerKind = computed<LayerKind | null>(() => {
   return selectedScatterTarget.value?.layer?.kind ?? null
+})
+
+const airWallEnabledModel = computed<boolean>({
+  get: () => {
+    const target = selectedScatterTarget.value
+    const kind = target?.layer?.kind
+    if (!target || (kind !== 'wall' && kind !== 'water' && kind !== 'green')) {
+      return false
+    }
+    return Boolean((target.shape as any).airWallEnabled)
+  },
+  set: (value: boolean) => {
+    if (propertyPanelDisabled.value) return
+    const target = selectedScatterTarget.value
+    const kind = target?.layer?.kind
+    if (!target || (kind !== 'wall' && kind !== 'water' && kind !== 'green')) {
+      return
+    }
+    ;(target.shape as any).airWallEnabled = Boolean(value)
+    markPlanningDirty()
+  },
 })
 
 const roadWidthMetersModel = computed({
@@ -5389,6 +5418,18 @@ onBeforeUnmount(() => {
             </div>
 
             <template v-if="propertyPanelLayerKind === 'green'">
+              <div class="property-panel__density">
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="airWallEnabledModel"
+                    density="compact"
+                    hide-details
+                    inset
+                    label="Air Wall"
+                  />
+                </div>
+              </div>
+
               <div class="property-panel__scatter-preview">
                 <div class="scatter-preview__thumbnail">
                   <img
@@ -5505,6 +5546,16 @@ onBeforeUnmount(() => {
 
             <template v-else-if="propertyPanelLayerKind === 'water'">
               <div class="property-panel__density">
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="airWallEnabledModel"
+                    density="compact"
+                    hide-details
+                    inset
+                    label="Air Wall"
+                  />
+                </div>
+
                 <div class="property-panel__density-title">水面平滑度</div>
                 <div class="property-panel__density-row">
                   <v-slider
@@ -5543,6 +5594,16 @@ onBeforeUnmount(() => {
 
             <template v-else-if="propertyPanelLayerKind === 'wall'">
               <div class="property-panel__density">
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="airWallEnabledModel"
+                    density="compact"
+                    hide-details
+                    inset
+                    label="Air Wall"
+                  />
+                </div>
+
                 <div class="property-panel__density-title">墙高</div>
                 <div class="property-panel__density-row">
                   <v-text-field

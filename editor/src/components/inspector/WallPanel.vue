@@ -404,9 +404,8 @@ function applyAirWallUpdate(rawValue: unknown) {
       <div class="wall-field-grid">
         <v-switch
           :model-value="localIsAirWall"
-          label="是否空气墙（不可见）"
+          label="Air Wall"
           density="compact"
-          inset
           hide-details
           @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
         />
