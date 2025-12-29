@@ -839,17 +839,19 @@ const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
-const wheelQuaternionHelper = new THREE.Quaternion()
+const wheelChassisQuaternionHelper = new THREE.Quaternion()
+const wheelVisualQuaternionHelper = new THREE.Quaternion()
+const wheelParentWorldQuaternionHelper = new THREE.Quaternion()
+const wheelParentWorldQuaternionInverseHelper = new THREE.Quaternion()
+const wheelBaseQuaternionInverseHelper = new THREE.Quaternion()
 const wheelSteeringQuaternionHelper = new THREE.Quaternion()
 const wheelSpinQuaternionHelper = new THREE.Quaternion()
 const wheelChassisPositionHelper = new THREE.Vector3()
 const wheelChassisDisplacementHelper = new THREE.Vector3()
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
-const VEHICLE_SPEED_EPSILON = 1e-3
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
-const ENABLE_VEHICLE_WHEEL_VISUALS = false
 const STEERING_WHEEL_MAX_DEGREES = 135
 const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
 const STEERING_WHEEL_RETURN_SPEED = 4
@@ -7423,48 +7425,48 @@ function updateVehicleWheelVisuals(delta: number): void {
 	if (delta <= 0 || !vehicleInstances.size) {
 		return
 	}
-	const safeDelta = Math.max(delta, 1e-6)
 	vehicleInstances.forEach((instance) => {
-		const { vehicle, wheelBindings, forwardAxis, axisUp } = instance
+		const { vehicle, wheelBindings } = instance
 		// No wheel bindings, nothing to update.
 		if (!wheelBindings.length) {
 			return
 		}
-		// Only process vehicles with front wheel bindings to update steering visuals.
-		const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId)
-		if (!hasFrontWheel) {
-			return
-		}
 		const chassisBody = vehicle.chassisBody
-		if (!chassisBody || !forwardAxis) {
+		if (!chassisBody) {
 			return
 		}
+
 		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
-		wheelQuaternionHelper.set(
-			chassisBody.quaternion.x,
-			chassisBody.quaternion.y,
-			chassisBody.quaternion.z,
-			chassisBody.quaternion.w,
-		)
-		wheelForwardHelper.copy(forwardAxis).applyQuaternion(wheelQuaternionHelper)
-		if (wheelForwardHelper.lengthSq() < 1e-6) {
-			wheelForwardHelper.set(0, 0, 1)
-		} else {
-			wheelForwardHelper.normalize()
+		wheelChassisQuaternionHelper
+			.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+			.normalize()
+
+		// Signed travel along the vehicle forward axis (supports reverse).
+		let signedTravel = 0
+		if (instance.hasChassisPositionSample) {
+			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
+			wheelForwardHelper.copy(instance.axisForward).applyQuaternion(wheelChassisQuaternionHelper)
+			if (wheelForwardHelper.lengthSq() < 1e-10) {
+				wheelForwardHelper.set(0, 0, 1)
+			} else {
+				wheelForwardHelper.normalize()
+			}
+			signedTravel = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
+			if (!Number.isFinite(signedTravel) || Math.abs(signedTravel) < VEHICLE_TRAVEL_EPSILON) {
+				signedTravel = 0
+			}
+			// Avoid huge jumps on teleports/resets.
+			if (Math.abs(signedTravel) > 50) {
+				signedTravel = 0
+			}
 		}
-		if (!instance.hasChassisPositionSample) {
-			instance.lastChassisPosition.copy(wheelChassisPositionHelper)
-			instance.hasChassisPositionSample = true
-			return
-		}
-		wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
 		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
-		const signedDistance = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
-		const signedSpeed = signedDistance / safeDelta
-		const canSpin = Math.abs(signedSpeed) >= VEHICLE_SPEED_EPSILON && Math.abs(signedDistance) >= VEHICLE_TRAVEL_EPSILON
+		instance.hasChassisPositionSample = true
+
+		const wheelInfos = (vehicle as any).wheelInfos as Array<{ steering?: number }> | undefined
 
 		wheelBindings.forEach((binding) => {
-			if (!binding.isFrontWheel || !binding.nodeId) {
+			if (!binding.nodeId) {
 				return
 			}
 			const wheelObject = nodeObjectMap.get(binding.nodeId) ?? null
@@ -7472,44 +7474,102 @@ function updateVehicleWheelVisuals(delta: number): void {
 				binding.object = null
 				return
 			}
+
+			// Capture base transform if the wheel object becomes available after the vehicle instance was created
+			// or if the object reference changed (e.g. asset reloaded).
 			if (binding.object !== wheelObject) {
 				binding.object = wheelObject
-				binding.baseQuaternion = wheelObject.quaternion.clone()
-				binding.basePosition = wheelObject.position.clone()
-				binding.baseScale = wheelObject.scale.clone()
+				binding.basePosition.copy(wheelObject.position)
+				binding.baseScale.copy(wheelObject.scale)
+				binding.baseQuaternion.copy(wheelObject.quaternion)
+				binding.spinAngle = 0
+				binding.lastSteeringAngle = 0
 			}
-			const wheelInfo = vehicle.wheelInfos[binding.wheelIndex]
-			const steeringAngle = wheelInfo?.steering ?? 0
-			const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
-			const angleDelta = canSpin ? signedDistance / radius : 0
-			if (Math.abs(angleDelta) >= VEHICLE_WHEEL_SPIN_EPSILON) {
-				binding.spinAngle += angleDelta
+
+			// Keep wheel translation/scale stable; only rotate for steer + spin.
+			wheelObject.position.copy(binding.basePosition)
+			wheelObject.scale.copy(binding.baseScale)
+
+			// Wheel roll based on chassis travel.
+			if (signedTravel !== 0) {
+				const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
+				const rollDelta = signedTravel / radius
+				if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
+					binding.spinAngle += rollDelta
+					// Keep angles bounded to avoid float growth.
+					binding.spinAngle =
+						THREE.MathUtils.euclideanModulo(binding.spinAngle + Math.PI, Math.PI * 2) - Math.PI
+				}
+			}
+
+			// Steering (front/steerable wheels).
+			let steeringAngle = 0
+			if (binding.isFrontWheel) {
+				const info = wheelInfos?.[binding.wheelIndex]
+				const raw = info?.steering
+				if (typeof raw === 'number' && Number.isFinite(raw)) {
+					steeringAngle = raw
+				} else if (vehicleDriveState.active && vehicleDriveState.vehicle === vehicle) {
+					// Fallback: approximate from current input (matches controller's typical max steer).
+					steeringAngle = THREE.MathUtils.clamp(vehicleDriveInput.steering, -1, 1) * THREE.MathUtils.degToRad(26)
+				}
 			}
 			binding.lastSteeringAngle = steeringAngle
 
-			wheelObject.position.copy(binding.basePosition)
-			wheelObject.scale.copy(binding.baseScale)
-			wheelObject.quaternion.copy(wheelQuaternionHelper)
-
-			wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle)
-			wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper)
-
-			wheelAxisHelper.copy(binding.axleAxis)
-			if (wheelAxisHelper.lengthSq() < 1e-6) {
-				wheelAxisHelper.copy(defaultWheelAxisVector)
+			// Build parent-space steering quaternion (around vehicle up axis).
+			wheelParentWorldQuaternionHelper.identity()
+			wheelParentWorldQuaternionInverseHelper.identity()
+			if (wheelObject.parent) {
+				wheelObject.parent.getWorldQuaternion(wheelParentWorldQuaternionHelper)
+				wheelParentWorldQuaternionInverseHelper.copy(wheelParentWorldQuaternionHelper).invert()
 			}
-			wheelAxisHelper.applyQuaternion(wheelQuaternionHelper)
-			wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper)
-			if (wheelAxisHelper.lengthSq() < 1e-6) {
-				wheelAxisHelper.copy(defaultWheelAxisVector)
-				wheelAxisHelper.applyQuaternion(wheelQuaternionHelper)
-				wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper)
+			wheelAxisHelper.copy(instance.axisUp).applyQuaternion(wheelChassisQuaternionHelper)
+			if (wheelObject.parent) {
+				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
 			}
-			wheelAxisHelper.normalize()
+			if (wheelAxisHelper.lengthSq() < 1e-10) {
+				wheelAxisHelper.set(0, 1, 0)
+			} else {
+				wheelAxisHelper.normalize()
+			}
+			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle)
+
+			// Build local-space spin quaternion (around wheel axle).
+			wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelChassisQuaternionHelper)
+			if (wheelObject.parent) {
+				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
+			}
+			if (wheelAxisHelper.lengthSq() < 1e-10) {
+				wheelAxisHelper.copy(defaultWheelAxisVector)
+				wheelAxisHelper.applyQuaternion(wheelChassisQuaternionHelper)
+				if (wheelObject.parent) {
+					wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
+				}
+			}
+			if (wheelAxisHelper.lengthSq() < 1e-10) {
+				wheelAxisHelper.set(1, 0, 0)
+			} else {
+				wheelAxisHelper.normalize()
+			}
+			wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert()
+			wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper)
+			if (wheelAxisHelper.lengthSq() < 1e-10) {
+				wheelAxisHelper.set(1, 0, 0)
+			} else {
+				wheelAxisHelper.normalize()
+			}
 			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
-			wheelObject.quaternion.multiply(wheelSpinQuaternionHelper)
-			wheelObject.quaternion.multiply(binding.baseQuaternion)
-			wheelObject.updateMatrixWorld(true)
+
+			// Compose: base -> (parent-space steer) -> (local-space spin).
+			wheelVisualQuaternionHelper.copy(binding.baseQuaternion)
+			if (steeringAngle !== 0) {
+				wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper)
+			}
+			if (binding.spinAngle !== 0) {
+				wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper)
+			}
+			wheelObject.quaternion.copy(wheelVisualQuaternionHelper)
+
 			syncInstancedTransform(wheelObject)
 		})
 	})
