@@ -191,13 +191,14 @@ const rendererDebug = reactive({
 	triangles: 0,
 	geometries: 0,
 	textures: 0,
-})
+	})
 
-	instancedMesh: 0,
-	instancedActive: 0,
-	instancedInstanceCount: 0,
-	instanceMatrixUploadKb: 0,
-	lodVisible: 0,
+	const instancingDebug = reactive({
+		instancedMesh: 0,
+		instancedActive: 0,
+		instancedInstanceCount: 0,
+		instanceMatrixUploadKb: 0,
+		lodVisible: 0,
 	lodTotal: 0,
 	scatterVisible: 0,
 	scatterTotal: 0,
