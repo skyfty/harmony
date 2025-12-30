@@ -95,6 +95,9 @@ export function generateTicks(options: {
   axisMaxMeters: number
   majorStepMeters: number
   minorStepMeters: number | null
+  // Optional anchor point (in meters) to align the generated grid phase to.
+  // When provided, major/minor ticks are generated as anchor + n * step.
+  anchorMeters?: number
 }): { major: RulerTick[]; minor: RulerTick[] } {
   const majorStep = options.majorStepMeters
   if (!Number.isFinite(majorStep) || majorStep <= 0) {
@@ -113,7 +116,10 @@ export function generateTicks(options: {
   }
 
   // 以0为中心，向两侧生成刻度
-  const startMajor = Math.ceil(clampedMin / majorStep) * majorStep
+  const anchor = Number.isFinite(options.anchorMeters as number) ? (options.anchorMeters as number) : undefined
+  const startMajor = anchor === undefined
+    ? Math.ceil(clampedMin / majorStep) * majorStep
+    : Math.ceil((clampedMin - anchor) / majorStep) * majorStep + anchor
   const endMajor = clampedMax
 
   const major: RulerTick[] = []
@@ -124,7 +130,9 @@ export function generateTicks(options: {
   const minor: RulerTick[] = []
   const minorStep = options.minorStepMeters
   if (minorStep && Number.isFinite(minorStep) && minorStep > 0) {
-    const startMinor = Math.ceil(clampedMin / minorStep) * minorStep
+    const startMinor = anchor === undefined
+      ? Math.ceil(clampedMin / minorStep) * minorStep
+      : Math.ceil((clampedMin - anchor) / minorStep) * minorStep + anchor
     const endMinor = clampedMax
     for (let v = startMinor; v <= endMinor + minorStep * 1e-6; v += minorStep) {
       // Skip if it coincides with a major tick.
