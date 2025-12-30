@@ -931,7 +931,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
 
-        // Mark planning metadata and lock the node. Try to mark editor-only by
         // setting the node's userData and then attempting a conservative editor flag
         // mutation to keep the node out of runtime exports.
         sceneStore.updateNodeUserData(floorNode.id, {
