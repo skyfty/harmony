@@ -212,7 +212,7 @@ interface LineDraft {
 
 const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
+  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.09 },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
@@ -1594,7 +1594,7 @@ function loadPlanningFromScene() {
             roadSmoothing:
               typeof (raw as any).roadSmoothing === 'number'
                 ? Number((raw as any).roadSmoothing)
-                : ((kind ?? preset?.kind) === 'road' ? 0.5 : undefined),
+                : ((kind ?? preset?.kind) === 'road' ? 0.09 : undefined),
             waterSmoothing:
               typeof (raw as any).waterSmoothing === 'number'
                 ? Number((raw as any).waterSmoothing)
@@ -1949,9 +1949,9 @@ const roadWidthMetersModel = computed({
 const roadSmoothingModel = computed({
   get: () => {
     const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return 0.5
-    const raw = Number(layer.roadSmoothing ?? 0.5)
-    if (!Number.isFinite(raw)) return 0.5
+    if (!layer || layer.kind !== 'road') return 0.09
+    const raw = Number(layer.roadSmoothing ?? 0.09)
+    if (!Number.isFinite(raw)) return 0.09
     return Math.min(1, Math.max(0, raw))
   },
   set: (value: number) => {
@@ -2513,9 +2513,9 @@ function addPlanningLayer(kind: LayerKind) {
     visible: true,
     color: getDefaultLayerColor(kind),
     locked: false,
-      roadWidthMeters: kind === 'road' ? 2 : undefined,
-      roadSmoothing: kind === 'road' ? 0.5 : undefined,
-      waterSmoothing: kind === 'water' ? 0.5 : undefined,
+    roadWidthMeters: kind === 'road' ? 2 : undefined,
+    roadSmoothing: kind === 'road' ? 0.09 : undefined,
+    waterSmoothing: kind === 'water' ? 0.5 : undefined,
     wallHeightMeters: kind === 'wall' ? 3 : undefined,
     wallThicknessMeters: kind === 'wall' ? 0.15 : undefined,
     floorSmooth: kind === 'floor' ? 0.5 : undefined,

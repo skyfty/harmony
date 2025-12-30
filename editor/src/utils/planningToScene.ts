@@ -931,6 +931,36 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
 
+        // 设置building图层为wireframe模式，方便查看边界
+        sceneStore.setNodeMaterials(floorNode.id, [
+          {
+            id: generateUuid(),
+            materialId: null,
+            type: 'MeshStandardMaterial',
+            name: 'Building Wireframe',
+            color: '#cccccc',
+            transparent: false,
+            opacity: 1,
+            side: 'front',
+            wireframe: true,
+            metalness: 0.2,
+            roughness: 0.7,
+            emissive: '#000000',
+            emissiveIntensity: 0,
+            aoStrength: 1,
+            envMapIntensity: 1,
+            textures: {
+              albedo: null,
+              normal: null,
+              metalness: null,
+              roughness: null,
+              ao: null,
+              emissive: null,
+              displacement: null,
+            },
+          },
+        ])
+
         // setting the node's userData and then attempting a conservative editor flag
         // mutation to keep the node out of runtime exports.
         sceneStore.updateNodeUserData(floorNode.id, {
