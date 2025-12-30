@@ -12,7 +12,7 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { generateFpsScatterPointsInPolygon } from '@/utils/scatterSampling'
-import { WALL_DEFAULT_SMOOTHING } from '@schema/components'
+import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -1939,6 +1939,51 @@ const waterSmoothingModel = computed({
     markPlanningDirty()
   },
 })
+
+const waterPresetOptions = computed(() =>
+  WATER_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
+)
+
+const selectedWaterPreset = ref<WaterPresetId | null>(null)
+
+watch(
+  () => selectedScatterTarget.value,
+  (target) => {
+    if (!target || target.layer?.kind !== 'water') {
+      selectedWaterPreset.value = null
+      return
+    }
+    const raw = (target.shape as any)?.waterPresetId
+    selectedWaterPreset.value = raw ?? null
+  },
+  { immediate: true },
+)
+
+function handleWaterPresetChange(value: WaterPresetId | null) {
+  if (propertyPanelDisabled.value) return
+  if (!selectedScatterTarget.value) return
+  selectedWaterPreset.value = value
+  const shape = selectedScatterTarget.value.shape as any
+  if (!value) {
+    delete shape.waterPresetId
+    markPlanningDirty()
+    return
+  }
+  const preset = WATER_PRESETS.find((p) => p.id === value)
+  if (!preset) return
+  // 存储所选预置 id 到该要素上，转换时可读取
+  shape.waterPresetId = value
+  // 可选：将部分显著参数也写入要素，便于后续导出或转场景使用
+  shape.waterPresetParams = {
+    distortionScale: preset.distortionScale,
+    size: preset.size,
+    flowSpeed: preset.flowSpeed,
+    waveStrength: preset.waveStrength,
+    waterColor: preset.waterColor,
+    alpha: preset.alpha,
+  }
+  markPlanningDirty()
+}
 
 const floorSmoothModel = computed({
   get: () => {
@@ -5546,6 +5591,19 @@ onBeforeUnmount(() => {
 
             <template v-else-if="propertyPanelLayerKind === 'water'">
               <div class="property-panel__density">
+                <v-select
+                  label="Preset"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  :items="waterPresetOptions"
+                  item-title="label"
+                  item-value="value"
+                  :model-value="selectedWaterPreset"
+                  :disabled="propertyPanelDisabled"
+                  @update:modelValue="handleWaterPresetChange"
+                />
+
                 <div class="property-panel__density-row">
                   <v-switch
                     v-model="airWallEnabledModel"
