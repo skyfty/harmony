@@ -8074,7 +8074,10 @@ function updateWallObjectProperties(object: THREE.Object3D, node: SceneNode) {
       | undefined
 
     const isAirWall = Boolean((wallComponent?.props as any)?.isAirWall)
-    applyAirWallVisualToWallGroup(object, isAirWall)
+    // 仅当object为THREE.Group时才调用
+    if ((object as any).isGroup) {
+      applyAirWallVisualToWallGroup(object as THREE.Group, isAirWall)
+    }
 }
 
 function updateGroundChunkStreaming() {

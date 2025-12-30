@@ -1708,7 +1708,9 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
   if (runtime) {
     runtime.traverse((child) => {
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData.dynamicMeshType ==='Wall') {
-          updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+          if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
+            updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+          }
           return false;
       }
     });
@@ -13035,7 +13037,7 @@ export const useSceneStore = defineStore('scene', {
         renamedScenes,
       }
     },
-    async ensureCurrentSceneLoaded(options: { skipComponentSync?: boolean } = {}) {
+    async ensureCurrentSceneLoaded(_: { skipComponentSync?: boolean } = {}) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
 
