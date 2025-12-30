@@ -1889,8 +1889,8 @@ const selectedImage = computed<PlanningImage | null>(() => {
 
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
+  // Allow editing layer/shape properties from the property panel even when the layer is locked.
   if (target) {
-    if (target.layer?.locked) return 'Layer is locked'
     return null
   }
   const img = selectedImage.value
@@ -2439,7 +2439,12 @@ const selectedVertexHighlight = computed(() => {
 })
 
 function isActiveLayer(layerId: string | null | undefined) {
-  return !!layerId && layerId === activeLayerId.value
+  if (!layerId || layerId !== activeLayerId.value) return false
+  const layer = layers.value.find((l) => l.id === layerId)
+  if (!layer) return false
+  // Treat locked layers as inactive for canvas interactions so shapes cannot be
+  // selected/moved/scaled on the canvas, while still allowing property-panel edits.
+  return !layer.locked
 }
 
 function getFeatureLayerId(feature: SelectedFeature | null): string | null {
