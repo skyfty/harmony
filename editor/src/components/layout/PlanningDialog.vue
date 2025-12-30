@@ -220,7 +220,19 @@ const layerPresets: PlanningLayer[] = [
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
 
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
-const activeLayerId = ref(layers.value[0]?.id ?? 'green-layer')
+// Single shared active list item for both layers and images.
+// Represented as { type: 'layer'|'image', id: string } or null.
+const activeListItem = ref<{ type: 'layer' | 'image'; id: string } | null>({ type: 'layer', id: layers.value[0]?.id ?? 'green-layer' })
+const activeLayerId = computed<string | null>({
+  get: () => (activeListItem.value?.type === 'layer' ? activeListItem.value.id : null),
+  set: (v: string | null) => {
+    if (v == null) {
+      if (activeListItem.value?.type === 'layer') activeListItem.value = null
+    } else {
+      activeListItem.value = { type: 'layer', id: v }
+    }
+  },
+})
 const polygons = ref<PlanningPolygon[]>([])
 const polylines = ref<PlanningPolyline[]>([])
 const polygonCounter = ref(1)
@@ -243,7 +255,16 @@ const hoverGuideY = ref<PlanningGuide | null>(null)
 // Keep list display order consistent with canvas stacking: upper layers appear earlier in the list.
 // The canvas uses DOM stacking order (later array elements are on top), so the list needs to be shown in reverse.
 const planningImagesForList = computed(() => [...planningImages.value].reverse())
-const activeImageId = ref<string | null>(null)
+const activeImageId = computed<string | null>({
+  get: () => (activeListItem.value?.type === 'image' ? activeListItem.value.id : null),
+  set: (v: string | null) => {
+    if (v == null) {
+      if (activeListItem.value?.type === 'image') activeListItem.value = null
+    } else {
+      activeListItem.value = { type: 'image', id: v }
+    }
+  },
+})
 const draggingImageId = ref<string | null>(null)
 const dragOverImageId = ref<string | null>(null)
 const alignModeActive = ref(false)
@@ -2716,9 +2737,17 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
 
 function getImageLayerListItemStyle(imageId: string): CSSProperties {
   const accent = getImageAccentColor(imageId)
+  const isActive = activeImageId.value === imageId
+  const bgAlpha = isActive ? 0.32 : 0.06
+  const borderAlpha = isActive ? 1 : 0.9
+  const accentWidth = isActive ? 8 : 4
   return {
-    backgroundColor: hexToRgba(accent, 0.06),
-    borderLeft: `4px solid ${hexToRgba(accent, 0.9)}`,
+    backgroundColor: hexToRgba(accent, bgAlpha),
+    borderLeft: `${accentWidth}px solid ${hexToRgba(accent, borderAlpha)}`,
+    borderColor: hexToRgba(accent, isActive ? 0.85 : 0.12),
+    boxShadow: isActive
+      ? `0 0 0 2px ${hexToRgba(accent, 0.35)}, 0 0 18px ${hexToRgba(accent, 0.22)}`
+      : 'none',
   }
 }
 
@@ -4505,9 +4534,7 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   if (!image.visible) {
     return
   }
-  if (tool === 'select') {
-    return
-  }
+  // allow starting a move when tool is 'pan' or 'select' (dragging the image moves it)
   const world = screenToWorld(event)
   if (tool === 'align-marker') {
     setAlignMarkerAtWorld(image, world)
@@ -4521,7 +4548,7 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   }
 
   // To avoid accidental operations: only allow dragging planning layers when the 'pan' tool is selected.
-  if (tool !== 'pan') {
+  if (tool !== 'select') {
     return
   }
 
@@ -4871,7 +4898,7 @@ onBeforeUnmount(() => {
             </header>
             <v-list
               density="compact"
-              class="image-layer-list"
+              class="layer-list"
               @dragover="handleImageLayerPanelDragOver"
               @dragleave="handleImageLayerPanelDragLeave"
               @drop="handleImageLayerPanelDrop"
@@ -4883,7 +4910,7 @@ onBeforeUnmount(() => {
                 v-for="image in planningImagesForList"
                 :key="image.id"
                 :class="[
-                  'image-layer-item',
+                  'layer-item',
                   {
                     active: activeImageId === image.id,
                     dragging: draggingImageId === image.id,
@@ -4898,55 +4925,42 @@ onBeforeUnmount(() => {
                 @dragend="handleImageLayerItemDragEnd"
                 @click="handleImageLayerSelect(image.id)"
               >
-                <div class="image-layer-content">
-                  <div class="image-layer-header">
-                    <div class="image-layer-name">{{ image.name }}</div>
-                    <div class="image-layer-actions">
-                      <v-btn
-                        icon
-                        size="x-small"
-                        variant="text"
-                        :color="image.locked ? 'primary' : 'grey'"
-                        @click.stop="handleImageLayerLockToggle(image.id)"
-                      >
-                        <v-icon size="18">{{ image.locked ? 'mdi-lock-outline' : 'mdi-lock-open-outline' }}</v-icon>
-                      </v-btn>
-                      <v-btn
-                        icon
-                        size="x-small"
-                        variant="text"
-                        :color="image.visible ? 'primary' : 'grey'"
-                        @click.stop="handleImageLayerToggle(image.id)"
-                      >
-                        <v-icon size="18">{{ image.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
-                      </v-btn>
-                      <v-btn
-                        icon
-                        size="x-small"
-                        variant="text"
-                        color="error"
-                        @click.stop="handleImageLayerDelete(image.id)"
-                      >
-                        <v-icon size="18">mdi-delete-outline</v-icon>
-                      </v-btn>
-                    </div>
-                  </div>
-                  <div class="image-layer-controls">
-                    <div class="control-row">
-                      <span class="control-label">Opacity</span>
-                      <v-slider
-                        :model-value="image.opacity"
-                        min="0"
-                        max="1"
-                        step="0.1"
-                        density="compact"
-                        hide-details
-                        @update:model-value="(v) => handleImageLayerOpacityChange(image.id, v)"
-                      />
-                      <span class="control-value">{{ Math.round(image.opacity * 100) }}%</span>
-                    </div>
-                  </div>
+                <div class="layer-content">
+                  <v-tooltip :text="image.name" location="bottom">
+                    <template #activator="{ props }">
+                      <div v-bind="props" class="layer-name layer-name--truncated">{{ image.name }}</div>
+                    </template>
+                  </v-tooltip>
                 </div>
+                <template #append>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="error"
+                    @click.stop="handleImageLayerDelete(image.id)"
+                  >
+                    <v-icon>mdi-delete-outline</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    :color="image.locked ? 'primary' : 'grey'"
+                    @click.stop="handleImageLayerLockToggle(image.id)"
+                  >
+                    <v-icon>{{ image.locked ? 'mdi-lock-outline' : 'mdi-lock-open-outline' }}</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    :color="image.visible ? 'primary' : 'grey'"
+                    @click.stop="handleImageLayerToggle(image.id)"
+                  >
+                    <v-icon>{{ image.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
+                  </v-btn>
+                </template>
               </v-list-item>
             </v-list>
           </section>
@@ -5465,6 +5479,45 @@ onBeforeUnmount(() => {
                     :alt="image.name"
                     draggable="false"
                   >
+                  <div
+                    v-if="activeImageId === image.id"
+                    class="planning-image__frame"
+                    aria-hidden="false"
+                  >
+                    <div class="planning-image__border" />
+                    <div
+                      class="image-resize-handle image-resize-handle--nw"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'nw', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--n"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'n', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--ne"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'ne', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--e"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'e', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--se"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'se', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--s"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 's', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--sw"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'sw', $event as PointerEvent)"
+                    />
+                    <div
+                      class="image-resize-handle image-resize-handle--w"
+                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'w', $event as PointerEvent)"
+                    />
+                  </div>
                 </div>
 
                 <div
@@ -6106,18 +6159,7 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.45);
 }
 
-.image-layer-panel {
-  padding: 16px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.image-layer-panel header h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
+/* Align panel header: title left, buttons right */
 .panel-header {
   display: flex;
   align-items: center;
@@ -6125,89 +6167,12 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.image-layer-panel header span {
-  font-size: 0.8rem;
-  opacity: 0.6;
+.panel-header h3 {
+  margin: 0;
+  font-size: 1rem;
 }
 
-.image-layer-list {
-  margin-top: 12px;
-  background: transparent;
-}
 
-.image-layer-item {
-  border-radius: 10px;
-  margin-bottom: 8px;
-  transition: background-color 0.2s ease;
-  padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.image-layer-item.active {
-  background: rgba(100, 181, 246, 0.18);
-  border-color: rgba(100, 181, 246, 0.3);
-}
-
-.image-layer-item.dragging {
-  opacity: 0.65;
-}
-
-.image-layer-item.drag-over {
-  outline: 1px dashed rgba(255, 255, 255, 0.35);
-  outline-offset: 2px;
-}
-
-.image-layer-empty {
-  border-radius: 10px;
-  margin-bottom: 8px;
-  padding: 12px 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.image-layer-empty__text {
-  font-size: 0.85rem;
-  opacity: 0.65;
-}
-
-.image-layer-content {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-
-.image-layer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.image-layer-name {
-  font-weight: 600;
-  font-size: 0.9rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.image-layer-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.image-layer-meta {
-  font-size: 0.75rem;
-  opacity: 0.7;
-}
-
-.image-layer-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 4px;
-}
 
 .control-row {
   display: grid;
@@ -6355,6 +6320,41 @@ onBeforeUnmount(() => {
   user-select: none;
   pointer-events: none;
 }
+
+/* Active image frame + resize handles */
+.planning-image__frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* allow clicks through except on handles */
+  z-index: 30;
+}
+.planning-image__border {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed rgba(98, 179, 255, 0.9);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.image-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.25);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto; /* handles receive pointer events */
+}
+.image-resize-handle--nw { left: 0%; top: 0%; cursor: nwse-resize; }
+.image-resize-handle--n  { left: 50%; top: 0%; cursor: ns-resize; }
+.image-resize-handle--ne { left: 100%; top: 0%; cursor: nesw-resize; }
+.image-resize-handle--e  { left: 100%; top: 50%; cursor: ew-resize; }
+.image-resize-handle--se { left: 100%; top: 100%; cursor: nwse-resize; }
+.image-resize-handle--s  { left: 50%; top: 100%; cursor: ns-resize; }
+.image-resize-handle--sw { left: 0%; top: 100%; cursor: nesw-resize; }
+.image-resize-handle--w  { left: 0%; top: 50%; cursor: ew-resize; }
 
 .scatter-thumb {
   pointer-events: none;
@@ -6636,5 +6636,14 @@ onBeforeUnmount(() => {
   padding: 0;
   clip: rect(0, 0, 0, 0);
   overflow: hidden;
+}
+
+/* Truncate long layer/image names and show full name in tooltip activator */
+.layer-name--truncated {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
