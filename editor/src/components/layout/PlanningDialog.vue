@@ -4353,6 +4353,15 @@ function loadPlanningImage(file: File) {
     planningImages.value.push(newImage)
     activeImageId.value = newImage.id
 
+    // persist the uploaded image to IndexedDB so it survives page reloads
+    try {
+      savePlanningImageToIndexedDB(newImage, file)
+    } catch (err) {
+      // non-fatal: keep running even if persistence fails
+      // eslint-disable-next-line no-console
+      console.warn('Failed to persist planning image to IndexedDB', err)
+    }
+
     markPlanningDirty()
   }
   image.onerror = () => {
@@ -4360,6 +4369,113 @@ function loadPlanningImage(file: File) {
     URL.revokeObjectURL(url)
   }
   image.src = url
+}
+
+// IndexedDB helpers for storing planning images (blob + metadata)
+function openPlanningImageDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open('harmony-planning-images', 1)
+      req.onupgradeneeded = () => {
+        const db = req.result
+        if (!db.objectStoreNames.contains('images')) {
+          const store = db.createObjectStore('images', { keyPath: 'id' })
+          store.createIndex('by_name', 'name', { unique: false })
+        }
+      }
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
+function putImageRecord(db: IDBDatabase, record: any) {
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('images', 'readwrite')
+    tx.objectStore('images').put(record)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+async function savePlanningImageToIndexedDB(image: PlanningImage, file: File) {
+  const db = await openPlanningImageDB()
+  const record = {
+    id: image.id,
+    name: image.name,
+    blob: file,
+    sizeLabel: image.sizeLabel,
+    width: image.width,
+    height: image.height,
+    visible: image.visible,
+    locked: image.locked,
+    opacity: image.opacity,
+    position: image.position,
+    scale: image.scale,
+    alignMarker: image.alignMarker ?? null,
+  }
+  await putImageRecord(db, record)
+  db.close()
+}
+
+function getAllImageRecords(db: IDBDatabase) {
+  return new Promise<any[]>((resolve, reject) => {
+    const tx = db.transaction('images', 'readonly')
+    const req = tx.objectStore('images').getAll()
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function loadPlanningImagesFromIndexedDB() {
+  const db = await openPlanningImageDB()
+  const records = await getAllImageRecords(db)
+  db.close()
+  const results: PlanningImage[] = []
+  for (const rec of records) {
+    try {
+      const blob: Blob = rec.blob
+      const url = URL.createObjectURL(blob)
+      const img = new Image()
+      await new Promise<void>((res, rej) => {
+        img.onload = () => res()
+        img.onerror = () => rej(new Error('Image decode error'))
+        img.src = url
+      })
+      const item: PlanningImage = {
+        id: rec.id,
+        name: rec.name,
+        url,
+        sizeLabel: rec.sizeLabel ?? `${rec.width} x ${rec.height}`,
+        width: rec.width,
+        height: rec.height,
+        visible: rec.visible ?? true,
+        locked: rec.locked ?? false,
+        opacity: typeof rec.opacity === 'number' ? rec.opacity : 1,
+        position: rec.position ?? { x: 0, y: 0 },
+        scale: typeof rec.scale === 'number' ? rec.scale : 1,
+        alignMarker: rec.alignMarker ?? undefined,
+      }
+      results.push(item)
+    } catch (e) {
+      // skip corrupted record
+      // eslint-disable-next-line no-console
+      console.warn('Skipping corrupted planning image record', rec?.id, e)
+    }
+  }
+  return results
+}
+
+async function deletePlanningImageFromIndexedDB(id: string) {
+  const db = await openPlanningImageDB()
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('images', 'readwrite')
+    tx.objectStore('images').delete(id)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
 }
 
 function handleResetView() {
@@ -4394,10 +4510,17 @@ function handleImageLayerOpacityChange(imageId: string, opacity: number) {
   }
 }
 
-function handleImageLayerDelete(imageId: string) {
+async function handleImageLayerDelete(imageId: string) {
   planningImages.value = planningImages.value.filter((img) => img.id !== imageId)
   if (activeImageId.value === imageId) {
     activeImageId.value = planningImages.value[0]?.id ?? null
+  }
+  try {
+    await deletePlanningImageFromIndexedDB(imageId)
+  } catch (e) {
+    // non-fatal
+    // eslint-disable-next-line no-console
+    console.warn('Failed to delete planning image from IndexedDB', e)
   }
   markPlanningDirty()
 }
@@ -4834,7 +4957,21 @@ void toggleAlignMode
 void handleDeleteButtonClick
 void reorderPlanningImages
 
-onMounted(() => {
+onMounted(async () => {
+  // load persisted planning images from IndexedDB before wiring up interactions
+  try {
+    const persisted = await loadPlanningImagesFromIndexedDB()
+    if (persisted && persisted.length) {
+      // restore order: stored order is bottom-to-top; keep as-is
+      planningImages.value = persisted
+      activeImageId.value = planningImages.value[0]?.id ?? null
+    }
+  } catch (e) {
+    // ignore DB errors (non-fatal)
+    // eslint-disable-next-line no-console
+    console.warn('Failed to load planning images from IndexedDB', e)
+  }
+
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
   window.addEventListener('pointerup', handlePointerUp)
   window.addEventListener('pointercancel', handlePointerUp)
