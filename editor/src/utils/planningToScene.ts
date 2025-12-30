@@ -820,7 +820,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
       const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      const layerColor = resolveLayerColorFromPlanningData(planningData, layerId) ?? ROAD_SURFACE_DEFAULT_COLOR
 
       for (const line of group.polylines) {
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
@@ -847,7 +846,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
 
-        const planningMaterials = createRoadNodeMaterials(layerColor, layerName)
+        const planningMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
         if (planningMaterials.length) {
           sceneStore.setNodeMaterials(roadNode.id, planningMaterials)
         }
@@ -1277,7 +1276,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
-
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
         for (let i = 0; i < line.points.length - 1; i += 1) {
