@@ -139,7 +139,7 @@ interface PlanningImage {
   opacity: number
   position: { x: number; y: number }
   scale: number
-  // 对齐标记（存储在图片自身坐标系：原始像素坐标）
+  // Align marker (stored in the image's own coordinate system: original pixel coordinates)
   alignMarker?: { x: number; y: number }
 }
 
@@ -174,7 +174,7 @@ type DragState =
     imageId: string
     startPos: { x: number; y: number }
     anchor: { x: number; y: number }
-    // 对齐模式下，记录参与对齐的图层拖拽起始位置；无对齐标记的图层不在此列表中。
+    // In align mode, record the starting drag positions of layers participating in alignment; layers without align markers are not included.
     groupStartPos?: Record<string, { x: number; y: number }>
   }
   | {
@@ -237,11 +237,11 @@ const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const planningGuides = ref<PlanningGuide[]>([])
 const guideDraft = ref<PlanningGuide | null>(null)
-// 临时跟随鼠标的辅助线（不入持久 guides 列表）
+// Temporary guides that follow the mouse (not added to the persistent guides list)
 const hoverGuideX = ref<PlanningGuide | null>(null)
 const hoverGuideY = ref<PlanningGuide | null>(null)
-// 列表显示顺序与画布遮挡顺序保持一致：上层在列表更靠前。
-// 画布采用 DOM 顺序叠放（数组越靠后越上层），因此列表需要反向展示。
+// Keep list display order consistent with canvas stacking: upper layers appear earlier in the list.
+// The canvas uses DOM stacking order (later array elements are on top), so the list needs to be shown in reverse.
 const planningImagesForList = computed(() => [...planningImages.value].reverse())
 const activeImageId = ref<string | null>(null)
 const draggingImageId = ref<string | null>(null)
@@ -279,8 +279,8 @@ const sceneGroundSize = computed(() => {
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 
-// 图层列表置顶（更靠前）= 更上层；SVG 后绘制的元素在更上层。
-// 因此绘制顺序应当反向遍历 layers。
+// Top of the layer list (earlier in list) = higher layer; SVG elements drawn later appear on top.
+// Therefore drawing order should traverse layers in reverse.
 const layerRenderOrderIds = computed(() => [...layers.value].reverse().map((layer) => layer.id))
 
 const visiblePolygons = computed(() => {
@@ -982,8 +982,8 @@ const selectedPolylineLengthM = computed(() => {
 })
 
 const selectedMeasurementTitle = computed(() => {
-  if (selectedPolygonAreaM2.value !== null) return '占用面积'
-  if (selectedPolylineLengthM.value !== null) return '长度'
+  if (selectedPolygonAreaM2.value !== null) return 'Area'
+  if (selectedPolylineLengthM.value !== null) return 'Length'
   return ''
 })
 
@@ -1018,8 +1018,8 @@ const canvasSize = computed(() => ({
   height: sceneGroundSize.value.height,
 }))
 
-// 性能优化：拖拽过程中如果动态改变舞台宽高，浏览器会频繁触发布局计算，拖到一定距离时容易出现明显卡顿。
-// 因此拖拽期间冻结舞台尺寸，仅通过 transform 更新位置。
+// Performance optimization: dynamically changing stage width/height during drag frequently triggers layout, which can cause noticeable jank over long drags.
+// Therefore freeze stage size during drag and update position only via transform.
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
 
@@ -1345,7 +1345,7 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
     return
   }
 
-  // 确保把 RAF 合并的最后一帧更新也落到状态里，再生成快照。
+  // Ensure the final frame merged by RAF is also applied to state before creating a snapshot.
   if (pendingPan) {
     viewTransform.offset.x = pendingPan.x
     viewTransform.offset.y = pendingPan.y
@@ -1373,7 +1373,7 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
   const nextData = isPlanningSnapshotEmpty(snapshot) ? null : snapshot
   const currentData = sceneStore.planningData ?? null
 
-  // 空场景默认不落盘，且不要因为“仅视图操作”造成未保存提示。
+  // Empty scenes are not persisted by default, and 'view-only' operations shouldn't trigger unsaved prompts.
   if (nextData === null && currentData === null) {
     planningDirty = false
     return
@@ -1496,7 +1496,7 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
   if (!providerAssetId || !assetId || !category || !(category in terrainScatterPresets)) {
     return undefined
   }
-  const name = typeof payload.name === 'string' ? payload.name : 'Scatter 预设'
+  const name = typeof payload.name === 'string' ? payload.name : 'Scatter Preset'
   const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
   const densityPercent = clampDensityPercent(payload.densityPercent)
   const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
@@ -1697,7 +1697,7 @@ function getEffectiveTool(): PlanningTool {
   return currentTool.value
 }
 
-// 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
+// Performance optimization: coalesce high-frequency pointermove updates to avoid triggering reactive chains and style recomputation on every event.
 let rafScheduled = false
 let pendingPan: { x: number; y: number } | null = null
 let pendingImageMoves: Array<{ imageId: string; x: number; y: number }> | null = null
@@ -1972,17 +1972,9 @@ function handleWaterPresetChange(value: WaterPresetId | null) {
   }
   const preset = WATER_PRESETS.find((p) => p.id === value)
   if (!preset) return
-  // 存储所选预置 id 到该要素上，转换时可读取
+  // Store selected preset id on the element so it can be read during conversion
   shape.waterPresetId = value
-  // 可选：将部分显著参数也写入要素，便于后续导出或转场景使用
-  shape.waterPresetParams = {
-    distortionScale: preset.distortionScale,
-    size: preset.size,
-    flowSpeed: preset.flowSpeed,
-    waveStrength: preset.waveStrength,
-    waterColor: preset.waterColor,
-    alpha: preset.alpha,
-  }
+
   markPlanningDirty()
 }
 
@@ -2196,7 +2188,7 @@ watch(
     if (!open) {
       return
     }
-    // 在对话框打开期间切换场景：先把旧场景的规划数据写回，再加载新场景。
+    // When switching scenes while the dialog is open: first write back the planning data of the old scene, then load the new scene.
     if (prevOpen && prevSceneId && sceneId && prevSceneId !== sceneId) {
       persistPlanningToSceneIfDirty({ force: true })
     }
@@ -2212,7 +2204,7 @@ function updateEditorRect() {
 }
 
 function getLayerName(layerId: string) {
-  return layers.value.find((layer) => layer.id === layerId)?.name ?? '未分层'
+  return layers.value.find((layer) => layer.id === layerId)?.name ?? 'Unassigned'
 }
 
 function getLayerColor(layerId: string, alpha = 1) {
@@ -2229,7 +2221,7 @@ function getLayerKind(layerId: string) {
 
 function getPolylineStrokeDasharray(layerId: string) {
   const kind = getLayerKind(layerId)
-  // 道路：虚线（更易与墙体区分），墙体：实线。
+  // Roads: dashed (easier to distinguish from walls); Walls: solid.
   if (kind === 'road') {
     return '10 7'
   }
@@ -2485,7 +2477,7 @@ function addPlanningLayer(kind: LayerKind) {
     floorSmooth: kind === 'floor' ? 0.5 : undefined,
   }
 
-  // 新建图层置顶（列表靠前）
+  // Newly created layers are placed on top (earlier in list)
   layers.value = [layer, ...layers.value]
   activeLayerId.value = id
   addLayerMenuOpen.value = false
@@ -2650,8 +2642,8 @@ function setAlignMarkerAtWorld(image: PlanningImage, world: PlanningPoint) {
 }
 
 function getImageAccentColor(imageId: string): string {
-  // 颜色需在图层创建后保持稳定，不随列表排序/置顶而改变。
-  // 因此这里使用 imageId 的稳定哈希来选取调色板颜色。
+  // Color must remain stable after layer creation and not change with list reordering/top placement.
+  // Therefore use a stable hash of imageId to pick a palette color.
   let hash = 0
   for (let i = 0; i < imageId.length; i += 1) {
     hash = (hash * 31 + imageId.charCodeAt(i)) | 0
@@ -2942,7 +2934,7 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
 }
 
 function clientToWorld(clientX: number, clientY: number): PlanningPoint {
-  // 使用实时的 DOMRect，避免 rect 缓存滞后导致绘制/选择坐标错位。
+  // Use the real-time DOMRect to avoid drawing/selection coordinate mismatch due to stale cached rect.
   const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
     return { x: 0, y: 0 }
@@ -3164,7 +3156,7 @@ const polygonDraftPreview = computed(() => {
     return { d: '', fill: 'transparent' }
   }
 
-  // 第一次点击后即显示预览：使用 [首点, 鼠标点] 形成可见闭合线段。
+  // Show preview immediately after first click: use [first point, mouse point] to form a visible closing segment.
   const previewPoints = pts.length === 1 ? [pts[0]!, hover] : [...pts, hover]
   const fill = previewPoints.length >= 3 ? 'rgba(98, 179, 255, 0.08)' : 'transparent'
   const smoothing = getLayerSmoothingValue(activeLayerId.value)
@@ -3191,7 +3183,7 @@ function startLineDraft(point: PlanningPoint) {
       const sourceKind = getLayerKind(sourceLine.layerId)
       const newLine: PlanningPolyline = {
         id: createId('line'),
-        name: `${getLayerName(sourceLine.layerId)} 线段 ${lineCounter.value++}`,
+        name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
         layerId: sourceLine.layerId,
         points: [sourcePoint, newPoint],
         cornerSmoothness: sourceKind === 'wall'
@@ -3216,7 +3208,7 @@ function startLineDraft(point: PlanningPoint) {
     const targetKind = getLayerKind(targetLayerId)
     const newLine: PlanningPolyline = {
       id: createId('line'),
-      name: `${getLayerName(targetLayerId)} 线段 ${lineCounter.value++}`,
+      name: `${getLayerName(targetLayerId)} Segment ${lineCounter.value++}`,
       layerId: targetLayerId,
       points: [nextPoint],
       cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
@@ -3575,7 +3567,7 @@ function handleEditorPointerDown(event: PointerEvent) {
   const world = screenToWorld(event)
   const insideCanvas = isPointInsideCanvas(world)
 
-  // 点击画布空白处时，直接清空当前选择（所有工具通用）。
+  // When clicking on empty canvas, clear current selection (applies to all tools).
   selectedFeature.value = null
 
   if (tool === 'align-marker') {
@@ -3614,7 +3606,7 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
-  // 平移视图：平移工具，或选择工具在空白处拖拽时
+  // Pan view: when using pan tool, or when dragging on empty space with select tool
   if (tool === 'pan' || tool === 'select') {
     beginPanDrag(event)
     return
@@ -3684,7 +3676,7 @@ function handleEditorContextMenu(event: MouseEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
-  // 自由绘制预览：拖拽状态为空时，跟随鼠标更新预览线条
+  // Free-draw preview: when not dragging, update preview line following the mouse
   if (
     dialogOpen.value
     && dragState.value.type === 'idle'
@@ -3695,7 +3687,7 @@ function handlePointerMove(event: PointerEvent) {
     scheduleRafFlush()
   }
 
-  // 线段绘制预览：拖拽状态为空时，跟随鼠标显示“最后一点 -> 鼠标”的预览线条
+  // Segment draw preview: when not dragging, show preview line from last point to mouse
   if (
     dialogOpen.value
     && dragState.value.type === 'idle'
@@ -3709,8 +3701,8 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
-  // 鼠标跟随辅助线：在画布区域且没有其它拖拽操作时显示（临时，不入持久 guides 列表）
-  // 禁用鼠标跟随辅助线功能（不再在鼠标移动时显示临时 guide）
+  // Mouse-follow guides: show when cursor is over canvas and no other drag is active (temporary, not added to persistent guides list)
+  // Disable mouse-follow guides (no longer show temporary guide on mouse move)
   hoverGuideX.value = null
   hoverGuideY.value = null
 
@@ -3879,7 +3871,7 @@ function handlePointerUp(event: PointerEvent) {
       finalizeRectangleDrag()
     }
     dragState.value = { type: 'idle' }
-    // 释放冻结的舞台尺寸，让画布在操作结束后再统一更新。
+    // Release frozen stage size so the canvas updates uniformly after the operation ends.
     frozenCanvasSize.value = null
 
     if (shouldDirty) {
@@ -3909,7 +3901,7 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
-  // 使用实时的 DOMRect，避免 editorRect 缓存滞后导致缩放中心漂移。
+  // Use the real-time DOMRect to avoid zoom-center drift caused by stale editorRect cache.
   const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
     return
@@ -4335,7 +4327,7 @@ function loadPlanningImage(file: File) {
     markPlanningDirty()
   }
   image.onerror = () => {
-    uploadError.value = '无法读取该图片，请重试或更换文件。'
+    uploadError.value = 'Unable to read the image; please retry or choose a different file.'
     URL.revokeObjectURL(url)
   }
   image.src = url
@@ -4429,7 +4421,7 @@ function movePlanningImageToEnd(imageId: string) {
 }
 
 function movePlanningImageToListEnd(imageId: string) {
-  // 列表末尾 = 画布最底层
+  // List end = bottom of canvas
   const listOrder = planningImagesForList.value
   const fromIndex = listOrder.findIndex((img) => img.id === imageId)
   if (fromIndex < 0 || fromIndex === listOrder.length - 1) {
@@ -4479,7 +4471,7 @@ function handleImageLayerItemDrop(targetImageId: string, event: DragEvent) {
     dragOverImageId.value = null
     return
   }
-  // 非排序拖拽（文件/上传图标）交给列表级 drop 逻辑处理。
+  // Non-reordering drags (file/upload icons) are handled by list-level drop logic.
   handleImageLayerPanelDrop(event)
 }
 
@@ -4495,8 +4487,8 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   if (event.button !== 0) {
     return
   }
-  // 规划图层作为“底图”，应允许在其上方进行区域选择/标注。
-  // 因此仅在需要直接操作底图的工具下拦截事件。
+  // Planning layers act as 'base map' and should allow selection/annotation above them.
+  // Therefore intercept events only for tools that need direct base map interaction.
   const tool = getEffectiveTool()
   if (tool !== 'select' && tool !== 'pan' && tool !== 'align-marker') {
     return
@@ -4528,7 +4520,7 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
-  // 为防误操作：只有在选择“平移”工具时才允许拖动规划图层。
+  // To avoid accidental operations: only allow dragging planning layers when the 'pan' tool is selected.
   if (tool !== 'pan') {
     return
   }
@@ -4788,8 +4780,8 @@ const deleteButtonTooltip = ' Delete selected objects (Del)'
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
 
-// 这些符号用于规划图转换的后续能力扩展（区域/线段绘制、几何编辑等）。
-// 当前画布实现以图片参考层为主，部分函数暂未在模板中引用；为避免 noUnusedLocals 报错，这里显式引用一次。
+// These symbols are for future planning-to-scene conversion extensions (area/segment drawing, geometry editing, etc.).
+// The current canvas implementation focuses on image reference layers; some functions are not yet referenced in the template. To avoid noUnusedLocals errors, reference them explicitly here.
 void getLayerColor
 void startRectangleDrag
 void addPolygonDraftPoint
@@ -4860,7 +4852,7 @@ onBeforeUnmount(() => {
                   variant="text"
                   color="primary"
                   draggable="true"
-                  title="上传规划图"
+                  title="Upload planning map"
                   @click.stop="handleUploadClick"
                   @dragstart="handleUploadIconDragStart"
                 >
@@ -5137,7 +5129,7 @@ onBeforeUnmount(() => {
                 <div class="zoom-value">{{ zoomPercentModel }}%</div>
               </div>
 
-              <v-tooltip text="重置视图" location="bottom">
+              <v-tooltip text="Reset View" location="bottom">
                 <template #activator="{ props }">
                   <v-btn
                     v-bind="props"
@@ -5193,7 +5185,7 @@ onBeforeUnmount(() => {
                     </filter>
                   </defs>
 
-                  <!-- 已绘制多边形区域 -->
+                  <!-- Drawn polygon areas -->
                   <g v-for="poly in visiblePolygons" :key="poly.id">
                     <path
                       class="planning-polygon"
@@ -5208,7 +5200,7 @@ onBeforeUnmount(() => {
                       @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
                     />
 
-                    <!-- 绿化散布密度预览（淡色点状） -->
+                    <!-- Green scatter density preview (faint dots) -->
                     <g
                       v-if="polygonScatterDensityDots[poly.id]?.length"
                       class="scatter-density-dots"
@@ -5256,7 +5248,7 @@ onBeforeUnmount(() => {
                   </g>
 
                   
-                  <!-- 已绘制线段（以 polyline 表示） -->
+                  <!-- Drawn segments (represented as polyline) -->
                   <g v-for="line in visiblePolylines" :key="line.id">
                     <path
                       class="planning-line"
@@ -5312,7 +5304,7 @@ onBeforeUnmount(() => {
                       preserveAspectRatio="xMidYMid meet"
                     />
 
-                    <!-- 端点命中区：允许直接点击端点继续绘制/拖动端点 -->
+                    <!-- Endpoint hit area: allows clicking endpoints to continue drawing/drag endpoints -->
                     <circle
                       v-if="line.points.length"
                       class="line-endpoint-hit"
@@ -5333,7 +5325,7 @@ onBeforeUnmount(() => {
                     />
                   </g>
 
-                  <!-- 矩形选择拖拽预览 -->
+                  <!-- Rectangle selection drag preview -->
                   <path
                     v-if="dragState.type === 'rectangle'"
                     class="planning-rectangle-preview"
@@ -5343,7 +5335,7 @@ onBeforeUnmount(() => {
                     stroke-width="0.1"
                   />
 
-                  <!-- 自由选择绘制预览（点击加点，双击结束） -->
+                  <!-- Freeform selection preview (click to add points, double-click to finish) -->
                   <path
                     v-if="polygonDraftPoints.length >= 1"
                     class="planning-polygon-draft"
@@ -5353,7 +5345,7 @@ onBeforeUnmount(() => {
                     stroke-width="0.1"
                   />
 
-                  <!-- 线段绘制预览 -->
+                  <!-- Segment draw preview -->
                   <path
                     v-if="lineDraftPreviewPath"
                     class="planning-line-draft"
@@ -5365,7 +5357,7 @@ onBeforeUnmount(() => {
                     fill="none"
                   />
 
-                  <!-- 线段绘制中：显示顶点位置 -->
+                  <!-- During segment drawing: show vertex positions -->
                   <g v-if="lineDraftPoints.length">
                     <circle
                       v-for="(p, idx) in lineDraftPoints"
@@ -5381,7 +5373,7 @@ onBeforeUnmount(() => {
                     />
                   </g>
 
-                  <!-- 顶点/当前操作点荧光高亮 -->
+                  <!-- Vertex/current operation point highlight -->
                   <circle
                     v-if="activeVertexHighlight"
                     class="vertex-highlight"
@@ -5395,7 +5387,7 @@ onBeforeUnmount(() => {
                     pointer-events="none"
                   />
 
-                  <!-- 选中顶点荧光高亮 -->
+                  <!-- Selected vertex highlight -->
                   <circle
                     v-if="selectedVertexHighlight"
                     class="vertex-highlight vertex-highlight--selected"
@@ -5409,7 +5401,7 @@ onBeforeUnmount(() => {
                     pointer-events="none"
                   />
 
-                  <!-- 选中多边形顶点 -->
+                  <!-- Selected polygon vertex -->
                   <g v-if="selectedPolygon">
                     <circle
                       v-for="(p, idx) in selectedPolygon.points"
@@ -5426,7 +5418,7 @@ onBeforeUnmount(() => {
                     />
                   </g>
 
-                  <!-- 选中线段顶点 -->
+                  <!-- Selected polyline vertex -->
                   <g v-if="selectedPolyline">
                     <circle
                       v-for="(p, idx) in selectedPolyline.points"
@@ -5514,7 +5506,7 @@ onBeforeUnmount(() => {
                   density="compact"
                   hide-details
                   :disabled="propertyPanelDisabled"
-                  placeholder="为图形设置名称"
+                  placeholder="Set shape name"
                   @update:modelValue="commitSelectedName"
                 />
               </div>
@@ -5607,7 +5599,7 @@ onBeforeUnmount(() => {
 
             <template v-else-if="propertyPanelLayerKind === 'road'">
               <div class="property-panel__density">
-                <div class="property-panel__density-title">道路宽度</div>
+                <div class="property-panel__density-title">Road width</div>
                 <div class="property-panel__density-row">
                   <v-text-field
                     v-model.number="roadWidthMetersModel"
@@ -5621,7 +5613,7 @@ onBeforeUnmount(() => {
                     suffix="m"
                   />
                 </div>
-                <div class="property-panel__spacing-title">连接平滑度</div>
+                <div class="property-panel__spacing-title">Junction smoothing</div>
                 <div class="property-panel__density-row">
                   <v-slider
                     v-model="roadSmoothingModel"
@@ -5652,7 +5644,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="property-panel__block">
                 <v-select
-                  label="Preset"
+                  label="Water Preset"
                   density="compact"
                   variant="underlined"
                   hide-details
@@ -5661,12 +5653,12 @@ onBeforeUnmount(() => {
                   item-value="value"
                   :model-value="selectedWaterPreset"
                   :disabled="propertyPanelDisabled"
-                  @update:modelValue="handleWaterPresetChange"
+                  @update:model-value="handleWaterPresetChange"
                 />
               </div>
 
               <div class="property-panel__block">
-                <div class="property-panel__density-title">水面平滑度</div>
+                <div class="property-panel__density-title">Water smoothing</div>
                 <div class="property-panel__density-row">
                   <v-slider
                     v-model="waterSmoothingModel"
@@ -5685,7 +5677,7 @@ onBeforeUnmount(() => {
 
             <template v-else-if="propertyPanelLayerKind === 'floor'">
               <div class="property-panel__density">
-                <div class="property-panel__density-title">地面平滑度</div>
+                <div class="property-panel__density-title">Floor smoothing</div>
                 <div class="property-panel__density-row">
                   <v-slider
                     v-model="floorSmoothModel"
@@ -5713,7 +5705,7 @@ onBeforeUnmount(() => {
                   />
                 </div>
 
-                <div class="property-panel__density-title">墙高</div>
+                <div class="property-panel__density-title">Wall height</div>
                 <div class="property-panel__density-row">
                   <v-text-field
                     v-model.number="wallHeightMetersModel"
@@ -5728,7 +5720,7 @@ onBeforeUnmount(() => {
                   />
                 </div>
 
-                <div class="property-panel__spacing-title">墙厚</div>
+                <div class="property-panel__spacing-title">Wall thickness</div>
                 <div class="property-panel__density-row">
                   <v-text-field
                     v-model.number="wallThicknessMetersModel"

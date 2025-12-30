@@ -1029,29 +1029,15 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           planningLayerId: layerId,
           kind: 'water',
         }
-        const presetId = (poly as any).waterPresetId
-        const presetParams = (poly as any).waterPresetParams
-        if (presetId) {
-          userData.waterPresetId = presetId
-        }
-        if (presetParams && typeof presetParams === 'object') {
-          userData.waterPresetParams = { ...presetParams }
-        }
 
         sceneStore.updateNodeUserData(waterNode.id, userData)
         sceneStore.setNodeLocked(waterNode.id, true)
-
+        
         // If preset params provided, apply them to the water component props so runtime matches
         const waterComponent = waterNode.components?.[WATER_COMPONENT_TYPE] as { id: string } | undefined
-        if (waterComponent?.id && presetParams && typeof presetParams === 'object') {
-          const patch: Record<string, unknown> = {}
-          if (typeof presetParams.distortionScale === 'number') patch.distortionScale = presetParams.distortionScale
-          if (typeof presetParams.size === 'number') patch.size = presetParams.size
-          if (typeof presetParams.flowSpeed === 'number') patch.flowSpeed = presetParams.flowSpeed
-          if (typeof presetParams.waveStrength === 'number') patch.waveStrength = presetParams.waveStrength
-          if (Object.keys(patch).length) {
-            sceneStore.updateNodeComponentProps(waterNode.id, waterComponent.id, patch)
-          }
+        if (waterComponent?.id) {
+            const presetId = (poly as any).waterPresetId
+            sceneStore.updateNodeComponentProps(waterNode.id, waterComponent.id, presetId ? { presetId } : {})
         }
 
         if (Boolean((poly as any).airWallEnabled)) {
