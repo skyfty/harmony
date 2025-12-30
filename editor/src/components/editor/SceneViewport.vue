@@ -8074,7 +8074,7 @@ function updateWallObjectProperties(object: THREE.Object3D, node: SceneNode) {
       | undefined
 
     const isAirWall = Boolean((wallComponent?.props as any)?.isAirWall)
-    applyAirWallVisualToWallGroup(object, isAirWall)
+    applyAirWallVisualToWallGroup(object as THREE.Group, isAirWall)
 }
 
 function updateGroundChunkStreaming() {

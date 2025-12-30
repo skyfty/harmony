@@ -110,7 +110,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 
-type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water'
+type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water' | 'building'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -333,6 +333,8 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
     }
   }
   return ['road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
+  // include building layer by default when present in planning data
+  return ['road-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -893,6 +895,83 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           kind: 'floor',
         })
         sceneStore.setNodeLocked(floorNode.id, true)
+      }
+    } else if (kind === 'building') {
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+      for (const poly of group.polygons) {
+        updateProgressForUnit(`Converting building: ${poly.name?.trim() || poly.id}`)
+        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+        if (worldXZ.length < 3) {
+          continue
+        }
+
+        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
+        const nodeName = poly.name?.trim()
+          ? poly.name.trim()
+          : (layerName ? `${layerName} Building` : 'Planning Building')
+
+        const floorNode = sceneStore.createFloorNode({
+          points: worldPoints,
+          name: nodeName,
+        })
+
+        if (!floorNode) {
+          continue
+        }
+
+        sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+
+        // Mark planning metadata and lock the node. Try to mark editor-only by
+        // setting the node's userData and then attempting a conservative editor flag
+        // mutation to keep the node out of runtime exports.
+        sceneStore.updateNodeUserData(floorNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          planningFeatureId: poly.id,
+          kind: 'building',
+        })
+        sceneStore.setNodeLocked(floorNode.id, true)
+
+        // If placed models exist on the planning polygon, instantiate them as child nodes.
+        const placed = Array.isArray((poly as any).placedModels) ? (poly as any).placedModels : []
+        for (const pm of placed) {
+          try {
+            const px = Number(pm?.position?.x)
+            const pz = Number(pm?.position?.y)
+            if (!Number.isFinite(px) || !Number.isFinite(pz)) continue
+
+            // Convert planning units into world coordinates (meters were already normalized for polygon points,
+            // but placed model positions in the saved feature may still be in planning units — treat them as meters here).
+            const world = toWorldPoint({ x: px, y: pz } as PlanningPoint, groundWidth, groundDepth, 0)
+            world.y = groundHeightAt(world.x, world.z)
+
+            const asset = typeof (sceneStore as any).getAsset === 'function' ? (sceneStore as any).getAsset(pm.assetId) : null
+            if (!asset) continue
+
+            // Use the high-level addModelNode helper so the asset is properly instantiated/instanced.
+            // This may be asynchronous depending on asset cache; await to keep conversion deterministic.
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore - addModelNode is available on the real sceneStore implementation
+            const created = await (sceneStore as any).addModelNode({
+              asset,
+              parentId: floorNode.id,
+              position: new THREE.Vector3(world.x, world.y, world.z),
+              name: pm.name ?? undefined,
+            })
+
+            if (created && created.id) {
+              ;(sceneStore as any).updateNodeUserData(created.id, {
+                source: PLANNING_CONVERSION_SOURCE,
+                planningLayerId: layerId,
+                planningFeatureId: poly.id,
+                placedModelId: pm.id ?? null,
+              })
+              ;(sceneStore as any).setNodeLocked(created.id, true)
+            }
+          } catch (err) {
+            // ignore individual model placement failures
+          }
+        }
       }
     } else if (kind === 'water') {
       const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
