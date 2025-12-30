@@ -225,6 +225,9 @@ const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const planningGuides = ref<PlanningGuide[]>([])
 const guideDraft = ref<PlanningGuide | null>(null)
+// 临时跟随鼠标的辅助线（不入持久 guides 列表）
+const hoverGuideX = ref<PlanningGuide | null>(null)
+const hoverGuideY = ref<PlanningGuide | null>(null)
 // 列表显示顺序与画布遮挡顺序保持一致：上层在列表更靠前。
 // 画布采用 DOM 顺序叠放（数组越靠后越上层），因此列表需要反向展示。
 const planningImagesForList = computed(() => [...planningImages.value].reverse())
@@ -3649,6 +3652,11 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
+  // 鼠标跟随辅助线：在画布区域且没有其它拖拽操作时显示（临时，不入持久 guides 列表）
+  // 禁用鼠标跟随辅助线功能（不再在鼠标移动时显示临时 guide）
+  hoverGuideX.value = null
+  hoverGuideY.value = null
+
   const state = dragState.value
   if (state.type === 'idle' || state.pointerId !== event.pointerId) {
     return
@@ -5376,6 +5384,7 @@ onBeforeUnmount(() => {
                     :class="`planning-guide-line--${guideDraft.axis}`"
                     :style="getGuideLineStyle(guideDraft)"
                   />
+                  <!-- hover guides removed -->
                 </div>
                 <div
                   v-for="(image, index) in planningImages"
@@ -5475,37 +5484,9 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="property-panel__scatter-preview">
-                <div class="scatter-preview__thumbnail">
-                  <img
-                    v-if="selectedScatterPreview && selectedScatterPreview.thumbnail"
-                    :src="selectedScatterPreview.thumbnail"
-                    :alt="selectedScatterPreview.name"
-                    loading="lazy"
-                    draggable="false"
-                  >
-                  <div v-else class="scatter-preview__placeholder">
-                    <v-icon icon="mdi-image-outline" size="20" />
-                  </div>
-                </div>
-                <div class="scatter-preview__meta">
-                  <div class="scatter-preview__name">
-                    {{ selectedScatterPreview ? selectedScatterPreview.name : '未设置 Scatter 预设' }}
-                  </div>
-                  <div class="scatter-preview__category" :class="{ 'scatter-preview__category--empty': !selectedScatterPreview }">
-                    <template v-if="selectedScatterPreview">
-                      <v-icon :icon="selectedScatterPreview.categoryIcon" size="16" />
-                      <span>{{ selectedScatterPreview.categoryLabel }}</span>
-                    </template>
-                    <template v-else>
-                      <span>Select a preset below to apply to the current shape</span>
-                    </template>
-                  </div>
-                </div>
-              </div>
 
               <div class="property-panel__density">
-                <div class="property-panel__density-title">密集度</div>
+                <div class="property-panel__density-title">Density</div>
                 <div class="property-panel__density-row">
                   <div @pointerdown.capture="beginScatterControlsInteraction">
                     <v-slider
@@ -6374,6 +6355,10 @@ onBeforeUnmount(() => {
 
 .planning-guide-line--draft {
   background: rgba(244, 246, 251, 0.75);
+}
+
+.planning-guide-line--hover {
+  background: rgba(244, 246, 251, 0.38);
 }
 
 .canvas-boundary-overlay {
