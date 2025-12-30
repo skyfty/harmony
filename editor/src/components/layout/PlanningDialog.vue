@@ -1835,20 +1835,6 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
 
 const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
 
-const selectedScatterPreview = computed(() => {
-  const assignment = selectedScatterAssignment.value
-  if (!assignment) {
-    return null
-  }
-  const preset = terrainScatterPresets[assignment.category]
-  return {
-    name: assignment.name ?? preset?.label ?? 'Scatter 预设',
-    thumbnail: assignment.thumbnail ?? null,
-    categoryLabel: preset?.label ?? assignment.category,
-    categoryIcon: preset?.icon ?? 'mdi-sprout',
-  }
-})
-
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
   if (!target) {
