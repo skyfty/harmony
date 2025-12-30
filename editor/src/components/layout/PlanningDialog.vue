@@ -1872,15 +1872,22 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
 
 const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
 
+const selectedImage = computed<PlanningImage | null>(() => {
+  return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
+})
+
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
-  if (!target) {
-    return 'No shape selected'
+  if (target) {
+    if (target.layer?.locked) return 'Layer is locked'
+    return null
   }
-  if (target.layer?.locked) {
-    return 'Layer is locked'
+  const img = selectedImage.value
+  if (img) {
+    if (img.locked) return 'Image is locked'
+    return null
   }
-  return null
+  return 'No shape selected'
 })
 
 const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
@@ -3542,6 +3549,28 @@ const scatterDensityEnabled = computed(() => {
     && target.layer?.kind === 'green'
     && !!target.shape.scatter
 })
+
+// Image property models for the property panel when an image is selected
+const imageNameModel = computed({
+  get: () => selectedImage.value ? selectedImage.value.name : '',
+  set: (v: string) => {
+    const img = selectedImage.value
+    if (!img || propertyPanelDisabled.value) return
+    img.name = String(v)
+    markPlanningDirty()
+  },
+})
+
+const imageOpacityModel = computed<number>({
+  get: () => (selectedImage.value ? selectedImage.value.opacity : 1),
+  set: (v: number) => {
+    const img = selectedImage.value
+    if (!img || propertyPanelDisabled.value) return
+    img.opacity = Math.min(1, Math.max(0, Number(v)))
+    markPlanningDirty()
+  },
+})
+
 
 function clearSelectedScatterAssignment() {
   if (propertyPanelDisabled.value) {
@@ -5865,6 +5894,28 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
+            <div v-if="selectedImage" class="property-panel__block">
+              <div style="display:flex;gap:8px;align-items:center;">
+                <v-text-field
+                  v-model="imageNameModel"
+                  density="compact"
+                  hide-details
+                  :disabled="propertyPanelDisabled"
+                  style="flex:1"
+                />
+              </div>
+
+
+              <div style="margin-top:8px">
+                <div class="property-panel__density-title">Opacity</div>
+                <div class="property-panel__density-row">
+                  <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
+                  <div class="property-panel__density-value">{{ Math.round(imageOpacityModel * 100) }}%</div>
+                </div>
+              </div>
+
+            </div>
+
             <div v-if="selectedMeasurementTitle" class="property-panel__density">
               <div class="property-panel__density-title">{{ selectedMeasurementTitle }}</div>
               <div class="property-panel__density-row">
