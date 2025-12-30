@@ -2158,6 +2158,14 @@ watch(selectedFeature, (feature) => {
   selectedName.value = `Segment ${feature.segmentIndex + 1}`
 })
 
+function commitSelectedName(value: string) {
+  if (!selectedScatterTarget.value) return
+  const shape = selectedScatterTarget.value.shape as any
+  shape.name = value
+  selectedName.value = value
+  markPlanningDirty()
+}
+
 watch(activeLayerId, () => {
   ensureSelectionWithinActiveLayer()
 })
@@ -5500,23 +5508,19 @@ onBeforeUnmount(() => {
             'property-panel--disabled': propertyPanelDisabled,
           }"
         >
-          <header class="property-panel__header">
+            <header class="property-panel__header">
             <div class="property-panel__title">
-              <span v-if="selectedScatterTarget" class="property-panel__subtitle">
-                {{ selectedScatterTarget.shape.name }} ·
-                {{ getLayerName(selectedScatterTarget.layer ? selectedScatterTarget.layer.id : '') }}
-              </span>
+              <div v-if="selectedScatterTarget" class="property-panel__subtitle">
+                <v-text-field
+                  v-model="selectedName"
+                  density="compact"
+                  hide-details
+                  :disabled="propertyPanelDisabled"
+                  placeholder="为图形设置名称"
+                  @update:modelValue="commitSelectedName"
+                />
+              </div>
             </div>
-            <v-btn
-              v-if="!propertyPanelDisabled && selectedScatterTarget && propertyPanelLayerKind === 'green' && selectedScatterTarget.shape.scatter"
-              icon
-              size="small"
-              variant="text"
-              color="grey"
-              @click="clearSelectedScatterAssignment"
-            >
-              <v-icon size="18">mdi-close-circle-outline</v-icon>
-            </v-btn>
           </header>
 
           <div v-if="propertyPanelDisabled" class="property-panel__placeholder">
@@ -5972,6 +5976,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  width: 100%;
 }
 
 .property-panel__title h3 {
