@@ -275,6 +275,17 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const editorRef = ref<HTMLDivElement | null>(null)
 const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
+// Dynamic cursor style for editor canvas
+const editorCursorStyle = computed(() => {
+  if (['rectangle', 'lasso', 'line'].includes(currentTool.value)) {
+    return { cursor: 'crosshair' }
+  }
+  if (currentTool.value === 'select') {
+    return { cursor: 'pointer' }
+  }
+  // Default: auto
+  return { cursor: 'auto' }
+})
 const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerId: number; moved: boolean } | null>(null)
 const activeToolbarTool = computed<PlanningTool>(() => currentTool.value)
 
@@ -2262,7 +2273,8 @@ function getPolylineStrokeDasharray(layerId: string) {
 
 function getPolylineStroke(layerId: string) {
   const kind = getLayerKind(layerId)
-  const alpha = kind === 'road' ? 0.85 : 0.95
+  // Increase opacity for better visibility
+  const alpha = kind === 'road' ? 0.95 : 1
   return getLayerColor(layerId, alpha)
 }
 
@@ -3317,7 +3329,8 @@ const lineDraftPreviewPath = computed(() => {
 const lineDraftPreviewStroke = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
   const kind = getLayerKind(layerId)
-  const alpha = kind === 'road' ? 0.45 : 0.55
+  // Increase opacity for better visibility
+  const alpha = kind === 'road' ? 0.75 : 0.85
   return getLayerColor(layerId, alpha)
 })
 
@@ -3382,20 +3395,6 @@ function deleteSelectedFeature() {
     selectedVertex.value = null
     markPlanningDirty()
     return
-  }
-
-  if (feature.type === 'polyline') {
-    const layerId = polylines.value.find((item) => item.id === feature.id)?.layerId
-    if (layerId && !canEditPolylineGeometry(layerId)) {
-      return
-    }
-  }
-
-  if (feature.type === 'segment') {
-    const layerId = polylines.value.find((item) => item.id === feature.lineId)?.layerId
-    if (layerId && !canEditPolylineGeometry(layerId)) {
-      return
-    }
   }
 
   if (feature.type === 'polyline') {
@@ -3917,7 +3916,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 }
 
-function handlePointerUp(event: PointerEvent) {
+async function handlePointerUp(event: PointerEvent) {
   const state = dragState.value
   if (state.type !== 'idle' && state.pointerId === event.pointerId) {
     const shouldDirty =
@@ -3937,6 +3936,19 @@ function handlePointerUp(event: PointerEvent) {
     frozenCanvasSize.value = null
 
     if (shouldDirty) {
+      // Ensure any pending RAF-applied moves are flushed before persisting metadata.
+      try {
+        scheduleRafFlush()
+        await new Promise((res) => requestAnimationFrame(res))
+        // Persist updated layer metadata (positions, scales, etc.) to IndexedDB so
+        // a browser refresh won't lose recent image edits even if the scene data
+        // hasn't been saved to the server yet.
+        await persistLayersToIndexedDB()
+      } catch (e) {
+        // non-fatal
+        // eslint-disable-next-line no-console
+        console.warn('Failed to persist planning layers after pointer up', e)
+      }
       markPlanningDirty()
     }
   }
@@ -4043,6 +4055,12 @@ function handleKeydown(event: KeyboardEvent) {
     return
   }
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedFeature.value) {
+    // If focus is in an input or textarea, do not delete shape/layer
+    const active = document.activeElement
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) {
+      // Let default text editing behavior happen
+      return
+    }
     event.preventDefault()
     deleteSelectedFeature()
     return
@@ -4546,9 +4564,11 @@ async function persistLayersToIndexedDB() {
         visible: img.visible,
         locked: img.locked,
         opacity: img.opacity,
-        position: img.position,
-        scale: img.scale,
-        alignMarker: img.alignMarker ?? null,
+        // Deep clone position to avoid Proxy/Ref issues
+        position: img.position ? { x: img.position.x, y: img.position.y } : { x: 0, y: 0 },
+        // Scale is a number, but ensure primitive
+        scale: typeof img.scale === 'number' ? img.scale : 1,
+        alignMarker: img.alignMarker ? { ...img.alignMarker } : null,
       }
       store.put(record)
     }
@@ -5479,7 +5499,7 @@ onBeforeUnmount(() => {
           <div
             ref="editorRef"
             class="editor-canvas"
-            :style="editorBackgroundStyle"
+            :style="{ ...editorBackgroundStyle, ...editorCursorStyle }"
             @pointerdown="handleEditorPointerDown"
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
@@ -5894,26 +5914,26 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
-            <div v-if="selectedImage" class="property-panel__block">
-              <div style="display:flex;gap:8px;align-items:center;">
-                <v-text-field
-                  v-model="imageNameModel"
-                  density="compact"
-                  hide-details
-                  :disabled="propertyPanelDisabled"
-                  style="flex:1"
-                />
+            <div v-if="selectedImage">
+              <div class="property-panel__block">
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <v-text-field
+                    v-model="imageNameModel"
+                    density="compact"
+                    hide-details
+                    :disabled="propertyPanelDisabled"
+                    style="flex:1"
+                  />
+                </div>
               </div>
 
-
-              <div style="margin-top:8px">
+              <div class="property-panel__density">
                 <div class="property-panel__density-title">Opacity</div>
                 <div class="property-panel__density-row">
                   <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
                   <div class="property-panel__density-value">{{ Math.round(imageOpacityModel * 100) }}%</div>
                 </div>
               </div>
-
             </div>
 
             <div v-if="selectedMeasurementTitle" class="property-panel__density">
