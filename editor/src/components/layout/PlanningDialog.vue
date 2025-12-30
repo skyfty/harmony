@@ -4523,14 +4523,18 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
-  event.stopPropagation()
-  event.preventDefault()
-  frozenCanvasSize.value = { ...canvasSize.value }
-  activeImageId.value = imageId
   const image = planningImages.value.find((img) => img.id === imageId)
   if (!image) {
     return
   }
+  // Only intercept image-area pointer events when the image is already selected in the panel.
+  // Otherwise allow the event to bubble so the editor can handle pan/selection normally.
+  if (activeImageId.value !== imageId) {
+    return
+  }
+  event.stopPropagation()
+  event.preventDefault()
+  frozenCanvasSize.value = { ...canvasSize.value }
   if (!image.visible) {
     return
   }
