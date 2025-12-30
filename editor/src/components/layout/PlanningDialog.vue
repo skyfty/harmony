@@ -2255,7 +2255,11 @@ function getLayerColor(layerId: string, alpha = 1) {
   if (!layer) {
     return `rgba(255, 255, 255, ${alpha})`
   }
-  return hexToRgba(layer.color, alpha)
+  // Reduce opacity for active layer to better distinguish it from others.
+  // Active layers are considered interactive (see `isActiveLayer`).
+  const ACTIVE_LAYER_ALPHA_FACTOR = 0.5
+  const effectiveAlpha = isActiveLayer(layerId) ? alpha * ACTIVE_LAYER_ALPHA_FACTOR : alpha
+  return hexToRgba(layer.color, effectiveAlpha)
 }
 
 function getLayerKind(layerId: string) {
@@ -5543,6 +5547,17 @@ onBeforeUnmount(() => {
 
                   <!-- Drawn polygon areas -->
                   <g v-for="poly in visiblePolygons" :key="poly.id">
+                    <!-- white outline for active layer to improve contrast -->
+                    <path
+                      v-if="isActiveLayer(poly.layerId)"
+                      :d="getPolygonPath(poly.points, getLayerSmoothingValue(poly.layerId))"
+                      fill="none"
+                      stroke="white"
+                      stroke-linejoin="round"
+                      stroke-width="0.35"
+                      pointer-events="none"
+                    />
+
                     <path
                       class="planning-polygon"
                       :class="{
@@ -5606,6 +5621,23 @@ onBeforeUnmount(() => {
                   
                   <!-- Drawn segments (represented as polyline) -->
                   <g v-for="line in visiblePolylines" :key="line.id">
+                    <!-- white outline for active layer polylines -->
+                    <path
+                      v-if="isActiveLayer(line.layerId)"
+                      :d="getPolylinePath(line.points)"
+                      fill="none"
+                      stroke="white"
+                      :vector-effect="getPolylineVectorEffect(line.layerId)"
+                      :stroke-linejoin="getPolylineStrokeLinejoin(line)"
+                      stroke-linecap="round"
+                      :stroke-width="getPolylineStrokeWidth(
+                        line.layerId,
+                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
+                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
+                      ) + 0.8"
+                      pointer-events="none"
+                    />
+
                     <path
                       class="planning-line"
                       :class="{
