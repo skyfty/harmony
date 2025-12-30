@@ -5502,7 +5502,6 @@ onBeforeUnmount(() => {
         >
           <header class="property-panel__header">
             <div class="property-panel__title">
-              <h3>Shape Properties</h3>
               <span v-if="selectedScatterTarget" class="property-panel__subtitle">
                 {{ selectedScatterTarget.shape.name }} ·
                 {{ getLayerName(selectedScatterTarget.layer ? selectedScatterTarget.layer.id : '') }}
@@ -5546,7 +5545,6 @@ onBeforeUnmount(() => {
                     v-model="airWallEnabledModel"
                     density="compact"
                     hide-details
-                    inset
                     label="Air Wall"
                   />
                 </div>
@@ -5639,7 +5637,18 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-else-if="propertyPanelLayerKind === 'water'">
-              <div class="property-panel__density">
+
+              <div class="property-panel__block">
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="airWallEnabledModel"
+                    density="compact"
+                    hide-details
+                    label="Air Wall"
+                  />
+                </div>
+              </div>
+              <div class="property-panel__block">
                 <v-select
                   label="Preset"
                   density="compact"
@@ -5652,17 +5661,9 @@ onBeforeUnmount(() => {
                   :disabled="propertyPanelDisabled"
                   @update:modelValue="handleWaterPresetChange"
                 />
+              </div>
 
-                <div class="property-panel__density-row">
-                  <v-switch
-                    v-model="airWallEnabledModel"
-                    density="compact"
-                    hide-details
-                    inset
-                    label="Air Wall"
-                  />
-                </div>
-
+              <div class="property-panel__block">
                 <div class="property-panel__density-title">水面平滑度</div>
                 <div class="property-panel__density-row">
                   <v-slider
@@ -5706,7 +5707,6 @@ onBeforeUnmount(() => {
                     v-model="airWallEnabledModel"
                     density="compact"
                     hide-details
-                    inset
                     label="Air Wall"
                   />
                 </div>
@@ -5874,6 +5874,14 @@ onBeforeUnmount(() => {
 }
 
 .property-panel__density {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.property-panel__block {
   margin-top: 12px;
   padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
