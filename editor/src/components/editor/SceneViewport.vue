@@ -80,6 +80,8 @@ import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
+import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
@@ -354,6 +356,89 @@ let environmentMapAssetId: string | null = null
 let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
+
+// Building label font/meshes (planning-conversion buildings)
+const buildingLabelMeshes = new Map<string, THREE.Mesh>()
+let fontPromise: Promise<THREE.Font> | null = null
+const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
+
+function loadLabelFont(): Promise<THREE.Font> {
+  if (fontPromise) return fontPromise
+  fontPromise = new Promise<THREE.Font>((resolve, reject) => {
+    const loader = new FontLoader()
+    // load from CDN at runtime (falls back if blocked)
+    const url = 'https://unpkg.com/three@0.154.0/examples/fonts/helvetiker_regular.typeface.json'
+    loader.load(
+      url,
+      (font) => resolve(font),
+      undefined,
+      (err) => reject(err),
+    )
+  })
+  return fontPromise
+}
+
+async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
+  try {
+    if (!node || !container) return
+
+    const nodeId = node.id
+    const existing = buildingLabelMeshes.get(nodeId)
+    const labelText = (node.name && String(node.name).trim()) || 'Building'
+
+    const font = await loadLabelFont()
+
+    // If existing label and text unchanged, just update position later
+    if (existing && existing.userData?.labelText === labelText) {
+      return
+    }
+
+    // Remove old
+    if (existing) {
+      existing.geometry.dispose()
+      ;(existing.material as THREE.Material).dispose?.()
+      existing.removeFromParent()
+      buildingLabelMeshes.delete(nodeId)
+    }
+
+    const size = 1.0
+    const height = 0.08
+    const geom = new TextGeometry(labelText, { font, size, height, curveSegments: 6, bevelEnabled: false })
+    geom.computeBoundingBox()
+    const bbox = geom.boundingBox
+    if (bbox) {
+      const center = new THREE.Vector3()
+      bbox.getCenter(center)
+      geom.translate(-center.x, -center.y, -center.z)
+    }
+
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+    mat.depthTest = false
+    mat.toneMapped = false
+    const mesh = new THREE.Mesh(geom, mat)
+    mesh.name = `${node.name ?? 'Building'} (label)`
+    mesh.userData = { nodeId, editorOnly: true, labelText }
+    mesh.renderOrder = 9999
+
+    // compute center of container in local space
+    const box = new THREE.Box3().setFromObject(container)
+    const worldCenter = new THREE.Vector3()
+    box.getCenter(worldCenter)
+    // convert to container local
+    const localCenter = worldCenter.clone()
+    container.worldToLocal(localCenter)
+    mesh.position.copy(localCenter)
+    // float a bit above
+    mesh.position.y = (box.max.y - box.min.y) * 0.5 + 0.2
+
+    // attach to the same container so it moves with the node
+    container.add(mesh)
+    buildingLabelMeshes.set(nodeId, mesh)
+  } catch (err) {
+    // ignore font/load errors silently
+    console.warn('Failed to create building label', err)
+  }
+}
 
 const PROTAGONIST_PREVIEW_WIDTH = 240
 const PROTAGONIST_PREVIEW_HEIGHT = 140
@@ -4586,6 +4671,22 @@ function animate() {
 
   updateScatterLod()
   updateInstancedCullingAndLod()
+  // make building labels face the camera and follow their parent container
+  if (buildingLabelMeshes.size > 0 && camera) {
+    const tmpBox = new THREE.Box3()
+    const tmpVec = new THREE.Vector3()
+    for (const [nodeId, mesh] of buildingLabelMeshes.entries()) {
+      const parent = objectMap.get(nodeId)
+      if (!parent) continue
+      tmpBox.setFromObject(parent)
+      tmpBox.getCenter(tmpVec)
+      const localCenter = tmpVec.clone()
+      parent.worldToLocal(localCenter)
+      mesh.position.copy(localCenter)
+      mesh.position.y = (tmpBox.max.y - tmpBox.min.y) * 0.5 + 0.2
+      mesh.quaternion.copy(camera.quaternion)
+    }
+  }
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
@@ -4659,6 +4760,15 @@ function disposeScene() {
   orbitControls = null
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
+  // dispose building label meshes
+  if (buildingLabelMeshes.size) {
+    for (const mesh of buildingLabelMeshes.values()) {
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose?.()
+      mesh.removeFromParent()
+    }
+    buildingLabelMeshes.clear()
+  }
   isGroundSelectionOrbitDisabled = false
 
   disposePostProcessing()
@@ -8748,6 +8858,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       floorGroup.removeFromParent()
       floorGroup.userData.nodeId = node.id
       floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
+
+      const nd = (node as any).userData
+      if (nd && nd.kind === 'building') {
+        void createOrUpdateLabel(node, floorGroup)
+      }
       container.add(floorGroup)
       containerData.floorGroup = floorGroup
     } else {

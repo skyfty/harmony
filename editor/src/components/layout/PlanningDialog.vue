@@ -2285,6 +2285,7 @@ function getPolylineStroke(layerId: string) {
 function getPolylineStrokeWidth(layerId: string, isSelected = false) {
   const kind = getLayerKind(layerId)
   const selectedScale = 1.52
+  const MIN_STROKE_WORLD = 0.1 // minimum stroke width in world units (meters)
   if (kind === 'road') {
     const layer = layers.value.find((item) => item.id === layerId)
     const width = Number(layer?.roadWidthMeters ?? 2)
@@ -2292,14 +2293,32 @@ function getPolylineStrokeWidth(layerId: string, isSelected = false) {
       return isSelected ? 2 * selectedScale : 2
     }
     const clamped = Math.min(10, Math.max(0.1, width))
-    return isSelected ? clamped * selectedScale : clamped
+    // Roads scale with zoom (world units). Enforce minimum world stroke width.
+    const result = isSelected ? clamped * selectedScale : clamped
+    return Math.max(result, MIN_STROKE_WORLD)
   }
   if (kind === 'wall') {
     const base = 3.2
-    return isSelected ? base * selectedScale : base
+    // Walls use non-scaling stroke (screen px). Ensure that the stroke, when
+    // converted to world units, is at least MIN_STROKE_WORLD. Calculate required
+    // minimum in px based on current render scale.
+    const vectorEffect = getPolylineVectorEffect(layerId)
+    const desired = isSelected ? base * selectedScale : base
+    if (vectorEffect === 'non-scaling-stroke') {
+      const minPx = MIN_STROKE_WORLD * Math.max(1e-6, renderScale.value)
+      return Math.max(desired, minPx)
+    }
+    return Math.max(desired, MIN_STROKE_WORLD)
   }
   const base = 1.05
-  return isSelected ? base * selectedScale : base
+  // Default kinds use non-scaling stroke; apply same minimum logic as for walls.
+  const vectorEffect = getPolylineVectorEffect(layerId)
+  const desired = isSelected ? base * selectedScale : base
+  if (vectorEffect === 'non-scaling-stroke') {
+    const minPx = MIN_STROKE_WORLD * Math.max(1e-6, renderScale.value)
+    return Math.max(desired, minPx)
+  }
+  return Math.max(desired, MIN_STROKE_WORLD)
 }
 
 function getPolylineHitRadiusWorld(line: PlanningPolyline, isSelected = false): number {
@@ -3338,9 +3357,9 @@ const lineDraftPreviewPath = computed(() => {
 const lineDraftPreviewStroke = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
   const kind = getLayerKind(layerId)
-  // Increase opacity for better visibility
-  const alpha = kind === 'road' ? 0.75 : 0.85
-  return getLayerColor(layerId, alpha)
+  // Use a high-contrast, fully opaque preview color for drawing (no transparency)
+  // Bright yellow chosen for contrast against dark/light backgrounds.
+  return 'rgba(255, 196, 0, 1)'
 })
 
 const lineDraftPreviewDasharray = computed(() => {
@@ -5552,9 +5571,9 @@ onBeforeUnmount(() => {
                       v-if="isActiveLayer(poly.layerId)"
                       :d="getPolygonPath(poly.points, getLayerSmoothingValue(poly.layerId))"
                       fill="none"
-                      stroke="white"
+                      stroke="rgba(255,255,255,0.95)"
                       stroke-linejoin="round"
-                      stroke-width="0.35"
+                      stroke-width="0.9"
                       pointer-events="none"
                     />
 
@@ -5626,7 +5645,7 @@ onBeforeUnmount(() => {
                       v-if="isActiveLayer(line.layerId)"
                       :d="getPolylinePath(line.points)"
                       fill="none"
-                      stroke="white"
+                      stroke="rgba(255,255,255,0.95)"
                       :vector-effect="getPolylineVectorEffect(line.layerId)"
                       :stroke-linejoin="getPolylineStrokeLinejoin(line)"
                       stroke-linecap="round"
@@ -5634,7 +5653,7 @@ onBeforeUnmount(() => {
                         line.layerId,
                         (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
                           || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
-                      ) + 0.8"
+                      ) + 1.6"
                       pointer-events="none"
                     />
 
