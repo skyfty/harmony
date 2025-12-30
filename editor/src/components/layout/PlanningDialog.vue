@@ -5430,37 +5430,9 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="property-panel__scatter-preview">
-                <div class="scatter-preview__thumbnail">
-                  <img
-                    v-if="selectedScatterPreview && selectedScatterPreview.thumbnail"
-                    :src="selectedScatterPreview.thumbnail"
-                    :alt="selectedScatterPreview.name"
-                    loading="lazy"
-                    draggable="false"
-                  >
-                  <div v-else class="scatter-preview__placeholder">
-                    <v-icon icon="mdi-image-outline" size="20" />
-                  </div>
-                </div>
-                <div class="scatter-preview__meta">
-                  <div class="scatter-preview__name">
-                    {{ selectedScatterPreview ? selectedScatterPreview.name : '未设置 Scatter 预设' }}
-                  </div>
-                  <div class="scatter-preview__category" :class="{ 'scatter-preview__category--empty': !selectedScatterPreview }">
-                    <template v-if="selectedScatterPreview">
-                      <v-icon :icon="selectedScatterPreview.categoryIcon" size="16" />
-                      <span>{{ selectedScatterPreview.categoryLabel }}</span>
-                    </template>
-                    <template v-else>
-                      <span>Select a preset below to apply to the current shape</span>
-                    </template>
-                  </div>
-                </div>
-              </div>
 
               <div class="property-panel__density">
-                <div class="property-panel__density-title">密集度</div>
+                <div class="property-panel__density-title">Density</div>
                 <div class="property-panel__density-row">
                   <div @pointerdown.capture="beginScatterControlsInteraction">
                     <v-slider

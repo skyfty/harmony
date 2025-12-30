@@ -101,22 +101,23 @@ export function generateTicks(options: {
     return { major: [], minor: [] }
   }
 
-  const min = Math.max(0, Math.min(options.visibleMinMeters, options.visibleMaxMeters))
-  const max = Math.max(0, Math.max(options.visibleMinMeters, options.visibleMaxMeters))
-  const clampedMin = Math.max(0, min)
-  const clampedMax = Math.min(Math.max(0, options.axisMaxMeters), max)
+  // 允许负数刻度，visibleMin/Max不强制为0
+  const min = Math.min(options.visibleMinMeters, options.visibleMaxMeters)
+  const max = Math.max(options.visibleMinMeters, options.visibleMaxMeters)
+  // 不再clamp到0和axisMaxMeters，允许负数
+  const clampedMin = min
+  const clampedMax = max
 
   if (!(clampedMax > clampedMin)) {
     return { major: [], minor: [] }
   }
 
+  // 以0为中心，向两侧生成刻度
   const startMajor = Math.ceil(clampedMin / majorStep) * majorStep
   const endMajor = clampedMax
 
   const major: RulerTick[] = []
   for (let v = startMajor; v <= endMajor + majorStep * 1e-6; v += majorStep) {
-    if (v < 0) continue
-    if (v > options.axisMaxMeters) continue
     major.push({ valueMeters: v, isMajor: true })
   }
 
@@ -126,8 +127,6 @@ export function generateTicks(options: {
     const startMinor = Math.ceil(clampedMin / minorStep) * minorStep
     const endMinor = clampedMax
     for (let v = startMinor; v <= endMinor + minorStep * 1e-6; v += minorStep) {
-      if (v < 0) continue
-      if (v > options.axisMaxMeters) continue
       // Skip if it coincides with a major tick.
       const mod = v % majorStep
       const isMajor = Math.abs(mod) < 1e-6 || Math.abs(mod - majorStep) < 1e-6

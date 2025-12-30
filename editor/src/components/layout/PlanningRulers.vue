@@ -130,6 +130,7 @@ function drawTopRuler() {
     ctx.lineTo(px, height - 10)
     ctx.stroke()
 
+    // 直接显示正负数label
     const label = formatMetersValue(t.valueMeters, steps.majorStepMeters)
     if (label) {
       ctx.fillText(label, px + 3, 3)
@@ -205,9 +206,9 @@ function drawLeftRuler() {
     ctx.lineTo(width - 10, py)
     ctx.stroke()
 
+    // 直接显示正负数label
     const label = formatMetersValue(t.valueMeters, steps.majorStepMeters)
     if (label) {
-      // Keep labels fully visible inside the ruler width.
       ctx.font = baseFont
       const maxLabelWidth = Math.max(0, width - 14)
       if (ctx.measureText(label).width > maxLabelWidth) {
