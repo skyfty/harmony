@@ -11346,7 +11346,8 @@ export const useSceneStore = defineStore('scene', {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
       bodyAssetId?: string | null
-      jointAssetId?: string | null
+      jointAssetId?: string | null,
+      editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
       if (!build) {
@@ -11367,6 +11368,7 @@ export const useSceneStore = defineStore('scene', {
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
           dynamicMesh: build.definition,
+          editorFlags: payload.editorFlags,
         })
         if (node) {
           this.ensureStaticRigidbodyComponent(node.id)
@@ -11400,7 +11402,8 @@ export const useSceneStore = defineStore('scene', {
       points: Vector3Like[]
       width?: number
       name?: string
-      bodyAssetId?: string | null
+      bodyAssetId?: string | null,
+      editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = buildRoadDynamicMeshFromWorldPoints(payload.points, payload.width)
       if (!build) {
@@ -11446,6 +11449,7 @@ export const useSceneStore = defineStore('scene', {
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
           dynamicMesh: build.definition,
+          editorFlags: payload.editorFlags,
         })
 
         if (node) {
@@ -11474,7 +11478,8 @@ export const useSceneStore = defineStore('scene', {
 
     createFloorNode(payload: {
       points: Vector3Like[]
-      name?: string
+      name?: string,
+      editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = buildFloorDynamicMeshFromWorldPoints(payload.points)
       if (!build) {
@@ -11495,6 +11500,7 @@ export const useSceneStore = defineStore('scene', {
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
           dynamicMesh: build.definition,
+          editorFlags: payload.editorFlags,
         })
 
         if (node) {
@@ -13037,7 +13043,7 @@ export const useSceneStore = defineStore('scene', {
         renamedScenes,
       }
     },
-    async ensureCurrentSceneLoaded(_: { skipComponentSync?: boolean } = {}) {
+    async ensureCurrentSceneLoaded() {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
 

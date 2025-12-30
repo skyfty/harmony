@@ -7,6 +7,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import PlanningRulers from '@/components/layout/PlanningRulers.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -38,7 +39,7 @@ const layerKindLabels: Record<LayerKind, string> = {
   water: 'Water',
 }
 
-const addableLayerKinds: LayerKind[] = ['road', 'floor', 'water', 'green', 'wall']
+const addableLayerKinds: LayerKind[] = ['road', 'floor', 'water', 'green', 'wall', 'building']
 
 interface PlanningLayer {
   id: string
@@ -90,6 +91,14 @@ interface PlanningScatterAssignment {
   footprintMaxSizeM: number
 }
 
+interface PlacedModel {
+  id?: string
+  assetId: string
+  position: PlanningPoint
+  rotation?: number
+  scale?: number
+}
+
 interface PlanningPolygon {
   id: string
   name: string
@@ -98,6 +107,8 @@ interface PlanningPolygon {
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
+  /** Placed building models (only meaningful for building layer) */
+  placedModels?: PlacedModel[]
 }
 
 interface PlanningPolyline {
@@ -201,6 +212,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
+  { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
   { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15 },
 ]
@@ -2934,6 +2946,57 @@ function clientToWorld(clientX: number, clientY: number): PlanningPoint {
   return { x, y }
 }
 
+function extractAssetPayloadFromDrag(event: DragEvent): { assetId: string } | null {
+  if (!event.dataTransfer) return null
+  const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed?.assetId && typeof parsed.assetId === 'string') {
+        return { assetId: parsed.assetId }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  // Fallback to scene store dragging id if present
+  const dragging = (sceneStore as any).draggingAssetId
+  if (dragging && typeof dragging === 'string') return { assetId: dragging }
+  return null
+}
+
+function isAssetDrag(event: DragEvent): boolean {
+  if (!event.dataTransfer) return false
+  return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
+}
+
+function handleCanvasDragOver(event: DragEvent) {
+  if (isAssetDrag(event)) {
+    event.preventDefault()
+  }
+}
+
+function handleCanvasDrop(event: DragEvent) {
+  const payload = extractAssetPayloadFromDrag(event)
+  if (!payload) return
+  const world = clientToWorld(event.clientX, event.clientY)
+  const polygon = hitTestPolygon(world)
+  if (!polygon) return
+  const kind = getLayerKind(polygon.layerId)
+  if (kind !== 'building') return
+  const model: PlacedModel = { id: createId('placed'), assetId: payload.assetId, position: world }
+  polygon.placedModels = Array.isArray(polygon.placedModels) ? [...polygon.placedModels, model] : [model]
+  markPlanningDirty()
+}
+
+function handlePlacedModelPointerDown(polygonId: string, modelId: string | undefined, event: PointerEvent) {
+  // keep parameters referenced to avoid unused-variable TS errors
+  void polygonId
+  void modelId
+  event.stopPropagation()
+  event.preventDefault()
+}
+
 function hitTestImage(point: PlanningPoint) {
   for (let i = planningImages.value.length - 1; i >= 0; i -= 1) {
     const image = planningImages.value[i]
@@ -5090,6 +5153,8 @@ onBeforeUnmount(() => {
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
             @contextmenu.prevent="handleEditorContextMenu"
+            @dragover.prevent="handleCanvasDragOver"
+            @drop.prevent="handleCanvasDrop"
           >
             <PlanningRulers
               :viewport-width="editorRect?.width ?? 0"
@@ -5165,6 +5230,21 @@ onBeforeUnmount(() => {
                       :height="polygonScatterThumbPlacements[poly.id]!.size"
                       preserveAspectRatio="xMidYMid meet"
                     />
+                    <!-- Placed building models (simple placeholder markers) -->
+                    <g v-if="poly.placedModels?.length" class="placed-models" :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }">
+                      <g v-for="(m, idx) in poly.placedModels" :key="m.id ?? `${poly.id}-placed-${idx}`">
+                        <circle
+                          :cx="m.position.x"
+                          :cy="m.position.y"
+                          :r="Math.max(0.25, vertexHandleRadiusWorld)"
+                          fill="orange"
+                          stroke="rgba(255,255,255,0.9)"
+                          :stroke-width="vertexHandleStrokeWidthWorld"
+                          pointer-events="visibleFill"
+                          @pointerdown="(e) => handlePlacedModelPointerDown(poly.id, m.id, e as PointerEvent)"
+                        />
+                      </g>
+                    </g>
                   </g>
 
                   

@@ -9090,14 +9090,6 @@ watch(
   { deep: true }
 )
 
-// watch(
-//   () => sceneStore.currentSceneId,
-//   () => {
-//     sceneStore.ensureCurrentSceneLoaded().then(() => {
-//       syncSceneGraph()
-//     })
-//   }
-// )
 watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {

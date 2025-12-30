@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
   SceneNodeMaterial,
+  SceneNodeEditorFlags,
 } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
@@ -56,20 +57,24 @@ export type ConvertPlanningToSceneOptions = {
       canPrefab?: boolean
       parentId?: string | null
       userData?: Record<string, unknown>
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode
     createWallNode: (payload: {
       segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createRoadNode: (payload: {
       points: Array<{ x: number; y: number; z: number }>
       width?: number
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createFloorNode: (payload: {
       points: Array<{ x: number; y: number; z: number }>
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
@@ -110,7 +115,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 
-type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water'
+type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water' | 'building'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -310,12 +315,14 @@ function layerKindFromId(layerId: string): LayerKind | null {
       return 'water'
     case 'wall-layer':
       return 'wall'
+    case 'building-layer':
+      return 'building'
     default:
       break
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(road|floor|green|water|wall)-layer\b/i.exec(layerId)
+  const match = /^(road|floor|green|water|wall|building)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -332,7 +339,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
+  return ['road-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -348,6 +355,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
         || normalized === 'green'
         || normalized === 'water'
         || normalized === 'wall'
+        || normalized === 'building'
       ) {
         return normalized as LayerKind
       }
@@ -891,6 +899,43 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
           kind: 'floor',
+        })
+        sceneStore.setNodeLocked(floorNode.id, true)
+      }
+    } else if (kind === 'building') {
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+      for (const poly of group.polygons) {
+        updateProgressForUnit(`Converting building: ${poly.name?.trim() || poly.id}`)
+        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+        if (worldXZ.length < 3) {
+          continue
+        }
+
+        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
+        const nodeName = poly.name?.trim()
+          ? poly.name.trim()
+          : (layerName ? `${layerName} Building` : 'Planning Building')
+
+        const floorNode = sceneStore.createFloorNode({
+          points: worldPoints,
+          name: nodeName,
+          editorFlags: {editorOnly: true},
+        })
+
+        if (!floorNode) {
+          continue
+        }
+
+        sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+
+        // Mark planning metadata and lock the node. Try to mark editor-only by
+        // setting the node's userData and then attempting a conservative editor flag
+        // mutation to keep the node out of runtime exports.
+        sceneStore.updateNodeUserData(floorNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          planningFeatureId: poly.id,
+          kind: 'building',
         })
         sceneStore.setNodeLocked(floorNode.id, true)
       }
