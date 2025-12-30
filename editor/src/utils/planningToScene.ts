@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
   SceneNodeMaterial,
+  SceneNodeEditorFlags,
 } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
@@ -56,20 +57,24 @@ export type ConvertPlanningToSceneOptions = {
       canPrefab?: boolean
       parentId?: string | null
       userData?: Record<string, unknown>
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode
     createWallNode: (payload: {
       segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createRoadNode: (payload: {
       points: Array<{ x: number; y: number; z: number }>
       width?: number
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createFloorNode: (payload: {
       points: Array<{ x: number; y: number; z: number }>
       name?: string
+      editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
@@ -310,12 +315,14 @@ function layerKindFromId(layerId: string): LayerKind | null {
       return 'water'
     case 'wall-layer':
       return 'wall'
+    case 'building-layer':
+      return 'building'
     default:
       break
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(road|floor|green|water|wall)-layer\b/i.exec(layerId)
+  const match = /^(road|floor|green|water|wall|building)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -332,8 +339,6 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['road-layer', 'floor-layer', 'water-layer', 'green-layer', 'wall-layer']
-  // include building layer by default when present in planning data
   return ['road-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
@@ -350,6 +355,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
         || normalized === 'green'
         || normalized === 'water'
         || normalized === 'wall'
+        || normalized === 'building'
       ) {
         return normalized as LayerKind
       }
@@ -913,6 +919,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         const floorNode = sceneStore.createFloorNode({
           points: worldPoints,
           name: nodeName,
+          editorFlags: {editorOnly: true},
         })
 
         if (!floorNode) {
@@ -931,47 +938,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           kind: 'building',
         })
         sceneStore.setNodeLocked(floorNode.id, true)
-
-        // If placed models exist on the planning polygon, instantiate them as child nodes.
-        const placed = Array.isArray((poly as any).placedModels) ? (poly as any).placedModels : []
-        for (const pm of placed) {
-          try {
-            const px = Number(pm?.position?.x)
-            const pz = Number(pm?.position?.y)
-            if (!Number.isFinite(px) || !Number.isFinite(pz)) continue
-
-            // Convert planning units into world coordinates (meters were already normalized for polygon points,
-            // but placed model positions in the saved feature may still be in planning units — treat them as meters here).
-            const world = toWorldPoint({ x: px, y: pz } as PlanningPoint, groundWidth, groundDepth, 0)
-            world.y = groundHeightAt(world.x, world.z)
-
-            const asset = typeof (sceneStore as any).getAsset === 'function' ? (sceneStore as any).getAsset(pm.assetId) : null
-            if (!asset) continue
-
-            // Use the high-level addModelNode helper so the asset is properly instantiated/instanced.
-            // This may be asynchronous depending on asset cache; await to keep conversion deterministic.
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore - addModelNode is available on the real sceneStore implementation
-            const created = await (sceneStore as any).addModelNode({
-              asset,
-              parentId: floorNode.id,
-              position: new THREE.Vector3(world.x, world.y, world.z),
-              name: pm.name ?? undefined,
-            })
-
-            if (created && created.id) {
-              ;(sceneStore as any).updateNodeUserData(created.id, {
-                source: PLANNING_CONVERSION_SOURCE,
-                planningLayerId: layerId,
-                planningFeatureId: poly.id,
-                placedModelId: pm.id ?? null,
-              })
-              ;(sceneStore as any).setNodeLocked(created.id, true)
-            }
-          } catch (err) {
-            // ignore individual model placement failures
-          }
-        }
       }
     } else if (kind === 'water') {
       const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
