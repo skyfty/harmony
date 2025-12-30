@@ -8804,7 +8804,6 @@ export const useSceneStore = defineStore('scene', {
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
       const commitOptions = options.commitOptions ?? { updateNodes: false }
-      commitSceneSnapshot(this, commitOptions)
       void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
     },
@@ -11651,8 +11650,6 @@ export const useSceneStore = defineStore('scene', {
           })
         }
       }
-
-      this.captureHistorySnapshot()
 
       visitNode(this.nodes, nodeId, (node) => {
         const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }

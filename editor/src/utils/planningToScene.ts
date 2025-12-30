@@ -5,6 +5,7 @@ import type {
   SceneNodeMaterial,
   SceneNodeEditorFlags,
 } from '@harmony/schema'
+import type {ProjectAsset} from '@/types/project-asset'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -22,6 +23,7 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildRandom, generateFpsScatterPointsInPolygon, hashSeedFromString } from '@/utils/scatterSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   FLOOR_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
@@ -85,6 +87,7 @@ export type ConvertPlanningToSceneOptions = {
     updateNodeUserData: (nodeId: string, userData: Record<string, unknown> | null) => void
     setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
+    registerAsset: (asset: ProjectAsset) => Promise<void>
   }
   planningData: PlanningSceneData
   overwriteExisting: boolean
@@ -963,6 +966,19 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (waterNode) {
           // 默认贴图资产ID
           const defaultTextureId = '694be79d9a9cceb7dd16834d'
+
+          const projectAsset: ProjectAsset = {
+            id: defaultTextureId,
+            name: 'Default Water Texture',
+            type: 'texture',
+            downloadUrl:'https://v.touchmagic.cn/uploads/FhhKc4p770XqX71U.jpg',
+            previewColor: '#ffffff',
+            thumbnail: 'https://v.touchmagic.cn/uploads/thumb-xjq8ZTRJEQo8_7e0.jpg',
+            description: "waternormals.jpg",
+            gleaned: true,
+          }
+          await sceneStore.registerAsset(projectAsset)
+  
           // 构造SceneNodeMaterial类型材质，补全必需字段
           sceneStore.setNodeMaterials(waterNode.id, [
             {
