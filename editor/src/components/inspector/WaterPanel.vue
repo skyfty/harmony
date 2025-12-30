@@ -142,6 +142,44 @@ function handlePresetChange(value: WaterPresetId | null) {
     opacity: preset.alpha,
     transparent: preset.alpha < 1 - OPACITY_EPSILON,
   })
+  // persist preset into node userData so it is saved with the scene
+  persistPresetToNode(value)
+}
+
+// Persist selected preset to node userData so it survives reloads
+watch(
+  () => selectedNode.value?.userData,
+  (ud) => {
+    const id = ud && (ud as any).waterPresetId ? (ud as any).waterPresetId as WaterPresetId : null
+    selectedPreset.value = id
+  },
+  { immediate: true },
+)
+
+// When user selects a preset, also save it into node.userData
+function persistPresetToNode(value: WaterPresetId | null) {
+  const node = selectedNode.value
+  const nodeId = selectedNodeId.value
+  if (!node || !nodeId) return
+  const prev = node.userData && typeof node.userData === 'object' ? { ...(node.userData as Record<string, unknown>) } : {}
+  if (value === null) {
+    delete prev.waterPresetId
+    delete prev.waterPresetParams
+  } else {
+    const preset = WATER_PRESETS.find((p) => p.id === value)
+    if (preset) {
+      prev.waterPresetId = value
+      prev.waterPresetParams = {
+        distortionScale: preset.distortionScale,
+        size: preset.size,
+        flowSpeed: preset.flowSpeed,
+        waveStrength: preset.waveStrength,
+        waterColor: preset.waterColor,
+        alpha: preset.alpha,
+      }
+    }
+  }
+  sceneStore.updateNodeUserData(nodeId, prev as Record<string, unknown>)
 }
 
 function toFixedNumber(value: number, decimals: number) {

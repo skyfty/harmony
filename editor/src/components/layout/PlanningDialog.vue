@@ -1847,8 +1847,6 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
 
 const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
 
-// removed unused `selectedScatterPreview` to satisfy TS no-unused-vars
-
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
   if (!target) {
