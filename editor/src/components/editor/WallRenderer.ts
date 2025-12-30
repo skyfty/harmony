@@ -40,6 +40,8 @@ function applyAirWallMaterialOverride(material: THREE.Material, isAirWall: boole
     }
     mat.opacity = AIR_WALL_OPACITY
     mat.depthWrite = false
+    mat.needsUpdate = true
+    
     return
   }
 
@@ -53,7 +55,7 @@ function applyAirWallMaterialOverride(material: THREE.Material, isAirWall: boole
   delete userData[AIR_WALL_MATERIAL_ORIGINAL_KEY]
 }
 
-function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boolean): void {
+export function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boolean): void {
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {

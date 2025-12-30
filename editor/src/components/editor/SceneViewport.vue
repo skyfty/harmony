@@ -156,7 +156,7 @@ import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
-import { createWallRenderer } from './WallRenderer'
+import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
@@ -8062,6 +8062,19 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   if (nodeType === 'Light') {
     updateLightObjectProperties(object, node)
   }
+
+  if (node.dynamicMesh?.type === 'Wall') {
+    updateWallObjectProperties(object, node);
+  }
+}
+
+function updateWallObjectProperties(object: THREE.Object3D, node: SceneNode) {
+    const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined
+
+    const isAirWall = Boolean((wallComponent?.props as any)?.isAirWall)
+    applyAirWallVisualToWallGroup(object, isAirWall)
 }
 
 function updateGroundChunkStreaming() {
