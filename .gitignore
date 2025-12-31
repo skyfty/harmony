@@ -30,13 +30,17 @@ admin/.env
 miniprogram/.env
 
 # WebAssembly / Rust build artifacts and caches
-# Rust build output (moved crate into editor/src/wasm)
-editor/src/wasm/rust-crate/target/
-editor/src/wasm/rust-crate/**/target/
+# Rust build output for the wasm crate located at `editor/wasm`
+editor/wasm/target/
+editor/wasm/target/**
 
 # Generated wasm package (wasm-bindgen / wasm-pack output used by frontend)
-editor/src/wasm/pkg/
-editor/src/wasm/pkg/**
+editor/wasm/pkg/
+editor/wasm/pkg/**
+
+# Keep debug copies and intermediate debug files out of git
+editor/wasm/*.debug
+editor/wasm/pkg/*.debug
 
 # wasm-pack / tool caches
 .cache/
