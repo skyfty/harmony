@@ -2,6 +2,7 @@
 import { storeToRefs } from 'pinia'
 import LoadingOverlay from '@/components/layout/LoadingOverlay.vue'
 import { useUiStore } from '@/stores/uiStore'
+import WasmDemo from '@/components/WasmDemo.vue'
 
 const uiStore = useUiStore()
 const { loadingOverlay } = storeToRefs(uiStore)
@@ -14,6 +15,7 @@ function handleOverlayClose() {
 <template>
   <v-app>
     <RouterView />
+    <WasmDemo />
     <LoadingOverlay
       :visible="loadingOverlay.visible"
       :mode="loadingOverlay.mode"
