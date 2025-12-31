@@ -9,7 +9,13 @@ export async function loadWasm() {
   const modulePath = '/wasm/pkg/editor_wasm.js';
   const pkg = await import(modulePath);
 
-  // If the crate provides an init function for debugging, call it.
+  // Initialize the wasm module (wasm-bindgen async initializer).
+  // This sets the internal `wasm` variable used by the generated wrapper.
+  if (typeof pkg.default === 'function') {
+    await pkg.default();
+  }
+
+  // If the crate provides an init function for debugging, call it (safe now).
   try {
     if (typeof pkg.init_panic_hook === 'function') pkg.init_panic_hook();
   } catch (e) {
