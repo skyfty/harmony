@@ -2878,7 +2878,7 @@ terrainGridHelper.name = 'TerrainGridHelper'
 
 const TERRAIN_GRID_BLOCK_CELLS = 64
 const TERRAIN_GRID_BLOCK_PADDING = 1
-const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 120
+const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 320
 const TERRAIN_GRID_HEIGHT_MARGIN = 0.5
 const terrainGridFrustum = new THREE.Frustum()
 const terrainGridProjScreenMatrix = new THREE.Matrix4()
@@ -9401,7 +9401,6 @@ defineExpose<SceneViewportHandle>({
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
         @capture-screenshot="handleCaptureScreenshot"
-        @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
         @toggle-scatter-erase="toggleScatterEraseMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"

@@ -514,8 +514,6 @@ export class TerrainGridHelper extends THREE.Object3D {
     this.pendingSignature = cacheKey
     this.setVisible(true)
     this.buildSegmentsAsync(definition, cacheKey, visibleRange).catch((error) => {
-      // 异步失败不应打断编辑器；仅记录，后续更新会重试。
-      console.warn('生成地形网格失败：', error)
       if (this.pendingSignature === cacheKey) {
         this.pendingSignature = null
       }
