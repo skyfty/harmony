@@ -171,13 +171,17 @@ const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
+// Tuning: increase follow distance and lower camera so vehicles sit higher on-screen
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 2.35
-const VEHICLE_FOLLOW_HEIGHT_MIN = 7.4
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.35
+// Lower the minimum follow camera height to bring the camera closer to vehicle height
+const VEHICLE_FOLLOW_HEIGHT_MIN = 3.5
+// Make follow distance larger relative to vehicle length so camera sits further back
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.8
 const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.45
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.7
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 2.8
+// Reduce target lift so the camera looks closer to the vehicle's center
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.6
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 2.5
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
