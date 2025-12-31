@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run wasm:build && vite build",
+    "build": "npm run wasm:build && vue-tsc -b &&  vite build",
     "preview": "vite preview",
     "wasm:build": "npx wasm-pack build wasm --target web --out-dir pkg --dev"
   },

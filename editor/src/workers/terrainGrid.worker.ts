@@ -28,8 +28,6 @@ type BuildTerrainGridResponse = {
 	heightMin: number
 	heightMax: number
 	error?: string
-	minorSphere?: { center: [number, number, number]; radius: number }
-	majorSphere?: { center: [number, number, number]; radius: number }
 }
 
 function isAligned(coord: number, spacing: number): boolean {
@@ -197,45 +195,6 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	return { minor, major }
 }
 
-function computeBoundingSphereFromPositions(positions: Float32Array): { center: [number, number, number]; radius: number } {
-	const len = positions.length
-	if (len === 0) {
-		return { center: [0, 0, 0], radius: 0 }
-	}
-
-	let minX = Infinity, minY = Infinity, minZ = Infinity
-	let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
-
-	for (let i = 0; i < len; i += 3) {
-		const x = positions[i]!
-		const y = positions[i + 1]!
-		const z = positions[i + 2]!
-		if (x < minX) minX = x
-		if (y < minY) minY = y
-		if (z < minZ) minZ = z
-		if (x > maxX) maxX = x
-		if (y > maxY) maxY = y
-		if (z > maxZ) maxZ = z
-	}
-
-	const cx = (minX + maxX) * 0.5
-	const cy = (minY + maxY) * 0.5
-	const cz = (minZ + maxZ) * 0.5
-
-	let maxRadiusSq = 0
-	for (let i = 0; i < len; i += 3) {
-		const dx = positions[i]! - cx
-		const dy = positions[i + 1]! - cy
-		const dz = positions[i + 2]! - cz
-		const dsq = dx * dx + dy * dy + dz * dz
-		if (dsq > maxRadiusSq) maxRadiusSq = dsq
-	}
-
-	return { center: [cx, cy, cz], radius: Math.sqrt(maxRadiusSq) }
-}
-
-// Worker uses JS implementation for bounding-sphere to avoid transferring extra data.
-
 function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: number; heightMax: number } {
 	const values = new Float32Array(message.heightValues)
 	const count = Math.max(0, Math.min(message.heightEntryCount, values.length))
@@ -259,19 +218,13 @@ self.onmessage = async (event: MessageEvent<BuildTerrainGridRequest>) => {
 		const { heightMin, heightMax } = computeHeightRange(message)
 		const { minor, major } = buildGridSegmentsInWorker(message)
 
-		// compute spheres using JS implementation inside worker
-		const minorSphere = computeBoundingSphereFromPositions(minor)
-		const majorSphere = computeBoundingSphereFromPositions(major)
-
 		const response: BuildTerrainGridResponse = {
 			kind: 'build-terrain-grid-result',
 			requestId: message.requestId,
 			minor: minor.buffer as ArrayBuffer,
 			major: major.buffer as ArrayBuffer,
 			heightMin,
-			heightMax,
-			minorSphere,
-			majorSphere,
+			heightMax
 		}
 		self.postMessage(response, [response.minor, response.major])
 	} catch (error) {
