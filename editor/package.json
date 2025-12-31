@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "wasm:build:rust": "cd src/wasm/rust-crate && wasm-pack build --target web --out-dir ../pkg",
+    "build:all": "npm run wasm:build:rust && npm run build",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },

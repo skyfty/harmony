@@ -11,6 +11,7 @@ import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
 import { configureAssetBlobDownloader } from '@schema/assetCache'
 import { createWorkerAssetBlobDownloader } from '@/utils/assetDownloadWorkerPool'
+import { initWasm } from './wasm_loader'
 
 async function preloadRuntimeConfig() {
 	try {
@@ -61,6 +62,16 @@ async function preloadRuntimeConfig() {
 
 	const authStore = useAuthStore(pinia)
 	await authStore.initialize()
+
+	// Initialize WebAssembly module (Rust -> wasm-bindgen)
+	try {
+		const wasmPkg = await initWasm()
+		if (wasmPkg && typeof wasmPkg.add === 'function') {
+			console.info('[wasm] add(1,2)=', wasmPkg.add(1, 2))
+		}
+	} catch (err) {
+		console.warn('[wasm] initialization failed', err)
+	}
 
 	app.mount('#app')
 
