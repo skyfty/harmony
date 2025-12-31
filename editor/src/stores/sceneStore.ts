@@ -6982,7 +6982,6 @@ export const useSceneStore = defineStore('scene', {
         this.activeTransformNodeId = nodeId
       }
       this.transformSnapshotCaptured = false
-      this.pendingTransformSnapshot = this.isRestoringHistory ? null : createHistorySnapshot(this)
     },
     endTransformInteraction() {
       if (this.pendingTransformSnapshot && this.transformSnapshotCaptured && !this.isRestoringHistory) {
