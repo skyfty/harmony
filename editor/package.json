@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "wasm:build": "npm run wasm:build:prod",
+    "wasm:build:dev": "rm -rf src/wasm/pkg && cd wasm && wasm-pack build --dev --target bundler --out-dir ../src/wasm/pkg",
+    "wasm:build:prod": "rm -rf src/wasm/pkg && cd wasm && wasm-pack build --release --target bundler --out-dir ../src/wasm/pkg && if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz src/wasm/pkg/editor_wasm_bg.wasm -o src/wasm/pkg/editor_wasm_bg.wasm || true; else echo 'wasm-opt not found — skipping wasm-opt step'; fi",
+    "wasm:watch": "cd wasm && watchexec -e rs -- 'npm run wasm:build:dev'",
+    "wasm:clean": "rm -rf src/wasm/pkg"
   },
   "dependencies": {
     "@harmony/schema": "file:../schema",

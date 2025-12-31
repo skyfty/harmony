@@ -7,7 +7,7 @@ const resolveDir = (relativePath: string) => fileURLToPath(new URL(relativePath,
 const withTrailingSlash = (value: string) => (value.endsWith('/') || value.endsWith('\\') ? value : `${value}/`)
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [vue(), vuetify({ autoImport: true })],
   resolve: {
     alias: [
@@ -42,10 +42,11 @@ export default defineConfig({
     ],
   },
   build: {
-    sourcemap: true,
+    // Only emit sourcemaps in non-production modes to enable WASM debugging in dev
+    sourcemap: mode !== 'production',
   },
   server: {
     port: 8088,
     sourcemapIgnoreList: false,
   },
-})
+}))

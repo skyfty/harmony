@@ -8,7 +8,16 @@
       "url": "http://localhost:8088",
       "webRoot": "${workspaceFolder}/editor",
       "sourceMaps": true,
-      "preLaunchTask": "npm: dev (editor)"
+      "preLaunchTask": "npm: dev (editor)",
+      "skipFiles": ["/node_modules/**"],
+      "sourceMapPathOverrides": {
+        "webpack:///*": "${webRoot}/*",
+        "*": "${webRoot}/*"
+      },
+      "resolveSourceMapLocations": [
+        "${workspaceFolder}/editor/**",
+        "!**/node_modules/**"
+      ]
     },
     {
       "name": "Attach to Chrome (remote)",

@@ -38,6 +38,14 @@ editor/src/wasm/rust-crate/**/target/
 editor/src/wasm/pkg/
 editor/src/wasm/pkg/**
 
+# Cargo / wasm build outputs for the crate under `editor/wasm`
+editor/wasm/target/
+editor/wasm/target/**
+
+# Ensure any generated wasm artifacts in src/wasm/pkg are ignored (explicit patterns)
+editor/src/wasm/pkg/*.wasm
+editor/src/wasm/pkg/*.wasm.d.ts
+
 # wasm-pack / tool caches
 .cache/
 .cache/**
