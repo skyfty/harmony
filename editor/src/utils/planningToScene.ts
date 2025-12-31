@@ -86,7 +86,7 @@ export type ConvertPlanningToSceneOptions = {
     setNodeLocked: (nodeId: string, locked: boolean) => void
     updateNodeUserData: (nodeId: string, userData: Record<string, unknown> | null) => void
     setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
-    refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
+    refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; }) => Promise<void>
     registerAsset: (asset: ProjectAsset) => Promise<void>
   }
   planningData: PlanningSceneData

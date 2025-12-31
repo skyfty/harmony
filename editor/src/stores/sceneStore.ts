@@ -6796,7 +6796,7 @@ export const useSceneStore = defineStore('scene', {
       this.workspaceType = descriptor.type
       this.workspaceLabel = descriptor.label
     },
-    async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean } = {}) {
+    async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean;} = {}) {
       if (runtimeRefreshInFlight) {
         try {
           await runtimeRefreshInFlight
@@ -6805,52 +6805,7 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      const task = (async () => {
-        const showOverlay = options.showOverlay ?? false
-        const refreshViewport = options.refreshViewport ?? false
-        const skipComponentSync = options.skipComponentSync ?? false
-
-        clearRuntimeObjectRegistry()
-        componentManager.reset()
-
-        if (!this.nodes.length) {
-          if (!skipComponentSync) {
-            componentManager.syncScene(this.nodes)
-          }
-          return
-        }
-
-        await this.ensureSceneAssetsReady({
-          nodes: this.nodes,
-          showOverlay,
-          refreshViewport,
-        })
-
-        this.rebuildGeneratedMeshRuntimes()
-
-        const assetNodeMap = collectNodesByAssetId(this.nodes)
-        const missingAssetNodes: SceneNode[] = []
-        assetNodeMap.forEach((nodesForAsset) => {
-          nodesForAsset.forEach((node) => {
-            if (!runtimeObjectRegistry.has(node.id)) {
-              missingAssetNodes.push(node)
-            }
-          })
-        })
-
-        if (missingAssetNodes.length) {
-          await this.ensureSceneAssetsReady({
-            nodes: missingAssetNodes,
-            showOverlay: false,
-            refreshViewport,
-          })
-        }
-
-        if (!skipComponentSync) {
-          reattachRuntimeObjectsForNodes(this.nodes)
-          componentManager.syncScene(this.nodes)
-        }
-      })()
+      const task = this.performRuntimeRefresh(this.nodes, options)
 
       runtimeRefreshInFlight = task
       try {
@@ -6860,6 +6815,51 @@ export const useSceneStore = defineStore('scene', {
           runtimeRefreshInFlight = null
         }
       }
+    },
+
+    async performRuntimeRefresh(
+      nodes: SceneNode[],
+      options: { showOverlay?: boolean; refreshViewport?: boolean } = {},
+    ) {
+      const showOverlay = options.showOverlay ?? false
+      const refreshViewport = options.refreshViewport ?? false
+
+      clearRuntimeObjectRegistry()
+      componentManager.reset()
+
+      if (!nodes.length) {
+        return
+      }
+
+      await this.ensureSceneAssetsReady({
+        nodes,
+        showOverlay,
+        refreshViewport,
+      })
+      this.rebuildGeneratedMeshRuntimes()
+
+      reattachRuntimeObjectsForNodes(nodes)
+      componentManager.syncScene(nodes)
+    },
+
+    applySceneDocumentToState(scene: StoredSceneDocument) {
+      this.currentSceneId = scene.id
+      applyCurrentSceneMeta(this, scene)
+      applySceneAssetState(this, scene)
+      this.nodes = cloneSceneNodes(scene.nodes)
+      this.environment = resolveSceneDocumentEnvironment(scene)
+      this.rebuildGeneratedMeshRuntimes()
+      this.planningData = clonePlanningData(scene.planningData)
+      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
+      this.camera = cloneCameraState(scene.camera)
+      this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
+      this.skybox = resolveDocumentSkybox(scene)
+      this.shadowsEnabled = resolveDocumentShadowsEnabled(scene)
+      this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
+      this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
+      this.groundSettings = cloneGroundSettings(scene.groundSettings)
+      this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
+      this.hasUnsavedChanges = false
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
       const snapshot = buildSceneDocumentFromState(this)
@@ -12677,24 +12677,8 @@ export const useSceneStore = defineStore('scene', {
       })
 
       await scenesStore.saveSceneDocument(sceneDocument)
-      this.currentSceneId = sceneDocument.id
-      applyCurrentSceneMeta(this, sceneDocument)
-      applySceneAssetState(this, sceneDocument)
-      this.nodes = cloneSceneNodes(sceneDocument.nodes)
-      this.environment = resolveSceneDocumentEnvironment(sceneDocument)
-      this.rebuildGeneratedMeshRuntimes()
-      this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
-      this.planningData = clonePlanningData(sceneDocument.planningData)
-      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
-      this.camera = cloneCameraState(sceneDocument.camera)
-      this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
-      this.skybox = cloneSkyboxSettings(sceneDocument.skybox)
-      this.shadowsEnabled = normalizeShadowsEnabledInput(sceneDocument.shadowsEnabled)
-      this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
-      this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
-      this.resourceProviderId = sceneDocument.resourceProviderId
+      this.applySceneDocumentToState(sceneDocument)
       this.isSceneReady = true
-      this.hasUnsavedChanges = false
       return sceneDocument.id
     },
     async createSceneFromTemplate(
@@ -12776,22 +12760,7 @@ export const useSceneStore = defineStore('scene', {
 
       await scenesStore.saveSceneDocument(sceneDocument)
 
-      this.currentSceneId = sceneDocument.id
-      applyCurrentSceneMeta(this, sceneDocument)
-      applySceneAssetState(this, sceneDocument)
-      this.nodes = cloneSceneNodes(sceneDocument.nodes)
-      this.environment = resolveSceneDocumentEnvironment(sceneDocument)
-      this.rebuildGeneratedMeshRuntimes()
-      this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
-      this.planningData = clonePlanningData(sceneDocument.planningData)
-      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
-      this.camera = cloneCameraState(sceneDocument.camera)
-      this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
-      this.skybox = cloneSkyboxSettings(sceneDocument.skybox)
-      this.shadowsEnabled = normalizeShadowsEnabledInput(sceneDocument.shadowsEnabled)
-      this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
-      this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
-      this.resourceProviderId = sceneDocument.resourceProviderId
+      this.applySceneDocumentToState(sceneDocument)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
       return sceneDocument.id
@@ -12824,23 +12793,7 @@ export const useSceneStore = defineStore('scene', {
           refreshViewport: false,
         })
 
-        this.currentSceneId = sceneId
-        applyCurrentSceneMeta(this, scene)
-        applySceneAssetState(this, scene)
-        this.nodes = cloneSceneNodes(scene.nodes)
-        this.environment = resolveSceneDocumentEnvironment(scene)
-        this.rebuildGeneratedMeshRuntimes()
-        this.planningData = clonePlanningData(scene.planningData)
-        this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
-        this.camera = cloneCameraState(scene.camera)
-        this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
-        this.skybox = resolveDocumentSkybox(scene)
-        this.shadowsEnabled = resolveDocumentShadowsEnabled(scene)
-        this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
-        this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
-        this.groundSettings = cloneGroundSettings(scene.groundSettings)
-        this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
-        this.hasUnsavedChanges = false
+        this.applySceneDocumentToState(scene)
       } finally {
         this.isSceneReady = true
       }
@@ -12865,21 +12818,8 @@ export const useSceneStore = defineStore('scene', {
           environment: this.environment,
         })
         await scenesStore.saveSceneDocument(fallback)
-        this.currentSceneId = fallback.id
-        applyCurrentSceneMeta(this, fallback)
-        applySceneAssetState(this, fallback)
-        this.nodes = cloneSceneNodes(fallback.nodes)
-        this.environment = resolveSceneDocumentEnvironment(fallback)
-        this.rebuildGeneratedMeshRuntimes()
-        this.planningData = clonePlanningData(fallback.planningData)
-        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
-        this.camera = cloneCameraState(fallback.camera)
-        this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
-        this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
-        this.groundSettings = cloneGroundSettings(fallback.groundSettings)
-        this.resourceProviderId = fallback.resourceProviderId
+        this.applySceneDocumentToState(fallback)
         this.isSceneReady = true
-        this.hasUnsavedChanges = false
         return true
       }
 
@@ -13027,7 +12967,7 @@ export const useSceneStore = defineStore('scene', {
         renamedScenes,
       }
     },
-    async ensureCurrentSceneLoaded(options: { skipComponentSync?: boolean } = {}) {
+    async ensureCurrentSceneLoaded() {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
 
@@ -13036,20 +12976,10 @@ export const useSceneStore = defineStore('scene', {
           const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
           await scenesStore.saveSceneDocument(fallback)
           await scenesStore.refreshMetadata()
-          this.currentSceneId = fallback.id
-          applyCurrentSceneMeta(this, fallback)
-          applySceneAssetState(this, fallback)
-          this.nodes = cloneSceneNodes(fallback.nodes)
-          this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
-          this.camera = cloneCameraState(fallback.camera)
-          this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
-          this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
-          this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
-          this.resourceProviderId = fallback.resourceProviderId
-          this.hasUnsavedChanges = false
-          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false, skipComponentSync: options.skipComponentSync })
+          this.applySceneDocumentToState(fallback)
+          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
         } else {
-          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false, skipComponentSync: options.skipComponentSync })
+          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
         }
       } finally {
         this.isSceneReady = true
