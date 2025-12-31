@@ -71,7 +71,7 @@ pub fn compute_bounding_sphere(data: &[f32]) -> Float64Array {
 #[wasm_bindgen]
 pub fn compute_bounding_box(data: &[f32]) -> Float64Array {
     let len = data.len();
-    let out = vec![0f64; 6];
+    let mut out = vec![0f64; 6];
     if len == 0 {
         return Float64Array::from(out.as_slice())
     }

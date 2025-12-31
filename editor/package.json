@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run wasm:build && vue-tsc -b && vite build",
+    "build": "npm run wasm:build && vite build",
     "preview": "vite preview",
     "wasm:build:dev": "npx wasm-pack build wasm --target web --out-dir pkg --dev",
     "wasm:build:prod": "npx wasm-pack build wasm --target web --out-dir pkg --release && (test -x $(which wasm-opt) && wasm-opt -Oz wasm/pkg/*.wasm -o wasm/pkg/*.wasm || true)",

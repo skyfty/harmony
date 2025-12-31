@@ -234,38 +234,7 @@ function computeBoundingSphereFromPositions(positions: Float32Array): { center: 
 	return { center: [cx, cy, cz], radius: Math.sqrt(maxRadiusSq) }
 }
 
-// Attempt to load a wasm implementation (built to /wasm/pkg by project scripts).
-// If unavailable, the worker will fall back to the JS implementation above.
-let wasmReady: Promise<void> | null = null
-let wasmCompute: ((data: Float32Array) => any) | null = null
-
-async function initWasmIfAvailable(): Promise<void> {
-	if (wasmReady) return wasmReady
-	wasmReady = (async () => {
-		try {
-			// dynamic import from public path where wasm-pack outputs files
-			// Vite serves project root so '/wasm/pkg/editor_wasm.js' is expected after build
-			// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-			// @ts-ignore
-			const mod = await import('/wasm/pkg/editor_wasm.js')
-			if (typeof mod.default === 'function') {
-				// initialize the wasm module (web target)
-				await mod.default()
-			}
-			if (typeof mod.compute_bounding_sphere === 'function') {
-				wasmCompute = (data: Float32Array) => {
-					// the wasm-export returns a Float64Array-like object
-					// @ts-ignore
-					return mod.compute_bounding_sphere(data)
-				}
-			}
-		} catch (e) {
-			// ignore and keep wasmCompute null to use JS fallback
-			wasmCompute = null
-		}
-	})()
-	return wasmReady
-}
+// Worker uses JS implementation for bounding-sphere to avoid transferring extra data.
 
 function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: number; heightMax: number } {
 	const values = new Float32Array(message.heightValues)
@@ -290,34 +259,9 @@ self.onmessage = async (event: MessageEvent<BuildTerrainGridRequest>) => {
 		const { heightMin, heightMax } = computeHeightRange(message)
 		const { minor, major } = buildGridSegmentsInWorker(message)
 
-		// default: JS computed spheres
-		let minorSphere = computeBoundingSphereFromPositions(minor)
-		let majorSphere = computeBoundingSphereFromPositions(major)
-
-		// attempt to init and use wasm implementation if available
-		try {
-			await initWasmIfAvailable()
-			if (wasmCompute) {
-				try {
-					const out = wasmCompute(minor)
-					if (out && out.length >= 4) {
-						minorSphere = { center: [out[0], out[1], out[2]], radius: out[3] }
-					}
-				} catch (e) {
-					// ignore wasm failure for minor
-				}
-				try {
-					const out2 = wasmCompute(major)
-					if (out2 && out2.length >= 4) {
-						majorSphere = { center: [out2[0], out2[1], out2[2]], radius: out2[3] }
-					}
-				} catch (e) {
-					// ignore wasm failure for major
-				}
-			}
-		} catch (e) {
-			// ignore wasm init errors and use JS fallback
-		}
+		// compute spheres using JS implementation inside worker
+		const minorSphere = computeBoundingSphereFromPositions(minor)
+		const majorSphere = computeBoundingSphereFromPositions(major)
 
 		const response: BuildTerrainGridResponse = {
 			kind: 'build-terrain-grid-result',

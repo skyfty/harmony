@@ -43,25 +43,25 @@ export async function initWasm(): Promise<void> {
   }
 }
 
-export function computeBoundingSphere(data: Float32Array): Float64Array | null {
+export function computeBoundingSphere(data: Float32Array): Float64Array {
   if (_computeBoundingSphere) {
     try {
       return _computeBoundingSphere(data)
     } catch (e) {
-      return null
+      throw e
     }
   }
-  return null
+  throw new Error('WASM computeBoundingSphere not initialized')
 }
 
-export function computeBoundingBox(data: Float32Array): Float64Array | null {
+export function computeBoundingBox(data: Float32Array): Float64Array {
   if (_computeBoundingBox) {
     try {
       return _computeBoundingBox(data)
     } catch (e) {
-      return null
+      throw e
     }
   }
-  return null
+  throw new Error('WASM computeBoundingBox not initialized')
 }
 
