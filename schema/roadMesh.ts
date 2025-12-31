@@ -485,10 +485,10 @@ function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: numb
     const smoothing = Math.max(0, Math.min(1, 1 - clamped))
     if (smoothing <= 0) {
       // 无平滑需求，直接返回直线
-      return new THREE.LineCurve3(points[0]!, points[1]!)
+      return new THREE.LineCurve3(points[0], points[1])
     }
-    const a = points[0]!.clone()
-    const b = points[1]!.clone()
+    const a = points[0].clone()
+    const b = points[1].clone()
     const dir = new THREE.Vector3().subVectors(b, a)
     const len = dir.length()
     if (len <= ROAD_EPSILON) {

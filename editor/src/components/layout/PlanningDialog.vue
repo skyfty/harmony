@@ -1424,7 +1424,7 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
     return
   }
 
-  sceneStore.planningData = nextData as any
+  sceneStore.planningData = nextData
   sceneStore.hasUnsavedChanges = true
   planningDirty = false
 }
@@ -1441,7 +1441,7 @@ async function handleConvertTo3DScene() {
   try {
     // Always clear previously generated conversion output so users can clean the scene
     // even when the current planning snapshot is empty.
-    await clearPlanningGeneratedContent(sceneStore as any)
+    await clearPlanningGeneratedContent(sceneStore)
     if (!planningData) {
       return
     }
@@ -1453,7 +1453,7 @@ async function handleConvertTo3DScene() {
     await nextTick()
 
     await convertPlanningTo3DScene({
-      sceneStore: sceneStore as any,
+      sceneStore,
       planningData,
       overwriteExisting,
       onProgress: ({ step, progress }) => {
@@ -2267,7 +2267,7 @@ function getLayerKind(layerId: string) {
 }
 
 function getPolylineStrokeDasharray(layerId: string) {
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   // Roads: dashed (easier to distinguish from walls); Walls: solid.
   if (kind === 'road') {
     return '10 7'
@@ -2276,14 +2276,14 @@ function getPolylineStrokeDasharray(layerId: string) {
 }
 
 function getPolylineStroke(layerId: string) {
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   // Increase opacity for better visibility
   const alpha = kind === 'road' ? 0.95 : 1
   return getLayerColor(layerId, alpha)
 }
 
 function getPolylineStrokeWidth(layerId: string, isSelected = false) {
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   const selectedScale = 1.52
   const MIN_STROKE_WORLD = 0.1 // minimum stroke width in world units (meters)
   if (kind === 'road') {
@@ -2369,12 +2369,12 @@ function isClickOnVisiblePolylineSegment(
 function getPolylineVectorEffect(layerId: string) {
   // Road width should represent world meters, so it should scale with zoom.
   // Walls/others keep constant screen width for readability.
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   return kind === 'road' ? undefined : 'non-scaling-stroke'
 }
 
 function canEditPolylineGeometry(layerId: string): boolean {
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   if (kind !== 'road' && kind !== 'wall') {
     return true
   }
@@ -3356,7 +3356,7 @@ const lineDraftPreviewPath = computed(() => {
 
 const lineDraftPreviewStroke = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
-  const kind = getLayerKind(layerId as string)
+  const kind = getLayerKind(layerId)
   // Use a high-contrast, fully opaque preview color for drawing (no transparency)
   // Bright yellow chosen for contrast against dark/light backgrounds.
   return 'rgba(255, 196, 0, 1)'
@@ -3364,17 +3364,17 @@ const lineDraftPreviewStroke = computed(() => {
 
 const lineDraftPreviewDasharray = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
-  return getPolylineStrokeDasharray(layerId as string)
+  return getPolylineStrokeDasharray(layerId)
 })
 
 const lineDraftPreviewStrokeWidth = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
-  return getPolylineStrokeWidth(layerId as string)
+  return getPolylineStrokeWidth(layerId)
 })
 
 const lineDraftPreviewVectorEffect = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
-  return getPolylineVectorEffect(layerId as string)
+  return getPolylineVectorEffect(layerId)
 })
 
 const lineDraftPoints = computed(() => getDraftLine()?.points ?? [])
@@ -4713,8 +4713,8 @@ async function handleImageLayerDelete(imageId: string) {
   const idx = planningImages.value.findIndex((img) => img.id === imageId)
   if (idx >= 0) {
     const img = planningImages.value[idx]
-      try {
-      if (img?.url) URL.revokeObjectURL(img.url)
+    try {
+      if (img.url) URL.revokeObjectURL(img.url)
     } catch {}
     planningImages.value.splice(idx, 1)
   }
@@ -5788,7 +5788,7 @@ onBeforeUnmount(() => {
                     :cy="activeVertexHighlight.y"
                     :r="activeVertexHighlight.r"
                     fill="none"
-                    :stroke="getLayerColor(activeVertexHighlight.layerId as string, 0.95)"
+                    :stroke="getLayerColor(activeVertexHighlight.layerId, 0.95)"
                     :stroke-width="vertexHighlightStrokeWidthWorld"
                     filter="url(#vertex-glow)"
                     pointer-events="none"
@@ -5802,7 +5802,7 @@ onBeforeUnmount(() => {
                     :cy="selectedVertexHighlight.y"
                     :r="selectedVertexHighlight.r"
                     fill="none"
-                    :stroke="getLayerColor(selectedVertexHighlight.layerId as string, 0.85)"
+                    :stroke="getLayerColor(selectedVertexHighlight.layerId, 0.85)"
                     :stroke-width="vertexHighlightStrokeWidthWorld"
                     filter="url(#vertex-glow)"
                     pointer-events="none"

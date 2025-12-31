@@ -513,7 +513,7 @@ export class TerrainGridHelper extends THREE.Object3D {
 
     this.pendingSignature = cacheKey
     this.setVisible(true)
-    this.buildSegmentsAsync(definition, cacheKey, visibleRange).catch(() => {
+    this.buildSegmentsAsync(definition, cacheKey, visibleRange).catch((error) => {
       if (this.pendingSignature === cacheKey) {
         this.pendingSignature = null
       }

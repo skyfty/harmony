@@ -26,8 +26,6 @@ type GroundRuntimeState = {
   chunkCells: number
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   lastChunkUpdateAt: number
-  pendingChunkCreates?: GroundChunkKey[]
-  pendingChunkCreateSet?: Set<GroundChunkKey>
 }
 
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
@@ -455,8 +453,6 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunkCells,
     chunks: new Map(),
     lastChunkUpdateAt: 0,
-    pendingChunkCreates: [],
-    pendingChunkCreateSet: new Set(),
   }
   groundRuntimeStateMap.set(root, next)
   return next
@@ -1133,53 +1129,21 @@ export function updateGroundChunks(
     }
   }
 
-  // Discover chunks that should be present. Newly-needed chunks are queued
-  // for creation to avoid doing heavy geometry work all in one frame.
   for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
     for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
       const key = groundChunkKey(cr, cc)
       const existed = state.chunks.has(key)
-      if (existed) {
-        const runtime = state.chunks.get(key) as GroundChunkRuntime
-        keep.add(runtime.key)
-      } else {
-        // Enqueue creation if not already enqueued
-        if (!state.pendingChunkCreateSet) {
-          state.pendingChunkCreateSet = new Set()
-        }
-        if (!state.pendingChunkCreates) {
-          state.pendingChunkCreates = []
-        }
-        if (!state.pendingChunkCreateSet.has(key)) {
-          state.pendingChunkCreates.push(key)
-          state.pendingChunkCreateSet.add(key)
-        }
+      const runtime = ensureChunkMesh(root, state, definition, cr, cc)
+      keep.add(runtime.key)
+      if (!existed) {
+        stitchRegion = mergeRegion(stitchRegion, {
+          minRow: runtime.spec.startRow,
+          maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
+          minColumn: runtime.spec.startColumn,
+          maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
+        })
       }
     }
-  }
-
-  // Process a small creation budget per frame to amortize work.
-  const CREATE_BUDGET_PER_FRAME = 2
-  let createdThisFrame = 0
-  const createdStitchRegion: GroundGeometryUpdateRegion | null = null
-  while (state.pendingChunkCreates && state.pendingChunkCreates.length > 0 && createdThisFrame < CREATE_BUDGET_PER_FRAME) {
-    const key = state.pendingChunkCreates.shift() as GroundChunkKey
-    state.pendingChunkCreateSet?.delete(key)
-    const parts = key.split(':')
-    const cr = Number(parts[0])
-    const cc = Number(parts[1])
-    const existed = state.chunks.has(key)
-    const runtime = ensureChunkMesh(root, state, definition, cr, cc)
-    keep.add(runtime.key)
-    if (!existed) {
-      stitchRegion = mergeRegion(stitchRegion, {
-        minRow: runtime.spec.startRow,
-        maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
-        minColumn: runtime.spec.startColumn,
-        maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
-      })
-    }
-    createdThisFrame += 1
   }
 
   state.chunks.forEach((chunk, key) => {
