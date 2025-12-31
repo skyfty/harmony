@@ -3,13 +3,15 @@
 快速上手：使用 Rust + wasm-bindgen (wasm-pack)
 
 本仓库示例路径：
-- Rust crate: `wasm/rust-crate`
+- Rust crate: `editor/src/wasm/rust-crate`
 - wasm 打包输出（wasm-pack 默认）：`editor/src/wasm/pkg`
 
 本地构建示例（在 `editor` 目录下运行）：
 
+npm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
 ```bash
 # 在系统上先安装 rustup/cargo 与 wasm-pack（见下）
+cd editor
 npm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
 npm run build
 ```
