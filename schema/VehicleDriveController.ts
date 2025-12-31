@@ -198,19 +198,13 @@ const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 // 跟随相机最大距离
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
 // 跟随相机高度比例（调高让车辆在画面中更靠下）
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.35
-// 跟随相机最小高度（调高让相机更高）
-const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0
-// 跟随距离与车辆长度的比例（调大让相机更远）
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 3.8
-// 跟随距离与车辆宽度的比例
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
+const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.8 // 恢复默认距离比例
 const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
-// 跟随距离与车辆对角线的比例
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.45
-// 目标点抬升比例（让相机看向车辆上方）
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 1.15
-// 目标点最小抬升
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 1.0
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3 // 降低目标抬升比例
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.5   // 降低最小抬升
 // 跟随相机位置插值速度
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 // 跟随相机目标插值速度
