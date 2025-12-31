@@ -10,7 +10,6 @@
     "wasm:build:dev": "npx wasm-pack build wasm --target web --out-dir pkg --dev",
     "wasm:build:prod": "npx wasm-pack build wasm --target web --out-dir pkg --release && (test -x $(which wasm-opt) && wasm-opt -Oz wasm/pkg/*.wasm -o wasm/pkg/*.wasm || true)",
     "wasm:build": "npm run wasm:build:prod",
-    "wasm:generate-sourcemap": "npx wasm-sourcemap convert --input wasm/pkg/*.wasm --out-dir wasm/pkg"
   },
   "dependencies": {
     "@harmony/schema": "file:../schema",

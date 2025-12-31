@@ -17,7 +17,9 @@ npm run wasm:build:prod
 ```
 
 Loading from the app
-- Use `import { loadWasm } from './src/wasm/loader'` then `const pkg = await loadWasm()`.
+- Example loader previously provided has been removed. Use your own initialization
+  workflow with the generated `wasm` package at `wasm/pkg/` (for example, call the
+  package's default async initializer exported by wasm-bindgen).
 
 Debugging in VSCode / Browser
 - The project produces source maps when running the dev build; attach the Chrome debugger
