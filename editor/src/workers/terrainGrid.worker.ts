@@ -28,6 +28,8 @@ type BuildTerrainGridResponse = {
 	heightMin: number
 	heightMax: number
 	error?: string
+	minorSphere?: { center: [number, number, number]; radius: number }
+	majorSphere?: { center: [number, number, number]; radius: number }
 }
 
 function isAligned(coord: number, spacing: number): boolean {
@@ -195,6 +197,76 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	return { minor, major }
 }
 
+function computeBoundingSphereFromPositions(positions: Float32Array): { center: [number, number, number]; radius: number } {
+	const len = positions.length
+	if (len === 0) {
+		return { center: [0, 0, 0], radius: 0 }
+	}
+
+	let minX = Infinity, minY = Infinity, minZ = Infinity
+	let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+
+	for (let i = 0; i < len; i += 3) {
+		const x = positions[i]!
+		const y = positions[i + 1]!
+		const z = positions[i + 2]!
+		if (x < minX) minX = x
+		if (y < minY) minY = y
+		if (z < minZ) minZ = z
+		if (x > maxX) maxX = x
+		if (y > maxY) maxY = y
+		if (z > maxZ) maxZ = z
+	}
+
+	const cx = (minX + maxX) * 0.5
+	const cy = (minY + maxY) * 0.5
+	const cz = (minZ + maxZ) * 0.5
+
+	let maxRadiusSq = 0
+	for (let i = 0; i < len; i += 3) {
+		const dx = positions[i]! - cx
+		const dy = positions[i + 1]! - cy
+		const dz = positions[i + 2]! - cz
+		const dsq = dx * dx + dy * dy + dz * dz
+		if (dsq > maxRadiusSq) maxRadiusSq = dsq
+	}
+
+	return { center: [cx, cy, cz], radius: Math.sqrt(maxRadiusSq) }
+}
+
+// Attempt to load a wasm implementation (built to /wasm/pkg by project scripts).
+// If unavailable, the worker will fall back to the JS implementation above.
+let wasmReady: Promise<void> | null = null
+let wasmCompute: ((data: Float32Array) => any) | null = null
+
+async function initWasmIfAvailable(): Promise<void> {
+	if (wasmReady) return wasmReady
+	wasmReady = (async () => {
+		try {
+			// dynamic import from public path where wasm-pack outputs files
+			// Vite serves project root so '/wasm/pkg/editor_wasm.js' is expected after build
+			// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+			// @ts-ignore
+			const mod = await import('/wasm/pkg/editor_wasm.js')
+			if (typeof mod.default === 'function') {
+				// initialize the wasm module (web target)
+				await mod.default()
+			}
+			if (typeof mod.compute_bounding_sphere === 'function') {
+				wasmCompute = (data: Float32Array) => {
+					// the wasm-export returns a Float64Array-like object
+					// @ts-ignore
+					return mod.compute_bounding_sphere(data)
+				}
+			}
+		} catch (e) {
+			// ignore and keep wasmCompute null to use JS fallback
+			wasmCompute = null
+		}
+	})()
+	return wasmReady
+}
+
 function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: number; heightMax: number } {
 	const values = new Float32Array(message.heightValues)
 	const count = Math.max(0, Math.min(message.heightEntryCount, values.length))
@@ -208,7 +280,7 @@ function computeHeightRange(message: BuildTerrainGridRequest): { heightMin: numb
 	return { heightMin, heightMax }
 }
 
-self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
+self.onmessage = async (event: MessageEvent<BuildTerrainGridRequest>) => {
 	const message = event.data
 	if (!message || message.kind !== 'build-terrain-grid') {
 		return
@@ -217,6 +289,36 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 	try {
 		const { heightMin, heightMax } = computeHeightRange(message)
 		const { minor, major } = buildGridSegmentsInWorker(message)
+
+		// default: JS computed spheres
+		let minorSphere = computeBoundingSphereFromPositions(minor)
+		let majorSphere = computeBoundingSphereFromPositions(major)
+
+		// attempt to init and use wasm implementation if available
+		try {
+			await initWasmIfAvailable()
+			if (wasmCompute) {
+				try {
+					const out = wasmCompute(minor)
+					if (out && out.length >= 4) {
+						minorSphere = { center: [out[0], out[1], out[2]], radius: out[3] }
+					}
+				} catch (e) {
+					// ignore wasm failure for minor
+				}
+				try {
+					const out2 = wasmCompute(major)
+					if (out2 && out2.length >= 4) {
+						majorSphere = { center: [out2[0], out2[1], out2[2]], radius: out2[3] }
+					}
+				} catch (e) {
+					// ignore wasm failure for major
+				}
+			}
+		} catch (e) {
+			// ignore wasm init errors and use JS fallback
+		}
+
 		const response: BuildTerrainGridResponse = {
 			kind: 'build-terrain-grid-result',
 			requestId: message.requestId,
@@ -224,6 +326,8 @@ self.onmessage = (event: MessageEvent<BuildTerrainGridRequest>) => {
 			major: major.buffer as ArrayBuffer,
 			heightMin,
 			heightMax,
+			minorSphere,
+			majorSphere,
 		}
 		self.postMessage(response, [response.minor, response.major])
 	} catch (error) {

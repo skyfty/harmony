@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "wasm:build:dev": "npx wasm-pack build wasm --target web --out-dir pkg --dev",
     "wasm:build:prod": "npx wasm-pack build wasm --target web --out-dir pkg --release && (test -x $(which wasm-opt) && wasm-opt -Oz wasm/pkg/*.wasm -o wasm/pkg/*.wasm || true)",
-    "wasm:build": "npm run wasm:build:prod",
+    "wasm:build": "npm run wasm:build:prod"
   },
   "dependencies": {
     "@harmony/schema": "file:../schema",

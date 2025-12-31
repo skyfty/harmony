@@ -248,6 +248,8 @@ type TerrainGridBuildResponse = {
   heightMin: number
   heightMax: number
   error?: string
+  minorSphere?: { center: [number, number, number]; radius: number }
+  majorSphere?: { center: [number, number, number]; radius: number }
 }
 
 export class TerrainGridHelper extends THREE.Object3D {
@@ -258,6 +260,10 @@ export class TerrainGridHelper extends THREE.Object3D {
   private signature: string | null = null
   private pendingSignature: string | null = null
   private segmentCache = new Map<string, SegmentBuffers>()
+  private segmentSphereCache = new Map<
+    string,
+    { minorSphere?: { center: [number, number, number]; radius: number }; majorSphere?: { center: [number, number, number]; radius: number } }
+  >()
 
   private hasHeightRange = false
   private heightMin = 0
@@ -465,15 +471,28 @@ export class TerrainGridHelper extends THREE.Object3D {
     }
     if (cacheKey) {
       this.segmentCache.set(cacheKey, buffers)
+      this.segmentSphereCache.set(cacheKey, { minorSphere: response.minorSphere, majorSphere: response.majorSphere })
     }
     this.signature = cacheKey
     this.pendingSignature = null
-    this.replaceLines(buffers.minor, this.minorLines, this.minorMaterial, (instance) => {
-      this.minorLines = instance
-    })
-    this.replaceLines(buffers.major, this.majorLines, this.majorMaterial, (instance) => {
-      this.majorLines = instance
-    })
+    this.replaceLines(
+      buffers.minor,
+      this.minorLines,
+      this.minorMaterial,
+      (instance) => {
+        this.minorLines = instance
+      },
+      response.minorSphere ?? null,
+    )
+    this.replaceLines(
+      buffers.major,
+      this.majorLines,
+      this.majorMaterial,
+      (instance) => {
+        this.majorLines = instance
+      },
+      response.majorSphere ?? null,
+    )
     this.setVisible(true)
   }
 
@@ -501,12 +520,25 @@ export class TerrainGridHelper extends THREE.Object3D {
     if (cached) {
       this.signature = cacheKey
       this.pendingSignature = null
-      this.replaceLines(cached.minor, this.minorLines, this.minorMaterial, (instance) => {
-        this.minorLines = instance
-      })
-      this.replaceLines(cached.major, this.majorLines, this.majorMaterial, (instance) => {
-        this.majorLines = instance
-      })
+      const sphereCache = cacheKey ? this.segmentSphereCache.get(cacheKey) : null
+      this.replaceLines(
+        cached.minor,
+        this.minorLines,
+        this.minorMaterial,
+        (instance) => {
+          this.minorLines = instance
+        },
+        sphereCache ? sphereCache.minorSphere ?? null : null,
+      )
+      this.replaceLines(
+        cached.major,
+        this.majorLines,
+        this.majorMaterial,
+        (instance) => {
+          this.majorLines = instance
+        },
+        sphereCache ? sphereCache.majorSphere ?? null : null,
+      )
       this.setVisible(true)
       return
     }
@@ -530,6 +562,7 @@ export class TerrainGridHelper extends THREE.Object3D {
     this.minorMaterial.dispose()
     this.majorMaterial.dispose()
     this.segmentCache.clear()
+    this.segmentSphereCache.clear()
   }
 
   // 控制两层网格的显示状态，保持一致性。
@@ -548,6 +581,7 @@ export class TerrainGridHelper extends THREE.Object3D {
     existing: THREE.LineSegments | null,
     material: THREE.LineBasicMaterial,
     assign: (instance: THREE.LineSegments | null) => void,
+    sphere?: { center: [number, number, number]; radius: number } | null,
   ) {
     if (!data.length) {
       if (existing) {
@@ -565,7 +599,14 @@ export class TerrainGridHelper extends THREE.Object3D {
       existing.geometry = new THREE.BufferGeometry()
       existing.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       existing.geometry.computeBoundingBox()
-      existing.geometry.computeBoundingSphere()
+      if (sphere && Array.isArray(sphere.center) && typeof sphere.radius === 'number') {
+        existing.geometry.boundingSphere = new THREE.Sphere(
+          new THREE.Vector3(sphere.center[0], sphere.center[1], sphere.center[2]),
+          sphere.radius,
+        )
+      } else {
+        existing.geometry.computeBoundingSphere()
+      }
       existing.visible = true
       assign(existing)
       return
@@ -573,6 +614,14 @@ export class TerrainGridHelper extends THREE.Object3D {
 
     const lines = createLineSegments(positions, material)
     lines.name = material === this.minorMaterial ? 'TerrainGridMinorLines' : 'TerrainGridMajorLines'
+    if (sphere && Array.isArray(sphere.center) && typeof sphere.radius === 'number') {
+      lines.geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(sphere.center[0], sphere.center[1], sphere.center[2]),
+        sphere.radius,
+      )
+    } else {
+      lines.geometry.computeBoundingSphere()
+    }
     assign(lines)
     this.add(lines)
   }
