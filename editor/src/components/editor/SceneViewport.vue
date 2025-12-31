@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
@@ -321,7 +320,7 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let orbitControls: OrbitControls | MapControls | null = null
+let mapControls: MapControls | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -912,15 +911,6 @@ const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 let isApplyingCameraState = false
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-
-const cameraControlMode = computed<CameraControlMode>({
-  get: () => sceneStore.viewportSettings.cameraControlMode,
-  set: (mode) => {
-    if (mode !== sceneStore.viewportSettings.cameraControlMode) {
-      sceneStore.setCameraControlMode(mode)
-    }
-  },
-})
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -2583,17 +2573,17 @@ function rotateActiveSelection(nodeId: string) {
   emit('updateNodeTransform', transformPayload)
 }
 
-function updateOrbitControlsEnabled() {
-  if (!orbitControls) {
+function updateMapControlsEnabled() {
+  if (!mapControls) {
     return
   }
   const shouldEnable = orbitDisableCount === 0 || isOrbitControlOverrideActive
-  orbitControls.enabled = shouldEnable
+  mapControls.enabled = shouldEnable
 }
 
-function requestOrbitControlDisable() {
+function requestMapControlDisable() {
   orbitDisableCount += 1
-  updateOrbitControlsEnabled()
+  updateMapControlsEnabled()
 }
 
 function releaseOrbitControlDisable() {
@@ -2601,13 +2591,13 @@ function releaseOrbitControlDisable() {
     return
   }
   orbitDisableCount = Math.max(0, orbitDisableCount - 1)
-  updateOrbitControlsEnabled()
+  updateMapControlsEnabled()
 }
 
 function disableOrbitForSelectDrag() {
   if (!isSelectDragOrbitDisabled) {
     isSelectDragOrbitDisabled = true
-    requestOrbitControlDisable()
+    requestMapControlDisable()
   }
 }
 
@@ -2621,7 +2611,7 @@ function restoreOrbitAfterSelectDrag() {
 function disableOrbitForGroundSelection() {
   if (!isGroundSelectionOrbitDisabled) {
     isGroundSelectionOrbitDisabled = true
-    requestOrbitControlDisable()
+    requestMapControlDisable()
   }
 }
 
@@ -2635,7 +2625,7 @@ function restoreOrbitAfterGroundSelection() {
 function disableOrbitForWallBuild() {
   if (!isWallBuildOrbitDisabled) {
     isWallBuildOrbitDisabled = true
-    requestOrbitControlDisable()
+    requestMapControlDisable()
   }
 }
 
@@ -2651,7 +2641,7 @@ function setOrbitControlOverride(active: boolean) {
     return
   }
   isOrbitControlOverrideActive = active
-  updateOrbitControlsEnabled()
+  updateMapControlsEnabled()
 }
 
 function activateAltOverride() {
@@ -2826,8 +2816,8 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
-  if (orbitControls) {
-    orbitControls.enabled = !value
+  if (mapControls) {
+    mapControls.enabled = !value
   }
 
   const targetObject = transformControls?.object as THREE.Object3D | null
@@ -3244,9 +3234,9 @@ function prepareDragPreview(assetId: string) {
 
 
 function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
-  if (orbitControls) {
-    orbitControls.object = newCamera
-    orbitControls.update()
+  if (mapControls) {
+    mapControls.object = newCamera
+    mapControls.update()
   }
   if (transformControls) {
     transformControls.camera = newCamera
@@ -3510,10 +3500,6 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
   }
 }
 
-function handleToggleCameraControlMode() {
-  cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'map' : 'orbit'
-}
-
 let initialGridVisibilityApplied = false
 
 watch(isSceneReady, (ready) => {
@@ -3591,7 +3577,7 @@ watch(
 )
 
 function resetCameraView() {
-  if (!camera || !orbitControls) return
+  if (!camera || !mapControls) return
 
   const targetY = Math.max(DEFAULT_CAMERA_TARGET.y, MIN_TARGET_HEIGHT)
   const position = new THREE.Vector3(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
@@ -3602,8 +3588,8 @@ function resetCameraView() {
   camera.fov = DEFAULT_PERSPECTIVE_FOV
   camera.updateProjectionMatrix()
 
-  orbitControls.target.copy(target)
-  orbitControls.update()
+  mapControls.target.copy(target)
+  mapControls.update()
   isApplyingCameraState = false
 
 }
@@ -3643,7 +3629,7 @@ export type SceneViewportHandle = {
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
-  if (!state || !orbitControls) return
+  if (!state || !mapControls) return
 
   cameraTransitionState = null
 
@@ -3670,15 +3656,15 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   }
 
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
-  orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
-  orbitControls.update()
+  mapControls.target.set(state.target.x, clampedTargetY, state.target.z)
+  mapControls.update()
   gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
 }
 
 
 function focusCameraOnNode(nodeId: string): boolean {
-  if (!camera || !orbitControls) {
+  if (!camera || !mapControls) {
     return false
   }
 
@@ -3720,8 +3706,8 @@ function focusCameraOnNode(nodeId: string): boolean {
   }
 
   const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
-  orbitControls.target.set(target.x, clampedTargetY, target.z)
-  orbitControls.update()
+  mapControls.target.set(target.x, clampedTargetY, target.z)
+  mapControls.update()
   isApplyingCameraState = false
 
   if (perspectiveCamera && camera !== perspectiveCamera) {
@@ -3738,12 +3724,12 @@ function handleControlsChange() {
   terrainGridCameraDirty = true
 }
 
-function applyCameraControlMode(mode: CameraControlMode) {
+function applyCameraControlMode() {
   if (!camera || !canvasRef.value) {
     return
   }
 
-  const previousControls = orbitControls
+  const previousControls = mapControls
   const previousTarget = previousControls ? previousControls.target.clone() : null
   const previousEnabled = previousControls?.enabled ?? true
 
@@ -3753,25 +3739,25 @@ function applyCameraControlMode(mode: CameraControlMode) {
   }
 
   const domElement = canvasRef.value
-  const useMapControls = mode === 'map' || mode === 'orbit'
-  orbitControls = useMapControls ? new MapControls(camera, domElement) : new OrbitControls(camera, domElement)
-  orbitControls.enableDamping = false
-  orbitControls.dampingFactor = mode === 'orbit' ? 0.08 : 0.05
-  orbitControls.screenSpacePanning = false
+  mapControls = new MapControls(camera, domElement) 
   if (previousTarget) {
-    orbitControls.target.copy(previousTarget)
+    mapControls.target.copy(previousTarget)
   } else {
-    orbitControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
+    mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
-  orbitControls.enabled = previousEnabled
-  orbitControls.addEventListener('change', handleControlsChange)
+  mapControls.enabled = previousEnabled
+  mapControls.maxPolarAngle = Math.PI / 2; // 最大角度：垂直向下
+  mapControls.minPolarAngle = 9 * (Math.PI / 180); // 最小角度：1度，防止完全水平视角
+  mapControls.minDistance = 2;
+  mapControls.maxDistance = 200;
+  mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
-  if (gizmoControls && orbitControls) {
-    gizmoControls.attachControls(orbitControls as OrbitControls)
+  if (gizmoControls && mapControls) {
+    gizmoControls.attachControls(mapControls)
     gizmoControls.update()
   }
-  updateOrbitControlsEnabled()
-  orbitControls.update()
+  updateMapControlsEnabled()
+  mapControls.update()
   gizmoControls?.cameraUpdate()
 
 }
@@ -3922,7 +3908,7 @@ function initScene() {
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
 
-  applyCameraControlMode(cameraControlMode.value)
+  applyCameraControlMode()
 
   transformControls = new TransformControls(camera, canvasRef.value)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
@@ -3939,8 +3925,8 @@ function initScene() {
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
     size: 70,
   })
-  if (orbitControls) {
-    gizmoControls.attachControls(orbitControls as OrbitControls)
+  if (mapControls) {
+    gizmoControls.attachControls(mapControls as any)
   }
   gizmoControls.update()
 
@@ -4584,7 +4570,7 @@ function animate() {
 
   let controlsUpdated = false
 
-  if (cameraTransitionState && orbitControls) {
+  if (cameraTransitionState && mapControls) {
     const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
     const elapsed = Math.max(performance.now() - startTime, 0)
     const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
@@ -4599,8 +4585,8 @@ function animate() {
     }
 
     camera.position.copy(cameraTransitionCurrentPosition)
-    orbitControls.target.copy(cameraTransitionCurrentTarget)
-    orbitControls.update()
+    mapControls.target.copy(cameraTransitionCurrentTarget)
+    mapControls.update()
 
     if (!previousApplying) {
       isApplyingCameraState = false
@@ -4623,8 +4609,8 @@ function animate() {
     }
   }
 
-  if (orbitControls && !controlsUpdated) {
-    orbitControls.update()
+  if (mapControls && !controlsUpdated) {
+    mapControls.update()
   }
 
   if (terrainGridCameraDirty) {
@@ -4753,11 +4739,11 @@ function disposeScene() {
 
   groundSelectionGroup.removeFromParent()
 
-  if (orbitControls) {
-    orbitControls.removeEventListener('change', handleControlsChange)
-    orbitControls.dispose()
+  if (mapControls) {
+    mapControls.removeEventListener('change', handleControlsChange)
+    mapControls.dispose()
   }
-  orbitControls = null
+  mapControls = null
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
   // dispose building label meshes
@@ -9178,10 +9164,6 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(cameraControlMode, (mode) => {
-  applyCameraControlMode(mode)
-})
-
 watch(
   () => props.sceneNodes,
   () => {
@@ -9404,7 +9386,6 @@ defineExpose<SceneViewportHandle>({
       <ViewportToolbar
         :show-grid="gridVisible"
         :show-axes="axesVisible"
-        :camera-control-mode="cameraControlMode"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"

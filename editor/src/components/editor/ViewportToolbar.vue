@@ -201,17 +201,6 @@
         @click="toggleAxesVisibility"
       />
 
-      <v-btn
-        :icon="cameraControlModeIcon"
- 
-        color="undefined"
-        variant="text"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        :title="cameraModeTitle"
-        @click="emit('toggle-camera-control')"
-      />
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -229,7 +218,6 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
-import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
@@ -244,7 +232,6 @@ const props = withDefaults(
   canRotateSelection: boolean
   canEraseScatter: boolean
   canClearAllScatterInstances: boolean
-  cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
   buildToolsDisabled?: boolean
   scatterEraseModeActive: boolean
@@ -262,7 +249,6 @@ const emit = defineEmits<{
   (event: 'align-selection', mode: AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
-  (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
@@ -279,7 +265,6 @@ const {
   canEraseScatter,
   canClearAllScatterInstances,
   scatterEraseModeActive,
-  cameraControlMode,
   activeBuildTool,
   buildToolsDisabled,
   scatterEraseRadius,
@@ -430,15 +415,6 @@ const buildToolButtons = [
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Middle Mouse)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
-const cameraModeTitle = computed(() =>
-  cameraControlMode.value === 'orbit'
-    ? 'Switch to Map Camera Controls'
-    : 'Switch to Orbit Camera Controls',
-)
-
-const cameraControlModeIcon = computed(() =>
-  cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-map',
-)
 
 function emitAlign(mode: AlignMode) {
   emit('align-selection', mode)
