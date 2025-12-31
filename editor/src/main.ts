@@ -37,9 +37,7 @@ async function preloadRuntimeConfig() {
 
 	// Initialize wasm early so main-thread consumers can call synchronous wrappers.
 	// We don't fail the app if wasm initialization fails.
-	initWasm().catch((e) => {
-		console.warn('[editor] wasm init failed', e)
-	})
+	await initWasm()
 
 	configureAssetBlobDownloader(
 		createWorkerAssetBlobDownloader(() => {
