@@ -6795,19 +6795,6 @@ export const useSceneStore = defineStore('scene', {
       this.workspaceId = descriptor.id
       this.workspaceType = descriptor.type
       this.workspaceLabel = descriptor.label
-      await this.ensureCurrentSceneLoaded()
-    },
-    onPersistHydrated(_state?: Partial<SceneState>) {
-      const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      this.projectTree = nextTree
-      if (this.activeDirectoryId && !findDirectory(nextTree, this.activeDirectoryId)) {
-        this.activeDirectoryId = defaultDirectoryId
-      }
-      if (this.selectedAssetId && !findAssetInTree(nextTree, this.selectedAssetId)) {
-        this.selectedAssetId = null
-      }
-      this.skybox = cloneSceneSkybox(this.skybox)
-      this.shadowsEnabled = normalizeShadowsEnabledInput(this.shadowsEnabled)
     },
     async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean } = {}) {
       if (runtimeRefreshInFlight) {
@@ -13040,7 +13027,7 @@ export const useSceneStore = defineStore('scene', {
         renamedScenes,
       }
     },
-    async ensureCurrentSceneLoaded() {
+    async ensureCurrentSceneLoaded(options: { skipComponentSync?: boolean } = {}) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
 
@@ -13060,7 +13047,10 @@ export const useSceneStore = defineStore('scene', {
           this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
           this.resourceProviderId = fallback.resourceProviderId
           this.hasUnsavedChanges = false
-        } 
+          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false, skipComponentSync: options.skipComponentSync })
+        } else {
+          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false, skipComponentSync: options.skipComponentSync })
+        }
       } finally {
         this.isSceneReady = true
       }

@@ -448,18 +448,18 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
 
         applyStatePatch(store, stateToHydrate)
 
-        if (typeof (store as any).onPersistHydrated === 'function') {
-          try {
-            (store as any).onPersistHydrated(stateToHydrate)
-          } catch (error) {
-            if (debug) {
-              console.warn('[pinia-persist] onPersistHydrated hook failed', {
-                storeId: store.$id,
-                error,
-              })
-            }
-          }
-        }
+        // if (typeof (store as any).onPersistHydrated === 'function') {
+        //   try {
+        //     (store as any).onPersistHydrated(stateToHydrate)
+        //   } catch (error) {
+        //     if (debug) {
+        //       console.warn('[pinia-persist] onPersistHydrated hook failed', {
+        //         storeId: store.$id,
+        //         error,
+        //       })
+        //     }
+        //   }
+        // }
 
         lastPersistedState = cloneDeep(stateToHydrate)
       } catch (error) {
