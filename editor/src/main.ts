@@ -11,6 +11,7 @@ import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
 import { configureAssetBlobDownloader } from '@schema/assetCache'
 import { createWorkerAssetBlobDownloader } from '@/utils/assetDownloadWorkerPool'
+import { initWasm } from '@/wasm/loader'
 
 async function preloadRuntimeConfig() {
 	try {
@@ -33,6 +34,12 @@ async function preloadRuntimeConfig() {
 	} catch (err) {
 		console.warn('[editor] runtime config preload failed', err)
 	}
+
+	// Initialize wasm early so main-thread consumers can call synchronous wrappers.
+	// We don't fail the app if wasm initialization fails.
+	initWasm().catch((e) => {
+		console.warn('[editor] wasm init failed', e)
+	})
 
 	configureAssetBlobDownloader(
 		createWorkerAssetBlobDownloader(() => {

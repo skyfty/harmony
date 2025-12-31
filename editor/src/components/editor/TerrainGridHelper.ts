@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@harmony/schema'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
+import { computeBoundingSphere as wasmComputeBoundingSphere, computeBoundingBox as wasmComputeBoundingBox } from '@/wasm/loader'
 
 // 网格线的主要配色和宽度配置，确保与地形有足够对比度。
 const MINOR_COLOR = new THREE.Color(0x80c7ff)
@@ -598,15 +599,19 @@ export class TerrainGridHelper extends THREE.Object3D {
       // 复用现有对象，只替换其几何数据以保持引用不变。
       existing.geometry = new THREE.BufferGeometry()
       existing.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      existing.geometry.computeBoundingBox()
-      if (sphere && Array.isArray(sphere.center) && typeof sphere.radius === 'number') {
-        existing.geometry.boundingSphere = new THREE.Sphere(
-          new THREE.Vector3(sphere.center[0], sphere.center[1], sphere.center[2]),
-          sphere.radius,
-        )
-      } else {
-        existing.geometry.computeBoundingSphere()
-      }
+      // Use wasm computeBoundingBox directly (assume wasm always exists)
+      const outBox = wasmComputeBoundingBox(positions)
+      existing.geometry.boundingBox = new THREE.Box3(
+        new THREE.Vector3(outBox[0], outBox[1], outBox[2]),
+        new THREE.Vector3(outBox[3], outBox[4], outBox[5]),
+      )
+
+      // Use wasm computeBoundingSphere directly (assume wasm always exists)
+      const outSphere = wasmComputeBoundingSphere(positions)
+      existing.geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(outSphere[0], outSphere[1], outSphere[2]),
+        outSphere[3],
+      )
       existing.visible = true
       assign(existing)
       return
@@ -614,14 +619,19 @@ export class TerrainGridHelper extends THREE.Object3D {
 
     const lines = createLineSegments(positions, material)
     lines.name = material === this.minorMaterial ? 'TerrainGridMinorLines' : 'TerrainGridMajorLines'
-    if (sphere && Array.isArray(sphere.center) && typeof sphere.radius === 'number') {
-      lines.geometry.boundingSphere = new THREE.Sphere(
-        new THREE.Vector3(sphere.center[0], sphere.center[1], sphere.center[2]),
-        sphere.radius,
-      )
-    } else {
-      lines.geometry.computeBoundingSphere()
-    }
+    // Use wasm computeBoundingBox directly (assume wasm always exists)
+    const outBox2 = wasmComputeBoundingBox(positions)
+    lines.geometry.boundingBox = new THREE.Box3(
+      new THREE.Vector3(outBox2[0], outBox2[1], outBox2[2]),
+      new THREE.Vector3(outBox2[3], outBox2[4], outBox2[5]),
+    )
+
+    // Use wasm computeBoundingSphere directly (assume wasm always exists)
+    const outSphere2 = wasmComputeBoundingSphere(positions)
+    lines.geometry.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3(outSphere2[0], outSphere2[1], outSphere2[2]),
+      outSphere2[3],
+    )
     assign(lines)
     this.add(lines)
   }

@@ -67,3 +67,41 @@ pub fn compute_bounding_sphere(data: &[f32]) -> Float64Array {
     let out = vec![cx, cy, cz, radius];
     Float64Array::from(out.as_slice())
 }
+
+#[wasm_bindgen]
+pub fn compute_bounding_box(data: &[f32]) -> Float64Array {
+    let len = data.len();
+    let out = vec![0f64; 6];
+    if len == 0 {
+        return Float64Array::from(out.as_slice())
+    }
+
+    let mut min_x = std::f32::INFINITY;
+    let mut min_y = std::f32::INFINITY;
+    let mut min_z = std::f32::INFINITY;
+    let mut max_x = std::f32::NEG_INFINITY;
+    let mut max_y = std::f32::NEG_INFINITY;
+    let mut max_z = std::f32::NEG_INFINITY;
+
+    let mut i = 0;
+    while i + 2 < len {
+        let x = data[i];
+        let y = data[i + 1];
+        let z = data[i + 2];
+        if x < min_x { min_x = x }
+        if y < min_y { min_y = y }
+        if z < min_z { min_z = z }
+        if x > max_x { max_x = x }
+        if y > max_y { max_y = y }
+        if z > max_z { max_z = z }
+        i += 3;
+    }
+
+    out[0] = min_x as f64;
+    out[1] = min_y as f64;
+    out[2] = min_z as f64;
+    out[3] = max_x as f64;
+    out[4] = max_y as f64;
+    out[5] = max_z as f64;
+    Float64Array::from(out.as_slice())
+}
