@@ -28,3 +28,16 @@ server/.env
 editor/.env
 admin/.env
 miniprogram/.env
+
+# WebAssembly / Rust build artifacts and caches
+# Rust build output
+/wasm/rust-crate/target/
+/wasm/rust-crate/**/target/
+
+# Generated wasm package (wasm-bindgen / wasm-pack output used by frontend)
+/editor/src/wasm/pkg/
+/editor/src/wasm/pkg/**
+
+# wasm-pack / tool caches
+.cache/
+.cache/**
