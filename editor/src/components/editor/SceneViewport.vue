@@ -65,7 +65,6 @@ import {
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
-import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -358,21 +357,22 @@ let cloudRenderer: SceneCloudRenderer | null = null
 
 // Building label font/meshes (planning-conversion buildings)
 const buildingLabelMeshes = new Map<string, THREE.Mesh>()
-let fontPromise: Promise<THREE.Font> | null = null
-const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
+// fontPromise will be defined below with a relaxed type to satisfy typings
+function clampInclusive(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  if (value < min) return min
+  if (value > max) return max
+  return value
+}
 
-function loadLabelFont(): Promise<THREE.Font> {
+let fontPromise: Promise<any> | null = null
+function loadLabelFont(): Promise<any> {
   if (fontPromise) return fontPromise
-  fontPromise = new Promise<THREE.Font>((resolve, reject) => {
+  fontPromise = new Promise<any>((resolve, reject) => {
     const loader = new FontLoader()
     // load from CDN at runtime (falls back if blocked)
     const url = 'https://unpkg.com/three@0.154.0/examples/fonts/helvetiker_regular.typeface.json'
-    loader.load(
-      url,
-      (font) => resolve(font),
-      undefined,
-      (err) => reject(err),
-    )
+    loader.load(url, (font) => resolve(font), undefined, (err) => reject(err))
   })
   return fontPromise
 }
@@ -2879,17 +2879,11 @@ terrainGridHelper.name = 'TerrainGridHelper'
 const TERRAIN_GRID_BLOCK_CELLS = 64
 const TERRAIN_GRID_BLOCK_PADDING = 1
 const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 320
-const TERRAIN_GRID_HEIGHT_MARGIN = 0.5
 const terrainGridFrustum = new THREE.Frustum()
 const terrainGridProjScreenMatrix = new THREE.Matrix4()
-const terrainGridBlockBox = new THREE.Box3()
-const terrainGridBoxMin = new THREE.Vector3()
-const terrainGridBoxMax = new THREE.Vector3()
 let terrainGridBaseSignature: string | null = null
 let terrainGridBaseDefinition: GroundDynamicMesh | null = null
-let terrainGridHeightMin = 0
-let terrainGridHeightMax = 0
-let terrainGridHasHeightRange = false
+// height range tracking removed — TerrainGridHelper worker outputs are not required here
 let terrainGridCameraDirty = false
 let lastTerrainGridCameraRefresh = 0
 
@@ -2943,52 +2937,84 @@ function computeTerrainGridVisibleRange(definition: GroundDynamicMesh, currentCa
   const blockCountX = Math.ceil(columns / block)
   const blockCountZ = Math.ceil(rows / block)
 
-  const heightRange = terrainGridHelper.getLastHeightRange()
-  if (heightRange) {
-    terrainGridHasHeightRange = true
-    terrainGridHeightMin = heightRange.min
-    terrainGridHeightMax = heightRange.max
-  }
+  // ignore worker-provided height range here; projection heuristic only needs XZ
 
   // 在 worker 首次回传高度范围之前，使用一个“宁可多算也不漏算”的竖向范围。
   // 这样能保证视锥-AABB 相交不会因为 y 范围太小而返回空。
-  const fallbackExtent = Number.isFinite((currentCamera as any).far) ? Math.max(200, (currentCamera as any).far) : 500
-  const boxMinY = terrainGridHasHeightRange
-    ? Math.min(terrainGridHeightMin, 0) - TERRAIN_GRID_HEIGHT_MARGIN
-    : -fallbackExtent
-  const boxMaxY = terrainGridHasHeightRange
-    ? Math.max(terrainGridHeightMax, 0) + TERRAIN_GRID_HEIGHT_MARGIN
-    : fallbackExtent
+  // vertical bounds omitted — projection heuristic does XZ-only estimation
 
-  let minVisibleBlockX = Infinity
-  let maxVisibleBlockX = -Infinity
-  let minVisibleBlockZ = Infinity
-  let maxVisibleBlockZ = -Infinity
+  // Fast-path: estimate visible range by projecting camera frustum corners to world XZ bounds.
+  // This avoids per-block frustum-AABB checks which are costly for large terrains.
+  // declare visible block range variables (fallback values in case of errors)
+  let minVisibleBlockX = 0
+  let maxVisibleBlockX = blockCountX - 1
+  let minVisibleBlockZ = 0
+  let maxVisibleBlockZ = blockCountZ - 1
 
-  for (let bz = 0; bz < blockCountZ; bz += 1) {
-    const startRow = bz * block
-    const endRow = Math.min(rows, (bz + 1) * block)
-    const zMin = -halfDepth + startRow * stepZ
-    const zMax = -halfDepth + endRow * stepZ
-
-    for (let bx = 0; bx < blockCountX; bx += 1) {
-      const startColumn = bx * block
-      const endColumn = Math.min(columns, (bx + 1) * block)
-      const xMin = -halfWidth + startColumn * stepX
-      const xMax = -halfWidth + endColumn * stepX
-
-      terrainGridBoxMin.set(xMin, boxMinY, zMin)
-      terrainGridBoxMax.set(xMax, boxMaxY, zMax)
-      terrainGridBlockBox.set(terrainGridBoxMin, terrainGridBoxMax)
-
-      if (!terrainGridFrustum.intersectsBox(terrainGridBlockBox)) {
-        continue
+  try {
+    const inv = new THREE.Matrix4()
+    inv.copy(terrainGridProjScreenMatrix).invert()
+      const ndcCorners: [number, number, number][] = [
+        [-1, -1, -1],
+        [1, -1, -1],
+        [-1, 1, -1],
+        [1, 1, -1],
+        [-1, -1, 1],
+        [1, -1, 1],
+        [-1, 1, 1],
+        [1, 1, 1],
+      ]
+    let minX = Infinity,
+      maxX = -Infinity,
+      minZ = Infinity,
+      maxZ = -Infinity
+    const v4 = new THREE.Vector4()
+    for (const c of ndcCorners) {
+      const [cx, cy, cz] = c
+      v4.set(cx, cy, cz, 1)
+      v4.applyMatrix4(inv)
+      if (v4.w !== 0) v4.divideScalar(v4.w)
+      const wx = v4.x
+      const wz = v4.z
+      if (Number.isFinite(wx) && Number.isFinite(wz)) {
+        minX = Math.min(minX, wx)
+        maxX = Math.max(maxX, wx)
+        minZ = Math.min(minZ, wz)
+        maxZ = Math.max(maxZ, wz)
       }
-      minVisibleBlockX = Math.min(minVisibleBlockX, bx)
-      maxVisibleBlockX = Math.max(maxVisibleBlockX, bx)
-      minVisibleBlockZ = Math.min(minVisibleBlockZ, bz)
-      maxVisibleBlockZ = Math.max(maxVisibleBlockZ, bz)
     }
+
+    if (minX === Infinity || minZ === Infinity) {
+      // fallback to conservative full scan
+      minVisibleBlockX = 0
+      maxVisibleBlockX = blockCountX - 1
+      minVisibleBlockZ = 0
+      maxVisibleBlockZ = blockCountZ - 1
+    } else {
+      const padWorld = pad * block * Math.max(stepX, stepZ)
+      minX -= padWorld
+      maxX += padWorld
+      minZ -= padWorld
+      maxZ += padWorld
+      const minColumn = Math.floor((minX + halfWidth) / stepX)
+      const maxColumn = Math.ceil((maxX + halfWidth) / stepX)
+      const minRow = Math.floor((minZ + halfDepth) / stepZ)
+      const maxRow = Math.ceil((maxZ + halfDepth) / stepZ)
+      const minChunkX = clampInclusive(Math.floor(minColumn / block), 0, blockCountX - 1)
+      const maxChunkX = clampInclusive(Math.floor(Math.max(0, maxColumn - 1) / block), 0, blockCountX - 1)
+      const minChunkZ = clampInclusive(Math.floor(minRow / block), 0, blockCountZ - 1)
+      const maxChunkZ = clampInclusive(Math.floor(Math.max(0, maxRow - 1) / block), 0, blockCountZ - 1)
+      minVisibleBlockX = minChunkX
+      maxVisibleBlockX = maxChunkX
+      minVisibleBlockZ = minChunkZ
+      maxVisibleBlockZ = maxChunkZ
+    }
+  } catch (err) {
+    // If matrix invert fails, fallback to conservative full scan.
+    minVisibleBlockX = 0
+    maxVisibleBlockX = blockCountX - 1
+    minVisibleBlockZ = 0
+    maxVisibleBlockZ = blockCountZ - 1
   }
 
   if (!Number.isFinite(minVisibleBlockX) || !Number.isFinite(minVisibleBlockZ)) {
@@ -3026,9 +3052,7 @@ function refreshTerrainGridHelper() {
   terrainGridBaseDefinition = definition
   terrainGridBaseSignature = definition ? computeGroundDynamicMeshSignature(definition) : null
 
-  terrainGridHasHeightRange = false
-  terrainGridHeightMin = 0
-  terrainGridHeightMax = 0
+  // height tracking removed — no-op
 
   refreshTerrainGridHelperWithCamera()
 }
@@ -4565,12 +4589,15 @@ function animate() {
   requestAnimationFrame(animate)
   stats?.begin()
 
+  // frameStart removed (was used only for temporary profiling)
   const delta = renderClock.running ? renderClock.getDelta() : 0
   const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
+  const prof: Record<string, number> = {}
 
   let controlsUpdated = false
 
   if (cameraTransitionState && mapControls) {
+    const t_cam0 = performance.now()
     const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
     const elapsed = Math.max(performance.now() - startTime, 0)
     const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
@@ -4607,28 +4634,36 @@ function animate() {
         perspectiveCamera.quaternion.copy(camera.quaternion)
       }
     }
+    prof.cameraTransition = performance.now() - t_cam0
   }
 
   if (mapControls && !controlsUpdated) {
+    const t0 = performance.now()
     mapControls.update()
+    prof.controls = performance.now() - t0
   }
 
   if (terrainGridCameraDirty) {
+    const t0 = performance.now()
     const now = performance.now()
     if (now - lastTerrainGridCameraRefresh >= TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS) {
       lastTerrainGridCameraRefresh = now
       terrainGridCameraDirty = false
       refreshTerrainGridHelperWithCamera()
     }
+    prof.terrainGrid = performance.now() - t0
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
+    const t0 = performance.now()
     scene.updateMatrixWorld(true)
     lightHelpersNeedingUpdate.forEach((helper) => {
       helper.update?.()
     })
+    prof.lightHelpers = performance.now() - t0
   }
 
+  const t_renderPrep = performance.now()
   wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
   roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
   floorBuildTool.flushPreviewIfNeeded(scene)
@@ -4637,11 +4672,16 @@ function animate() {
   if (sky) {
     sky.position.copy(camera.position)
   }
+  const t_mid = performance.now()
+  prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
   if (props.activeTool === 'translate') {
-      faceSnapManager.updateEffectIntensity(effectiveDelta)
+    const t0 = performance.now()
+    faceSnapManager.updateEffectIntensity(effectiveDelta)
+    prof.faceSnap = performance.now() - t0
   }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
+    const t0 = performance.now()
     effectRuntimeTickers.forEach((tick) => {
       try {
         tick(effectiveDelta)
@@ -4649,16 +4689,26 @@ function animate() {
         console.warn('[SceneViewport] Failed to advance effect runtime', error)
       }
     })
+    prof.effectTickers = performance.now() - t0
   }
   if (effectiveDelta > 0 && cloudRenderer) {
+    const t0 = performance.now()
     cloudRenderer.update(effectiveDelta)
+    prof.cloudRenderer = performance.now() - t0
   }
-  updateGroundChunkStreaming()
+  if (typeof updateGroundChunkStreaming === 'function') {
+    const t_gc0 = performance.now()
+    updateGroundChunkStreaming()
+    prof.groundStreaming = performance.now() - t_gc0
+  }
 
+  const t0_scatter = performance.now()
   updateScatterLod()
   updateInstancedCullingAndLod()
+  prof.scatterAndCulling = performance.now() - t0_scatter
   // make building labels face the camera and follow their parent container
   if (buildingLabelMeshes.size > 0 && camera) {
+    const t0_labels = performance.now()
     const tmpBox = new THREE.Box3()
     const tmpVec = new THREE.Vector3()
     for (const [nodeId, mesh] of buildingLabelMeshes.entries()) {
@@ -4672,10 +4722,17 @@ function animate() {
       mesh.position.y = (tmpBox.max.y - tmpBox.min.y) * 0.5 + 0.2
       mesh.quaternion.copy(camera.quaternion)
     }
+    prof.buildingLabels = performance.now() - t0_labels
   }
+  const t0_render = performance.now()
   renderViewportFrame()
+  prof.render = performance.now() - t0_render
+  const t0_gizmoRender = performance.now()
   gizmoControls?.render()
+  prof.gizmoRender = performance.now() - t0_gizmoRender
   stats?.end()
+
+  // frame timing previously used for debug logging; removed per request
 }
 
 function disposeScene() {
@@ -9128,7 +9185,7 @@ onMounted(() => {
     viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
     viewportResizeObserver.observe(viewportEl.value)
   }
-  sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true });
+  sceneStore.ensureCurrentSceneLoaded();
 })
 
 onBeforeUnmount(() => {
