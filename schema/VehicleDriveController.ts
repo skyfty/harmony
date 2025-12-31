@@ -138,75 +138,129 @@ export type VehicleDriveCameraContext = {
   firstPersonControls?: { object: THREE.Object3D }
   desiredOrbitTarget?: THREE.Vector3
 }
-
+// 车辆引擎最大推力
 const VEHICLE_ENGINE_FORCE = 320
+// 车辆最大刹车力
 const VEHICLE_BRAKE_FORCE = 42
-const VEHICLE_SPEED_SOFT_CAP = 8.5 // m/s (~30 km/h) before gentle limiting
-const VEHICLE_SPEED_HARD_CAP = 12.5 // m/s (~45 km/h) absolute upper bound
+// 车辆速度软上限（m/s，约30km/h），超过后逐渐限制
+const VEHICLE_SPEED_SOFT_CAP = 8.5
+// 车辆速度硬上限（m/s，约45km/h），绝对不能超过
+const VEHICLE_SPEED_HARD_CAP = 12.5
 const VEHICLE_SPEED_SOFT_CAP_SQ = VEHICLE_SPEED_SOFT_CAP * VEHICLE_SPEED_SOFT_CAP
 const VEHICLE_SPEED_HARD_CAP_SQ = VEHICLE_SPEED_HARD_CAP * VEHICLE_SPEED_HARD_CAP
+// 超速时的速度阻尼
 const VEHICLE_SPEED_LIMIT_DAMPING = 0.08
+// 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
+// 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
+// 平滑停车最大阻尼
 const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.45
+// 平滑停车速度阈值
 const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.14
 const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD * VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+// 平滑停车最终速度
 const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
 const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
+// 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
+// 最大转向角（弧度）
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
-const VEHICLE_STEER_SOFT_CAP = 4.2 // m/s speed where steering starts damping
-const VEHICLE_STEER_HARD_CAP = 10 // m/s speed where steering is strongly limited
+// 转向开始衰减的速度（m/s）
+const VEHICLE_STEER_SOFT_CAP = 4.2
+// 转向强烈限制的速度（m/s）
+const VEHICLE_STEER_HARD_CAP = 10
 const VEHICLE_STEER_SOFT_CAP_SQ = VEHICLE_STEER_SOFT_CAP * VEHICLE_STEER_SOFT_CAP
+// 相机世界上方向
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
+// 第一人称默认观察距离
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
+// 相机高度兜底值
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
+// 相机高度兜底比例
 const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45
+// 下车时横向偏移比例
 const VEHICLE_EXIT_LATERAL_RATIO = 0.6
+// 下车时前向偏移比例
 const VEHICLE_EXIT_FORWARD_RATIO = 0.35
+// 下车时竖直偏移比例
 const VEHICLE_EXIT_VERTICAL_RATIO = 0.25
+// 下车时横向最小偏移
 const VEHICLE_EXIT_LATERAL_MIN = 1.25
+// 下车时前向最小偏移
 const VEHICLE_EXIT_FORWARD_MIN = 1.25
+// 下车时竖直最小偏移
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6
+// 车辆尺寸兜底值
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
+// 跟随相机最小距离
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
+// 跟随相机最大距离
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
-// Tuning: increase follow distance and lower camera so vehicles sit higher on-screen
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 2.35
-// Minimum follow camera height (raised to position camera higher)
-const VEHICLE_FOLLOW_HEIGHT_MIN = 8.5
-// Make follow distance larger relative to vehicle length so camera sits further back
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.8
+// 跟随相机高度比例（调高让车辆在画面中更靠下）
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.35
+// 跟随相机最小高度（调高让相机更高）
+const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0
+// 跟随距离与车辆长度的比例（调大让相机更远）
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 3.8
+// 跟随距离与车辆宽度的比例
 const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
+// 跟随距离与车辆对角线的比例
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.45
-// Increase target lift so the camera looks slightly above the vehicle center
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.65
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3.0
+// 目标点抬升比例（让相机看向车辆上方）
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 1.15
+// 目标点最小抬升
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 1.0
+// 跟随相机位置插值速度
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
+// 跟随相机目标插值速度
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
+// 跟随相机朝向插值速度
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
+// 目标点前向偏移比例
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.82
+// 目标点最小前向偏移
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
+// 跟随相机前瞻时间（秒）
 const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
+// 跟随相机最大前瞻距离
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
+// 前瞻激活的最小速度平方
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
+// 前瞻混合起始速度
 const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START = 0.25
+// 前瞻完全激活的速度
 const VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED = Math.sqrt(VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ)
 const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START)
+// 锚点插值速度
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
+// 判断倒车的点积阈值
 const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
+// 判断前进的点积阈值
 const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
+// 碰撞锁定锚点的速度平方阈值
 const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
+// 碰撞锁定锚点的方向点积阈值
 const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
+// 碰撞锁定锚点的持续时间（秒）
 const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
+// 前瞻混合插值速度
 const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_SPEED = 4
+// 跟随相机运动混合起始速度
 const VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD = 0.7
+// 跟随相机运动混合最大速度
 const VEHICLE_FOLLOW_MOTION_SPEED_FULL = 6
+// 跟随相机运动混合插值速度
 const VEHICLE_FOLLOW_MOTION_BLEND_SPEED = 3.2
+// 跟随相机运动距离提升比例
 const VEHICLE_FOLLOW_MOTION_DISTANCE_BOOST = 0.28
+// 跟随相机运动高度提升比例
 const VEHICLE_FOLLOW_MOTION_HEIGHT_BOOST = 0.22
+// 跟随相机运动混合速度区间
 const VEHICLE_FOLLOW_MOTION_SPEED_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_MOTION_SPEED_FULL - VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD)
+// 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
+// 判断车辆移动的速度平方阈值
 const VEHICLE_CAMERA_MOVING_SPEED_SQ = 0.04
 
 function clampAxisScalar(value: number): number {
@@ -1127,18 +1181,10 @@ export class VehicleDriveController {
       follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
     }
 
-    const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
-    run(() => {
-      ctx.camera!.position.copy(follow.currentPosition)
-      ctx.camera!.up.copy(headingUp)
-      if (mapControls) {
-          mapControls.target.copy(follow.currentTarget)
-          ctx.camera!.lookAt(follow.currentTarget)
-          mapControls.update?.()
-      } else {
-        ctx.camera!.lookAt(follow.currentTarget)
-      }
-    })
+    ctx.camera!.position.copy(follow.currentPosition)
+    ctx.camera!.up.copy(headingUp)
+    ctx.camera!.lookAt(follow.currentTarget)
+
     follow.initialized = true
     return true
   }
