@@ -987,7 +987,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       })()
     : null
 
-  const roadGeometry = buildMultiCurveGeometry(
+  let roadGeometry = buildMultiCurveGeometry(
     curves,
     (() => {
       let curveIndex = 0
@@ -1002,6 +1002,15 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   )
   if (!roadGeometry) {
     return
+  }
+
+  if (junctionSurfaceGeometries.length) {
+    const merged = mergeGeometries([roadGeometry, ...junctionSurfaceGeometries], false)
+    junctionSurfaceGeometries.forEach((g) => g.dispose())
+    if (merged) {
+      roadGeometry.dispose()
+      roadGeometry = merged
+    }
   }
 
   const roadMesh = new THREE.Mesh(roadGeometry, createRoadMaterial())
@@ -1042,6 +1051,11 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     )
     if (rightShoulder) {
       shoulderGeometries.push(rightShoulder)
+    }
+
+    if (junctionShoulderGeometries.length) {
+      shoulderGeometries.push(...junctionShoulderGeometries)
+      junctionShoulderGeometries.length = 0
     }
     if (shoulderGeometries.length) {
       const mergedShoulder = mergeGeometries(shoulderGeometries, false)
@@ -1100,29 +1114,6 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       laneMesh.renderOrder = 1000
       laneMesh.userData.overrideMaterial = true
       group.add(laneMesh)
-    }
-  }
-
-  if (junctionSurfaceGeometries.length) {
-    const merged = mergeGeometries(junctionSurfaceGeometries, false)
-    junctionSurfaceGeometries.forEach((g) => g.dispose())
-    if (merged) {
-      const mesh = new THREE.Mesh(merged, createRoadMaterial())
-      mesh.name = 'RoadJunctionSurface'
-      mesh.castShadow = false
-      mesh.receiveShadow = true
-      group.add(mesh)
-    }
-  }
-
-  if (junctionShoulderGeometries.length) {
-    const merged = mergeGeometries(junctionShoulderGeometries, false)
-    junctionShoulderGeometries.forEach((g) => g.dispose())
-    if (merged) {
-      const mesh = new THREE.Mesh(merged, createShoulderMaterial())
-      mesh.name = 'RoadJunctionShoulders'
-      mesh.userData.overrideMaterial = true
-      group.add(mesh)
     }
   }
 
