@@ -1,6 +1,13 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import polygonClipping from 'polygon-clipping'
+import type {
+  Pair as PolygonClippingPair,
+  Ring as PolygonClippingRing,
+  Polygon as PolygonClippingPolygon,
+  MultiPolygon as PolygonClippingMultiPolygon,
+} from 'polygon-clipping'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 import { sampleGroundHeight } from './groundMesh'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
@@ -99,6 +106,276 @@ const ROAD_CORNER_MIN_SEGMENTS_BASE = 12
 const ROAD_CORNER_MIN_SEGMENTS_EXTRA = 12
 
 const ROAD_OFFSET_MITER_LIMIT = 4
+
+const ROAD_POLYGON_QUANTIZE_EPS = 1e-4
+
+function polygonArea2XZ(points: THREE.Vector2[]): number {
+  let area = 0
+  const n = points.length
+  for (let i = 0; i < n; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % n]!
+    area += a.x * b.y - b.x * a.y
+  }
+  return area * 0.5
+}
+
+function ensureWindingXZ(points: THREE.Vector2[], ccw: boolean): THREE.Vector2[] {
+  if (points.length < 3) {
+    return points
+  }
+  const area = polygonArea2XZ(points)
+  const isCcw = area > 0
+  if (isCcw === ccw) {
+    return points
+  }
+  return points.slice().reverse()
+}
+
+function quantizeXZKey(x: number, z: number): string {
+  const ix = Math.round(x / ROAD_POLYGON_QUANTIZE_EPS)
+  const iz = Math.round(z / ROAD_POLYGON_QUANTIZE_EPS)
+  return `${ix},${iz}`
+}
+
+function cleanLoopXZ(points: THREE.Vector2[], eps = ROAD_EPSILON): THREE.Vector2[] {
+  if (points.length < 3) {
+    return points
+  }
+  const cleaned: THREE.Vector2[] = []
+  const eps2 = eps * eps
+  for (const p of points) {
+    const last = cleaned.length ? cleaned[cleaned.length - 1]! : null
+    if (!last || last.distanceToSquared(p) > eps2) {
+      cleaned.push(p)
+    }
+  }
+  if (cleaned.length >= 3 && cleaned[0]!.distanceToSquared(cleaned[cleaned.length - 1]!) <= eps2) {
+    cleaned.pop()
+  }
+  return cleaned
+}
+
+function vector2LoopToPolygonClippingRing(points: THREE.Vector2[]): PolygonClippingRing {
+  const cleaned = cleanLoopXZ(points, ROAD_EPSILON)
+  if (cleaned.length < 3) {
+    return []
+  }
+  const ring: PolygonClippingRing = cleaned.map((p): PolygonClippingPair => [p.x, p.y])
+  // polygon-clipping expects closed rings (first point repeated at end).
+  const first = ring[0]!
+  const last = ring[ring.length - 1]!
+  const fx = first[0]
+  const fz = first[1]
+  const lx = last[0]
+  const lz = last[1]
+  if (Math.abs(fx - lx) > ROAD_EPSILON || Math.abs(fz - lz) > ROAD_EPSILON) {
+    ring.push([fx, fz])
+  }
+  return ring
+}
+
+function polygonClippingRingToVector2Loop(ring: PolygonClippingRing): THREE.Vector2[] {
+  if (!Array.isArray(ring) || ring.length < 4) {
+    return []
+  }
+  const points: THREE.Vector2[] = []
+  for (let i = 0; i < ring.length; i += 1) {
+    const p = ring[i]
+    if (!Array.isArray(p) || p.length < 2) {
+      continue
+    }
+    const x = Number(p[0])
+    const z = Number(p[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      continue
+    }
+    points.push(new THREE.Vector2(x, z))
+  }
+  // Drop the closing point for ShapeUtils.
+  if (points.length >= 2 && points[0]!.distanceToSquared(points[points.length - 1]!) <= ROAD_EPSILON * ROAD_EPSILON) {
+    points.pop()
+  }
+  return cleanLoopXZ(points, ROAD_EPSILON)
+}
+
+function computePlanarUvBoundsFromRings(polygons: PolygonClippingMultiPolygon): { minX: number; minZ: number; spanX: number; spanZ: number } {
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  for (const poly of polygons) {
+    for (const ring of poly) {
+      for (const p of ring) {
+        if (!Array.isArray(p) || p.length < 2) {
+          continue
+        }
+        const x = Number(p[0])
+        const z = Number(p[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          continue
+        }
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (z < minZ) minZ = z
+        if (z > maxZ) maxZ = z
+      }
+    }
+  }
+
+  const spanX = Number.isFinite(maxX - minX) && Math.abs(maxX - minX) > ROAD_EPSILON ? (maxX - minX) : 1
+  const spanZ = Number.isFinite(maxZ - minZ) && Math.abs(maxZ - minZ) > ROAD_EPSILON ? (maxZ - minZ) : 1
+  return { minX, minZ, spanX, spanZ }
+}
+
+function buildOffsetRingXZForCurve(params: {
+  curve: THREE.Curve<THREE.Vector3>
+  divisions: number
+  signedDistance: number
+  sharedCenterHeights?: number[] | null
+  heightSampler?: ((x: number, z: number) => number) | null
+  yBaseOffset: number
+  extraClearance: number
+  yAdditionalOffset: number
+  yMap: Map<string, number>
+}): THREE.Vector2[] {
+  const {
+    curve,
+    divisions,
+    signedDistance,
+    sharedCenterHeights,
+    heightSampler,
+    yBaseOffset,
+    extraClearance,
+    yAdditionalOffset,
+    yMap,
+  } = params
+
+  const sampleCenters: THREE.Vector3[] = new Array(divisions + 1)
+  const center = new THREE.Vector3()
+  for (let i = 0; i <= divisions; i += 1) {
+    curve.getPoint(i / divisions, center)
+    sampleCenters[i] = center.clone()
+  }
+
+  const left = new THREE.Vector3()
+  const right = new THREE.Vector3()
+  const leftPoints: THREE.Vector2[] = new Array(divisions + 1)
+  const rightPoints: THREE.Vector2[] = new Array(divisions + 1)
+
+  for (let i = 0; i <= divisions; i += 1) {
+    const prev = i > 0 ? sampleCenters[i - 1]! : null
+    const cur = sampleCenters[i]!
+    const next = i < divisions ? sampleCenters[i + 1]! : null
+
+    computeOffsetPointMiterLimited(prev, cur, next, Math.abs(signedDistance), left)
+    computeOffsetPointMiterLimited(prev, cur, next, -Math.abs(signedDistance), right)
+
+    leftPoints[i] = new THREE.Vector2(left.x, left.z)
+    rightPoints[i] = new THREE.Vector2(right.x, right.z)
+
+    // Populate an XZ->Y lookup for boundary points so the shoulder triangulation can match
+    // the road profile along shared edges (reduces cracks / z-fighting along the boundary).
+    let y: number
+    if (Array.isArray(sharedCenterHeights) && sharedCenterHeights.length === divisions + 1) {
+      y = sharedCenterHeights[i]! + yAdditionalOffset
+    } else if (typeof heightSampler === 'function') {
+      const sampled = heightSampler(cur.x, cur.z)
+      y = (Number.isFinite(sampled) ? sampled : 0) + yBaseOffset + extraClearance + yAdditionalOffset
+    } else {
+      y = yBaseOffset + yAdditionalOffset
+    }
+
+    yMap.set(quantizeXZKey(left.x, left.z), y)
+    yMap.set(quantizeXZKey(right.x, right.z), y)
+  }
+
+  const ring = [...leftPoints, ...rightPoints.slice().reverse()]
+  return ensureWindingXZ(cleanLoopXZ(ring, ROAD_EPSILON), true)
+}
+
+function triangulatePolygonClippingMultiPolygonXZ(params: {
+  polygons: PolygonClippingMultiPolygon
+  heightSampler?: ((x: number, z: number) => number) | null
+  yBaseOffset: number
+  extraClearance: number
+  yAdditionalOffset: number
+  yMap: Map<string, number>
+}): THREE.BufferGeometry | null {
+  const polygons = params.polygons
+  if (!Array.isArray(polygons) || !polygons.length) {
+    return null
+  }
+
+  const sampler = typeof params.heightSampler === 'function' ? params.heightSampler : null
+  const { minX, minZ, spanX, spanZ } = computePlanarUvBoundsFromRings(polygons)
+
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  let vertexBase = 0
+
+  for (const poly of polygons) {
+    if (!Array.isArray(poly) || !poly.length) {
+      continue
+    }
+
+    const contour = polygonClippingRingToVector2Loop(poly[0] as PolygonClippingRing)
+    if (contour.length < 3) {
+      continue
+    }
+
+    const holes: THREE.Vector2[][] = []
+    for (let i = 1; i < poly.length; i += 1) {
+      const hole = polygonClippingRingToVector2Loop(poly[i] as PolygonClippingRing)
+      if (hole.length >= 3) {
+        holes.push(hole)
+      }
+    }
+
+    const ccwContour = ensureWindingXZ(contour, true)
+    const woundHoles = holes.map((h) => ensureWindingXZ(h, false))
+    const faces = THREE.ShapeUtils.triangulateShape(ccwContour, woundHoles)
+    if (!faces.length) {
+      continue
+    }
+
+    const points2: THREE.Vector2[] = [...ccwContour]
+    for (const hole of woundHoles) {
+      points2.push(...hole)
+    }
+
+    for (const p of points2) {
+      const key = quantizeXZKey(p.x, p.y)
+      const mapped = params.yMap.get(key)
+      const sampled = sampler ? sampler(p.x, p.y) : 0
+      const base = sampler ? ((Number.isFinite(sampled) ? sampled : 0) + params.yBaseOffset + params.extraClearance) : params.yBaseOffset
+      const y = (typeof mapped === 'number' && Number.isFinite(mapped)) ? mapped : base + params.yAdditionalOffset
+
+      positions.push(p.x, y, p.y)
+      uvs.push((p.x - minX) / spanX, (p.y - minZ) / spanZ)
+    }
+
+    for (const f of faces) {
+      indices.push(vertexBase + f[0]!, vertexBase + f[1]!, vertexBase + f[2]!)
+    }
+    vertexBase += points2.length
+  }
+
+  if (!indices.length || positions.length < 9) {
+    return null
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setIndex(indices)
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
 
 function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): number {
   if (!Number.isFinite(divisions) || divisions <= 0) {
@@ -847,14 +1124,15 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
 
   const graph = buildRoadGraph(definition)
   const junctionPolygons: THREE.Vector2[][] = []
+  const junctionSurfaceLoops: THREE.Vector2[][] = []
+  const junctionOuterLoops: THREE.Vector2[][] = []
   const junctionSurfaceGeometries: THREE.BufferGeometry[] = []
-  const junctionShoulderGeometries: THREE.BufferGeometry[] = []
   if (graph && graph.junctionVertices.length) {
     const shoulderWidth = Number.isFinite(options.shoulderWidth) && options.shoulderWidth! > 0.01
       ? options.shoulderWidth!
       : ROAD_SHOULDER_WIDTH
     const roadRadius = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
-    const outerRadius = width * 0.5 + ROAD_SHOULDER_GAP + shoulderWidth
+    const outerRadius = width * 0.5 + shoulderWidth
     const roundSegments = 8 + Math.round(24 * smoothing)
 
     for (const junctionVertex of graph.junctionVertices) {
@@ -874,6 +1152,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
         roundSegments,
       })
       if (surfaceLoop.length >= 3) {
+        junctionSurfaceLoops.push(surfaceLoop)
         junctionPolygons.push(surfaceLoop)
         const surface = triangulateJunctionPatchXZ({
           contour: surfaceLoop,
@@ -893,23 +1172,8 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
           radius: outerRadius,
           roundSegments,
         })
-        const innerLoop = surfaceLoop.length
-          ? surfaceLoop
-          : buildJunctionLoopXZ({ center, incidentDirsXZ: dirs, radius: roadRadius, roundSegments })
-        if (outerLoop.length >= 3 && innerLoop.length >= 3) {
-          const shoulderYOffset = heightSampler
-            ? ROAD_SHOULDER_OFFSET_Y
-            : ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y
-          const ring = triangulateJunctionPatchXZ({
-            contour: outerLoop,
-            holes: [innerLoop],
-            heightSampler,
-            yOffset: shoulderYOffset,
-            minClearance,
-          })
-          if (ring) {
-            junctionShoulderGeometries.push(ring)
-          }
+        if (outerLoop.length >= 3) {
+          junctionOuterLoops.push(outerLoop)
         }
       }
     }
@@ -1023,49 +1287,132 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     const shoulderWidth = Number.isFinite(options.shoulderWidth) && options.shoulderWidth! > 0.01
       ? options.shoulderWidth!
       : ROAD_SHOULDER_WIDTH
-    const shoulderOffset = width * 0.5 + ROAD_SHOULDER_GAP + shoulderWidth * 0.5
-    const shoulderGeometries: THREE.BufferGeometry[] = []
-    const shoulderYOffset = sharedHeightSeriesList
+    const outerDistance = width * 0.5 + shoulderWidth
+    const surfaceDistance = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+    const extraClearance = Number.isFinite(minClearance) ? Math.max(0, minClearance) : 0
+    const yBaseOffset = ROAD_SURFACE_Y_OFFSET
+    const yAdditionalOffset = sharedHeightSeriesList
       ? ROAD_SHOULDER_OFFSET_Y
-      : ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y
-    const leftShoulder = buildOverlayGeometry(
-      curves,
-      shoulderWidth,
-      shoulderOffset,
-      heightSampler,
-      shoulderYOffset,
-      meshOptions,
-      sharedHeightSeriesList ?? undefined,
-    )
-    if (leftShoulder) {
-      shoulderGeometries.push(leftShoulder)
-    }
-    const rightShoulder = buildOverlayGeometry(
-      curves,
-      shoulderWidth,
-      -shoulderOffset,
-      heightSampler,
-      shoulderYOffset,
-      meshOptions,
-      sharedHeightSeriesList ?? undefined,
-    )
-    if (rightShoulder) {
-      shoulderGeometries.push(rightShoulder)
+      : ROAD_SHOULDER_OFFSET_Y
+
+    const yMap = new Map<string, number>()
+
+    const surfacePolys: PolygonClippingPolygon[] = []
+    const outerPolys: PolygonClippingPolygon[] = []
+
+    for (let curveIndex = 0; curveIndex < curves.length; curveIndex += 1) {
+      const curve = curves[curveIndex]!.curve
+      const length = curve.getLength()
+      if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
+        continue
+      }
+
+      const shared = sharedHeightSeriesList ? (sharedHeightSeriesList[curveIndex] ?? null) : null
+      const divisions = Array.isArray(shared) && shared.length >= 2
+        ? shared.length - 1
+        : computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, smoothing)
+
+      const surfaceLoop = buildOffsetRingXZForCurve({
+        curve,
+        divisions,
+        signedDistance: surfaceDistance,
+        sharedCenterHeights: shared,
+        heightSampler,
+        yBaseOffset,
+        extraClearance,
+        yAdditionalOffset,
+        yMap,
+      })
+      const outerLoop = buildOffsetRingXZForCurve({
+        curve,
+        divisions,
+        signedDistance: outerDistance,
+        sharedCenterHeights: shared,
+        heightSampler,
+        yBaseOffset,
+        extraClearance,
+        yAdditionalOffset,
+        yMap,
+      })
+
+      const surfaceRing = vector2LoopToPolygonClippingRing(surfaceLoop)
+      if (surfaceRing.length >= 4) {
+        surfacePolys.push([surfaceRing])
+      }
+
+      const outerRing = vector2LoopToPolygonClippingRing(outerLoop)
+      if (outerRing.length >= 4) {
+        outerPolys.push([outerRing])
+      }
     }
 
-    if (junctionShoulderGeometries.length) {
-      shoulderGeometries.push(...junctionShoulderGeometries)
-      junctionShoulderGeometries.length = 0
+    // Include junction loops so the boolean result follows the intended junction rounding.
+    for (const loop of junctionSurfaceLoops) {
+      const ring = vector2LoopToPolygonClippingRing(loop)
+      if (ring.length >= 4) {
+        surfacePolys.push([ring])
+      }
+      // Populate yMap for junction boundary vertices.
+      if (heightSampler) {
+        for (const p of loop) {
+          const sampled = heightSampler(p.x, p.y)
+          const y = (Number.isFinite(sampled) ? sampled : 0) + yBaseOffset + extraClearance + yAdditionalOffset
+          yMap.set(quantizeXZKey(p.x, p.y), y)
+        }
+      }
     }
-    if (shoulderGeometries.length) {
-      const mergedShoulder = mergeGeometries(shoulderGeometries, false)
-      shoulderGeometries.forEach((geometry) => geometry.dispose())
-      if (mergedShoulder) {
-        const shoulderMesh = new THREE.Mesh(mergedShoulder, createShoulderMaterial())
+    for (const loop of junctionOuterLoops) {
+      const ring = vector2LoopToPolygonClippingRing(loop)
+      if (ring.length >= 4) {
+        outerPolys.push([ring])
+      }
+      if (heightSampler) {
+        for (const p of loop) {
+          const sampled = heightSampler(p.x, p.y)
+          const y = (Number.isFinite(sampled) ? sampled : 0) + yBaseOffset + extraClearance + yAdditionalOffset
+          yMap.set(quantizeXZKey(p.x, p.y), y)
+        }
+      }
+    }
+
+    try {
+      const outerUnion = (() => {
+        if (!outerPolys.length) {
+          return [] as PolygonClippingMultiPolygon
+        }
+        const [first, ...rest] = outerPolys
+        return polygonClipping.union(first!, ...rest) as unknown as PolygonClippingMultiPolygon
+      })()
+      const surfaceUnion = (() => {
+        if (!surfacePolys.length) {
+          return [] as PolygonClippingMultiPolygon
+        }
+        const [first, ...rest] = surfacePolys
+        return polygonClipping.union(first!, ...rest) as unknown as PolygonClippingMultiPolygon
+      })()
+      const shouldersPolys = outerUnion.length
+        ? (surfaceUnion.length
+            ? (polygonClipping.difference(outerUnion, surfaceUnion) as unknown as PolygonClippingMultiPolygon)
+            : outerUnion)
+        : []
+
+      const shoulderGeometry = triangulatePolygonClippingMultiPolygonXZ({
+        polygons: shouldersPolys,
+        heightSampler,
+        yBaseOffset,
+        extraClearance,
+        yAdditionalOffset,
+        yMap,
+      })
+
+      if (shoulderGeometry) {
+        const shoulderMesh = new THREE.Mesh(shoulderGeometry, createShoulderMaterial())
         shoulderMesh.name = 'RoadShoulders'
         shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
       }
+    } catch {
+      // If polygon boolean fails, skip shoulders to avoid crashing the scene.
     }
   }
 
