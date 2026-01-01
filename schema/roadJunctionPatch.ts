@@ -179,6 +179,26 @@ export function triangulateJunctionPatchXZ(params: {
   const clearance = Number.isFinite(params.minClearance) ? Math.max(0, params.minClearance!) : 0
 
   const positions: number[] = new Array(points2.length * 3)
+  const uvs: number[] = new Array(points2.length * 2)
+
+  // Simple planar UVs in XZ so BufferGeometryUtils.mergeGeometries can merge
+  // with the strip geometries (which always have a `uv` attribute).
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const p of points2) {
+    if (!p) {
+      continue
+    }
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minZ) minZ = p.y
+    if (p.y > maxZ) maxZ = p.y
+  }
+  const spanX = Number.isFinite(maxX - minX) && Math.abs(maxX - minX) > EPSILON ? (maxX - minX) : 1
+  const spanZ = Number.isFinite(maxZ - minZ) && Math.abs(maxZ - minZ) > EPSILON ? (maxZ - minZ) : 1
+
   for (let i = 0; i < points2.length; i += 1) {
     const p = points2[i]!
     const sampled = sampler ? sampler(p.x, p.y) : 0
@@ -186,6 +206,9 @@ export function triangulateJunctionPatchXZ(params: {
     positions[i * 3 + 0] = p.x
     positions[i * 3 + 1] = y
     positions[i * 3 + 2] = p.y
+
+    uvs[i * 2 + 0] = (p.x - minX) / spanX
+    uvs[i * 2 + 1] = (p.y - minZ) / spanZ
   }
 
   const indices: number[] = []
@@ -196,6 +219,7 @@ export function triangulateJunctionPatchXZ(params: {
   const geometry = new THREE.BufferGeometry()
   geometry.setIndex(indices)
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
