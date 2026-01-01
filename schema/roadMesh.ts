@@ -449,6 +449,21 @@ function clearGroupContent(group: THREE.Group) {
   }
 }
 
+function createShoulderMaterial(): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xff0000,
+    metalness: 0,
+    roughness: 0.9,
+    transparent: true,
+    opacity: 0.85,
+  })
+  material.name = 'RoadShoulderMaterial'
+  material.side = THREE.DoubleSide
+  material.polygonOffset = true
+  material.polygonOffsetFactor = -1
+  material.polygonOffsetUnits = -1
+  return material
+}
 function createRoadMaterial(): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
     color: DEFAULT_COLOR,
@@ -1259,10 +1274,11 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       if (rightStrip) rightStrip.dispose()
 
       if (merged) {
-        const shoulderMesh = new THREE.Mesh(merged, createRoadMaterial())
-        shoulderMesh.name = 'RoadShoulders'
+        const shoulderMesh = new THREE.Mesh(merged, createShoulderMaterial())
         shoulderMesh.castShadow = false
         shoulderMesh.receiveShadow = true
+        shoulderMesh.name = 'RoadShoulders'
+        shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
       }
     } else {
