@@ -6892,6 +6892,166 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
   if (isAltOverrideActive) {
     return false
   }
+  const session = ensureRoadBuildSession()
+
+  // If this is the first point, prefer raycast-based interaction:
+  // - If clicking on an existing road surface, start a branch by splitting the nearest segment.
+  // - Otherwise, fall back to the ground-plane placement + vertex snapping.
+  if (session.points.length === 0) {
+    const hit = pickNodeAtPointer(event)
+    if (hit?.nodeId) {
+      const node = findSceneNode(sceneStore.nodes, hit.nodeId)
+      const runtime = objectMap.get(hit.nodeId) ?? null
+      if (node?.dynamicMesh?.type === 'Road' && runtime) {
+        const base = node.dynamicMesh
+        const vertices = Array.isArray(base.vertices)
+          ? base.vertices.map((v) => [Number(v[0]), Number(v[1])] as [number, number])
+          : ([] as [number, number][]) 
+        const segments = Array.isArray(base.segments)
+          ? base.segments.map((s) => ({ a: Math.trunc(Number(s.a)), b: Math.trunc(Number(s.b)) }))
+          : ([] as Array<{ a: number; b: number }>)
+
+        if (vertices.length >= 2 && segments.length >= 1) {
+          const localHit = runtime.worldToLocal(hit.point.clone())
+          const clickX = localHit.x
+          const clickZ = localHit.z
+
+          const EPS2 = 1e-6
+          const findExistingVertexIndex = (x: number, z: number): number => {
+            for (let i = 0; i < vertices.length; i += 1) {
+              const v = vertices[i]!
+              const dx = (v[0] ?? 0) - x
+              const dz = (v[1] ?? 0) - z
+              if (dx * dx + dz * dz <= EPS2) {
+                return i
+              }
+            }
+            return -1
+          }
+
+          // Find nearest segment and compute closest-point projection in local XZ.
+          let bestSegmentIndex = -1
+          let bestDist2 = Number.POSITIVE_INFINITY
+          let bestAx = 0
+          let bestAz = 0
+          let bestBx = 0
+          let bestBz = 0
+          let bestProjX = 0
+          let bestProjZ = 0
+          let bestAIndex = -1
+          let bestBIndex = -1
+
+          for (let i = 0; i < segments.length; i += 1) {
+            const seg = segments[i]!
+            const a = seg.a
+            const b = seg.b
+            if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
+              continue
+            }
+            if (a >= vertices.length || b >= vertices.length) {
+              continue
+            }
+            const va = vertices[a]
+            const vb = vertices[b]
+            if (!va || !vb) {
+              continue
+            }
+            const ax = va[0]
+            const az = va[1]
+            const bx = vb[0]
+            const bz = vb[1]
+            if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
+              continue
+            }
+
+            const dx = bx - ax
+            const dz = bz - az
+            const len2 = dx * dx + dz * dz
+            if (len2 <= EPS2) {
+              continue
+            }
+            const tRaw = ((clickX - ax) * dx + (clickZ - az) * dz) / len2
+            const t = Math.max(0, Math.min(1, tRaw))
+            const px = ax + dx * t
+            const pz = az + dz * t
+            const ddx = clickX - px
+            const ddz = clickZ - pz
+            const dist2 = ddx * ddx + ddz * ddz
+            if (dist2 < bestDist2) {
+              bestDist2 = dist2
+              bestSegmentIndex = i
+              bestAx = ax
+              bestAz = az
+              bestBx = bx
+              bestBz = bz
+              bestProjX = px
+              bestProjZ = pz
+              bestAIndex = a
+              bestBIndex = b
+            }
+          }
+
+          if (bestSegmentIndex >= 0 && bestAIndex >= 0 && bestBIndex >= 0) {
+            const endpointSnap2 = ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE
+            const daX = bestProjX - bestAx
+            const daZ = bestProjZ - bestAz
+            const dbX = bestProjX - bestBx
+            const dbZ = bestProjZ - bestBz
+            const dist2ToA = daX * daX + daZ * daZ
+            const dist2ToB = dbX * dbX + dbZ * dbZ
+
+            let startIndex = -1
+
+            // If projection is near an endpoint, prefer reusing that endpoint.
+            if (dist2ToA <= endpointSnap2) {
+              startIndex = bestAIndex
+            } else if (dist2ToB <= endpointSnap2) {
+              startIndex = bestBIndex
+            } else {
+              const existingIndex = findExistingVertexIndex(bestProjX, bestProjZ)
+              if (existingIndex >= 0) {
+                startIndex = existingIndex
+              } else {
+                // Insert a new vertex and split the nearest segment.
+                const newIndex = vertices.length
+                vertices.push([bestProjX, bestProjZ])
+                const originalA = bestAIndex
+                const originalB = bestBIndex
+                segments[bestSegmentIndex] = { a: originalA, b: newIndex }
+                segments.push({ a: newIndex, b: originalB })
+                startIndex = newIndex
+              }
+            }
+
+            if (startIndex >= 0) {
+              const next: RoadDynamicMesh = {
+                type: 'Road',
+                width: Number.isFinite(base.width) ? Math.max(0.2, base.width) : session.width,
+                vertices,
+                segments,
+              }
+
+              // Persist the split immediately so subsequent clicks/commit can extend from this vertex.
+              sceneStore.updateNodeDynamicMesh(hit.nodeId, next)
+
+              const worldProjected = runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ))
+              worldProjected.y = 0
+
+              session.targetNodeId = hit.nodeId
+              session.startVertexIndex = startIndex
+              session.snapVertices = collectRoadSnapVertices()
+              session.points.push(worldProjected.clone())
+              session.previewEnd = worldProjected.clone()
+              updateRoadPreview()
+              return true
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Fall back to ground-plane placement + vertex snapping.
   if (!raycastGroundPoint(event, groundPointerHelper)) {
     return false
   }
@@ -6899,7 +7059,6 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
   const snapped = groundPointerHelper.clone()
   snapped.y = 0
 
-  const session = ensureRoadBuildSession()
   // Refresh snap targets on every placement to ensure up-to-date snapping.
   session.snapVertices = collectRoadSnapVertices()
   const snappedResult = snapRoadPointToVertices(snapped, session.snapVertices)

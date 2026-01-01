@@ -1751,10 +1751,14 @@ function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProp
     return false
   }
   const normalized = clampRoadProps(props)
+  // Road geometry (vertices/segments) is edited directly via dynamicMesh.
+  // Component props control rendering parameters (lane lines, shoulders, smoothing, etc).
+  // Do NOT overwrite geometry from component props; otherwise toggles/rebuilds can revert user edits.
+  const existing = node.dynamicMesh
   node.dynamicMesh = {
     type: 'Road',
-    vertices: normalized.vertices,
-    segments: normalized.segments,
+    vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
+    segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
     width: normalized.width,
   }
 
