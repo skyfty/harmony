@@ -152,6 +152,8 @@ export function triangulateJunctionPatchXZ(params: {
   contour: THREE.Vector2[]
   holes?: THREE.Vector2[][]
   heightSampler?: ((x: number, z: number) => number) | null
+  /** Optional precomputed vertex heights (world Y) aligned to contour/holes order. */
+  vertexHeights?: { contour: number[]; holes?: number[][] } | null
   yOffset: number
   minClearance?: number
 }): THREE.BufferGeometry | null {
@@ -162,8 +164,26 @@ export function triangulateJunctionPatchXZ(params: {
 
   const holes = Array.isArray(params.holes) ? params.holes.filter((h) => Array.isArray(h) && h.length >= 3) : []
 
+  const inputHeights = params.vertexHeights ?? null
+  const contourHeights = Array.isArray(inputHeights?.contour) ? inputHeights!.contour : null
+  const holeHeightsList = Array.isArray(inputHeights?.holes) ? inputHeights!.holes! : null
+
   const ccwContour = ensureWinding(contour, true)
+  const ccwContourHeights = contourHeights
+    ? (ccwContour === contour ? contourHeights : contourHeights.slice().reverse())
+    : null
+
   const woundHoles = holes.map((h) => ensureWinding(h, false))
+  const woundHoleHeights = holeHeightsList
+    ? holes.map((hole, index) => {
+        const heights = holeHeightsList[index]
+        if (!Array.isArray(heights) || heights.length !== hole.length) {
+          return null
+        }
+        const wound = woundHoles[index]!
+        return wound === hole ? heights : heights.slice().reverse()
+      })
+    : null
 
   const faces = THREE.ShapeUtils.triangulateShape(ccwContour, woundHoles)
   if (!faces.length) {
@@ -174,6 +194,23 @@ export function triangulateJunctionPatchXZ(params: {
   for (const hole of woundHoles) {
     points2.push(...hole)
   }
+
+  const heights2: number[] | null = ccwContourHeights
+    ? (() => {
+        const collected: number[] = [...ccwContourHeights]
+        if (woundHoles.length) {
+          for (let i = 0; i < woundHoles.length; i += 1) {
+            const hole = woundHoles[i]!
+            const heights = woundHoleHeights ? woundHoleHeights[i] : null
+            if (!heights || heights.length !== hole.length) {
+              return null
+            }
+            collected.push(...heights)
+          }
+        }
+        return collected
+      })()
+    : null
 
   const sampler = typeof params.heightSampler === 'function' ? params.heightSampler : null
   const clearance = Number.isFinite(params.minClearance) ? Math.max(0, params.minClearance!) : 0
@@ -201,8 +238,11 @@ export function triangulateJunctionPatchXZ(params: {
 
   for (let i = 0; i < points2.length; i += 1) {
     const p = points2[i]!
+    const precomputed = heights2 ? heights2[i] : undefined
     const sampled = sampler ? sampler(p.x, p.y) : 0
-    const y = (Number.isFinite(sampled) ? sampled : 0) + params.yOffset + clearance
+    const y = Number.isFinite(precomputed as number)
+      ? (precomputed as number)
+      : (Number.isFinite(sampled) ? sampled : 0) + params.yOffset + clearance
     positions[i * 3 + 0] = p.x
     positions[i * 3 + 1] = y
     positions[i * 3 + 2] = p.y
