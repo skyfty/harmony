@@ -6,6 +6,7 @@ import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './component
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
 import { resolveRoadLocalHeightSampler } from './roadMesh'
 import { buildGroundHeightfieldData } from './groundHeightfield'
+import { buildRoadCurves as buildRoadCurvesShared } from './roadCurves'
 
 export type RoadHeightfieldBodiesEntry = { signature: string; bodies: CANNON.Body[] }
 
@@ -50,7 +51,12 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		| SceneNodeComponentState<RoadComponentProps>
 		| undefined
 	const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
-	const roadWidth = Math.max(0.01, Number.isFinite(roadProps.width) ? roadProps.width : 2)
+	const roadWidth = Math.max(
+		0.01,
+		Number.isFinite(definition.width)
+			? definition.width
+			: (Number.isFinite(roadProps.width) ? roadProps.width : 2),
+	)
 	const samplingDensityFactor = roadProps.samplingDensityFactor ?? 1.0
 	const smoothingStrengthFactor = roadProps.smoothingStrengthFactor ?? 1.0
 	const minClearance = roadProps.minClearance ?? 0.01
@@ -65,7 +71,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 	if (!buildData) {
 		return null
 	}
-	const curves = buildRoadCurves(junctionSmoothing, buildData)
+	const curves = buildRoadCurvesShared(junctionSmoothing, buildData, { width: roadWidth })
 	if (!curves.length) {
 		return null
 	}
@@ -507,31 +513,6 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
 		return null
 	}
 	return { vertexVectors, paths }
-}
-
-type RoadCurveDescriptor = { curve: THREE.Curve<THREE.Vector3> }
-
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-	if (points.length === 2) {
-		return new THREE.LineCurve3(points[0], points[1])
-	}
-	const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
-	curve.tension = clampNumber(tension, 0, 1, 0)
-	return curve
-}
-
-function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
-	const tension = Math.max(0, Math.min(1, 1 - (Number.isFinite(smoothing) ? smoothing : 0)))
-	const curves: RoadCurveDescriptor[] = []
-	for (const path of buildData.paths) {
-		const points = path.indices
-			.map((index) => buildData.vertexVectors[index] ?? null)
-			.filter((p): p is THREE.Vector3 => Boolean(p))
-		if (points.length >= 2) {
-			curves.push({ curve: createRoadCurve(points, path.closed, tension) })
-		}
-	}
-	return curves
 }
 
 type SmoothedHeightSeriesParams = {
