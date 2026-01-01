@@ -45,14 +45,15 @@ function computeCornerRadius(width: number, smoothing: number): { base: number; 
   const w = Math.max(0.01, safeFinite(width, 2))
   const s = clamp(safeFinite(smoothing, 0), 0, 1)
 
-  // Keep a small minimum radius so even smoothing=0 isn't a perfect hard polyline.
-  const rMin = clamp(0.03 * w, 0.02, 0.25)
+  // When smoothing is 0, use zero radius (no rounding at all - straight segments stay straight).
+  // When smoothing > 0, scale from a small minimum to maximum based on smoothing value.
+  const rMin = s > EPS ? clamp(0.03 * w, 0.02, 0.25) : 0
   const rMax = clamp(1.5 * w, rMin, 12)
   const gamma = 1.5
   const base = rMin + (rMax - rMin) * Math.pow(s, gamma)
 
   // Micro-bend radius cap (used for very small-angle, long-segment corners).
-  const microMax = clamp(0.25 * w, rMin, 2)
+  const microMax = s > EPS ? clamp(0.25 * w, rMin, 2) : 0
   return { base, microMax }
 }
 
@@ -113,8 +114,10 @@ function buildRoundedCurveFromPoints(
 
   const { base: baseRadius, microMax: microRadiusMax } = computeCornerRadius(options.width, smoothing)
   const uTurnThresholdRad = (170 * Math.PI) / 180
-  const microAngleRad = (1.5 * Math.PI) / 180
-  const noiseAngleRad = (0.2 * Math.PI) / 180
+  // Increase the micro angle threshold - only smooth corners with noticeable angles (>5 degrees)
+  const microAngleRad = (5.0 * Math.PI) / 180
+  // Increase noise threshold - angles smaller than 1 degree are essentially straight
+  const noiseAngleRad = (1.0 * Math.PI) / 180
   const microMinLen = Math.max(10 * options.width, 8)
 
   const n = filtered.length
@@ -158,6 +161,11 @@ function buildRoundedCurveFromPoints(
     // Option C: for very small-angle corners that occur on long segments, cap the radius so it stays subtle.
     if (angle <= microAngleRad && Math.min(lenIn, lenOut) >= microMinLen) {
       radius = Math.min(radius, microRadiusMax)
+    }
+
+    // If radius is effectively zero (smoothing=0), skip rounding to keep segments perfectly straight
+    if (!(radius > 1e-4)) {
+      continue
     }
 
     const d = buildCornerCutDistance({

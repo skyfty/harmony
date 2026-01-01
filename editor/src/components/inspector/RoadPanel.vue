@@ -107,7 +107,7 @@ watch(
       isSyncingFromScene.value = false
     })
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 )
 
 function applyLaneLinesUpdate(rawValue: unknown) {
