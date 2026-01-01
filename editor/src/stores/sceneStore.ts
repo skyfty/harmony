@@ -1234,11 +1234,46 @@ function normalizeRoadWidth(value: unknown): number {
   return Math.max(ROAD_MIN_WIDTH, numeric)
 }
 
-const ROAD_CURVE_TENSION = 0.5
-const ROAD_CURVE_MIN_DIVISIONS = 4
-const ROAD_CURVE_MAX_DIVISIONS = 256
 const ROAD_CURVE_DIVISION_DENSITY = 8
 const ROAD_CURVE_EPSILON = 1e-6
+const ROAD_CURVE_LINEAR_STEP_METERS = 0.5
+const ROAD_CURVE_MAX_POINTS = 2048
+
+function densifyPolylineByStep(points: Vector3[], stepMeters: number, maxPoints: number): Vector3[] {
+  if (points.length < 2) {
+    return points
+  }
+  const requestedStep = typeof stepMeters === 'number' && Number.isFinite(stepMeters) ? stepMeters : ROAD_CURVE_LINEAR_STEP_METERS
+  const step = Math.max(1e-3, requestedStep)
+  const limit = Number.isFinite(maxPoints) ? Math.max(2, Math.trunc(maxPoints)) : ROAD_CURVE_MAX_POINTS
+
+  let totalLength = 0
+  for (let i = 0; i < points.length - 1; i += 1) {
+    totalLength += points[i]!.distanceTo(points[i + 1]!)
+  }
+
+  // Avoid exploding vertex counts on very long roads.
+  const effectiveStep = Math.max(step, totalLength / Math.max(1, limit - 1))
+
+  const out: Vector3[] = [points[0]!.clone()]
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i]!
+    const b = points[i + 1]!
+    const len = a.distanceTo(b)
+    if (!(len > 1e-9)) {
+      continue
+    }
+    const divisions = Math.max(1, Math.ceil(len / effectiveStep))
+    for (let j = 1; j <= divisions; j += 1) {
+      const t = j / divisions
+      out.push(a.clone().lerp(b, t))
+      if (out.length >= limit) {
+        return out
+      }
+    }
+  }
+  return out
+}
 
 function buildRoadWorldPoints(points: Vector3Like[]): Vector3[] {
   const out: Vector3[] = []
@@ -1289,28 +1324,19 @@ function buildRoadDynamicMeshFromWorldPoints(
   }
 
   const normalizedWidth = normalizeRoadWidth(width)
-  const closed =
+  // Closed curves are represented by `closed=true` (topology via segments),
+  // NOT by repeating the first point as the last point.
+  let closed = false
+  if (
     worldPoints.length >= 3 &&
     worldPoints[0]!.distanceToSquared(worldPoints[worldPoints.length - 1]!) <= ROAD_CURVE_EPSILON
-
-  const curve = new THREE.CatmullRomCurve3(worldPoints, closed, 'catmullrom')
-  curve.tension = ROAD_CURVE_TENSION
-
-  const length = Math.max(curve.getLength(), ROAD_CURVE_EPSILON)
-  const divisions = Math.max(
-    ROAD_CURVE_MIN_DIVISIONS,
-    Math.min(ROAD_CURVE_MAX_DIVISIONS, Math.ceil(length * ROAD_CURVE_DIVISION_DENSITY)),
-  )
-
-  const sampledPoints: Vector3[] = []
-  for (let i = 0; i <= divisions; i += 1) {
-    sampledPoints.push(curve.getPoint(i / divisions))
+  ) {
+    worldPoints.pop()
+    closed = true
   }
 
-  if (closed && sampledPoints.length > 1) {
-    sampledPoints.pop()
-  }
-
+  const densifyStep = Math.max(1e-3, 1 / ROAD_CURVE_DIVISION_DENSITY, ROAD_CURVE_LINEAR_STEP_METERS)
+  const sampledPoints = densifyPolylineByStep(worldPoints, densifyStep, ROAD_CURVE_MAX_POINTS)
   if (sampledPoints.length < 2) {
     return null
   }

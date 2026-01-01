@@ -740,97 +740,6 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   }
 }
 
-function smoothRoadCenterlineXZ(definition: RoadDynamicMesh, options: { pinnedIndex: number; iterations?: number; alpha?: number }): RoadDynamicMesh {
-  const pinnedIndex = Math.trunc(options.pinnedIndex)
-  const iterations = Math.max(0, Math.min(24, Math.trunc(options.iterations ?? 6)))
-  const alpha = Math.max(0, Math.min(1, Number.isFinite(options.alpha) ? (options.alpha as number) : 0.35))
-
-  const vertices = Array.isArray(definition.vertices)
-    ? definition.vertices.map((v) => [Number(v?.[0]) || 0, Number(v?.[1]) || 0] as [number, number])
-    : ([] as Array<[number, number]>)
-  if (pinnedIndex < 0 || pinnedIndex >= vertices.length || iterations <= 0 || alpha <= 0) {
-    return definition
-  }
-
-  // Build adjacency from segments.
-  const adjacency = new Map<number, number[]>()
-  const degree = new Map<number, number>()
-  const segments = Array.isArray(definition.segments) ? definition.segments : []
-  for (const s of segments) {
-    const a = Math.trunc(Number((s as any)?.a))
-    const b = Math.trunc(Number((s as any)?.b))
-    if (!(a >= 0 && b >= 0)) {
-      continue
-    }
-    if (a >= vertices.length || b >= vertices.length || a === b) {
-      continue
-    }
-    const aList = adjacency.get(a) ?? []
-    if (!aList.includes(b)) aList.push(b)
-    adjacency.set(a, aList)
-    const bList = adjacency.get(b) ?? []
-    if (!bList.includes(a)) bList.push(a)
-    adjacency.set(b, bList)
-  }
-
-  for (const [index, neighbors] of adjacency.entries()) {
-    degree.set(index, neighbors.length)
-  }
-
-  // Only smooth within the connected component of the pinned vertex.
-  const component = new Set<number>()
-  const queue: number[] = [pinnedIndex]
-  component.add(pinnedIndex)
-  while (queue.length) {
-    const current = queue.shift()!
-    const neighbors = adjacency.get(current) ?? []
-    for (const n of neighbors) {
-      if (!component.has(n)) {
-        component.add(n)
-        queue.push(n)
-      }
-    }
-  }
-
-  let working = vertices
-  for (let pass = 0; pass < iterations; pass += 1) {
-    const next = working.map((v) => [v[0], v[1]] as [number, number])
-    for (const index of component) {
-      if (index === pinnedIndex) {
-        continue
-      }
-      const deg = degree.get(index) ?? 0
-      // Keep endpoints (deg=1) and junctions (deg!=2) fixed to preserve branching topology.
-      if (deg !== 2) {
-        continue
-      }
-      const neighbors = adjacency.get(index) ?? []
-      const n0 = neighbors[0]
-      const n1 = neighbors[1]
-      if (n0 == null || n1 == null) {
-        continue
-      }
-      const v0 = working[n0]
-      const v1 = working[n1]
-      if (!v0 || !v1) {
-        continue
-      }
-      const avgX = (v0[0] + v1[0]) * 0.5
-      const avgZ = (v0[1] + v1[1]) * 0.5
-      const cur = working[index]
-      if (!cur) {
-        continue
-      }
-      next[index] = [cur[0] + (avgX - cur[0]) * alpha, cur[1] + (avgZ - cur[1]) * alpha]
-    }
-    working = next
-  }
-
-  const nextDef = JSON.parse(JSON.stringify(definition)) as RoadDynamicMesh
-  nextDef.vertices = working
-  return nextDef
-}
-
 function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
   if (!Array.isArray(node.materials) || node.materials.length < 3) {
     return
@@ -5923,13 +5832,6 @@ function handlePointerMove(event: PointerEvent) {
     }
     vertices[state.vertexIndex] = [local.x, local.z]
     working.vertices = vertices
-
-    // Smooth the entire centerline in XZ while keeping the dragged vertex pinned.
-    state.workingDefinition = smoothRoadCenterlineXZ(state.workingDefinition, {
-      pinnedIndex: state.vertexIndex,
-      iterations: 6,
-      alpha: 0.35,
-    })
 
     // Treat any actual geometry change as a drag (prevents tiny mouse movement from being interpreted as a click -> branch).
     const [startVX, startVZ] = state.startVertex

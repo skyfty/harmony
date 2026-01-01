@@ -147,6 +147,53 @@ const samplingDensityDisplay = computed(() => localSamplingDensityFactor.value.t
 const smoothingStrengthDisplay = computed(() => localSmoothingStrengthFactor.value.toFixed(2))
 const minClearanceDisplay = computed(() => `${(localMinClearance.value * 100).toFixed(1)} cm`)
 
+function onJunctionSmoothingModelUpdate(value: unknown) {
+  localJunctionSmoothing.value = Number(value)
+  applyJunctionSmoothingUpdate(value)
+}
+
+function onWidthModelUpdate(v: unknown) {
+  localWidth.value = Number(v)
+  applyWidthUpdate(v)
+}
+
+function onLaneLinesModelUpdate(value: unknown) {
+  const next = Boolean(value)
+  localLaneLines.value = next
+  applyLaneLinesUpdate(next)
+}
+
+function onShouldersModelUpdate(value: unknown) {
+  const next = Boolean(value)
+  localShoulders.value = next
+  applyShouldersUpdate(next)
+}
+
+function onSamplingDensityModelUpdate(value: unknown) {
+  localSamplingDensityFactor.value = Number(value)
+  applySamplingDensityUpdate(value)
+}
+
+function onSmoothingStrengthModelUpdate(value: unknown) {
+  localSmoothingStrengthFactor.value = Number(value)
+  applySmoothingStrengthUpdate(value)
+}
+
+function onMinClearanceModelUpdate(value: unknown) {
+  localMinClearance.value = Number(value)
+  applyMinClearanceUpdate(value)
+}
+
+function onLaneLineWidthModelUpdate(v: unknown) {
+  localLaneLineWidth.value = v ? Number(v) : undefined
+  applyLaneLineWidthUpdate(v)
+}
+
+function onShoulderWidthModelUpdate(v: unknown) {
+  localShoulderWidth.value = v ? Number(v) : undefined
+  applyShoulderWidthUpdate(v)
+}
+
 function applyJunctionSmoothingUpdate(rawValue: unknown) {
   if (isSyncingFromScene.value) {
     return
@@ -324,7 +371,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           density="compact"
           track-color="rgba(77, 208, 225, 0.4)"
           color="primary"
-          @update:modelValue="(value) => { localJunctionSmoothing = Number(value); applyJunctionSmoothingUpdate(value) }"
+          @update:modelValue="onJunctionSmoothingModelUpdate"
         />
 
         <v-text-field
@@ -335,21 +382,21 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           variant="underlined"
           min="0.2"
           step="0.1"
-          @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
+          @update:modelValue="onWidthModelUpdate"
         />
 
         <v-switch
           :model-value="localLaneLines"
           density="compact"
           label="Show Lane Lines"
-          @update:modelValue="(value) => { const next = Boolean(value); localLaneLines = next; applyLaneLinesUpdate(next) }"
+          @update:modelValue="onLaneLinesModelUpdate"
         />
 
         <v-switch
           :model-value="localShoulders"
           density="compact"
           label="Show Shoulders"
-          @update:modelValue="(value) => { const next = Boolean(value); localShoulders = next; applyShouldersUpdate(next) }"
+          @update:modelValue="onShouldersModelUpdate"
         />
 
         <v-divider class="my-2" />
@@ -368,7 +415,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           density="compact"
           track-color="rgba(77, 208, 225, 0.4)"
           color="primary"
-          @update:modelValue="(value) => { localSamplingDensityFactor = Number(value); applySamplingDensityUpdate(value) }"
+          @update:modelValue="onSamplingDensityModelUpdate"
         />
 
         <div class="road-field-labels">
@@ -383,7 +430,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           density="compact"
           track-color="rgba(77, 208, 225, 0.4)"
           color="primary"
-          @update:modelValue="(value) => { localSmoothingStrengthFactor = Number(value); applySmoothingStrengthUpdate(value) }"
+          @update:modelValue="onSmoothingStrengthModelUpdate"
         />
 
         <div class="road-field-labels">
@@ -398,7 +445,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           density="compact"
           track-color="rgba(77, 208, 225, 0.4)"
           color="primary"
-          @update:modelValue="(value) => { localMinClearance = Number(value); applyMinClearanceUpdate(value) }"
+          @update:modelValue="onMinClearanceModelUpdate"
         />
 
         <v-divider class="my-2" />
@@ -416,7 +463,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           step="0.01"
           placeholder="Auto"
           clearable
-          @update:modelValue="(v) => { localLaneLineWidth = v ? Number(v) : undefined; applyLaneLineWidthUpdate(v) }"
+          @update:modelValue="onLaneLineWidthModelUpdate"
         />
 
         <v-text-field
@@ -430,7 +477,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           step="0.01"
           placeholder="Auto"
           clearable
-          @update:modelValue="(v) => { localShoulderWidth = v ? Number(v) : undefined; applyShoulderWidthUpdate(v) }"
+          @update:modelValue="onShoulderWidthModelUpdate"
         />
       </div>
     </v-expansion-panel-text>

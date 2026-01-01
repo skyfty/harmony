@@ -6,6 +6,8 @@ import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './component
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
 import { resolveRoadLocalHeightSampler } from './roadMesh'
 import { buildGroundHeightfieldData } from './groundHeightfield'
+import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
+import { buildRoadGraph, type RoadGraph } from './roadGraph'
 
 export type RoadHeightfieldBodiesEntry = { signature: string; bodies: CANNON.Body[] }
 
@@ -61,11 +63,11 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	const buildData = collectRoadBuildData(definition)
-	if (!buildData) {
+	const graph = buildRoadGraph(definition)
+	if (!graph) {
 		return null
 	}
-	const curves = buildRoadCurves(junctionSmoothing, buildData)
+	const curves = buildRoadCurvesFromGraph(junctionSmoothing, graph)
 	if (!curves.length) {
 		return null
 	}
@@ -92,7 +94,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		if (!(length > 1e-6)) {
 			continue
 		}
-		const divisions = computeRoadDivisions(length, samplingDensityFactor)
+		const divisions = computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, junctionSmoothing)
 		if (divisions < 2) {
 			continue
 		}
@@ -128,8 +130,8 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 				endU = endIndex / divisions
 				headingDelta = computeHeadingDeltaRad(curve, startU, endU)
 			}
-			curve.getPointAt(startU, p0)
-			curve.getPointAt(endU, p1)
+			curve.getPoint(startU, p0)
+			curve.getPoint(endU, p1)
 			forward.copy(p1).sub(p0)
 			const forwardLen = Math.hypot(forward.x, forward.z)
 			let yaw = 0
@@ -137,7 +139,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 				yaw = Math.atan2(forward.x, forward.z)
 			} else {
 				const midU = (startU + endU) * 0.5
-				const tangent = curve.getTangentAt(midU)
+				const tangent = curve.getTangent(midU)
 				yaw = Math.atan2(tangent.x, tangent.z)
 			}
 			centerPoint.copy(p0).add(p1).multiplyScalar(0.5)
@@ -251,8 +253,10 @@ function normalizeAngleRad(angle: number): number {
 }
 
 function computeHeadingDeltaRad(curve: THREE.Curve<THREE.Vector3>, startU: number, endU: number): number {
-	const t0 = curve.getTangentAt(Math.max(0, Math.min(1, startU)))
-	const t1 = curve.getTangentAt(Math.max(0, Math.min(1, endU)))
+	const t0 = curve.getTangent(Math.max(0, Math.min(1, startU)))
+	t0.y = 0
+	const t1 = curve.getTangent(Math.max(0, Math.min(1, endU)))
+	t1.y = 0
 	const a0 = Math.atan2(t0.x, t0.z)
 	const a1 = Math.atan2(t1.x, t1.z)
 	return Math.abs(normalizeAngleRad(a1 - a0))
@@ -313,6 +317,44 @@ function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): numb
 		ROAD_MIN_DIVISIONS,
 		Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
 	)
+}
+
+function computeCornerMinSegments(junctionSmoothing = 0): number {
+	const smoothing = clampNumber(junctionSmoothing, 0, 1, 0)
+	const suggested = Math.round(12 + 12 * smoothing)
+	return Math.max(6, Math.min(48, suggested))
+}
+
+function computeRoadDivisionsForCurve(
+	curve: THREE.Curve<THREE.Vector3>,
+	length: number,
+	samplingDensityFactor = 1.0,
+	junctionSmoothing = 0,
+): number {
+	let divisions = computeRoadDivisions(length, samplingDensityFactor)
+	if (!(divisions > 0)) {
+		return 0
+	}
+	const curves = (curve as any)?.curves
+	if (!Array.isArray(curves) || !curves.length) {
+		return divisions
+	}
+	const cornerMinSegments = computeCornerMinSegments(junctionSmoothing)
+	for (const segment of curves as Array<THREE.Curve<THREE.Vector3>>) {
+		const isQuadratic = Boolean((segment as any)?.isQuadraticBezierCurve3)
+		if (!isQuadratic) {
+			continue
+		}
+		const cornerLength = segment.getLength()
+		if (!Number.isFinite(cornerLength) || cornerLength <= ROAD_EPSILON) {
+			continue
+		}
+		const requiredTotal = Math.ceil((cornerMinSegments * length) / cornerLength)
+		if (Number.isFinite(requiredTotal)) {
+			divisions = Math.max(divisions, requiredTotal)
+		}
+	}
+	return Math.max(ROAD_MIN_DIVISIONS, Math.min(ROAD_MAX_DIVISIONS, divisions))
 }
 
 function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): number {
@@ -511,24 +553,34 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
 
 type RoadCurveDescriptor = { curve: THREE.Curve<THREE.Vector3> }
 
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-	if (points.length === 2) {
-		return new THREE.LineCurve3(points[0], points[1])
+function buildRoadCurvesFromGraph(smoothing: number, graph: RoadGraph): RoadCurveDescriptor[] {
+	const junctionSmoothing = Math.max(0, Math.min(1, Number.isFinite(smoothing) ? smoothing : 0))
+	const curves: RoadCurveDescriptor[] = []
+	for (const edge of graph.edges) {
+		const points = edge.indices
+			.map((idx) => graph.vertices[idx] ?? null)
+			.filter((p): p is THREE.Vector3 => Boolean(p))
+		if (points.length < 2) {
+			continue
+		}
+		curves.push({ curve: buildRoadCornerBezierCurvePath(points, edge.closed && points.length >= 3, junctionSmoothing) })
 	}
-	const curve = new THREE.CatmullRomCurve3(points, closed, 'catmullrom')
-	curve.tension = clampNumber(tension, 0, 1, 0)
-	return curve
+	return curves
+}
+
+function createRoadCurve(points: THREE.Vector3[], closed: boolean, junctionSmoothing: number): THREE.Curve<THREE.Vector3> {
+	return buildRoadCornerBezierCurvePath(points, closed, junctionSmoothing)
 }
 
 function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
-	const tension = Math.max(0, Math.min(1, 1 - (Number.isFinite(smoothing) ? smoothing : 0)))
+	const junctionSmoothing = Math.max(0, Math.min(1, Number.isFinite(smoothing) ? smoothing : 0))
 	const curves: RoadCurveDescriptor[] = []
 	for (const path of buildData.paths) {
 		const points = path.indices
 			.map((index) => buildData.vertexVectors[index] ?? null)
 			.filter((p): p is THREE.Vector3 => Boolean(p))
 		if (points.length >= 2) {
-			curves.push({ curve: createRoadCurve(points, path.closed, tension) })
+			curves.push({ curve: createRoadCurve(points, path.closed && points.length >= 3, junctionSmoothing) })
 		}
 	}
 	return curves
@@ -561,8 +613,8 @@ function buildSmoothedHeightSeries({
 	const right = new THREE.Vector3()
 	for (let i = 0; i <= divisions; i += 1) {
 		const u = i / divisions
-		curve.getPointAt(u, center)
-		curve.getTangentAt(u, tangent)
+		curve.getPoint(u, center)
+		curve.getTangent(u, tangent)
 		normal.set(tangent.z, 0, -tangent.x)
 		if (normal.lengthSq() <= ROAD_EPSILON) {
 			normal.set(1, 0, 0)

@@ -3,6 +3,9 @@ import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/sch
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 import { sampleGroundHeight } from './groundMesh'
+import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
+import { buildRoadGraph, getJunctionIncidentDirectionsXZ } from './roadGraph'
+import { buildJunctionLoopXZ, triangulateJunctionPatchXZ } from './roadJunctionPatch'
 
 export function resolveRoadLocalHeightSampler(
   roadNode: SceneNode,
@@ -92,6 +95,11 @@ const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
 
+const ROAD_CORNER_MIN_SEGMENTS_BASE = 12
+const ROAD_CORNER_MIN_SEGMENTS_EXTRA = 12
+
+const ROAD_OFFSET_MITER_LIMIT = 4
+
 function computeHeightSmoothingPasses(divisions: number, strengthFactor = 1.0): number {
   if (!Number.isFinite(divisions) || divisions <= 0) {
     return ROAD_HEIGHT_SMOOTHING_MIN_PASSES
@@ -111,6 +119,50 @@ function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): numb
     ROAD_MIN_DIVISIONS,
     Math.min(ROAD_MAX_DIVISIONS, Math.ceil(length * ROAD_DIVISION_DENSITY * densityFactor)),
   )
+}
+
+function computeCornerMinSegments(junctionSmoothing = 0): number {
+  const smoothing = normalizeJunctionSmoothing(junctionSmoothing)
+  const suggested = Math.round(ROAD_CORNER_MIN_SEGMENTS_BASE + ROAD_CORNER_MIN_SEGMENTS_EXTRA * smoothing)
+  return Math.max(6, Math.min(48, suggested))
+}
+
+function computeRoadDivisionsForCurve(
+  curve: THREE.Curve<THREE.Vector3>,
+  length: number,
+  samplingDensityFactor = 1.0,
+  junctionSmoothing = 0,
+): number {
+  let divisions = computeRoadDivisions(length, samplingDensityFactor)
+
+  const curves = (curve as any)?.curves
+  if (!Array.isArray(curves) || !curves.length) {
+    return divisions
+  }
+
+  const cornerMinSegments = computeCornerMinSegments(junctionSmoothing)
+  if (cornerMinSegments <= 0) {
+    return divisions
+  }
+
+  for (const segment of curves as Array<THREE.Curve<THREE.Vector3>>) {
+    const isQuadratic = Boolean((segment as any)?.isQuadraticBezierCurve3)
+    if (!isQuadratic) {
+      continue
+    }
+    const cornerLength = segment.getLength()
+    if (!Number.isFinite(cornerLength) || cornerLength <= ROAD_EPSILON) {
+      continue
+    }
+    // Ensure each corner curve receives a minimum number of samples by inflating
+    // the total divisions only when the curve contains quadratic (corner) segments.
+    const requiredTotal = Math.ceil((cornerMinSegments * length) / cornerLength)
+    if (Number.isFinite(requiredTotal)) {
+      divisions = Math.max(divisions, requiredTotal)
+    }
+  }
+
+  return Math.max(ROAD_MIN_DIVISIONS, Math.min(ROAD_MAX_DIVISIONS, divisions))
 }
 
 function smoothHeightSeries(values: number[], passes: number, minimums: number[]): number[] {
@@ -212,6 +264,72 @@ function disposeObject3D(object: THREE.Object3D) {
       material.dispose()
     }
   })
+}
+
+function computeOffsetPointMiterLimited(
+  prev: THREE.Vector3 | null,
+  cur: THREE.Vector3,
+  next: THREE.Vector3 | null,
+  signedDistance: number,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  // Offsets a polyline vertex in XZ using a miter join with a miter limit.
+  // This prevents huge spikes on very small angles (which can cause self-intersection / “fold loops”).
+  const d = Number.isFinite(signedDistance) ? signedDistance : 0
+  if (Math.abs(d) <= ROAD_EPSILON) {
+    return out.copy(cur)
+  }
+
+  const dir0 = new THREE.Vector3()
+  const dir1 = new THREE.Vector3()
+
+  if (prev) {
+    dir0.subVectors(cur, prev)
+  }
+  if (next) {
+    dir1.subVectors(next, cur)
+  }
+
+  if (dir0.lengthSq() <= ROAD_EPSILON) {
+    dir0.copy(dir1)
+  }
+  if (dir1.lengthSq() <= ROAD_EPSILON) {
+    dir1.copy(dir0)
+  }
+  dir0.y = 0
+  dir1.y = 0
+
+  if (dir0.lengthSq() <= ROAD_EPSILON) {
+    // Degenerate; fall back to an arbitrary normal.
+    return out.set(cur.x - d, cur.y, cur.z)
+  }
+
+  dir0.normalize()
+  dir1.normalize()
+
+  // Perpendiculars in XZ.
+  const n0 = new THREE.Vector3(-dir0.z, 0, dir0.x)
+  const n1 = new THREE.Vector3(-dir1.z, 0, dir1.x)
+
+  const miter = new THREE.Vector3().addVectors(n0, n1)
+  if (miter.lengthSq() <= ROAD_EPSILON) {
+    // 180° turn or near-collinear: just use the incoming normal.
+    return out.copy(cur).addScaledVector(n0, d)
+  }
+  miter.normalize()
+
+  const denom = miter.dot(n1)
+  if (Math.abs(denom) <= 1e-3) {
+    return out.copy(cur).addScaledVector(n1, d)
+  }
+
+  let miterLen = d / denom
+  const limit = Math.max(1, ROAD_OFFSET_MITER_LIMIT) * Math.abs(d)
+  if (Math.abs(miterLen) > limit) {
+    miterLen = Math.sign(miterLen) * limit
+  }
+
+  return out.copy(cur).addScaledVector(miter, miterLen)
 }
 
 function clearGroupContent(group: THREE.Group) {
@@ -451,65 +569,14 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
   return { vertexVectors, paths }
 }
 
-/**
- * 创建用于道路样条的曲线。
- *
- * 说明：
- * - 本函数返回一个 THREE.Curve（`LineCurve3` 或 `CatmullRomCurve3`），用于后续沿曲线取点、计算切线等。
- * - 参数 `tension` 在函数内会被裁剪到 [0,1] 区间；在本模块中，外部的 `smoothing` 通常通过
- *   `tension = 1 - smoothing` 进行映射，因此：
- *     - smoothing 越大（靠近 1）时，对应的 tension 越小，曲线表现越圆滑；
- *     - smoothing 越小（靠近 0）时，对应的 tension 越大，曲线越靠近折线/硬角。
- *
- * 参数：
- * - `points`：控制顶点数组（世界/局部坐标的 THREE.Vector3）。如果数组长度 < 2 则无效。
- * - `closed`：若为 true 则使用闭合样条（首尾相连），否则为开放曲线。
- * - `tension`：传递给 Catmull-Rom 曲线的张力参数（已被裁剪到 [0,1]）。注意外部可能以 1-smoothing 的
- *   方式传入该值，因此需要结合上层逻辑理解其含义。
- *
- * 特殊处理（2 点情形）：
- * - 对于仅有 2 个控制点的线段，直接使用 `LineCurve3` 将无法表现 Catmull-Rom 的圆角效果；为了让
- *   junction smoothing 在短线段/单段拐角处也能可视化，我们在 smoothing（即 1 - tension）大于 0 时，
- *   通过在两端插入两个中间控制点（基于原始方向并按长度按比例偏移）来构造 4 个控制点的 Catmull-Rom
- *   曲线，从而产生可见的圆滑过渡。
- * - 插入控制点的偏移量为 `offset = len * 0.5 * smoothing`：长度越长偏移越大，smoothing 越大越圆滑；
- *   当 smoothing 为 0 或长度接近 0 时，回退到 `LineCurve3`。
- *
- * 返回：一个可用于 `getPointAt` / `getTangentAt` 的 `THREE.Curve<THREE.Vector3>`。
- */
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-  const clamped = Math.max(0, Math.min(1, tension))
-  // 仅两个控制点时，尝试通过插入控制点让 Catmull-Rom 产生圆角
-  if (points.length === 2) {
-    // 这里的 smoothing 与外部的语义是一致的：smoothing = 1 - tension
-    const smoothing = Math.max(0, Math.min(1, 1 - clamped))
-    if (smoothing <= 0) {
-      // 无平滑需求，直接返回直线
-      return new THREE.LineCurve3(points[0], points[1])
-    }
-    const a = points[0].clone()
-    const b = points[1].clone()
-    const dir = new THREE.Vector3().subVectors(b, a)
-    const len = dir.length()
-    if (len <= ROAD_EPSILON) {
-      // 两点重合或极短，退回直线以避免数值问题
-      return new THREE.LineCurve3(a, b)
-    }
-    dir.normalize()
-    // 根据长度与平滑度计算插入控制点的偏移量，比例为 0.5 * smoothing
-    const offset = len * 0.5 * smoothing
-    const a2 = a.clone().addScaledVector(dir, offset)
-    const b2 = b.clone().addScaledVector(dir, -offset)
-    const ctrl = [a, a2, b2, b]
-    return new THREE.CatmullRomCurve3(ctrl, false, 'catmullrom', clamped)
-  }
-
-  // 多点情形直接构建 Catmull-Rom 曲线，closed 参数决定是否闭合
-  return new THREE.CatmullRomCurve3(points, closed, 'catmullrom', 0.0)
+function createRoadCurve(points: THREE.Vector3[], closed: boolean, junctionSmoothing: number): THREE.Curve<THREE.Vector3> {
+  // The road centerline uses straight (linear) segments for the main body,
+  // with quadratic Bezier smoothing applied only at corners.
+  // Points must NOT repeat the first point for closed curves; closure is expressed via `closed=true`.
+  return buildRoadCornerBezierCurvePath(points, closed, junctionSmoothing)
 }
 
 function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
-  const tension = Math.max(0, Math.min(1, 1 - smoothing))
   const curves: RoadCurveDescriptor[] = []
   for (const path of buildData.paths) {
     const points = path.indices
@@ -518,7 +585,7 @@ function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurve
     if (points.length < 2) {
       continue
     }
-    const curve = createRoadCurve(points, path.closed && points.length >= 3, tension)
+    const curve = createRoadCurve(points, path.closed && points.length >= 3, smoothing)
     curves.push({ curve })
   }
   return curves
@@ -530,7 +597,13 @@ function buildOffsetStripGeometry(
   offset: number,
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
-  options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  options: {
+    samplingDensityFactor?: number
+    smoothingStrengthFactor?: number
+    minClearance?: number
+    junctionSmoothing?: number
+    segmentMask?: ((center: THREE.Vector3) => boolean) | null
+  } = {},
   sharedHeightSeries?: number[] | null,
   dashPattern?: { dashLength: number; gapLength: number } | null,
 ): THREE.BufferGeometry | null {
@@ -542,7 +615,7 @@ function buildOffsetStripGeometry(
   const useSharedHeightSeries = Array.isArray(sharedHeightSeries) && sharedHeightSeries.length >= 2
   const divisions = useSharedHeightSeries
     ? sharedHeightSeries.length - 1
-    : computeRoadDivisions(length, options.samplingDensityFactor)
+    : computeRoadDivisionsForCurve(curve, length, options.samplingDensityFactor, options.junctionSmoothing)
 
   const halfWidth = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
   const positions: number[] = []
@@ -552,9 +625,10 @@ function buildOffsetStripGeometry(
   const center = new THREE.Vector3()
   const tangent = new THREE.Vector3()
   const lateral = new THREE.Vector3()
-  const offsetCenter = new THREE.Vector3()
   const left = new THREE.Vector3()
   const right = new THREE.Vector3()
+  const leftEdge = new THREE.Vector3()
+  const rightEdge = new THREE.Vector3()
 
   const sampler = typeof heightSampler === 'function' ? heightSampler : null
   const heights: number[] | null = useSharedHeightSeries ? (sharedHeightSeries as number[]) : (sampler ? [] : null)
@@ -570,25 +644,27 @@ function buildOffsetStripGeometry(
     : null
   const dashPeriod = dash ? dash.dashLength + dash.gapLength : 0
 
+  const segmentMask = typeof options.segmentMask === 'function' ? options.segmentMask : null
+
+  const sampleCenters: THREE.Vector3[] = new Array(divisions + 1)
+  for (let i = 0; i <= divisions; i += 1) {
+    const t = i / divisions
+    curve.getPoint(t, center)
+    sampleCenters[i] = center.clone()
+  }
+
   if (!useSharedHeightSeries && heights && minHeights) {
     for (let i = 0; i <= divisions; i += 1) {
-      const t = i / divisions
-      center.copy(curve.getPointAt(t))
+      const prev = i > 0 ? sampleCenters[i - 1]! : null
+      const next = i < divisions ? sampleCenters[i + 1]! : null
+      center.copy(sampleCenters[i]!)
 
-      tangent.copy(curve.getTangentAt(t))
-      tangent.y = 0
-      if (tangent.lengthSq() <= ROAD_EPSILON) {
-        tangent.set(0, 0, 1)
-      } else {
-        tangent.normalize()
-      }
-      lateral.set(-tangent.z, 0, tangent.x)
+      // Distances are signed (positive = left of travel direction).
+      computeOffsetPointMiterLimited(prev, center, next, offset + halfWidth, left,)
+      computeOffsetPointMiterLimited(prev, center, next, offset - halfWidth, right,)
 
-      offsetCenter.copy(center).addScaledVector(lateral, offset)
-      left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
-      right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
-
-      const sampledCenter = sampler!(offsetCenter.x, offsetCenter.z)
+      // Sample an envelope across the strip width to avoid terrain poking through.
+      const sampledCenter = sampler!(center.x, center.z)
       const sampledLeft = sampler!(left.x, left.z)
       const sampledRight = sampler!(right.x, right.z)
       const centerY = Number.isFinite(sampledCenter) ? sampledCenter : 0
@@ -606,41 +682,39 @@ function buildOffsetStripGeometry(
 
   for (let i = 0; i <= divisions; i += 1) {
     const t = i / divisions
-    center.copy(curve.getPointAt(t))
-    tangent.copy(curve.getTangentAt(t))
-    tangent.y = 0
-    if (tangent.lengthSq() <= ROAD_EPSILON) {
-      tangent.set(0, 0, 1)
-    } else {
-      tangent.normalize()
-    }
-    lateral.set(-tangent.z, 0, tangent.x)
-    offsetCenter.copy(center).addScaledVector(lateral, offset)
-    left.copy(offsetCenter).addScaledVector(lateral, halfWidth)
-    right.copy(offsetCenter).addScaledVector(lateral, -halfWidth)
+    const prev = i > 0 ? sampleCenters[i - 1]! : null
+    const next = i < divisions ? sampleCenters[i + 1]! : null
+    center.copy(sampleCenters[i]!)
+
+    // Build the strip boundaries using a miter-limited polyline offset.
+    computeOffsetPointMiterLimited(prev, center, next, offset + halfWidth, leftEdge)
+    computeOffsetPointMiterLimited(prev, center, next, offset - halfWidth, rightEdge)
 
     // Terrain conformance uses a smoothed height sampled along the curve centerline.
     // This keeps the road surface smooth and avoids jagged edges from per-vertex sampling.
     const y = heights
       ? (useSharedHeightSeries ? heights[i]! + yOffset : heights[i]!)
       : yOffset
-    left.y = y
-    right.y = y
+    leftEdge.y = y
+    rightEdge.y = y
 
-    positions.push(left.x, left.y, left.z, right.x, right.y, right.z)
+    positions.push(leftEdge.x, leftEdge.y, leftEdge.z, rightEdge.x, rightEdge.y, rightEdge.z)
     uvs.push(t, 0, t, 1)
 
     if (i < divisions) {
       const base = i * 2
-      if (!dash || dashPeriod <= ROAD_EPSILON) {
-        indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
-      } else {
-        const startDistance = (i / divisions) * length
-        const endDistance = ((i + 1) / divisions) * length
-        const midDistance = (startDistance + endDistance) * 0.5
-        const phase = ((midDistance % dashPeriod) + dashPeriod) % dashPeriod
-        if (phase < dash.dashLength) {
+      const allowed = segmentMask ? segmentMask(sampleCenters[i]!) : true
+      if (allowed) {
+        if (!dash || dashPeriod <= ROAD_EPSILON) {
           indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+        } else {
+          const startDistance = (i / divisions) * length
+          const endDistance = ((i + 1) / divisions) * length
+          const midDistance = (startDistance + endDistance) * 0.5
+          const phase = ((midDistance % dashPeriod) + dashPeriod) % dashPeriod
+          if (phase < dash.dashLength) {
+            indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3)
+          }
         }
       }
     }
@@ -661,7 +735,12 @@ function buildRoadStripGeometry(
   width: number,
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
-  options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  options: {
+    samplingDensityFactor?: number
+    smoothingStrengthFactor?: number
+    minClearance?: number
+    junctionSmoothing?: number
+  } = {},
   sharedHeightSeries?: number[] | null,
 ): THREE.BufferGeometry | null {
   return buildOffsetStripGeometry(curve, width, 0, heightSampler, yOffset, options, sharedHeightSeries)
@@ -713,7 +792,13 @@ function buildLaneLineGeometry(
   width: number,
   heightSampler?: ((x: number, z: number) => number) | null,
   yOffset = 0,
-  options: { samplingDensityFactor?: number; smoothingStrengthFactor?: number; minClearance?: number } = {},
+  options: {
+    samplingDensityFactor?: number
+    smoothingStrengthFactor?: number
+    minClearance?: number
+    junctionSmoothing?: number
+    segmentMask?: ((center: THREE.Vector3) => boolean) | null
+  } = {},
   sharedHeightSeriesList?: Array<number[] | null>,
 ): THREE.BufferGeometry | null {
   // Center lane line should follow the road surface profile exactly (like shoulders), but be dashed.
@@ -758,7 +843,77 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   const samplingDensityFactor = options.samplingDensityFactor ?? 1.0
   const smoothingStrengthFactor = options.smoothingStrengthFactor ?? 1.0
   const minClearance = options.minClearance ?? 0
-  const meshOptions = { samplingDensityFactor, smoothingStrengthFactor, minClearance }
+  const meshOptions = { samplingDensityFactor, smoothingStrengthFactor, minClearance, junctionSmoothing: smoothing }
+
+  const graph = buildRoadGraph(definition)
+  const junctionPolygons: THREE.Vector2[][] = []
+  const junctionSurfaceGeometries: THREE.BufferGeometry[] = []
+  const junctionShoulderGeometries: THREE.BufferGeometry[] = []
+  if (graph && graph.junctionVertices.length) {
+    const shoulderWidth = Number.isFinite(options.shoulderWidth) && options.shoulderWidth! > 0.01
+      ? options.shoulderWidth!
+      : ROAD_SHOULDER_WIDTH
+    const roadRadius = Math.max(ROAD_OVERLAY_MIN_WIDTH * 0.5, width * 0.5)
+    const outerRadius = width * 0.5 + ROAD_SHOULDER_GAP + shoulderWidth
+    const roundSegments = 8 + Math.round(24 * smoothing)
+
+    for (const junctionVertex of graph.junctionVertices) {
+      const center = graph.vertices[junctionVertex]
+      if (!center) {
+        continue
+      }
+      const dirs = getJunctionIncidentDirectionsXZ(graph, junctionVertex)
+      if (dirs.length < 3) {
+        continue
+      }
+
+      const surfaceLoop = buildJunctionLoopXZ({
+        center,
+        incidentDirsXZ: dirs,
+        radius: roadRadius,
+        roundSegments,
+      })
+      if (surfaceLoop.length >= 3) {
+        junctionPolygons.push(surfaceLoop)
+        const surface = triangulateJunctionPatchXZ({
+          contour: surfaceLoop,
+          heightSampler,
+          yOffset: ROAD_SURFACE_Y_OFFSET,
+          minClearance,
+        })
+        if (surface) {
+          junctionSurfaceGeometries.push(surface)
+        }
+      }
+
+      if (options.shoulders) {
+        const outerLoop = buildJunctionLoopXZ({
+          center,
+          incidentDirsXZ: dirs,
+          radius: outerRadius,
+          roundSegments,
+        })
+        const innerLoop = surfaceLoop.length
+          ? surfaceLoop
+          : buildJunctionLoopXZ({ center, incidentDirsXZ: dirs, radius: roadRadius, roundSegments })
+        if (outerLoop.length >= 3 && innerLoop.length >= 3) {
+          const shoulderYOffset = heightSampler
+            ? ROAD_SHOULDER_OFFSET_Y
+            : ROAD_SURFACE_Y_OFFSET + ROAD_SHOULDER_OFFSET_Y
+          const ring = triangulateJunctionPatchXZ({
+            contour: outerLoop,
+            holes: [innerLoop],
+            heightSampler,
+            yOffset: shoulderYOffset,
+            minClearance,
+          })
+          if (ring) {
+            junctionShoulderGeometries.push(ring)
+          }
+        }
+      }
+    }
+  }
 
   const sharedHeightSeriesList: Array<number[] | null> | null = heightSampler
     ? (() => {
@@ -785,7 +940,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
           if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
             return null
           }
-          const divisions = computeRoadDivisions(length, samplingDensityFactor)
+          const divisions = computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, smoothing)
 
           const maxDeltaY = Math.max(
             ROAD_HEIGHT_SLOPE_MIN_DELTA_Y,
@@ -796,9 +951,8 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
           const minimums: number[] = []
           for (let i = 0; i <= divisions; i += 1) {
             const t = i / divisions
-            point.copy(curve.getPointAt(t))
-
-            tangent.copy(curve.getTangentAt(t))
+            curve.getPoint(t, point)
+            curve.getTangent(t, tangent)
             tangent.y = 0
             if (tangent.lengthSq() <= ROAD_EPSILON) {
               tangent.set(0, 0, 1)
@@ -913,7 +1067,31 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       laneLineWidth,
       heightSampler,
       sharedHeightSeriesList ? ROAD_LANE_LINE_OFFSET_Y : ROAD_SURFACE_Y_OFFSET + ROAD_LANE_LINE_OFFSET_Y,
-      meshOptions,
+      {
+        ...meshOptions,
+        segmentMask: junctionPolygons.length
+          ? (centerPoint: THREE.Vector3) => {
+              const x = centerPoint.x
+              const z = centerPoint.z
+              for (const poly of junctionPolygons) {
+                let inside = false
+                for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i += 1) {
+                  const a = poly[i]!
+                  const b = poly[j]!
+                  const intersect = ((a.y > z) !== (b.y > z))
+                    && (x < ((b.x - a.x) * (z - a.y)) / (b.y - a.y + 1e-12) + a.x)
+                  if (intersect) {
+                    inside = !inside
+                  }
+                }
+                if (inside) {
+                  return false
+                }
+              }
+              return true
+            }
+          : null,
+      },
       sharedHeightSeriesList ?? undefined,
     )
     if (laneGeometry) {
@@ -922,6 +1100,29 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       laneMesh.renderOrder = 1000
       laneMesh.userData.overrideMaterial = true
       group.add(laneMesh)
+    }
+  }
+
+  if (junctionSurfaceGeometries.length) {
+    const merged = mergeGeometries(junctionSurfaceGeometries, false)
+    junctionSurfaceGeometries.forEach((g) => g.dispose())
+    if (merged) {
+      const mesh = new THREE.Mesh(merged, createRoadMaterial())
+      mesh.name = 'RoadJunctionSurface'
+      mesh.castShadow = false
+      mesh.receiveShadow = true
+      group.add(mesh)
+    }
+  }
+
+  if (junctionShoulderGeometries.length) {
+    const merged = mergeGeometries(junctionShoulderGeometries, false)
+    junctionShoulderGeometries.forEach((g) => g.dispose())
+    if (merged) {
+      const mesh = new THREE.Mesh(merged, createShoulderMaterial())
+      mesh.name = 'RoadJunctionShoulders'
+      mesh.userData.overrideMaterial = true
+      group.add(mesh)
     }
   }
 
