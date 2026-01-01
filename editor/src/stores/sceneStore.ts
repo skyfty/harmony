@@ -1720,7 +1720,7 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
   return true
 }
 
-function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProps): boolean {
+function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProps, groundNode: SceneNode | null): boolean {
   if (node.dynamicMesh?.type !== 'Road') {
     return false
   }
@@ -1734,25 +1734,21 @@ function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProp
 
   const runtime = getRuntimeObject(node.id)
   if (runtime) {
-    const groundNode = resolveGroundNodeForHeightSampling(useSceneStore().nodes)
     const heightSampler = resolveRoadLocalHeightSampler(node, groundNode)
 
     runtime.traverse((child) => {
-      if (child.type === 'Group' && child.name === 'RoadGroup' && child.userData.dynamicMeshType === 'Road') {
-        if (node.dynamicMesh && node.dynamicMesh.type === 'Road') {
-          updateRoadGroup(child, node.dynamicMesh, {
-            junctionSmoothing: normalized.junctionSmoothing,
-            laneLines: normalized.laneLines,
-            shoulders: normalized.shoulders,
-            heightSampler,
-            samplingDensityFactor: normalized.samplingDensityFactor,
-            smoothingStrengthFactor: normalized.smoothingStrengthFactor,
-            minClearance: normalized.minClearance,
-            laneLineWidth: normalized.laneLineWidth,
-            shoulderWidth: normalized.shoulderWidth,
-          })
-        }
-        return false
+      if (child.type === 'Group'  && node.dynamicMesh && node.dynamicMesh.type === 'Road') {
+        updateRoadGroup(child, node.dynamicMesh, {
+          junctionSmoothing: normalized.junctionSmoothing,
+          laneLines: normalized.laneLines,
+          shoulders: normalized.shoulders,
+          heightSampler,
+          samplingDensityFactor: normalized.samplingDensityFactor,
+          smoothingStrengthFactor: normalized.smoothingStrengthFactor,
+          minClearance: normalized.minClearance,
+          laneLineWidth: normalized.laneLineWidth,
+          shoulderWidth: normalized.shoulderWidth,
+        })
       }
     })
   }
@@ -3255,21 +3251,6 @@ function resolveGroundNodeForHeightSampling(nodes: SceneNode[]): SceneNode | nul
   if (byId?.dynamicMesh?.type === 'Ground') {
     return byId
   }
-
-  const stack: SceneNode[] = [...nodes]
-  while (stack.length) {
-    const current = stack.pop()
-    if (!current) {
-      continue
-    }
-    if (current.dynamicMesh?.type === 'Ground') {
-      return current
-    }
-    if (current.children?.length) {
-      stack.push(...current.children)
-    }
-  }
-
   return null
 }
 
@@ -11694,7 +11675,8 @@ export const useSceneStore = defineStore('scene', {
           } else if (componentState.type === FLOOR_COMPONENT_TYPE) {
             applyFloorComponentPropsToNode(node, componentState.props as FloorComponentProps)
           }else if (componentState.type === ROAD_COMPONENT_TYPE) {
-            applyRoadComponentPropsToNode(node, componentState.props as RoadComponentProps)
+            const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+            applyRoadComponentPropsToNode(node, componentState.props as RoadComponentProps, groundNode)
           } 
         })
         node.components = nextComponents
@@ -12042,7 +12024,7 @@ export const useSceneStore = defineStore('scene', {
         if (currentType === WALL_COMPONENT_TYPE) {
           applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
         } else if (currentType === ROAD_COMPONENT_TYPE) {
-          applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps)
+          applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps, resolveGroundNodeForHeightSampling(this.nodes))
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {
           applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
         } else if (currentType === FLOOR_COMPONENT_TYPE) {
