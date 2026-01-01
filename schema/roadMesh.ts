@@ -3,6 +3,7 @@ import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/sch
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 import { sampleGroundHeight } from './groundMesh'
+import { buildRoadCurves as buildRoadCurvesShared } from './roadCurves'
 
 export function resolveRoadLocalHeightSampler(
   roadNode: SceneNode,
@@ -451,77 +452,8 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
   return { vertexVectors, paths }
 }
 
-/**
- * 创建用于道路样条的曲线。
- *
- * 说明：
- * - 本函数返回一个 THREE.Curve（`LineCurve3` 或 `CatmullRomCurve3`），用于后续沿曲线取点、计算切线等。
- * - 参数 `tension` 在函数内会被裁剪到 [0,1] 区间；在本模块中，外部的 `smoothing` 通常通过
- *   `tension = 1 - smoothing` 进行映射，因此：
- *     - smoothing 越大（靠近 1）时，对应的 tension 越小，曲线表现越圆滑；
- *     - smoothing 越小（靠近 0）时，对应的 tension 越大，曲线越靠近折线/硬角。
- *
- * 参数：
- * - `points`：控制顶点数组（世界/局部坐标的 THREE.Vector3）。如果数组长度 < 2 则无效。
- * - `closed`：若为 true 则使用闭合样条（首尾相连），否则为开放曲线。
- * - `tension`：传递给 Catmull-Rom 曲线的张力参数（已被裁剪到 [0,1]）。注意外部可能以 1-smoothing 的
- *   方式传入该值，因此需要结合上层逻辑理解其含义。
- *
- * 特殊处理（2 点情形）：
- * - 对于仅有 2 个控制点的线段，直接使用 `LineCurve3` 将无法表现 Catmull-Rom 的圆角效果；为了让
- *   junction smoothing 在短线段/单段拐角处也能可视化，我们在 smoothing（即 1 - tension）大于 0 时，
- *   通过在两端插入两个中间控制点（基于原始方向并按长度按比例偏移）来构造 4 个控制点的 Catmull-Rom
- *   曲线，从而产生可见的圆滑过渡。
- * - 插入控制点的偏移量为 `offset = len * 0.5 * smoothing`：长度越长偏移越大，smoothing 越大越圆滑；
- *   当 smoothing 为 0 或长度接近 0 时，回退到 `LineCurve3`。
- *
- * 返回：一个可用于 `getPointAt` / `getTangentAt` 的 `THREE.Curve<THREE.Vector3>`。
- */
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, tension: number): THREE.Curve<THREE.Vector3> {
-  const clamped = Math.max(0, Math.min(1, tension))
-  // 仅两个控制点时，尝试通过插入控制点让 Catmull-Rom 产生圆角
-  if (points.length === 2) {
-    // 这里的 smoothing 与外部的语义是一致的：smoothing = 1 - tension
-    const smoothing = Math.max(0, Math.min(1, 1 - clamped))
-    if (smoothing <= 0) {
-      // 无平滑需求，直接返回直线
-      return new THREE.LineCurve3(points[0], points[1])
-    }
-    const a = points[0].clone()
-    const b = points[1].clone()
-    const dir = new THREE.Vector3().subVectors(b, a)
-    const len = dir.length()
-    if (len <= ROAD_EPSILON) {
-      // 两点重合或极短，退回直线以避免数值问题
-      return new THREE.LineCurve3(a, b)
-    }
-    dir.normalize()
-    // 根据长度与平滑度计算插入控制点的偏移量，比例为 0.5 * smoothing
-    const offset = len * 0.5 * smoothing
-    const a2 = a.clone().addScaledVector(dir, offset)
-    const b2 = b.clone().addScaledVector(dir, -offset)
-    const ctrl = [a, a2, b2, b]
-    return new THREE.CatmullRomCurve3(ctrl, false, 'catmullrom', clamped)
-  }
-
-  // 多点情形直接构建 Catmull-Rom 曲线，closed 参数决定是否闭合
-  return new THREE.CatmullRomCurve3(points, closed, 'catmullrom', 0.0)
-}
-
-function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
-  const tension = Math.max(0, Math.min(1, 1 - smoothing))
-  const curves: RoadCurveDescriptor[] = []
-  for (const path of buildData.paths) {
-    const points = path.indices
-      .map((vertexIndex) => buildData.vertexVectors[vertexIndex])
-      .filter((point): point is THREE.Vector3 => Boolean(point))
-    if (points.length < 2) {
-      continue
-    }
-    const curve = createRoadCurve(points, path.closed && points.length >= 3, tension)
-    curves.push({ curve })
-  }
-  return curves
+function buildRoadCurves(smoothing: number, buildData: RoadBuildData, width: number): RoadCurveDescriptor[] {
+  return buildRoadCurvesShared(smoothing, buildData, { width })
 }
 
 function buildOffsetStripGeometry(
@@ -748,7 +680,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     return
   }
 
-  const curves = buildRoadCurves(smoothing, buildData)
+  const curves = buildRoadCurves(smoothing, buildData, width)
   if (!curves.length) {
     return
   }
