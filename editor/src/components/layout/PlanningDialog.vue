@@ -2976,7 +2976,7 @@ function distancePointToPointSquared(a: PlanningPoint, b: PlanningPoint) {
 }
 
 function findNearbyPolylineVertexInLayer(world: PlanningPoint, layerId: string) {
-  const radiusWorld = LINE_VERTEX_SNAP_RADIUS_PX / Math.max(1e-6, renderScale.value)
+  const radiusWorld = pxToWorld(LINE_VERTEX_SNAP_RADIUS_PX)
   const radiusSq = radiusWorld * radiusWorld
   for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
     const line = polylines.value[i]
@@ -2997,6 +2997,33 @@ function findNearbyPolylineVertexInLayer(world: PlanningPoint, layerId: string) 
       if (distancePointToPointSquared(world, point) <= radiusSq) {
         return { line, point, vertexIndex: index }
       }
+    }
+  }
+  return null
+}
+
+function findNearbyPolylineEndpointInLayer(world: PlanningPoint, layerId: string) {
+  const radiusWorld = pxToWorld(LINE_VERTEX_SNAP_RADIUS_PX)
+  const radiusSq = radiusWorld * radiusWorld
+  for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
+    const line = polylines.value[i]
+    if (!line) {
+      continue
+    }
+    if (line.layerId !== layerId) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(line.layerId)) {
+      continue
+    }
+    const first = line.points[0]
+    if (first && distancePointToPointSquared(world, first) <= radiusSq) {
+      return { line, point: first, vertexIndex: 0 }
+    }
+    const lastIndex = line.points.length - 1
+    const last = lastIndex >= 0 ? line.points[lastIndex] : undefined
+    if (last && distancePointToPointSquared(world, last) <= radiusSq) {
+      return { line, point: last, vertexIndex: lastIndex }
     }
   }
   return null
@@ -3396,6 +3423,32 @@ function startLineDraft(point: PlanningPoint) {
   }
   lineDraftHoverPoint.value = null
   pendingLineHoverClient = null
+  markPlanningDirty()
+}
+
+function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
+  if (!canUseLineTool.value) {
+    return
+  }
+  if (lineDraft.value) {
+    return
+  }
+
+  activeLayerId.value = layerId
+  const targetKind = getLayerKind(layerId)
+  const newLine: PlanningPolyline = {
+    id: createId('line'),
+    name: `${getLayerName(layerId)} Segment ${lineCounter.value++}`,
+    layerId,
+    points: [point],
+    cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
+  }
+  polylines.value = [...polylines.value, newLine]
+  lineDraft.value = { lineId: newLine.id, layerId }
+  lineDraftHoverPoint.value = null
+  pendingLineHoverClient = null
+  selectFeature({ type: 'polyline', id: newLine.id })
+  selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 0 }
   markPlanningDirty()
 }
 
@@ -3956,25 +4009,6 @@ function handlePointerMove(event: PointerEvent) {
         !lineVertexClickState.value.moved
       ) {
         lineVertexClickState.value = { ...lineVertexClickState.value, moved: true }
-
-        // Road endpoints may be shared (welded). Only detach on first actual movement,
-        // so a simple click doesn't unexpectedly break connections.
-        if (line && getLayerKind(line.layerId) === 'road' && (state.vertexIndex === 0 || state.vertexIndex === line.points.length - 1)) {
-          const point = line.points[state.vertexIndex]
-          const pointId = point?.id
-          if (point && pointId) {
-            let occurrences = 0
-            for (const other of polylines.value) {
-              if (other.layerId !== line.layerId) continue
-              if (other.points[0]?.id === pointId) occurrences += 1
-              if (other.points[other.points.length - 1]?.id === pointId) occurrences += 1
-              if (occurrences > 1) break
-            }
-            if (occurrences > 1) {
-              line.points[state.vertexIndex] = createVertexPoint(point)
-            }
-          }
-        }
       }
 
       const target = line?.points[state.vertexIndex]
@@ -4428,7 +4462,8 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   }
 
   // In line tool, first click selects the polyline; only when already selected do we insert a vertex and start drawing from it.
-  if (currentTool.value === 'line' && getLayerKind(line.layerId) === 'road') {
+  const layerKind = getLayerKind(line.layerId)
+  if (currentTool.value === 'line' && (layerKind === 'road' || layerKind === 'wall')) {
     event.stopPropagation()
     event.preventDefault()
     selectFeature({ type: 'polyline', id: line.id })
@@ -4458,9 +4493,9 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     const t = Math.max(0, Math.min(1, tRaw))
     const proj = { x: Number((ax + t * dx).toFixed(2)), y: Number((ay + t * dy).toFixed(2)) }
 
-    // Avoid inserting if very close to an existing vertex.
-    const near = findNearbyPolylineVertexInLayer(proj, line.layerId)
-    const insertPoint = near?.point ?? createVertexPoint(proj)
+    // Avoid creating duplicate endpoints: only reuse existing endpoints (snap radius scales with zoom).
+    const nearEndpoint = findNearbyPolylineEndpointInLayer(proj, line.layerId)
+    const insertPoint = nearEndpoint?.point ?? createVertexPoint(proj)
 
     // Insert the new vertex into the clicked polyline at segmentIndex+1 if not already present.
     const insertIndex = Math.min(segmentIndex + 1, Math.max(1, line.points.length - 1))
@@ -4468,13 +4503,14 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     const after = line.points[insertIndex]
     const sameAsBefore = before && ((before.id && insertPoint.id && before.id === insertPoint.id) || (before.x === insertPoint.x && before.y === insertPoint.y))
     const sameAsAfter = after && ((after.id && insertPoint.id && after.id === insertPoint.id) || (after.x === insertPoint.x && after.y === insertPoint.y))
+    const selectedIndex = sameAsBefore ? (insertIndex - 1) : insertIndex
     if (!sameAsBefore && !sameAsAfter) {
       line.points.splice(insertIndex, 0, insertPoint)
     }
 
-    // Start a new line draft from this vertex.
-    selectedVertex.value = { feature: 'polyline', targetId: line.id, vertexIndex: insertIndex }
-    startLineDraft(proj)
+    // Select the (existing or newly created) endpoint and start a new draft from it.
+    selectedVertex.value = { feature: 'polyline', targetId: line.id, vertexIndex: selectedIndex }
+    beginLineDraftFromPoint(insertPoint, line.layerId)
     return
   }
 
