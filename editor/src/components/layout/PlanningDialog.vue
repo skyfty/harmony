@@ -2567,6 +2567,17 @@ function isSelectedVertexHandle(feature: 'polygon' | 'polyline', targetId: strin
   return !!selection && selection.feature === feature && selection.targetId === targetId && selection.vertexIndex === vertexIndex
 }
 
+function getEndpointFillColor(layerId: string) {
+  // Endpoint is considered "selectable" when it's in the active, editable layer.
+  const selectable = isActiveLayer(layerId) && canEditPolylineGeometry(layerId)
+  if (selectable) {
+    // Light-blue fill for selectable endpoints
+    return 'rgba(126,200,255,0.95)'
+  }
+  // Muted fill for non-selectable endpoints
+  return hexToRgba(getLayerColor(layerId), 0.55)
+}
+
 function hexToRgba(hex: string, alpha: number) {
   const normalized = hex.replace('#', '')
   const bigint = Number.parseInt(normalized, 16)
@@ -5889,6 +5900,17 @@ onBeforeUnmount(() => {
                       pointer-events="all"
                       @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
                     />
+                    <!-- Visible small endpoint marker (distinct color when selectable) -->
+                    <circle
+                      v-if="line.points.length"
+                      :cx="line.points[0]!.x"
+                      :cy="line.points[0]!.y"
+                      :r="vertexHandleRadiusWorld"
+                      :fill="getEndpointFillColor(line.layerId)"
+                      stroke="rgba(255,255,255,0.9)"
+                      :stroke-width="vertexHandleStrokeWidthWorld"
+                      pointer-events="none"
+                    />
                     <circle
                       v-if="line.points.length >= 2"
                       class="line-endpoint-hit"
@@ -5898,6 +5920,16 @@ onBeforeUnmount(() => {
                       fill="transparent"
                       pointer-events="all"
                       @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
+                    />
+                    <circle
+                      v-if="line.points.length >= 2"
+                      :cx="line.points[line.points.length - 1]!.x"
+                      :cy="line.points[line.points.length - 1]!.y"
+                      :r="vertexHandleRadiusWorld"
+                      :fill="getEndpointFillColor(line.layerId)"
+                      stroke="rgba(255,255,255,0.9)"
+                      :stroke-width="vertexHandleStrokeWidthWorld"
+                      pointer-events="none"
                     />
                   </g>
 
