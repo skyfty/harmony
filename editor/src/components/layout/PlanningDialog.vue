@@ -13,6 +13,7 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { generateFpsScatterPointsInPolygon } from '@/utils/scatterSampling'
+import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
 import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -1035,6 +1036,9 @@ const selectedMeasurementValueText = computed(() => {
 const BASE_PIXELS_PER_METER = 10
 const PLANNING_RULER_THICKNESS_PX = 34
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
+const ROAD_ENDPOINT_WELD_PX = 6
+const ROAD_INTERSECTION_MERGE_PX = 8
+const ROAD_SHORT_SEGMENT_CLEAN_PX = 10
 const VERTEX_HANDLE_DIAMETER_PX = 10
 const VERTEX_HANDLE_RADIUS_PX = VERTEX_HANDLE_DIAMETER_PX / 2
 const VERTEX_HANDLE_STROKE_PX = 1
@@ -1072,6 +1076,64 @@ const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
 
 function pxToWorld(px: number): number {
   return Number(px) / Math.max(1e-6, renderScale.value)
+}
+
+function getRoadNormalizeEpsWorld() {
+  return {
+    endpoints: pxToWorld(ROAD_ENDPOINT_WELD_PX),
+    intersection: pxToWorld(ROAD_INTERSECTION_MERGE_PX),
+    shortSegment: pxToWorld(ROAD_SHORT_SEGMENT_CLEAN_PX),
+  }
+}
+
+function normalizeRoadLayerIfNeeded(layerId: string | null | undefined) {
+  if (!layerId) return
+  if (getLayerKind(layerId) !== 'road') return
+
+  const eps = getRoadNormalizeEpsWorld()
+  const result = normalizeLayerPolylines({
+    layerId,
+    layerName: getLayerName(layerId),
+    polylines: polylines.value as any,
+    eps,
+    createVertexId: () => createId('v'),
+    quantize: (n: number) => Number(Number(n).toFixed(2)),
+  })
+
+  if (!result.changed) {
+    return
+  }
+
+  polylines.value = result.nextPolylines as any
+
+  // Remap selection when line ids are merged.
+  if (selectedFeature.value?.type === 'polyline') {
+    const mapped = result.lineIdMap[selectedFeature.value.id]
+    if (mapped) {
+      selectedFeature.value = { type: 'polyline', id: mapped }
+    } else {
+      const selectedId = selectedFeature.value.id
+      if (!polylines.value.find((l) => l.id === selectedId)) {
+      selectedFeature.value = null
+      selectedVertex.value = null
+      }
+    }
+  } else if (selectedFeature.value?.type === 'segment') {
+    const mapped = result.lineIdMap[selectedFeature.value.lineId]
+    if (mapped) {
+      selectedFeature.value = { type: 'polyline', id: mapped }
+    } else {
+      selectedFeature.value = null
+      selectedVertex.value = null
+    }
+  }
+
+  if (selectedVertex.value?.feature === 'polyline') {
+    const mapped = result.lineIdMap[selectedVertex.value.targetId]
+    if (mapped) {
+      selectedVertex.value = null
+    }
+  }
 }
 
 const vertexHandleRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
@@ -3337,6 +3399,10 @@ function finalizeLineDraft() {
   }
   selectFeature({ type: 'polyline', id: line.id })
   clearLineDraft({ keepLine: true })
+
+  // After finishing a road edit, normalize intersections + merge into component polylines.
+  normalizeRoadLayerIfNeeded(line.layerId)
+
   markPlanningDirty()
 }
 
@@ -3417,6 +3483,7 @@ function deleteSelectedFeature() {
   if (!feature) {
     return
   }
+  const layerIdBefore = getFeatureLayerId(feature)
   if (feature.type === 'polygon') {
     polygons.value = polygons.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
@@ -3448,6 +3515,10 @@ function deleteSelectedFeature() {
   line.points.splice(removeIndex, 1)
   selectedFeature.value = null
   selectedVertex.value = null
+
+  // Deleting a road segment can split a component; re-normalize.
+  normalizeRoadLayerIfNeeded(layerIdBefore)
+
   markPlanningDirty()
 }
 
@@ -3978,6 +4049,17 @@ async function handlePointerUp(event: PointerEvent) {
         console.warn('Failed to persist planning layers after pointer up', e)
       }
       markPlanningDirty()
+
+      // Road drags can create/remove connections; normalize when an edit ends.
+      if (state.type === 'move-polyline' || state.type === 'drag-vertex') {
+        if (state.type === 'move-polyline') {
+          const line = polylines.value.find((l) => l.id === state.lineId)
+          normalizeRoadLayerIfNeeded(line?.layerId)
+        } else if (state.type === 'drag-vertex' && state.feature === 'polyline') {
+          const line = polylines.value.find((l) => l.id === state.targetId)
+          normalizeRoadLayerIfNeeded(line?.layerId)
+        }
+      }
     }
   }
 
@@ -4261,6 +4343,27 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   if (effectiveTool !== 'select') {
     return
   }
+
+  // Road endpoints may be shared (welded). If user starts dragging an endpoint,
+  // detach it first so the gesture can "break" the connection.
+  if (getLayerKind(line.layerId) === 'road' && (vertexIndex === 0 || vertexIndex === line.points.length - 1)) {
+    const point = line.points[vertexIndex]
+    const pointId = point?.id
+    if (point && pointId) {
+      let occurrences = 0
+      for (const other of polylines.value) {
+        if (other.layerId !== line.layerId) continue
+        if (other.points[0]?.id === pointId) occurrences += 1
+        if (other.points[other.points.length - 1]?.id === pointId) occurrences += 1
+        if (occurrences > 1) break
+      }
+      if (occurrences > 1) {
+        // Clone a new endpoint vertex id so it becomes independent.
+        line.points[vertexIndex] = createVertexPoint(point)
+      }
+    }
+  }
+
   dragState.value = {
     type: 'drag-vertex',
     pointerId: event.pointerId,
@@ -4297,6 +4400,57 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   // Only allow splitting when the click is actually on the visible stroke.
   // This prevents adding vertices when clicking near (but not on) a segment.
   if (!isClickOnVisiblePolylineSegment(line, segmentIndex, world, isCurrentlySelected)) {
+    return
+  }
+
+  // In line tool, first click selects the polyline; only when already selected do we insert a vertex and start drawing from it.
+  if (currentTool.value === 'line' && getLayerKind(line.layerId) === 'road') {
+    event.stopPropagation()
+    event.preventDefault()
+    selectFeature({ type: 'polyline', id: line.id })
+
+    if (!isCurrentlySelected) {
+      return
+    }
+    if (!canEditPolylineGeometry(line.layerId)) {
+      return
+    }
+
+    const segments = getLineSegments(line)
+    const segment = segments[segmentIndex]
+    if (!segment) {
+      return
+    }
+
+    // Compute the projection of the click point onto the segment.
+    const ax = segment.start.x
+    const ay = segment.start.y
+    const bx = segment.end.x
+    const by = segment.end.y
+    const dx = bx - ax
+    const dy = by - ay
+    const denom = dx * dx + dy * dy
+    const tRaw = denom <= 1e-12 ? 0 : ((world.x - ax) * dx + (world.y - ay) * dy) / denom
+    const t = Math.max(0, Math.min(1, tRaw))
+    const proj = { x: Number((ax + t * dx).toFixed(2)), y: Number((ay + t * dy).toFixed(2)) }
+
+    // Avoid inserting if very close to an existing vertex.
+    const near = findNearbyPolylineVertexInLayer(proj, line.layerId)
+    const insertPoint = near?.point ?? createVertexPoint(proj)
+
+    // Insert the new vertex into the clicked polyline at segmentIndex+1 if not already present.
+    const insertIndex = Math.min(segmentIndex + 1, Math.max(1, line.points.length - 1))
+    const before = line.points[insertIndex - 1]
+    const after = line.points[insertIndex]
+    const sameAsBefore = before && ((before.id && insertPoint.id && before.id === insertPoint.id) || (before.x === insertPoint.x && before.y === insertPoint.y))
+    const sameAsAfter = after && ((after.id && insertPoint.id && after.id === insertPoint.id) || (after.x === insertPoint.x && after.y === insertPoint.y))
+    if (!sameAsBefore && !sameAsAfter) {
+      line.points.splice(insertIndex, 0, insertPoint)
+    }
+
+    // Start a new line draft from this vertex.
+    selectedVertex.value = { feature: 'polyline', targetId: line.id, vertexIndex: insertIndex }
+    startLineDraft(proj)
     return
   }
 
