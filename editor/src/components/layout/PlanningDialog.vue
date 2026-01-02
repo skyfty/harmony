@@ -5962,6 +5962,20 @@ onBeforeUnmount(() => {
                     pointer-events="none"
                   />
 
+                  <!-- Prominent filled marker for selected endpoint -->
+                  <circle
+                    v-if="selectedVertexHighlight"
+                    class="selected-endpoint"
+                    :cx="selectedVertexHighlight.x"
+                    :cy="selectedVertexHighlight.y"
+                    :r="Math.max(0.001, vertexHandleRadiusWorld * 1.25)"
+                    :fill="getLayerColor(selectedVertexHighlight.layerId as string, 0.95)"
+                    stroke="rgba(255,255,255,0.95)"
+                    :stroke-width="vertexHandleStrokeWidthWorld"
+                    filter="url(#vertex-glow)"
+                    pointer-events="none"
+                  />
+
                   <!-- Selected polygon vertex -->
                   <g v-if="selectedPolygon">
                     <circle
@@ -7203,6 +7217,10 @@ onBeforeUnmount(() => {
   cursor: pointer;
   stroke: #ffffff;
   stroke-width: 0.2;
+}
+
+.selected-endpoint {
+  pointer-events: none;
 }
 
 .vertex-handle.line {
