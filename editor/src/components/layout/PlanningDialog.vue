@@ -1036,6 +1036,8 @@ const selectedMeasurementValueText = computed(() => {
 const BASE_PIXELS_PER_METER = 10
 const PLANNING_RULER_THICKNESS_PX = 34
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
+// When creating endpoints, merge very-close endpoints to avoid duplicates.
+const ENDPOINT_MERGE_RADIUS_PX = 5
 const ROAD_ENDPOINT_WELD_PX = 6
 const ROAD_INTERSECTION_MERGE_PX = 8
 const ROAD_SHORT_SEGMENT_CLEAN_PX = 10
@@ -3002,8 +3004,8 @@ function findNearbyPolylineVertexInLayer(world: PlanningPoint, layerId: string) 
   return null
 }
 
-function findNearbyPolylineEndpointInLayer(world: PlanningPoint, layerId: string) {
-  const radiusWorld = pxToWorld(LINE_VERTEX_SNAP_RADIUS_PX)
+function findNearbyPolylineEndpointInLayer(world: PlanningPoint, layerId: string, radiusPx = LINE_VERTEX_SNAP_RADIUS_PX) {
+  const radiusWorld = pxToWorld(radiusPx)
   const radiusSq = radiusWorld * radiusWorld
   for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
     const line = polylines.value[i]
@@ -3355,7 +3357,7 @@ function startLineDraft(point: PlanningPoint) {
   }
 
   const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
-  const reuse = findNearbyPolylineVertexInLayer(point, targetLayerId)
+  const reuse = findNearbyPolylineEndpointInLayer(point, targetLayerId, ENDPOINT_MERGE_RADIUS_PX)
   const reusePoint = reuse?.point
 
   if (!lineDraft.value && selectedVertex.value?.feature === 'polyline') {
@@ -4410,6 +4412,20 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
+
+  // While drawing a line, clicking an existing endpoint should connect the draft to it,
+  // not switch selection to that endpoint.
+  if (currentTool.value === 'line' && canUseLineTool.value && lineDraft.value && lineDraft.value.layerId === line.layerId) {
+    const point = line.points[vertexIndex]
+    if (!point) {
+      return
+    }
+    event.stopPropagation()
+    event.preventDefault()
+    startLineDraft(point)
+    return
+  }
+
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
@@ -4494,7 +4510,7 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     const proj = { x: Number((ax + t * dx).toFixed(2)), y: Number((ay + t * dy).toFixed(2)) }
 
     // Avoid creating duplicate endpoints: only reuse existing endpoints (snap radius scales with zoom).
-    const nearEndpoint = findNearbyPolylineEndpointInLayer(proj, line.layerId)
+    const nearEndpoint = findNearbyPolylineEndpointInLayer(proj, line.layerId, ENDPOINT_MERGE_RADIUS_PX)
     const insertPoint = nearEndpoint?.point ?? createVertexPoint(proj)
 
     // Insert the new vertex into the clicked polyline at segmentIndex+1 if not already present.
@@ -4503,13 +4519,11 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     const after = line.points[insertIndex]
     const sameAsBefore = before && ((before.id && insertPoint.id && before.id === insertPoint.id) || (before.x === insertPoint.x && before.y === insertPoint.y))
     const sameAsAfter = after && ((after.id && insertPoint.id && after.id === insertPoint.id) || (after.x === insertPoint.x && after.y === insertPoint.y))
-    const selectedIndex = sameAsBefore ? (insertIndex - 1) : insertIndex
     if (!sameAsBefore && !sameAsAfter) {
       line.points.splice(insertIndex, 0, insertPoint)
     }
 
     // Select the (existing or newly created) endpoint and start a new draft from it.
-    selectedVertex.value = { feature: 'polyline', targetId: line.id, vertexIndex: selectedIndex }
     beginLineDraftFromPoint(insertPoint, line.layerId)
     return
   }
