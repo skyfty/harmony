@@ -1041,9 +1041,10 @@ const ROAD_INTERSECTION_MERGE_PX = 8
 const ROAD_SHORT_SEGMENT_CLEAN_PX = 10
 const VERTEX_HANDLE_DIAMETER_PX = 10
 const VERTEX_HANDLE_RADIUS_PX = VERTEX_HANDLE_DIAMETER_PX / 2
+const VERTEX_HIT_RADIUS_PX = 14
 const VERTEX_HANDLE_STROKE_PX = 1
-const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 2
-const VERTEX_HIGHLIGHT_STROKE_PX = 1
+const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 6
+const VERTEX_HIGHLIGHT_STROKE_PX = 2
 
 // Scatter density dots should stay readable at any zoom level.
 const SCATTER_DENSITY_DOT_RADIUS_PX = 3.5
@@ -1137,7 +1138,7 @@ function normalizeRoadLayerIfNeeded(layerId: string | null | undefined) {
 }
 
 const vertexHandleRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
-const vertexHandleHitRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
+const vertexHandleHitRadiusWorld = computed(() => pxToWorld(VERTEX_HIT_RADIUS_PX))
 const vertexHandleStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HANDLE_STROKE_PX))
 const vertexHighlightRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX + VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX))
 const vertexHighlightStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HIGHLIGHT_STROKE_PX))
@@ -2561,6 +2562,11 @@ function ensureSelectionWithinActiveLayer() {
   }
 }
 
+function isSelectedVertexHandle(feature: 'polygon' | 'polyline', targetId: string, vertexIndex: number) {
+  const selection = selectedVertex.value
+  return !!selection && selection.feature === feature && selection.targetId === targetId && selection.vertexIndex === vertexIndex
+}
+
 function hexToRgba(hex: string, alpha: number) {
   const normalized = hex.replace('#', '')
   const bigint = Number.parseInt(normalized, 16)
@@ -3933,17 +3939,37 @@ function handlePointerMove(event: PointerEvent) {
       }
     } else {
       const line = polylines.value.find((item) => item.id === state.targetId)
-      const target = line?.points[state.vertexIndex]
-      if (target) {
-        target.x = world.x
-        target.y = world.y
-      }
       if (
         lineVertexClickState.value &&
         lineVertexClickState.value.pointerId === event.pointerId &&
         !lineVertexClickState.value.moved
       ) {
         lineVertexClickState.value = { ...lineVertexClickState.value, moved: true }
+
+        // Road endpoints may be shared (welded). Only detach on first actual movement,
+        // so a simple click doesn't unexpectedly break connections.
+        if (line && getLayerKind(line.layerId) === 'road' && (state.vertexIndex === 0 || state.vertexIndex === line.points.length - 1)) {
+          const point = line.points[state.vertexIndex]
+          const pointId = point?.id
+          if (point && pointId) {
+            let occurrences = 0
+            for (const other of polylines.value) {
+              if (other.layerId !== line.layerId) continue
+              if (other.points[0]?.id === pointId) occurrences += 1
+              if (other.points[other.points.length - 1]?.id === pointId) occurrences += 1
+              if (occurrences > 1) break
+            }
+            if (occurrences > 1) {
+              line.points[state.vertexIndex] = createVertexPoint(point)
+            }
+          }
+        }
+      }
+
+      const target = line?.points[state.vertexIndex]
+      if (target) {
+        target.x = world.x
+        target.y = world.y
       }
     }
     return
@@ -4018,11 +4044,18 @@ function handlePointerMove(event: PointerEvent) {
 async function handlePointerUp(event: PointerEvent) {
   const state = dragState.value
   if (state.type !== 'idle' && state.pointerId === event.pointerId) {
+    const didMovePolylineVertex =
+      state.type === 'drag-vertex'
+      && state.feature === 'polyline'
+      && !!lineVertexClickState.value
+      && lineVertexClickState.value.pointerId === event.pointerId
+      && lineVertexClickState.value.moved
+
     const shouldDirty =
       state.type === 'pan'
       || state.type === 'move-polygon'
       || state.type === 'move-polyline'
-      || state.type === 'drag-vertex'
+      || (state.type === 'drag-vertex' && (state.feature !== 'polyline' || didMovePolylineVertex))
       || state.type === 'move-image-layer'
       || state.type === 'move-align-marker'
       || state.type === 'resize-image-layer'
@@ -4055,7 +4088,7 @@ async function handlePointerUp(event: PointerEvent) {
         if (state.type === 'move-polyline') {
           const line = polylines.value.find((l) => l.id === state.lineId)
           normalizeRoadLayerIfNeeded(line?.layerId)
-        } else if (state.type === 'drag-vertex' && state.feature === 'polyline') {
+        } else if (state.type === 'drag-vertex' && state.feature === 'polyline' && didMovePolylineVertex) {
           const line = polylines.value.find((l) => l.id === state.targetId)
           normalizeRoadLayerIfNeeded(line?.layerId)
         }
@@ -4342,26 +4375,6 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   }
   if (effectiveTool !== 'select') {
     return
-  }
-
-  // Road endpoints may be shared (welded). If user starts dragging an endpoint,
-  // detach it first so the gesture can "break" the connection.
-  if (getLayerKind(line.layerId) === 'road' && (vertexIndex === 0 || vertexIndex === line.points.length - 1)) {
-    const point = line.points[vertexIndex]
-    const pointId = point?.id
-    if (point && pointId) {
-      let occurrences = 0
-      for (const other of polylines.value) {
-        if (other.layerId !== line.layerId) continue
-        if (other.points[0]?.id === pointId) occurrences += 1
-        if (other.points[other.points.length - 1]?.id === pointId) occurrences += 1
-        if (occurrences > 1) break
-      }
-      if (occurrences > 1) {
-        // Clone a new endpoint vertex id so it becomes independent.
-        line.points[vertexIndex] = createVertexPoint(point)
-      }
-    }
   }
 
   dragState.value = {
@@ -5873,6 +5886,7 @@ onBeforeUnmount(() => {
                       :cy="line.points[0]!.y"
                       :r="vertexHandleHitRadiusWorld"
                       fill="transparent"
+                      pointer-events="all"
                       @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
                     />
                     <circle
@@ -5882,6 +5896,7 @@ onBeforeUnmount(() => {
                       :cy="line.points[line.points.length - 1]!.y"
                       :r="vertexHandleHitRadiusWorld"
                       fill="transparent"
+                      pointer-events="all"
                       @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
                     />
                   </g>
@@ -5962,20 +5977,6 @@ onBeforeUnmount(() => {
                     pointer-events="none"
                   />
 
-                  <!-- Prominent filled marker for selected endpoint -->
-                  <circle
-                    v-if="selectedVertexHighlight"
-                    class="selected-endpoint"
-                    :cx="selectedVertexHighlight.x"
-                    :cy="selectedVertexHighlight.y"
-                    :r="Math.max(0.001, vertexHandleRadiusWorld * 1.25)"
-                    :fill="getLayerColor(selectedVertexHighlight.layerId as string, 0.95)"
-                    stroke="rgba(255,255,255,0.95)"
-                    :stroke-width="vertexHandleStrokeWidthWorld"
-                    filter="url(#vertex-glow)"
-                    pointer-events="none"
-                  />
-
                   <!-- Selected polygon vertex -->
                   <g v-if="selectedPolygon">
                     <circle
@@ -5984,10 +5985,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      :r="vertexHandleRadiusWorld"
+                      :r="isSelectedVertexHandle('polygon', selectedPolygon.id, idx) ? vertexHandleRadiusWorld * 1.35 : vertexHandleRadiusWorld"
                       :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="vertexHandleStrokeWidthWorld"
+                      :stroke-width="isSelectedVertexHandle('polygon', selectedPolygon.id, idx) ? vertexHandleStrokeWidthWorld * 2 : vertexHandleStrokeWidthWorld"
                       pointer-events="visibleFill"
                       @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
                     />
@@ -6001,10 +6002,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      :r="vertexHandleRadiusWorld"
+                      :r="isSelectedVertexHandle('polyline', selectedPolyline.id, idx) ? vertexHandleRadiusWorld * 1.35 : vertexHandleRadiusWorld"
                       :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="vertexHandleStrokeWidthWorld"
+                      :stroke-width="isSelectedVertexHandle('polyline', selectedPolyline.id, idx) ? vertexHandleStrokeWidthWorld * 2 : vertexHandleStrokeWidthWorld"
                       pointer-events="visibleFill"
                       @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
                     />
@@ -7217,10 +7218,6 @@ onBeforeUnmount(() => {
   cursor: pointer;
   stroke: #ffffff;
   stroke-width: 0.2;
-}
-
-.selected-endpoint {
-  pointer-events: none;
 }
 
 .vertex-handle.line {
