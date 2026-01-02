@@ -1234,46 +1234,7 @@ function normalizeRoadWidth(value: unknown): number {
   return Math.max(ROAD_MIN_WIDTH, numeric)
 }
 
-const ROAD_CURVE_DIVISION_DENSITY = 8
 const ROAD_CURVE_EPSILON = 1e-6
-const ROAD_CURVE_LINEAR_STEP_METERS = 0.5
-const ROAD_CURVE_MAX_POINTS = 2048
-
-function densifyPolylineByStep(points: Vector3[], stepMeters: number, maxPoints: number): Vector3[] {
-  if (points.length < 2) {
-    return points
-  }
-  const requestedStep = typeof stepMeters === 'number' && Number.isFinite(stepMeters) ? stepMeters : ROAD_CURVE_LINEAR_STEP_METERS
-  const step = Math.max(1e-3, requestedStep)
-  const limit = Number.isFinite(maxPoints) ? Math.max(2, Math.trunc(maxPoints)) : ROAD_CURVE_MAX_POINTS
-
-  let totalLength = 0
-  for (let i = 0; i < points.length - 1; i += 1) {
-    totalLength += points[i]!.distanceTo(points[i + 1]!)
-  }
-
-  // Avoid exploding vertex counts on very long roads.
-  const effectiveStep = Math.max(step, totalLength / Math.max(1, limit - 1))
-
-  const out: Vector3[] = [points[0]!.clone()]
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const a = points[i]!
-    const b = points[i + 1]!
-    const len = a.distanceTo(b)
-    if (!(len > 1e-9)) {
-      continue
-    }
-    const divisions = Math.max(1, Math.ceil(len / effectiveStep))
-    for (let j = 1; j <= divisions; j += 1) {
-      const t = j / divisions
-      out.push(a.clone().lerp(b, t))
-      if (out.length >= limit) {
-        return out
-      }
-    }
-  }
-  return out
-}
 
 function buildRoadWorldPoints(points: Vector3Like[]): Vector3[] {
   const out: Vector3[] = []
@@ -1335,15 +1296,11 @@ function buildRoadDynamicMeshFromWorldPoints(
     closed = true
   }
 
-  const densifyStep = Math.max(1e-3, 1 / ROAD_CURVE_DIVISION_DENSITY, ROAD_CURVE_LINEAR_STEP_METERS)
-  const sampledPoints = densifyPolylineByStep(worldPoints, densifyStep, ROAD_CURVE_MAX_POINTS)
-  if (sampledPoints.length < 2) {
-    return null
-  }
+  // IMPORTANT: Persist only user control points.
+  // Road geometry densification/smoothing happens later during mesh generation.
+  const center = computeRoadCenter(worldPoints)
 
-  const center = computeRoadCenter(sampledPoints)
-
-  const vertices = sampledPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
   const segments: Array<{ a: number; b: number }> = []
   for (let index = 0; index < vertices.length - 1; index += 1) {
     segments.push({ a: index, b: index + 1 })
