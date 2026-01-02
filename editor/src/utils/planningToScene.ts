@@ -817,26 +817,51 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const group = featuresByLayer.get(layerId)!
 
     if (kind === 'road') {
-      const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
+      const roadWidth = resolveRoadWidthFromPlanningData(planningData, layerId)
       const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
+      const duplicateEpsilon = 1e-10
+      const buildRoadWorldPointsFromPlanning = (points: PlanningPoint[]) => {
+        const worldPoints: Array<{ x: number; y: number; z: number }> = []
+        for (const point of points) {
+          if (!point) {
+            continue
+          }
+          const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+          const x = world.x
+          const z = world.z
+          if (!Number.isFinite(x) || !Number.isFinite(z)) {
+            continue
+          }
+          const previous = worldPoints[worldPoints.length - 1]
+          if (previous) {
+            const dx = x - previous.x
+            const dz = z - previous.z
+            if (dx * dx + dz * dz <= duplicateEpsilon) {
+              continue
+            }
+          }
+          // IMPORTANT: do NOT drop last==first; createRoadNode will normalize closure.
+          worldPoints.push({ x, y: 0, z })
+        }
+        return worldPoints
+      }
+
       for (const line of group.polylines) {
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
-
-        const pts = Array.isArray(line.points) ? line.points : []
-        if (pts.length < 2) {
+        const worldPoints = buildRoadWorldPointsFromPlanning(line.points)
+        if (worldPoints.length < 2) {
           continue
         }
 
-        const points = pts.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0))
         const nodeName = line.name?.trim()
           ? line.name.trim()
           : (layerName ? `${layerName} Road` : 'Planning Road')
 
         const roadNode = sceneStore.createRoadNode({
-          points,
-          width: widthMeters,
+          points: worldPoints,
+          width: roadWidth,
           name: nodeName,
         })
 
@@ -846,24 +871,26 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
 
-        const planningMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
-        if (planningMaterials.length) {
-          sceneStore.setNodeMaterials(roadNode.id, planningMaterials)
-        }
-
-        // Apply road-layer smoothing to the road component so the viewport can build
-        // smoothed junction transition meshes (no dynamic mesh recompute here).
-        const roadComponent = roadNode.components?.[ROAD_COMPONENT_TYPE] as { id: string } | undefined
-        if (roadComponent?.id) {
-          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing })
+        const roadMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
+        if (roadMaterials.length) {
+          sceneStore.setNodeMaterials(roadNode.id, roadMaterials)
         }
 
         sceneStore.updateNodeUserData(roadNode.id, {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
-          planningPolylineId: line.id,
+          planningFeatureId: line.id,
           kind: 'road',
         })
+
+        // Default: roads participate in physics collision.
+        ensureStaticRigidbody(sceneStore, roadNode)
+
+        const roadComponent = roadNode.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
+        if (roadComponent?.id) {
+          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing })
+        }
+
         sceneStore.setNodeLocked(roadNode.id, true)
       }
     } else if (kind === 'floor') {
