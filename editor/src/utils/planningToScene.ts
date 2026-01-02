@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
+  RoadDynamicMesh,
   SceneNode,
   SceneNodeMaterial,
   SceneNodeEditorFlags,
@@ -139,6 +140,182 @@ type PlanningPolylineAny = {
   scatter?: unknown
   cornerSmoothness?: unknown
   airWallEnabled?: unknown
+}
+
+type RoadGraphSegment = { a: number; b: number; featureIds: Set<string> }
+
+function quantizedCoordKey(value: number, step: number): number {
+  if (!Number.isFinite(value) || step <= 0) return 0
+  return Math.round(value / step)
+}
+
+function buildRoadGraphFromPlanningLayer(options: {
+  layerId: string
+  polylines: PlanningPolylineAny[]
+  groundWidth: number
+  groundDepth: number
+  roadWidth: number
+}) {
+  const { polylines, groundWidth, groundDepth, roadWidth } = options
+
+  // Use a conservative weld step so points inserted via intersections align even if ids differ.
+  const weldStepMeters = 1e-3
+  const verticesWorld: Array<{ x: number; z: number }> = []
+  const idToVertex = new Map<string, number>()
+  const posToVertex = new Map<string, number>()
+  const segmentMap = new Map<string, RoadGraphSegment>()
+
+  const getVertexIndex = (point: PlanningPoint): number | null => {
+    if (!point) return null
+    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+    const x = Number(world.x)
+    const z = Number(world.z)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+
+    const id = typeof point.id === 'string' && point.id.trim() ? point.id.trim() : null
+    if (id && idToVertex.has(id)) {
+      return idToVertex.get(id)!
+    }
+
+    const qx = quantizedCoordKey(x, weldStepMeters)
+    const qz = quantizedCoordKey(z, weldStepMeters)
+    const posKey = `${qx},${qz}`
+
+    const existing = posToVertex.get(posKey)
+    if (existing != null) {
+      if (id) idToVertex.set(id, existing)
+      return existing
+    }
+
+    const nextIndex = verticesWorld.length
+    verticesWorld.push({ x, z })
+    posToVertex.set(posKey, nextIndex)
+    if (id) idToVertex.set(id, nextIndex)
+    return nextIndex
+  }
+
+  const addSegment = (a: number, b: number, featureId: string) => {
+    if (a === b) return
+    const low = Math.min(a, b)
+    const high = Math.max(a, b)
+    const key = `${low}-${high}`
+    const existing = segmentMap.get(key)
+    if (existing) {
+      existing.featureIds.add(featureId)
+      return
+    }
+    segmentMap.set(key, { a: low, b: high, featureIds: new Set([featureId]) })
+  }
+
+  for (const line of polylines) {
+    const featureId = typeof line?.id === 'string' ? line.id : ''
+    let prev: number | null = null
+    for (const point of line.points ?? []) {
+      const idx = getVertexIndex(point)
+      if (idx == null) continue
+      if (prev != null && prev !== idx) {
+        addSegment(prev, idx, featureId)
+      }
+      prev = idx
+    }
+  }
+
+  const segments = Array.from(segmentMap.values())
+  const adjacency = new Map<number, Set<number>>()
+  const ensureAdj = (v: number) => {
+    const existing = adjacency.get(v)
+    if (existing) return existing
+    const created = new Set<number>()
+    adjacency.set(v, created)
+    return created
+  }
+  for (const seg of segments) {
+    ensureAdj(seg.a).add(seg.b)
+    ensureAdj(seg.b).add(seg.a)
+  }
+
+  const visited = new Array(verticesWorld.length).fill(false)
+  const components: Array<{
+    center: { x: number; z: number }
+    dynamicMesh: RoadDynamicMesh
+    featureIds: string[]
+  }> = []
+
+  for (let start = 0; start < verticesWorld.length; start += 1) {
+    if (visited[start]) continue
+    const neighbors = adjacency.get(start)
+    if (!neighbors || neighbors.size === 0) {
+      visited[start] = true
+      continue
+    }
+
+    const queue: number[] = [start]
+    visited[start] = true
+    const componentSet = new Set<number>()
+    componentSet.add(start)
+
+    while (queue.length) {
+      const v = queue.shift()!
+      const adj = adjacency.get(v)
+      if (!adj) continue
+      for (const n of adj) {
+        if (visited[n]) continue
+        visited[n] = true
+        componentSet.add(n)
+        queue.push(n)
+      }
+    }
+
+    const vertexIndices = Array.from(componentSet).sort((a, b) => a - b)
+    const componentSegments = segments.filter((seg) => componentSet.has(seg.a) && componentSet.has(seg.b))
+    if (vertexIndices.length < 2 || componentSegments.length === 0) {
+      continue
+    }
+
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minZ = Number.POSITIVE_INFINITY
+    let maxZ = Number.NEGATIVE_INFINITY
+    for (const idx of vertexIndices) {
+      const v = verticesWorld[idx]!
+      minX = Math.min(minX, v.x)
+      maxX = Math.max(maxX, v.x)
+      minZ = Math.min(minZ, v.z)
+      maxZ = Math.max(maxZ, v.z)
+    }
+    const centerX = Number.isFinite(minX) && Number.isFinite(maxX) ? (minX + maxX) * 0.5 : 0
+    const centerZ = Number.isFinite(minZ) && Number.isFinite(maxZ) ? (minZ + maxZ) * 0.5 : 0
+
+    const remap = new Map<number, number>()
+    vertexIndices.forEach((oldIndex, nextIndex) => remap.set(oldIndex, nextIndex))
+
+    const vertices = vertexIndices.map((oldIndex) => {
+      const v = verticesWorld[oldIndex]!
+      return [v.x - centerX, v.z - centerZ] as [number, number]
+    })
+
+    const meshSegments = componentSegments
+      .map((seg) => ({ a: remap.get(seg.a)!, b: remap.get(seg.b)! }))
+      .filter((seg) => seg.a !== seg.b)
+
+    const featureIdSet = new Set<string>()
+    componentSegments.forEach((seg) => seg.featureIds.forEach((id) => id && featureIdSet.add(id)))
+
+    const dynamicMesh: RoadDynamicMesh = {
+      type: 'Road',
+      width: roadWidth,
+      vertices,
+      segments: meshSegments,
+    }
+
+    components.push({
+      center: { x: centerX, z: centerZ },
+      dynamicMesh,
+      featureIds: Array.from(featureIdSet.values()),
+    })
+  }
+
+  return components
 }
 
 function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
@@ -821,46 +998,36 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
-      const duplicateEpsilon = 1e-10
-      const buildRoadWorldPointsFromPlanning = (points: PlanningPoint[]) => {
-        const worldPoints: Array<{ x: number; y: number; z: number }> = []
-        for (const point of points) {
-          if (!point) {
-            continue
-          }
-          const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-          const x = world.x
-          const z = world.z
-          if (!Number.isFinite(x) || !Number.isFinite(z)) {
-            continue
-          }
-          const previous = worldPoints[worldPoints.length - 1]
-          if (previous) {
-            const dx = x - previous.x
-            const dz = z - previous.z
-            if (dx * dx + dz * dz <= duplicateEpsilon) {
-              continue
-            }
-          }
-          // IMPORTANT: do NOT drop last==first; createRoadNode will normalize closure.
-          worldPoints.push({ x, y: 0, z })
-        }
-        return worldPoints
+      for (const line of group.polylines) {
+        updateProgressForUnit(`Preparing roads: ${line.name?.trim() || line.id}`)
       }
 
-      for (const line of group.polylines) {
-        updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
-        const worldPoints = buildRoadWorldPointsFromPlanning(line.points)
-        if (worldPoints.length < 2) {
-          continue
-        }
+      const components = buildRoadGraphFromPlanningLayer({
+        layerId,
+        polylines: group.polylines,
+        groundWidth,
+        groundDepth,
+        roadWidth,
+      })
 
-        const nodeName = line.name?.trim()
-          ? line.name.trim()
-          : (layerName ? `${layerName} Road` : 'Planning Road')
+      const baseName = layerName ? `${layerName} Road` : 'Planning Road'
+      const roadMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
+
+      for (let index = 0; index < components.length; index += 1) {
+        const component = components[index]!
+        const nodeName = components.length > 1 ? `${baseName} ${index + 1}` : baseName
+
+        // Create a placeholder road node whose computed center matches the component center.
+        // We'll overwrite its dynamic mesh with a branching road graph afterwards.
+        const cx = component.center.x
+        const cz = component.center.z
+        const placeholder = [
+          { x: cx - 0.5, y: 0, z: cz },
+          { x: cx + 0.5, y: 0, z: cz },
+        ]
 
         const roadNode = sceneStore.createRoadNode({
-          points: worldPoints,
+          points: placeholder,
           width: roadWidth,
           name: nodeName,
         })
@@ -869,19 +1036,24 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
+        sceneStore.updateNodeDynamicMesh(roadNode.id, component.dynamicMesh)
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
 
-        const roadMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
         if (roadMaterials.length) {
           sceneStore.setNodeMaterials(roadNode.id, roadMaterials)
         }
 
-        sceneStore.updateNodeUserData(roadNode.id, {
+        const featureIds = component.featureIds
+        const userData: Record<string, unknown> = {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
-          planningFeatureId: line.id,
           kind: 'road',
-        })
+          planningFeatureIds: featureIds,
+        }
+        if (featureIds.length === 1) {
+          userData.planningFeatureId = featureIds[0]
+        }
+        sceneStore.updateNodeUserData(roadNode.id, userData)
 
         // Default: roads participate in physics collision.
         ensureStaticRigidbody(sceneStore, roadNode)
