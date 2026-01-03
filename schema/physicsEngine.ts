@@ -4,6 +4,7 @@ import type {
 	SceneNode,
 	SceneNodeComponentState,
 	GroundDynamicMesh,
+	WallDynamicMesh,
 } from '@harmony/schema'
 import type {
 	RigidbodyComponentProps,
@@ -251,7 +252,17 @@ export type GroundHeightfieldCacheEntry = {
 
 export type WallTrimeshCacheEntry = {
 	signature: string
-	shape: CANNON.Trimesh
+	/**
+	 * Wall colliders.
+	 *
+	 * We intentionally avoid Trimesh for walls because Box/Convex  Trimesh contacts
+	 * are not reliable in our current cannon-es narrowphase.
+	 */
+	segments: Array<{
+		shape: CANNON.Box
+		offset: [number, number, number]
+		orientation: [number, number, number, number]
+	}>
 }
 
 export type WallTrimeshCache = Map<string, WallTrimeshCacheEntry>
@@ -324,6 +335,14 @@ const wallRootQuaternionHelper = new THREE.Quaternion()
 const wallRootQuaternionInverseHelper = new THREE.Quaternion()
 const wallVertexWorldHelper = new THREE.Vector3()
 const wallVertexLocalHelper = new THREE.Vector3()
+const wallAxisXHelper = new THREE.Vector3(1, 0, 0)
+const wallStartHelper = new THREE.Vector3()
+const wallEndHelper = new THREE.Vector3()
+const wallDirHelper = new THREE.Vector3()
+const wallUnitDirHelper = new THREE.Vector3()
+const wallQuatThreeHelper = new THREE.Quaternion()
+const wallOffsetVec3Helper = new CANNON.Vec3()
+const wallOrientationQuatHelper = new CANNON.Quaternion()
 const cylinderShapeRotationHelper = new CANNON.Quaternion()
 cylinderShapeRotationHelper.setFromEuler(Math.PI / 2, 0, 0)
 const cylinderShapeOffsetHelper = new CANNON.Vec3()
@@ -361,74 +380,20 @@ function findWallRenderMesh(object: THREE.Object3D): THREE.Mesh | null {
 
 function resolveWallShape(params: {
 	node: SceneNode
-	object: THREE.Object3D
+	definition: WallDynamicMesh
 	cache: WallTrimeshCache
 	loggerTag?: LoggerTag
 }): WallTrimeshCacheEntry | null {
-	const { node, object, cache, loggerTag } = params
+	const { node, definition, cache, loggerTag } = params
 	const nodeId = node.id
 	if (!nodeId) {
 		return null
 	}
 
-	object.updateMatrixWorld(true)
-	object.matrixWorld.decompose(wallRootPositionHelper, wallRootQuaternionHelper, physicsScaleHelper)
-	wallRootQuaternionInverseHelper.copy(wallRootQuaternionHelper).invert()
-
-	const wallMesh = findWallRenderMesh(object)
-
-	if (!wallMesh) {
+	const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
+	if (!rawSegments.length) {
 		cache.delete(nodeId)
 		return null
-	}
-	const geometry = (wallMesh as any).geometry as THREE.BufferGeometry | undefined
-	if (!geometry) {
-		cache.delete(nodeId)
-		return null
-	}
-	const positionAttribute = geometry.getAttribute('position') as THREE.BufferAttribute | null
-	if (!positionAttribute || positionAttribute.itemSize < 3 || positionAttribute.count < 3) {
-		cache.delete(nodeId)
-		return null
-	}
-
-	// Build vertices in the wall root's local frame (translation+rotation removed),
-	// with scale baked into vertex positions (Cannon bodies ignore scale).
-	const vertexCount = positionAttribute.count
-	const vertices: number[] = new Array(vertexCount * 3)
-	const positionArray = positionAttribute.array as ArrayLike<number>
-	for (let i = 0; i < vertexCount; i += 1) {
-		const base = i * 3
-		wallVertexLocalHelper.set(
-			Number(positionArray[base] ?? 0),
-			Number(positionArray[base + 1] ?? 0),
-			Number(positionArray[base + 2] ?? 0),
-		)
-		wallVertexWorldHelper.copy(wallVertexLocalHelper).applyMatrix4(wallMesh.matrixWorld)
-		wallVertexWorldHelper.sub(wallRootPositionHelper).applyQuaternion(wallRootQuaternionInverseHelper)
-		vertices[base] = wallVertexWorldHelper.x
-		vertices[base + 1] = wallVertexWorldHelper.y
-		vertices[base + 2] = wallVertexWorldHelper.z
-	}
-
-	const indexAttribute = geometry.getIndex() as THREE.BufferAttribute | null
-	let indices: number[]
-	if (indexAttribute && indexAttribute.count >= 3) {
-		const indexArray = indexAttribute.array as ArrayLike<number>
-		indices = new Array(indexAttribute.count)
-		for (let i = 0; i < indexAttribute.count; i += 1) {
-			indices[i] = (Number(indexArray[i] ?? 0) | 0) >>> 0
-		}
-	} else {
-		const triangleCount = Math.floor(vertexCount / 3)
-		if (triangleCount <= 0) {
-			cache.delete(nodeId)
-			return null
-		}
-		indices = new Array(triangleCount * 3)
-		for (let i = 0; i < triangleCount * 3; i += 1) {
-			indices[i] = i
-		}
 	}
 
 	// Signature for caching: quantize to reduce float jitter.
@@ -439,26 +404,88 @@ function resolveWallShape(params: {
 		hash ^= value
 		hash = Math.imul(hash, 16777619) >>> 0
 	}
-	for (let i = 0; i < vertices.length; i += 1) {
-		const v = vertices[i] ?? 0
-		const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
-		fnv(q | 0)
+	for (const segment of rawSegments) {
+		const sx = Number((segment as any)?.start?.x)
+		const sy = Number((segment as any)?.start?.y)
+		const sz = Number((segment as any)?.start?.z)
+		const ex = Number((segment as any)?.end?.x)
+		const ey = Number((segment as any)?.end?.y)
+		const ez = Number((segment as any)?.end?.z)
+		const h = Number((segment as any)?.height)
+		const w = Number((segment as any)?.width)
+		const t = Number((segment as any)?.thickness)
+		const values = [sx, sy, sz, ex, ey, ez, h, w, t]
+		for (const v of values) {
+			const q = Number.isFinite(v) ? Math.round(v * quantize) : 0
+			fnv(q | 0)
+		}
 	}
-	for (let i = 0; i < indices.length; i += 1) {
-		fnv((indices[i] ?? 0) | 0)
-	}
-	const signature = `${vertices.length}:${indices.length}:${hash.toString(16)}`
+	const signature = `s:${rawSegments.length}:${hash.toString(16)}`
 	if (cached && cached.signature === signature) {
 		return cached
 	}
 
 	try {
-		const shape = new CANNON.Trimesh(vertices, indices)
-		const entry: WallTrimeshCacheEntry = { signature, shape }
+		const segments: WallTrimeshCacheEntry['segments'] = []
+		const eps = 1e-3
+		for (const segment of rawSegments) {
+			const start = (segment as any)?.start as { x?: unknown; y?: unknown; z?: unknown } | undefined
+			const end = (segment as any)?.end as { x?: unknown; y?: unknown; z?: unknown } | undefined
+			const sx = Number(start?.x)
+			const sy = Number(start?.y)
+			const sz = Number(start?.z)
+			const ex = Number(end?.x)
+			const ey = Number(end?.y)
+			const ez = Number(end?.z)
+			if (!Number.isFinite(sx + sy + sz + ex + ey + ez)) {
+				continue
+			}
+			wallStartHelper.set(sx, sy, sz)
+			wallEndHelper.set(ex, ey, ez)
+
+			wallDirHelper.subVectors(wallEndHelper, wallStartHelper)
+			wallDirHelper.y = 0
+			const length = wallDirHelper.length()
+			if (!Number.isFinite(length) || length <= eps) {
+				continue
+			}
+			wallUnitDirHelper.copy(wallDirHelper).multiplyScalar(1 / length)
+			wallQuatThreeHelper.setFromUnitVectors(wallAxisXHelper, wallUnitDirHelper)
+
+			const rawHeight = Number((segment as any)?.height)
+			const rawWidth = Number((segment as any)?.width)
+			const rawThickness = Number((segment as any)?.thickness)
+			const height = Number.isFinite(rawHeight) ? Math.max(eps, rawHeight) : 3
+			// Wall geometry currently uses "width" as the ribbon thickness.
+			const thickness = Number.isFinite(rawWidth) ? Math.max(eps, rawWidth) : (Number.isFinite(rawThickness) ? Math.max(eps, rawThickness) : 0.2)
+
+			const hx = Math.max(eps, length * 0.5)
+			const hy = Math.max(eps, height * 0.5)
+			const hz = Math.max(eps, thickness * 0.5)
+			const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
+
+			// Position the box at segment midpoint, lifted by half height.
+			const cx = (sx + ex) * 0.5
+			const cz = (sz + ez) * 0.5
+			const baseY = (sy + ey) * 0.5
+			const cy = baseY + hy
+
+			segments.push({
+				shape,
+				offset: [cx, cy, cz],
+				orientation: [wallQuatThreeHelper.x, wallQuatThreeHelper.y, wallQuatThreeHelper.z, wallQuatThreeHelper.w],
+			})
+		}
+
+		if (!segments.length) {
+			cache.delete(nodeId)
+			return null
+		}
+		const entry: WallTrimeshCacheEntry = { signature, segments }
 		cache.set(nodeId, entry)
 		return entry
 	} catch (error) {
-		warn(loggerTag, 'Failed to build wall trimesh', error)
+		warn(loggerTag, 'Failed to build wall colliders', error)
 		cache.delete(nodeId)
 		return null
 	}
@@ -899,6 +926,7 @@ export function createRigidbodyBody(
 	const shapeScale = normalizeScaleVector(physicsScaleHelper)
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
+	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let needsHeightfieldOrientation = false
 	if (isGroundDynamicMesh(node.dynamicMesh)) {
 		const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh, groundHeightfieldCache)
@@ -909,9 +937,10 @@ export function createRigidbodyBody(
 		}
 	}
 	if (isWallDynamicMesh(node.dynamicMesh) && wallTrimeshCache) {
-		const entry = resolveWallShape({ node, object, cache: wallTrimeshCache, loggerTag })
+		const entry = resolveWallShape({ node, definition: node.dynamicMesh as WallDynamicMesh, cache: wallTrimeshCache, loggerTag })
 		if (entry) {
-			resolvedShape = entry.shape
+			wallSegments = entry.segments
+			resolvedShape = null
 			offsetTuple = null
 		}
 	}
@@ -922,7 +951,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape) {
+	if (!resolvedShape && !wallSegments) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -948,7 +977,18 @@ export function createRigidbodyBody(
 		)
 	}
 	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
-	body.addShape(resolvedShape, shapeOffset)
+	if (wallSegments && wallSegments.length) {
+		for (const segment of wallSegments) {
+			const [ox, oy, oz] = segment.offset
+			wallOffsetVec3Helper.set(ox, oy, oz)
+			const [qx, qy, qz, qw] = segment.orientation
+			wallOrientationQuatHelper.set(qx, qy, qz, qw)
+			// Clone to avoid accidental shared references if cannon-es stores by reference.
+			body.addShape(segment.shape, wallOffsetVec3Helper.clone(), wallOrientationQuatHelper.clone())
+		}
+	} else if (resolvedShape) {
+		body.addShape(resolvedShape, shapeOffset)
+	}
 	syncBodyFromObject(body, object, orientationAdjustment)
 	body.updateMassProperties()
 	body.linearDamping = props.linearDamping ?? DEFAULT_LINEAR_DAMPING
