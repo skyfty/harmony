@@ -6,12 +6,14 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { AssetCache, AssetLoader } from '@schema/assetCache'
+import { AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { disposeMaterialTextures } from '@schema/material'
 import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@harmony/schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 
 const props = defineProps<{
   file: File | null
@@ -32,8 +34,8 @@ let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
 
-const assetCache = new AssetCache({ maxEntries: 48 })
-const assetLoader = new AssetLoader(assetCache)
+const assetCacheStore = useAssetCacheStore()
+const assetLoader = new AssetLoader(new StoreBackedAssetCache(assetCacheStore))
 
 function disposeObject(object: THREE.Object3D | null): void {
   if (!object) {
@@ -263,6 +265,7 @@ async function loadPrefabScene(): Promise<void> {
       enableGround: true,
       lazyLoadMeshes: false,
     }
+
     const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
       warn: (message) => console.warn('[PrefabPreview] resource warning:', message),
       reportDownloadProgress: undefined,

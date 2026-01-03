@@ -34,8 +34,9 @@ import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOp
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
 import ResourceCache from '@schema/ResourceCache'
-import { AssetLoader, AssetCache } from '@schema/assetCache'
+import { AssetLoader } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
+import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
@@ -269,34 +270,8 @@ const resourceProgressItems = ref<ResourceProgressItem[]>([])
 const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
 
 const assetCacheStore = useAssetCacheStore()
-// Adapter so the preview uses the shared Pinia-backed cache without duplicating downloads.
-class StoreBackedAssetCache extends AssetCache {
-	constructor() {
-		super()
-	}
-	async getEntry(assetId: string): Promise<AssetCacheEntry | undefined |null> {
-		let storeEntry = assetCacheStore.entries[assetId]
-		if (storeEntry !== undefined && storeEntry !== null) {
-			return storeEntry
-		}
-		// fall back to parent cache (may return undefined)
-		storeEntry = await super.getEntry(assetId) ?? undefined
-		if (storeEntry === undefined) {
-			await assetCacheStore.loadFromIndexedDb(assetId)
-			storeEntry = assetCacheStore.getEntry(assetId)
-		}
-		return storeEntry
-	}
 
-	hasCache(assetId: string): boolean {
-		return assetCacheStore.hasCache(assetId) || super.hasCache(assetId)
-	}
-	createFileFromCache(assetId: string): File | null {
-		return assetCacheStore.createFileFromCache(assetId)
-	}
-}
-
-const editorAssetCache = new StoreBackedAssetCache()
+const editorAssetCache = new StoreBackedAssetCache(assetCacheStore)
 const editorAssetLoader = new AssetLoader(editorAssetCache)
 let editorResourceCache: ResourceCache | null = null
 
