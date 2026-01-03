@@ -908,7 +908,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && isWallDynamicMesh(node.dynamicMesh) && wallTrimeshCache) {
+	if (isWallDynamicMesh(node.dynamicMesh) && wallTrimeshCache) {
 		const entry = resolveWallShape({ node, object, cache: wallTrimeshCache, loggerTag })
 		if (entry) {
 			resolvedShape = entry.shape
@@ -926,12 +926,10 @@ export function createRigidbodyBody(
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
-	const isWall = isWallDynamicMesh(node.dynamicMesh)
-	const effectiveBodyType: RigidbodyComponentProps['bodyType'] = isWall ? 'STATIC' : props.bodyType
-	const isDynamic = effectiveBodyType === 'DYNAMIC'
+	const isDynamic = props.bodyType === 'DYNAMIC'
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
-	body.type = mapBodyType(effectiveBodyType)
+	body.type = mapBodyType(props.bodyType)
 	body.material = ensureRigidbodyMaterial({
 		world,
 		rigidbodyMaterialCache,
