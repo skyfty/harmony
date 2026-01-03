@@ -5592,6 +5592,16 @@ function collectPrefabAssetReferences(root: SceneNode | null | undefined): strin
   return Array.from(bucket)
 }
 
+const prefabPlaceholderWatchers = new Map<string, WatchStopHandle>()
+
+function stopPrefabPlaceholderWatcher(nodeId: string) {
+  const stop = prefabPlaceholderWatchers.get(nodeId)
+  if (stop) {
+    stop()
+    prefabPlaceholderWatchers.delete(nodeId)
+  }
+}
+
 export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
   const bucket = new Set<string>()
   const materialIds = new Set<string>()
@@ -8733,7 +8743,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (asset.type === 'prefab') {
-        const node = await this.instantiateNodePrefabAsset(asset.id, position, {
+        const node = await this.spawnPrefabWithPlaceholder(asset.id, position ?? null, {
           parentId: targetParentId,
         })
         if (options.preserveWorldPosition) {
@@ -9198,8 +9208,15 @@ export const useSceneStore = defineStore('scene', {
       const text = await entry.blob.text()
       return deserializeNodePrefab(text)
     },
-    async ensurePrefabDependencies(assetIds: string[], options: { providerId?: string | null } = {}) {
+    async ensurePrefabDependencies(
+      assetIds: string[],
+      options: { providerId?: string | null; prefabAssetIdForDownloadProgress?: string | null } = {},
+    ) {
       const providerId = options.providerId ?? null
+      const prefabProgressKey = typeof options.prefabAssetIdForDownloadProgress === 'string'
+        ? options.prefabAssetIdForDownloadProgress.trim()
+        : ''
+      const shouldReportPrefabProgress = prefabProgressKey.length > 0
       const normalizedIds = Array.from(
         new Set(
           assetIds
@@ -9241,19 +9258,123 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      await Promise.all(
-        resolvedAssets.map(async (asset) => {
-          if (assetCache.hasCache(asset.id)) {
-            assetCache.touch(asset.id)
-            return
+      const trackedAssetIds = normalizedIds
+      let stopPrefabProgressWatcher: WatchStopHandle | null = null
+
+      const clampPercent = (value: unknown): number => {
+        const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0
+        return Math.max(0, Math.min(100, Math.round(numeric)))
+      }
+
+      const computePrefabAggregateProgress = (): { active: boolean; progress: number; error: string | null } => {
+        if (!trackedAssetIds.length) {
+          return { active: false, progress: 100, error: null }
+        }
+        let sum = 0
+        let missing = 0
+        let downloading = 0
+        let errorCount = 0
+        let firstError: string | null = null
+
+        for (const id of trackedAssetIds) {
+          const entry = assetCache.getEntry(id)
+          const cached = assetCache.hasCache(id) || entry?.status === 'cached'
+          if (cached) {
+            sum += 100
+            continue
           }
-          try {
-            await assetCache.downloaProjectAsset(asset)
-          } catch (error) {
-            console.warn(`Failed to preload prefab dependency ${asset.id}`, error)
+          if (entry?.status === 'downloading') {
+            downloading += 1
+            sum += clampPercent(entry.progress)
+            continue
           }
-        }),
-      )
+          if (entry?.status === 'error') {
+            errorCount += 1
+            if (!firstError) {
+              firstError = entry.error ?? '资源下载失败'
+            }
+            sum += 0
+            continue
+          }
+          missing += 1
+          sum += 0
+        }
+
+        const progress = Math.round(sum / trackedAssetIds.length)
+        const active = downloading > 0 || missing > 0
+        const error = errorCount > 0
+          ? (errorCount === 1 ? firstError : `${errorCount} assets failed`)
+          : null
+        return { active, progress, error }
+      }
+
+      if (shouldReportPrefabProgress) {
+        this.prefabAssetDownloadProgress[prefabProgressKey] = {
+          active: true,
+          progress: 0,
+          error: null,
+          assetIds: trackedAssetIds,
+        }
+
+        stopPrefabProgressWatcher = watch(
+          () =>
+            trackedAssetIds.map((id) => {
+              const entry = assetCache.getEntry(id)
+              return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
+            }),
+          () => {
+            const next = computePrefabAggregateProgress()
+            const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
+            if (!previous) {
+              return
+            }
+            this.prefabAssetDownloadProgress[prefabProgressKey] = {
+              ...previous,
+              active: next.active,
+              progress: next.progress,
+              error: next.error,
+            }
+          },
+          { immediate: true },
+        )
+      }
+
+      const errors: Array<{ assetId: string; message: string }> = []
+
+      try {
+        await Promise.all(
+          resolvedAssets.map(async (asset) => {
+            if (assetCache.hasCache(asset.id)) {
+              assetCache.touch(asset.id)
+              return
+            }
+            try {
+              await assetCache.downloaProjectAsset(asset)
+            } catch (error) {
+              const message = (error as Error).message ?? '资源下载失败'
+              errors.push({ assetId: asset.id, message })
+              console.warn(`Failed to preload prefab dependency ${asset.id}`, error)
+            }
+          }),
+        )
+      } finally {
+        stopPrefabProgressWatcher?.()
+        if (shouldReportPrefabProgress) {
+          const latest = this.prefabAssetDownloadProgress[prefabProgressKey]
+          const next = computePrefabAggregateProgress()
+          if (errors.length > 0) {
+            this.prefabAssetDownloadProgress[prefabProgressKey] = {
+              ...(latest ?? { assetIds: trackedAssetIds }),
+              active: false,
+              progress: next.progress,
+              error: errors.length === 1 ? errors[0]?.message ?? next.error : `${errors.length} assets failed`,
+              assetIds: trackedAssetIds,
+            }
+          } else {
+            delete this.prefabAssetDownloadProgress[prefabProgressKey]
+          }
+        }
+      }
     },
     async instantiatePrefabData(
       prefab: NodePrefabData,
@@ -9263,13 +9384,17 @@ export const useSceneStore = defineStore('scene', {
         runtimeSnapshots?: Map<string, Object3D>
         position?: THREE.Vector3 | null
         providerId?: string | null
+        prefabAssetIdForDownloadProgress?: string | null
       } = {},
     ): Promise<SceneNode> {
       const dependencyAssetIds = options.dependencyAssetIds ?? collectPrefabAssetReferences(prefab.root)
       const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
       const providerId = options.providerId ?? null
       if (dependencyAssetIds.length) {
-        await this.ensurePrefabDependencies(dependencyAssetIds, { providerId })
+        await this.ensurePrefabDependencies(dependencyAssetIds, {
+          providerId,
+          prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? null,
+        })
       }
 
       const prefabAssetIndex = prefab.assetIndex && isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
@@ -9352,6 +9477,7 @@ export const useSceneStore = defineStore('scene', {
         sourceAssetId: assetId,
         position: position ?? null,
         providerId: dependencyProviderId,
+        prefabAssetIdForDownloadProgress: assetId,
       })
 
       const spawnPositionVector = new Vector3(
@@ -9431,6 +9557,148 @@ export const useSceneStore = defineStore('scene', {
       this.setSelection([duplicate.id], { primaryId: duplicate.id })
       commitSceneSnapshot(this)
       return duplicate
+    },
+
+    observePrefabDownloadForNode(nodeId: string, prefabAssetId: string) {
+      stopPrefabPlaceholderWatcher(nodeId)
+      const prefabKey = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''
+      if (!prefabKey) {
+        return
+      }
+
+      const stop = watch(
+        () => {
+          const entry = this.prefabAssetDownloadProgress?.[prefabKey] ?? null
+          if (!entry) {
+            return null
+          }
+          return {
+            active: entry.active,
+            progress: entry.progress ?? 0,
+            error: entry.error ?? null,
+          }
+        },
+        (snapshot) => {
+          const target = findNodeById(this.nodes, nodeId)
+          if (!target) {
+            stopPrefabPlaceholderWatcher(nodeId)
+            return
+          }
+
+          if (!snapshot) {
+            // Prefab dependencies finished (or tracker cleaned up). Keep the placeholder until
+            // the caller replaces it with the real prefab instance.
+            if (target.downloadProgress !== 100) {
+              target.downloadProgress = 100
+              this.nodes = [...this.nodes]
+            }
+            return
+          }
+
+          let changed = false
+          if (target.downloadProgress !== snapshot.progress) {
+            target.downloadProgress = snapshot.progress
+            changed = true
+          }
+          if (target.downloadError !== snapshot.error) {
+            target.downloadError = snapshot.error
+            changed = true
+          }
+          const nextStatus = snapshot.error
+            ? 'error'
+            : snapshot.active
+              ? 'downloading'
+              : 'ready'
+          if (target.downloadStatus !== nextStatus) {
+            target.downloadStatus = nextStatus
+            changed = true
+          }
+          if (changed) {
+            this.nodes = [...this.nodes]
+          }
+        },
+        { immediate: true },
+      )
+
+      prefabPlaceholderWatchers.set(nodeId, stop)
+    },
+
+    async spawnPrefabWithPlaceholder(
+      assetId: string,
+      position: THREE.Vector3 | null,
+      options: { parentId?: string | null; placeAtParentOrigin?: boolean } = {},
+    ): Promise<SceneNode> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('节点预制件资源不存在')
+      }
+      if (asset.type !== 'prefab') {
+        throw new Error('指定资源并非节点预制件')
+      }
+
+      let parentId = options.parentId ?? null
+      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+        parentId = null
+      }
+      if (parentId) {
+        const parentNode = findNodeById(this.nodes, parentId)
+        if (!allowsChildNodes(parentNode)) {
+          parentId = null
+        }
+      }
+
+      let spawnPosition = position ? position.clone() : null
+      if (!spawnPosition && parentId && options.placeAtParentOrigin) {
+        const parentMatrix = computeWorldMatrixForNode(this.nodes, parentId)
+        if (parentMatrix) {
+          const parentWorldPosition = new Vector3()
+          const parentWorldQuaternion = new Quaternion()
+          const parentWorldScale = new Vector3()
+          parentMatrix.decompose(parentWorldPosition, parentWorldQuaternion, parentWorldScale)
+          spawnPosition = parentWorldPosition
+        }
+      }
+
+      if (!spawnPosition) {
+        spawnPosition = resolveSpawnPosition({
+          baseY: 0,
+          radius: DEFAULT_SPAWN_RADIUS,
+          localCenter: new Vector3(0, 0, 0),
+          camera: this.camera,
+          nodes: this.nodes,
+          snapToGrid: true,
+        })
+      }
+
+      const placeholder = this.addPlaceholderNode(
+        asset,
+        {
+          position: toPlainVector(spawnPosition),
+          rotation: { x: 0, y: 0, z: 0 } as Vector3Like,
+          scale: { x: 1, y: 1, z: 1 } as Vector3Like,
+        },
+        { parentId },
+      )
+
+      this.observePrefabDownloadForNode(placeholder.id, assetId)
+
+      void (async () => {
+        try {
+          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, { parentId })
+          stopPrefabPlaceholderWatcher(placeholder.id)
+          this.removeSceneNodes([placeholder.id])
+          this.setSelection([instantiated.id], { primaryId: instantiated.id })
+        } catch (error) {
+          const target = findNodeById(this.nodes, placeholder.id)
+          if (target) {
+            target.downloadStatus = 'error'
+            target.downloadError = (error as Error).message ?? '资源下载失败'
+            this.nodes = [...this.nodes]
+          }
+        }
+      })()
+
+      return placeholder
     },
     async saveBehaviorPrefab(payload: {
       name: string

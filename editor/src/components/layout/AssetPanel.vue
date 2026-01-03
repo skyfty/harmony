@@ -330,7 +330,9 @@ function prefabAggregateProgressState(asset: ProjectAsset) {
     return null
   }
   const cacheId = resolveAssetCacheId(asset)
-  return sceneStore.prefabAssetDownloadProgress?.[cacheId] ?? null
+  return sceneStore.prefabAssetDownloadProgress?.[cacheId]
+    ?? sceneStore.prefabAssetDownloadProgress?.[asset.id]
+    ?? null
 }
 
 function isAssetDownloading(asset: ProjectAsset) {
@@ -525,21 +527,16 @@ async function handleAddAsset(asset: ProjectAsset) {
   try {
     preparedAsset = prepareAssetForOperations(asset)
     assetCacheStore.setError(preparedAsset.id, null)
-    await ensureAssetCached(preparedAsset)
     const currentNode = selectedSceneNode.value
     const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
-      const instantiated = await sceneStore.instantiateNodePrefabAsset(preparedAsset.id)
-      if (instantiated && parentNode?.id) {
-        const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentNode.id, position: 'inside' })
-        if (moved) {
-          snapNodeToParentOrigin(instantiated.id)
-        } else {
-          console.warn('Failed to reparent prefab under selected node', instantiated.id, parentNode.id)
-        }
-      }
+      await sceneStore.spawnPrefabWithPlaceholder(preparedAsset.id, null, {
+        parentId: parentNode?.id ?? null,
+        placeAtParentOrigin: Boolean(parentNode?.id),
+      })
       return
     }
+    await ensureAssetCached(preparedAsset)
     if (MODEL_ASSET_TYPES.has(preparedAsset.type)) {
       const node = await sceneStore.addModelNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
       if (!node) {
