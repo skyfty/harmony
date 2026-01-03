@@ -61,6 +61,20 @@ export type AssetBlobDownloader = (
 
 let assetBlobDownloader: AssetBlobDownloader | null = null
 
+export type AssetDownloadHostMirrorMap = Record<string, string[]>
+
+let assetDownloadHostMirrors: AssetDownloadHostMirrorMap | null = null
+
+/**
+ * Configure host mirror mapping for asset downloads.
+ *
+ * This only affects the generated *download URL candidates*.
+ * The asset identifier / cache key stays as the original assetId / URL.
+ */
+export function configureAssetDownloadHostMirrors(mirrors: AssetDownloadHostMirrorMap | null): void {
+  assetDownloadHostMirrors = normalizeHostMirrorMap(mirrors)
+}
+
 export function configureAssetBlobDownloader(downloader: AssetBlobDownloader | null): void {
   assetBlobDownloader = downloader
 }
@@ -529,7 +543,7 @@ export async function fetchAssetBlob(
 
   
   if (uniGlobal && typeof uniGlobal.request === 'function') {
-    return await fetchViaUni(fallbackUrl, controller, onProgress)
+      return await fetchViaUni(candidates, controller, onProgress)
   }
 
   if (typeof fetch === 'function') {
@@ -606,6 +620,38 @@ async function readBlobWithProgress(
 }
 
 async function fetchViaUni(
+  urlCandidates: string[] | string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  const candidates = Array.isArray(urlCandidates) ? urlCandidates : [urlCandidates]
+  if (!candidates.length) {
+    throw new Error('资源下载失败（无效的下载地址）')
+  }
+  let lastError: unknown = null
+  for (const candidate of candidates) {
+    if (controller.signal.aborted) {
+      throw createAbortError()
+    }
+    try {
+      onProgress(0)
+      return await fetchViaUniOnce(candidate, controller, onProgress)
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+      lastError = error
+      if (!shouldRetryUniError(error)) {
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+      // Retry by switching to the next candidate (优先切源策略).
+      continue
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? '资源下载失败'))
+}
+
+async function fetchViaUniOnce(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
@@ -654,7 +700,13 @@ async function fetchViaUni(
         }
         settled = true
         cleanup(handleAbort)
-        reject(new Error(`资源下载失败（${res.statusCode ?? 'unknown'}）`))
+        const statusCode = res.statusCode
+        const err = new Error(`资源下载失败（${statusCode ?? 'unknown'}）`) as Error & { statusCode?: number; url?: string }
+        if (typeof statusCode === 'number') {
+          err.statusCode = statusCode
+        }
+        err.url = url
+        reject(err)
       },
       fail: (error: unknown) => {
         if (settled) {
@@ -662,7 +714,9 @@ async function fetchViaUni(
         }
         settled = true
         cleanup(handleAbort)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        const err = error instanceof Error ? error : new Error(String(error))
+        ;(err as Error & { url?: string }).url = url
+        reject(err)
       },
     }) as unknown as UniRequestTask | undefined
 
@@ -688,6 +742,26 @@ async function fetchViaUni(
       })
     }
   })
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error) {
+    return false
+  }
+  const name = (error as { name?: unknown }).name
+  return name === 'AbortError'
+}
+
+function shouldRetryUniError(error: unknown): boolean {
+  if (!error) {
+    return true
+  }
+  const statusCode = (error as { statusCode?: unknown }).statusCode
+  if (typeof statusCode === 'number') {
+    return statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode <= 599)
+  }
+  // If we don't have a status code, assume it's a network/transport error.
+  return true
 }
 
 async function fetchViaXmlHttp(
@@ -792,12 +866,158 @@ function createDownloadUrlCandidates(url: string): string[] {
   if (!normalized) {
     return []
   }
-  const candidates = [normalized]
+
+  // Base ordering: prefer https-upgraded form (when applicable), then original.
+  const bases: string[] = []
   const upgraded = upgradeHttpUrl(normalized)
   if (upgraded && upgraded !== normalized) {
-    candidates.unshift(upgraded)
+    bases.push(upgraded)
   }
-  return Array.from(new Set(candidates))
+  bases.push(normalized)
+
+  const out: string[] = []
+  const seen = new Set<string>()
+  const pushUnique = (value: string) => {
+    const trimmed = typeof value === 'string' ? value.trim() : ''
+    if (!trimmed) {
+      return
+    }
+    if (seen.has(trimmed)) {
+      return
+    }
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+
+  for (const base of bases) {
+    const mirrors = createMirroredUrlCandidates(base)
+    mirrors.forEach((candidate) => pushUnique(candidate))
+    pushUnique(base)
+  }
+
+  return out
+}
+
+function createMirroredUrlCandidates(url: string): string[] {
+  if (!assetDownloadHostMirrors) {
+    return []
+  }
+  const parsed = tryParseUrl(url)
+  if (!parsed) {
+    return []
+  }
+  const sourceHost = normalizeHostKey(parsed.host)
+  if (!sourceHost) {
+    return []
+  }
+  const mirrors = assetDownloadHostMirrors[sourceHost]
+  if (!Array.isArray(mirrors) || mirrors.length === 0) {
+    return []
+  }
+
+  const results: string[] = []
+  const seen = new Set<string>()
+  for (const mirror of mirrors) {
+    const trimmed = typeof mirror === 'string' ? mirror.trim() : ''
+    if (!trimmed) {
+      continue
+    }
+    const rewritten = rewriteUrlHostOrOrigin(parsed, trimmed)
+    if (!rewritten) {
+      continue
+    }
+    if (!seen.has(rewritten)) {
+      seen.add(rewritten)
+      results.push(rewritten)
+    }
+  }
+  return results
+}
+
+function rewriteUrlHostOrOrigin(source: URL, mirrorHostOrOrigin: string): string | null {
+  try {
+    const value = mirrorHostOrOrigin.trim()
+    if (!value) {
+      return null
+    }
+
+    // If mirror is an origin (has scheme), use its protocol/host.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+      const mirror = new URL(value)
+      const rewritten = new URL(source.toString())
+      rewritten.protocol = mirror.protocol
+      rewritten.username = mirror.username
+      rewritten.password = mirror.password
+      rewritten.host = mirror.host
+      return rewritten.toString()
+    }
+
+    // If mirror is scheme-relative (e.g. //cdn.example.com), treat as https.
+    if (/^\/\//.test(value)) {
+      const mirror = new URL(`https:${value}`)
+      const rewritten = new URL(source.toString())
+      rewritten.protocol = mirror.protocol
+      rewritten.host = mirror.host
+      return rewritten.toString()
+    }
+
+    // Otherwise treat as host[:port], preserve protocol and other URL parts.
+    const rewritten = new URL(source.toString())
+    rewritten.host = value
+    return rewritten.toString()
+  } catch (_error) {
+    return null
+  }
+}
+
+function tryParseUrl(url: string): URL | null {
+  try {
+    // Support scheme-relative URLs.
+    if (/^\/\//.test(url)) {
+      return new URL(`https:${url}`)
+    }
+    return new URL(url)
+  } catch (_error) {
+    return null
+  }
+}
+
+function normalizeHostKey(value: string): string {
+  return (typeof value === 'string' ? value.trim().toLowerCase() : '')
+}
+
+function normalizeHostMirrorMap(map: AssetDownloadHostMirrorMap | null): AssetDownloadHostMirrorMap | null {
+  if (!map || typeof map !== 'object') {
+    return null
+  }
+  const normalized: AssetDownloadHostMirrorMap = {}
+  Object.keys(map).forEach((key) => {
+    const hostKey = normalizeHostKey(key)
+    if (!hostKey) {
+      return
+    }
+    const mirrors = map[key]
+    if (!Array.isArray(mirrors) || mirrors.length === 0) {
+      return
+    }
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const item of mirrors) {
+      const trimmed = typeof item === 'string' ? item.trim() : ''
+      if (!trimmed) {
+        continue
+      }
+      if (seen.has(trimmed)) {
+        continue
+      }
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+    if (out.length) {
+      normalized[hostKey] = out
+    }
+  })
+  return Object.keys(normalized).length ? normalized : null
 }
 
 function upgradeHttpUrl(url: string): string | null {

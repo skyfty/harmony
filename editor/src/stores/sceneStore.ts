@@ -6541,6 +6541,9 @@ function allowsChildNodes(node: SceneNode | null | undefined): boolean {
   if (node.nodeType !== 'Group') {
     return false
   }
+  if (node.groupExpanded === false) {
+    return false
+  }
   if (node.sourceAssetId) {
     return false
   }
@@ -8699,7 +8702,15 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
-      const targetParentId = options.parentId ?? null
+      const parentMap = buildParentMap(this.nodes)
+      let targetParentId = options.parentId ?? null
+      while (targetParentId) {
+        const candidate = findNodeById(this.nodes, targetParentId)
+        if (allowsChildNodes(candidate)) {
+          break
+        }
+        targetParentId = parentMap.get(targetParentId) ?? null
+      }
 
       const adjustNodeWorldPosition = (nodeId: string | null, desiredWorldPosition: THREE.Vector3 | null) => {
         if (!nodeId || !desiredWorldPosition || !targetParentId) {
@@ -9636,15 +9647,17 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('指定资源并非节点预制件')
       }
 
+      const parentMap = buildParentMap(this.nodes)
       let parentId = options.parentId ?? null
       if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
         parentId = null
       }
-      if (parentId) {
+      while (parentId) {
         const parentNode = findNodeById(this.nodes, parentId)
-        if (!allowsChildNodes(parentNode)) {
-          parentId = null
+        if (allowsChildNodes(parentNode)) {
+          break
         }
+        parentId = parentMap.get(parentId) ?? null
       }
 
       let spawnPosition = position ? position.clone() : null

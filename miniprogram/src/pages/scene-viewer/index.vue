@@ -335,7 +335,8 @@ import {
 } from '@schema/sceneGraph';
 import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import ResourceCache from '@schema/ResourceCache';
-import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
+import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@schema/assetCache';
+import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
@@ -557,6 +558,10 @@ const resourcePreloadBytesLabel = computed(() => {
   }
   return '';
 });
+
+// Configure multi-source mirrors for asset downloads (优先切源).
+// Note: asset identifiers / cache keys remain the original URLs/assetIds.
+configureAssetDownloadHostMirrors(ASSET_DOWNLOAD_HOST_MIRRORS);
 
 const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);

@@ -507,17 +507,10 @@ async function handleAssetDropOnNode(asset: ProjectAsset, targetId: string): Pro
     const parentCenter = sceneStore.getNodeWorldCenter(resolvedParentId)
     const spawnCenter = parentCenter ? parentCenter.clone() : null
     if (asset.type === 'prefab') {
-      const instantiated = await sceneStore.instantiateNodePrefabAsset(
-        asset.id,
-        spawnCenter ?? undefined,
-      )
-      const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: resolvedParentId, position: 'inside' })
-      if (moved) {
-        sceneStore.setGroupExpanded(resolvedParentId, true, { captureHistory: false })
-      }
-      if (!moved) {
-        console.warn('Failed to nest prefab under target node', asset.id, resolvedParentId)
-      }
+      await sceneStore.spawnPrefabWithPlaceholder(asset.id, spawnCenter, {
+        parentId: resolvedParentId,
+      })
+      sceneStore.setGroupExpanded(resolvedParentId, true, { captureHistory: false })
       return
     }
 
@@ -550,7 +543,7 @@ async function handleAssetDropOnNode(asset: ProjectAsset, targetId: string): Pro
 async function handleAssetDropOnRoot(asset: ProjectAsset): Promise<void> {
   try {
     if (asset.type === 'prefab') {
-      await sceneStore.instantiateNodePrefabAsset(asset.id)
+      await sceneStore.spawnPrefabWithPlaceholder(asset.id, null)
       return
     }
     if (asset.type === 'model') {
