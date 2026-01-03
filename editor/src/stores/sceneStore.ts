@@ -3746,7 +3746,7 @@ function collectClipboardPayload(
     const found = findNodeById(nodes, id)
     if (found) {
       const rootNode = prepareNodePrefabRoot(found, { regenerateIds: false })
-      resetPrefabRootTransform(rootNode)
+      bakePrefabSubtreeTransforms(rootNode, nodes)
       const serialized = JSON.stringify(rootNode, null, 2)
       entries.push({
         sourceId: id,
@@ -4491,10 +4491,50 @@ function prepareNodePrefabRoot(
   return remapPrefabNodeIds(stripped, options.regenerateIds ?? false)
 }
 
-function resetPrefabRootTransform(root: SceneNode) {
-  root.position = { x: 0, y: 0, z: 0 }
-  root.rotation = { x: 0, y: 0, z: 0 }
-  root.scale = root.scale ?? { x: 1, y: 1, z: 1 }
+function sanitizeFiniteVector3Like(value: Vector3Like | null | undefined, fallback: Vector3Like): Vector3Like {
+  if (!value) {
+    return fallback
+  }
+  const x = typeof value.x === 'number' && Number.isFinite(value.x) ? value.x : fallback.x
+  const y = typeof value.y === 'number' && Number.isFinite(value.y) ? value.y : fallback.y
+  const z = typeof value.z === 'number' && Number.isFinite(value.z) ? value.z : fallback.z
+  return { x, y, z }
+}
+
+function bakePrefabSubtreeTransforms(root: SceneNode, sceneNodes: SceneNode[]): SceneNode {
+  const identity = new Matrix4()
+  const rootWorld = computeWorldMatrixForNode(sceneNodes, root.id) ?? identity
+  const rootDet = rootWorld.determinant()
+  const rootInverse = Number.isFinite(rootDet) && Math.abs(rootDet) > 1e-12 ? rootWorld.clone().invert() : identity
+
+  const rewrite = (node: SceneNode, parentRelativeWorld: Matrix4, parentSceneWorld: Matrix4) => {
+    const sceneWorld = computeWorldMatrixForNode(sceneNodes, node.id)
+      ?? new Matrix4().multiplyMatrices(parentSceneWorld, composeNodeMatrix(node))
+    const relativeWorld = new Matrix4().multiplyMatrices(rootInverse, sceneWorld)
+    const parentInverse = parentRelativeWorld.clone().invert()
+    const localMatrix = new Matrix4().multiplyMatrices(parentInverse, relativeWorld)
+
+    const position = new Vector3()
+    const quaternion = new Quaternion()
+    const scale = new Vector3()
+    localMatrix.decompose(position, quaternion, scale)
+
+    const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
+    const nextPosition = sanitizeFiniteVector3Like({ x: position.x, y: position.y, z: position.z }, { x: 0, y: 0, z: 0 })
+    const nextRotation = sanitizeFiniteVector3Like({ x: euler.x, y: euler.y, z: euler.z }, { x: 0, y: 0, z: 0 })
+    const nextScale = sanitizeFiniteVector3Like({ x: scale.x, y: scale.y, z: scale.z }, { x: 1, y: 1, z: 1 })
+
+    node.position = createVector(nextPosition.x, nextPosition.y, nextPosition.z)
+    node.rotation = createVector(nextRotation.x, nextRotation.y, nextRotation.z)
+    node.scale = createVector(nextScale.x, nextScale.y, nextScale.z)
+
+    if (node.children?.length) {
+      node.children.forEach((child) => rewrite(child, relativeWorld, sceneWorld))
+    }
+  }
+
+  rewrite(root, identity, identity)
+  return root
 }
 
 function ensurePrefabGroupRoot(node: SceneNode): SceneNode {
@@ -4518,12 +4558,9 @@ function ensurePrefabGroupRoot(node: SceneNode): SceneNode {
   return wrapper
 }
 
-function createNodePrefabData(node: SceneNode, name: string, options: { resetRootTransform?: boolean } = {}): NodePrefabData {
+function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
   const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(node, { regenerateIds: false })
-  if (options.resetRootTransform !== false) {
-    resetPrefabRootTransform(root)
-  }
   return {
     formatVersion: NODE_PREFAB_FORMAT_VERSION,
     name: normalizedName,
@@ -4535,7 +4572,7 @@ function serializeNodePrefab(payload: NodePrefabData): string {
   return JSON.stringify(payload, null, 2)
 }
 
-function deserializeNodePrefab(raw: string, options: { resetRootTransform?: boolean } = {}): NodePrefabData {
+function deserializeNodePrefab(raw: string): NodePrefabData {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -4557,9 +4594,6 @@ function deserializeNodePrefab(raw: string, options: { resetRootTransform?: bool
   }
   const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(candidate.root as SceneNode, { regenerateIds: false })
-  if (options.resetRootTransform !== false) {
-    resetPrefabRootTransform(root)
-  }
   const assetIndex = candidate.assetIndex && isAssetIndex(candidate.assetIndex)
     ? cloneAssetIndex(candidate.assetIndex as Record<string, AssetIndexEntry>)
     : undefined
@@ -4592,13 +4626,12 @@ function buildSerializedPrefabPayload(
     name?: string
     assetIndex: Record<string, AssetIndexEntry>
     packageAssetMap: Record<string, string>
-    resetRootTransform?: boolean
+    sceneNodes: SceneNode[]
   },
 ): SerializedPrefabPayload {
   const prefabRoot = ensurePrefabGroupRoot(node)
-  const prefabData = createNodePrefabData(prefabRoot, context.name ?? node.name ?? '', {
-    resetRootTransform: context.resetRootTransform !== false,
-  })
+  const prefabData = createNodePrefabData(prefabRoot, context.name ?? node.name ?? '')
+  bakePrefabSubtreeTransforms(prefabData.root, context.sceneNodes)
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
   if (dependencyAssetIds.length) {
     const assetIndexSubset = buildAssetIndexSubsetForPrefab(context.assetIndex, dependencyAssetIds)
@@ -4624,7 +4657,7 @@ function buildSerializedPrefabPayload(
     dependencyAssetIds,
   }
 }
-function deserializeSceneNode(raw: string, options: { resetRootTransform?: boolean } = {}): SceneNode | null {
+function deserializeSceneNode(raw: string): SceneNode | null {
   if (typeof raw !== 'string') {
     return null
   }
@@ -4633,10 +4666,8 @@ function deserializeSceneNode(raw: string, options: { resetRootTransform?: boole
     return null
   }
 
-  const resetRootTransform = options.resetRootTransform !== false
-
   try {
-    const prefab = deserializeNodePrefab(normalized, { resetRootTransform })
+    const prefab = deserializeNodePrefab(normalized)
     return prefab.root
   } catch (_prefabError) {
     // Fall through to plain node handling.
@@ -4656,9 +4687,6 @@ function deserializeSceneNode(raw: string, options: { resetRootTransform?: boole
 
   try {
     const root = prepareNodePrefabRoot(parsed as SceneNode, { regenerateIds: false })
-    if (resetRootTransform) {
-      resetPrefabRootTransform(root)
-    }
     return root
   } catch (error) {
     console.warn('Failed to normalize scene node clipboard payload', error)
@@ -9170,7 +9198,7 @@ export const useSceneStore = defineStore('scene', {
         name: options.name ?? node.name ?? '',
         assetIndex: this.assetIndex,
         packageAssetMap: this.packageAssetMap,
-        resetRootTransform: true,
+        sceneNodes: this.nodes,
       })
 
       const registered = await this.registerPrefabAssetFromData(payload.prefab, payload.serialized, {
