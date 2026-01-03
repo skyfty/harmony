@@ -345,6 +345,11 @@ declare module '@/types/scene-state' {
     workspaceId: string
     workspaceType: SceneWorkspaceType
     workspaceLabel: string
+
+    prefabAssetDownloadProgress: Record<
+      string,
+      { active: boolean; progress: number; error: string | null; assetIds: string[] }
+    >
   }
 }
 const OPACITY_EPSILON = 1e-3
@@ -6663,6 +6668,7 @@ export const useSceneStore = defineStore('scene', {
       projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cloudPreviewEnabled: false,
+      prefabAssetDownloadProgress: {},
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
     nodeHighlightTargetId: null,
@@ -8325,12 +8331,102 @@ export const useSceneStore = defineStore('scene', {
       const uiStore = useUiStore()
       const shouldShowOverlay = options.showOverlay ?? true
       const refreshViewport = options.refreshViewport ?? options.nodes === undefined
+      const prefabProgressKey = typeof options.prefabAssetIdForDownloadProgress === 'string'
+        ? options.prefabAssetIdForDownloadProgress.trim()
+        : ''
+      const shouldReportPrefabProgress = prefabProgressKey.length > 0
       const normalizeUrl = (value: string | null | undefined): string | null => {
         if (!value) {
           return null
         }
         const trimmed = value.trim()
         return trimmed.length > 0 ? trimmed : null
+      }
+
+      const trackedAssetIds = shouldReportPrefabProgress ? Array.from(assetNodeMap.keys()) : []
+      let stopPrefabProgressWatcher: WatchStopHandle | null = null
+
+      const clampPercent = (value: unknown): number => {
+        const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0
+        return Math.max(0, Math.min(100, Math.round(numeric)))
+      }
+
+      const computePrefabAggregateProgress = (): {
+        active: boolean
+        progress: number
+        error: string | null
+      } => {
+        if (!trackedAssetIds.length) {
+          return { active: false, progress: 100, error: null }
+        }
+        let sum = 0
+        let missing = 0
+        let downloading = 0
+        let errorCount = 0
+        let firstError: string | null = null
+
+        for (const id of trackedAssetIds) {
+          const entry = assetCache.getEntry(id)
+          const cached = assetCache.hasCache(id) || entry?.status === 'cached'
+          if (cached) {
+            sum += 100
+            continue
+          }
+          if (entry?.status === 'downloading') {
+            downloading += 1
+            sum += clampPercent(entry.progress)
+            continue
+          }
+          if (entry?.status === 'error') {
+            errorCount += 1
+            if (!firstError) {
+              firstError = entry.error ?? '资源下载失败'
+            }
+            // Treat errored assets as 0% for aggregate.
+            sum += 0
+            continue
+          }
+          // Not cached yet; download may start later in the loop.
+          missing += 1
+          sum += 0
+        }
+
+        const progress = Math.round(sum / trackedAssetIds.length)
+        const active = downloading > 0 || missing > 0
+        const error = errorCount > 0
+          ? (errorCount === 1 ? firstError : `${errorCount} assets failed`)
+          : null
+        return { active, progress, error }
+      }
+
+      if (shouldReportPrefabProgress) {
+        this.prefabAssetDownloadProgress[prefabProgressKey] = {
+          active: true,
+          progress: 0,
+          error: null,
+          assetIds: trackedAssetIds,
+        }
+        stopPrefabProgressWatcher = watch(
+          () =>
+            trackedAssetIds.map((id) => {
+              const entry = assetCache.getEntry(id)
+              return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
+            }),
+          () => {
+            const next = computePrefabAggregateProgress()
+            const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
+            if (!previous) {
+              return
+            }
+            this.prefabAssetDownloadProgress[prefabProgressKey] = {
+              ...previous,
+              active: next.active,
+              progress: next.progress,
+              error: next.error,
+            }
+          },
+          { immediate: true },
+        )
       }
 
       if (shouldShowOverlay) {
@@ -8347,6 +8443,8 @@ export const useSceneStore = defineStore('scene', {
       const total = assetNodeMap.size
       let completed = 0
       const errors: Array<{ assetId: string; message: string }> = []
+
+      try {
 
       for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
         const asset = this.getAsset(assetId)
@@ -8536,6 +8634,25 @@ export const useSceneStore = defineStore('scene', {
           if (shouldShowOverlay) {
             const percent = Math.round((completed / total) * 100)
             uiStore.updateLoadingProgress(percent, { autoClose: false })
+          }
+        }
+      }
+
+      } finally {
+        stopPrefabProgressWatcher?.()
+        if (shouldReportPrefabProgress) {
+          const latest = this.prefabAssetDownloadProgress[prefabProgressKey]
+          const next = computePrefabAggregateProgress()
+          if (errors.length > 0) {
+            this.prefabAssetDownloadProgress[prefabProgressKey] = {
+              ...(latest ?? { assetIds: trackedAssetIds }),
+              active: false,
+              progress: next.progress,
+              error: errors.length === 1 ? errors[0]?.message ?? next.error : `${errors.length} assets failed`,
+              assetIds: trackedAssetIds,
+            }
+          } else {
+            delete this.prefabAssetDownloadProgress[prefabProgressKey]
           }
         }
       }
@@ -9303,7 +9420,11 @@ export const useSceneStore = defineStore('scene', {
         nextNodes = [...this.nodes, duplicate]
       }
       this.nodes = nextNodes
-      await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
+      await this.ensureSceneAssetsReady({
+        nodes: [duplicate],
+        showOverlay: false,
+        prefabAssetIdForDownloadProgress: assetId,
+      })
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
       }

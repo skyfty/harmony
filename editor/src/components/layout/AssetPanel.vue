@@ -325,7 +325,19 @@ function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
 }
 
+function prefabAggregateProgressState(asset: ProjectAsset) {
+  if (asset.type !== 'prefab') {
+    return null
+  }
+  const cacheId = resolveAssetCacheId(asset)
+  return sceneStore.prefabAssetDownloadProgress?.[cacheId] ?? null
+}
+
 function isAssetDownloading(asset: ProjectAsset) {
+  const aggregate = prefabAggregateProgressState(asset)
+  if (aggregate?.active) {
+    return true
+  }
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
@@ -340,10 +352,18 @@ function canDeleteAsset(asset: ProjectAsset) {
 }
 
 function assetDownloadProgress(asset: ProjectAsset) {
+  const aggregate = prefabAggregateProgressState(asset)
+  if (aggregate) {
+    return aggregate.progress
+  }
   return assetCacheStore.getProgress(resolveAssetCacheId(asset))
 }
 
 function assetDownloadError(asset: ProjectAsset) {
+  const aggregate = prefabAggregateProgressState(asset)
+  if (aggregate && !aggregate.active) {
+    return aggregate.error
+  }
   return assetCacheStore.getError(resolveAssetCacheId(asset))
 }
 
