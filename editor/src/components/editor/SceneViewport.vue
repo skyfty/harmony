@@ -34,7 +34,13 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject, registerRuntimeObject, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
+import {
+  useSceneStore,
+  getRuntimeObject,
+  registerRuntimeObject,
+  ENVIRONMENT_NODE_ID,
+  collectPrefabAssetReferences,
+} from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -64,8 +70,15 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
+import ResourceCache from '@schema/ResourceCache'
+import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import {createPrimitiveMesh}  from '@harmony/schema'
+
+import { parsePrefabFile } from '@/utils/prefabDocument'
+import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
+import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
+import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -3047,6 +3060,9 @@ function disposeObjectResources(object: THREE.Object3D) {
 }
 
 function clearDragPreviewObject(disposeResources = true) {
+  if (dragPreviewAssetId) {
+    setDragPreviewReady(dragPreviewAssetId, false)
+  }
   if (dragPreviewObject && disposeResources) {
     disposeObjectResources(dragPreviewObject)
   }
@@ -3090,6 +3106,17 @@ function setDragPreviewPosition(point: THREE.Vector3 | null) {
   }
   dragPreviewGroup.position.copy(point)
   dragPreviewGroup.visible = true
+}
+
+async function ensureAssetsCachedLocally(assetIds: string[]): Promise<boolean> {
+  if (!assetIds.length) {
+    return true
+  }
+  const missing = assetIds.filter((id) => id && !assetCacheStore.hasCache(id))
+  if (missing.length) {
+    await Promise.all(missing.map((id) => assetCacheStore.loadFromIndexedDb(id)))
+  }
+  return assetIds.every((id) => !id || assetCacheStore.hasCache(id))
 }
 
 async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
@@ -3143,9 +3170,85 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
   }
 }
 
+async function loadDragPreviewForPrefab(asset: ProjectAsset): Promise<boolean> {
+  if (pendingPreviewAssetId === asset.id) {
+    return false
+  }
+
+  pendingPreviewAssetId = asset.id
+  clearDragPreviewObject()
+  const token = ++dragPreviewLoadToken
+
+  try {
+    let file = assetCacheStore.createFileFromCache(asset.id)
+    if (!file) {
+      await assetCacheStore.loadFromIndexedDb(asset.id)
+      file = assetCacheStore.createFileFromCache(asset.id)
+    }
+    if (!file) {
+      pendingPreviewAssetId = null
+      return false
+    }
+
+    const document = await parsePrefabFile(file)
+    const rootNode = document.nodes?.[0] ?? null
+    const dependencyAssetIds = collectPrefabAssetReferences(rootNode)
+
+    const allCached = await ensureAssetsCachedLocally(dependencyAssetIds)
+    if (!allCached) {
+      pendingPreviewAssetId = null
+      return false
+    }
+
+    const buildOptions: SceneGraphBuildOptions = {
+      enableGround: true,
+      lazyLoadMeshes: false,
+    }
+
+    const assetLoader = new CacheOnlyAssetLoader(new StoreBackedAssetCache(assetCacheStore))
+    const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
+      warn: (message) => console.warn('[DragPreview:Prefab] resource warning:', message),
+      reportDownloadProgress: undefined,
+    })
+
+    const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
+
+    if (token !== dragPreviewLoadToken) {
+      disposeObjectResources(root)
+      return false
+    }
+
+    // Prefab instantiation overrides root position at spawn time.
+    root.position.set(0, 0, 0)
+
+    applyPreviewVisualTweaks(root)
+    dragPreviewObject = root
+    dragPreviewAssetId = asset.id
+    dragPreviewGroup.add(root)
+    setDragPreviewReady(asset.id, true)
+
+    if (lastDragPoint) {
+      dragPreviewGroup.position.copy(lastDragPoint)
+      dragPreviewGroup.visible = true
+    } else {
+      dragPreviewGroup.visible = false
+    }
+
+    pendingPreviewAssetId = null
+    return true
+  } catch (error) {
+    if (token === dragPreviewLoadToken) {
+      clearDragPreviewObject()
+    }
+    pendingPreviewAssetId = null
+    console.warn('Failed to load prefab drag preview object', error)
+    return false
+  }
+}
+
 function prepareDragPreview(assetId: string) {
   const asset = findAssetMetadata(assetId)
-  if (!asset || asset.type !== 'model') {
+  if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'prefab')) {
     disposeDragPreview()
     return
   }
@@ -3162,7 +3265,11 @@ function prepareDragPreview(assetId: string) {
     return
   }
 
-  void loadDragPreviewForAsset(asset)
+  if (asset.type === 'prefab') {
+    void loadDragPreviewForPrefab(asset)
+  } else {
+    void loadDragPreviewForAsset(asset)
+  }
 }
 
 

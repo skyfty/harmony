@@ -5611,7 +5611,7 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   }
 }
 
-function collectPrefabAssetReferences(root: SceneNode | null | undefined): string[] {
+export function collectPrefabAssetReferences(root: SceneNode | null | undefined): string[] {
   if (!root) {
     return []
   }

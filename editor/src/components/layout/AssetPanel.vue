@@ -26,6 +26,7 @@ import type { SceneNode } from '@harmony/schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -77,6 +78,7 @@ const NODE_DRAG_MIME = 'application/x-harmony-node'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null
 let dragSuppressionPreparedAssetId: string | null = null
+let dragSuppressionPreparedAssetType: ProjectAsset['type'] | null = null
 let dragSuppressionActive = false
 let dragSuppressionSourceAssetId: string | null = null
 
@@ -673,7 +675,7 @@ function restorePreviewDragImage(event: DragEvent) {
 }
 
 function handleWindowDragOver(event: DragEvent) {
-  if (!dragSuppressionPreparedAssetId || !dragSuppressionSourceAssetId) {
+  if (!dragSuppressionPreparedAssetId || !dragSuppressionSourceAssetId || !dragSuppressionPreparedAssetType) {
     return
   }
   if (!event.dataTransfer) {
@@ -689,7 +691,9 @@ function handleWindowDragOver(event: DragEvent) {
   if (typeof document === 'undefined') {
     return
   }
-  const cachedObjectReady = !!getCachedModelObject(dragSuppressionPreparedAssetId)
+  const cachedObjectReady = dragSuppressionPreparedAssetType === 'prefab'
+    ? isDragPreviewReady(dragSuppressionPreparedAssetId)
+    : !!getCachedModelObject(dragSuppressionPreparedAssetId)
   if (!cachedObjectReady) {
     if (dragSuppressionActive) {
       restorePreviewDragImage(event)
@@ -741,14 +745,17 @@ function detachDragSuppressionListeners() {
   }
   dragSuppressionActive = false
   dragSuppressionPreparedAssetId = null
+  dragSuppressionPreparedAssetType = null
   dragSuppressionSourceAssetId = null
 }
 
 function initializeDragSuppression(preparedAsset: ProjectAsset, sourceAssetId: string) {
   detachDragSuppressionListeners()
-  const preparedAssetId = MODEL_ASSET_TYPES.has(preparedAsset.type) ? preparedAsset.id : null
+  const supportsSuppression = preparedAsset.type === 'prefab' || MODEL_ASSET_TYPES.has(preparedAsset.type)
+  const preparedAssetId = supportsSuppression ? preparedAsset.id : null
   dragSuppressionSourceAssetId = sourceAssetId
   dragSuppressionPreparedAssetId = preparedAssetId
+  dragSuppressionPreparedAssetType = supportsSuppression ? preparedAsset.type : null
   dragSuppressionActive = false
   if (dragSuppressionPreparedAssetId) {
     attachDragSuppressionListeners()
