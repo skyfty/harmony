@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
+import { useProtagonistPreview } from './useProtagonistPreview'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -441,25 +442,24 @@ async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
   }
 }
 
-const PROTAGONIST_PREVIEW_WIDTH = 240
-const PROTAGONIST_PREVIEW_HEIGHT = 140
-const PROTAGONIST_PREVIEW_MARGIN = 16
-
 const faceSnapManager = createFaceSnapManager({
   getScene: () => scene,
   objectMap,
   getActiveTool: () => props.activeTool,
   isEditableKeyboardTarget,
 })
-const protagonistPreviewCameraOffset = new THREE.Vector3(0, 0.35, 0)
-const protagonistPreviewDirection = new THREE.Vector3(0, 0, -1)
-const protagonistPreviewWorldPosition = new THREE.Vector3()
-const protagonistPreviewTarget = new THREE.Vector3()
-const protagonistPreviewOffsetTarget = new THREE.Vector3()
-const previewViewportState = new THREE.Vector4()
-const previewScissorState = new THREE.Vector4()
-const previewRenderSize = new THREE.Vector2()
-let protagonistPreviewCamera: THREE.PerspectiveCamera | null = null
+
+const protagonistPreview = useProtagonistPreview({
+  getScene: () => scene,
+  getRenderer: () => renderer,
+  getTransformControls: () => transformControls,
+  objectMap,
+  protagonistPreviewNodeId,
+  showProtagonistPreview,
+  widthPx: 240,
+  heightPx: 140,
+  marginPx: 16,
+})
 
 const textureLoader = new THREE.TextureLoader()
 const cubeTextureLoader = new THREE.CubeTextureLoader()
@@ -2889,86 +2889,7 @@ function renderViewportFrame() {
     return
   }
   postprocessing.render()
-  renderProtagonistPreview()
-}
-
-function ensureProtagonistPreviewCamera() {
-  if (protagonistPreviewCamera) {
-    return
-  }
-  protagonistPreviewCamera = new THREE.PerspectiveCamera(
-    55,
-    PROTAGONIST_PREVIEW_WIDTH / PROTAGONIST_PREVIEW_HEIGHT,
-    0.1,
-    2000,
-  )
-  protagonistPreviewCamera.name = 'ProtagonistPreviewCamera'
-}
-
-function syncProtagonistPreviewCamera(): boolean {
-  if (!scene || !renderer) {
-    return false
-  }
-  const nodeId = protagonistPreviewNodeId.value
-  if (!nodeId) {
-    return false
-  }
-  const nodeObject = objectMap.get(nodeId)
-  if (!nodeObject) {
-    return false
-  }
-  ensureProtagonistPreviewCamera()
-  if (!protagonistPreviewCamera) {
-    return false
-  }
-  nodeObject.updateWorldMatrix(true, false)
-  nodeObject.getWorldPosition(protagonistPreviewWorldPosition)
-  const cameraQuaternion = protagonistPreviewCamera.quaternion
-  nodeObject.getWorldQuaternion(cameraQuaternion)
-  protagonistPreviewOffsetTarget.copy(protagonistPreviewCameraOffset).applyQuaternion(cameraQuaternion)
-  protagonistPreviewCamera.position.copy(protagonistPreviewWorldPosition).add(protagonistPreviewOffsetTarget)
-  protagonistPreviewTarget.copy(protagonistPreviewWorldPosition)
-  protagonistPreviewDirection.set(1, 0, 0).applyQuaternion(cameraQuaternion)
-  protagonistPreviewTarget.add(protagonistPreviewDirection)
-  protagonistPreviewCamera.lookAt(protagonistPreviewTarget)
-  protagonistPreviewCamera.near = 0.1
-  protagonistPreviewCamera.far = 2000
-  protagonistPreviewCamera.updateMatrixWorld()
-  return true
-}
-
-function renderProtagonistPreview() {
-  if (!scene || !renderer || !showProtagonistPreview.value || !syncProtagonistPreviewCamera() || !protagonistPreviewCamera) {
-    return
-  }
-  const previousTransformVisible = transformControls?.visible ?? false
-  if (transformControls) {
-    transformControls.visible = false
-  }
-  renderer.getSize(previewRenderSize)
-  const previewWidth = Math.round(Math.min(PROTAGONIST_PREVIEW_WIDTH, previewRenderSize.x))
-  const previewHeight = Math.round(Math.min(PROTAGONIST_PREVIEW_HEIGHT, previewRenderSize.y))
-  const previewX = Math.round(Math.max(0, previewRenderSize.x - previewWidth - PROTAGONIST_PREVIEW_MARGIN))
-  const previewY = Math.round(PROTAGONIST_PREVIEW_MARGIN)
-  renderer.getViewport(previewViewportState)
-  renderer.getScissor(previewScissorState)
-  const previousScissorTest = renderer.getScissorTest()
-  const previousAutoClear = renderer.autoClear
-  renderer.clearDepth()
-  renderer.setViewport(previewX, previewY, previewWidth, previewHeight)
-  renderer.setScissor(previewX, previewY, previewWidth, previewHeight)
-  renderer.setScissorTest(true)
-  renderer.autoClear = false
-  protagonistPreviewCamera.aspect = previewWidth / previewHeight
-  protagonistPreviewCamera.updateProjectionMatrix()
-  renderer.render(scene, protagonistPreviewCamera)
-  renderer.setViewport(previewViewportState)
-  renderer.setScissor(previewScissorState)
-  renderer.setScissorTest(previousScissorTest)
-  renderer.autoClear = previousAutoClear
-  if (transformControls) {
-    transformControls.visible = previousTransformVisible
-  }
+  protagonistPreview.render()
 }
 
 function applyGridVisibility(visible: boolean) {
@@ -4369,6 +4290,7 @@ function disposeScene() {
   terrainGridHelper.removeFromParent()
 
   clearOutlineSelectionTargets()
+  protagonistPreview.dispose()
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
 
