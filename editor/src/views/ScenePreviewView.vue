@@ -4694,7 +4694,19 @@ function handleCanvasClick(event: MouseEvent) {
 	behaviorRaycaster.layers.set(LAYER_BEHAVIOR_INTERACTIVE)
 	behaviorRaycaster.layers.enable(LAYER_VEHICLE_INTERACTIVE)
 
-	const intersections = behaviorRaycaster.intersectObject(currentScene, true)
+	const raycastRoots: THREE.Object3D[] = [];
+	if (rootGroup) {
+		raycastRoots.push(rootGroup);
+	}
+	if (instancedMeshGroup) {
+		raycastRoots.push(instancedMeshGroup);
+	}
+	if (!raycastRoots.length) {
+		return;
+	}
+	raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+	
+	const intersections = behaviorRaycaster.intersectObjects(raycastRoots, true)
 	if (!intersections.length) {
 		return
 	}
