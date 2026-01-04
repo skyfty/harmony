@@ -3,12 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } 
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
-import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
-import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { useViewportPostprocessing } from './useViewportPostprocessing'
+import { useDragPreview } from './useDragPreview'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -39,11 +35,9 @@ import {
   getRuntimeObject,
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
-  collectPrefabAssetReferences,
 } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 
 import type { EditorTool } from '@/types/editor-tool'
@@ -70,15 +64,9 @@ import {
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
-import ResourceCache from '@schema/ResourceCache'
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
-import { parsePrefabFile } from '@/utils/prefabDocument'
-import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
-import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
-import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -109,7 +97,8 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { TerrainGridHelper, type TerrainGridVisibleRange } from './TerrainGridHelper'
+import { TerrainGridHelper } from './TerrainGridHelper'
+import { useTerrainGridController } from './useTerrainGridController'
 import { createWallPreviewRenderer } from './WallPreviewRenderer'
 import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
 import { createFloorBuildTool } from './FloorBuildTool'
@@ -352,11 +341,11 @@ let latestFogSettings: EnvironmentSettings | null = null
 let shouldRenderSkyBackground = true
 let sky: Sky | null = null
 let resizeObserver: ResizeObserver | null = null
-let composer: EffectComposer | null = null
-let renderPass: RenderPass | null = null
-let outlinePass: OutlinePass | null = null
-let fxaaPass: ShaderPass | null = null
-let outputPass: OutputPass | null = null
+const postprocessing = useViewportPostprocessing({
+  getRenderer: () => renderer,
+  getScene: () => scene,
+  getCamera: () => camera,
+})
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -2798,17 +2787,6 @@ function shouldDeferSceneGraphSync(): boolean {
 const terrainGridHelper = new TerrainGridHelper()
 terrainGridHelper.name = 'TerrainGridHelper'
 
-const TERRAIN_GRID_BLOCK_CELLS = 64
-const TERRAIN_GRID_BLOCK_PADDING = 1
-const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 320
-const terrainGridFrustum = new THREE.Frustum()
-const terrainGridProjScreenMatrix = new THREE.Matrix4()
-let terrainGridBaseSignature: string | null = null
-let terrainGridBaseDefinition: GroundDynamicMesh | null = null
-// height range tracking removed — TerrainGridHelper worker outputs are not required here
-let terrainGridCameraDirty = false
-let lastTerrainGridCameraRefresh = 0
-
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
 
@@ -2835,159 +2813,13 @@ function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
   return null
 }
 
-function computeTerrainGridVisibleRange(definition: GroundDynamicMesh, currentCamera: THREE.Camera): TerrainGridVisibleRange | null {
-  const columns = Math.max(1, Math.floor(definition.columns))
-  const rows = Math.max(1, Math.floor(definition.rows))
-  const cellSize = Math.max(1e-4, definition.cellSize)
-  const width = Math.max(Math.abs(definition.width), columns * cellSize)
-  const depth = Math.max(Math.abs(definition.depth), rows * cellSize)
-  const halfWidth = width * 0.5
-  const halfDepth = depth * 0.5
-  const stepX = columns > 0 ? width / columns : 0
-  const stepZ = rows > 0 ? depth / rows : 0
-  if (stepX <= 0 || stepZ <= 0) {
-    return null
-  }
-
-  // 用相机视锥与“地形分块 AABB”做相交测试。
-  // 好处：天然考虑 near/far、透视/正交、以及地形高度范围（更稳，不会因为 y=0 平面假设而漏掉）。
-  terrainGridProjScreenMatrix.multiplyMatrices(currentCamera.projectionMatrix, currentCamera.matrixWorldInverse)
-  terrainGridFrustum.setFromProjectionMatrix(terrainGridProjScreenMatrix)
-
-  const block = TERRAIN_GRID_BLOCK_CELLS
-  const pad = TERRAIN_GRID_BLOCK_PADDING
-  const blockCountX = Math.ceil(columns / block)
-  const blockCountZ = Math.ceil(rows / block)
-
-  // ignore worker-provided height range here; projection heuristic only needs XZ
-
-  // 在 worker 首次回传高度范围之前，使用一个“宁可多算也不漏算”的竖向范围。
-  // 这样能保证视锥-AABB 相交不会因为 y 范围太小而返回空。
-  // vertical bounds omitted — projection heuristic does XZ-only estimation
-
-  // Fast-path: estimate visible range by projecting camera frustum corners to world XZ bounds.
-  // This avoids per-block frustum-AABB checks which are costly for large terrains.
-  // declare visible block range variables (fallback values in case of errors)
-  let minVisibleBlockX = 0
-  let maxVisibleBlockX = blockCountX - 1
-  let minVisibleBlockZ = 0
-  let maxVisibleBlockZ = blockCountZ - 1
-
-  try {
-    const inv = new THREE.Matrix4()
-    inv.copy(terrainGridProjScreenMatrix).invert()
-      const ndcCorners: [number, number, number][] = [
-        [-1, -1, -1],
-        [1, -1, -1],
-        [-1, 1, -1],
-        [1, 1, -1],
-        [-1, -1, 1],
-        [1, -1, 1],
-        [-1, 1, 1],
-        [1, 1, 1],
-      ]
-    let minX = Infinity,
-      maxX = -Infinity,
-      minZ = Infinity,
-      maxZ = -Infinity
-    const v4 = new THREE.Vector4()
-    for (const c of ndcCorners) {
-      const [cx, cy, cz] = c
-      v4.set(cx, cy, cz, 1)
-      v4.applyMatrix4(inv)
-      if (v4.w !== 0) v4.divideScalar(v4.w)
-      const wx = v4.x
-      const wz = v4.z
-      if (Number.isFinite(wx) && Number.isFinite(wz)) {
-        minX = Math.min(minX, wx)
-        maxX = Math.max(maxX, wx)
-        minZ = Math.min(minZ, wz)
-        maxZ = Math.max(maxZ, wz)
-      }
-    }
-
-    if (minX === Infinity || minZ === Infinity) {
-      // fallback to conservative full scan
-      minVisibleBlockX = 0
-      maxVisibleBlockX = blockCountX - 1
-      minVisibleBlockZ = 0
-      maxVisibleBlockZ = blockCountZ - 1
-    } else {
-      const padWorld = pad * block * Math.max(stepX, stepZ)
-      minX -= padWorld
-      maxX += padWorld
-      minZ -= padWorld
-      maxZ += padWorld
-      const minColumn = Math.floor((minX + halfWidth) / stepX)
-      const maxColumn = Math.ceil((maxX + halfWidth) / stepX)
-      const minRow = Math.floor((minZ + halfDepth) / stepZ)
-      const maxRow = Math.ceil((maxZ + halfDepth) / stepZ)
-      const minChunkX = clampInclusive(Math.floor(minColumn / block), 0, blockCountX - 1)
-      const maxChunkX = clampInclusive(Math.floor(Math.max(0, maxColumn - 1) / block), 0, blockCountX - 1)
-      const minChunkZ = clampInclusive(Math.floor(minRow / block), 0, blockCountZ - 1)
-      const maxChunkZ = clampInclusive(Math.floor(Math.max(0, maxRow - 1) / block), 0, blockCountZ - 1)
-      minVisibleBlockX = minChunkX
-      maxVisibleBlockX = maxChunkX
-      minVisibleBlockZ = minChunkZ
-      maxVisibleBlockZ = maxChunkZ
-    }
-  } catch (err) {
-    // If matrix invert fails, fallback to conservative full scan.
-    minVisibleBlockX = 0
-    maxVisibleBlockX = blockCountX - 1
-    minVisibleBlockZ = 0
-    maxVisibleBlockZ = blockCountZ - 1
-  }
-
-  if (!Number.isFinite(minVisibleBlockX) || !Number.isFinite(minVisibleBlockZ)) {
-    return null
-  }
-
-  const qMinColumn = Math.max(0, (minVisibleBlockX - pad) * block)
-  const qMaxColumn = Math.min(columns, (maxVisibleBlockX + pad + 1) * block)
-  const qMinRow = Math.max(0, (minVisibleBlockZ - pad) * block)
-  const qMaxRow = Math.min(rows, (maxVisibleBlockZ + pad + 1) * block)
-
-  if (qMaxColumn - qMinColumn <= 0 || qMaxRow - qMinRow <= 0) {
-    return null
-  }
-
-  return { minRow: qMinRow, maxRow: qMaxRow, minColumn: qMinColumn, maxColumn: qMaxColumn }
-}
-
-function refreshTerrainGridHelperWithCamera() {
-  const definition = terrainGridBaseDefinition
-  if (!definition) {
-    terrainGridHelper.update(null, null)
-    return
-  }
-  const baseSignature = terrainGridBaseSignature ?? computeGroundDynamicMeshSignature(definition)
-  const range = camera ? computeTerrainGridVisibleRange(definition, camera) : null
-  const signature = range
-    ? `${baseSignature}|view:${range.minRow}-${range.maxRow}:${range.minColumn}-${range.maxColumn}`
-    : baseSignature
-  terrainGridHelper.update(definition, signature, range)
-}
-
-function refreshTerrainGridHelper() {
-  const definition = resolveGroundDynamicMeshDefinition()
-  terrainGridBaseDefinition = definition
-  terrainGridBaseSignature = definition ? computeGroundDynamicMeshSignature(definition) : null
-
-  // height tracking removed — no-op
-
-  refreshTerrainGridHelperWithCamera()
-}
-
-const dragPreviewGroup = new THREE.Group()
-dragPreviewGroup.visible = false
-dragPreviewGroup.name = 'DragPreview'
-
-let dragPreviewObject: THREE.Object3D | null = null
-let dragPreviewAssetId: string | null = null
-let pendingPreviewAssetId: string | null = null
-let dragPreviewLoadToken = 0
-let lastDragPoint: THREE.Vector3 | null = null
+const terrainGridController = useTerrainGridController({
+  terrainGridHelper,
+  getCamera: () => camera,
+  resolveDefinition: resolveGroundDynamicMeshDefinition,
+  computeSignature: computeGroundDynamicMeshSignature,
+  nowMs,
+})
 let fallbackLightGroup: THREE.Group | null = null
 let isSelectDragOrbitDisabled = false
 let isGroundSelectionOrbitDisabled = false
@@ -3001,31 +2833,6 @@ type AltOverrideSnapshot = {
   groundSelectionActive: boolean
 }
 let toolOverrideSnapshot: AltOverrideSnapshot | null = null
-
-function findAssetMetadata(assetId: string): ProjectAsset | null {
-  const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
-    if (!directories) {
-      return null
-    }
-    for (const directory of directories) {
-      if (directory.assets) {
-        const match = directory.assets.find((asset) => asset.id === assetId)
-        if (match) {
-          return match
-        }
-      }
-      if (directory.children && directory.children.length > 0) {
-        const nested = search(directory.children)
-        if (nested) {
-          return nested
-        }
-      }
-    }
-    return null
-  }
-
-  return search(sceneStore.projectTree)
-}
 
 function disposeObjectResources(object: THREE.Object3D) {
   const placeholderHandle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
@@ -3059,218 +2866,12 @@ function disposeObjectResources(object: THREE.Object3D) {
   })
 }
 
-function clearDragPreviewObject(disposeResources = true) {
-  if (dragPreviewAssetId) {
-    setDragPreviewReady(dragPreviewAssetId, false)
-  }
-  if (dragPreviewObject && disposeResources) {
-    disposeObjectResources(dragPreviewObject)
-  }
-  dragPreviewGroup.clear()
-  dragPreviewObject = null
-  dragPreviewAssetId = null
-  dragPreviewGroup.visible = false
-}
-
-function disposeDragPreview(cancelLoad = true) {
-  if (cancelLoad) {
-    dragPreviewLoadToken += 1
-    pendingPreviewAssetId = null
-  }
-  lastDragPoint = null
-  clearDragPreviewObject()
-}
-
-function applyPreviewVisualTweaks(object: THREE.Object3D) {
-  object.traverse((child) => {
-    const meshChild = child as THREE.Mesh
-    if (meshChild?.isMesh) {
-      const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
-      for (const material of materials) {
-        if (!material) {
-          continue
-        }
-        material.transparent = true
-        material.opacity = Math.min(0.75, material.opacity ?? 1)
-        material.depthWrite = false
-      }
-    }
-  })
-}
-
-function setDragPreviewPosition(point: THREE.Vector3 | null) {
-  lastDragPoint = point ? point.clone() : null
-  if (!dragPreviewObject || !point) {
-    dragPreviewGroup.visible = false
-    return
-  }
-  dragPreviewGroup.position.copy(point)
-  dragPreviewGroup.visible = true
-}
-
-async function ensureAssetsCachedLocally(assetIds: string[]): Promise<boolean> {
-  if (!assetIds.length) {
-    return true
-  }
-  const missing = assetIds.filter((id) => id && !assetCacheStore.hasCache(id))
-  if (missing.length) {
-    await Promise.all(missing.map((id) => assetCacheStore.loadFromIndexedDb(id)))
-  }
-  return assetIds.every((id) => !id || assetCacheStore.hasCache(id))
-}
-
-async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
-  if (pendingPreviewAssetId === asset.id) {
-    return false
-  }
-
-  pendingPreviewAssetId = asset.id
-  clearDragPreviewObject()
-  const token = ++dragPreviewLoadToken
-  try {
-    let baseGroup = getCachedModelObject(asset.id)
-
-    if (!baseGroup) {
-      let file = assetCacheStore.createFileFromCache(asset.id)
-      if (!file) {
-        await assetCacheStore.loadFromIndexedDb(asset.id)
-        file = assetCacheStore.createFileFromCache(asset.id)
-      }
-      if (!file) {
-        pendingPreviewAssetId = null
-        return false
-      }
-      baseGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
-      assetCacheStore.releaseInMemoryBlob(asset.id)
-    }
-
-    if (token !== dragPreviewLoadToken) {
-      disposeObjectResources(baseGroup.object)
-      return false
-    }
-    applyPreviewVisualTweaks(baseGroup.object)
-    dragPreviewObject = baseGroup.object
-    dragPreviewAssetId = asset.id
-    dragPreviewGroup.add(baseGroup.object)
-    if (lastDragPoint) {
-      dragPreviewGroup.position.copy(lastDragPoint)
-      dragPreviewGroup.visible = true
-    } else {
-      dragPreviewGroup.visible = false
-    }
-    pendingPreviewAssetId = null
-    return true
-  } catch (error) {
-    if (token === dragPreviewLoadToken) {
-      clearDragPreviewObject()
-    }
-    pendingPreviewAssetId = null
-    console.warn('Failed to load drag preview object', error)
-    return false
-  }
-}
-
-async function loadDragPreviewForPrefab(asset: ProjectAsset): Promise<boolean> {
-  if (pendingPreviewAssetId === asset.id) {
-    return false
-  }
-
-  pendingPreviewAssetId = asset.id
-  clearDragPreviewObject()
-  const token = ++dragPreviewLoadToken
-
-  try {
-    let file = assetCacheStore.createFileFromCache(asset.id)
-    if (!file) {
-      await assetCacheStore.loadFromIndexedDb(asset.id)
-      file = assetCacheStore.createFileFromCache(asset.id)
-    }
-    if (!file) {
-      pendingPreviewAssetId = null
-      return false
-    }
-
-    const document = await parsePrefabFile(file)
-    const rootNode = document.nodes?.[0] ?? null
-    const dependencyAssetIds = collectPrefabAssetReferences(rootNode)
-
-    const allCached = await ensureAssetsCachedLocally(dependencyAssetIds)
-    if (!allCached) {
-      pendingPreviewAssetId = null
-      return false
-    }
-
-    const buildOptions: SceneGraphBuildOptions = {
-      enableGround: true,
-      lazyLoadMeshes: false,
-    }
-
-    const assetLoader = new CacheOnlyAssetLoader(new StoreBackedAssetCache(assetCacheStore))
-    const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
-      warn: (message) => console.warn('[DragPreview:Prefab] resource warning:', message),
-      reportDownloadProgress: undefined,
-    })
-
-    const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
-
-    if (token !== dragPreviewLoadToken) {
-      disposeObjectResources(root)
-      return false
-    }
-
-    // Prefab instantiation overrides root position at spawn time.
-    root.position.set(0, 0, 0)
-
-    applyPreviewVisualTweaks(root)
-    dragPreviewObject = root
-    dragPreviewAssetId = asset.id
-    dragPreviewGroup.add(root)
-    setDragPreviewReady(asset.id, true)
-
-    if (lastDragPoint) {
-      dragPreviewGroup.position.copy(lastDragPoint)
-      dragPreviewGroup.visible = true
-    } else {
-      dragPreviewGroup.visible = false
-    }
-
-    pendingPreviewAssetId = null
-    return true
-  } catch (error) {
-    if (token === dragPreviewLoadToken) {
-      clearDragPreviewObject()
-    }
-    pendingPreviewAssetId = null
-    console.warn('Failed to load prefab drag preview object', error)
-    return false
-  }
-}
-
-function prepareDragPreview(assetId: string) {
-  const asset = findAssetMetadata(assetId)
-  if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'prefab')) {
-    disposeDragPreview()
-    return
-  }
-
-  if (dragPreviewAssetId === asset.id && dragPreviewObject) {
-    if (lastDragPoint) {
-      dragPreviewGroup.position.copy(lastDragPoint)
-      dragPreviewGroup.visible = true
-    }
-    return
-  }
-
-  if (pendingPreviewAssetId === asset.id) {
-    return
-  }
-
-  if (asset.type === 'prefab') {
-    void loadDragPreviewForPrefab(asset)
-  } else {
-    void loadDragPreviewForAsset(asset)
-  }
-}
+const dragPreview = useDragPreview({
+  getProjectTree: () => sceneStore.projectTree,
+  assetCacheStore,
+  disposeObjectResources,
+})
+const dragPreviewGroup = dragPreview.group
 
 
 function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
@@ -3283,97 +2884,11 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   }
 }
 
-function configureOutlinePassAppearance(pass: OutlinePass) {
-  pass.edgeStrength = 5.5
-  pass.edgeGlow = 0.8
-  pass.edgeThickness = 2.75
-  pass.pulsePeriod = 0
-  pass.visibleEdgeColor.setHex(0xffffff)
-  pass.hiddenEdgeColor.setHex(0x66d9ff)
-  pass.usePatternTexture = false
-}
-
-function updateFxaaResolution(width: number, height: number) {
-  if (!fxaaPass) {
-    return
-  }
-
-  const safeWidth = Math.max(1, width)
-  const safeHeight = Math.max(1, height)
-  const pixelRatio = renderer?.getPixelRatio?.() ?? 1
-  const uniform = fxaaPass.uniforms?.['resolution']
-  if (!uniform?.value) {
-    return
-  }
-  const inverseWidth = 1 / (safeWidth * pixelRatio)
-  const inverseHeight = 1 / (safeHeight * pixelRatio)
-
-  const value = uniform.value as THREE.Vector2 & { x: number; y: number }
-  if (typeof value.set === 'function') {
-    value.set(inverseWidth, inverseHeight)
-  } else {
-    value.x = inverseWidth
-    value.y = inverseHeight
-  }
-}
-
-function createPostProcessingPipeline(width: number, height: number) {
-  if (!renderer || !scene || !camera) {
-    return
-  }
-
-  disposePostProcessing()
-
-  const safeWidth = Math.max(1, width)
-  const safeHeight = Math.max(1, height)
-
-  composer = new EffectComposer(renderer)
-  composer.setPixelRatio(renderer.getPixelRatio())
-  composer.setSize(safeWidth, safeHeight)
-
-  renderPass = new RenderPass(scene, camera)
-  composer.addPass(renderPass)
-
-  outlinePass = new OutlinePass(new THREE.Vector2(safeWidth, safeHeight), scene, camera)
-  configureOutlinePassAppearance(outlinePass)
-  composer.addPass(outlinePass)
-
-  fxaaPass = new ShaderPass(FXAAShader)
-  if (fxaaPass.material) {
-    fxaaPass.material.toneMapped = true
-  }
-  composer.addPass(fxaaPass)
-
-  outputPass = new OutputPass()
-  composer.addPass(outputPass)
-
-  updateFxaaResolution(safeWidth, safeHeight)
-
-  updateOutlineSelectionTargets()
-}
-
-function disposePostProcessing() {
-  if (composer) {
-    composer.renderTarget1.dispose()
-    composer.renderTarget2.dispose()
-    composer = null
-  }
-  outlinePass?.dispose?.()
-  outlinePass = null
-  renderPass = null
-  fxaaPass = null
-  outputPass = null
-}
-
 function renderViewportFrame() {
   if (!renderer || !scene || !camera) {
     return
   }
-  if (composer) {
-    composer.render()
-  } else {
-    renderer.render(scene, camera)
-  }
+  postprocessing.render()
   renderProtagonistPreview()
 }
 
@@ -3463,8 +2978,9 @@ function applyGridVisibility(visible: boolean) {
     return
   }
 
-  if (isDragHovering.value && lastDragPoint) {
-    updateGridHighlight(lastDragPoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
+  const dragPoint = isDragHovering.value ? dragPreview.getLastPoint() : null
+  if (dragPoint) {
+    updateGridHighlight(dragPoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
     return
   }
 
@@ -3761,7 +3277,7 @@ function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
 
   gizmoControls?.cameraUpdate()
-  terrainGridCameraDirty = true
+  terrainGridController.markCameraDirty()
 }
 
 function applyCameraControlMode() {
@@ -3955,7 +3471,8 @@ function initScene() {
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
 
-  createPostProcessingPipeline(width, height)
+  postprocessing.init(width, height)
+  updateOutlineSelectionTargets()
 
   bindControlsToCamera(camera)
 
@@ -3987,9 +3504,7 @@ function initScene() {
       return
     }
     renderer.setSize(w, h)
-    composer?.setSize(w, h)
-    outlinePass?.setSize(w, h)
-    updateFxaaResolution(w, h)
+    postprocessing.setSize(w, h)
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
@@ -4636,7 +4151,7 @@ function animate() {
     }
 
     controlsUpdated = true
-    terrainGridCameraDirty = true
+    terrainGridController.markCameraDirty()
 
     if (perspectiveCamera && camera !== perspectiveCamera) {
       perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
@@ -4659,14 +4174,10 @@ function animate() {
     prof.controls = performance.now() - t0
   }
 
-  if (terrainGridCameraDirty) {
+  {
     const t0 = performance.now()
     const now = performance.now()
-    if (now - lastTerrainGridCameraRefresh >= TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS) {
-      lastTerrainGridCameraRefresh = now
-      terrainGridCameraDirty = false
-      refreshTerrainGridHelperWithCamera()
-    }
+    terrainGridController.tick(now)
     prof.terrainGrid = performance.now() - t0
   }
 
@@ -4830,7 +4341,7 @@ function disposeScene() {
   }
   isGroundSelectionOrbitDisabled = false
 
-  disposePostProcessing()
+  postprocessing.dispose()
   renderer?.dispose()
   renderer = null
   renderClock.stop()
@@ -4854,11 +4365,11 @@ function disposeScene() {
     gridHighlight = null
   }
 
-  terrainGridHelper.update(null, null)
+  terrainGridController.dispose()
   terrainGridHelper.removeFromParent()
 
   clearOutlineSelectionTargets()
-  disposeDragPreview()
+  dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
@@ -5205,17 +4716,13 @@ function updateOutlineSelectionTargets() {
   outlineSelectionTargets.length = 0
   outlineSelectionTargets.push(...meshSet)
 
-  if (outlinePass) {
-    outlinePass.selectedObjects = outlineSelectionTargets.slice()
-  }
+  postprocessing.setOutlineTargets(outlineSelectionTargets)
 }
 
 function clearOutlineSelectionTargets() {
   outlineSelectionTargets.length = 0
   clearInstancedOutlineEntries()
-  if (outlinePass) {
-    outlinePass.selectedObjects = []
-  }
+  postprocessing.setOutlineTargets([])
 }
 
 function ensureNodePickerIndicator(): THREE.Group | null {
@@ -8071,7 +7578,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
-    disposeDragPreview()
+    dragPreview.dispose()
     return
   }
 
@@ -8087,7 +7594,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
-    disposeDragPreview()
+    dragPreview.dispose()
     return
   }
 
@@ -8100,7 +7607,7 @@ function handleViewportDragOver(event: DragEvent) {
       }
       isDragHovering.value = true
       updateGridHighlightFromObject(target.object)
-      disposeDragPreview()
+      dragPreview.dispose()
       return
     }
   }
@@ -8117,7 +7624,7 @@ function handleViewportDragOver(event: DragEvent) {
     } else {
       updateGridHighlight(null)
     }
-    disposeDragPreview()
+    dragPreview.dispose()
     return
   }
 
@@ -8128,11 +7635,11 @@ function handleViewportDragOver(event: DragEvent) {
   }
   isDragHovering.value = true
   updateGridHighlight(point, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
-  setDragPreviewPosition(point)
+  dragPreview.setPosition(point)
   if (info) {
-    prepareDragPreview(info.assetId)
+    dragPreview.prepare(info.assetId)
   } else {
-    disposeDragPreview()
+    dragPreview.dispose()
   }
 }
 
@@ -8145,7 +7652,7 @@ function handleViewportDragLeave(event: DragEvent) {
   }
   isDragHovering.value = false
   updateGridHighlight(null)
-  disposeDragPreview()
+  dragPreview.dispose()
   restoreGridHighlightForSelection()
 }
 
@@ -8155,7 +7662,7 @@ async function handleViewportDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   isDragHovering.value = false
-  disposeDragPreview()
+  dragPreview.dispose()
   if (!info) {
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -9025,7 +8532,7 @@ function syncSceneGraph() {
   updateOutlineSelectionTargets()
 
   refreshPlaceholderOverlays()
-  refreshTerrainGridHelper()
+  terrainGridController.refresh()
   ensureFallbackLighting()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
