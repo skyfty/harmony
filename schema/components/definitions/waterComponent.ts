@@ -4,9 +4,9 @@ import {
   Color,
   DataTexture,
   Float32BufferAttribute,
+  LinearFilter,
   MirroredRepeatWrapping,
   NoColorSpace,
-  RepeatWrapping,
   ShaderMaterial,
   Vector2,
   Vector3,
@@ -56,47 +56,133 @@ const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
-function ensurePlanarUVs(geometry: BufferGeometry): void {
-  const positionAttr = geometry.getAttribute('position') as { count: number; getX: (i: number) => number; getZ: (i: number) => number } | null
-  if (!positionAttr || positionAttr.count <= 0) {
-    return
-  }
+type PositionAttribute = {
+  count: number
+  getX: (i: number) => number
+  getY: (i: number) => number
+  getZ: (i: number) => number
+}
 
+function computePositionBounds(positionAttr: PositionAttribute): {
+  min: [number, number, number]
+  max: [number, number, number]
+  size: [number, number, number]
+} | null {
   let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
   let minZ = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
   let maxZ = Number.NEGATIVE_INFINITY
 
   for (let i = 0; i < positionAttr.count; i += 1) {
     const x = positionAttr.getX(i)
+    const y = positionAttr.getY(i)
     const z = positionAttr.getZ(i)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
       continue
     }
     minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
     minZ = Math.min(minZ, z)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
     maxZ = Math.max(maxZ, z)
   }
 
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(minZ) || !Number.isFinite(maxX) || !Number.isFinite(maxY) || !Number.isFinite(maxZ)) {
+    return null
   }
 
   const sizeX = Math.max(1e-6, maxX - minX)
+  const sizeY = Math.max(1e-6, maxY - minY)
   const sizeZ = Math.max(1e-6, maxZ - minZ)
-  const uvs = new Float32Array(positionAttr.count * 2)
+  return {
+    min: [minX, minY, minZ],
+    max: [maxX, maxY, maxZ],
+    size: [sizeX, sizeY, sizeZ],
+  }
+}
 
+function ensurePlanarUVs(geometry: BufferGeometry): void {
+  const positionAttr = geometry.getAttribute('position') as PositionAttribute | null
+  if (!positionAttr || positionAttr.count <= 0) {
+    return
+  }
+
+  const bounds = computePositionBounds(positionAttr)
+  if (!bounds) {
+    return
+  }
+
+  // Choose the two dominant axes as UV plane, so rotated PlaneGeometry (XY) and horizontal ground (XZ)
+  // both get meaningful, continuous UVs.
+  const extents = bounds.size
+  const axes = [0, 1, 2].sort((a, b) => extents[b] - extents[a])
+  const uAxis = axes[0]
+  const vAxis = axes[1]
+
+  const uvs = new Float32Array(positionAttr.count * 2)
   for (let i = 0; i < positionAttr.count; i += 1) {
     const x = positionAttr.getX(i)
+    const y = positionAttr.getY(i)
     const z = positionAttr.getZ(i)
-    const u = (x - minX) / sizeX
-    const v = (z - minZ) / sizeZ
+    const coords: [number, number, number] = [x, y, z]
+    const u = (coords[uAxis] - bounds.min[uAxis]) / bounds.size[uAxis]
+    const v = (coords[vAxis] - bounds.min[vAxis]) / bounds.size[vAxis]
     uvs[i * 2 + 0] = Number.isFinite(u) ? u : 0
     uvs[i * 2 + 1] = Number.isFinite(v) ? v : 0
   }
 
   geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2))
+}
+
+function ensureFlatNormals(geometry: BufferGeometry): void {
+  const positionAttr = geometry.getAttribute('position') as PositionAttribute | null
+  if (!positionAttr || positionAttr.count <= 0) {
+    return
+  }
+  const bounds = computePositionBounds(positionAttr)
+  if (!bounds) {
+    return
+  }
+
+  // For a planar surface, the axis with the smallest extent corresponds to the local normal axis.
+  const extents = bounds.size
+  let normalAxis = 0
+  if (extents[1] < extents[normalAxis]) normalAxis = 1
+  if (extents[2] < extents[normalAxis]) normalAxis = 2
+
+  const normal = new Vector3(
+    normalAxis === 0 ? 1 : 0,
+    normalAxis === 1 ? 1 : 0,
+    normalAxis === 2 ? 1 : 0,
+  )
+
+  // Preserve original normal orientation (sign) if available.
+  const existingNormal = geometry.getAttribute('normal') as { count: number; getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number } | null
+  if (existingNormal && existingNormal.count > 0) {
+    let sumX = 0
+    let sumY = 0
+    let sumZ = 0
+    for (let i = 0; i < existingNormal.count; i += 1) {
+      sumX += existingNormal.getX(i)
+      sumY += existingNormal.getY(i)
+      sumZ += existingNormal.getZ(i)
+    }
+    const avg = new Vector3(sumX, sumY, sumZ)
+    if (avg.lengthSq() > 1e-12 && avg.dot(normal) < 0) {
+      normal.multiplyScalar(-1)
+    }
+  }
+
+  const normals = new Float32Array(positionAttr.count * 3)
+  for (let i = 0; i < positionAttr.count; i += 1) {
+    normals[i * 3 + 0] = normal.x
+    normals[i * 3 + 1] = normal.y
+    normals[i * 3 + 2] = normal.z
+  }
+  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3))
 }
 
 function createDefaultNormalTexture(): Texture {
@@ -361,6 +447,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
     ensurePlanarUVs(resolvedGeometry)
+    ensureFlatNormals(resolvedGeometry)
     this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
@@ -380,6 +467,16 @@ class WaterComponent extends Component<WaterComponentProps> {
     water.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
     water.renderOrder = mesh.renderOrder
     const shaderMaterial = water.material as ShaderMaterial
+    // Prevent hard reflection seams when distorted reflection UVs go out of [0,1].
+    // Water.js samples: mirrorCoord.xy / mirrorCoord.w + distortion; default clamp-to-edge can create a sharp split.
+    const mirrorTexture = (shaderMaterial.uniforms?.mirrorSampler?.value as Texture | null) ?? null
+    if (mirrorTexture) {
+      mirrorTexture.wrapS = MirroredRepeatWrapping
+      mirrorTexture.wrapT = MirroredRepeatWrapping
+      mirrorTexture.minFilter = LinearFilter
+      mirrorTexture.magFilter = LinearFilter
+      mirrorTexture.needsUpdate = true
+    }
     if (shaderMaterial.uniforms?.normalSampler) {
       shaderMaterial.uniforms.normalSampler.value = normalTexture
     }
