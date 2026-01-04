@@ -5,6 +5,7 @@ import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from '@har
 import type { TerrainScatterInstance, TerrainScatterLayer, TerrainScatterStoreSnapshot } from './terrain-scatter'
 import { clampLodComponentProps, type LodComponentProps } from './components'
 import { loadNodeObject } from './modelAssetLoader'
+import { normalizeScatterMaterials } from './scatterMaterials'
 import {
   allocateModelInstance,
   getCachedModelObject,
@@ -259,6 +260,7 @@ async function ensureModelInstanceGroup(assetId: string, resourceCache: Resource
       if (!object) {
         throw new Error('Instanced mesh loader returned empty object')
       }
+      normalizeScatterMaterials(object)
       return object
     })
     return group

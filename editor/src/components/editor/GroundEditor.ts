@@ -47,6 +47,7 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -871,7 +872,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return
 			}
 			try {
-				await getOrLoadModelObject(normalized, () => loadObjectFromFile(file))
+				await getOrLoadModelObject(normalized, async () => {
+					const object = await loadObjectFromFile(file)
+					normalizeScatterMaterials(object)
+					return object
+				})
 				ensureInstancedMeshesRegistered(normalized)
 			} finally {
 				assetCacheStore.releaseInMemoryBlob(normalized)
@@ -1102,7 +1107,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		try {
-			group = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+			group = await getOrLoadModelObject(asset.id, async () => {
+				const object = await loadObjectFromFile(file)
+				normalizeScatterMaterials(object)
+				return object
+			})
 			ensureInstancedMeshesRegistered(asset.id)
 		} catch (error) {
 			console.warn('加载散布资源失败', asset.id, error)
