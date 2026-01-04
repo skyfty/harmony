@@ -6042,7 +6042,6 @@ function removeNodeSubtree(nodeId: string) {
 			nodeObjectMap.delete(id)
 			removeRigidbodyInstance(id)
 			previewComponentManager.removeNode(id)
-			previewNodeMap.delete(id)
 			const controller = nodeAnimationControllers.get(id)
 			if (controller) {
 				try {
@@ -6087,6 +6086,12 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				syncInstancedTransform(child)
 			}
 			const nodeState = resolveNodeById(nodeId)
+			if (!nodeState) {
+				console.warn(
+					'[ScenePreview] Runtime object has nodeId missing from preview node state; runtime bindings may be incomplete',
+					nodeId,
+				)
+			}
 			const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
 			const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall)
 			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)

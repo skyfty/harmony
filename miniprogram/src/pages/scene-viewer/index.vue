@@ -6456,17 +6456,28 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
     behaviorPointer.y = -((clientY - bounds.top) / height) * 2 + 1;
 
     behaviorRaycaster.setFromCamera(behaviorPointer, camera);
-    const candidates = listInteractableObjects();
-    if (!candidates.length) {
+    const raycastRoots: THREE.Object3D[] = [];
+    if (sceneGraphRoot) {
+      raycastRoots.push(sceneGraphRoot);
+    }
+    if (instancedMeshGroup) {
+      raycastRoots.push(instancedMeshGroup);
+    }
+    if (!raycastRoots.length) {
       return;
     }
-    const intersections = behaviorRaycaster.intersectObjects(candidates, true);
+    raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+    const intersections = behaviorRaycaster.intersectObjects(raycastRoots, true);
     if (!intersections.length) {
       return;
     }
     for (const intersection of intersections) {
       const nodeId = resolveNodeIdFromIntersection(intersection);
       if (!nodeId) {
+        continue;
+      }
+      const actions = listRegisteredBehaviorActions(nodeId);
+      if (!actions.includes('click')) {
         continue;
       }
       const hitObject = nodeObjectMap.get(nodeId) ?? intersection.object;
