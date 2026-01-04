@@ -91,12 +91,17 @@ export default class ResourceCache {
     if (!assetId) {
       return null;
     }
+
+    // Fast path: if we already have an in-flight resolve/load, reuse it.
+    // This avoids duplicate IndexedDB hydration calls in StoreBackedAssetCache.
+    if (this.assetEntryCache.has(assetId)) {
+      return this.assetEntryCache.get(assetId)!;
+    }
+
     const cached = await this.assetLoader.getCache().getEntry(assetId);
     if (cached?.status === 'cached') {
       this.assetLoader.getCache().touch(assetId);
-    }
-    if (this.assetEntryCache.has(assetId)) {
-      return this.assetEntryCache.get(assetId)!;
+      return cached;
     }
 
     const pending = this.resolveAssetSource(assetId)
