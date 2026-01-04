@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, MATERIAL_CONFIG_ID_KEY } from './material';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import ResourceCache from './ResourceCache';
@@ -43,50 +43,18 @@ import {
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
 import { loadObjectFromFile } from './assetImport'
-import { createGroundMesh, setGroundMaterial, updateGroundMesh } from './groundMesh'
-import { createWallRenderGroup } from './wallMesh'
-import { createRoadRenderGroup, resolveRoadLocalHeightSampler, type RoadJunctionSmoothingOptions } from './roadMesh'
-import { createFloorRenderGroup } from './floorMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
 
-type SceneNodeWithExtras = SceneNode & {
-  light?: {
-    type?: string;
-    color?: string;
-    intensity?: number;
-    distance?: number;
-    decay?: number;
-    angle?: number;
-    penumbra?: number;
-    castShadow?: boolean;
-    target?: THREE.Vector3;
-  };
-  dynamicMesh?: any;
-  components?: SceneNodeComponentMap;
-  editorFlags?: SceneNodeEditorFlags;
-};
-
-function findGroundNodeInNodes(nodes: SceneNodeWithExtras[]): SceneNodeWithExtras | null {
-  const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
-  while (stack.length) {
-    const node = stack.pop()!
-    const mesh = node.dynamicMesh as unknown
-    if (mesh && (mesh as any).type === 'Ground') {
-      return node
-    }
-
-    const children = Array.isArray((node as any).children) ? ((node as any).children as SceneNodeWithExtras[]) : []
-    if (children.length) {
-      for (const child of children) {
-        stack.push(child)
-      }
-    }
-  }
-  return null
-}
+import type { SceneNodeWithExtras } from './sceneGraph/types';
+import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
+import { applyMaterialConfigAssignment, buildMaterialConfigMap } from './sceneGraph/materialAssignment';
+import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
+import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
+import { buildRoadMesh as buildRoadDynamicMesh } from './sceneGraph/dynamicMeshes/road';
+import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -1001,28 +969,10 @@ class SceneGraphBuilder {
       return;
     }
 
-    const materialByConfigId = new Map<string, THREE.Material>();
-    nodeMaterialConfigs.forEach((config, index) => {
-      const configId = typeof config?.id === 'string' ? config.id.trim() : '';
-      const material = resolvedMaterials[index];
-      if (configId && material) {
-        materialByConfigId.set(configId, material);
-      }
-    });
-
-    object.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh & { isMesh?: boolean };
-      if (!mesh?.isMesh) {
-        return;
-      }
-
-      const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
-      const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
-      if (selectorId && materialByConfigId.has(selectorId)) {
-        mesh.material = materialByConfigId.get(selectorId)!;
-        return;
-      }
-      mesh.material = defaultMaterialAssignment;
+    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
+    applyMaterialConfigAssignment(object, {
+      defaultMaterial: defaultMaterialAssignment,
+      materialByConfigId,
     });
   }
 
@@ -1119,41 +1069,7 @@ class SceneGraphBuilder {
   }
 
   private applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExtras): void {
-    if (!object || !node || !node.id) {
-      return;
-    }
-    const metadata = object.userData ?? (object.userData = {});
-    metadata.nodeId = node.id;
-    const resolvedType = node.nodeType ?? (node.light ? 'Light' : node.dynamicMesh ? 'Mesh' : 'Group');
-    metadata.nodeType = resolvedType;
-    metadata.dynamicMeshType = node.dynamicMesh?.type ?? null;
-    metadata.lightType = node.light?.type ?? null;
-    metadata.sourceAssetId = node.sourceAssetId ?? null;
-    const guideboardState = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
-      | SceneNodeComponentState<GuideboardComponentProps>
-      | undefined;
-    if (guideboardState?.enabled) {
-      metadata.isGuideboard = true;
-      const props = clampGuideboardComponentProps(guideboardState.props as Partial<GuideboardComponentProps>);
-      metadata.guideboardInitiallyVisible = props.initiallyVisible === true;
-      metadata[GUIDEBOARD_EFFECT_METADATA_KEY] = cloneGuideboardComponentProps(props);
-    }
-    const viewPointState = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
-      | SceneNodeComponentState<ViewPointComponentProps>
-      | undefined;
-    if (viewPointState?.enabled) {
-      metadata.viewPoint = true;
-      const viewPointProps = viewPointState.props as ViewPointComponentProps | undefined;
-      metadata.viewPointInitiallyVisible = viewPointProps?.initiallyVisible === true;
-    }
-    const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
-      | SceneNodeComponentState<WarpGateComponentProps>
-      | undefined;
-    if (warpGateState?.enabled) {
-      metadata.warpGate = true;
-      const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
-      metadata[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
-    }
+    applyNodeMetadataToObject(object, node);
   }
 
   private async resolveNodeMaterials(node: SceneNodeWithExtras): Promise<THREE.Material[]> {
@@ -1249,212 +1165,61 @@ class SceneGraphBuilder {
   }
 
   private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const groundObject = createGroundMesh(meshInfo);
-    groundObject.name = node.name ?? (groundObject.name || 'Ground');
-
-    const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
-    userData.dynamicMeshType = 'Ground';
-    groundObject.userData = userData;
-
-    updateGroundMesh(groundObject, meshInfo);
-
-    // Apply node materials across all ground chunks.
-    let groundTexture: THREE.Texture | null = null;
-    groundObject.traverse((child: THREE.Object3D) => {
-      const mesh = child as unknown as THREE.Mesh;
-      if (!groundTexture && mesh && (mesh as any).isMesh) {
-        groundTexture = this.extractGroundTextureFromMaterial(mesh.material) ?? null;
-      }
-    });
-
-    const materials = await this.resolveNodeMaterials(node);
-    const resolvedAssignment = this.pickMaterialAssignment(materials);
-    const resolvedMaterial = Array.isArray(resolvedAssignment) ? resolvedAssignment[0] : resolvedAssignment;
-    if (resolvedMaterial) {
-      const groundMaterial = resolvedMaterial.clone();
-      setGroundMaterial(groundObject, groundMaterial);
-      if (groundTexture) {
-        this.assignTextureToMaterial(groundMaterial, groundTexture);
-      }
-    }
-
-    this.applyTransform(groundObject, node);
-    this.applyVisibility(groundObject, node);
-
-    // Record statistics for each chunk mesh.
-    groundObject.traverse((child: THREE.Object3D) => {
-      const mesh = child as unknown as THREE.Mesh;
-      if (mesh && (mesh as any).isMesh) {
-        this.recordMeshStatistics(mesh);
-      }
-    });
-
-    return groundObject;
+    return buildGroundDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        extractGroundTextureFromMaterial: (material) => this.extractGroundTextureFromMaterial(material),
+        assignTextureToMaterial: (material, texture) => this.assignTextureToMaterial(material, texture),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+        recordMeshStatistics: (object) => this.recordMeshStatistics(object),
+      },
+      meshInfo,
+      node,
+    );
   }
 
   private async buildWallMesh(meshInfo: WallDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const wallState = node.components?.[WALL_COMPONENT_TYPE] as
-      | SceneNodeComponentState<WallComponentProps>
-      | undefined;
-    const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
-
-    const bodyObject = wallProps.bodyAssetId ? await this.loadAssetMesh(wallProps.bodyAssetId) : null;
-    const jointObject = wallProps.jointAssetId ? await this.loadAssetMesh(wallProps.jointAssetId) : null;
-
-    const group = createWallRenderGroup(
+    return buildWallDynamicMesh(
+      {
+        loadAssetMesh: (assetId) => this.loadAssetMesh(assetId),
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
       meshInfo,
-      { bodyObject, jointObject },
-      { smoothing: wallProps.smoothing },
+      node,
     );
-    group.name = node.name ?? (group.name || 'Wall');
-    const materials = await this.resolveNodeMaterials(node);
-    const materialAssignment = this.pickMaterialAssignment(materials);
-    if (materialAssignment) {
-      group.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh;
-        if (!(mesh as any)?.isMesh) {
-          return;
-        }
-        const tag = (mesh.userData as any)?.dynamicMeshType;
-        // Only override the procedural wall mesh material; asset instances should keep their own materials.
-        if (tag === 'Wall') {
-          mesh.material = materialAssignment;
-        }
-      });
-    }
-    this.applyTransform(group, node);
-    this.applyVisibility(group, node);
-
-    // Air wall: keep mesh hierarchy (for rigidbody generation), but hide it from rendering.
-    if (wallProps.isAirWall) {
-      group.visible = false;
-    }
-
-    // Tag for downstream systems (physics/debug tooling) if needed.
-    group.userData = { ...(group.userData ?? {}), isAirWall: Boolean(wallProps.isAirWall), hidden: Boolean(wallProps.isAirWall) };
-    return group;
   }
 
   private async buildRoadMesh(meshInfo: RoadDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
-      | SceneNodeComponentState<RoadComponentProps>
-      | undefined;
-    const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined);
-
-    const bodyObject = roadProps.bodyAssetId ? await this.loadAssetMesh(roadProps.bodyAssetId) : null;
-    const materialConfigId = this.resolveRoadMaterialConfigId(node);
-    const roadOptions: RoadJunctionSmoothingOptions = {
-      junctionSmoothing: roadProps.junctionSmoothing,
-      laneLines: roadProps.laneLines,
-      shoulders: roadProps.shoulders,
-      materialConfigId,
-      samplingDensityFactor: roadProps.samplingDensityFactor,
-      smoothingStrengthFactor: roadProps.smoothingStrengthFactor,
-      minClearance: roadProps.minClearance,
-      laneLineWidth: roadProps.laneLineWidth,
-      shoulderWidth: roadProps.shoulderWidth,
-    };
-
-    const documentNodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    const groundNode = findGroundNodeInNodes(documentNodes);
-    roadOptions.heightSampler = resolveRoadLocalHeightSampler(node, groundNode);
-
-    const group = createRoadRenderGroup(meshInfo, { bodyObject }, roadOptions);
-    group.name = node.name ?? (group.name || 'Road');
-
-    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
-    const resolvedMaterials = await this.resolveNodeMaterials(node);
-    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
-
-    if (defaultMaterialAssignment) {
-      const materialByConfigId = new Map<string, THREE.Material>();
-      nodeMaterialConfigs.forEach((config, index) => {
-        const configId = typeof config?.id === 'string' ? config.id.trim() : '';
-        const material = resolvedMaterials[index];
-        if (configId && material) {
-          materialByConfigId.set(configId, material);
-        }
-      });
-
-      group.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh & { isMesh?: boolean };
-        if (!mesh?.isMesh) {
-          return;
-        }
-
-        const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
-        const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
-        if (selectorId && materialByConfigId.has(selectorId)) {
-          mesh.material = materialByConfigId.get(selectorId)!;
-          return;
-        }
-
-        mesh.material = defaultMaterialAssignment;
-      });
-    }
-
-    const applyOverlayMaterial = (meshName: string, material: THREE.Material | undefined) => {
-      if (!material) {
-        return;
-      }
-      const overlay = group.getObjectByName(meshName) as THREE.Mesh | null;
-      if (overlay?.isMesh) {
-        overlay.material = material;
-      }
-    };
-
-    applyOverlayMaterial('RoadShoulders', resolvedMaterials[1]);
-    applyOverlayMaterial('RoadLaneLines', resolvedMaterials[2]);
-
-    this.applyTransform(group, node);
-    this.applyVisibility(group, node);
-    return group;
-  }
-
-  private resolveRoadMaterialConfigId(node: SceneNodeWithExtras): string | null {
-    const first = node.materials?.[0];
-    const id = typeof first?.id === 'string' ? first.id.trim() : '';
-    return id ? id : null;
+    return buildRoadDynamicMesh(
+      {
+        loadAssetMesh: (assetId) => this.loadAssetMesh(assetId),
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+        getDocumentNodes: () => Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [],
+      },
+      meshInfo,
+      node,
+    );
   }
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const group = createFloorRenderGroup(meshInfo, {});
-    group.name = node.name ?? (group.name || 'Floor');
-
-    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
-    const resolvedMaterials = await this.resolveNodeMaterials(node);
-    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
-
-    if (defaultMaterialAssignment) {
-      const materialByConfigId = new Map<string, THREE.Material>();
-      nodeMaterialConfigs.forEach((config, index) => {
-        const configId = typeof config?.id === 'string' ? config.id.trim() : '';
-        const material = resolvedMaterials[index];
-        if (configId && material) {
-          materialByConfigId.set(configId, material);
-        }
-      });
-
-      group.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh & { isMesh?: boolean };
-        if (!mesh?.isMesh) {
-          return;
-        }
-
-        const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
-        const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
-        if (selectorId && materialByConfigId.has(selectorId)) {
-          mesh.material = materialByConfigId.get(selectorId)!;
-          return;
-        }
-
-        mesh.material = defaultMaterialAssignment;
-      });
-    }
-
-    this.applyTransform(group, node);
-    this.applyVisibility(group, node);
-    return group;
+    return buildFloorDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
   }
 
   private pickMaterialAssignment(materials: THREE.Material[]): THREE.Material | THREE.Material[] | null {
