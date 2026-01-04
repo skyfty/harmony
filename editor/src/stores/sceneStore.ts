@@ -3880,8 +3880,100 @@ function regenerateNodeBehaviorIdentifiers(node: SceneNode, context: DuplicateCo
   regenerateBehaviorComponentIdentifiers(behaviorComponent, context)
 }
 
+function deepCloneReferenceTree<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => deepCloneReferenceTree(entry)) as unknown as T
+  }
+  if (isPlainRecord(value)) {
+    const record = value as Record<string, unknown>
+    const cloned: Record<string, unknown> = {}
+    Object.entries(record).forEach(([key, entry]) => {
+      cloned[key] = deepCloneReferenceTree(entry)
+    })
+    return cloned as unknown as T
+  }
+  return value
+}
+
+function cloneNodeForDuplication(node: SceneNode): SceneNode {
+  const clonedUserData = deepCloneReferenceTree(clonePlainRecord(node.userData ?? undefined))
+  const viewPointResult = evaluateViewPointAttributes(clonedUserData)
+  const displayBoardResult = evaluateDisplayBoardAttributes(viewPointResult.sanitizedUserData, node.name)
+  const guideboardResult = evaluateGuideboardAttributes(displayBoardResult.sanitizedUserData, node.name)
+  const warpGateResult = evaluateWarpGateAttributes(guideboardResult.sanitizedUserData)
+
+  const { children: _children, ...nodeWithoutChildren } = node as SceneNode & { children?: SceneNode[] }
+
+  const workingNode: SceneNode = {
+    ...nodeWithoutChildren,
+    userData: warpGateResult.sanitizedUserData
+      ? (deepCloneReferenceTree(warpGateResult.sanitizedUserData) as Record<string, unknown>)
+      : undefined,
+  }
+
+  const normalizedComponents = normalizeNodeComponents(
+    workingNode,
+    node.components,
+    {
+      attachDisplayBoard: displayBoardResult.shouldAttachDisplayBoard,
+      attachGuideboard: guideboardResult.shouldAttachGuideboard,
+      attachViewPoint: viewPointResult.shouldAttachViewPoint,
+      attachWarpGate: warpGateResult.shouldAttachWarpGate,
+      viewPointOverrides: viewPointResult.componentOverrides,
+    },
+  )
+
+  if (normalizedComponents) {
+    Object.values(normalizedComponents).forEach((component) => {
+      if (!component) {
+        return
+      }
+      if (component.props !== undefined) {
+        component.props = deepCloneReferenceTree(component.props)
+      }
+      if (component.metadata !== undefined) {
+        component.metadata = deepCloneReferenceTree(component.metadata)
+      }
+    })
+  }
+
+  const nodeType = normalizeSceneNodeType(workingNode.nodeType)
+  const materialsSource = workingNode.materials
+  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(materialsSource) : undefined
+
+  return {
+    ...workingNode,
+    nodeType,
+    materials,
+    components: normalizedComponents,
+    light: node.light
+      ? {
+          ...node.light,
+          target: node.light.target ? cloneVector(node.light.target) : undefined,
+        }
+      : undefined,
+    camera: node.camera ? { ...node.camera } : undefined,
+    position: cloneVector(node.position),
+    rotation: cloneVector(node.rotation),
+    scale: cloneVector(node.scale),
+    dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
+    importMetadata: workingNode.importMetadata
+      ? {
+          assetId: workingNode.importMetadata.assetId,
+          objectPath: Array.isArray(workingNode.importMetadata.objectPath)
+            ? [...workingNode.importMetadata.objectPath]
+            : [],
+        }
+      : undefined,
+    editorFlags: cloneEditorFlags(node.editorFlags),
+  }
+}
+
 function duplicateNodeTree(original: SceneNode, context: DuplicateContext): SceneNode {
-  const duplicated = cloneNode(original)
+  const duplicated = cloneNodeForDuplication(original)
   const newId = generateUuid()
   duplicated.id = newId
   context.idMap?.set(original.id, newId)
@@ -4572,7 +4664,7 @@ function serializeNodePrefab(payload: NodePrefabData): string {
   return JSON.stringify(payload, null, 2)
 }
 
-function deserializeNodePrefab(raw: string): NodePrefabData {
+function parseNodePrefab(raw: string): NodePrefabData {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -4612,6 +4704,23 @@ function deserializeNodePrefab(raw: string): NodePrefabData {
     prefab.packageAssetMap = packageAssetMap
   }
   return prefab
+}
+
+function instantiateNodePrefab(
+  prefab: NodePrefabData,
+  context: {
+    assetCache: ReturnType<typeof useAssetCacheStore>
+    runtimeSnapshots?: Map<string, Object3D>
+    regenerateBehaviorIds?: boolean
+  },
+): SceneNode {
+  const duplicateContext: DuplicateContext = {
+    assetCache: context.assetCache,
+    runtimeSnapshots: context.runtimeSnapshots ?? new Map<string, Object3D>(),
+    idMap: new Map<string, string>(),
+    regenerateBehaviorIds: context.regenerateBehaviorIds ?? true,
+  }
+  return duplicateNodeTree(prefab.root, duplicateContext)
 }
 
 type SerializedPrefabPayload = {
@@ -4667,7 +4776,7 @@ function deserializeSceneNode(raw: string): SceneNode | null {
   }
 
   try {
-    const prefab = deserializeNodePrefab(normalized)
+    const prefab = parseNodePrefab(normalized)
     return prefab.root
   } catch (_prefabError) {
     // Fall through to plain node handling.
@@ -9214,7 +9323,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
       try {
-        const prefabData = deserializeNodePrefab(serialized)
+        const prefabData = parseNodePrefab(serialized)
         return await this.registerPrefabAssetFromData(prefabData, serialized)
       } catch (error) {
         console.warn('Invalid prefab clipboard payload', error)
@@ -9245,7 +9354,7 @@ export const useSceneStore = defineStore('scene', {
 
       assetCache.touch(assetId)
       const text = await entry.blob.text()
-      return deserializeNodePrefab(text)
+      return parseNodePrefab(text)
     },
     async ensurePrefabDependencies(
       assetIds: string[],
@@ -9460,12 +9569,10 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
-      const idMap = new Map<string, string>()
       const runtimeSnapshots = options.runtimeSnapshots ?? new Map<string, Object3D>()
-      const duplicate = duplicateNodeTree(prefab.root, {
+      const duplicate = instantiateNodePrefab(prefab, {
         assetCache,
         runtimeSnapshots,
-        idMap,
         regenerateBehaviorIds: true,
       })
       const spawnPosition = options.position
