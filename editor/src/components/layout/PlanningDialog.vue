@@ -1508,6 +1508,7 @@ async function handleConvertTo3DScene() {
     // even when the current planning snapshot is empty.
     await clearPlanningGeneratedContent(sceneStore as any)
     if (!planningData) {
+      dialogOpen.value = false
       return
     }
 
