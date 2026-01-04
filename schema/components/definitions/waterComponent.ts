@@ -1,5 +1,16 @@
 import type { Material, Mesh, Object3D, Texture } from 'three'
-import { BufferGeometry, Color, DataTexture, RepeatWrapping, ShaderMaterial, Vector2, Vector3 } from 'three'
+import {
+  BufferGeometry,
+  Color,
+  DataTexture,
+  Float32BufferAttribute,
+  MirroredRepeatWrapping,
+  NoColorSpace,
+  RepeatWrapping,
+  ShaderMaterial,
+  Vector2,
+  Vector3,
+} from 'three'
 import { Water } from 'three/examples/jsm/objects/Water.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import {
@@ -45,6 +56,49 @@ const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
+function ensurePlanarUVs(geometry: BufferGeometry): void {
+  const positionAttr = geometry.getAttribute('position') as { count: number; getX: (i: number) => number; getZ: (i: number) => number } | null
+  if (!positionAttr || positionAttr.count <= 0) {
+    return
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  for (let i = 0; i < positionAttr.count; i += 1) {
+    const x = positionAttr.getX(i)
+    const z = positionAttr.getZ(i)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      continue
+    }
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minZ = Math.min(minZ, z)
+    maxZ = Math.max(maxZ, z)
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return
+  }
+
+  const sizeX = Math.max(1e-6, maxX - minX)
+  const sizeZ = Math.max(1e-6, maxZ - minZ)
+  const uvs = new Float32Array(positionAttr.count * 2)
+
+  for (let i = 0; i < positionAttr.count; i += 1) {
+    const x = positionAttr.getX(i)
+    const z = positionAttr.getZ(i)
+    const u = (x - minX) / sizeX
+    const v = (z - minZ) / sizeZ
+    uvs[i * 2 + 0] = Number.isFinite(u) ? u : 0
+    uvs[i * 2 + 1] = Number.isFinite(v) ? v : 0
+  }
+
+  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2))
+}
+
 function createDefaultNormalTexture(): Texture {
   // Use a small procedural, tileable normal map so the water surface doesn't look flat
   // when no normalMap is provided by the host mesh material.
@@ -80,8 +134,10 @@ function createDefaultNormalTexture(): Texture {
     }
   }
   const texture = new DataTexture(data, size, size)
-  texture.wrapS = RepeatWrapping
-  texture.wrapT = RepeatWrapping
+  texture.wrapS = MirroredRepeatWrapping
+  texture.wrapT = MirroredRepeatWrapping
+  // Normal maps are non-color data.
+  texture.colorSpace = NoColorSpace
   texture.needsUpdate = true
   return texture
 }
@@ -304,6 +360,7 @@ class WaterComponent extends Component<WaterComponentProps> {
   private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
+    ensurePlanarUVs(resolvedGeometry)
     this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
@@ -365,8 +422,11 @@ class WaterComponent extends Component<WaterComponentProps> {
   private prepareNormalTexture(source: Texture | null): Texture {
     const base = source ?? DEFAULT_NORMAL_MAP
     const clone = base.clone()
-    clone.wrapS = RepeatWrapping
-    clone.wrapT = RepeatWrapping
+    // Mirrored repeat hides many visible tile seams better than repeat.
+    clone.wrapS = MirroredRepeatWrapping
+    clone.wrapT = MirroredRepeatWrapping
+    // Normal maps are non-color data.
+    clone.colorSpace = NoColorSpace
     clone.needsUpdate = true
     return clone
   }
