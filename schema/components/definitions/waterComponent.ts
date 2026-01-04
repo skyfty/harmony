@@ -321,11 +321,6 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
     this.syncWaterTransform()
     const props = clampWaterComponentProps(this.context.getProps())
-    this.flowOffset.x = (this.flowOffset.x + props.flowDirection.x * props.flowSpeed * 0.05 * deltaTime) % 1
-    this.flowOffset.y = (this.flowOffset.y + props.flowDirection.y * props.flowSpeed * 0.05 * deltaTime) % 1
-    if (this.normalTexture) {
-      this.normalTexture.offset.set(this.flowOffset.x, this.flowOffset.y)
-    }
     const material = this.waterInstance.material as ShaderMaterial
     if (material.uniforms?.time) {
       material.uniforms.time.value += deltaTime * props.flowSpeed
@@ -447,8 +442,6 @@ class WaterComponent extends Component<WaterComponentProps> {
   private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
-    // ensurePlanarUVs(resolvedGeometry)
-    // ensureFlatNormals(resolvedGeometry)
     this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
@@ -466,18 +459,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     water.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = this.context.nodeId
     water.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
     water.renderOrder = mesh.renderOrder
-    const shaderMaterial = water.material as ShaderMaterial
-    // Prevent hard reflection seams when distorted reflection UVs go out of [0,1].
-    // Water.js samples: mirrorCoord.xy / mirrorCoord.w + distortion; default clamp-to-edge can create a sharp split.
-    const mirrorTexture = (shaderMaterial.uniforms?.mirrorSampler?.value as Texture | null) ?? null
-    if (mirrorTexture) {
-      mirrorTexture.wrapS = RepeatWrapping
-      mirrorTexture.wrapT = RepeatWrapping
-      mirrorTexture.needsUpdate = true
-    }
-    if (shaderMaterial.uniforms?.size) {
-      shaderMaterial.uniforms.size.value = props.size
-    }
+
     const parent = mesh.parent
     if (parent) {
       water.position.copy(mesh.position)
