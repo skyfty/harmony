@@ -1,3 +1,4 @@
+import { rewriteUrlHostOrOrigin, tryParseUrl } from './urlString'
 
 const NodeBuffer: { from: (data: string, encoding: string) => { buffer: ArrayBuffer; byteOffset: number; byteLength: number } } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
@@ -932,54 +933,6 @@ function createMirroredUrlCandidates(url: string): string[] {
     }
   }
   return results
-}
-
-function rewriteUrlHostOrOrigin(source: URL, mirrorHostOrOrigin: string): string | null {
-  try {
-    const value = mirrorHostOrOrigin.trim()
-    if (!value) {
-      return null
-    }
-
-    // If mirror is an origin (has scheme), use its protocol/host.
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-      const mirror = new URL(value)
-      const rewritten = new URL(source.toString())
-      rewritten.protocol = mirror.protocol
-      rewritten.username = mirror.username
-      rewritten.password = mirror.password
-      rewritten.host = mirror.host
-      return rewritten.toString()
-    }
-
-    // If mirror is scheme-relative (e.g. //cdn.example.com), treat as https.
-    if (/^\/\//.test(value)) {
-      const mirror = new URL(`https:${value}`)
-      const rewritten = new URL(source.toString())
-      rewritten.protocol = mirror.protocol
-      rewritten.host = mirror.host
-      return rewritten.toString()
-    }
-
-    // Otherwise treat as host[:port], preserve protocol and other URL parts.
-    const rewritten = new URL(source.toString())
-    rewritten.host = value
-    return rewritten.toString()
-  } catch (_error) {
-    return null
-  }
-}
-
-function tryParseUrl(url: string): URL | null {
-  try {
-    // Support scheme-relative URLs.
-    if (/^\/\//.test(url)) {
-      return new URL(`https:${url}`)
-    }
-    return new URL(url)
-  } catch (_error) {
-    return null
-  }
 }
 
 function normalizeHostKey(value: string): string {

@@ -562,7 +562,6 @@ const resourcePreloadBytesLabel = computed(() => {
 // Configure multi-source mirrors for asset downloads (优先切源).
 // Note: asset identifiers / cache keys remain the original URLs/assetIds.
 configureAssetDownloadHostMirrors(ASSET_DOWNLOAD_HOST_MIRRORS);
-
 const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
