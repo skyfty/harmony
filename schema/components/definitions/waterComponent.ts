@@ -5,6 +5,7 @@ import {
   DataTexture,
   Float32BufferAttribute,
   LinearFilter,
+  RepeatWrapping,
   MirroredRepeatWrapping,
   NoColorSpace,
   ShaderMaterial,
@@ -220,8 +221,8 @@ function createDefaultNormalTexture(): Texture {
     }
   }
   const texture = new DataTexture(data, size, size)
-  texture.wrapS = MirroredRepeatWrapping
-  texture.wrapT = MirroredRepeatWrapping
+  texture.wrapS = RepeatWrapping
+  texture.wrapT = RepeatWrapping
   // Normal maps are non-color data.
   texture.colorSpace = NoColorSpace
   texture.needsUpdate = true
@@ -446,8 +447,8 @@ class WaterComponent extends Component<WaterComponentProps> {
   private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
-    ensurePlanarUVs(resolvedGeometry)
-    ensureFlatNormals(resolvedGeometry)
+    // ensurePlanarUVs(resolvedGeometry)
+    // ensureFlatNormals(resolvedGeometry)
     this.waterGeometry = resolvedGeometry
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
@@ -455,7 +456,6 @@ class WaterComponent extends Component<WaterComponentProps> {
     const water = new Water(resolvedGeometry, {
       textureWidth: props.textureWidth,
       textureHeight: props.textureHeight,
-      alpha: this.resolveMaterialAlpha(material),
       waterColor: this.resolveMaterialColor(material).getHex(),
       distortionScale: Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength),
       waterNormals: normalTexture,
@@ -471,14 +471,9 @@ class WaterComponent extends Component<WaterComponentProps> {
     // Water.js samples: mirrorCoord.xy / mirrorCoord.w + distortion; default clamp-to-edge can create a sharp split.
     const mirrorTexture = (shaderMaterial.uniforms?.mirrorSampler?.value as Texture | null) ?? null
     if (mirrorTexture) {
-      mirrorTexture.wrapS = MirroredRepeatWrapping
-      mirrorTexture.wrapT = MirroredRepeatWrapping
-      mirrorTexture.minFilter = LinearFilter
-      mirrorTexture.magFilter = LinearFilter
+      mirrorTexture.wrapS = RepeatWrapping
+      mirrorTexture.wrapT = RepeatWrapping
       mirrorTexture.needsUpdate = true
-    }
-    if (shaderMaterial.uniforms?.normalSampler) {
-      shaderMaterial.uniforms.normalSampler.value = normalTexture
     }
     if (shaderMaterial.uniforms?.size) {
       shaderMaterial.uniforms.size.value = props.size
@@ -520,10 +515,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     const base = source ?? DEFAULT_NORMAL_MAP
     const clone = base.clone()
     // Mirrored repeat hides many visible tile seams better than repeat.
-    clone.wrapS = MirroredRepeatWrapping
-    clone.wrapT = MirroredRepeatWrapping
-    // Normal maps are non-color data.
-    clone.colorSpace = NoColorSpace
+    clone.wrapS = RepeatWrapping
+    clone.wrapT = RepeatWrapping
     clone.needsUpdate = true
     return clone
   }
@@ -533,9 +526,6 @@ class WaterComponent extends Component<WaterComponentProps> {
       return
     }
     const shaderMaterial = this.waterInstance.material as ShaderMaterial
-    if (shaderMaterial.uniforms?.alpha) {
-      shaderMaterial.uniforms.alpha.value = this.resolveMaterialAlpha(material)
-    }
     if (shaderMaterial.uniforms?.distortionScale) {
       shaderMaterial.uniforms.distortionScale.value = Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength)
     }
