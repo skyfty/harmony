@@ -804,7 +804,7 @@ export class SceneCloudRenderer {
       side: THREE.BackSide,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
     })
 
     this.volumetricMaterial = material
