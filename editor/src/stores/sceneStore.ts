@@ -73,6 +73,8 @@ import type {
   SceneHistoryEntry,
   SceneHistoryGroundRegionBounds,
   SceneHistoryGroundHeightEntry,
+  SceneHistoryNodeLocation,
+  SceneHistoryNodeStructureOp,
   SceneHistoryTransformSnapshot,
 } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
@@ -6386,6 +6388,125 @@ function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHis
   return { kind: 'node-basics', snapshots }
 }
 
+function findNodeLocationInTree(nodes: SceneNode[], targetId: string): SceneHistoryNodeLocation | null {
+  if (!targetId) {
+    return null
+  }
+
+  const visit = (current: SceneNode[], parentId: string | null): SceneHistoryNodeLocation | null => {
+    for (let index = 0; index < current.length; index += 1) {
+      const node = current[index]!
+      if (node.id === targetId) {
+        return { parentId, index }
+      }
+      if (node.children?.length) {
+        const found = visit(node.children, node.id)
+        if (found) {
+          return found
+        }
+      }
+    }
+    return null
+  }
+
+  return visit(nodes, null)
+}
+
+function extractSubtreeSnapshot(nodes: SceneNode[], nodeId: string): SceneNode | null {
+  const node = findNodeById(nodes, nodeId)
+  if (!node) {
+    return null
+  }
+  return cloneSceneNodes([node])[0] ?? null
+}
+
+function removeNodeByIdImmutable(nodes: SceneNode[], nodeId: string): { tree: SceneNode[]; removed: SceneNode | null } {
+  let removed: SceneNode | null = null
+  const walk = (current: SceneNode[]): SceneNode[] => {
+    const next: SceneNode[] = []
+    for (const node of current) {
+      if (node.id === nodeId) {
+        removed = node
+        continue
+      }
+      if (node.children?.length) {
+        const nextChildren = walk(node.children)
+        if (nextChildren !== node.children) {
+          next.push({ ...node, children: nextChildren.length ? nextChildren : undefined })
+        } else {
+          next.push(node)
+        }
+      } else {
+        next.push(node)
+      }
+    }
+    return next
+  }
+
+  const nextTree = walk(nodes)
+  return { tree: nextTree, removed }
+}
+
+function insertSubtreeAtLocationImmutable(
+  nodes: SceneNode[],
+  subtree: SceneNode,
+  location: SceneHistoryNodeLocation,
+): SceneNode[] {
+  const cloned = cloneSceneNodes([subtree])[0]
+  if (!cloned) {
+    return nodes
+  }
+
+  const parentId = location.parentId ?? null
+  const requestedIndex = Number.isFinite(location.index) ? location.index : 0
+
+  // Root insert
+  if (!parentId || parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+    const next = [...nodes]
+    const safeIndex = Math.min(Math.max(requestedIndex, 0), next.length)
+    next.splice(safeIndex, 0, cloned)
+    return next
+  }
+
+  // Insert as child
+  let inserted = false
+  const walk = (current: SceneNode[]): SceneNode[] => {
+    return current.map((node) => {
+      if (inserted) {
+        return node
+      }
+      if (node.id === parentId) {
+        if (!allowsChildNodes(node)) {
+          return node
+        }
+        const children = node.children ? [...node.children] : []
+        const safeIndex = Math.min(Math.max(requestedIndex, 0), children.length)
+        children.splice(safeIndex, 0, cloned)
+        inserted = true
+        return { ...node, children }
+      }
+      if (node.children?.length) {
+        const nextChildren = walk(node.children)
+        if (nextChildren !== node.children) {
+          return { ...node, children: nextChildren.length ? nextChildren : undefined }
+        }
+      }
+      return node
+    })
+  }
+
+  const nextTree = walk(nodes)
+  if (inserted) {
+    return nextTree
+  }
+
+  // Parent missing: fall back to root.
+  const fallback = [...nodes]
+  const safeIndex = Math.min(Math.max(requestedIndex, 0), fallback.length)
+  fallback.splice(safeIndex, 0, cloned)
+  return fallback
+}
+
 function createTransformHistoryEntry(store: SceneState, nodeIds: string[]): SceneHistoryEntry {
   const transforms: SceneHistoryTransformSnapshot[] = []
   nodeIds.forEach((id) => {
@@ -6457,11 +6578,66 @@ function createGroundHeightmapRegionEntry(
   }
 }
 
+function collectRecenterTransformTargets(
+  nodes: SceneNode[],
+  startIds: Array<string | null | undefined>,
+  extraIds: string[] = [],
+): string[] {
+  const parentMap = buildParentMap(nodes)
+  const targets = new Set<string>()
+
+  const pushNodeAndChildren = (nodeId: string) => {
+    const node = findNodeById(nodes, nodeId)
+    if (!node) {
+      return
+    }
+    targets.add(nodeId)
+    node.children?.forEach((child) => {
+      targets.add(child.id)
+    })
+  }
+
+  startIds.forEach((rawId) => {
+    let current = typeof rawId === 'string' && rawId.length ? rawId : null
+    const visited = new Set<string>()
+    while (current) {
+      if (visited.has(current)) {
+        break
+      }
+      visited.add(current)
+      pushNodeAndChildren(current)
+      current = parentMap.get(current) ?? null
+    }
+  })
+
+  extraIds.forEach((id) => {
+    if (typeof id === 'string' && id.length) {
+      targets.add(id)
+    }
+  })
+
+  return Array.from(targets)
+}
+
 function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): SceneHistoryEntry | null {
   const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
   switch (entry.kind) {
     case 'content-snapshot':
       return createContentHistoryEntry(store)
+    case 'batch': {
+      const captured: SceneHistoryEntry[] = []
+      entry.entries.forEach((child) => {
+        const redo = captureRedoEntryFor(store, child)
+        if (redo) {
+          captured.push(redo)
+        }
+      })
+      if (!captured.length) {
+        return null
+      }
+      // Invert order: redo should apply inverse operations in reverse.
+      return { kind: 'batch', entries: captured.reverse() }
+    }
     case 'node-basics': {
       const requests: NodeBasicsHistoryRequest[] = entry.snapshots.map((snapshot) => {
         return {
@@ -6473,6 +6649,31 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
         }
       })
       return createNodeBasicsHistoryEntry(store, requests)
+    }
+    case 'node-structure': {
+      const nextOps: SceneHistoryNodeStructureOp[] = []
+      entry.ops.forEach((op) => {
+        if (op.type === 'remove') {
+          const subtree = extractSubtreeSnapshot(store.nodes, op.nodeId)
+          if (!subtree) {
+            return
+          }
+          nextOps.push({
+            type: 'insert',
+            location: op.location,
+            subtree,
+          })
+          return
+        }
+        if (op.type === 'insert') {
+          nextOps.push({
+            type: 'remove',
+            location: op.location,
+            nodeId: op.subtree.id,
+          })
+        }
+      })
+      return { kind: 'node-structure', ops: nextOps }
     }
     case 'ground-settings':
       return { kind: 'ground-settings', groundSettings: cloneGroundSettings(store.groundSettings) }
@@ -6506,6 +6707,12 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       store.groundSettings = cloneGroundSettings(entry.groundSettings)
       break
     }
+    case 'batch': {
+      entry.entries.forEach((child) => {
+        applyHistoryEntry(store, child)
+      })
+      break
+    }
     case 'node-basics': {
       entry.snapshots.forEach((snapshot) => {
         visitNode(store.nodes, snapshot.id, (node) => {
@@ -6537,6 +6744,28 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
         })
       })
       store.nodes = [...store.nodes]
+      break
+    }
+    case 'node-structure': {
+      // Apply removes first (by id), then inserts at recorded locations.
+      let working = store.nodes as SceneNode[]
+
+      entry.ops.forEach((op) => {
+        if (op.type !== 'remove') {
+          return
+        }
+        const result = removeNodeByIdImmutable(working, op.nodeId)
+        working = result.tree
+      })
+
+      entry.ops.forEach((op) => {
+        if (op.type !== 'insert') {
+          return
+        }
+        working = insertSubtreeAtLocationImmutable(working, op.subtree, op.location)
+      })
+
+      store.nodes = working
       break
     }
     case 'ground-settings': {
@@ -7387,6 +7616,15 @@ export const useSceneStore = defineStore('scene', {
         this.redoStack = []
       }
     },
+    captureHistoryEntry(entry: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      this.appendUndoEntry(entry, options)
+    },
     captureHistorySnapshot(options: { resetRedo?: boolean } = {}) {
       if (this.isRestoringHistory) {
         return
@@ -7431,6 +7669,19 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.appendUndoEntry(entry)
+    },
+    captureNodeStructureHistorySnapshot(ops: SceneHistoryNodeStructureOp[]) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const normalized = Array.isArray(ops) ? ops.filter((op): op is SceneHistoryNodeStructureOp => Boolean(op && op.type)) : []
+      if (!normalized.length) {
+        return
+      }
+      this.appendUndoEntry({ kind: 'node-structure', ops: normalized })
     },
     captureGroundHeightmapRegionHistory(nodeId: string, bounds: SceneHistoryGroundRegionBounds) {
       if (this.isRestoringHistory) {
@@ -9353,7 +9604,7 @@ export const useSceneStore = defineStore('scene', {
           parentId: targetParentId,
         })
         if (options.preserveWorldPosition) {
-          adjustNodeWorldPosition(node?.id ?? null, position)
+          await this.withHistorySuppressed(() => adjustNodeWorldPosition(node?.id ?? null, position))
         }
         return { asset, node }
       }
@@ -9365,7 +9616,7 @@ export const useSceneStore = defineStore('scene', {
       })
       if (node) {
         if (options.preserveWorldPosition) {
-          adjustNodeWorldPosition(node.id, position)
+          await this.withHistorySuppressed(() => adjustNodeWorldPosition(node.id, position))
         }
         return { asset, node }
       }
@@ -9376,7 +9627,7 @@ export const useSceneStore = defineStore('scene', {
         parentId: targetParentId,
       })
       if (options.preserveWorldPosition) {
-        adjustNodeWorldPosition(placeholder.id, position)
+        await this.withHistorySuppressed(() => adjustNodeWorldPosition(placeholder.id, position))
       }
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
@@ -10136,7 +10387,6 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      this.captureHistorySnapshot()
       let nextNodes: SceneNode[]
       if (parentId) {
         const workingTree = [...this.nodes]
@@ -10150,6 +10400,18 @@ export const useSceneStore = defineStore('scene', {
         nextNodes = [...this.nodes, duplicate]
       }
       this.nodes = nextNodes
+
+      // Structural history: undo by removing the inserted prefab subtree.
+      const insertionLocation = findNodeLocationInTree(this.nodes, duplicate.id)
+      if (insertionLocation) {
+        this.captureNodeStructureHistorySnapshot([
+          {
+            type: 'remove',
+            location: insertionLocation,
+            nodeId: duplicate.id,
+          },
+        ])
+      }
       await this.ensureSceneAssetsReady({
         nodes: [duplicate],
         showOverlay: false,
@@ -10299,14 +10561,107 @@ export const useSceneStore = defineStore('scene', {
         { parentId },
       )
 
+      // Structural history: undo removes the placeholder (and later the prefab if it replaces the placeholder).
+      const placeholderLocation = findNodeLocationInTree(this.nodes, placeholder.id)
+      if (placeholderLocation) {
+        this.captureNodeStructureHistorySnapshot([
+          { type: 'remove', location: placeholderLocation, nodeId: placeholder.id },
+        ])
+      }
+
       this.observePrefabDownloadForNode(placeholder.id, assetId)
 
       void (async () => {
         try {
-          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, { parentId })
-          stopPrefabPlaceholderWatcher(placeholder.id)
-          this.removeSceneNodes([placeholder.id])
-          this.setSelection([instantiated.id], { primaryId: instantiated.id })
+          // If the placeholder was undone/removed before completion, abort.
+          const existingPlaceholder = findNodeById(this.nodes, placeholder.id)
+          if (!existingPlaceholder) {
+            stopPrefabPlaceholderWatcher(placeholder.id)
+            return
+          }
+
+          const instantiated = await this.withHistorySuppressed(async () => {
+            const stillPresent = findNodeById(this.nodes, placeholder.id)
+            if (!stillPresent) {
+              return null
+            }
+
+            const prefab = await this.loadNodePrefab(assetId)
+            const sourceMeta = this.assetIndex[assetId]?.source ?? null
+            const dependencyProviderId = sourceMeta && sourceMeta.type === 'package' ? sourceMeta.providerId ?? null : null
+
+            const created = await this.instantiatePrefabData(prefab, {
+              sourceAssetId: assetId,
+              position: spawnPosition ?? null,
+              providerId: dependencyProviderId,
+              prefabAssetIdForDownloadProgress: assetId,
+            })
+
+            // Replace the placeholder node in-place so undoing the single structural entry
+            // (remove placeholder id) also removes the final prefab.
+            const parentMap = buildParentMap(this.nodes)
+            const resolvedParentId = parentMap.get(placeholder.id) ?? null
+            const siblings = resolvedParentId
+              ? (findNodeById(this.nodes, resolvedParentId)?.children ?? [])
+              : this.nodes
+            const placeholderIndex = siblings.findIndex((item) => item.id === placeholder.id)
+
+            const { tree, node: removedPlaceholder } = detachNodeImmutable(this.nodes, placeholder.id)
+            if (!removedPlaceholder) {
+              stopPrefabPlaceholderWatcher(placeholder.id)
+              return null
+            }
+
+            created.id = placeholder.id
+            if (created.nodeType === 'Group') {
+              created.groupExpanded = false
+            }
+            // Best-effort: preserve basic flags.
+            created.visible = removedPlaceholder.visible ?? true
+            created.locked = removedPlaceholder.locked
+
+            if (resolvedParentId) {
+              const parentNode = findNodeById(tree, resolvedParentId)
+              if (parentNode && allowsChildNodes(parentNode)) {
+                const nextChildren = parentNode.children ? [...parentNode.children] : []
+                const safeIndex = placeholderIndex >= 0 ? placeholderIndex : nextChildren.length
+                nextChildren.splice(safeIndex, 0, created)
+                parentNode.children = nextChildren
+              } else {
+                const safeIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
+                tree.splice(safeIndex, 0, created)
+              }
+            } else {
+              const safeIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
+              tree.splice(safeIndex, 0, created)
+            }
+
+            this.nodes = tree
+
+            stopPrefabPlaceholderWatcher(placeholder.id)
+
+            await this.ensureSceneAssetsReady({
+              nodes: [created],
+              showOverlay: false,
+              prefabAssetIdForDownloadProgress: assetId,
+              refreshViewport: true,
+            })
+
+            const syncSubtree = (node: SceneNode) => {
+              componentManager.syncNode(node)
+              if (node.children?.length) {
+                node.children.forEach(syncSubtree)
+              }
+            }
+            syncSubtree(created)
+
+            commitSceneSnapshot(this)
+            return created
+          })
+
+          if (instantiated) {
+            this.setSelection([instantiated.id], { primaryId: instantiated.id })
+          }
         } catch (error) {
           const target = findNodeById(this.nodes, placeholder.id)
           if (target) {
@@ -11169,6 +11524,12 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const oldLocation = findNodeLocationInTree(this.nodes, nodeId)
+      const oldSubtree = extractSubtreeSnapshot(this.nodes, nodeId)
+      if (!oldLocation || !oldSubtree) {
+        return false
+      }
+
       const movingNode = findNodeById(this.nodes, nodeId)
       if (!movingNode) {
         return false
@@ -11263,7 +11624,33 @@ export const useSceneStore = defineStore('scene', {
       const inserted = insertNodeMutable(tree, targetId, node, position)
       if (!inserted) return false
 
-      this.captureHistorySnapshot()
+      const newLocation = findNodeLocationInTree(tree, nodeId)
+      if (!newLocation) {
+        return false
+      }
+
+      const movingSubtreeIds = flattenNodeIds([oldSubtree])
+      const transformTargetIds = collectRecenterTransformTargets(
+        this.nodes,
+        [oldParentId, newParentId],
+        movingSubtreeIds,
+      )
+      const transformUndo = transformTargetIds.length
+        ? createTransformHistoryEntry(this, transformTargetIds)
+        : null
+
+      const undoOps: SceneHistoryNodeStructureOp[] = [
+        { type: 'remove', location: newLocation, nodeId },
+        { type: 'insert', location: oldLocation, subtree: oldSubtree },
+      ]
+      const batchEntries: SceneHistoryEntry[] = [
+        { kind: 'node-structure', ops: undoOps },
+      ]
+      if (transformUndo && transformUndo.kind === 'node-transform' && transformUndo.transforms.length) {
+        batchEntries.push(transformUndo)
+      }
+      this.captureHistoryEntry({ kind: 'batch', entries: batchEntries })
+
       this.nodes = tree
       const postMoveParentMap = buildParentMap(this.nodes)
       if (oldParentId) {
@@ -13143,6 +13530,19 @@ export const useSceneStore = defineStore('scene', {
       }
       const idSet = new Set(existingIds)
       const parentMap = buildParentMap(this.nodes)
+
+      // Structural undo entry: re-insert the removed top-level subtrees at their original locations.
+      const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
+      const undoOps: SceneHistoryNodeStructureOp[] = []
+      topLevelIds.forEach((id) => {
+        const location = findNodeLocationInTree(this.nodes, id)
+        const subtree = extractSubtreeSnapshot(this.nodes, id)
+        if (!location || !subtree) {
+          return
+        }
+        undoOps.push({ type: 'insert', location, subtree })
+      })
+
       const affectedParentIds = new Set<string>()
       existingIds.forEach((id) => {
         const parentId = parentMap.get(id) ?? null
@@ -13151,7 +13551,20 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      this.captureHistorySnapshot()
+      const transformTargetIds = collectRecenterTransformTargets(this.nodes, Array.from(affectedParentIds))
+      const transformUndo = transformTargetIds.length
+        ? createTransformHistoryEntry(this, transformTargetIds)
+        : null
+      const batchEntries: SceneHistoryEntry[] = []
+      if (undoOps.length) {
+        batchEntries.push({ kind: 'node-structure', ops: undoOps })
+      }
+      if (transformUndo && transformUndo.kind === 'node-transform' && transformUndo.transforms.length) {
+        batchEntries.push(transformUndo)
+      }
+      if (batchEntries.length) {
+        this.captureHistoryEntry({ kind: 'batch', entries: batchEntries })
+      }
 
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
@@ -13429,17 +13842,43 @@ export const useSceneStore = defineStore('scene', {
         }
         const siblings = parentNode.children ? [...parentNode.children] : []
         const safeIndex = Math.min(Math.max(insertionIndex, 0), siblings.length)
+
+        // Capture undo entry: remove group + re-insert original nodes at original locations.
+        const undoOps: SceneHistoryNodeStructureOp[] = []
+        topLevelIds.forEach((id) => {
+          const location = findNodeLocationInTree(this.nodes, id)
+          const subtree = extractSubtreeSnapshot(this.nodes, id)
+          if (location && subtree) {
+            undoOps.push({ type: 'insert', location, subtree })
+          }
+        })
+        undoOps.push({ type: 'remove', location: { parentId: targetParentId, index: safeIndex }, nodeId: groupId })
+        this.captureNodeStructureHistorySnapshot(undoOps)
+
         siblings.splice(safeIndex, 0, groupNode)
         parentNode.children = siblings
         tree = [...tree]
       } else {
         const nextTree = [...tree]
         const safeIndex = Math.min(Math.max(insertionIndex, 0), nextTree.length)
+
+        const undoOps: SceneHistoryNodeStructureOp[] = []
+        topLevelIds.forEach((id) => {
+          const location = findNodeLocationInTree(this.nodes, id)
+          const subtree = extractSubtreeSnapshot(this.nodes, id)
+          if (location && subtree) {
+            undoOps.push({ type: 'insert', location, subtree })
+          }
+        })
+        undoOps.push({ type: 'remove', location: { parentId: null, index: safeIndex }, nodeId: groupId })
+        this.captureNodeStructureHistorySnapshot(undoOps)
+
         nextTree.splice(safeIndex, 0, groupNode)
         tree = nextTree
       }
       this.nodes = tree
       this.setSelection([groupId], {primaryId: groupId })
+      commitSceneSnapshot(this)
       return true
     },
     duplicateNodes(nodeIds: string[], options: { select?: boolean } = {}): string[] {
@@ -13485,7 +13924,7 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      this.captureHistorySnapshot()
+      const undoOps: SceneHistoryNodeStructureOp[] = []
 
       topLevelIds.forEach((id) => {
         const source = findNodeById(this.nodes, id)
@@ -13504,10 +13943,19 @@ export const useSceneStore = defineStore('scene', {
         }
         duplicates.push(duplicate)
         duplicateIdMap.set(id, duplicate.id)
+
+        const location = findNodeLocationInTree(working, duplicate.id)
+        if (location) {
+          undoOps.push({ type: 'remove', location, nodeId: duplicate.id })
+        }
       })
 
       if (!duplicates.length) {
         return []
+      }
+
+      if (undoOps.length) {
+        this.captureNodeStructureHistorySnapshot(undoOps)
       }
 
       this.nodes = working
@@ -13613,6 +14061,7 @@ export const useSceneStore = defineStore('scene', {
       const insertedNodes: SceneNode[] = []
       const insertedIds: string[] = []
       const affectedParentIds = new Set<string>()
+      const undoOps: SceneHistoryNodeStructureOp[] = []
 
       for (const entry of clipboardEntries) {
         const duplicate = duplicateNodeTree(entry.root, duplicateContext)
@@ -13639,13 +14088,20 @@ export const useSceneStore = defineStore('scene', {
 
         insertedNodes.push(duplicate)
         insertedIds.push(duplicate.id)
+
+        const location = findNodeLocationInTree(working, duplicate.id)
+        if (location) {
+          undoOps.push({ type: 'remove', location, nodeId: duplicate.id })
+        }
       }
 
       if (!insertedNodes.length) {
         return false
       }
 
-      this.captureHistorySnapshot()
+      if (undoOps.length) {
+        this.captureNodeStructureHistorySnapshot(undoOps)
+      }
       this.nodes = working
 
       affectedParentIds.forEach((parentId) => {

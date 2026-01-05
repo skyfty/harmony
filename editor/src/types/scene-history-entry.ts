@@ -29,6 +29,23 @@ export type SceneHistoryNodeBasicsSnapshot = {
   userData?: Record<string, unknown> | null
 }
 
+export type SceneHistoryNodeLocation = {
+  parentId: string | null
+  index: number
+}
+
+export type SceneHistoryNodeStructureOp =
+  | {
+      type: 'insert'
+      location: SceneHistoryNodeLocation
+      subtree: SceneNode
+    }
+  | {
+      type: 'remove'
+      location: SceneHistoryNodeLocation
+      nodeId: string
+    }
+
 // New history model: content-only undo/redo entries.
 // Explicitly excludes: selection, camera, viewport, panels, assets, planning, environment/skybox/shadows.
 export type SceneHistoryEntry =
@@ -39,8 +56,16 @@ export type SceneHistoryEntry =
       groundSettings: GroundSettings
     }
   | {
+      kind: 'batch'
+      entries: SceneHistoryEntry[]
+    }
+  | {
       kind: 'node-basics'
       snapshots: SceneHistoryNodeBasicsSnapshot[]
+    }
+  | {
+      kind: 'node-structure'
+      ops: SceneHistoryNodeStructureOp[]
     }
   | {
       kind: 'ground-settings'
