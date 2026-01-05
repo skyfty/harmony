@@ -31,6 +31,7 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  createPrimitiveMesh,
 } from '@harmony/schema'
 import type {
   AssetIndexEntry,
@@ -3481,6 +3482,79 @@ function reattachRuntimeObjectsForNodes(nodes: SceneNode[]): void {
     }
     componentManager.attachRuntime(node, object)
   })
+}
+
+function hasEnabledComponent(node: SceneNode, componentType: string): boolean {
+  const entry = node.components?.[componentType] as SceneNodeComponentState<unknown> | undefined
+  return entry?.enabled !== false
+}
+
+function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
+  if (!node || (node.sourceAssetId ?? '').trim().length) {
+    return false
+  }
+
+  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
+
+  if (nodeType === 'WarpGate' || hasEnabledComponent(node, WARP_GATE_COMPONENT_TYPE)) {
+    return true
+  }
+  if (nodeType === 'Guideboard' || hasEnabledComponent(node, GUIDEBOARD_COMPONENT_TYPE)) {
+    return true
+  }
+  if (nodeType === 'Plane' && hasEnabledComponent(node, DISPLAY_BOARD_COMPONENT_TYPE)) {
+    return true
+  }
+  if (nodeType === 'Sphere' && hasEnabledComponent(node, VIEW_POINT_COMPONENT_TYPE)) {
+    return true
+  }
+
+  return false
+}
+
+function createProceduralRuntimeObject(node: SceneNode): Object3D {
+  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
+
+  if (nodeType === 'WarpGate' || nodeType === 'Guideboard') {
+    const object = new Object3D()
+    object.name = node.name ?? nodeType
+    object.visible = node.visible ?? true
+    tagObjectWithNodeId(object, node.id)
+    return object
+  }
+
+  if (nodeType === 'Plane' || nodeType === 'Sphere') {
+    const mesh = createPrimitiveMesh(nodeType)
+    mesh.name = node.name ?? nodeType
+    mesh.visible = node.visible ?? true
+    tagObjectWithNodeId(mesh, node.id)
+    return mesh
+  }
+
+  const fallback = new Object3D()
+  fallback.name = node.name ?? nodeType
+  fallback.visible = node.visible ?? true
+  tagObjectWithNodeId(fallback, node.id)
+  return fallback
+}
+
+function rebuildProceduralRuntimeObjects(nodes: SceneNode[]): void {
+  const visit = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (!node) {
+        return
+      }
+      if (!runtimeObjectRegistry.has(node.id) && shouldCreateProceduralRuntimeObject(node)) {
+        const object = createProceduralRuntimeObject(node)
+        registerRuntimeObject(node.id, object)
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        visit(node.children)
+      }
+    })
+  }
+
+  visit(nodes)
 }
 
 function tagObjectWithNodeId(object: Object3D, nodeId: string) {
@@ -7002,6 +7076,10 @@ export const useSceneStore = defineStore('scene', {
         refreshViewport,
       })
       this.rebuildGeneratedMeshRuntimes()
+
+      // Some nodes (WarpGate/Guideboard/ViewPoint/DisplayBoard) are procedural and don't have sourceAssetId,
+      // so ensure they still get a runtime Object3D during refresh.
+      rebuildProceduralRuntimeObjects(nodes)
 
       reattachRuntimeObjectsForNodes(nodes)
       componentManager.syncScene(nodes)

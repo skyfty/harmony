@@ -468,7 +468,18 @@ const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
-const usesRuntimeObjectTypes = new Set<string>(['Mesh', WARP_GATE_COMPONENT_TYPE, GUIDEBOARD_COMPONENT_TYPE, 'Group'])
+// Node types that may require swapping in a store-managed runtime Object3D.
+// NOTE: This must use SceneNode.nodeType values (e.g. 'WarpGate'), not component type strings (e.g. 'warpGate').
+const usesRuntimeObjectTypes = new Set<string>([
+  'Mesh',
+  'Group',
+  'Sky',
+  'Environment',
+  'WarpGate',
+  'Guideboard',
+  'Plane',
+  'Sphere',
+])
 
 function disposeCachedTextures() {
   textureCache.forEach((texture) => texture.dispose())

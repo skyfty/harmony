@@ -119,9 +119,11 @@ function ensurePlanarUVs(geometry: BufferGeometry): void {
   // Choose the two dominant axes as UV plane, so rotated PlaneGeometry (XY) and horizontal ground (XZ)
   // both get meaningful, continuous UVs.
   const extents = bounds.size
-  const axes = [0, 1, 2].sort((a, b) => (extents[b] ?? 0) - (extents[a] ?? 0))
-  const uAxis = axes[0] as number
-  const vAxis = axes[1] as number
+  type Axis = 0 | 1 | 2
+  const axes: Axis[] = [0, 1, 2]
+  axes.sort((a, b) => extents[b] - extents[a])
+  const uAxis = axes[0]!
+  const vAxis = axes[1]!
 
   const uvs = new Float32Array(positionAttr.count * 2)
   for (let i = 0; i < positionAttr.count; i += 1) {
@@ -129,10 +131,10 @@ function ensurePlanarUVs(geometry: BufferGeometry): void {
     const y = positionAttr.getY(i)
     const z = positionAttr.getZ(i)
     const coords: [number, number, number] = [x, y, z]
-    const minU = bounds.min[uAxis] ?? 0
-    const minV = bounds.min[vAxis] ?? 0
-    const sizeU = bounds.size[uAxis] ?? 1
-    const sizeV = bounds.size[vAxis] ?? 1
+    const minU = bounds.min[uAxis]
+    const minV = bounds.min[vAxis]
+    const sizeU = bounds.size[uAxis]
+    const sizeV = bounds.size[vAxis]
     const u = (coords[uAxis] - minU) / sizeU
     const v = (coords[vAxis] - minV) / sizeV
     uvs[i * 2 + 0] = Number.isFinite(u) ? u : 0
