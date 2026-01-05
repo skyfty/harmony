@@ -8678,7 +8678,7 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--actions {
   right: 16px;
-  top: calc(50% + var(--viewer-safe-area-top, 0px));
+  top: calc(30% + var(--viewer-safe-area-top, 0px));
   transform: translateY(-50%);
   align-items: flex-end;
   flex-direction: column;
