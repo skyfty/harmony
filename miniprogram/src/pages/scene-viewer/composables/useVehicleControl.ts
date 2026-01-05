@@ -1,4 +1,4 @@
-import { ref, reactive, computed, nextTick, watch, type Ref, type ComponentPublicInstance } from 'vue';
+import { ref, reactive, computed, nextTick, watch, shallowRef, type Ref, type ComponentPublicInstance } from 'vue';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import {
@@ -31,14 +31,14 @@ export function useVehicleControl(deps: {
   resolveNodeById: (id: string) => any;
   resolveRigidbodyComponent: (node: any) => any;
   resolveVehicleComponent: (node: any) => any;
-  ensurePhysicsWorld: () => any;
-  ensureVehicleBindingForNode: (nodeId: string) => any;
+  ensurePhysicsWorld: () => void;
+  ensureVehicleBindingForNode: (nodeId: string) => void;
   normalizeNodeId: (id: any) => string | null;
   setCameraViewState: (mode: any, targetId?: string | null) => void;
-  setCameraCaging: (caged: boolean) => void;
+  setCameraCaging: (enabled: boolean, options?: { force?: boolean }) => void;
   runWithProgrammaticCameraMutation: (fn: () => void) => void;
-  withControlsVerticalFreedom: (fn: () => void) => void;
-  lockControlsPitchToCurrent: () => void;
+  withControlsVerticalFreedom: <T>(controls: any, callback: () => T) => T;
+  lockControlsPitchToCurrent: (controls: any, camera: THREE.PerspectiveCamera) => void;
   syncLastFirstPersonStateFromCamera: () => void;
   onToast: (message: string) => void;
   onResolveBehaviorToken: (token: string, resolution: any) => void;
@@ -676,8 +676,11 @@ export function useVehicleControl(deps: {
   }
 
   function updateVehiclePhysics(delta: number) {
-    vehicleDriveController.updatePhysics(delta);
-    const vehicle = vehicleDriveController.vehicle;
+    void delta;
+    // Apply current inputs (throttle/steering/brake) to the physics vehicle each frame.
+    // Without this, the joystick updates state but no forces are applied.
+    vehicleDriveController.applyForces();
+    const vehicle = vehicleDriveVehicle.value;
     const velocity = vehicle?.chassisBody?.velocity ?? null;
     if (!velocity) {
       vehicleSpeed.value = 0;

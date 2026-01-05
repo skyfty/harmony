@@ -9696,7 +9696,20 @@ export const useSceneStore = defineStore('scene', {
         nodes: [duplicate],
         showOverlay: false,
         prefabAssetIdForDownloadProgress: assetId,
+        refreshViewport: true,
       })
+
+      // Ensure all nodes in the prefab subtree are correctly synced to the runtime scene graph.
+      // ensureSceneAssetsReady only processes nodes with assets, so we need to explicitly sync the hierarchy
+      // to ensure parenting is correct for all nodes (including Groups and those without assets).
+      const syncSubtree = (node: SceneNode) => {
+        componentManager.syncNode(node)
+        if (node.children?.length) {
+          node.children.forEach(syncSubtree)
+        }
+      }
+      syncSubtree(duplicate)
+
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
       }

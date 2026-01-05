@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { defineStore } from 'pinia';
 import type { SceneJsonExportDocument } from '@harmony/schema';
 
@@ -65,7 +65,19 @@ export function createSceneEntry(scene: SceneJsonExportDocument, origin?: string
 
 
 
-export const useSceneStore = defineStore('sceneStore', () => {
+type SceneStoreSetup = {
+    scenes: Ref<StoredSceneEntry[]>;
+    initialized: Ref<boolean>;
+    orderedScenes: ComputedRef<StoredSceneEntry[]>;
+    bootstrap: () => void;
+    setScenes: (entries: StoredSceneEntry[]) => void;
+    upsertScene: (entry: StoredSceneEntry) => StoredSceneEntry;
+    importScene: (scene: SceneJsonExportDocument, origin?: string) => StoredSceneEntry;
+    removeScene: (sceneId: string) => void;
+    getScene: (sceneId: string) => StoredSceneEntry | undefined;
+};
+
+export const useSceneStore = defineStore('sceneStore', (): SceneStoreSetup => {
     const scenes = ref<StoredSceneEntry[]>([]);
     const initialized = ref(false);
 
@@ -125,7 +137,9 @@ export const useSceneStore = defineStore('sceneStore', () => {
         if (index >= 0) {
             const next = [...scenes.value];
             next.splice(index, 1, entry);
-            return next;
+            scenes.value = next;
+            persistScenes(scenes.value);
+            return entry;
         }
         scenes.value = [entry, ...scenes.value];
 

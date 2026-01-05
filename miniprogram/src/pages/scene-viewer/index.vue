@@ -1287,15 +1287,8 @@ const {
   setCameraViewState,
   setCameraCaging,
   runWithProgrammaticCameraMutation,
-  withControlsVerticalFreedom: (fn) => {
-    const controls = renderContext?.controls;
-    if (controls) withControlsVerticalFreedom(controls, fn);
-  },
-  lockControlsPitchToCurrent: () => {
-    const controls = renderContext?.controls;
-    const camera = renderContext?.camera;
-    if (controls && camera) lockControlsPitchToCurrent(controls, camera);
-  },
+  withControlsVerticalFreedom: (controls, callback) => withControlsVerticalFreedom(controls, callback),
+  lockControlsPitchToCurrent: (controls, camera) => lockControlsPitchToCurrent(controls, camera),
   syncLastFirstPersonStateFromCamera,
   onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
   onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
@@ -2262,12 +2255,12 @@ function isTapInsideLanternDialog(event: Event): boolean {
   return dialogNode === target || dialogNode.contains(target);
 }
 
-function handleLanternOverlayTap(event: Event): void {
+function handleLanternOverlayTap(event?: Event): void {
   if (isLanternViewerOpen()) {
     closeLanternImageFullscreen();
     return;
   }
-  if (!isTapInsideLanternDialog(event)) {
+  if (!event || !isTapInsideLanternDialog(event)) {
     cancelLanternOverlay();
   }
 }
