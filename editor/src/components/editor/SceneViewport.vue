@@ -255,7 +255,7 @@ const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
-const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
+const { panelVisibility, isSceneReady, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
 const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterBrushRadius, scatterEraseRadius } =
   storeToRefs(terrainStore)
 
@@ -1352,7 +1352,7 @@ const {
   clearPlaceholderOverlays,
   updatePlaceholderOverlayPositions,
 } = usePlaceholderOverlayController({
-  getSceneNodes: () => props.sceneNodes,
+  getSceneNodes: () => sceneStore.nodes,
   getCamera: () => camera,
   objectMap,
   getThumbnailUrl: (node) => {
@@ -2753,6 +2753,7 @@ const draggingChangedHandler = (event: unknown) => {
     updateSelectionHighlights()
     if (pendingSceneGraphSync) {
       pendingSceneGraphSync = false
+      sceneStore.drainScenePatches()
       syncSceneGraph()
       refreshPlaceholderOverlays()
     }
@@ -2769,6 +2770,68 @@ const draggingChangedHandler = (event: unknown) => {
     }
     updateSelectionHighlights()
   }
+}
+
+let patchAppliedInCurrentFlush = false
+let patchAppliedResetScheduled = false
+
+function markPatchAppliedInCurrentFlush(): void {
+  patchAppliedInCurrentFlush = true
+  if (patchAppliedResetScheduled) {
+    return
+  }
+  patchAppliedResetScheduled = true
+  const reset = () => {
+    patchAppliedInCurrentFlush = false
+    patchAppliedResetScheduled = false
+  }
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(reset)
+  } else {
+    Promise.resolve().then(reset)
+  }
+}
+
+function applyPendingScenePatches(): boolean {
+  if (!sceneStore.isSceneReady) {
+    return false
+  }
+
+  const patches = sceneStore.drainScenePatches()
+  if (!patches.length) {
+    return false
+  }
+
+  markPatchAppliedInCurrentFlush()
+
+  const needsStructureSync = patches.some((patch) => patch.type === 'structure')
+  if (needsStructureSync) {
+    syncSceneGraph()
+    return true
+  }
+
+  // Best-effort incremental updates; fall back to a full sync if something is missing.
+  for (const patch of patches) {
+    if (patch.type !== 'node') {
+      continue
+    }
+    const nodeId = patch.id
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    const object = objectMap.get(nodeId) ?? null
+    if (!node || !object) {
+      syncSceneGraph()
+      return true
+    }
+    if (shouldRecreateNode(object, node)) {
+      syncSceneGraph()
+      return true
+    }
+
+    updateNodeObject(object, node)
+  }
+
+  updatePlaceholderOverlayPositions()
+  return true
 }
 
 function shouldDeferSceneGraphSync(): boolean {
@@ -8434,7 +8497,7 @@ function syncSceneGraph() {
   if (!scene) return
 
   const encountered = new Set<string>()
-  reconcileNodeList(props.sceneNodes, rootGroup, encountered)
+  reconcileNodeList(sceneStore.nodes, rootGroup, encountered)
 
   const removable: string[] = []
   objectMap.forEach((_object, id) => {
@@ -9203,20 +9266,14 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(
-  () => props.sceneNodes,
-  () => {
-    if (shouldDeferSceneGraphSync()) {
-      pendingSceneGraphSync = true
-      return
-    }
-
-    if (sceneStore.isSceneReady) {
-      syncSceneGraph()
-    }
-    refreshPlaceholderOverlays()
+watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
+  if (shouldDeferSceneGraphSync()) {
+    pendingSceneGraphSync = true
+    return
   }
-)
+
+  applyPendingScenePatches()
+})
 
 watch(
   () => props.cameraState,
