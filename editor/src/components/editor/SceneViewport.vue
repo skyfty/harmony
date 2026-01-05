@@ -6,6 +6,8 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
+import { createNormalizedPointerGuard } from './normalizedPointerGuard
+import { createPointerCaptureGuard } from './pointerCaptureGuard'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -342,6 +344,16 @@ let latestFogSettings: EnvironmentSettings | null = null
 let shouldRenderSkyBackground = true
 let sky: Sky | null = null
 let resizeObserver: ResizeObserver | null = null
+
+const normalizedPointerGuard = createNormalizedPointerGuard({
+  getCanvas: () => canvasRef.value,
+  getCamera: () => camera,
+  raycaster,
+  pointer,
+})
+
+const pointerCaptureGuard = createPointerCaptureGuard(() => canvasRef.value)
+
 const postprocessing = useViewportPostprocessing({
   getRenderer: () => renderer,
   getScene: () => scene,
@@ -1311,16 +1323,9 @@ function pickSceneInstancedTargetAtPointer(event: PointerEvent): { nodeId: strin
 }
 
 function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?: string | null }): { handled: boolean; erasedKey: string | null } {
-  if (!canvasRef.value || !camera) {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
     return { handled: false, erasedKey: null }
   }
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return { handled: false, erasedKey: null }
-  }
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
 
   const pickTargets = collectInstancedPickTargets()
   const intersections = raycaster.intersectObjects(pickTargets, false)
@@ -1557,11 +1562,7 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
   }
 
   disableOrbitForSelectDrag()
-  try {
-    canvasRef.value.setPointerCapture(event.pointerId)
-  } catch (_error) {
-    /* noop */
-  }
+  pointerCaptureGuard.capture(event.pointerId)
 
   event.preventDefault()
   event.stopPropagation()
@@ -1635,9 +1636,7 @@ function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false):
   }
   continuousInstancedCreateState = null
 
-  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-    canvasRef.value.releasePointerCapture(event.pointerId)
-  }
+  pointerCaptureGuard.releaseIfCaptured(event.pointerId)
 
   restoreOrbitAfterSelectDrag()
 
@@ -1909,11 +1908,7 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
     referencePoint: hit.referencePoint.clone(),
     initialProjection: hit.initialProjection,
   }
-  try {
-    canvasRef.value?.setPointerCapture(event.pointerId)
-  } catch {
-    /* noop */
-  }
+  pointerCaptureGuard.capture(event.pointerId)
   pointerTrackingState = null
   event.preventDefault()
   event.stopPropagation()
@@ -2337,14 +2332,9 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
     return null
   }
 
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
     return null
   }
-
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
 
   const intersection = raycaster.ray.intersectBox(selectionDragBoundingBox, selectionDragIntersectionHelper)
   if (!intersection) {
@@ -3290,19 +3280,57 @@ watch(axesVisible, (visible) => {
   applyAxesVisibility(visible)
 }, { immediate: true })
 
-watch(skyboxSettings, (settings) => {
-  applySkyboxSettingsToScene(settings)
+const skyboxSignature = computed(() => {
+  const settings = skyboxSettings.value
+  if (!settings) {
+    return 'null'
+  }
+  return JSON.stringify({
+    turbidity: settings.turbidity,
+    rayleigh: settings.rayleigh,
+    mieCoefficient: settings.mieCoefficient,
+    mieDirectionalG: settings.mieDirectionalG,
+    elevation: settings.elevation,
+    azimuth: settings.azimuth,
+    exposure: settings.exposure,
+  })
+})
+
+const environmentSignature = computed(() => {
+  const settings = environmentSettings.value
+  return JSON.stringify({
+    background: {
+      mode: settings.background.mode,
+      solidColor: settings.background.solidColor,
+      hdriAssetId: settings.background.hdriAssetId ?? null,
+    },
+    environmentMap: {
+      mode: settings.environmentMap.mode,
+      hdriAssetId: settings.environmentMap.hdriAssetId ?? null,
+    },
+    ambientLightColor: settings.ambientLightColor,
+    ambientLightIntensity: settings.ambientLightIntensity,
+    fogMode: settings.fogMode,
+    fogColor: settings.fogColor,
+    fogNear: settings.fogNear,
+    fogFar: settings.fogFar,
+    fogDensity: settings.fogDensity,
+  })
+})
+
+watch(skyboxSignature, () => {
+  applySkyboxSettingsToScene(skyboxSettings.value)
   syncCloudRendererSettings()
-}, { deep: true, immediate: true })
+}, { immediate: true })
 
 watch(cloudPreviewEnabled, () => {
   syncCloudRendererSettings()
 }, { immediate: true })
 
-watch(environmentSettings, (settings) => {
-  void applyEnvironmentSettingsToScene(settings)
+watch(environmentSignature, () => {
+  void applyEnvironmentSettingsToScene(environmentSettings.value)
   updateFogForSelection()
-}, { deep: true, immediate: true })
+}, { immediate: true })
 
 watch(isEnvironmentNodeSelected, () => {
   updateFogForSelection()
@@ -5206,16 +5234,9 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
 }
 
 function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
-  if (!camera || !canvasRef.value) {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
     return false
   }
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return false
-  }
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
   return !!raycaster.ray.intersectPlane(groundPlane, result)
 }
 
@@ -5251,11 +5272,7 @@ async function handlePointerDown(event: PointerEvent) {
         instancedEraseDragState.lastKey = result.erasedKey
         instancedEraseDragState.lastAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
       }
-      try {
-        canvasRef.value.setPointerCapture(event.pointerId)
-      } catch {
-        /* noop */
-      }
+      pointerCaptureGuard.capture(event.pointerId)
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -5425,11 +5442,7 @@ async function handlePointerDown(event: PointerEvent) {
               })),
             },
           }
-          try {
-            canvasRef.value.setPointerCapture(event.pointerId)
-          } catch {
-            /* noop */
-          }
+          pointerCaptureGuard.capture(event.pointerId)
           pointerTrackingState = null
           event.preventDefault()
           event.stopPropagation()
@@ -5582,11 +5595,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
 
-  try {
-    canvasRef.value.setPointerCapture(event.pointerId)
-  } catch (error) {
-    /* noop */
-  }
+  pointerCaptureGuard.capture(event.pointerId)
 
   const selectionDrag = button === 0 && props.activeTool === 'select' && dragHit && currentPrimaryId && dragHit.nodeId === currentPrimaryId
     ? createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
@@ -5855,9 +5864,7 @@ function handlePointerUp(event: PointerEvent) {
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId && event.button === 1) {
     const state = roadVertexDragState
     roadVertexDragState = null
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
 
     if (state.moved) {
       sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
@@ -5917,9 +5924,7 @@ function handlePointerUp(event: PointerEvent) {
   if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId && event.button === 1) {
     const state = floorEdgeDragState
     floorEdgeDragState = null
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
 
     if (state.moved) {
       sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
@@ -5946,9 +5951,7 @@ function handlePointerUp(event: PointerEvent) {
 
   if (instancedEraseDragState && event.pointerId === instancedEraseDragState.pointerId && event.button === 1) {
     instancedEraseDragState = null
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -6056,9 +6059,7 @@ function handlePointerUp(event: PointerEvent) {
   const trackingState = pointerTrackingState
   pointerTrackingState = null
 
-  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-    canvasRef.value.releasePointerCapture(event.pointerId)
-  }
+  pointerCaptureGuard.releaseIfCaptured(event.pointerId)
 
   if (transformControls?.dragging) {
     return
@@ -6129,9 +6130,7 @@ function handlePointerCancel(event: PointerEvent) {
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
     roadVertexDragState = null
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
     try {
       const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
       updateRoadGroup(state.roadGroup, state.baseDefinition, roadOptions)
@@ -6183,9 +6182,7 @@ function handlePointerCancel(event: PointerEvent) {
   if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId) {
     const state = floorEdgeDragState
     floorEdgeDragState = null
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
     const resetVertices = state.startVertices.map(([x, z]) => [x, z] as [number, number])
     state.workingDefinition.vertices = resetVertices
     updateFloorGroup(state.runtimeObject, state.workingDefinition)
@@ -9482,13 +9479,21 @@ watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
   applyPendingScenePatches()
 })
 
-watch(
-  () => props.cameraState,
-  (state) => {
-    applyCameraState(state)
-  },
-  { deep: true }
-)
+const cameraStateSignature = computed(() => {
+  const state = props.cameraState
+  if (!state) {
+    return 'null'
+  }
+  return JSON.stringify({
+    position: [state.position.x, state.position.y, state.position.z],
+    target: [state.target.x, state.target.y, state.target.z],
+    fov: state.fov,
+  })
+})
+
+watch(cameraStateSignature, () => {
+  applyCameraState(props.cameraState)
+})
 
 watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
