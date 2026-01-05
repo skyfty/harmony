@@ -1394,6 +1394,22 @@ function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
 	return null
 }
 
+function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
+	let currentId: string | null = nodeId
+	while (currentId) {
+		try {
+			const actions = listRegisteredBehaviorActions(currentId)
+			if (actions.includes('click')) {
+				return currentId
+			}
+		} catch {
+			// keep searching if behavior registry is unavailable
+		}
+		currentId = resolveParentNodeId(currentId)
+	}
+	return null
+}
+
 const vehicleDriveUi = computed(() => {
 	const override = vehicleDriveUiOverride.value
 	const baseActive = vehicleDriveState.active
@@ -4720,11 +4736,14 @@ function handleCanvasClick(event: MouseEvent) {
 
 		// 1) Behavior click has priority.
 		if (hasRegisteredBehaviors()) {
-			const actions = listRegisteredBehaviorActions(resolvedId)
-			if (actions.includes('click')) {
-				const hitObject = nodeObjectMap.get(resolvedId) ?? intersection.object
+			const directActions = listRegisteredBehaviorActions(resolvedId)
+			const behaviorTargetId = directActions.includes('click')
+				? resolvedId
+				: resolveClickBehaviorAncestorNodeId(resolvedId)
+			if (behaviorTargetId) {
+				const hitObject = nodeObjectMap.get(behaviorTargetId) ?? intersection.object
 				const hitPoint = intersection.point
-				const results = triggerBehaviorAction(resolvedId, 'click', {
+				const results = triggerBehaviorAction(behaviorTargetId, 'click', {
 					pointerEvent: event,
 					intersection: {
 						object: hitObject,
