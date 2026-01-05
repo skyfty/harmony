@@ -11945,6 +11945,7 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = nextTree
       this.setSelection([id], { primaryId: id })
+      this.queueSceneStructurePatch('addSceneNode')
       commitSceneSnapshot(this)
 
       return node
