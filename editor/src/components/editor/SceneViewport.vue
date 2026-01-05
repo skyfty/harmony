@@ -2814,6 +2814,45 @@ function removeNodeObjects(removedIds: Set<string>): void {
   refreshEffectRuntimeTickers()
 }
 
+function buildParentIdMap(nodes: SceneNode[]): Map<string, string | null> {
+  const map = new Map<string, string | null>()
+  const walk = (list: SceneNode[], parentId: string | null) => {
+    list.forEach((node) => {
+      map.set(node.id, parentId)
+      if (node.children?.length) {
+        walk(node.children, node.id)
+      }
+    })
+  }
+  walk(nodes, null)
+  return map
+}
+
+function ensureNodeSubtreeExists(nodeId: string, node: SceneNode, parentIdMap: Map<string, string | null>): boolean {
+  const parentId = parentIdMap.get(nodeId) ?? null
+  const parentObject = parentId ? (objectMap.get(parentId) ?? null) : rootGroup
+  if (parentId && !parentObject) {
+    return false
+  }
+  reconcileNode(node, parentObject ?? rootGroup, new Set<string>())
+  return true
+}
+
+function recreateNodeSubtree(nodeId: string, node: SceneNode, parentIdMap: Map<string, string | null>): boolean {
+  const existing = objectMap.get(nodeId) ?? null
+  const parentObject = existing?.parent
+    ?? (() => {
+      const parentId = parentIdMap.get(nodeId) ?? null
+      return parentId ? (objectMap.get(parentId) ?? null) : rootGroup
+    })()
+  if (!parentObject) {
+    return false
+  }
+  disposeNodeSubtree(nodeId)
+  reconcileNode(node, parentObject, new Set<string>())
+  return true
+}
+
 function applyPendingScenePatches(): boolean {
   if (!sceneStore.isSceneReady) {
     return false
@@ -2866,23 +2905,108 @@ function applyPendingScenePatches(): boolean {
     removeNodeObjects(removedIds)
   }
 
-  for (const patch of patches) {
-    if (patch.type !== 'node') {
-      continue
+  let parentIdMap: Map<string, string | null> | null = null
+  const getParentIdMap = () => {
+    if (parentIdMap) {
+      return parentIdMap
     }
-    const nodeId = patch.id
-    const node = findSceneNode(sceneStore.nodes, nodeId)
-    const object = objectMap.get(nodeId) ?? null
-    if (!node || !object) {
-      syncSceneGraph()
-      return true
-    }
-    if (shouldRecreateNode(object, node)) {
-      syncSceneGraph()
-      return true
+    parentIdMap = buildParentIdMap(sceneStore.nodes)
+    return parentIdMap
+  }
+
+  const nodePatches = patches.filter((patch) => patch.type === 'node') as Array<{
+    type: 'node'
+    id: string
+    fields: string[]
+  }>
+  if (nodePatches.length) {
+    // Fast path: if all targets exist and don't require recreation, avoid building parent maps.
+    let needsTopology = false
+    for (const patch of nodePatches) {
+      const nodeId = patch.id
+      if (removedIds.has(nodeId)) {
+        continue
+      }
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      if (!node) {
+        continue
+      }
+      const object = objectMap.get(nodeId) ?? null
+      if (!object || shouldRecreateNode(object, node)) {
+        needsTopology = true
+        break
+      }
     }
 
-    updateNodeObject(object, node)
+    if (!needsTopology) {
+      for (const patch of nodePatches) {
+        const nodeId = patch.id
+        if (removedIds.has(nodeId)) {
+          continue
+        }
+        const node = findSceneNode(sceneStore.nodes, nodeId)
+        const object = objectMap.get(nodeId) ?? null
+        if (!node || !object) {
+          continue
+        }
+        updateNodeObject(object, node)
+      }
+    } else {
+      const resolvedParentIdMap = getParentIdMap()
+      const depthCache = new Map<string, number>()
+      const resolveDepth = (id: string): number => {
+        if (depthCache.has(id)) {
+          return depthCache.get(id) as number
+        }
+        let depth = 0
+        let current: string | null = id
+        const visited = new Set<string>()
+        while (current) {
+          if (visited.has(current)) {
+            depth = 9999
+            break
+          }
+          visited.add(current)
+          const nextParentId: string | null = resolvedParentIdMap.get(current) ?? null
+          if (!nextParentId) {
+            break
+          }
+          depth += 1
+          current = nextParentId
+        }
+        depthCache.set(id, depth)
+        return depth
+      }
+
+      nodePatches.sort((a, b) => resolveDepth(a.id) - resolveDepth(b.id))
+
+      for (const patch of nodePatches) {
+        const nodeId = patch.id
+        if (removedIds.has(nodeId)) {
+          continue
+        }
+        const node = findSceneNode(sceneStore.nodes, nodeId)
+        if (!node) {
+          continue
+        }
+        const object = objectMap.get(nodeId) ?? null
+        if (!object) {
+          if (!ensureNodeSubtreeExists(nodeId, node, resolvedParentIdMap)) {
+            syncSceneGraph()
+            return true
+          }
+          continue
+        }
+        if (shouldRecreateNode(object, node)) {
+          if (!recreateNodeSubtree(nodeId, node, resolvedParentIdMap)) {
+            syncSceneGraph()
+            return true
+          }
+          continue
+        }
+        updateNodeObject(object, node)
+      }
+    }
   }
 
   if (needsPlaceholderOverlayRefresh) {

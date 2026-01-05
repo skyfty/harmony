@@ -347,6 +347,7 @@ export type ScenePatchField =
   | 'components'
   | 'dynamicMesh'
   | 'light'
+  | 'runtime'
   | 'userData'
   | 'name'
   | 'groupExpanded'
@@ -9082,7 +9083,18 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (errors.length === 0 && refreshViewport) {
-        this.queueSceneStructurePatch('ensureSceneAssetsReady')
+        // Avoid forcing a full scene graph reconcile.
+        // Signal consumers (viewport) to refresh/recreate affected runtime objects incrementally.
+        let queued = false
+        assetNodeMap.forEach((nodesForAsset) => {
+          nodesForAsset.forEach((node) => {
+            const ok = this.queueSceneNodePatch(node.id, ['runtime'], { bumpVersion: false })
+            queued = queued || ok
+          })
+        })
+        if (queued) {
+          this.sceneNodePropertyVersion += 1
+        }
       }
     },
     async spawnAssetAtPosition(
@@ -9965,6 +9977,9 @@ export const useSceneStore = defineStore('scene', {
         }
       }
       syncSubtree(duplicate)
+
+      // Prefab dependencies are ready; now create the subtree in the viewport.
+      this.queueSceneNodePatch(duplicate.id, ['transform'])
 
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
@@ -11161,8 +11176,8 @@ export const useSceneStore = defineStore('scene', {
       }
       this.setSelection([id])
 
-      // Structure changed: a new node was inserted.
-      this.queueSceneStructurePatch('addPlaceholderNode')
+      // A new node was inserted. Use incremental viewport updates.
+      this.queueSceneNodePatch(id, ['transform', 'download'])
 
       return node
     },
@@ -11469,8 +11484,10 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = tree
         this.setSelection([newNodeId])
 
-        // Structure changed: placeholder removed, real node inserted.
-        this.queueSceneStructurePatch('finalizePlaceholderNode')
+        // Avoid forcing a full scene graph reconcile. Incrementally remove the placeholder
+        // and create the real node in the viewport.
+        this.queueSceneRemovePatch([nodeId], 'finalizePlaceholderNode')
+        this.queueSceneNodePatch(newNodeId, ['runtime'])
 
         assetCache.touch(asset.id)
 
