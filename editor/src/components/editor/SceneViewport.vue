@@ -2803,6 +2803,17 @@ function markPatchAppliedInCurrentFlush(): void {
   }
 }
 
+function removeNodeObjects(removedIds: Set<string>): void {
+  removedIds.forEach((id) => disposeNodeSubtree(id))
+
+  // Keep selection/effects/lighting consistent with the full-sync path.
+  attachSelection(props.selectedNodeId, props.activeTool)
+  updateOutlineSelectionTargets()
+  updateSelectionHighlights()
+  ensureFallbackLighting()
+  refreshEffectRuntimeTickers()
+}
+
 function applyPendingScenePatches(): boolean {
   if (!sceneStore.isSceneReady) {
     return false
@@ -2817,6 +2828,9 @@ function applyPendingScenePatches(): boolean {
 
   const needsPlaceholderOverlayRefresh = patches.some((patch) => {
     if (patch.type === 'structure') {
+      return true
+    }
+    if (patch.type === 'remove') {
       return true
     }
     if (patch.type === 'node') {
@@ -2836,7 +2850,22 @@ function applyPendingScenePatches(): boolean {
     return true
   }
 
-  // Best-effort incremental updates; fall back to a full sync if something is missing.
+  // Incremental removals: dispose subtrees directly instead of full reconcile.
+  const removedIds = new Set<string>()
+  for (const patch of patches) {
+    if (patch.type !== 'remove') {
+      continue
+    }
+    patch.ids.forEach((id) => {
+      if (typeof id === 'string' && id.trim().length) {
+        removedIds.add(id)
+      }
+    })
+  }
+  if (removedIds.size) {
+    removeNodeObjects(removedIds)
+  }
+
   for (const patch of patches) {
     if (patch.type !== 'node') {
       continue

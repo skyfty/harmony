@@ -355,6 +355,7 @@ export type ScenePatchField =
 
 export type ScenePatch =
   | { type: 'structure'; reason?: string }
+  | { type: 'remove'; ids: string[]; reason?: string }
   | { type: 'node'; id: string; fields: ScenePatchField[] }
 
 declare module '@/types/scene-state' {
@@ -7009,6 +7010,54 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
+    queueSceneRemovePatch(ids: string[], reason?: string): boolean {
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return false
+      }
+      const normalized = Array.from(
+        new Set(
+          ids
+            .filter((id): id is string => typeof id === 'string')
+            .map((id) => id.trim())
+            .filter(Boolean),
+        ),
+      ).filter((id) => id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+      if (!normalized.length) {
+        return false
+      }
+
+      const existing = this.pendingScenePatches
+      if (existing.some((patch) => patch.type === 'structure')) {
+        // A structure reconcile is already pending; no need to queue incremental removes.
+        this.sceneGraphStructureVersion += 1
+        this.sceneNodePropertyVersion += 1
+        return true
+      }
+
+      const removeSet = new Set(normalized)
+      let mergedIds = new Set(normalized)
+      const next: ScenePatch[] = []
+
+      for (const patch of existing) {
+        if (patch.type === 'remove') {
+          patch.ids.forEach((id) => mergedIds.add(id))
+          continue
+        }
+        if (patch.type === 'node' && removeSet.has(patch.id)) {
+          // Dropping node patches for soon-to-be-removed nodes prevents viewport fallbacks.
+          continue
+        }
+        next.push(patch)
+      }
+
+      next.push({ type: 'remove', ids: Array.from(mergedIds), reason })
+
+      this.pendingScenePatches = next
+      this.sceneGraphStructureVersion += 1
+      this.sceneNodePropertyVersion += 1
+      return true
+    },
+
     queueSceneNodePatch(
       nodeId: string,
       fields: ScenePatchField[],
@@ -12919,7 +12968,7 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = pruneNodes(this.nodes, idSet, removed)
 
       if (removed.length) {
-        this.queueSceneStructurePatch('removeSceneNodes')
+        this.queueSceneRemovePatch(removed, 'removeSceneNodes')
       }
 
       removed.forEach((id) => stopPlaceholderWatcher(id))
