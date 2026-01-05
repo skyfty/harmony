@@ -6,7 +6,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
-import { createNormalizedPointerGuard } from './normalizedPointerGuard
+import { createNormalizedPointerGuard } from './normalizedPointerGuard'
 import { createPointerCaptureGuard } from './pointerCaptureGuard'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
