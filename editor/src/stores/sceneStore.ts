@@ -69,7 +69,12 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
-import type { SceneHistoryEntry } from '@/types/scene-history-entry'
+import type {
+  SceneHistoryEntry,
+  SceneHistoryGroundRegionBounds,
+  SceneHistoryGroundHeightEntry,
+  SceneHistoryTransformSnapshot,
+} from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
@@ -6324,25 +6329,290 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   }
 }
 
-function collectSceneRuntimeSnapshots(nodes: SceneNode[]): Map<string, Object3D> {
-  const runtimeSnapshots = new Map<string, Object3D>()
-  nodes.forEach((node) => collectRuntimeSnapshots(node, runtimeSnapshots))
-  return runtimeSnapshots
-}
-
-function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
+function createContentHistoryEntry(store: SceneState): SceneHistoryEntry {
   return {
+    kind: 'content-snapshot',
     nodes: cloneSceneNodes(store.nodes),
     materials: cloneSceneMaterials(store.materials),
-    selectedNodeIds: cloneSelection(store.selectedNodeIds),
-    selectedNodeId: store.selectedNodeId,
-    viewportSettings: cloneViewportSettings(store.viewportSettings),
-    skybox: cloneSkyboxSettings(store.skybox),
-    shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
-    environment: cloneEnvironmentSettings(store.environment),
     groundSettings: cloneGroundSettings(store.groundSettings),
-    resourceProviderId: store.resourceProviderId,
-    runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
+  }
+}
+
+type NodeBasicsHistoryRequest = {
+  id: string
+  name?: boolean
+  visible?: boolean
+  locked?: boolean
+  userData?: boolean
+}
+
+function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHistoryRequest[]): SceneHistoryEntry {
+  const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+  const snapshots: any[] = []
+
+  const normalized = Array.isArray(requests)
+    ? requests.filter((request): request is NodeBasicsHistoryRequest => Boolean(request && typeof request.id === 'string' && request.id.length))
+    : []
+
+  normalized.forEach((request) => {
+    const node = findNodeById(store.nodes, request.id)
+    if (!node) {
+      return
+    }
+
+    const snapshot: Record<string, unknown> = { id: request.id }
+    if (request.name) {
+      snapshot.name = node.name
+    }
+    if (request.visible) {
+      snapshot.visible = typeof (node as any).visible === 'boolean' ? (node as any).visible : null
+    }
+    if (request.locked) {
+      snapshot.locked = typeof (node as any).locked === 'boolean' ? (node as any).locked : null
+    }
+    if (request.userData) {
+      const raw = (node as any).userData
+      snapshot.userData = raw && isPlainRecord(raw) ? (clonePlainRecord(raw) ?? null) : null
+    }
+
+    // Avoid writing empty snapshots.
+    if (Object.keys(snapshot).length > 1) {
+      snapshots.push(snapshot)
+    }
+  })
+
+  // Ensure stable ordering for deterministic diffs/history.
+  snapshots.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+  return { kind: 'node-basics', snapshots }
+}
+
+function createTransformHistoryEntry(store: SceneState, nodeIds: string[]): SceneHistoryEntry {
+  const transforms: SceneHistoryTransformSnapshot[] = []
+  nodeIds.forEach((id) => {
+    const node = findNodeById(store.nodes, id)
+    if (!node) return
+    transforms.push({
+      id,
+      position: cloneVector(node.position ?? { x: 0, y: 0, z: 0 }),
+      rotation: cloneVector(node.rotation ?? { x: 0, y: 0, z: 0 }),
+      scale: cloneVector(node.scale ?? { x: 1, y: 1, z: 1 }),
+    })
+  })
+  return { kind: 'node-transform', transforms }
+}
+
+function createDynamicMeshHistoryEntry(store: SceneState, nodeId: string): SceneHistoryEntry | null {
+  const node = findNodeById(store.nodes, nodeId)
+  if (!node) {
+    return null
+  }
+  // NOTE: dynamicMesh can be large (especially Ground.heightMap). Prefer dedicated ground region history
+  // for sculpt operations; this is mainly for non-ground meshes (road/wall/floor) and discrete edits.
+  return {
+    kind: 'node-dynamic-mesh',
+    nodeId,
+    dynamicMesh: manualDeepClone((node as any).dynamicMesh ?? null),
+  }
+}
+
+function createGroundHeightmapRegionEntry(
+  store: SceneState,
+  nodeId: string,
+  bounds: SceneHistoryGroundRegionBounds,
+): SceneHistoryEntry | null {
+  const node = findNodeById(store.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const definition = node.dynamicMesh as GroundDynamicMesh
+  const normalized = normalizeGroundBounds(definition, bounds)
+  const entries: SceneHistoryGroundHeightEntry[] = []
+  const heightMap = definition.heightMap ?? {}
+  for (const [key, rawValue] of Object.entries(heightMap)) {
+    const value = typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : 0
+    if (Math.abs(value) <= HEIGHT_EPSILON) {
+      continue
+    }
+    const parts = key.split(':')
+    if (parts.length !== 2) {
+      continue
+    }
+    const row = Number(parts[0])
+    const column = Number(parts[1])
+    if (!Number.isFinite(row) || !Number.isFinite(column)) {
+      continue
+    }
+    if (
+      row >= normalized.minRow && row <= normalized.maxRow &&
+      column >= normalized.minColumn && column <= normalized.maxColumn
+    ) {
+      entries.push({ row, column, value })
+    }
+  }
+  return {
+    kind: 'ground-heightmap-region',
+    nodeId,
+    bounds: normalized,
+    entries,
+  }
+}
+
+function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): SceneHistoryEntry | null {
+  const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+  switch (entry.kind) {
+    case 'content-snapshot':
+      return createContentHistoryEntry(store)
+    case 'node-basics': {
+      const requests: NodeBasicsHistoryRequest[] = entry.snapshots.map((snapshot) => {
+        return {
+          id: snapshot.id,
+          name: hasOwn(snapshot, 'name'),
+          visible: hasOwn(snapshot, 'visible'),
+          locked: hasOwn(snapshot, 'locked'),
+          userData: hasOwn(snapshot, 'userData'),
+        }
+      })
+      return createNodeBasicsHistoryEntry(store, requests)
+    }
+    case 'ground-settings':
+      return { kind: 'ground-settings', groundSettings: cloneGroundSettings(store.groundSettings) }
+    case 'ground-texture': {
+      const groundNode = findNodeById(store.nodes, entry.nodeId)
+      const definition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh) : null
+      return {
+        kind: 'ground-texture',
+        nodeId: entry.nodeId,
+        dataUrl: definition?.textureDataUrl ?? null,
+        name: definition?.textureName ?? null,
+      }
+    }
+    case 'node-transform':
+      return createTransformHistoryEntry(store, entry.transforms.map((t) => t.id))
+    case 'node-dynamic-mesh':
+      return createDynamicMeshHistoryEntry(store, entry.nodeId)
+    case 'ground-heightmap-region':
+      return createGroundHeightmapRegionEntry(store, entry.nodeId, entry.bounds)
+    default:
+      return null
+  }
+}
+
+function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
+  const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+  switch (entry.kind) {
+    case 'content-snapshot': {
+      store.nodes = cloneSceneNodes(entry.nodes)
+      store.materials = cloneSceneMaterials(entry.materials)
+      store.groundSettings = cloneGroundSettings(entry.groundSettings)
+      break
+    }
+    case 'node-basics': {
+      entry.snapshots.forEach((snapshot) => {
+        visitNode(store.nodes, snapshot.id, (node) => {
+          if (hasOwn(snapshot, 'name') && typeof snapshot.name === 'string') {
+            node.name = snapshot.name
+          }
+          if (hasOwn(snapshot, 'visible')) {
+            if (snapshot.visible === null) {
+              if ('visible' in (node as any)) {
+                delete (node as any).visible
+              }
+            } else {
+              ;(node as any).visible = Boolean(snapshot.visible)
+            }
+          }
+          if (hasOwn(snapshot, 'locked')) {
+            if (snapshot.locked === null) {
+              if ('locked' in (node as any)) {
+                delete (node as any).locked
+              }
+            } else {
+              ;(node as any).locked = Boolean(snapshot.locked)
+            }
+          }
+          if (hasOwn(snapshot, 'userData')) {
+            const raw = snapshot.userData
+            ;(node as any).userData = raw && isPlainRecord(raw) ? (clonePlainRecord(raw) ?? null) : null
+          }
+        })
+      })
+      store.nodes = [...store.nodes]
+      break
+    }
+    case 'ground-settings': {
+      store.groundSettings = cloneGroundSettings(entry.groundSettings)
+      break
+    }
+    case 'ground-texture': {
+      const groundNode = findNodeById(store.nodes, entry.nodeId)
+      if (!groundNode) {
+        break
+      }
+      if (groundNode.dynamicMesh?.type !== 'Ground') {
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, store.groundSettings)
+      }
+      const definition = groundNode.dynamicMesh as GroundDynamicMesh
+      groundNode.dynamicMesh = {
+        ...definition,
+        textureDataUrl: entry.dataUrl,
+        textureName: entry.name,
+      }
+      store.nodes = [...store.nodes]
+      break
+    }
+    case 'node-transform': {
+      entry.transforms.forEach((transform) => {
+        visitNode(store.nodes, transform.id, (node) => {
+          node.position = cloneVector(transform.position)
+          node.rotation = cloneVector(transform.rotation)
+          node.scale = cloneVector(transform.scale)
+        })
+      })
+      // trigger reactivity
+      store.nodes = [...store.nodes]
+      break
+    }
+    case 'node-dynamic-mesh': {
+      visitNode(store.nodes, entry.nodeId, (node) => {
+        ;(node as any).dynamicMesh = manualDeepClone(entry.dynamicMesh as any)
+      })
+      store.nodes = [...store.nodes]
+      break
+    }
+    case 'ground-heightmap-region': {
+      const node = findNodeById(store.nodes, entry.nodeId)
+      if (!node) {
+        break
+      }
+      if (node.dynamicMesh?.type !== 'Ground') {
+        node.dynamicMesh = createGroundDynamicMeshDefinition({}, store.groundSettings)
+      }
+      const definition = node.dynamicMesh as GroundDynamicMesh
+      const nextHeightMap: Record<string, number> = { ...(definition.heightMap ?? {}) }
+      for (const key of Object.keys(nextHeightMap)) {
+        const parts = key.split(':')
+        if (parts.length !== 2) continue
+        const row = Number(parts[0])
+        const column = Number(parts[1])
+        if (!Number.isFinite(row) || !Number.isFinite(column)) continue
+        if (
+          row >= entry.bounds.minRow && row <= entry.bounds.maxRow &&
+          column >= entry.bounds.minColumn && column <= entry.bounds.maxColumn
+        ) {
+          delete nextHeightMap[key]
+        }
+      }
+      entry.entries.forEach((cell) => {
+        const key = groundVertexKey(cell.row, cell.column)
+        nextHeightMap[key] = cell.value
+      })
+      node.dynamicMesh = {
+        ...definition,
+        heightMap: nextHeightMap,
+      }
+      store.nodes = [...store.nodes]
+      break
+    }
   }
 }
 
@@ -6905,7 +7175,6 @@ export const useSceneStore = defineStore('scene', {
       isRestoringHistory: false,
       activeTransformNodeId: null,
       transformSnapshotCaptured: false,
-      pendingTransformSnapshot: null,
       isSceneReady: false,
       hasUnsavedChanges: false,
       workspaceId: '',
@@ -7108,8 +7377,8 @@ export const useSceneStore = defineStore('scene', {
       const snapshot = buildSceneDocumentFromState(this)
       return snapshot
     },
-    appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
-      const nextUndoStack = [...this.undoStack, snapshot]
+    appendUndoEntry(entry: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
+      const nextUndoStack = [...this.undoStack, entry]
       this.undoStack = nextUndoStack.length > HISTORY_LIMIT
         ? nextUndoStack.slice(nextUndoStack.length - HISTORY_LIMIT)
         : nextUndoStack
@@ -7125,8 +7394,67 @@ export const useSceneStore = defineStore('scene', {
       if (historyCaptureSuppressionDepth > 0) {
         return
       }
-      const snapshot = createHistorySnapshot(this)
-      this.appendUndoSnapshot(snapshot, options)
+      const entry = createContentHistoryEntry(this)
+      this.appendUndoEntry(entry, options)
+    },
+    captureTransformHistorySnapshot(nodeIds: string[]) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const normalized = Array.isArray(nodeIds)
+        ? nodeIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+      if (!normalized.length) {
+        return
+      }
+      const entry = createTransformHistoryEntry(this, normalized)
+      this.appendUndoEntry(entry)
+    },
+    captureNodeBasicsHistorySnapshot(requests: NodeBasicsHistoryRequest[]) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const normalized = Array.isArray(requests)
+        ? requests.filter((request): request is NodeBasicsHistoryRequest => Boolean(request && typeof request.id === 'string' && request.id.length))
+        : []
+      if (!normalized.length) {
+        return
+      }
+      const entry = createNodeBasicsHistoryEntry(this, normalized)
+      if (entry.kind !== 'node-basics' || !entry.snapshots.length) {
+        return
+      }
+      this.appendUndoEntry(entry)
+    },
+    captureGroundHeightmapRegionHistory(nodeId: string, bounds: SceneHistoryGroundRegionBounds) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const entry = createGroundHeightmapRegionEntry(this, nodeId, bounds)
+      if (entry) {
+        this.appendUndoEntry(entry)
+      }
+    },
+    captureNodeDynamicMeshHistory(nodeId: string) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      if (historyCaptureSuppressionDepth > 0) {
+        return
+      }
+      const entry = createDynamicMeshHistoryEntry(this, nodeId)
+      if (entry) {
+        this.appendUndoEntry(entry)
+      }
     },
     beginHistoryCaptureSuppression() {
       historyCaptureSuppressionDepth += 1
@@ -7142,83 +7470,81 @@ export const useSceneStore = defineStore('scene', {
         this.endHistoryCaptureSuppression()
       }
     },
-    pushRedoSnapshot() {
-      const snapshot = createHistorySnapshot(this)
-      const nextRedoStack = [...this.redoStack, snapshot]
-      this.redoStack = nextRedoStack.length > HISTORY_LIMIT
-        ? nextRedoStack.slice(nextRedoStack.length - HISTORY_LIMIT)
-        : nextRedoStack
-    },
-    async restoreFromHistory(snapshot: SceneHistoryEntry) {
-      this.isRestoringHistory = true
-      this.activeTransformNodeId = null
-      this.transformSnapshotCaptured = false
-      this.pendingTransformSnapshot = null
-      try {
-        this.nodes.forEach((node) => releaseRuntimeTree(node))
-        this.nodes = cloneSceneNodes(snapshot.nodes)
-        this.materials = cloneSceneMaterials(snapshot.materials)
-        this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
-        this.selectedNodeId = snapshot.selectedNodeId
-        this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
-        const legacyViewport = snapshot.viewportSettings as LegacyViewportSettings | undefined
-        this.skybox = cloneSceneSkybox(snapshot.skybox ?? legacyViewport?.skybox ?? null)
-        this.shadowsEnabled = normalizeShadowsEnabledInput(snapshot.shadowsEnabled ?? legacyViewport?.shadowsEnabled)
-        this.environment = cloneEnvironmentSettings(snapshot.environment)
-        this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
-        this.resourceProviderId = snapshot.resourceProviderId
-
-        componentManager.reset()
-        componentManager.syncScene(this.nodes)
-
-        snapshot.runtimeSnapshots.forEach((object, nodeId) => {
-          const node = findNodeById(this.nodes, nodeId)
-          if (!node) {
-            return
-          }
-          restoreRuntimeFromSnapshot(node, object)
-        })
-
-        this.rebuildGeneratedMeshRuntimes()
-
-        const nodeIds = flattenNodeIds(this.nodes)
-        const missingRuntimeObjects = nodeIds.filter((id) => !runtimeObjectRegistry.has(id))
-        if (missingRuntimeObjects.length) {
-          await this.ensureSceneAssetsReady({ nodes: this.nodes, showOverlay: false, refreshViewport: false })
-        }
-
-        // trigger reactivity for consumers relying on node array reference
-        this.nodes = [...this.nodes]
-        commitSceneSnapshot(this)
-      } finally {
-        this.isRestoringHistory = false
-      }
-    },
     async undo() {
       if (!this.undoStack.length || this.isRestoringHistory) {
         return false
       }
-      const snapshot = this.undoStack[this.undoStack.length - 1]!
+      const entry = this.undoStack[this.undoStack.length - 1]!
       this.undoStack = this.undoStack.slice(0, -1)
-      this.pushRedoSnapshot()
-      await this.restoreFromHistory(snapshot)
-      return true
+
+      this.isRestoringHistory = true
+      this.activeTransformNodeId = null
+      this.transformSnapshotCaptured = false
+      try {
+        const redoEntry = captureRedoEntryFor(this, entry)
+        if (redoEntry) {
+          const nextRedoStack = [...this.redoStack, redoEntry]
+          this.redoStack = nextRedoStack.length > HISTORY_LIMIT
+            ? nextRedoStack.slice(nextRedoStack.length - HISTORY_LIMIT)
+            : nextRedoStack
+        }
+
+        this.nodes.forEach((node) => releaseRuntimeTree(node))
+
+        applyHistoryEntry(this, entry)
+        // Keep excluded state (environment/skybox/shadows/etc.) out of undo.
+        this.nodes = ensureEnvironmentNode(
+          ensureSkyNode(ensureGroundNode(this.nodes, this.groundSettings)),
+          this.environment,
+        )
+
+        // Sanitize selection without recording it in history.
+        this.setSelection(this.selectedNodeIds)
+
+        await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+        commitSceneSnapshot(this)
+        return true
+      } finally {
+        this.isRestoringHistory = false
+      }
     },
     async redo() {
       if (!this.redoStack.length || this.isRestoringHistory) {
         return false
       }
-      const snapshot = this.redoStack[this.redoStack.length - 1]!
+      const entry = this.redoStack[this.redoStack.length - 1]!
       this.redoStack = this.redoStack.slice(0, -1)
-      this.captureHistorySnapshot({ resetRedo: false })
-      await this.restoreFromHistory(snapshot)
-      return true
+
+      this.isRestoringHistory = true
+      this.activeTransformNodeId = null
+      this.transformSnapshotCaptured = false
+      try {
+        const undoEntry = captureRedoEntryFor(this, entry)
+        if (undoEntry) {
+          this.appendUndoEntry(undoEntry, { resetRedo: false })
+        }
+
+        this.nodes.forEach((node) => releaseRuntimeTree(node))
+
+        applyHistoryEntry(this, entry)
+        this.nodes = ensureEnvironmentNode(
+          ensureSkyNode(ensureGroundNode(this.nodes, this.groundSettings)),
+          this.environment,
+        )
+
+        this.setSelection(this.selectedNodeIds)
+
+        await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+        commitSceneSnapshot(this)
+        return true
+      } finally {
+        this.isRestoringHistory = false
+      }
     },
     beginTransformInteraction(nodeId: string | null) {
       if (!nodeId) {
         this.activeTransformNodeId = null
         this.transformSnapshotCaptured = false
-        this.pendingTransformSnapshot = null
         return
       }
       if (this.activeTransformNodeId !== nodeId) {
@@ -7227,10 +7553,6 @@ export const useSceneStore = defineStore('scene', {
       this.transformSnapshotCaptured = false
     },
     endTransformInteraction() {
-      if (this.pendingTransformSnapshot && this.transformSnapshotCaptured && !this.isRestoringHistory) {
-        this.appendUndoSnapshot(this.pendingTransformSnapshot)
-      }
-      this.pendingTransformSnapshot = null
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
     },
@@ -7246,12 +7568,18 @@ export const useSceneStore = defineStore('scene', {
         groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
       const currentDefinition = groundNode.dynamicMesh as GroundDynamicMesh
+
       const result = applyGroundRegionTransform(currentDefinition, bounds, transformer)
       if (!result.changed) {
         return false
       }
+
+      // Record a minimal history entry for this region (sparse heightMap keys only).
+      this.captureGroundHeightmapRegionHistory(groundNode.id, bounds)
+
       groundNode.dynamicMesh = result.definition
       this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
       return true
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
@@ -7270,10 +7598,15 @@ export const useSceneStore = defineStore('scene', {
       if (this.groundSettings.enableAirWall === next) {
         return false
       }
+
+      this.appendUndoEntry({ kind: 'ground-settings', groundSettings: cloneGroundSettings(this.groundSettings) })
+
       this.groundSettings = {
         ...this.groundSettings,
         enableAirWall: next,
       }
+
+      commitSceneSnapshot(this)
       return true
     },
     setGroundDimensions(payload: { width?: number; depth?: number }) {
@@ -7288,6 +7621,9 @@ export const useSceneStore = defineStore('scene', {
       ) {
         return false
       }
+
+      // This operation may resize/regenerate ground meshes; use a content snapshot for correctness.
+      this.captureHistorySnapshot()
 
       this.groundSettings = normalized
 
@@ -7313,6 +7649,8 @@ export const useSceneStore = defineStore('scene', {
         this.environment,
       )
       this.nodes = updatedNodes
+
+      commitSceneSnapshot(this)
       return true
     },
     setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
@@ -7329,12 +7667,22 @@ export const useSceneStore = defineStore('scene', {
       if (definition.textureDataUrl === nextDataUrl && definition.textureName === nextName) {
         return false
       }
+
+      this.appendUndoEntry({
+        kind: 'ground-texture',
+        nodeId: groundNode.id,
+        dataUrl: definition.textureDataUrl ?? null,
+        name: definition.textureName ?? null,
+      })
+
       groundNode.dynamicMesh = {
         ...definition,
         textureDataUrl: nextDataUrl,
         textureName: nextName,
       }
       this.nodes = [...this.nodes]
+
+      commitSceneSnapshot(this)
       return true
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
@@ -7343,7 +7691,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.captureHistorySnapshot()
       this.environment = normalized
       this.nodes = ensureEnvironmentNode(this.nodes, normalized)
       commitSceneSnapshot(this)
@@ -7548,15 +7895,11 @@ export const useSceneStore = defineStore('scene', {
       const isActiveTransform = this.activeTransformNodeId === payload.id
       if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
-          if (this.pendingTransformSnapshot) {
-            this.transformSnapshotCaptured = true
-          } else {
-            this.captureHistorySnapshot()
-            this.transformSnapshotCaptured = true
-          }
+          this.captureTransformHistorySnapshot([payload.id])
+          this.transformSnapshotCaptured = true
         }
       } else {
-        this.captureHistorySnapshot()
+        this.captureTransformHistorySnapshot([payload.id])
       }
       visitNode(this.nodes, payload.id, (node) => {
         node.position = cloneVector(payload.position)
@@ -7593,15 +7936,11 @@ export const useSceneStore = defineStore('scene', {
       const isActiveTransform = this.activeTransformNodeId === payload.id
       if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
-          if (this.pendingTransformSnapshot) {
-            this.transformSnapshotCaptured = true
-          } else {
-            this.captureHistorySnapshot()
-            this.transformSnapshotCaptured = true
-          }
+          this.captureTransformHistorySnapshot([payload.id])
+          this.transformSnapshotCaptured = true
         }
       } else {
-        this.captureHistorySnapshot()
+        this.captureTransformHistorySnapshot([payload.id])
       }
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
@@ -7622,7 +7961,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      this.captureHistorySnapshot()
+      this.captureNodeBasicsHistorySnapshot([{ id: nodeId, userData: true }])
 
       const sanitized = userData && isPlainRecord(userData) ? (clonePlainRecord(userData) ?? null) : null
 
@@ -7683,15 +8022,11 @@ export const useSceneStore = defineStore('scene', {
 
       if (interactsWithActive) {
         if (!this.transformSnapshotCaptured) {
-          if (this.pendingTransformSnapshot) {
-            this.transformSnapshotCaptured = true
-          } else {
-            this.captureHistorySnapshot()
-            this.transformSnapshotCaptured = true
-          }
+          this.captureTransformHistorySnapshot(prepared.map((update) => update.id))
+          this.transformSnapshotCaptured = true
         }
       } else {
-        this.captureHistorySnapshot()
+        this.captureTransformHistorySnapshot(prepared.map((update) => update.id))
       }
 
       prepared.forEach((update) => {
@@ -7719,6 +8054,14 @@ export const useSceneStore = defineStore('scene', {
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) return
+
+      if (target.dynamicMesh?.type === 'Ground') {
+        // Ground mesh edits should ideally use region-based history; fall back to a content snapshot for safety.
+        this.captureHistorySnapshot()
+      } else {
+        this.captureNodeDynamicMeshHistory(nodeId)
+      }
+
       visitNode(this.nodes, nodeId, (node) => {
         // PERF: Avoid JSON stringify/parse deep clones.
         // Dynamic meshes (especially Ground.heightMap) can be very large and deep cloning can stall the UI.
@@ -7764,6 +8107,7 @@ export const useSceneStore = defineStore('scene', {
         }
       })
       this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {
       const target = findNodeById(this.nodes, nodeId)
@@ -7782,7 +8126,7 @@ export const useSceneStore = defineStore('scene', {
       if (!target || target.name === trimmed) {
         return
       }
-      this.captureHistorySnapshot()
+      this.captureNodeBasicsHistorySnapshot([{ id, name: true }])
       visitNode(this.nodes, id, (node) => {
         node.name = trimmed
       })
@@ -8325,14 +8669,19 @@ export const useSceneStore = defineStore('scene', {
       return node?.visible ?? true
     },
     setNodeVisibility(id: string, visible: boolean) {
-      let updated = false
-      visitNode(this.nodes, id, (node) => {
-        node.visible = visible
-        updated = true
-      })
-      if (!updated) {
+      const node = findNodeById(this.nodes, id)
+      if (!node) {
         return
       }
+      const currentEffective = (node as any).visible ?? true
+      if (currentEffective === visible) {
+        return
+      }
+
+      this.captureNodeBasicsHistorySnapshot([{ id, visible: true }])
+      visitNode(this.nodes, id, (target) => {
+        ;(target as any).visible = visible
+      })
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
@@ -8341,12 +8690,11 @@ export const useSceneStore = defineStore('scene', {
       this.setNodeVisibility(id, !current)
     },
     setAllNodesVisibility(visible: boolean) {
-      let updated = false
+      const changedIds: string[] = []
       const apply = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
-          if ((node.visible ?? true) !== visible) {
-            node.visible = visible
-            updated = true
+          if ((node as any).visible ?? true !== visible) {
+            changedIds.push(node.id)
           }
           if (node.children?.length) {
             apply(node.children)
@@ -8354,9 +8702,16 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       apply(this.nodes)
-      if (!updated) {
+      if (!changedIds.length) {
         return
       }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, visible: true })))
+      changedIds.forEach((id) => {
+        visitNode(this.nodes, id, (node) => {
+          ;(node as any).visible = visible
+        })
+      })
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
@@ -8388,10 +8743,18 @@ export const useSceneStore = defineStore('scene', {
       if (!shouldUpdate) {
         return false
       }
+
+      const changedIds = nodes.filter((node) => (node.visible ?? true) !== targetVisible).map((node) => node.id)
+      if (!changedIds.length) {
+        return false
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, visible: true })))
       nodes.forEach((node) => {
-        node.visible = targetVisible
+        ;(node as any).visible = targetVisible
       })
       this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
       return true
     },
     isNodeSelectionLocked(id: string) {
@@ -8403,12 +8766,15 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       let updated = false
+      const current = this.isNodeSelectionLocked(id)
+      if (current === locked) {
+        return
+      }
+
+      this.captureNodeBasicsHistorySnapshot([{ id, locked: true }])
       visitNode(this.nodes, id, (node) => {
-        const current = node.locked ?? false
-        if (current !== locked) {
-          node.locked = locked
-          updated = true
-        }
+        ;(node as any).locked = locked
+        updated = true
       })
       if (!updated) {
         return
@@ -8428,7 +8794,7 @@ export const useSceneStore = defineStore('scene', {
       this.setNodeSelectionLock(id, next)
     },
     setAllNodesSelectionLock(locked: boolean) {
-      let updated = false
+      const changedIds: string[] = []
       const apply = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
           const current = node.locked ?? false
@@ -8436,8 +8802,7 @@ export const useSceneStore = defineStore('scene', {
             return
           }
           if (current !== locked) {
-            node.locked = locked
-            updated = true
+            changedIds.push(node.id)
           }
           if (node.children?.length) {
             apply(node.children)
@@ -8445,9 +8810,16 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       apply(this.nodes)
-      if (!updated) {
+      if (!changedIds.length) {
         return
       }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
+      changedIds.forEach((id) => {
+        visitNode(this.nodes, id, (node) => {
+          ;(node as any).locked = locked
+        })
+      })
       if (locked && this.selectedNodeIds.length) {
         this.setSelection([])
       }
@@ -8471,6 +8843,13 @@ export const useSceneStore = defineStore('scene', {
       if (!shouldUpdate) {
         return false
       }
+
+      const changedIds = nodes.filter((node) => (node.locked ?? false) !== targetLock).map((node) => node.id)
+      if (!changedIds.length) {
+        return false
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
       const processed = new Set<string>()
       nodes.forEach((node) => {
         const current = node.locked ?? false
@@ -8488,6 +8867,7 @@ export const useSceneStore = defineStore('scene', {
         this.setSelection(remainingSelection, { primaryId: nextPrimary })
       }
       this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
       return true
     },
     toggleSelectionTransparency(): boolean {
