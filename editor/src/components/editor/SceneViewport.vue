@@ -2853,6 +2853,149 @@ function recreateNodeSubtree(nodeId: string, node: SceneNode, parentIdMap: Map<s
   return true
 }
 
+type PendingNodePatch = {
+  type: 'node'
+  id: string
+  fields: string[]
+}
+
+function shouldRefreshPlaceholderOverlaysFromPatches(patches: Array<{ type: string }>): boolean {
+  return patches.some((patch) => {
+    if (patch.type === 'structure' || patch.type === 'remove') {
+      return true
+    }
+    if (patch.type === 'node') {
+      const nodePatch = patch as { type: 'node'; fields?: string[] }
+      return Array.isArray(nodePatch.fields) && nodePatch.fields.includes('download')
+    }
+    return false
+  })
+}
+
+function collectRemovedIdsFromPatches(patches: Array<{ type: string }>): Set<string> {
+  const removedIds = new Set<string>()
+  for (const patch of patches) {
+    if (patch.type !== 'remove') {
+      continue
+    }
+    const removePatch = patch as { type: 'remove'; ids?: unknown[] }
+    removePatch.ids?.forEach((id) => {
+      if (typeof id === 'string' && id.trim().length) {
+        removedIds.add(id)
+      }
+    })
+  }
+  return removedIds
+}
+
+function collectNodePatches(patches: Array<{ type: string }>): PendingNodePatch[] {
+  return patches.filter((patch) => patch.type === 'node') as PendingNodePatch[]
+}
+
+function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<string>): void {
+  for (const patch of nodePatches) {
+    const nodeId = patch.id
+    if (removedIds.has(nodeId)) {
+      continue
+    }
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    const object = objectMap.get(nodeId) ?? null
+    if (!node || !object) {
+      continue
+    }
+    updateNodeObject(object, node)
+  }
+}
+
+function applyNodePatchesWithTopology(
+  nodePatches: PendingNodePatch[],
+  removedIds: Set<string>,
+  parentIdMap: Map<string, string | null>,
+): boolean {
+  const depthCache = new Map<string, number>()
+  const resolveDepth = (id: string): number => {
+    if (depthCache.has(id)) {
+      return depthCache.get(id) as number
+    }
+    let depth = 0
+    let current: string | null = id
+    const visited = new Set<string>()
+    while (current) {
+      if (visited.has(current)) {
+        depth = 9999
+        break
+      }
+      visited.add(current)
+      const nextParentId: string | null = parentIdMap.get(current) ?? null
+      if (!nextParentId) {
+        break
+      }
+      depth += 1
+      current = nextParentId
+    }
+    depthCache.set(id, depth)
+    return depth
+  }
+
+  nodePatches.sort((a, b) => resolveDepth(a.id) - resolveDepth(b.id))
+
+  for (const patch of nodePatches) {
+    const nodeId = patch.id
+    if (removedIds.has(nodeId)) {
+      continue
+    }
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    if (!node) {
+      continue
+    }
+    const object = objectMap.get(nodeId) ?? null
+    if (!object) {
+      if (!ensureNodeSubtreeExists(nodeId, node, parentIdMap)) {
+        syncSceneGraph()
+        return true
+      }
+      continue
+    }
+    if (shouldRecreateNode(object, node)) {
+      if (!recreateNodeSubtree(nodeId, node, parentIdMap)) {
+        syncSceneGraph()
+        return true
+      }
+      continue
+    }
+    updateNodeObject(object, node)
+  }
+  return false
+}
+
+function applyNodePatchesIncrementally(nodePatches: PendingNodePatch[], removedIds: Set<string>): boolean {
+  // Fast path: if all targets exist and don't require recreation, avoid building parent maps.
+  let needsTopology = false
+  for (const patch of nodePatches) {
+    const nodeId = patch.id
+    if (removedIds.has(nodeId)) {
+      continue
+    }
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    if (!node) {
+      continue
+    }
+    const object = objectMap.get(nodeId) ?? null
+    if (!object || shouldRecreateNode(object, node)) {
+      needsTopology = true
+      break
+    }
+  }
+
+  if (!needsTopology) {
+    applyNodePatchesFast(nodePatches, removedIds)
+    return false
+  }
+
+  const parentIdMap = buildParentIdMap(sceneStore.nodes)
+  return applyNodePatchesWithTopology(nodePatches, removedIds, parentIdMap)
+}
+
 function applyPendingScenePatches(): boolean {
   if (!sceneStore.isSceneReady) {
     return false
@@ -2865,21 +3008,8 @@ function applyPendingScenePatches(): boolean {
 
   markPatchAppliedInCurrentFlush()
 
-  const needsPlaceholderOverlayRefresh = patches.some((patch) => {
-    if (patch.type === 'structure') {
-      return true
-    }
-    if (patch.type === 'remove') {
-      return true
-    }
-    if (patch.type === 'node') {
-      return patch.fields.includes('download')
-    }
-    return false
-  })
-
-  const needsStructureSync = patches.some((patch) => patch.type === 'structure')
-  if (needsStructureSync) {
+  const needsPlaceholderOverlayRefresh = shouldRefreshPlaceholderOverlaysFromPatches(patches as Array<{ type: string }>)
+  if (patches.some((patch) => patch.type === 'structure')) {
     syncSceneGraph()
 
     if (needsPlaceholderOverlayRefresh) {
@@ -2890,122 +3020,16 @@ function applyPendingScenePatches(): boolean {
   }
 
   // Incremental removals: dispose subtrees directly instead of full reconcile.
-  const removedIds = new Set<string>()
-  for (const patch of patches) {
-    if (patch.type !== 'remove') {
-      continue
-    }
-    patch.ids.forEach((id) => {
-      if (typeof id === 'string' && id.trim().length) {
-        removedIds.add(id)
-      }
-    })
-  }
+  const removedIds = collectRemovedIdsFromPatches(patches as Array<{ type: string }>)
   if (removedIds.size) {
     removeNodeObjects(removedIds)
   }
 
-  let parentIdMap: Map<string, string | null> | null = null
-  const getParentIdMap = () => {
-    if (parentIdMap) {
-      return parentIdMap
-    }
-    parentIdMap = buildParentIdMap(sceneStore.nodes)
-    return parentIdMap
-  }
-
-  const nodePatches = patches.filter((patch) => patch.type === 'node') as Array<{
-    type: 'node'
-    id: string
-    fields: string[]
-  }>
+  const nodePatches = collectNodePatches(patches as Array<{ type: string }>)
   if (nodePatches.length) {
-    // Fast path: if all targets exist and don't require recreation, avoid building parent maps.
-    let needsTopology = false
-    for (const patch of nodePatches) {
-      const nodeId = patch.id
-      if (removedIds.has(nodeId)) {
-        continue
-      }
-      const node = findSceneNode(sceneStore.nodes, nodeId)
-      if (!node) {
-        continue
-      }
-      const object = objectMap.get(nodeId) ?? null
-      if (!object || shouldRecreateNode(object, node)) {
-        needsTopology = true
-        break
-      }
-    }
-
-    if (!needsTopology) {
-      for (const patch of nodePatches) {
-        const nodeId = patch.id
-        if (removedIds.has(nodeId)) {
-          continue
-        }
-        const node = findSceneNode(sceneStore.nodes, nodeId)
-        const object = objectMap.get(nodeId) ?? null
-        if (!node || !object) {
-          continue
-        }
-        updateNodeObject(object, node)
-      }
-    } else {
-      const resolvedParentIdMap = getParentIdMap()
-      const depthCache = new Map<string, number>()
-      const resolveDepth = (id: string): number => {
-        if (depthCache.has(id)) {
-          return depthCache.get(id) as number
-        }
-        let depth = 0
-        let current: string | null = id
-        const visited = new Set<string>()
-        while (current) {
-          if (visited.has(current)) {
-            depth = 9999
-            break
-          }
-          visited.add(current)
-          const nextParentId: string | null = resolvedParentIdMap.get(current) ?? null
-          if (!nextParentId) {
-            break
-          }
-          depth += 1
-          current = nextParentId
-        }
-        depthCache.set(id, depth)
-        return depth
-      }
-
-      nodePatches.sort((a, b) => resolveDepth(a.id) - resolveDepth(b.id))
-
-      for (const patch of nodePatches) {
-        const nodeId = patch.id
-        if (removedIds.has(nodeId)) {
-          continue
-        }
-        const node = findSceneNode(sceneStore.nodes, nodeId)
-        if (!node) {
-          continue
-        }
-        const object = objectMap.get(nodeId) ?? null
-        if (!object) {
-          if (!ensureNodeSubtreeExists(nodeId, node, resolvedParentIdMap)) {
-            syncSceneGraph()
-            return true
-          }
-          continue
-        }
-        if (shouldRecreateNode(object, node)) {
-          if (!recreateNodeSubtree(nodeId, node, resolvedParentIdMap)) {
-            syncSceneGraph()
-            return true
-          }
-          continue
-        }
-        updateNodeObject(object, node)
-      }
+    const didFallbackToFullSync = applyNodePatchesIncrementally(nodePatches, removedIds)
+    if (didFallbackToFullSync) {
+      return true
     }
   }
 
