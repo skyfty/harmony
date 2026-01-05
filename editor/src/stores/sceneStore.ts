@@ -7025,8 +7025,12 @@ export const useSceneStore = defineStore('scene', {
       }
       const existing = this.pendingScenePatches
       if (existing.some((patch) => patch.type === 'structure')) {
-        // Already going to reconcile everything.
-        return false
+        // A structure reconcile is already pending.
+        // Still bump version so consumers (viewport/overlays) can refresh from latest store state.
+        if (bumpVersion) {
+          this.sceneNodePropertyVersion += 1
+        }
+        return true
       }
 
       let changed = false
@@ -11108,6 +11112,9 @@ export const useSceneStore = defineStore('scene', {
       }
       this.setSelection([id])
 
+      // Structure changed: a new node was inserted.
+      this.queueSceneStructurePatch('addPlaceholderNode')
+
       return node
     },
 
@@ -11412,6 +11419,9 @@ export const useSceneStore = defineStore('scene', {
 
         this.nodes = tree
         this.setSelection([newNodeId])
+
+        // Structure changed: placeholder removed, real node inserted.
+        this.queueSceneStructurePatch('finalizePlaceholderNode')
 
         assetCache.touch(asset.id)
 

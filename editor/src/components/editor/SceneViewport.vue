@@ -2815,9 +2815,24 @@ function applyPendingScenePatches(): boolean {
 
   markPatchAppliedInCurrentFlush()
 
+  const needsPlaceholderOverlayRefresh = patches.some((patch) => {
+    if (patch.type === 'structure') {
+      return true
+    }
+    if (patch.type === 'node') {
+      return patch.fields.includes('download')
+    }
+    return false
+  })
+
   const needsStructureSync = patches.some((patch) => patch.type === 'structure')
   if (needsStructureSync) {
     syncSceneGraph()
+
+    if (needsPlaceholderOverlayRefresh) {
+      refreshPlaceholderOverlays()
+    }
+    updatePlaceholderOverlayPositions()
     return true
   }
 
@@ -2839,6 +2854,10 @@ function applyPendingScenePatches(): boolean {
     }
 
     updateNodeObject(object, node)
+  }
+
+  if (needsPlaceholderOverlayRefresh) {
+    refreshPlaceholderOverlays()
   }
 
   updatePlaceholderOverlayPositions()
