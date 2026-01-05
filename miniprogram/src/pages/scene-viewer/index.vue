@@ -15,43 +15,144 @@
         class="viewer-canvas"
         @useCanvas="handleUseCanvas"
       />
-      <BehaviorDialog
-        :visible="behaviorAlertVisible"
-        :title="behaviorAlertTitle"
-        :message="behaviorAlertMessage"
-        :show-cancel="behaviorAlertShowCancel"
-        :cancel-text="behaviorAlertCancelText"
-        :show-confirm="behaviorAlertShowConfirm"
-        :confirm-text="behaviorAlertConfirmText"
-        @cancel="cancelBehaviorAlert"
-        @confirm="confirmBehaviorAlert"
-      />
-      <LanternOverlay
-        :visible="lanternOverlayVisible"
-        :current-slide-image="lanternCurrentSlideImage || ''"
-        :image-box-style="lanternImageBoxStyle"
-        :viewer-options="lanternViewerOptions"
-        :current-title="lanternCurrentTitle"
-        :current-text="lanternCurrentText"
-        :current-index="lanternActiveSlideIndex"
-        :total-slides="lanternSlides.length"
-        :close-icon="lanternCloseIcon"
-        @cancel="cancelLanternOverlay"
-        @overlay-tap="handleLanternOverlayTap"
-        @image-load="handleLanternImageLoad"
-        @open-fullscreen="openLanternImageFullscreen"
-        @touchstart="handleLanternTouchStart"
-        @touchmove="handleLanternTouchMove"
-        @touchend="handleLanternTouchEnd"
-        @touchcancel="handleLanternTouchCancel"
-      />
-      <LoadingScreen
-        :overlay-active="overlayActive"
-        :overlay-title="overlayTitle"
-        :overlay-percent="overlayPercent"
-        :overlay-bytes-label="overlayBytesLabel"
-        :error="error"
-      />
+      <view
+        v-if="behaviorAlertVisible"
+        class="viewer-behavior-overlay"
+        @tap.self="cancelBehaviorAlert"
+      >
+        <view class="viewer-behavior-dialog">
+          <text class="viewer-behavior-title">{{ behaviorAlertTitle }}</text>
+          <scroll-view v-if="behaviorAlertMessage" scroll-y class="viewer-behavior-message">
+            <text>{{ behaviorAlertMessage }}</text>
+          </scroll-view>
+          <view class="viewer-behavior-actions">
+            <button
+              v-if="behaviorAlertShowCancel"
+              class="viewer-behavior-button cancel"
+              @tap="cancelBehaviorAlert"
+            >
+              {{ behaviorAlertCancelText }}
+            </button>
+            <button
+              v-if="behaviorAlertShowConfirm"
+              class="viewer-behavior-button"
+              @tap="confirmBehaviorAlert"
+            >
+              {{ behaviorAlertConfirmText }}
+            </button>
+          </view>
+        </view>
+      </view>
+      <view
+        v-if="lanternOverlayVisible"
+        class="viewer-lantern-overlay"
+        @tap="handleLanternOverlayTap"
+      >
+        <view
+          ref="lanternDialogRef"
+          class="viewer-lantern-dialog"
+          @touchstart="handleLanternTouchStart"
+          @touchmove="handleLanternTouchMove"
+          @touchend="handleLanternTouchEnd"
+          @touchcancel="handleLanternTouchCancel"
+        >
+          <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
+            <text class="viewer-lantern-close-icon">{{ lanternCloseIcon }}</text>
+          </button>
+          <!-- #ifdef H5 -->
+          <view
+            v-if="lanternCurrentSlideImage"
+            class="viewer-lantern-image-wrapper"
+            :style="lanternImageBoxStyle"
+            v-viewer="lanternViewerOptions"
+            ref="lanternViewerRoot"
+          >
+            <image
+              :src="lanternCurrentSlideImage"
+              mode="aspectFit"
+              class="viewer-lantern-image"
+              @load="handleLanternImageLoad"
+              @tap="openLanternImageFullscreen"
+            />
+          </view>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
+          <view
+            v-if="lanternCurrentSlideImage"
+            class="viewer-lantern-image-wrapper"
+            :style="lanternImageBoxStyle"
+            ref="lanternViewerRoot"
+          >
+            <image
+              :src="lanternCurrentSlideImage"
+              mode="aspectFit"
+              class="viewer-lantern-image"
+              @load="handleLanternImageLoad"
+              @tap="openLanternImageFullscreen"
+            />
+          </view>
+          <!-- #endif -->
+          <view class="viewer-lantern-body">
+            <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
+            <view
+              class="viewer-drive-cluster viewer-drive-cluster--joystick">
+              <view class="viewer-drive-joystick-layout">
+                <view
+                  id="viewer-drive-joystick"
+                  ref="joystickRef"
+                  class="viewer-drive-joystick"
+                  :class="{ 'is-active': vehicleDriveUi.joystickActive }"
+                  role="slider"
+                  aria-label="驾驶摇杆"
+                  aria-valuemin="-100"
+                  aria-valuemax="100"
+                  :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+                  @touchstart.stop.prevent="handleJoystickTouchStart"
+                  @touchmove.stop.prevent="handleJoystickTouchMove"
+                  @touchend.stop.prevent="handleJoystickTouchEnd"
+                  @touchcancel.stop.prevent="handleJoystickTouchEnd"
+                >
+                  <view class="viewer-drive-joystick__base"></view>
+                  <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
+                </view>
+                <view class="viewer-drive-speed-gauge" aria-hidden="true">
+                  <view class="viewer-drive-speed-gauge__dial" :style="vehicleSpeedGaugeStyle">
+                    <view class="viewer-drive-speed-gauge__needle"></view>
+                  </view>
+                  <view class="viewer-drive-speed-gauge__values">
+                    <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
+                    <text class="viewer-drive-speed-gauge__unit">km/h</text>
+                  </view>
+                </view>
+              </view>
+            </view>
+            <view class="viewer-progress__stats">
+              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="overlayActive" class="viewer-overlay">
+        <view class="viewer-overlay__content viewer-overlay__card">
+          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
+          <view class="viewer-progress">
+            <view class="viewer-progress__bar">
+              <view
+                class="viewer-progress__bar-fill"
+                :style="{ width: overlayPercent + '%' }"
+              />
+            </view>
+            <view class="viewer-progress__stats">
+              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="error" class="viewer-overlay error">
+        <text>{{ error }}</text>
+      </view>
       <view
         v-if="purposeControlsVisible"
         class="viewer-purpose-controls"
@@ -116,31 +217,93 @@
           </view>
         </button>
       </view>
-      <VehicleHud
-        :visible="vehicleDriveUi.visible"
-        :reset-busy="vehicleDriveResetBusy"
-        :exit-busy="vehicleDriveExitBusy"
-        :drive-pad-state="drivePadState"
-        :drive-pad-style="drivePadStyle"
-        :joystick-active="vehicleDriveUi.joystickActive"
-        :throttle="vehicleDriveInput.throttle"
-        :joystick-knob-style="joystickKnobStyle"
-        :speed-gauge-style="vehicleSpeedGaugeStyle"
-        :speed-kmh="vehicleSpeedKmh.toFixed(0)"
-        @reset="handleVehicleDriveResetTap"
-        @exit="handleVehicleDriveExitTap"
-        @joystick-touch-start="handleJoystickTouchStart"
-        @joystick-touch-move="handleJoystickTouchMove"
-        @joystick-touch-end="handleJoystickTouchEnd"
-      />
+      <view
+        v-if="vehicleDriveUi.visible"
+        class="viewer-drive-console viewer-drive-console--mobile"
+      >
+        <view class="viewer-drive-cluster viewer-drive-cluster--actions">
+   
+          <button
+            class="viewer-drive-icon-button"
+            :class="{ 'is-busy': vehicleDriveResetBusy }"
+            type="button"
+            hover-class="none"
+            :disabled="vehicleDriveResetBusy"
+            aria-label="重置车辆"
+            @tap="handleVehicleDriveResetTap"
+          >
+            <view class="viewer-drive-icon" aria-hidden="true">
+              <text class="viewer-drive-icon-text">🔄</text>
+            </view>
+          </button>
+          <button
+            class="viewer-drive-icon-button viewer-drive-icon-button--danger"
+            :class="{ 'is-busy': vehicleDriveExitBusy }"
+            :disabled="vehicleDriveExitBusy"
+            type="button"
+            hover-class="none"
+            aria-label="下车"
+            @tap="handleVehicleDriveExitTap"
+          >
+            <view class="viewer-drive-icon" aria-hidden="true">
+              <text class="viewer-drive-icon-text">🚪</text>
+            </view>
+          </button>
+        </view>
+        <view
+          v-show="drivePadState.visible"
+          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
+          :class="{ 'is-fading': drivePadState.fading }"
+          :style="drivePadStyle"
+        >
+          <view
+            id="viewer-drive-joystick"
+            ref="joystickRef"
+            class="viewer-drive-joystick"
+            :class="{ 'is-active': vehicleDriveUi.joystickActive }"
+            role="slider"
+            aria-label="驾驶摇杆"
+            aria-valuemin="-100"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+            @touchstart.stop.prevent="handleJoystickTouchStart"
+            @touchmove.stop.prevent="handleJoystickTouchMove"
+            @touchend.stop.prevent="handleJoystickTouchEnd"
+            @touchcancel.stop.prevent="handleJoystickTouchEnd"
+          >
+            <view class="viewer-drive-joystick__base"></view>
+            <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
+          </view>
+        </view>
+      </view>
+      <view
+        v-if="vehicleDriveUi.visible"
+        class="viewer-drive-speed-floating"
+        aria-hidden="true"
+      >
+        <view class="viewer-drive-speed-gauge" :style="vehicleSpeedGaugeStyle">
+          <view class="viewer-drive-speed-gauge__needle"></view>
+        </view>
+        <view class="viewer-drive-speed-gauge__values">
+          <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
+          <text class="viewer-drive-speed-gauge__unit">km/h</text>
+        </view>
+      </view>
 
-      <DebugStats
-        :debug-overlay-visible="debugOverlayVisible"
-        :debug-fps="debugFps"
-        :renderer-debug="rendererDebug"
-        :instancing-debug="instancingDebug"
-        :ground-chunk-debug="groundChunkDebug"
-      />
+      <view v-if="debugOverlayVisible" class="viewer-debug-overlay">
+        <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
+        <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
+        <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
+        <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
+        <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
+        <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
+        <text class="viewer-debug-line">Instanced instances (sum mesh.count): {{ instancingDebug.instancedInstanceCount }}</text>
+        <text class="viewer-debug-line">Instanced matrix upload est: {{ instancingDebug.instanceMatrixUploadKb }} KB/frame</text>
+        <text class="viewer-debug-line">LOD nodes (visible/total): {{ instancingDebug.lodVisible }} / {{ instancingDebug.lodTotal }}</text>
+        <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
+        <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
+        <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -163,12 +326,6 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
-import LoadingScreen from './components/LoadingScreen.vue';
-import DebugStats from './components/DebugStats.vue';
-import BehaviorDialog from './components/BehaviorDialog.vue';
-import LanternOverlay from './components/LanternOverlay.vue';
-import VehicleHud from './components/VehicleHud.vue';
-import { useVehicleControl } from './composables/useVehicleControl';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import {
@@ -1229,79 +1386,77 @@ const purposeActiveMode = ref<'watch' | 'level'>('level');
 
 const pageInstance = getCurrentInstance();
 
-const {
-  vehicleDriveActive,
-  vehicleDriveNodeId,
-  vehicleDriveToken,
-  activeVehicleDriveEvent,
-  vehicleDriveSeatNodeId,
-  vehicleDriveUiOverride,
-  vehicleDriveExitBusy,
-  vehicleDriveInputFlags,
-  vehicleDriveInput,
-  vehicleDriveCameraMode,
-  vehicleDriveOrbitMode,
-  vehicleDriveCameraFollowState,
-  joystickRef,
-  joystickVector,
-  joystickOffset,
-  joystickState,
-  drivePadState,
-  drivePadStyle,
-  steeringKeyboardValue,
-  steeringKeyboardTarget,
-  joystickKnobStyle,
-  vehicleDriveUi,
-  vehicleDrivePrompt,
-  vehicleDriveResetBusy,
-  vehicleDriveVehicle,
-  vehicleSpeedKmh,
-  vehicleSpeedGaugeStyle,
-  handleDrivePadTouchStart,
-  handleDrivePadTouchMove,
-  handleDrivePadTouchEnd,
-  handleDrivePadMouseDown,
-  handleJoystickTouchStart,
-  handleJoystickTouchMove,
-  handleJoystickTouchEnd,
-  handleVehicleDriveResetTap,
-  handleVehicleDriveExitTap,
-  handleVehicleDrivePromptTap,
-  updateVehiclePhysics,
-  updateVehicleCamera,
-  handleVehicleDriveEvent,
-  handleVehicleDebusEvent,
-  handleShowVehicleCockpitEvent,
-  handleHideVehicleCockpitEvent,
-  resetVehicleControlState,
-} = useVehicleControl({
-  vehicleInstances,
-  rigidbodyInstances,
-  nodeObjectMap,
-  resolveNodeById,
-  resolveRigidbodyComponent,
-  resolveVehicleComponent,
-  ensurePhysicsWorld,
-  ensureVehicleBindingForNode,
-  normalizeNodeId,
-  setCameraViewState,
-  setCameraCaging,
-  runWithProgrammaticCameraMutation,
-  withControlsVerticalFreedom: (controls, callback) => withControlsVerticalFreedom(controls, callback),
-  lockControlsPitchToCurrent: (controls, camera) => lockControlsPitchToCurrent(controls, camera),
-  syncLastFirstPersonStateFromCamera,
-  onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
-  onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
-  getViewportHeight: () => {
-    try {
-      return uni.getSystemInfoSync().windowHeight;
-    } catch (e) {
-      return 0;
-    }
-  },
-  purposeActiveMode,
-  getRenderContext: () => renderContext,
+const vehicleDriveActive = ref(false);
+const vehicleDriveNodeId = ref<string | null>(null);
+const vehicleDriveToken = ref<string | null>(null);
+const activeVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const vehicleDriveSeatNodeId = ref<string | null>(null);
+const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
+const vehicleDriveExitBusy = ref(false);
+let vehicleDriveSteerable: number[] = [];
+let vehicleDriveWheelCount = 0;
+let vehicleDriveVehicle: CANNON.RaycastVehicle | null = null;
+const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  brake: false,
 });
+const vehicleDriveInput = reactive<VehicleDriveInputState>({
+  throttle: 0,
+  steering: 0,
+  brake: 0,
+});
+const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
+const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow');
+const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
+  desiredPosition: new THREE.Vector3(),
+  currentPosition: new THREE.Vector3(),
+  desiredTarget: new THREE.Vector3(),
+  currentTarget: new THREE.Vector3(),
+  desiredAnchor: new THREE.Vector3(),
+  currentAnchor: new THREE.Vector3(),
+  anchorHoldSeconds: 0,
+  lastVelocityDirection: new THREE.Vector3(0, 0, 1),
+  shouldHoldAnchorForReverse: false,
+  heading: new THREE.Vector3(0, 0, 1),
+  initialized: false,
+  localOffset: new THREE.Vector3(),
+  hasLocalOffset: false,
+  motionDistanceBlend: 0,
+  lookaheadOffset: new THREE.Vector3(),
+});
+const joystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const joystickVector = reactive({ x: 0, y: 0 });
+const joystickOffset = reactive({ x: 0, y: 0 });
+const joystickState = reactive({
+  active: false,
+  pointerId: -1,
+  centerX: 0,
+  centerY: 0,
+  ready: false,
+});
+const DRIVE_PAD_MOUSE_POINTER_ID = -2;
+const DRIVE_PAD_FADE_MS = 220;
+const drivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
+const drivePadStyle = computed(() => ({
+  left: `${drivePadState.x}px`,
+  top: `${drivePadState.y}px`,
+}));
+let drivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let drivePadMouseTracking = false;
+const isBrowserEnvironment = typeof window !== 'undefined';
+const drivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
+const steeringKeyboardValue = ref(0);
+const steeringKeyboardTarget = ref(0);
+const joystickKnobStyle = computed(() => {
+  const scale = joystickState.active ? 0.88 : 1;
+  return {
+    transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
+  };
+});
+const vehicleDriveResetBusy = ref(false);
 
 type CameraViewMode = 'level' | 'watching';
 const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
@@ -1309,7 +1464,201 @@ const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | 
   targetNodeId: null,
 });
 
+const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
+  hasSnapshot: false,
+  position: new THREE.Vector3(),
+  target: new THREE.Vector3(),
+  quaternion: new THREE.Quaternion(),
+  up: new THREE.Vector3(),
+  controlMode: null,
+  viewMode: cameraViewState.mode as CameraViewMode,
+  viewTargetId: cameraViewState.targetNodeId as string | null,
+  isCameraCaged: false,
+  purposeMode: purposeActiveMode.value,
+};
 
+const vehicleSpeed = ref(0);
+const vehicleSpeedPercent = computed(() => Math.min(1, vehicleSpeed.value / VEHICLE_SPEED_GAUGE_MAX_MPS));
+const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6));
+const vehicleSpeedGaugeStyle = computed(() => ({
+  '--speed-angle': `${vehicleSpeedPercent.value * 360}deg`,
+}));
+
+// Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
+const vehicleDriveStateBridge = {
+  get active() {
+    return vehicleDriveActive.value;
+  },
+  set active(value: boolean) {
+    vehicleDriveActive.value = value;
+  },
+  get nodeId() {
+    return vehicleDriveNodeId.value;
+  },
+  set nodeId(value: string | null) {
+    vehicleDriveNodeId.value = value;
+  },
+  get token() {
+    return vehicleDriveToken.value;
+  },
+  set token(value: string | null) {
+    vehicleDriveToken.value = value;
+  },
+  get vehicle() {
+    return vehicleDriveVehicle;
+  },
+  set vehicle(value: CANNON.RaycastVehicle | null) {
+    vehicleDriveVehicle = value;
+  },
+  get steerableWheelIndices() {
+    return vehicleDriveSteerable;
+  },
+  set steerableWheelIndices(value: number[]) {
+    vehicleDriveSteerable = value;
+  },
+  get wheelCount() {
+    return vehicleDriveWheelCount;
+  },
+  set wheelCount(value: number) {
+    vehicleDriveWheelCount = value;
+  },
+  get seatNodeId() {
+    return vehicleDriveSeatNodeId.value;
+  },
+  set seatNodeId(value: string | null) {
+    vehicleDriveSeatNodeId.value = value;
+  },
+  get sourceEvent() {
+    return activeVehicleDriveEvent.value;
+  },
+  set sourceEvent(value: unknown) {
+    activeVehicleDriveEvent.value = value as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null;
+  },
+} as const;
+
+const vehicleDriveUi = computed(() => {
+  const override = vehicleDriveUiOverride.value;
+  const active = vehicleDriveActive.value;
+  const visible = override === 'show' ? true : override === 'hide' ? false : active;
+  if (!visible) {
+    return {
+      visible: false,
+      label: '',
+      cameraLocked: false,
+      joystickActive: false,
+      accelerating: false,
+      braking: false,
+    } as const;
+  }
+  const nodeId = vehicleDriveNodeId.value ?? '';
+  const node = nodeId ? resolveNodeById(nodeId) : null;
+  const label = node?.name?.trim() || nodeId || 'Vehicle';
+  return {
+    visible: true,
+    label,
+    cameraLocked: active,
+    joystickActive: active && joystickState.active,
+    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    braking: active && vehicleDriveInputFlags.brake,
+  } as const;
+});
+
+const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const vehicleDrivePromptBusy = ref(false);
+
+const vehicleDriveController = new VehicleDriveController(
+  {
+    vehicleInstances,
+    rigidbodyInstances,
+    nodeObjectMap,
+    resolveNodeById,
+    resolveRigidbodyComponent,
+    resolveVehicleComponent,
+    ensurePhysicsWorld,
+    ensureVehicleBindingForNode,
+    normalizeNodeId,
+    setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
+    setCameraCaging,
+    runWithProgrammaticCameraMutation,
+    withControlsVerticalFreedom,
+    lockControlsPitchToCurrent,
+    syncLastFirstPersonStateFromCamera,
+    onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
+    onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution as any),
+  },
+  {
+    state: vehicleDriveStateBridge as any,
+    inputFlags: vehicleDriveInputFlags,
+    input: vehicleDriveInput,
+    cameraMode: vehicleDriveCameraMode,
+    orbitMode: vehicleDriveOrbitMode,
+    uiOverride: vehicleDriveUiOverride,
+    promptBusy: vehicleDrivePromptBusy,
+    exitBusy: vehicleDriveExitBusy,
+    cameraRestoreState: vehicleDriveCameraRestoreState,
+    cameraFollowState: vehicleDriveCameraFollowState,
+    steeringKeyboardValue,
+  },
+);
+
+const vehicleDrivePrompt = computed(() => {
+  const event = pendingVehicleDriveEvent.value;
+  if (!event) {
+    return {
+      visible: false,
+      label: '',
+      busy: false,
+    } as const;
+  }
+  const targetNodeId = event.targetNodeId ?? event.nodeId;
+  const node = targetNodeId ? resolveNodeById(targetNodeId) : null;
+  const label = node?.name?.trim() || targetNodeId || 'Vehicle';
+  return {
+    visible: true,
+    label,
+    busy: vehicleDrivePromptBusy.value,
+  } as const;
+});
+
+watch(
+  () => vehicleDriveUi.value.visible,
+  (visible) => {
+    if (visible) {
+      refreshJoystickMetrics();
+    } else {
+      detachDrivePadMouseListeners();
+      hideDrivePadImmediate();
+      deactivateJoystick(true);
+    }
+  },
+);
+
+watch(vehicleDriveCameraMode, (mode) => {
+  vehicleDriveCameraFollowState.initialized = false;
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  if (mode === 'follow') {
+    const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
+    if (nodeId) {
+      setCameraViewState('watching', nodeId);
+      setCameraCaging(true);
+    }
+    setVehicleDriveUiOverride('show');
+    updateVehicleDriveCamera(0, { immediate: true });
+  } else {
+    setVehicleDriveUiOverride('hide');
+    updateVehicleDriveCamera(0, { immediate: true });
+  }
+});
+
+watch(vehicleDriveActive, (active) => {
+  if (!active) {
+    vehicleDriveCameraMode.value = 'follow';
+    vehicleDriveCameraFollowState.initialized = false;
+    vehicleSpeed.value = 0;
+  }
+});
 const isCameraCaged = ref(false);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
@@ -1489,8 +1838,6 @@ const lanternCurrentSlideTextState = computed(() => {
   }
   return getLanternTextState(slide.descriptionAssetId.trim());
 });
-
-const lanternCurrentText = computed(() => lanternCurrentSlideTextState.value?.text || '');
 
 const lanternCurrentSlideImage = computed(() => {
   const slide = lanternCurrentSlide.value;
@@ -2255,12 +2602,12 @@ function isTapInsideLanternDialog(event: Event): boolean {
   return dialogNode === target || dialogNode.contains(target);
 }
 
-function handleLanternOverlayTap(event?: Event): void {
+function handleLanternOverlayTap(event: Event): void {
   if (isLanternViewerOpen()) {
     closeLanternImageFullscreen();
     return;
   }
-  if (!event || !isTapInsideLanternDialog(event)) {
+  if (!isTapInsideLanternDialog(event)) {
     cancelLanternOverlay();
   }
 }
@@ -3291,7 +3638,19 @@ function resetPhysicsWorld(): void {
   wallTrimeshCache.clear();
   rigidbodyMaterialCache.clear();
   rigidbodyContactMaterialKeys.clear();
-  resetVehicleControlState();
+  vehicleDriveActive.value = false;
+  vehicleDriveNodeId.value = null;
+  vehicleDriveToken.value = null;
+  activeVehicleDriveEvent.value = null;
+  pendingVehicleDriveEvent.value = null;
+  vehicleDrivePromptBusy.value = false;
+  vehicleDriveExitBusy.value = false;
+  vehicleDriveResetBusy.value = false;
+  resetVehicleDriveInputs();
+  vehicleDriveCameraMode.value = 'follow';
+  vehicleDriveCameraFollowState.initialized = false;
+  deactivateJoystick(true);
+  setVehicleDriveUiOverride('hide');
 }
 
 function createRigidbodyBody(
@@ -3844,7 +4203,7 @@ function updateVehicleWheelVisuals(delta: number): void {
         const raw = info?.steering;
         if (typeof raw === 'number' && Number.isFinite(raw)) {
           steeringAngle = raw;
-        } else if (vehicleDriveActive.value && vehicleDriveVehicle.value === instance.vehicle) {
+        } else if (vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle) {
           steeringAngle = THREE.MathUtils.clamp(vehicleDriveInput.steering, -1, 1) * THREE.MathUtils.degToRad(26);
         }
       }
@@ -5397,7 +5756,664 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 
+function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
+  vehicleDriveUiOverride.value = mode;
+}
 
+function clampAxisScalar(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(-1, Math.min(1, value));
+}
+
+function updateSteeringKeyboardValue(): void {
+  let target = 0;
+  if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
+    target = vehicleDriveInputFlags.left ? -1 : 1;
+  }
+  steeringKeyboardTarget.value = target;
+  if (target !== 0) {
+    steeringKeyboardValue.value = target;
+  }
+  recomputeVehicleDriveInputs();
+}
+
+function setVehicleDriveBrake(active: boolean): void {
+  if (vehicleDriveInputFlags.brake === active) {
+    return;
+  }
+  vehicleDriveController.setControlFlag('brake', active);
+  recomputeVehicleDriveInputs();
+}
+
+function handleBrakeButtonPress(event?: Event): void {
+  if (event) {
+    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
+  }
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  setVehicleDriveBrake(true);
+}
+
+function handleBrakeButtonRelease(event?: Event): void {
+  if (event) {
+    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
+  }
+  setVehicleDriveBrake(false);
+}
+
+function refreshJoystickMetrics(): void {
+  nextTick(() => {
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+    query
+      .select('#viewer-drive-joystick')
+      .boundingClientRect((rect) => {
+        const info = (rect || null) as UniApp.NodeInfo | null;
+        if (!info) {
+          joystickState.ready = false;
+          return;
+        }
+        const left = info.left ?? 0;
+        const top = info.top ?? 0;
+        const width = info.width ?? 0;
+        const height = info.height ?? 0;
+        joystickState.centerX = left + width / 2;
+        joystickState.centerY = top + height / 2;
+        joystickState.ready = true;
+      })
+      .exec();
+  });
+}
+
+function getTouchCoordinates(touch: Touch | null): { x: number; y: number } | null {
+  if (!touch) {
+    return null;
+  }
+  const clientX = 'clientX' in touch ? touch.clientX : (touch as unknown as { x?: number }).x ?? 0;
+  const clientY = 'clientY' in touch ? touch.clientY : (touch as unknown as { y?: number }).y ?? 0;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return null;
+  }
+  return { x: clientX, y: clientY };
+}
+
+function setJoystickVector(x: number, y: number): void {
+  let nextX = clampAxisScalar(x);
+  let nextY = clampAxisScalar(y);
+  const length = Math.hypot(nextX, nextY);
+  if (length > 1) {
+    const scale = 1 / length;
+    nextX *= scale;
+    nextY *= scale;
+  }
+  joystickVector.x = nextX;
+  joystickVector.y = nextY;
+  joystickOffset.x = joystickVector.x * JOYSTICK_VISUAL_RANGE;
+  joystickOffset.y = -joystickVector.y * JOYSTICK_VISUAL_RANGE;
+  recomputeVehicleDriveInputs();
+}
+
+function deactivateJoystick(reset: boolean): void {
+  joystickState.active = false;
+  joystickState.pointerId = -1;
+  joystickState.ready = false;
+  if (reset) {
+    setJoystickVector(0, 0);
+  }
+}
+
+function resolveJoystickDriveInput(): { throttle: number; steering: number } {
+  const x = joystickVector.x;
+  const y = joystickVector.y;
+  const length = Math.hypot(x, y);
+  if (length <= JOYSTICK_DEADZONE) {
+    return { throttle: 0, steering: 0 };
+  }
+  const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
+  const scale = length > 0 ? effectiveLength / length : 0;
+  return {
+    throttle: y * scale,
+    steering: x * scale,
+  };
+}
+
+function applyJoystickFromPoint(x: number, y: number): void {
+  if (!joystickState.ready) {
+    joystickState.centerX = x;
+    joystickState.centerY = y;
+    joystickState.ready = true;
+    refreshJoystickMetrics();
+  }
+  const dx = x - joystickState.centerX;
+  const dy = y - joystickState.centerY;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    return;
+  }
+  const normalizedX = clampAxisScalar(dx / JOYSTICK_INPUT_RADIUS);
+  const normalizedY = clampAxisScalar(-dy / JOYSTICK_INPUT_RADIUS);
+  let length = Math.hypot(normalizedX, normalizedY);
+  if (length > 1) {
+    const inv = 1 / length;
+    setJoystickVector(normalizedX * inv, normalizedY * inv);
+    return;
+  }
+  setJoystickVector(normalizedX, normalizedY);
+}
+
+function approachAxisValue(current: number, target: number, rate: number, delta: number): number {
+  if (!Number.isFinite(current) || !Number.isFinite(target) || !Number.isFinite(delta) || rate <= 0 || delta <= 0) {
+    return target;
+  }
+  const difference = target - current;
+  if (Math.abs(difference) <= 1e-4) {
+    return target;
+  }
+  const maxStep = rate * delta;
+  if (Math.abs(difference) <= maxStep) {
+    return target;
+  }
+  return current + Math.sign(difference) * maxStep;
+}
+
+function updateDriveInputRelaxation(delta: number): void {
+  if (!Number.isFinite(delta) || delta <= 0) {
+    return;
+  }
+  const target = steeringKeyboardTarget.value;
+  const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED;
+  const nextKeyboard = approachAxisValue(steeringKeyboardValue.value, target, keyboardRate, delta);
+  if (nextKeyboard !== steeringKeyboardValue.value) {
+    steeringKeyboardValue.value = clampAxisScalar(nextKeyboard);
+    recomputeVehicleDriveInputs();
+  }
+}
+
+function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
+  const touches: readonly Touch[] = [...Array.from(event.changedTouches || [])];
+  for (const touch of touches) {
+    if (touch.identifier === identifier) {
+      return touch;
+    }
+  }
+  const activeTouches: readonly Touch[] = [...Array.from(event.touches || [])];
+  for (const touch of activeTouches) {
+    if (touch.identifier === identifier) {
+      return touch;
+    }
+  }
+  return null;
+}
+
+function getViewportHeight(): number {
+  if (typeof window !== 'undefined' && Number.isFinite(window.innerHeight)) {
+    return window.innerHeight;
+  }
+  return initialSystemInfo?.windowHeight ?? initialSystemInfo?.screenHeight ?? 0;
+}
+
+function shouldActivateDrivePad(clientY: number): boolean {
+  const height = drivePadViewportRect.height > 0 ? drivePadViewportRect.height : getViewportHeight();
+  if (height <= 0) {
+    return true;
+  }
+  return clientY >= drivePadViewportRect.top + height / 2;
+}
+
+function updateDrivePadViewportRect(target: EventTarget | null): void {
+  const element = target as { getBoundingClientRect?: () => DOMRect | ClientRect } | null;
+  if (element && typeof element.getBoundingClientRect === 'function') {
+    const rect = element.getBoundingClientRect();
+    if (rect) {
+      drivePadViewportRect.top = rect.top ?? 0;
+      drivePadViewportRect.left = rect.left ?? 0;
+      drivePadViewportRect.height = rect.height ?? getViewportHeight();
+      return;
+    }
+  }
+  drivePadViewportRect.top = 0;
+  drivePadViewportRect.left = 0;
+  drivePadViewportRect.height = getViewportHeight();
+}
+
+function toDrivePadLocalCoords(x: number, y: number): { x: number; y: number } {
+  return {
+    x: x - drivePadViewportRect.left,
+    y: y - drivePadViewportRect.top,
+  };
+}
+
+function cancelDrivePadFade(): void {
+  if (drivePadFadeTimer) {
+    clearTimeout(drivePadFadeTimer);
+    drivePadFadeTimer = null;
+  }
+}
+
+function summonDrivePadAt(x: number, y: number): void {
+  cancelDrivePadFade();
+  drivePadState.x = x;
+  drivePadState.y = y;
+  drivePadState.visible = true;
+  drivePadState.fading = false;
+}
+
+function scheduleDrivePadFade(): void {
+  if (!drivePadState.visible) {
+    return;
+  }
+  drivePadState.fading = true;
+  cancelDrivePadFade();
+  drivePadFadeTimer = setTimeout(() => {
+    drivePadState.visible = false;
+    drivePadState.fading = false;
+    drivePadFadeTimer = null;
+  }, DRIVE_PAD_FADE_MS);
+}
+
+function hideDrivePadImmediate(): void {
+  if (!drivePadState.visible && !drivePadState.fading) {
+    return;
+  }
+  cancelDrivePadFade();
+  drivePadState.visible = false;
+  drivePadState.fading = false;
+}
+
+function cancelVehicleSmoothStop(): void {
+  vehicleDriveController.clearSmoothStop();
+}
+
+function requestVehicleSmoothStop(): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  if (Math.abs(vehicleDriveInput.throttle) > VEHICLE_SMOOTH_STOP_MIN_THROTTLE) {
+    return;
+  }
+  if (vehicleSpeed.value <= VEHICLE_SMOOTH_STOP_TRIGGER_SPEED) {
+    return;
+  }
+  vehicleDriveController.requestSmoothStop({ initialSpeed: vehicleSpeed.value });
+}
+
+function handleDrivePadTouchStart(event: TouchEvent): void {
+  if (!vehicleDriveUi.value.visible) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const touch = event.changedTouches?.[0] ?? null;
+  const coords = getTouchCoordinates(touch);
+  if (!coords || !shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  cancelVehicleSmoothStop();
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  handleJoystickTouchStart(event);
+}
+
+function handleDrivePadTouchMove(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchMove(event);
+}
+
+function handleDrivePadTouchEnd(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchEnd(event);
+  scheduleDrivePadFade();
+}
+
+function attachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = true;
+  window.addEventListener('mousemove', handleDrivePadMouseMove);
+  window.addEventListener('mouseup', handleDrivePadMouseUp);
+  window.addEventListener('blur', handleDrivePadMouseUp);
+}
+
+function detachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || !drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = false;
+  window.removeEventListener('mousemove', handleDrivePadMouseMove);
+  window.removeEventListener('mouseup', handleDrivePadMouseUp);
+  window.removeEventListener('blur', handleDrivePadMouseUp);
+}
+
+function handleDrivePadMouseDown(event: MouseEvent): void {
+  if (!vehicleDriveUi.value.visible || event.button !== 0) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const coords = { x: event.clientX, y: event.clientY };
+  if (!shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  cancelVehicleSmoothStop();
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  joystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
+  joystickState.active = true;
+  joystickState.ready = false;
+  setJoystickVector(0, 0);
+  applyJoystickFromPoint(coords.x, coords.y);
+  attachDrivePadMouseListeners();
+}
+
+function handleDrivePadMouseMove(event: MouseEvent): void {
+  if (joystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+    return;
+  }
+  event.preventDefault();
+  applyJoystickFromPoint(event.clientX, event.clientY);
+}
+
+function handleDrivePadMouseUp(): void {
+  if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    deactivateJoystick(true);
+    requestVehicleSmoothStop();
+    scheduleDrivePadFade();
+  }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
+}
+
+function handleJoystickTouchStart(event: TouchEvent): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  const touch = event.changedTouches?.[0] ?? null;
+  if (!touch) {
+    return;
+  }
+  if (!joystickState.ready) {
+    refreshJoystickMetrics();
+  }
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  joystickState.pointerId = touch.identifier;
+  joystickState.active = true;
+  cancelVehicleSmoothStop();
+  applyJoystickFromPoint(coords.x, coords.y);
+}
+
+function handleJoystickTouchMove(event: TouchEvent): void {
+  if (!joystickState.active || joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  applyJoystickFromPoint(coords.x, coords.y);
+}
+
+function handleJoystickTouchEnd(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  deactivateJoystick(true);
+  requestVehicleSmoothStop();
+}
+
+function recomputeVehicleDriveInputs(): void {
+  const joystickInput = resolveJoystickDriveInput();
+  const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
+  const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
+  // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
+  vehicleDriveInput.throttle = throttleFromJoystick;
+  vehicleDriveInput.steering = -steeringFromJoystick;
+  vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0;
+  vehicleDriveController.recomputeInputs();
+}
+
+function resetVehicleDriveInputs(): void {
+  steeringKeyboardTarget.value = 0;
+  deactivateJoystick(true);
+  vehicleDriveController.resetInputs();
+}
+
+type VehicleDriveStartResult =
+  | { success: true }
+  | { success: false; message: string };
+
+
+function startVehicleDriveMode(
+  event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+): VehicleDriveStartResult {
+  const ctx = renderContext
+    ? { camera: renderContext.camera, mapControls: renderContext.controls }
+    : { camera: null as THREE.PerspectiveCamera | null };
+  const result = vehicleDriveController.startDrive(event, ctx);
+  if (result.success) {
+    vehicleDriveCameraFollowState.initialized = false;
+    purposeActiveMode.value = 'watch';
+    updateVehicleDriveCamera(0, { immediate: true });
+  }
+  return result;
+}
+
+function applyVehicleDriveForces(): void {
+
+  vehicleDriveController.applyForces();
+}
+
+function updateVehicleSpeedFromVehicle(): void {
+  const vehicle = vehicleDriveVehicle;
+  const velocity = vehicle?.chassisBody?.velocity ?? null;
+  if (!velocity) {
+    vehicleSpeed.value = 0;
+    return;
+  }
+  const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+  vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
+}
+
+function handleVehicleDriveResetTap(): void {
+  if (!vehicleDriveActive.value || vehicleDriveResetBusy.value) {
+    return;
+  }
+  vehicleDriveResetBusy.value = true;
+  try {
+    const success = resetActiveVehiclePose();
+    if (!success) {
+      uni.showToast({ title: '无法重置车辆', icon: 'none' });
+      return;
+    }
+    updateVehicleDriveCamera(0, { immediate: true });
+  } finally {
+    vehicleDriveResetBusy.value = false;
+  }
+}
+
+function resetActiveVehiclePose(): boolean {
+  return vehicleDriveController.resetPose();
+}
+
+
+type VehicleDriveCameraUpdateOptions = {
+  immediate?: boolean;
+};
+
+
+function updateVehicleDriveCamera(
+  deltaSeconds = 0,
+  options: VehicleDriveCameraUpdateOptions = {},
+): boolean {
+  const ctx = renderContext
+    ? { camera: renderContext.camera, mapControls: renderContext.controls }
+    : { camera: null as THREE.PerspectiveCamera | null };
+  return vehicleDriveController.updateCamera(deltaSeconds, ctx, options);
+}
+
+
+function restoreVehicleDriveCameraState(): void {
+  const ctx = renderContext
+    ? { camera: renderContext.camera, mapControls: renderContext.controls }
+    : { camera: null as THREE.PerspectiveCamera | null };
+  vehicleDriveCameraRestoreState.viewMode = cameraViewState.mode;
+  vehicleDriveCameraRestoreState.viewTargetId = cameraViewState.targetNodeId;
+  vehicleDriveCameraRestoreState.isCameraCaged = isCameraCaged.value;
+  vehicleDriveCameraRestoreState.purposeMode = purposeActiveMode.value;
+  vehicleDriveController.restoreCamera(ctx);
+}
+
+function alignVehicleDriveExitCamera(): boolean {
+  const ctx = renderContext
+    ? { camera: renderContext.camera, mapControls: renderContext.controls }
+    : { camera: null as THREE.PerspectiveCamera | null };
+  return vehicleDriveController.alignExitCamera(ctx);
+}
+
+async function handleVehicleDrivePromptTap(): Promise<void> {
+  const event = pendingVehicleDriveEvent.value;
+  if (!event || vehicleDrivePromptBusy.value) {
+    return;
+  }
+  vehicleDrivePromptBusy.value = true;
+  try {
+    const result = startVehicleDriveMode(event);
+    if (!result.success) {
+      const message = result.message ?? '无法进入驾驶模式';
+      uni.showToast({ title: message, icon: 'none' });
+      resolveBehaviorToken(event.token, { type: 'fail', message });
+      pendingVehicleDriveEvent.value = null;
+      return;
+    }
+    pendingVehicleDriveEvent.value = null;
+    handleShowVehicleCockpitEvent();
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
+}
+
+function handleVehicleDriveExitTap(): void {
+  if (!vehicleDriveActive.value || vehicleDriveExitBusy.value) {
+    return;
+  }
+  const event = activeVehicleDriveEvent.value;
+  if (!event) {
+    uni.showToast({ title: '缺少驾驶上下文', icon: 'none' });
+    handleVehicleDebusEvent();
+    return;
+  }
+  vehicleDriveExitBusy.value = true;
+  try {
+    const aligned = alignVehicleDriveExitCamera();
+    if (!aligned) {
+      uni.showToast({ title: '无法定位默认下车位置，已恢复默认视角', icon: 'none' });
+    }
+    handleHideVehicleCockpitEvent();
+    handleVehicleDebusEvent();
+  } finally {
+    vehicleDriveExitBusy.value = false;
+  }
+}
+
+function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
+  const targetNodeId = event.targetNodeId || event.nodeId || null;
+  if (!targetNodeId) {
+    uni.showToast({ title: '缺少驾驶目标', icon: 'none' });
+    resolveBehaviorToken(event.token, { type: 'fail', message: '缺少驾驶目标' });
+    return;
+  }
+  if (vehicleDriveActive.value) {
+    restoreVehicleDriveCameraState();
+    vehicleDriveController.stopDrive(
+      { resolution: { type: 'abort', message: '驾驶状态被新的脚本替换。' }, preserveCamera: true },
+      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+    );
+  }
+  if (pendingVehicleDriveEvent.value) {
+    resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+      type: 'abort',
+      message: '已有驾驶请求已取消。',
+    });
+  }
+  pendingVehicleDriveEvent.value = event;
+  vehicleDrivePromptBusy.value = false;
+  setVehicleDriveUiOverride('hide');
+  resetVehicleDriveInputs();
+  vehicleDriveExitBusy.value = false;
+}
+
+function handleVehicleDebusEvent(): void {
+  if (pendingVehicleDriveEvent.value) {
+    resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+      type: 'abort',
+      message: '驾驶请求已被终止。',
+    });
+    pendingVehicleDriveEvent.value = null;
+    vehicleDrivePromptBusy.value = false;
+    setVehicleDriveUiOverride('hide');
+  }
+  if (!vehicleDriveActive.value) {
+    restoreVehicleDriveCameraState();
+    return;
+  }
+  vehicleDriveController.stopDrive(
+    { resolution: { type: 'continue' }, preserveCamera: false },
+    renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+  );
+  setVehicleDriveUiOverride('hide');
+  activeVehicleDriveEvent.value = null;
+}
+
+function handleShowVehicleCockpitEvent(): void {
+  setVehicleDriveUiOverride('show');
+}
+
+function handleHideVehicleCockpitEvent(): void {
+  setVehicleDriveUiOverride('hide');
+}
 
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -6834,7 +7850,7 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
-          // updateDriveInputRelaxation(deltaSeconds);
+          updateDriveInputRelaxation(deltaSeconds);
         }
 
         // Camera tween has priority over user controls.
@@ -6860,14 +7876,15 @@ function startRenderLoop(
           });
 
           if (vehicleDriveActive.value) {
-            updateVehiclePhysics(deltaSeconds);
+            applyVehicleDriveForces();
           }
           stepPhysicsWorld(deltaSeconds);
+          updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
         }
 
         if (vehicleDriveActive.value) {
-          updateVehicleCamera(deltaSeconds);
+          updateVehicleDriveCamera(deltaSeconds);
         }
 
         updateBehaviorProximity();
@@ -7066,6 +8083,8 @@ onUnload(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -7085,6 +8104,7 @@ onUnmounted(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -7180,14 +8200,137 @@ onUnmounted(() => {
   background-color: #e9eef5;
 }
 
+.viewer-debug-overlay {
+  position: absolute;
+  left: 12px;
+  top: calc(12px + var(--viewer-safe-area-top, 0px));
+  z-index: 1900;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(8, 12, 26, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(245, 250, 255, 0.92);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
 
+.viewer-debug-line {
+  display: block;
+  white-space: nowrap;
+}
 
 .viewer-canvas {
   width: 100%;
   height: 100%;
 }
 
+.viewer-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(29, 30, 34, 0.4);
+  color: #ffffff;
+  font-size: 14px;
+  text-align: center;
+  padding: 12px;
+}
 
+.viewer-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 80%;
+  max-width: 320px;
+}
+
+.viewer-overlay__card {
+  width: 100%;
+  background: rgba(20, 22, 34, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 24px 22px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(14px);
+}
+
+.viewer-overlay__title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.viewer-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.viewer-progress__bar {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.viewer-progress__bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: inherit;
+  transition: width 0.35s ease;
+  background-image: linear-gradient(90deg, rgba(94, 161, 255, 0.25) 0%, rgba(94, 161, 255, 0.75) 45%, rgba(188, 120, 255, 0.86) 100%);
+  background-size: 200% 100%;
+  animation: viewer-progress-fill 1.8s linear infinite;
+}
+
+@keyframes viewer-progress-fill {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.viewer-progress__stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.viewer-progress__percent {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.viewer-progress__bytes {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.viewer-overlay__caption {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  text-align: center;
+}
+
+.viewer-overlay.error {
+  background-color: rgba(208, 0, 0, 0.6);
+}
 
 .viewer-footer {
   padding: 12px 16px;
@@ -7214,9 +8357,182 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 
+/* Behavior alert overlay (floats above canvas) */
+.viewer-behavior-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.35);
+  z-index: 2000; /* above loading/error overlays */
+}
 
+.viewer-behavior-dialog {
+  min-width: 240px;
+  max-width: 80vw;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background-color: rgba(18, 18, 32, 0.96);
+  color: #f5f7ff;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 
+.viewer-behavior-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
 
+.viewer-behavior-message {
+  max-height: 180px;
+  font-size: 14px;
+  opacity: 0.9;
+  text-align: left;
+}
+
+.viewer-behavior-message text {
+  display: block;
+  line-height: 1.5;
+}
+
+.viewer-behavior-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.viewer-behavior-button {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 18px;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  color: #ffffff;
+  font-size: 14px;
+  min-width: 96px;
+}
+
+.viewer-behavior-button.cancel {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.viewer-lantern-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(6, 8, 12, 0.62);
+  z-index: 2100;
+  padding: 16px;
+}
+
+.viewer-lantern-dialog {
+  position: relative;
+  width: auto;
+  max-width: min(620px, 92vw);
+  max-height: 90vh;
+  border-radius: 16px;
+  background: rgba(12, 16, 28, 0.96);
+  color: #f5f7ff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  touch-action: pan-y;
+}
+
+.viewer-lantern-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background-color: rgba(15, 18, 30, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.viewer-lantern-close:active {
+  opacity: 0.8;
+}
+
+.viewer-lantern-close-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: #FFFFFF;
+}
+
+.viewer-lantern-image-wrapper {
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  flex-shrink: 0;
+}
+
+.viewer-lantern-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.viewer-lantern-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+
+.viewer-lantern-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.viewer-lantern-text {
+  max-height: 32vh;
+  padding-right: 4px;
+  flex: 1 1 auto;
+}
+
+.viewer-lantern-text text {
+  display: block;
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.92;
+}
+
+.viewer-lantern-indicator {
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.viewer-lantern-counter {
+  font-size: 12px;
+  opacity: 0.72;
+  letter-spacing: 0.5px;
+}
 
 .viewer-drive-start {
   position: absolute;
@@ -7315,7 +8631,330 @@ onUnmounted(() => {
 }
 
 
+.viewer-drive-console {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1550;
+}
 
+.viewer-drive-cluster {
+  position: absolute;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.viewer-drive-console--mobile .viewer-drive-cluster {
+  max-width: none;
+}
+
+.viewer-drive-cluster--joystick {
+  left: 16px;
+  bottom: 16px;
+  align-items: center;
+}
+
+.viewer-drive-cluster--floating {
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.24s ease;
+}
+
+.viewer-drive-cluster--floating.is-fading {
+  opacity: 0;
+}
+
+.viewer-drive-cluster--throttle {
+  right: 16px;
+  bottom: 16px;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.viewer-drive-cluster--actions {
+  right: 16px;
+  top: calc(30% + var(--viewer-safe-area-top, 0px));
+  transform: translateY(-50%);
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.viewer-drive-icon-button {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(8, 12, 28, 0.48);
+  color: #f4f6ff;
+  box-shadow: 0 10px 24px rgba(4, 6, 18, 0.45);
+  backdrop-filter: blur(12px);
+  transition: background-color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+
+.viewer-drive-icon-button--danger {
+  background-color: rgba(74, 6, 24, 0.6);
+  border-color: rgba(255, 143, 167, 0.45);
+  color: #ffe5ea;
+}
+
+.viewer-drive-icon-button.is-busy,
+.viewer-drive-icon-button:disabled {
+  opacity: 0.7;
+}
+
+.viewer-drive-icon-button:active {
+  transform: scale(0.95);
+}
+
+.viewer-drive-speed-floating {
+  position: absolute;
+  left: 24px;
+  bottom: 190px;
+  z-index: 1580;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.viewer-drive-speed-gauge {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background:
+    conic-gradient(from -90deg, rgba(102, 210, 255, 0.65) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.04) var(--speed-angle, 0deg));
+  background-color: rgba(6, 10, 24, 0.28);
+  position: relative;
+  box-shadow:
+    inset 0 0 14px rgba(0, 0, 0, 0.32),
+    0 14px 28px rgba(3, 6, 18, 0.35);
+  backdrop-filter: blur(8px);
+}
+
+.viewer-drive-speed-gauge::after {
+  content: '';
+  position: absolute;
+  inset: 14%;
+  border-radius: 50%;
+  background: rgba(4, 6, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.viewer-drive-speed-gauge__needle {
+  position: absolute;
+  bottom: 50%;
+  left: 50%;
+  width: 2px;
+  height: 36px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(67, 221, 255, 0.8));
+  border-radius: 1px;
+  transform-origin: center bottom;
+  transform: translateX(-50%) rotate(calc(var(--speed-angle, 0deg) - 90deg));
+  box-shadow: 0 0 10px rgba(78, 227, 255, 0.5);
+  z-index: 2;
+}
+
+.viewer-drive-speed-gauge__values {
+  color: #f7fbff;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.8rem;
+}
+
+.viewer-drive-speed-gauge__value {
+  font-size: 1.3rem;
+}
+
+.viewer-drive-speed-gauge__unit {
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.viewer-drive-brake {
+  position: absolute;
+  right: 16px;
+  bottom: 18px;
+  z-index: 1550;
+  pointer-events: auto;
+}
+
+.viewer-drive-brake-button {
+  width: 94px;
+  height: 94px;
+  border-radius: 999px;
+  border: none;
+  outline: none;
+  background: linear-gradient(135deg, #ff6f7b, #c81e46);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  box-shadow: 0 18px 36px rgba(200, 30, 70, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-drive-brake-button.is-active {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.viewer-drive-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.viewer-drive-icon-text {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.viewer-drive-pedal-button {
+  width: 68px;
+  height: 68px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 22px;
+  border: 2px solid rgba(164, 188, 255, 0.28);
+  color: #f4f6ff;
+  background-color: rgba(26, 38, 82, 0.38);
+  box-shadow: 0 12px 22px rgba(6, 10, 28, 0.48);
+  backdrop-filter: blur(12px);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.viewer-drive-pedal-button--forward {
+  background-color: rgba(62, 174, 255, 0.26);
+  border-color: rgba(118, 206, 255, 0.45);
+}
+
+.viewer-drive-pedal-button--brake {
+  background-color: rgba(255, 112, 130, 0.24);
+  border-color: rgba(255, 150, 160, 0.45);
+}
+
+.viewer-drive-pedal-button.is-active {
+  transform: scale(0.92);
+  box-shadow: 0 6px 16px rgba(4, 6, 18, 0.55);
+}
+
+.viewer-drive-pedal-button--forward.is-active {
+  background-color: rgba(62, 174, 255, 0.42);
+  border-color: rgba(138, 214, 255, 0.6);
+}
+
+.viewer-drive-pedal-button--brake.is-active {
+  background-color: rgba(255, 112, 130, 0.4);
+  border-color: rgba(255, 168, 178, 0.6);
+}
+
+.viewer-drive-joystick {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  position: relative;
+  pointer-events: auto;
+  transition: transform 0.18s ease;
+}
+
+.viewer-drive-joystick::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.12), transparent 62%),
+    rgba(18, 28, 64, 0.45);
+  border: 2px solid rgba(124, 156, 255, 0.3);
+  box-shadow:
+    inset 0 0 22px rgba(10, 18, 48, 0.85),
+    0 0 28px rgba(32, 80, 220, 0.32);
+  backdrop-filter: blur(6px);
+}
+
+.viewer-drive-joystick__base {
+  position: absolute;
+  inset: 16px;
+  border-radius: 50%;
+  background: rgba(50, 72, 148, 0.18);
+  box-shadow: inset 0 0 18px rgba(12, 18, 42, 0.8);
+}
+
+.viewer-drive-joystick__stick {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent 58%),
+    rgba(78, 118, 230, 0.75);
+  border: 2px solid rgba(150, 188, 255, 0.4);
+  box-shadow:
+    inset 0 0 14px rgba(18, 26, 58, 0.8),
+    0 8px 18px rgba(10, 12, 28, 0.45);
+  transform: translate(-50%, -50%);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.viewer-drive-joystick.is-active {
+  transform: scale(0.97);
+}
+
+.viewer-drive-joystick.is-active .viewer-drive-joystick__stick {
+  box-shadow:
+    inset 0 0 18px rgba(18, 26, 58, 0.95),
+    0 10px 22px rgba(18, 22, 44, 0.6);
+}
+
+.viewer-drive-pedal-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.92;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.viewer-drive-pedal-icon-text {
+  font-size: 24px;
+  line-height: 1;
+  color: currentColor;
+}
+
+.viewer-drive-pedal-button.is-active .viewer-drive-pedal-icon {
+  transform: scale(1.1);
+  opacity: 1;
+}
 
 @keyframes viewer-drive-icon-glow {
   0% {
