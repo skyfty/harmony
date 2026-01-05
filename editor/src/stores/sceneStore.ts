@@ -10755,95 +10755,11 @@ export const useSceneStore = defineStore('scene', {
 
       void (async () => {
         try {
-          // If the placeholder was undone/removed before completion, abort.
-          const existingPlaceholder = findNodeById(this.nodes, placeholder.id)
-          if (!existingPlaceholder) {
-            stopPrefabPlaceholderWatcher(placeholder.id)
-            return
-          }
+          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, { parentId })
+          stopPrefabPlaceholderWatcher(placeholder.id)
+          this.removeSceneNodes([placeholder.id])
+          this.setSelection([instantiated.id], { primaryId: instantiated.id })
 
-          const instantiated = await this.withHistorySuppressed(async () => {
-            const stillPresent = findNodeById(this.nodes, placeholder.id)
-            if (!stillPresent) {
-              return null
-            }
-
-            const prefab = await this.loadNodePrefab(assetId)
-            const sourceMeta = this.assetIndex[assetId]?.source ?? null
-            const dependencyProviderId = sourceMeta && sourceMeta.type === 'package' ? sourceMeta.providerId ?? null : null
-
-            const created = await this.instantiatePrefabData(prefab, {
-              sourceAssetId: assetId,
-              position: spawnPosition ?? null,
-              providerId: dependencyProviderId,
-              prefabAssetIdForDownloadProgress: assetId,
-            })
-
-            // Replace the placeholder node in-place so undoing the single structural entry
-            // (remove placeholder id) also removes the final prefab.
-            const parentMap = buildParentMap(this.nodes)
-            const resolvedParentId = parentMap.get(placeholder.id) ?? null
-            const siblings = resolvedParentId
-              ? (findNodeById(this.nodes, resolvedParentId)?.children ?? [])
-              : this.nodes
-            const placeholderIndex = siblings.findIndex((item) => item.id === placeholder.id)
-
-            const { tree, node: removedPlaceholder } = detachNodeImmutable(this.nodes, placeholder.id)
-            if (!removedPlaceholder) {
-              stopPrefabPlaceholderWatcher(placeholder.id)
-              return null
-            }
-
-            created.id = placeholder.id
-            if (created.nodeType === 'Group') {
-              created.groupExpanded = false
-            }
-            // Best-effort: preserve basic flags.
-            created.visible = removedPlaceholder.visible ?? true
-            created.locked = removedPlaceholder.locked
-
-            if (resolvedParentId) {
-              const parentNode = findNodeById(tree, resolvedParentId)
-              if (parentNode && allowsChildNodes(parentNode)) {
-                const nextChildren = parentNode.children ? [...parentNode.children] : []
-                const safeIndex = placeholderIndex >= 0 ? placeholderIndex : nextChildren.length
-                nextChildren.splice(safeIndex, 0, created)
-                parentNode.children = nextChildren
-              } else {
-                const safeIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
-                tree.splice(safeIndex, 0, created)
-              }
-            } else {
-              const safeIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
-              tree.splice(safeIndex, 0, created)
-            }
-
-            this.nodes = tree
-
-            stopPrefabPlaceholderWatcher(placeholder.id)
-
-            await this.ensureSceneAssetsReady({
-              nodes: [created],
-              showOverlay: false,
-              prefabAssetIdForDownloadProgress: assetId,
-              refreshViewport: true,
-            })
-
-            const syncSubtree = (node: SceneNode) => {
-              componentManager.syncNode(node)
-              if (node.children?.length) {
-                node.children.forEach(syncSubtree)
-              }
-            }
-            syncSubtree(created)
-
-            commitSceneSnapshot(this)
-            return created
-          })
-
-          if (instantiated) {
-            this.setSelection([instantiated.id], { primaryId: instantiated.id })
-          }
         } catch (error) {
           const target = findNodeById(this.nodes, placeholder.id)
           if (target) {
