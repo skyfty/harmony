@@ -1159,6 +1159,7 @@ previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
+const previewParentMap = new Map<string, string | null>();
 const assetNodeIdMap = new Map<string, Set<string>>();
 const multiuserNodeIds = new Set<string>();
 const multiuserNodeObjects = new Map<string, THREE.Object3D>();
@@ -1234,6 +1235,8 @@ const VEHICLE_TRAVEL_EPSILON = 1e-5;
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let handleBehaviorClick: ((event: MouseEvent | TouchEvent) => void) | null = null;
+const LAYER_BEHAVIOR_INTERACTIVE = 1;
+const LAYER_VEHICLE_INTERACTIVE = 2;
 
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -2767,17 +2770,20 @@ function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   previewNodeMap.clear();
+  previewParentMap.clear();
   assetNodeIdMap.clear();
   if (!Array.isArray(nodes)) {
     return;
   }
-  const stack: SceneNode[] = [...nodes];
+  const stack: Array<{ node: SceneNode; parentId: string | null }> = nodes.map((node) => ({ node, parentId: null }));
   while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
+    const entry = stack.pop();
+    if (!entry) {
       continue;
     }
+    const { node, parentId } = entry;
     previewNodeMap.set(node.id, node);
+    previewParentMap.set(node.id, parentId);
     if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length) {
       const assetId = node.sourceAssetId.trim();
       let bucket = assetNodeIdMap.get(assetId);
@@ -2788,9 +2794,29 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       bucket.add(node.id);
     }
     if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
+      node.children.forEach((child) => stack.push({ node: child, parentId: node.id }));
     }
   }
+}
+
+function resolveParentNodeId(nodeId: string): string | null {
+  return previewParentMap.get(nodeId) ?? null;
+}
+
+function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
+  let currentId: string | null = nodeId;
+  while (currentId) {
+    try {
+      const actions = listRegisteredBehaviorActions(currentId);
+      if (actions.includes('click')) {
+        return currentId;
+      }
+    } catch (e) {
+      // ignore and continue searching
+    }
+    currentId = resolveParentNodeId(currentId);
+  }
+  return null;
 }
 
 function collectMultiuserNodeIds(nodes: SceneNode[] | undefined | null, collector: Set<string>): void {
@@ -3453,6 +3479,21 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     nodeObjectMap.set(nodeId, object);
     ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
+
+    // Ensure interaction layers are in sync for this runtime object (enable behavior layer
+    // when the node or any ancestor is registered as clickable).
+    try {
+      const actions = listRegisteredBehaviorActions(nodeId);
+      const clickable = Array.isArray(actions) && actions.includes('click');
+      const behaviorTargetId = clickable ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
+      if (behaviorTargetId) {
+        object.layers.enable(LAYER_BEHAVIOR_INTERACTIVE);
+      } else {
+        object.layers.disable(LAYER_BEHAVIOR_INTERACTIVE);
+      }
+    } catch (e) {
+      // ignore
+    }
 
     const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
     if (instancedAssetId) {
@@ -5093,6 +5134,22 @@ function refreshBehaviorProximityCandidates(): void {
 const behaviorRuntimeListener: BehaviorRuntimeListener = {
   onRegistryChanged(nodeId) {
     syncBehaviorProximityCandidate(nodeId);
+    try {
+      // ensure objects belonging to this node update their interaction layers
+      const object = nodeObjectMap.get(nodeId);
+      if (object) {
+        const actions = listRegisteredBehaviorActions(nodeId);
+        const clickable = Array.isArray(actions) && actions.includes('click');
+        const behaviorTargetId = clickable ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
+        if (behaviorTargetId) {
+          object.layers.enable(LAYER_BEHAVIOR_INTERACTIVE);
+        } else {
+          object.layers.disable(LAYER_BEHAVIOR_INTERACTIVE);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
   },
 };
 
@@ -6476,12 +6533,13 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       if (!nodeId) {
         continue;
       }
-      const actions = listRegisteredBehaviorActions(nodeId);
-      if (!actions.includes('click')) {
+      const directActions = listRegisteredBehaviorActions(nodeId);
+      const behaviorTargetId = directActions.includes('click') ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
+      if (!behaviorTargetId) {
         continue;
       }
-      const hitObject = nodeObjectMap.get(nodeId) ?? intersection.object;
-      const results = triggerBehaviorAction(nodeId, 'click', {
+      const hitObject = nodeObjectMap.get(behaviorTargetId) ?? intersection.object;
+      const results = triggerBehaviorAction(behaviorTargetId, 'click', {
         intersection: {
           object: hitObject,
           point: {

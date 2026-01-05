@@ -440,8 +440,10 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 	}
 
 	try {
-		const actions = listRegisteredBehaviorActions(nodeId)
-		if (Array.isArray(actions) && actions.includes('click')) {
+		const directActions = listRegisteredBehaviorActions(nodeId)
+		const hasClick = Array.isArray(directActions) && directActions.includes('click')
+		const clickableAncestor = hasClick ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId)
+		if (clickableAncestor) {
 			target.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
 		} else {
 			target.layers.disable(LAYER_BEHAVIOR_INTERACTIVE)
