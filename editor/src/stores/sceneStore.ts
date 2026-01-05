@@ -340,12 +340,33 @@ const SEMI_TRANSPARENT_OPACITY = 0.35
 const HEIGHT_EPSILON = 1e-5
 const WALL_DIMENSION_EPSILON = 1e-4
 
+export type ScenePatchField =
+  | 'transform'
+  | 'visibility'
+  | 'materials'
+  | 'components'
+  | 'dynamicMesh'
+  | 'light'
+  | 'userData'
+  | 'name'
+  | 'groupExpanded'
+  | 'download'
+  | 'lock'
+
+export type ScenePatch =
+  | { type: 'structure'; reason?: string }
+  | { type: 'node'; id: string; fields: ScenePatchField[] }
+
 declare module '@/types/scene-state' {
   interface SceneState {
     panelPlacement: PanelPlacementState
     workspaceId: string
     workspaceType: SceneWorkspaceType
     workspaceLabel: string
+
+    sceneGraphStructureVersion: number
+    sceneNodePropertyVersion: number
+    pendingScenePatches: ScenePatch[]
 
     prefabAssetDownloadProgress: Record<
       string,
@@ -6908,6 +6929,9 @@ export const useSceneStore = defineStore('scene', {
       pendingTransformSnapshot: null,
       isSceneReady: false,
       hasUnsavedChanges: false,
+      sceneGraphStructureVersion: 0,
+      sceneNodePropertyVersion: 0,
+      pendingScenePatches: [],
       workspaceId: '',
       workspaceType: 'local',
       workspaceLabel: '本地用户',
@@ -6970,6 +6994,77 @@ export const useSceneStore = defineStore('scene', {
     },
   },
   actions: {
+
+    queueSceneStructurePatch(reason?: string): boolean {
+      const entry: ScenePatch = { type: 'structure', reason }
+      const existing = this.pendingScenePatches
+      const hasStructure = existing.some((patch) => patch.type === 'structure')
+      if (hasStructure) {
+        this.pendingScenePatches = [entry]
+      } else {
+        this.pendingScenePatches = [entry]
+      }
+      this.sceneGraphStructureVersion += 1
+      this.sceneNodePropertyVersion += 1
+      return true
+    },
+
+    queueSceneNodePatch(
+      nodeId: string,
+      fields: ScenePatchField[],
+      options: { bumpVersion?: boolean } = {},
+    ): boolean {
+      const id = typeof nodeId === 'string' ? nodeId.trim() : ''
+      if (!id) {
+        return false
+      }
+      const bumpVersion = options.bumpVersion !== false
+      const requested = Array.from(new Set(fields)).filter(Boolean)
+      if (!requested.length) {
+        return false
+      }
+      const existing = this.pendingScenePatches
+      if (existing.some((patch) => patch.type === 'structure')) {
+        // Already going to reconcile everything.
+        return false
+      }
+
+      let changed = false
+      const next = existing.map((patch) => {
+        if (patch.type !== 'node' || patch.id !== id) {
+          return patch
+        }
+        const merged = Array.from(new Set([...patch.fields, ...requested])) as ScenePatchField[]
+        if (merged.length !== patch.fields.length) {
+          changed = true
+        }
+        return { ...patch, fields: merged }
+      })
+
+      if (!next.some((patch) => patch.type === 'node' && patch.id === id)) {
+        next.push({ type: 'node', id, fields: requested })
+        changed = true
+      }
+
+      if (!changed) {
+        return false
+      }
+
+      this.pendingScenePatches = next
+      if (bumpVersion) {
+        this.sceneNodePropertyVersion += 1
+      }
+      return true
+    },
+
+    drainScenePatches(): ScenePatch[] {
+      const patches = this.pendingScenePatches
+      if (!patches.length) {
+        return []
+      }
+      this.pendingScenePatches = []
+      return patches
+    },
 
     initialize() {
       if (workspaceScopeStopHandle) {
@@ -7103,6 +7198,8 @@ export const useSceneStore = defineStore('scene', {
       this.groundSettings = cloneGroundSettings(scene.groundSettings)
       this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
       this.hasUnsavedChanges = false
+
+      this.queueSceneStructurePatch('applySceneDocumentToState')
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
       const snapshot = buildSceneDocumentFromState(this)
@@ -7187,8 +7284,7 @@ export const useSceneStore = defineStore('scene', {
           await this.ensureSceneAssetsReady({ nodes: this.nodes, showOverlay: false, refreshViewport: false })
         }
 
-        // trigger reactivity for consumers relying on node array reference
-        this.nodes = [...this.nodes]
+        this.queueSceneStructurePatch('restoreFromHistory')
         commitSceneSnapshot(this)
       } finally {
         this.isRestoringHistory = false
@@ -7251,7 +7347,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       groundNode.dynamicMesh = result.definition
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
       return true
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
@@ -7334,7 +7430,7 @@ export const useSceneStore = defineStore('scene', {
         textureDataUrl: nextDataUrl,
         textureName: nextName,
       }
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
       return true
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
@@ -7428,7 +7524,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       node.groupExpanded = normalized
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['groupExpanded'])
       if (!normalized) {
         this.setSelection([...this.selectedNodeIds])
       }
@@ -7462,7 +7558,13 @@ export const useSceneStore = defineStore('scene', {
           selectionNeedsNormalization = true
         }
       })
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      assignments.forEach(({ node }) => {
+        patchQueued = this.queueSceneNodePatch(node.id, ['groupExpanded'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       if (selectionNeedsNormalization) {
         this.setSelection([...this.selectedNodeIds])
       }
@@ -7563,7 +7665,7 @@ export const useSceneStore = defineStore('scene', {
         node.rotation = cloneVector(payload.rotation)
         node.scale = cloneVector(payload.scale)
       })
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(payload.id, ['transform'])
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -7608,8 +7710,7 @@ export const useSceneStore = defineStore('scene', {
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
         if (payload.scale) node.scale = cloneVector(payload.scale)
       })
-      // trigger reactivity for listeners relying on reference changes
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(payload.id, ['transform'])
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -7633,8 +7734,7 @@ export const useSceneStore = defineStore('scene', {
           node.userData = null
         }
       })
-
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['userData'])
       commitSceneSnapshot(this)
     },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
@@ -7707,7 +7807,14 @@ export const useSceneStore = defineStore('scene', {
           }
         })
       })
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      prepared.forEach((update) => {
+        patchQueued =
+          this.queueSceneNodePatch(update.id, ['transform'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       if (scaleRefreshTargets.size) {
         scaleRefreshTargets.forEach((id) => {
           const updatedNode = findNodeById(this.nodes, id)
@@ -7763,7 +7870,7 @@ export const useSceneStore = defineStore('scene', {
           existingRecord[key] = value
         }
       })
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
     },
     setNodeLocked(nodeId: string, locked: boolean) {
       const target = findNodeById(this.nodes, nodeId)
@@ -7771,7 +7878,7 @@ export const useSceneStore = defineStore('scene', {
       visitNode(this.nodes, nodeId, (node) => {
         node.locked = locked
       })
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['lock'])
     },
     renameNode(id: string, name: string) {
       const trimmed = name.trim()
@@ -7786,7 +7893,7 @@ export const useSceneStore = defineStore('scene', {
       visitNode(this.nodes, id, (node) => {
         node.name = trimmed
       })
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['name'])
       commitSceneSnapshot(this)
     },
     addNodeMaterial(
@@ -7828,7 +7935,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return created
     },
@@ -7909,7 +8016,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return true
     },
@@ -7946,7 +8053,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
     },
     updateNodeMaterialType(nodeId: string, nodeMaterialId: string, type: SceneMaterialType) {
@@ -7973,7 +8080,8 @@ export const useSceneStore = defineStore('scene', {
       if (!updated) {
         return false
       }
-      this.nodes = [...this.nodes]
+
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return true
     },
@@ -8015,7 +8123,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return true
     },
@@ -8039,7 +8147,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return true
     },
@@ -8062,8 +8170,7 @@ export const useSceneStore = defineStore('scene', {
       if (!changed) {
         return false
       }
-
-      this.nodes = [...this.nodes]
+      this.queueSceneStructurePatch('resetSharedMaterialAssignments')
       commitSceneSnapshot(this)
       return true
     },
@@ -8124,7 +8231,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.materials = [...this.materials, material]
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
 
       const previewColor = typeof props.color === 'string' && props.color.trim().length ? props.color : '#607d8b'
       const asset: ProjectAsset = {
@@ -8177,7 +8284,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
     },
     createMaterial(payload: { name?: string; props?: Partial<SceneMaterialProps> | null } = {}) {
@@ -8247,7 +8354,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (changedNodes) {
-        this.nodes = [...this.nodes]
+        this.queueSceneStructurePatch('updateMaterialDefinition')
       }
 
       commitSceneSnapshot(this, { updateNodes: changedNodes })
@@ -8290,7 +8397,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (changedNodes) {
-        this.nodes = [...this.nodes]
+        this.queueSceneStructurePatch('deleteMaterial')
       }
 
       commitSceneSnapshot(this, { updateNodes: changedNodes })
@@ -8317,7 +8424,7 @@ export const useSceneStore = defineStore('scene', {
         }
         node.light = next
       })
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['light'])
       commitSceneSnapshot(this)
     },
     isNodeVisible(id: string) {
@@ -8333,7 +8440,7 @@ export const useSceneStore = defineStore('scene', {
       if (!updated) {
         return
       }
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['visibility'])
       commitSceneSnapshot(this)
     },
     toggleNodeVisibility(id: string) {
@@ -8357,7 +8464,7 @@ export const useSceneStore = defineStore('scene', {
       if (!updated) {
         return
       }
-      this.nodes = [...this.nodes]
+      this.queueSceneStructurePatch('setAllNodesVisibility')
       commitSceneSnapshot(this)
     },
     toggleSelectionVisibility(): boolean {
@@ -8391,7 +8498,13 @@ export const useSceneStore = defineStore('scene', {
       nodes.forEach((node) => {
         node.visible = targetVisible
       })
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      nodes.forEach((node) => {
+        patchQueued = this.queueSceneNodePatch(node.id, ['visibility'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       return true
     },
     isNodeSelectionLocked(id: string) {
@@ -8417,7 +8530,7 @@ export const useSceneStore = defineStore('scene', {
         const nextSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
         this.setSelection(nextSelection)
       }
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['lock'])
       commitSceneSnapshot(this)
     },
     toggleNodeSelectionLock(id: string) {
@@ -8451,7 +8564,7 @@ export const useSceneStore = defineStore('scene', {
       if (locked && this.selectedNodeIds.length) {
         this.setSelection([])
       }
-      this.nodes = [...this.nodes]
+      this.queueSceneStructurePatch('setAllNodesSelectionLock')
       commitSceneSnapshot(this)
     },
     toggleSelectionLock(): boolean {
@@ -8487,7 +8600,13 @@ export const useSceneStore = defineStore('scene', {
         const nextPrimary = remainingSelection[remainingSelection.length - 1] ?? null
         this.setSelection(remainingSelection, { primaryId: nextPrimary })
       }
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      processed.forEach((nodeId) => {
+        patchQueued = this.queueSceneNodePatch(nodeId, ['lock'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       return true
     },
     toggleSelectionTransparency(): boolean {
@@ -8529,7 +8648,13 @@ export const useSceneStore = defineStore('scene', {
           })
         })
       })
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      nodes.forEach((node) => {
+        patchQueued = this.queueSceneNodePatch(node.id, ['materials'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       return true
     },
     setActiveDirectory(id: string) {
@@ -8904,7 +9029,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (errors.length === 0 && refreshViewport) {
-        this.nodes = [...this.nodes]
+        this.queueSceneStructurePatch('ensureSceneAssetsReady')
       }
     },
     async spawnAssetAtPosition(
@@ -9005,7 +9130,7 @@ export const useSceneStore = defineStore('scene', {
         if (target) {
           target.downloadStatus = 'error'
           target.downloadError = (error as Error).message ?? '资源下载失败'
-          this.nodes = [...this.nodes]
+          this.queueSceneNodePatch(placeholder.id, ['download'])
         }
       })
 
@@ -9393,7 +9518,7 @@ export const useSceneStore = defineStore('scene', {
       })
 
       attachPrefabMetadata(node, registered.id)
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['userData'])
       return registered
     },
     async importPrefabAssetFromClipboard(serialized: string): Promise<ProjectAsset | null> {
@@ -9827,7 +9952,7 @@ export const useSceneStore = defineStore('scene', {
             // the caller replaces it with the real prefab instance.
             if (target.downloadProgress !== 100) {
               target.downloadProgress = 100
-              this.nodes = [...this.nodes]
+              this.queueSceneNodePatch(nodeId, ['download'])
             }
             return
           }
@@ -9851,7 +9976,7 @@ export const useSceneStore = defineStore('scene', {
             changed = true
           }
           if (changed) {
-            this.nodes = [...this.nodes]
+            this.queueSceneNodePatch(nodeId, ['download'])
           }
         },
         { immediate: true },
@@ -9932,7 +10057,7 @@ export const useSceneStore = defineStore('scene', {
           if (target) {
             target.downloadStatus = 'error'
             target.downloadError = (error as Error).message ?? '资源下载失败'
-            this.nodes = [...this.nodes]
+            this.queueSceneNodePatch(placeholder.id, ['download'])
           }
         }
       })()
@@ -10436,7 +10561,7 @@ export const useSceneStore = defineStore('scene', {
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
       replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
       this.materials = [...this.materials]
-      this.nodes = [...this.nodes]
+      this.queueSceneStructurePatch('replaceAssetIdInNodes')
 
       if (this.selectedAssetId === localAssetId) {
         this.selectedAssetId = storedAsset.id
@@ -10694,7 +10819,14 @@ export const useSceneStore = defineStore('scene', {
         componentManager.syncNode(childNode)
       })
 
-      this.nodes = [...this.nodes]
+      let patchQueued = false
+      patchQueued = this.queueSceneNodePatch(groupId, ['transform'], { bumpVersion: false }) || patchQueued
+      childAdjustments.forEach((adjustment) => {
+        patchQueued = this.queueSceneNodePatch(adjustment.id, ['transform'], { bumpVersion: false }) || patchQueued
+      })
+      if (patchQueued) {
+        this.sceneNodePropertyVersion += 1
+      }
       if (options.commit) {
         commitSceneSnapshot(this)
       }
@@ -11023,7 +11155,7 @@ export const useSceneStore = defineStore('scene', {
             target.downloadProgress = 100
             changed = true
             stopPlaceholderWatcher(nodeId)
-            this.nodes = [...this.nodes]
+            this.queueSceneNodePatch(nodeId, ['download'])
             void this.finalizePlaceholderNode(nodeId, asset)
             return
           }
@@ -11033,7 +11165,7 @@ export const useSceneStore = defineStore('scene', {
             changed = true
             stopPlaceholderWatcher(nodeId)
             if (changed) {
-              this.nodes = [...this.nodes]
+              this.queueSceneNodePatch(nodeId, ['download'])
             }
             return
           }
@@ -11045,7 +11177,7 @@ export const useSceneStore = defineStore('scene', {
           }
 
           if (changed) {
-            this.nodes = [...this.nodes]
+            this.queueSceneNodePatch(nodeId, ['download'])
           }
         },
         { immediate: true },
@@ -11064,7 +11196,7 @@ export const useSceneStore = defineStore('scene', {
       if (!assetId) {
         placeholder.downloadStatus = 'error'
         placeholder.downloadError = '缺少资源 ID，无法重试'
-        this.nodes = [...this.nodes]
+        this.queueSceneNodePatch(nodeId, ['download'])
         return false
       }
 
@@ -11072,7 +11204,7 @@ export const useSceneStore = defineStore('scene', {
       if (!asset) {
         placeholder.downloadStatus = 'error'
         placeholder.downloadError = '资源不存在，无法重试'
-        this.nodes = [...this.nodes]
+        this.queueSceneNodePatch(nodeId, ['download'])
         return false
       }
 
@@ -11081,7 +11213,7 @@ export const useSceneStore = defineStore('scene', {
       placeholder.downloadStatus = 'downloading'
       placeholder.downloadProgress = 0
       placeholder.downloadError = null
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['download'])
 
       this.observeAssetDownloadForNode(nodeId, asset)
       assetCache.setError(asset.id, null)
@@ -11094,7 +11226,7 @@ export const useSceneStore = defineStore('scene', {
         if (target) {
           target.downloadStatus = 'error'
           target.downloadError = (error as Error).message ?? '资源下载失败'
-          this.nodes = [...this.nodes]
+          this.queueSceneNodePatch(nodeId, ['download'])
         }
         return false
       }
@@ -11288,7 +11420,7 @@ export const useSceneStore = defineStore('scene', {
         placeholder.isPlaceholder = true
         placeholder.downloadStatus = 'error'
         placeholder.downloadError = (error as Error).message ?? '资源加载失败'
-        this.nodes = [...this.nodes]
+        this.queueSceneNodePatch(nodeId, ['download'])
       }
     },
 
@@ -11371,7 +11503,7 @@ export const useSceneStore = defineStore('scene', {
       componentManager.attachRuntime(node, runtimeObject)
       componentManager.syncNode(node)
 
-      this.nodes = [...this.nodes]
+      this.queueSceneStructurePatch('replaceNodeModelAsset')
 
       assetCache.touch(asset.id)
       commitSceneSnapshot(this)
@@ -11795,7 +11927,7 @@ export const useSceneStore = defineStore('scene', {
       }
       visitNodes(this.nodes)
       if (created > 0) {
-        this.nodes = [...this.nodes]
+        this.queueSceneStructurePatch('rebuildGeneratedMeshRuntimes')
       }
       return created
     },
@@ -12164,7 +12296,7 @@ export const useSceneStore = defineStore('scene', {
         ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
         : false
       if (!recentered) {
-        this.nodes = [...this.nodes]
+        this.queueSceneNodePatch(nodeId, ['transform', 'dynamicMesh'])
       }
       commitSceneSnapshot(this)
 
@@ -12233,7 +12365,7 @@ export const useSceneStore = defineStore('scene', {
         target.components = nextComponents
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
       const normalizedNode = findNodeById(this.nodes, nodeId)
       if (normalizedNode) {
         componentManager.syncNode(normalizedNode)
@@ -12297,7 +12429,7 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
@@ -12324,7 +12456,7 @@ export const useSceneStore = defineStore('scene', {
         node.components = componentCount(nextComponents) ? nextComponents : undefined
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
@@ -12358,7 +12490,7 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components'])
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
@@ -12647,7 +12779,7 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
@@ -12681,7 +12813,7 @@ export const useSceneStore = defineStore('scene', {
         node.components = componentCount(nextComponents) ? nextComponents : undefined
       })
 
-      this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(nodeId, ['components'])
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
