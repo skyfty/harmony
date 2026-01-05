@@ -12918,7 +12918,12 @@ export const useSceneStore = defineStore('scene', {
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
 
+      if (removed.length) {
+        this.queueSceneStructurePatch('removeSceneNodes')
+      }
+
       removed.forEach((id) => stopPlaceholderWatcher(id))
+      removed.forEach((id) => stopPrefabPlaceholderWatcher(id))
 
       affectedParentIds.forEach((parentId) => {
         if (!findNodeById(this.nodes, parentId)) {
