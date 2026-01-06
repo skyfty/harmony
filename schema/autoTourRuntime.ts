@@ -39,6 +39,8 @@ export type AutoTourRuntime = {
 }
 
 type AutoTourPlaybackState = {
+  mode: 'seek-endpoint' | 'path' | 'loop-to-start' | 'return-to-start' | 'stopped' | 'stopping'
+  endpointIndex: 0 | 1
   targetIndex: number
   routeNodeId: string
   routeWaypointCount: number
@@ -52,6 +54,8 @@ const AUTO_TOUR_ENGINE_FORCE = 320
 const AUTO_TOUR_BRAKE_FORCE = 16
 const AUTO_TOUR_POSITION_SMOOTHING = 14
 const AUTO_TOUR_YAW_SMOOTHING = 12
+const AUTO_TOUR_STOP_POSITION_EPSILON = 0.03
+const AUTO_TOUR_STOP_VEHICLE_SPEED_EPSILON = 0.25
 
 function expSmoothingAlpha(smoothing: number, deltaSeconds: number): number {
   const k = Math.max(0, smoothing)
@@ -85,6 +89,17 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
     }
   }
   return bestIndex
+}
+
+function findNearestEndpointIndex(points: THREE.Vector3[], position: THREE.Vector3): 0 | 1 {
+  const start = points[0]
+  const end = points[points.length - 1]
+  if (!start || !end) {
+    return 0
+  }
+  const d0 = position.distanceToSquared(start)
+  const d1 = position.distanceToSquared(end)
+  return d1 < d0 ? 1 : 0
 }
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
@@ -154,6 +169,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
 
+      const endIndex = points.length - 1
+
       const speed = Math.max(0, props.speedMps)
       if (speed <= 0) {
         continue
@@ -161,7 +178,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const key = `${node.id}:${autoTour.id}`
       const cached = autoTourPlaybackState.get(key) ?? null
-      let targetIndex = cached?.targetIndex ?? -1
+      let state = cached
 
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
       const hasVehicle = Boolean(vehicleInstance?.vehicle?.chassisBody)
@@ -170,8 +187,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
 
-      if (!cached || cached.routeNodeId !== routeNodeId || cached.routeWaypointCount !== points.length) {
-        // Initialize to the closest waypoint, then head toward the next one.
+      if (!state || state.routeNodeId !== routeNodeId || state.routeWaypointCount !== points.length) {
+        // Initialize by heading to the nearest endpoint (start/end).
         const positionSample = autoTourCurrentPosition
         if (hasVehicle) {
           const body = vehicleInstance!.vehicle.chassisBody
@@ -180,11 +197,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           nodeObject!.getWorldPosition(positionSample)
         }
 
-        const nearest = findClosestWaypointIndex(points, positionSample)
-        targetIndex = nearest + 1
-        if (targetIndex >= points.length) {
-          targetIndex = props.loop ? 0 : points.length - 1
-        }
+        const nearestEndpoint = findNearestEndpointIndex(points, positionSample)
+        const endpointTargetIndex = nearestEndpoint === 0 ? 0 : endIndex
 
         let initialYaw = 0
         if (hasVehicle) {
@@ -202,27 +216,54 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           initialYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
         }
 
-        autoTourPlaybackState.set(key, {
-          targetIndex,
+        state = {
+          mode: 'seek-endpoint',
+          endpointIndex: nearestEndpoint,
+          targetIndex: endpointTargetIndex,
           routeNodeId,
           routeWaypointCount: points.length,
           hasSmoothedState: true,
           smoothedWorldPosition: positionSample.clone(),
           smoothedYaw: initialYaw,
-        })
-      } else if (targetIndex < 0) {
-        targetIndex = 1
+        }
+        autoTourPlaybackState.set(key, state)
       }
 
-      if (targetIndex >= points.length) {
+      if (!state) {
+        continue
+      }
+
+      // When stopped and not looping:
+      // - non-vehicle: do nothing (object already at final position)
+      // - vehicle: keep holding brake to avoid rolling
+      if (state.mode === 'stopped') {
         if (props.loop) {
-          targetIndex = 0
+          state.mode = 'loop-to-start'
+          state.targetIndex = 0
         } else {
+          if (hasVehicle) {
+            try {
+              const vehicle = vehicleInstance!.vehicle
+              for (let index = 0; index < vehicleInstance!.wheelCount; index += 1) {
+                vehicle.setBrake(AUTO_TOUR_BRAKE_FORCE * 6, index)
+                vehicle.applyEngineForce(0, index)
+                vehicle.setSteeringValue(0, index)
+              }
+            } catch (error) {
+              console.warn('[AutoTourRuntime] AutoTour vehicle hold brake failed', error)
+            }
+          }
           continue
         }
       }
 
-      const target = points[targetIndex]!
+      // Safety clamp.
+      if (!Number.isFinite(state.targetIndex)) {
+        state.targetIndex = 0
+      }
+      state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
+
+      const target = points[state.targetIndex]!
       if (hasVehicle) {
         const chassisBody = vehicleInstance!.vehicle.chassisBody
         autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
@@ -234,20 +275,68 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const distance = autoTourDirection.length()
       const arrivalDistance = Math.max(0.35, Math.min(1.25, speed * 0.2))
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
-        let nextIndex = targetIndex + 1
-        if (nextIndex >= points.length) {
-          nextIndex = props.loop ? 0 : points.length
+        // Snap to the waypoint visually for non-vehicle nodes to avoid leaving a visible gap.
+        if (!hasVehicle) {
+          state.smoothedWorldPosition.copy(target)
+          if (nodeObject!.parent) {
+            nodeObject!.parent.updateMatrixWorld(true)
+            autoTourLocalPosition.copy(target)
+            nodeObject!.parent.worldToLocal(autoTourLocalPosition)
+            nodeObject!.position.copy(autoTourLocalPosition)
+          } else {
+            nodeObject!.position.copy(target)
+          }
+          deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
         }
-        const existing = autoTourPlaybackState.get(key)
-        if (existing) {
-          autoTourPlaybackState.set(key, {
-            ...existing,
-            targetIndex: nextIndex,
-            routeNodeId,
-            routeWaypointCount: points.length,
-          })
+
+        // Advance state machine:
+        // - Intermediate points: no stop, advance to next.
+        // - Start point: advance to next.
+        // - End point: return to start before traversing.
+        if (state.mode === 'seek-endpoint') {
+          if (state.endpointIndex === 0) {
+            // Reached start endpoint: begin forward traversal.
+            state.mode = 'path'
+            state.targetIndex = Math.min(1, endIndex)
+          } else {
+            // Reached end endpoint: return to start before traversing the full path.
+            state.mode = 'return-to-start'
+            state.targetIndex = 0
+          }
+        } else if (state.mode === 'return-to-start') {
+          // Returned to start from end: now begin forward traversal.
+          state.mode = 'path'
+          state.targetIndex = Math.min(1, endIndex)
+        } else if (state.mode === 'loop-to-start') {
+          // Arrived at start; continue along the route toward the end.
+          state.mode = 'path'
+          state.targetIndex = Math.min(1, endIndex)
+        } else if (state.mode === 'path') {
+          if (state.targetIndex >= endIndex) {
+            if (props.loop) {
+              state.mode = 'loop-to-start'
+              state.targetIndex = 0
+            } else {
+              // Enter stopping phase; keep target at end and allow easing/braking.
+              state.mode = 'stopping'
+              state.targetIndex = endIndex
+            }
+          } else {
+            state.targetIndex += 1
+          }
+        } else if (state.mode === 'stopping') {
+          // Once in stopping mode, do not advance indices on the coarse arrival threshold.
+          state.targetIndex = endIndex
         }
-        continue
+
+        // Keep cache metadata in sync.
+        state.routeNodeId = routeNodeId
+        state.routeWaypointCount = points.length
+
+        // If we transitioned into stopping mode, fall through to let the movement branch ease/brake.
+        if (state.mode !== 'stopping') {
+          continue
+        }
       }
 
       // Vehicle branch (drive as a car).
@@ -283,8 +372,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         const steeringPenalty = Math.min(1, Math.abs(signedAngle) / Math.PI)
         const throttle = THREE.MathUtils.clamp(1 - steeringPenalty * 1.4, 0, 1)
         const shouldBrake = distance < Math.max(2.5, speed * 0.9)
-        const engineForce = AUTO_TOUR_ENGINE_FORCE * throttle
-        const brakeForce = shouldBrake ? AUTO_TOUR_BRAKE_FORCE : 0
+        const isStopping = state.mode === 'stopping'
+        const engineForce = isStopping ? 0 : AUTO_TOUR_ENGINE_FORCE * throttle
+        const brakeForce = isStopping ? AUTO_TOUR_BRAKE_FORCE * 6 : (shouldBrake ? AUTO_TOUR_BRAKE_FORCE : 0)
 
         try {
           for (let index = 0; index < instance.wheelCount; index += 1) {
@@ -298,6 +388,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         } catch (error) {
           console.warn('[AutoTourRuntime] AutoTour vehicle drive failed', error)
         }
+
+        if (isStopping) {
+          const vx = chassisBody.velocity.x
+          const vz = chassisBody.velocity.z
+          const planarSpeed = Math.sqrt(vx * vx + vz * vz)
+          if (distance <= AUTO_TOUR_STOP_POSITION_EPSILON && planarSpeed <= AUTO_TOUR_STOP_VEHICLE_SPEED_EPSILON) {
+            state.mode = 'stopped'
+          }
+        }
         continue
       }
 
@@ -309,17 +408,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       autoTourDesiredDir.normalize()
 
-      const stepDistance = speed * deltaSeconds
-      const clampedStep = Number.isFinite(stepDistance) ? Math.max(0, stepDistance) : 0
-      autoTourNextWorldPosition.copy(autoTourCurrentPosition)
-      if (clampedStep > 0) {
-        autoTourNextWorldPosition.addScaledVector(autoTourDesiredDir, Math.min(clampedStep, distance))
+      if (state.mode === 'stopping') {
+        // Ease into the final endpoint by smoothing toward the exact target.
+        autoTourNextWorldPosition.copy(target)
+      } else {
+        const stepDistance = speed * deltaSeconds
+        const clampedStep = Number.isFinite(stepDistance) ? Math.max(0, stepDistance) : 0
+        autoTourNextWorldPosition.copy(autoTourCurrentPosition)
+        if (clampedStep > 0) {
+          autoTourNextWorldPosition.addScaledVector(autoTourDesiredDir, Math.min(clampedStep, distance))
+        }
       }
 
-      const state = autoTourPlaybackState.get(key)
-      if (!state) {
-        continue
-      }
       if (!state.hasSmoothedState) {
         state.hasSmoothedState = true
         state.smoothedWorldPosition.copy(autoTourCurrentPosition)
@@ -354,6 +454,23 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
+
+      if (state.mode === 'stopping') {
+        if (state.smoothedWorldPosition.distanceToSquared(target) <= AUTO_TOUR_STOP_POSITION_EPSILON * AUTO_TOUR_STOP_POSITION_EPSILON) {
+          // Snap exactly to endpoint and stop.
+          state.smoothedWorldPosition.copy(target)
+          if (nodeObject!.parent) {
+            nodeObject!.parent.updateMatrixWorld(true)
+            autoTourLocalPosition.copy(target)
+            nodeObject!.parent.worldToLocal(autoTourLocalPosition)
+            nodeObject!.position.copy(autoTourLocalPosition)
+          } else {
+            nodeObject!.position.copy(target)
+          }
+          deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
+          state.mode = 'stopped'
+        }
+      }
     }
   }
 
