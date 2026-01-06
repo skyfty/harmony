@@ -4,6 +4,11 @@ import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { RoadDynamicMesh, SceneNode } from '@harmony/schema'
 import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
+import {
+  findConnectableRoadNodeId,
+  integrateWorldPolylineIntoRoadMesh,
+  splitRoadSelfIntersectionsMesh,
+} from './RoadBuildGeometry'
 
 export type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
@@ -53,7 +58,7 @@ export function createRoadBuildTool(options: {
   snapRoadPointToVertices: (
     point: THREE.Vector3,
     vertices: RoadSnapVertex[],
-    vertexSnapDistance: number,
+    vertexSnapDistance?: number,
   ) => { position: THREE.Vector3; nodeId: string | null; vertexIndex: number | null }
   vertexSnapDistance: number
 
@@ -68,11 +73,7 @@ export function createRoadBuildTool(options: {
   selectNode: (nodeId: string) => void
 
   createRoadNodeMaterials: () => any[]
-  splitRoadSelfIntersections: (nodeId: string) => void
   ensureRoadVertexHandlesForSelectedNode: (options?: { force?: boolean }) => void
-
-  integrateWorldPolylineIntoRoadNode: (nodeId: string, worldPoints: THREE.Vector3[], width: number) => boolean
-  findConnectableRoadNodeId: (worldPoints: THREE.Vector3[]) => string | null
 }): RoadBuildToolHandle {
   const previewRenderer = createRoadPreviewRenderer({
     rootGroup: options.rootGroup,
@@ -396,20 +397,51 @@ export function createRoadBuildTool(options: {
       const node = options.findSceneNode(options.sceneNodes(), targetNodeId)
       if (node?.dynamicMesh?.type === 'Road') {
         const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
-        options.integrateWorldPolylineIntoRoadNode(targetNodeId, committed, width)
+        const runtime = options.getRuntimeObject(targetNodeId)
+        if (runtime) {
+          const next = integrateWorldPolylineIntoRoadMesh({
+            baseMesh: node.dynamicMesh,
+            runtime,
+            worldPoints: committed,
+            width,
+            defaultWidth: options.defaultWidth,
+          })
+          if (next) {
+            options.updateNodeDynamicMesh(targetNodeId, next)
+          }
+        }
         options.ensureRoadVertexHandlesForSelectedNode({ force: true })
         clearSession()
         return
       }
     }
 
-    const connectNodeId = options.findConnectableRoadNodeId(committed)
+    const connectNodeId = findConnectableRoadNodeId({
+      worldPoints: committed,
+      nodes: options.sceneNodes(),
+      getRuntimeObject: options.getRuntimeObject,
+      collectRoadSnapVertices: options.collectRoadSnapVertices,
+      snapRoadPointToVertices: options.snapRoadPointToVertices,
+      vertexSnapDistance: options.vertexSnapDistance,
+    })
     if (connectNodeId) {
       const node = options.findSceneNode(options.sceneNodes(), connectNodeId)
       const width = node?.dynamicMesh?.type === 'Road' && Number.isFinite(node.dynamicMesh.width)
         ? node.dynamicMesh.width
         : session.width
-      options.integrateWorldPolylineIntoRoadNode(connectNodeId, committed, width)
+      const runtime = options.getRuntimeObject(connectNodeId)
+      if (node?.dynamicMesh?.type === 'Road' && runtime) {
+        const next = integrateWorldPolylineIntoRoadMesh({
+          baseMesh: node.dynamicMesh,
+          runtime,
+          worldPoints: committed,
+          width,
+          defaultWidth: options.defaultWidth,
+        })
+        if (next) {
+          options.updateNodeDynamicMesh(connectNodeId, next)
+        }
+      }
       options.selectNode(connectNodeId)
       options.ensureRoadVertexHandlesForSelectedNode({ force: true })
       clearSession()
@@ -429,7 +461,10 @@ export function createRoadBuildTool(options: {
     }
 
     if (created?.dynamicMesh?.type === 'Road') {
-      options.splitRoadSelfIntersections(created.id)
+      const split = splitRoadSelfIntersectionsMesh(created.dynamicMesh, options.defaultWidth)
+      if (split) {
+        options.updateNodeDynamicMesh(created.id, split)
+      }
     }
 
     if (created?.dynamicMesh?.type === 'Road') {
