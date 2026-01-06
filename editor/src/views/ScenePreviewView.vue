@@ -12,6 +12,7 @@ import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer
 import {
 	ENVIRONMENT_NODE_ID,
 	createAutoTourRuntime,
+	resolveEnabledComponentState,
 	type EnvironmentSettings,
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
@@ -1749,23 +1750,13 @@ function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined):
 function resolveRigidbodyComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<RigidbodyComponentProps> | null {
-	const component = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
-		SceneNodeComponentState<RigidbodyComponentProps> | undefined
-	if (!component || !component.enabled) {
-		return null
-	}
-	return component
+	return resolveEnabledComponentState<RigidbodyComponentProps>(node, RIGIDBODY_COMPONENT_TYPE)
 }
 
 function resolveVehicleComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<VehicleComponentProps> | null {
-	const component = node?.components?.[VEHICLE_COMPONENT_TYPE] as
-		SceneNodeComponentState<VehicleComponentProps> | undefined
-	if (!component || !component.enabled) {
-		return null
-	}
-	return component
+	return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
 }
 
 const autoTourRuntime = createAutoTourRuntime({

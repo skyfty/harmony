@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import type { SceneNode, SceneNodeComponentState } from './index'
+import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -53,17 +54,6 @@ const AUTO_TOUR_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
 const AUTO_TOUR_ENGINE_FORCE = 320
 const AUTO_TOUR_BRAKE_FORCE = 16
 
-function resolveEnabledComponent<TProps>(
-  node: SceneNode | null | undefined,
-  type: string,
-): SceneNodeComponentState<TProps> | null {
-  const component = node?.components?.[type] as SceneNodeComponentState<TProps> | undefined
-  if (!component || !component.enabled) {
-    return null
-  }
-  return component
-}
-
 function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vector3): number {
   let bestIndex = 0
   let bestDistanceSq = Number.POSITIVE_INFINITY
@@ -96,7 +86,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!routeNode) {
       return null
     }
-    const component = resolveEnabledComponent<GuideRouteComponentProps>(routeNode, GUIDE_ROUTE_COMPONENT_TYPE)
+    const component = resolveEnabledComponentState<GuideRouteComponentProps>(routeNode, GUIDE_ROUTE_COMPONENT_TYPE)
     if (!component) {
       return null
     }
@@ -126,7 +116,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
 
     for (const node of deps.iterNodes()) {
-      const autoTour = resolveEnabledComponent<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+      const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
       if (!autoTour) {
         continue
       }

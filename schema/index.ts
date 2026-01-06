@@ -34,6 +34,8 @@ export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuse
 export { createAutoTourRuntime } from './autoTourRuntime'
 export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike, AutoTourRigidbodyInstanceLike } from './autoTourRuntime'
 
+export { resolveEnabledComponentState } from './componentRuntimeUtils'
+
 export {
   AssetTypes,
   DEFAULT_ASSET_TYPE,
