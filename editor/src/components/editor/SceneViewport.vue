@@ -8,6 +8,7 @@ import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
 import { createNormalizedPointerGuard } from './normalizedPointerGuard'
 import { createPointerCaptureGuard } from './pointerCaptureGuard'
+import { usePointerInteractionStateMachine } from './usePointerInteractionStateMachine'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -102,8 +103,8 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
-import { createWallPreviewRenderer } from './WallPreviewRenderer'
-import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
+import { createWallBuildTool } from './WallBuildTool'
+import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
 import {
   createRoadVertexRenderer,
@@ -353,6 +354,11 @@ const normalizedPointerGuard = createNormalizedPointerGuard({
 })
 
 const pointerCaptureGuard = createPointerCaptureGuard(() => canvasRef.value)
+
+const pointerInteraction = usePointerInteractionStateMachine({
+  pointerCaptureGuard,
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
 
 const postprocessing = useViewportPostprocessing({
   getRenderer: () => renderer,
@@ -906,8 +912,7 @@ const wallRenderer = createWallRenderer({
   removeInstancedPickProxy,
 })
 
-type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
-let repairClickState: RepairClickState | null = null
+// (gesture state moved into `pointerInteraction`)
 
 type InstancedEraseDragState = {
   pointerId: number
@@ -979,7 +984,7 @@ function exitScatterEraseMode() {
     return
   }
   scatterEraseModeActive.value = false
-  repairClickState = null
+  pointerInteraction.clearIfKind('repairClick')
   instancedEraseDragState = null
   clearRepairHoverHighlight(true)
   cancelGroundEditorScatterErase()
@@ -1562,7 +1567,7 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
   }
 
   disableOrbitForSelectDrag()
-  pointerCaptureGuard.capture(event.pointerId)
+  pointerInteraction.capture(event.pointerId)
 
   event.preventDefault()
   event.stopPropagation()
@@ -1636,7 +1641,7 @@ function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false):
   }
   continuousInstancedCreateState = null
 
-  pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+  pointerInteraction.releaseIfCaptured(event.pointerId)
 
   restoreOrbitAfterSelectDrag()
 
@@ -1682,39 +1687,11 @@ function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false):
   return true
 }
 
-type WallSessionSegment = {
-  start: THREE.Vector3
-  end: THREE.Vector3
-}
-
-type WallBuildSession = {
-  dragStart: THREE.Vector3 | null
-  dragEnd: THREE.Vector3 | null
-  segments: WallSessionSegment[]
-  previewGroup: THREE.Group | null
-  nodeId: string | null
-  dimensions: { height: number; width: number; thickness: number }
-  bodyAssetId: string | null
-  jointAssetId: string | null
-}
-let wallBuildSession: WallBuildSession | null = null
+// wall build session moved into `wallBuildTool`
 
 type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
-type RoadBuildSession = {
-  points: THREE.Vector3[]
-  previewEnd: THREE.Vector3 | null
-  previewGroup: THREE.Group | null
-  width: number
-  snapVertices: RoadSnapVertex[]
-
-  /** When set, edits an existing Road node (branch build). */
-  targetNodeId: string | null
-  /** Vertex index in the target node to branch from. */
-  startVertexIndex: number | null
-}
-
-let roadBuildSession: RoadBuildSession | null = null
+// road build session moved into `roadBuildTool`
 
 type RoadVertexDragState = {
   pointerId: number
@@ -1908,7 +1885,7 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
     referencePoint: hit.referencePoint.clone(),
     initialProjection: hit.initialProjection,
   }
-  pointerCaptureGuard.capture(event.pointerId)
+  pointerInteraction.capture(event.pointerId)
   pointerTrackingState = null
   event.preventDefault()
   event.stopPropagation()
@@ -1916,21 +1893,7 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   return true
 }
 
-let roadRightClickState: {
-  pointerId: number
-  startX: number
-  startY: number
-  moved: boolean
-} | null = null
-
 const RIGHT_DOUBLE_CLICK_MS = 320
-
-type BuildToolRightClickDragState = {
-  pointerId: number
-  startX: number
-  startY: number
-  moved: boolean
-}
 
 type BuildToolRightClickCandidate = {
   atMs: number
@@ -1938,7 +1901,6 @@ type BuildToolRightClickCandidate = {
   y: number
 }
 
-let buildToolRightClickDragState: BuildToolRightClickDragState | null = null
 let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
 
 type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor'
@@ -1969,13 +1931,9 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
     return false
   }
 
-  const dragState = buildToolRightClickDragState
-  const clickWasDrag = dragState?.pointerId === event.pointerId ? dragState.moved : false
-
-  // Clear the drag tracker on mouse-up so it doesn't leak across interactions.
-  if (dragState?.pointerId === event.pointerId) {
-    buildToolRightClickDragState = null
-  }
+  const dragState = pointerInteraction.get()
+  const isTrackedRightClick = dragState?.kind === 'buildToolRightClick' && dragState.pointerId === event.pointerId
+  const clickWasDrag = isTrackedRightClick ? (dragState.moved || pointerInteraction.ensureMoved(event)) : false
 
   // Don't treat drags as clicks; let camera controls + existing finalize logic proceed.
   if (clickWasDrag) {
@@ -1990,7 +1948,7 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
     const dy = event.clientY - previous.y
     if (Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
       buildToolRightClickCandidate = null
-      roadRightClickState = null
+      pointerInteraction.clearIfKind('buildToolRightClick')
       const handled = cancelActiveBuildOperation()
       if (handled) {
         event.preventDefault()
@@ -2009,18 +1967,49 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
   return false
 }
 
-const wallPreviewRenderer = createWallPreviewRenderer({
+const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
+
+const wallBuildTool = createWallBuildTool({
+  activeBuildTool,
+  sceneStore,
   rootGroup,
+  raycastGroundPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point),
+  isAltOverrideActive: () => isAltOverrideActive,
+  disableOrbitForWallBuild,
+  restoreOrbitAfterWallBuild,
   normalizeWallDimensionsForViewport,
 })
 
-const roadPreviewRenderer = createRoadPreviewRenderer({
+const roadBuildTool = createRoadBuildTool({
+  activeBuildTool,
+  pointerInteraction,
   rootGroup,
   heightSampler: (x: number, z: number) => {
     const ground = resolveGroundDynamicMeshDefinition()
     return ground ? sampleGroundHeight(ground, x, z) : 0
   },
-})
+  getScene: () => scene,
+  defaultWidth: ROAD_DEFAULT_WIDTH,
+  isAltOverrideActive: () => isAltOverrideActive,
+  raycastGroundPoint,
+  collectRoadSnapVertices,
+  snapRoadPointToVertices,
+  vertexSnapDistance: ROAD_VERTEX_SNAP_DISTANCE,
+  pickNodeAtPointer,
+  findSceneNode,
+  getRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? null,
+  sceneNodes: () => sceneStore.nodes,
+  updateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
+  createRoadNode: (payload) => sceneStore.createRoadNode(payload),
+  setNodeMaterials: (nodeId, materials) => sceneStore.setNodeMaterials(nodeId, materials),
+  selectNode: (nodeId) => sceneStore.selectNode(nodeId),
+  createRoadNodeMaterials,
+  splitRoadSelfIntersections,
+  ensureRoadVertexHandlesForSelectedNode,
+  integrateWorldPolylineIntoRoadNode,
+  findConnectableRoadNodeId,
+ })
 
 const floorBuildTool = createFloorBuildTool({
   activeBuildTool,
@@ -2563,7 +2552,7 @@ function activateAltOverride() {
   isAltOverrideActive = true
   toolOverrideSnapshot = {
     transformTool: props.activeTool ?? null,
-    wallBuildActive: Boolean(wallBuildSession),
+    wallBuildActive: Boolean(wallBuildTool.getSession()),
     groundSelectionActive: groundEditorHasActiveSelection(),
   }
   if (props.activeTool !== 'select') {
@@ -2583,8 +2572,8 @@ function deactivateAltOverride() {
   if (snapshot?.transformTool && props.activeTool !== snapshot.transformTool) {
     emit('changeTool', snapshot.transformTool)
   }
-  if (snapshot?.wallBuildActive && wallBuildSession) {
-    updateWallPreview({ immediate: true })
+  if (snapshot?.wallBuildActive && wallBuildTool.getSession()) {
+    wallBuildTool.flushPreview(scene)
   }
   if (snapshot?.groundSelectionActive && groundSelection.value) {
     updateGroundSelectionToolbarPosition()
@@ -4410,8 +4399,8 @@ function animate() {
   }
 
   const t_renderPrep = performance.now()
-  wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
-  roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
+  wallBuildTool.flushPreviewIfNeeded(scene)
+  roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   updatePlaceholderOverlayPositions()
@@ -4606,8 +4595,8 @@ function disposeScene() {
   clearPlaceholderOverlays()
   objectMap.clear()
   resetEffectRuntimeTickers()
-  wallPreviewRenderer.dispose(wallBuildSession)
-  roadPreviewRenderer.dispose(roadBuildSession)
+  wallBuildTool.dispose()
+  roadBuildTool.dispose()
   pendingSceneGraphSync = false
 }
 
@@ -5272,7 +5261,7 @@ async function handlePointerDown(event: PointerEvent) {
         instancedEraseDragState.lastKey = result.erasedKey
         instancedEraseDragState.lastAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
       }
-      pointerCaptureGuard.capture(event.pointerId)
+      pointerInteraction.capture(event.pointerId)
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -5309,12 +5298,7 @@ async function handlePointerDown(event: PointerEvent) {
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
   if (scatterEraseModeActive.value && hasInstancedMeshes.value && event.button === 0) {
     pointerTrackingState = null
-    repairClickState = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      moved: false,
-    }
+    pointerInteraction.beginRepairClick(event)
     return
   }
 
@@ -5343,11 +5327,8 @@ async function handlePointerDown(event: PointerEvent) {
 
 
   if (activeBuildTool.value === 'wall') {
-    if (button === 1 && !isAltOverrideActive) {
+    if (wallBuildTool.handlePointerDown(event)) {
       pointerTrackingState = null
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
       return
     }
     // Wall build uses middle click for placement; keep left/right available for camera controls.
@@ -5356,12 +5337,7 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     if (button === 2) {
-      buildToolRightClickDragState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       pointerTrackingState = null
       return
     }
@@ -5387,12 +5363,7 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     if (button === 2) {
-      buildToolRightClickDragState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       pointerTrackingState = null
       return
     }
@@ -5442,7 +5413,7 @@ async function handlePointerDown(event: PointerEvent) {
               })),
             },
           }
-          pointerCaptureGuard.capture(event.pointerId)
+          pointerInteraction.capture(event.pointerId)
           pointerTrackingState = null
           event.preventDefault()
           event.stopPropagation()
@@ -5458,25 +5429,13 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     // Road build uses middle click for placement; keep left/right available for camera controls.
-    if (button === 2 && roadBuildSession) {
-      roadRightClickState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-      }
-    }
+    const roadCancelEligible = button === 2 && Boolean(roadBuildTool.getSession())
     if (button === 0) {
       pointerTrackingState = null
       return
     }
     if (button === 2) {
-      buildToolRightClickDragState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-      }
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible })
       pointerTrackingState = null
       return
     }
@@ -5595,7 +5554,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
 
-  pointerCaptureGuard.capture(event.pointerId)
+  pointerInteraction.capture(event.pointerId)
 
   const selectionDrag = button === 0 && props.activeTool === 'select' && dragHit && currentPrimaryId && dragHit.nodeId === currentPrimaryId
     ? createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
@@ -5704,13 +5663,7 @@ function handlePointerMove(event: PointerEvent) {
       }
     }
 
-    if (repairClickState && repairClickState.pointerId === event.pointerId && !repairClickState.moved) {
-      const dx = event.clientX - repairClickState.startX
-      const dy = event.clientY - repairClickState.startY
-      if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-        repairClickState.moved = true
-      }
-    }
+    pointerInteraction.updateMoved(event)
   } else {
     updateRepairHoverHighlight(event)
   }
@@ -5772,45 +5725,21 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (buildToolRightClickDragState && event.pointerId === buildToolRightClickDragState.pointerId && !buildToolRightClickDragState.moved) {
-    const dx = event.clientX - buildToolRightClickDragState.startX
-    const dy = event.clientY - buildToolRightClickDragState.startY
-    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      buildToolRightClickDragState.moved = true
-    }
+  if (wallBuildTool.handlePointerMove(event)) {
+    return
   }
 
-  if (roadRightClickState && event.pointerId === roadRightClickState.pointerId && !roadRightClickState.moved) {
-    const dx = event.clientX - roadRightClickState.startX
-    const dy = event.clientY - roadRightClickState.startY
-    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      roadRightClickState.moved = true
-    }
+  if (roadBuildTool.handlePointerMove(event)) {
+    return
   }
+
+  pointerInteraction.updateMoved(event)
 
   if (isAltOverrideActive) {
     return
   }
 
-  if (activeBuildTool.value === 'wall' && wallBuildSession) {
-    if (wallBuildSession.dragStart) {
-      const isRightButtonActive = (event.buttons & 2) !== 0
-      if (!isRightButtonActive) {
-        updateWallSegmentDrag(event)
-        return
-      }
-    }
-  }
-
-  if (activeBuildTool.value === 'road' && roadBuildSession) {
-    if (roadBuildSession.points.length > 0) {
-      const isRightButtonActive = (event.buttons & 2) !== 0
-      if (!isRightButtonActive) {
-        updateRoadCursorPreview(event)
-        return
-      }
-    }
-  }
+  // wall/road build move handling handled by build-tool modules
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
@@ -5861,10 +5790,11 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  try {
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId && event.button === 1) {
     const state = roadVertexDragState
     roadVertexDragState = null
-    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+    pointerInteraction.releaseIfCaptured(event.pointerId)
 
     if (state.moved) {
       sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
@@ -5903,14 +5833,12 @@ function handlePointerUp(event: PointerEvent) {
         const runtime = objectMap.get(state.nodeId) ?? null
         if (runtime) {
           const world = runtime.localToWorld(new THREE.Vector3(Number(v[0]) || 0, 0, Number(v[1]) || 0))
-          const session = ensureRoadBuildSession()
-          session.points = [world.clone()]
-          session.previewEnd = world.clone()
-          session.width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
-          session.snapVertices = collectRoadSnapVertices()
-          session.targetNodeId = state.nodeId
-          session.startVertexIndex = state.vertexIndex
-          updateRoadPreview({ immediate: true })
+          roadBuildTool.beginBranchFromVertex({
+            nodeId: state.nodeId,
+            vertexIndex: state.vertexIndex,
+            worldPoint: world,
+            width: Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : ROAD_DEFAULT_WIDTH,
+          })
           event.preventDefault()
           event.stopPropagation()
           event.stopImmediatePropagation()
@@ -5924,7 +5852,7 @@ function handlePointerUp(event: PointerEvent) {
   if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId && event.button === 1) {
     const state = floorEdgeDragState
     floorEdgeDragState = null
-    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+    pointerInteraction.releaseIfCaptured(event.pointerId)
 
     if (state.moved) {
       sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
@@ -5951,18 +5879,17 @@ function handlePointerUp(event: PointerEvent) {
 
   if (instancedEraseDragState && event.pointerId === instancedEraseDragState.pointerId && event.button === 1) {
     instancedEraseDragState = null
-    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+    pointerInteraction.releaseIfCaptured(event.pointerId)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
     return
   }
 
-  if (scatterEraseModeActive.value && repairClickState && event.pointerId === repairClickState.pointerId && event.button === 0) {
-    const dx = event.clientX - repairClickState.startX
-    const dy = event.clientY - repairClickState.startY
-    const moved = repairClickState.moved || Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
-    repairClickState = null
+  const interaction = pointerInteraction.get()
+  if (scatterEraseModeActive.value && interaction?.kind === 'repairClick' && interaction.pointerId === event.pointerId && event.button === 0) {
+    const moved = interaction.moved || pointerInteraction.ensureMoved(event)
+    pointerInteraction.clearIfPointer(event.pointerId)
     if (!moved) {
       const result = tryEraseRepairTargetAtPointer(event)
       if (result.handled) {
@@ -5984,33 +5911,12 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'wall') {
-    if (event.button === 1) {
-      if (overrideActive) {
-        return
-      }
-      const handled = handleWallPlacementClick(event)
-      if (handled) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-      }
-      return
-    } else if (event.button === 2) {
-      // Right click cancels an active wall build session; otherwise leave it to camera controls.
-      if (overrideActive) {
-        return
-      }
-      if (wallBuildSession) {
-        finalizeWallBuildSession()
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-      }
-      return
-    } else {
-      return
-    }
+  if (wallBuildTool.handlePointerUp(event)) {
+    return
+  }
+
+  if (roadBuildTool.handlePointerUp(event)) {
+    return
   }
 
   if (activeBuildTool.value === 'floor') {
@@ -6023,34 +5929,7 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'road') {
-    if (event.button === 1) {
-      if (overrideActive) {
-        return
-      }
-      const handled = handleRoadPlacementClick(event)
-      if (handled) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-      }
-      return
-    } else if (event.button === 2) {
-      if (overrideActive) {
-        return
-      }
-      if (roadRightClickState && roadRightClickState.pointerId === event.pointerId) {
-        const clickWasDrag = roadRightClickState.moved
-        roadRightClickState = null
-        if (!clickWasDrag && roadBuildSession) {
-          finalizeRoadBuildSession()
-        }
-      }
-      return
-    } else {
-      return
-    }
-  }
+  // road build pointer-up handled by roadBuildTool
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
@@ -6059,7 +5938,7 @@ function handlePointerUp(event: PointerEvent) {
   const trackingState = pointerTrackingState
   pointerTrackingState = null
 
-  pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+  pointerInteraction.releaseIfCaptured(event.pointerId)
 
   if (transformControls?.dragging) {
     return
@@ -6124,13 +6003,18 @@ function handlePointerUp(event: PointerEvent) {
   handleClickSelection(event, trackingState, {
     allowDeselectOnReselect: props.activeTool === 'select',
   })
+  } finally {
+    // Ensure lightweight gesture state doesn't leak across interactions.
+    pointerInteraction.clearIfPointer(event.pointerId)
+  }
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  pointerInteraction.clearIfPointer(event.pointerId)
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
     roadVertexDragState = null
-    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+    pointerInteraction.releaseIfCaptured(event.pointerId)
     try {
       const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
       updateRoadGroup(state.roadGroup, state.baseDefinition, roadOptions)
@@ -6158,10 +6042,6 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
-  if (repairClickState && repairClickState.pointerId === event.pointerId) {
-    repairClickState = null
-  }
-
   if (nodePickerStore.isActive) {
     hideNodePickerHighlight()
   }
@@ -6182,7 +6062,7 @@ function handlePointerCancel(event: PointerEvent) {
   if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId) {
     const state = floorEdgeDragState
     floorEdgeDragState = null
-    pointerCaptureGuard.releaseIfCaptured(event.pointerId)
+    pointerInteraction.releaseIfCaptured(event.pointerId)
     const resetVertices = state.startVertices.map(([x, z]) => [x, z] as [number, number])
     state.workingDefinition.vertices = resetVertices
     updateFloorGroup(state.runtimeObject, state.workingDefinition)
@@ -6192,27 +6072,20 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'wall') {
-    if (wallBuildSession) {
-      cancelWallDrag()
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
+  if (wallBuildTool.handlePointerCancel(event)) {
+    return
   }
 
-  if (roadRightClickState && roadRightClickState.pointerId === event.pointerId) {
-    roadRightClickState = null
+  if (roadBuildTool.handlePointerCancel(event)) {
+    return
   }
+
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
 
-  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-    canvasRef.value.releasePointerCapture(event.pointerId)
-  }
+  pointerInteraction.releaseIfCaptured(event.pointerId)
 
   if (pointerTrackingState.selectionDrag) {
     const dragState = pointerTrackingState.selectionDrag
@@ -6253,319 +6126,8 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   event.stopPropagation()
 }
 
+// wall build logic moved to WallBuildTool
 
-function getWallNodeDimensions(node: SceneNode): { height: number; width: number; thickness: number } {
-  if (node.dynamicMesh?.type !== 'Wall' || node.dynamicMesh.segments.length === 0) {
-    return normalizeWallDimensionsForViewport({
-      height: WALL_DEFAULT_HEIGHT,
-      width: WALL_DEFAULT_WIDTH,
-      thickness: WALL_DEFAULT_THICKNESS,
-    })
-  }
-  const sample = node.dynamicMesh.segments[0]!
-  return normalizeWallDimensionsForViewport({
-    height: sample.height ?? WALL_DEFAULT_HEIGHT,
-    width: sample.width ?? WALL_DEFAULT_WIDTH,
-    thickness: sample.thickness ?? WALL_DEFAULT_THICKNESS,
-  })
-}
-
-function expandWallSegmentsToWorld(node: SceneNode): WallSessionSegment[] {
-  if (node.dynamicMesh?.type !== 'Wall') {
-    return []
-  }
-  const origin = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
-  return node.dynamicMesh.segments.map((segment) => ({
-    start: new THREE.Vector3(segment.start.x + origin.x, segment.start.y + origin.y, segment.start.z + origin.z),
-    end: new THREE.Vector3(segment.end.x + origin.x, segment.end.y + origin.y, segment.end.z + origin.z),
-  }))
-}
-
-function clearWallPreview() {
-  wallPreviewRenderer.clear(wallBuildSession)
-}
-
-function updateWallPreview(options?: { immediate?: boolean }) {
-  if (options?.immediate) {
-    wallPreviewRenderer.flush(scene, wallBuildSession)
-    return
-  }
-  wallPreviewRenderer.markDirty()
-}
-
-function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
-  if (options.disposePreview ?? true) {
-    clearWallPreview()
-  } else if (wallBuildSession?.previewGroup) {
-    wallBuildSession.previewGroup.removeFromParent()
-  }
-  wallBuildSession = null
-  wallPreviewRenderer.reset()
-}
-
-function ensureWallBuildSession(): WallBuildSession {
-  if (wallBuildSession) {
-    return wallBuildSession
-  }
-  wallBuildSession = {
-    dragStart: null,
-    dragEnd: null,
-    segments: [],
-    previewGroup: null,
-    nodeId: null,
-    dimensions: normalizeWallDimensionsForViewport({
-      height: WALL_DEFAULT_HEIGHT,
-      width: WALL_DEFAULT_WIDTH,
-      thickness: WALL_DEFAULT_THICKNESS,
-    }),
-    bodyAssetId: null,
-    jointAssetId: null,
-  }
-  return wallBuildSession
-}
-
-function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 {
-  const delta = target.clone().sub(start)
-  let stepX = Math.round(delta.x / GRID_MAJOR_SPACING)
-  let stepZ = Math.round(delta.z / GRID_MAJOR_SPACING)
-
-  if (stepX === 0 && stepZ === 0) {
-    return start.clone()
-  }
-
-  const rawDelta = rawTarget ? rawTarget.clone().sub(start) : delta.clone()
-  const absRawX = Math.abs(rawDelta.x)
-  const absRawZ = Math.abs(rawDelta.z)
-
-  if (absRawX > 1e-4 || absRawZ > 1e-4) {
-    const angle = Math.atan2(absRawZ, absRawX)
-    const diagonalAngle = Math.PI * 0.25
-    if (!Number.isNaN(angle) && Math.abs(angle - diagonalAngle) <= WALL_DIAGONAL_SNAP_THRESHOLD) {
-      const diagSteps = Math.max(Math.abs(stepX), Math.abs(stepZ), 1)
-      const signX = rawDelta.x >= 0 ? 1 : -1
-      const signZ = rawDelta.z >= 0 ? 1 : -1
-      stepX = diagSteps * signX
-      stepZ = diagSteps * signZ
-    }
-  }
-
-  if (stepX !== 0 && stepZ !== 0 && Math.abs(stepX) !== Math.abs(stepZ)) {
-    if (Math.abs(stepX) > Math.abs(stepZ)) {
-      stepZ = 0
-    } else {
-      stepX = 0
-    }
-  }
-
-  return new THREE.Vector3(
-    start.x + stepX * GRID_MAJOR_SPACING,
-    start.y,
-    start.z + stepZ * GRID_MAJOR_SPACING,
-  )
-}
-
-function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
-  const isFreshSession = !session.nodeId && session.segments.length === 0
-  if (isFreshSession) {
-    const selectedId = sceneStore.selectedNodeId
-    if (selectedId) {
-      const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
-  if (selectedNode?.dynamicMesh?.type === 'Wall') {
-        session.dimensions = getWallNodeDimensions(selectedNode)
-
-        const wallComponent = selectedNode.components?.[WALL_COMPONENT_TYPE] as
-          | SceneNodeComponentState<WallComponentProps>
-          | undefined
-        session.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-        session.jointAssetId = wallComponent?.props?.jointAssetId ?? null
-      }
-    }
-    session.dimensions = normalizeWallDimensionsForViewport(session.dimensions)
-    return
-  }
-  if (!session.nodeId) {
-    const selectedId = sceneStore.selectedNodeId
-    if (selectedId) {
-      const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
-  if (selectedNode?.dynamicMesh?.type === 'Wall') {
-        session.nodeId = selectedNode.id
-        session.dimensions = getWallNodeDimensions(selectedNode)
-        session.segments = expandWallSegmentsToWorld(selectedNode)
-      }
-    }
-  } else {
-    const node = findSceneNode(sceneStore.nodes, session.nodeId)
-  if (node?.dynamicMesh?.type === 'Wall') {
-      session.dimensions = getWallNodeDimensions(node)
-      session.segments = expandWallSegmentsToWorld(node)
-    }
-  }
-  session.dimensions = normalizeWallDimensionsForViewport(session.dimensions)
-}
-
-function beginWallSegmentDrag(startPoint: THREE.Vector3) {
-  disableOrbitForWallBuild()
-  const session = ensureWallBuildSession()
-  hydrateWallBuildSessionFromSelection(session)
-  session.dragStart = startPoint.clone()
-  session.dragEnd = startPoint.clone()
-  updateWallPreview()
-}
-
-function updateWallSegmentDrag(event: PointerEvent) {
-  if (isAltOverrideActive) {
-    return
-  }
-  if (!wallBuildSession || !wallBuildSession.dragStart) {
-    return
-  }
-
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    return
-  }
-
-  const rawPointer = groundPointerHelper.clone()
-  const pointer = snapVectorToMajorGrid(rawPointer.clone())
-  const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer, rawPointer)
-  const previous = wallBuildSession.dragEnd
-  if (previous && previous.equals(constrained)) {
-    return
-  }
-  wallBuildSession.dragEnd = constrained
-  updateWallPreview()
-}
-
-function resetWallDragState() {
-  if (!wallBuildSession) {
-    return
-  }
-  restoreOrbitAfterWallBuild()
-}
-
-function cancelWallDrag() {
-  if (!wallBuildSession) {
-    return
-  }
-  wallBuildSession.dragStart = null
-  wallBuildSession.dragEnd = null
-  resetWallDragState()
-  updateWallPreview()
-}
-
-function commitWallSegmentDrag(): boolean {
-  if (!wallBuildSession || !wallBuildSession.dragStart || !wallBuildSession.dragEnd) {
-    return false
-  }
-
-  const start = wallBuildSession.dragStart.clone()
-  const end = wallBuildSession.dragEnd.clone()
-  if (start.distanceToSquared(end) < 1e-6) {
-    cancelWallDrag()
-    return false
-  }
-
-  const segment: WallSessionSegment = { start, end }
-  const pendingSegments = [...wallBuildSession.segments, segment]
-
-  const segmentPayload = pendingSegments.map((entry) => ({
-    start: entry.start.clone(),
-    end: entry.end.clone(),
-  }))
-
-  let nodeId = wallBuildSession.nodeId
-  if (!nodeId) {
-    const created = sceneStore.createWallNode({
-      segments: segmentPayload,
-      dimensions: wallBuildSession.dimensions,
-      bodyAssetId: wallBuildSession.bodyAssetId,
-      jointAssetId: wallBuildSession.jointAssetId,
-    })
-    if (!created) {
-      cancelWallDrag()
-      return false
-    }
-    nodeId = created.id
-    wallBuildSession.nodeId = nodeId
-    wallBuildSession.segments = pendingSegments
-    wallBuildSession.dimensions = getWallNodeDimensions(created)
-  } else {
-    const updated = sceneStore.updateWallNodeGeometry(nodeId, {
-      segments: segmentPayload,
-      dimensions: wallBuildSession.dimensions,
-    })
-    if (!updated) {
-      cancelWallDrag()
-      return false
-    }
-    wallBuildSession.segments = pendingSegments
-    const refreshed = findSceneNode(sceneStore.nodes, nodeId)
-  if (refreshed?.dynamicMesh?.type === 'Wall') {
-      wallBuildSession.dimensions = getWallNodeDimensions(refreshed)
-    }
-  }
-
-  wallBuildSession.dragStart = end.clone()
-  wallBuildSession.dragEnd = end.clone()
-  wallBuildSession.dimensions = normalizeWallDimensionsForViewport(wallBuildSession.dimensions)
-  updateWallPreview()
-  return true
-}
-
-function handleWallPlacementClick(event: PointerEvent): boolean {
-  if (!activeBuildTool.value || activeBuildTool.value !== 'wall') {
-    return false
-  }
-  if (isAltOverrideActive) {
-    return false
-  }
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    return false
-  }
-  const rawPointer = groundPointerHelper.clone()
-  const snappedPoint = snapVectorToMajorGrid(rawPointer.clone())
-  const session = ensureWallBuildSession()
-
-  if (!session.dragStart) {
-    beginWallSegmentDrag(snappedPoint)
-    return true
-  }
-
-  const constrained = constrainWallEndPoint(session.dragStart, snappedPoint, rawPointer)
-  const previous = session.dragEnd
-  if (!previous || !previous.equals(constrained)) {
-    session.dragEnd = constrained
-    updateWallPreview()
-  }
-
-  const committed = commitWallSegmentDrag()
-  if (!committed) {
-    session.dragStart = constrained.clone()
-    session.dragEnd = constrained.clone()
-    updateWallPreview()
-  }
-  return true
-}
-
-function cancelWallSelection(): boolean {
-  if (!wallBuildSession) {
-    return false
-  }
-  cancelWallDrag()
-  clearWallBuildSession()
-  restoreOrbitAfterWallBuild()
-  return true
-}
-
-function finalizeWallBuildSession() {
-  if (!wallBuildSession) {
-    return
-  }
-  cancelWallDrag()
-  clearWallBuildSession()
-  restoreOrbitAfterWallBuild()
-}
-
-const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 const ROAD_INTERSECTION_EPS = 1e-6
 const ROAD_VERTEX_MERGE_EPS2 = 1e-10
 
@@ -6991,6 +6553,7 @@ function findConnectableRoadNodeId(worldPoints: THREE.Vector3[]): string | null 
 function snapRoadPointToVertices(
   point: THREE.Vector3,
   vertices: RoadSnapVertex[],
+  vertexSnapDistance = ROAD_VERTEX_SNAP_DISTANCE,
 ): { position: THREE.Vector3; nodeId: string | null; vertexIndex: number | null } {
   let best: RoadSnapVertex | null = null
   let bestDist2 = Number.POSITIVE_INFINITY
@@ -7004,384 +6567,10 @@ function snapRoadPointToVertices(
       best = candidate
     }
   }
-  if (best && bestDist2 <= ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE) {
+  if (best && bestDist2 <= vertexSnapDistance * vertexSnapDistance) {
     return { position: best.position.clone(), nodeId: best.nodeId, vertexIndex: best.vertexIndex }
   }
   return { position: point, nodeId: null, vertexIndex: null }
-}
-
-function clearRoadPreview() {
-  roadPreviewRenderer.clear(roadBuildSession)
-}
-
-function updateRoadPreview(options?: { immediate?: boolean }) {
-  if (options?.immediate) {
-    roadPreviewRenderer.flush(scene, roadBuildSession)
-    return
-  }
-  roadPreviewRenderer.markDirty()
-}
-
-function clearRoadBuildSession(options: { disposePreview?: boolean } = {}) {
-  if (options.disposePreview ?? true) {
-    clearRoadPreview()
-  } else if (roadBuildSession?.previewGroup) {
-    roadBuildSession.previewGroup.removeFromParent()
-  }
-  roadBuildSession = null
-  roadRightClickState = null
-  roadPreviewRenderer.reset()
-}
-
-function ensureRoadBuildSession(): RoadBuildSession {
-  if (roadBuildSession) {
-    return roadBuildSession
-  }
-  roadBuildSession = {
-    points: [],
-    previewEnd: null,
-    previewGroup: null,
-    width: ROAD_DEFAULT_WIDTH,
-    snapVertices: collectRoadSnapVertices(),
-    targetNodeId: null,
-    startVertexIndex: null,
-  }
-  return roadBuildSession
-}
-
-function updateRoadCursorPreview(event: PointerEvent) {
-  if (isAltOverrideActive) {
-    return
-  }
-  if (!roadBuildSession || roadBuildSession.points.length === 0) {
-    return
-  }
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    return
-  }
-
-  // Keep snap targets fresh so subsequent points can snap too.
-  roadBuildSession.snapVertices = collectRoadSnapVertices()
-
-  const rawPointer = groundPointerHelper.clone()
-  rawPointer.y = 0
-  const { position: next } = snapRoadPointToVertices(rawPointer, roadBuildSession.snapVertices)
-
-  const previous = roadBuildSession.previewEnd
-  if (previous && previous.equals(next)) {
-    return
-  }
-
-  roadBuildSession.previewEnd = next
-  updateRoadPreview()
-}
-
-function handleRoadPlacementClick(event: PointerEvent): boolean {
-  if (!activeBuildTool.value || activeBuildTool.value !== 'road') {
-    return false
-  }
-  if (isAltOverrideActive) {
-    return false
-  }
-  const session = ensureRoadBuildSession()
-
-  // If this is the first point, prefer raycast-based interaction:
-  // - If clicking on an existing road surface, start a branch by splitting the nearest segment.
-  // - Otherwise, fall back to the ground-plane placement + vertex snapping.
-  if (session.points.length === 0) {
-    const hit = pickNodeAtPointer(event)
-    if (hit?.nodeId) {
-      const node = findSceneNode(sceneStore.nodes, hit.nodeId)
-      const runtime = objectMap.get(hit.nodeId) ?? null
-      if (node?.dynamicMesh?.type === 'Road' && runtime) {
-        const base = node.dynamicMesh
-        const vertices = Array.isArray(base.vertices)
-          ? base.vertices.map((v) => [Number(v[0]), Number(v[1])] as [number, number])
-          : ([] as [number, number][]) 
-        const segments = Array.isArray(base.segments)
-          ? base.segments.map((s) => ({ a: Math.trunc(Number(s.a)), b: Math.trunc(Number(s.b)) }))
-          : ([] as Array<{ a: number; b: number }>)
-
-        if (vertices.length >= 2 && segments.length >= 1) {
-          const localHit = runtime.worldToLocal(hit.point.clone())
-          const clickX = localHit.x
-          const clickZ = localHit.z
-
-          const EPS2 = 1e-6
-          const findExistingVertexIndex = (x: number, z: number): number => {
-            for (let i = 0; i < vertices.length; i += 1) {
-              const v = vertices[i]!
-              const dx = (v[0] ?? 0) - x
-              const dz = (v[1] ?? 0) - z
-              if (dx * dx + dz * dz <= EPS2) {
-                return i
-              }
-            }
-            return -1
-          }
-
-          // Find nearest segment and compute closest-point projection in local XZ.
-          let bestSegmentIndex = -1
-          let bestDist2 = Number.POSITIVE_INFINITY
-          let bestAx = 0
-          let bestAz = 0
-          let bestBx = 0
-          let bestBz = 0
-          let bestProjX = 0
-          let bestProjZ = 0
-          let bestAIndex = -1
-          let bestBIndex = -1
-
-          for (let i = 0; i < segments.length; i += 1) {
-            const seg = segments[i]!
-            const a = seg.a
-            const b = seg.b
-            if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
-              continue
-            }
-            if (a >= vertices.length || b >= vertices.length) {
-              continue
-            }
-            const va = vertices[a]
-            const vb = vertices[b]
-            if (!va || !vb) {
-              continue
-            }
-            const ax = va[0]
-            const az = va[1]
-            const bx = vb[0]
-            const bz = vb[1]
-            if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
-              continue
-            }
-
-            const dx = bx - ax
-            const dz = bz - az
-            const len2 = dx * dx + dz * dz
-            if (len2 <= EPS2) {
-              continue
-            }
-            const tRaw = ((clickX - ax) * dx + (clickZ - az) * dz) / len2
-            const t = Math.max(0, Math.min(1, tRaw))
-            const px = ax + dx * t
-            const pz = az + dz * t
-            const ddx = clickX - px
-            const ddz = clickZ - pz
-            const dist2 = ddx * ddx + ddz * ddz
-            if (dist2 < bestDist2) {
-              bestDist2 = dist2
-              bestSegmentIndex = i
-              bestAx = ax
-              bestAz = az
-              bestBx = bx
-              bestBz = bz
-              bestProjX = px
-              bestProjZ = pz
-              bestAIndex = a
-              bestBIndex = b
-            }
-          }
-
-          if (bestSegmentIndex >= 0 && bestAIndex >= 0 && bestBIndex >= 0) {
-            const endpointSnap2 = ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE
-            const daX = bestProjX - bestAx
-            const daZ = bestProjZ - bestAz
-            const dbX = bestProjX - bestBx
-            const dbZ = bestProjZ - bestBz
-            const dist2ToA = daX * daX + daZ * daZ
-            const dist2ToB = dbX * dbX + dbZ * dbZ
-
-            let startIndex = -1
-
-            // If projection is near an endpoint, prefer reusing that endpoint.
-            if (dist2ToA <= endpointSnap2) {
-              startIndex = bestAIndex
-            } else if (dist2ToB <= endpointSnap2) {
-              startIndex = bestBIndex
-            } else {
-              const existingIndex = findExistingVertexIndex(bestProjX, bestProjZ)
-              if (existingIndex >= 0) {
-                startIndex = existingIndex
-              } else {
-                // Insert a new vertex and split the nearest segment.
-                const newIndex = vertices.length
-                vertices.push([bestProjX, bestProjZ])
-                const originalA = bestAIndex
-                const originalB = bestBIndex
-                segments[bestSegmentIndex] = { a: originalA, b: newIndex }
-                segments.push({ a: newIndex, b: originalB })
-                startIndex = newIndex
-              }
-            }
-
-            if (startIndex >= 0) {
-              const next: RoadDynamicMesh = {
-                type: 'Road',
-                width: Number.isFinite(base.width) ? Math.max(0.2, base.width) : session.width,
-                vertices,
-                segments,
-              }
-
-              // Persist the split immediately so subsequent clicks/commit can extend from this vertex.
-              sceneStore.updateNodeDynamicMesh(hit.nodeId, next)
-
-              const worldProjected = runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ))
-              worldProjected.y = 0
-
-              session.targetNodeId = hit.nodeId
-              session.startVertexIndex = startIndex
-              session.snapVertices = collectRoadSnapVertices()
-              session.points.push(worldProjected.clone())
-              session.previewEnd = worldProjected.clone()
-              updateRoadPreview()
-              return true
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Fall back to ground-plane placement + vertex snapping.
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    return false
-  }
-
-  const snapped = groundPointerHelper.clone()
-  snapped.y = 0
-
-  // Refresh snap targets on every placement to ensure up-to-date snapping.
-  session.snapVertices = collectRoadSnapVertices()
-  const snappedResult = snapRoadPointToVertices(snapped, session.snapVertices)
-  let point = snappedResult.position
-
-  // If starting on an existing road vertex, branch into that road node.
-  if (
-    session.points.length === 0 &&
-    snappedResult.nodeId &&
-    typeof snappedResult.vertexIndex === 'number' &&
-    snappedResult.vertexIndex >= 0
-  ) {
-    session.targetNodeId = snappedResult.nodeId
-    session.startVertexIndex = snappedResult.vertexIndex
-  }
-
-  if (session.points.length === 0) {
-    session.points.push(point.clone())
-    session.previewEnd = point.clone()
-    updateRoadPreview()
-    return true
-  }
-
-  // Close loop: if user clicks near the starting point, reuse it.
-  if (session.points.length >= 2) {
-    const first = session.points[0]!
-    const dx = first.x - point.x
-    const dz = first.z - point.z
-    if (dx * dx + dz * dz <= ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE) {
-      point = first.clone()
-    }
-  }
-
-  const last = session.points[session.points.length - 1]!
-  // Treat very small movements as the same vertex to avoid duplicates.
-  if (last.distanceToSquared(point) <= 1e-6) {
-    session.previewEnd = point.clone()
-    updateRoadPreview()
-    return true
-  }
-
-  session.points.push(point.clone())
-  session.previewEnd = point.clone()
-  updateRoadPreview()
-  return true
-}
-
-function cancelRoadBuildSession(): boolean {
-  if (!roadBuildSession) {
-    return false
-  }
-  clearRoadBuildSession()
-  return true
-}
-
-function finalizeRoadBuildSession() {
-  if (!roadBuildSession) {
-    return
-  }
-
-  const session = roadBuildSession
-  const committed = session.points.map((p) => p.clone())
-  if (committed.length < 2) {
-    clearRoadBuildSession()
-    return
-  }
-
-  // If last click is near the first point, reuse it to form a closed loop.
-  if (committed.length >= 3) {
-    const first = committed[0]!
-    const last = committed[committed.length - 1]!
-    const dx = first.x - last.x
-    const dz = first.z - last.z
-    if (dx * dx + dz * dz <= ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE) {
-      committed[committed.length - 1] = first.clone()
-    }
-  }
-
-  const targetNodeId = session.targetNodeId
-  const startVertexIndex = session.startVertexIndex
-  if (targetNodeId && typeof startVertexIndex === 'number' && Number.isFinite(startVertexIndex) && startVertexIndex >= 0) {
-    const node = findSceneNode(sceneStore.nodes, targetNodeId)
-    if (node?.dynamicMesh?.type === 'Road') {
-      const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
-      integrateWorldPolylineIntoRoadNode(targetNodeId, committed, width)
-      ensureRoadVertexHandlesForSelectedNode({ force: true })
-      clearRoadBuildSession()
-      return
-    }
-  }
-
-  // If the drawn polyline intersects an existing road (or ends on its endpoint), merge into that road node.
-  const connectNodeId = findConnectableRoadNodeId(committed)
-  if (connectNodeId) {
-    const node = findSceneNode(sceneStore.nodes, connectNodeId)
-    const width = node?.dynamicMesh?.type === 'Road' && Number.isFinite(node.dynamicMesh.width)
-      ? node.dynamicMesh.width
-      : session.width
-    integrateWorldPolylineIntoRoadNode(connectNodeId, committed, width)
-    sceneStore.selectNode(connectNodeId)
-    ensureRoadVertexHandlesForSelectedNode({ force: true })
-    clearRoadBuildSession()
-    return
-  }
-
-  const created = sceneStore.createRoadNode({
-    points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
-    width: session.width,
-  })
-
-  if (created) {
-    const roadMaterials = createRoadNodeMaterials()
-    if (roadMaterials.length) {
-      sceneStore.setNodeMaterials(created.id, roadMaterials)
-    }
-  }
-
-  if (created?.dynamicMesh?.type === 'Road') {
-    // Ensure self-intersections become real junction vertices.
-    splitRoadSelfIntersections(created.id)
-  }
-
-  // Keep editing: select the newly created road so vertex handles show immediately.
-  if (created?.dynamicMesh?.type === 'Road') {
-    sceneStore.selectNode(created.id)
-    ensureRoadVertexHandlesForSelectedNode({ force: true })
-    void nextTick(() => {
-      ensureRoadVertexHandlesForSelectedNode({ force: true })
-    })
-  }
-
-  clearRoadBuildSession()
 }
 
 function cancelActiveBuildOperation(): boolean {
@@ -7401,10 +6590,9 @@ function cancelActiveBuildOperation(): boolean {
       handled = true
       break
     case 'wall':
-      if (wallBuildSession) {
-        finalizeWallBuildSession()
+      if (wallBuildTool.getSession()) {
+        wallBuildTool.cancel()
       } else {
-        cancelWallSelection()
         activeBuildTool.value = null
       }
       handled = true
@@ -7417,9 +6605,7 @@ function cancelActiveBuildOperation(): boolean {
       handled = true
       break
     case 'road':
-      if (roadBuildSession) {
-        cancelRoadBuildSession()
-      }
+      roadBuildTool.cancel()
       activeBuildTool.value = null
       handled = true
       break
@@ -9610,15 +8796,13 @@ watch(activeBuildTool, (tool) => {
   handleGroundEditorBuildToolChange(tool)
   if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
     buildToolRightClickCandidate = null
-    buildToolRightClickDragState = null
+    pointerInteraction.clearIfKind('buildToolRightClick')
   }
   if (tool !== 'wall') {
-    cancelWallDrag()
-    clearWallBuildSession()
-    restoreOrbitAfterWallBuild()
+    wallBuildTool.cancel()
   }
   if (tool !== 'road') {
-    clearRoadBuildSession()
+    roadBuildTool.cancel()
   }
 })
 
