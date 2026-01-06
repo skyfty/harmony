@@ -697,12 +697,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		{ immediate: true },
 	)
 
-	function stableRandom01FromXZ(x: number, z: number): number {
-		// Deterministic pseudo-random in [0,1) for stable preview yaw.
-		const seed = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453
-		return seed - Math.floor(seed)
-	}
-
 	function ensureScatterPreviewObject(bindingAssetId: string): void {
 		if (!bindingAssetId) {
 			scatterPreviewGroup.visible = false
@@ -716,8 +710,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterPreviewGroup.visible = false
 			return
 		}
+		if (!group.object) {
+			scatterPreviewGroup.visible = false
+			return
+		}
 		scatterPreviewGroup.clear()
-		const cloned = (group as unknown as THREE.Object3D).clone(true)
+		const cloned = group.object.clone(true)
 		cloned.name = `ScatterPreview:${bindingAssetId}`
 		scatterPreviewGroup.add(cloned)
 		scatterPreviewAssetId = bindingAssetId
@@ -762,12 +760,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const preset = getScatterPreset(category)
 		const minScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 0.9
 		const maxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1.1
-		const yaw = stableRandom01FromXZ(scatterPreviewProjectedHelper.x, scatterPreviewProjectedHelper.z) * Math.PI * 2
-		const scaleJitter = stableRandom01FromXZ(
-			scatterPreviewProjectedHelper.x + 19.17,
-			scatterPreviewProjectedHelper.z + 43.03,
+		const scaleFactor = THREE.MathUtils.clamp(
+			(minScale + maxScale) * 0.5,
+			Math.min(minScale, maxScale),
+			Math.max(minScale, maxScale),
 		)
-		const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, scaleJitter)
+		const yaw = 0
 		scatterPreviewGroup.position.copy(scatterPreviewProjectedHelper)
 		scatterPreviewGroup.rotation.set(0, yaw, 0)
 		scatterPreviewGroup.scale.setScalar(scaleFactor)
