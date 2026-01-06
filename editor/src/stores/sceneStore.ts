@@ -12936,18 +12936,6 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      if (type === AUTO_TOUR_COMPONENT_TYPE && !target.components?.[RIGIDBODY_COMPONENT_TYPE]) {
-        const rigidbodyDefinition = componentManager.getDefinition(RIGIDBODY_COMPONENT_TYPE)
-        if (rigidbodyDefinition?.canAttach(target)) {
-          statesToAdd.unshift({
-            id: generateUuid(),
-            type: RIGIDBODY_COMPONENT_TYPE,
-            enabled: true,
-            props: rigidbodyDefinition.createDefaultProps(target),
-          })
-        }
-      }
-
       visitNode(this.nodes, nodeId, (node) => {
         const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
         statesToAdd.forEach((componentState) => {

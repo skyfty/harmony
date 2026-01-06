@@ -374,6 +374,9 @@ import type { ViewerOptions } from 'viewerjs';
 import {
   ENVIRONMENT_NODE_ID,
   createAutoTourRuntime,
+  rebuildSceneNodeIndex,
+  resolveSceneNodeById,
+  resolveSceneParentNodeId,
   resolveEnabledComponentState,
   type EnvironmentSettings,
   type SceneNode,
@@ -2781,21 +2784,9 @@ function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined
 }
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
-  previewNodeMap.clear();
-  previewParentMap.clear();
   assetNodeIdMap.clear();
-  if (!Array.isArray(nodes)) {
-    return;
-  }
-  const stack: Array<{ node: SceneNode; parentId: string | null }> = nodes.map((node) => ({ node, parentId: null }));
-  while (stack.length) {
-    const entry = stack.pop();
-    if (!entry) {
-      continue;
-    }
-    const { node, parentId } = entry;
-    previewNodeMap.set(node.id, node);
-    previewParentMap.set(node.id, parentId);
+  rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
+  for (const node of previewNodeMap.values()) {
     if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length) {
       const assetId = node.sourceAssetId.trim();
       let bucket = assetNodeIdMap.get(assetId);
@@ -2805,14 +2796,11 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       }
       bucket.add(node.id);
     }
-    if (Array.isArray(node.children) && node.children.length) {
-      node.children.forEach((child) => stack.push({ node: child, parentId: node.id }));
-    }
   }
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
-  return previewParentMap.get(nodeId) ?? null;
+  return resolveSceneParentNodeId(previewParentMap, nodeId);
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -2866,7 +2854,7 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
-  return previewNodeMap.get(nodeId) ?? null;
+  return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
@@ -3423,9 +3411,11 @@ const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
   nodeObjectMap,
-  rigidbodyInstances,
   vehicleInstances,
   isManualDriveActive: () => vehicleDriveActive.value,
+  onNodeObjectTransformUpdated: (_nodeId, object) => {
+    syncInstancedTransform(object);
+  },
 });
 
 function extractRigidbodyShape(
@@ -4118,6 +4108,15 @@ function stepPhysicsWorld(delta: number): void {
     if (entry.syncObjectFromBody === false) {
       return;
     }
+    // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
+    const nodeState = resolveNodeById(entry.nodeId);
+    const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(nodeState, AUTO_TOUR_COMPONENT_TYPE);
+    if (autoTour) {
+      const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE);
+      if (!vehicle) {
+        return;
+      }
+    }
     syncSharedObjectFromBody(entry, syncInstancedTransform);
   });
 }
@@ -4773,11 +4772,17 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
+  const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
+  const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id);
   if (node.position) {
-    object.position.set(node.position.x, node.position.y, node.position.z);
+    if (!skipTransformSync) {
+      object.position.set(node.position.x, node.position.y, node.position.z);
+    }
   }
   if (node.rotation) {
-    object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
+    if (!skipTransformSync) {
+      object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
+    }
   }
   if (node.scale) {
     object.scale.set(node.scale.x, node.scale.y, node.scale.z);
