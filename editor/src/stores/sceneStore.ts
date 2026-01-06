@@ -31,7 +31,6 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
-  createPrimitiveMesh,
 } from '@harmony/schema'
 import type {
   AssetIndexEntry,
@@ -127,6 +126,7 @@ import { useAssetCacheStore } from './assetCacheStore'
 import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
+import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
@@ -178,6 +178,7 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
+import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -3632,79 +3633,6 @@ function reattachRuntimeObjectsForNodes(nodes: SceneNode[]): void {
     }
     componentManager.attachRuntime(node, object)
   })
-}
-
-function hasEnabledComponent(node: SceneNode, componentType: string): boolean {
-  const entry = node.components?.[componentType] as SceneNodeComponentState<unknown> | undefined
-  return entry?.enabled !== false
-}
-
-function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
-  if (!node || (node.sourceAssetId ?? '').trim().length) {
-    return false
-  }
-
-  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
-
-  if (nodeType === 'WarpGate' || hasEnabledComponent(node, WARP_GATE_COMPONENT_TYPE)) {
-    return true
-  }
-  if (nodeType === 'Guideboard' || hasEnabledComponent(node, GUIDEBOARD_COMPONENT_TYPE)) {
-    return true
-  }
-  if (nodeType === 'Plane' && hasEnabledComponent(node, DISPLAY_BOARD_COMPONENT_TYPE)) {
-    return true
-  }
-  if (nodeType === 'Sphere' && hasEnabledComponent(node, VIEW_POINT_COMPONENT_TYPE)) {
-    return true
-  }
-
-  return false
-}
-
-function createProceduralRuntimeObject(node: SceneNode): Object3D {
-  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
-
-  if (nodeType === 'WarpGate' || nodeType === 'Guideboard') {
-    const object = new Object3D()
-    object.name = node.name ?? nodeType
-    object.visible = node.visible ?? true
-    tagObjectWithNodeId(object, node.id)
-    return object
-  }
-
-  if (nodeType === 'Plane' || nodeType === 'Sphere') {
-    const mesh = createPrimitiveMesh(nodeType)
-    mesh.name = node.name ?? nodeType
-    mesh.visible = node.visible ?? true
-    tagObjectWithNodeId(mesh, node.id)
-    return mesh
-  }
-
-  const fallback = new Object3D()
-  fallback.name = node.name ?? nodeType
-  fallback.visible = node.visible ?? true
-  tagObjectWithNodeId(fallback, node.id)
-  return fallback
-}
-
-function rebuildProceduralRuntimeObjects(nodes: SceneNode[]): void {
-  const visit = (list: SceneNode[]) => {
-    list.forEach((node) => {
-      if (!node) {
-        return
-      }
-      if (!runtimeObjectRegistry.has(node.id) && shouldCreateProceduralRuntimeObject(node)) {
-        const object = createProceduralRuntimeObject(node)
-        registerRuntimeObject(node.id, object)
-      }
-      if (Array.isArray(node.children) && node.children.length) {
-        visit(node.children)
-      }
-    })
-  }
-
-  visit(nodes)
 }
 
 function tagObjectWithNodeId(object: Object3D, nodeId: string) {
@@ -7846,7 +7774,11 @@ export const useSceneStore = defineStore('scene', {
 
       // Some nodes (WarpGate/Guideboard/ViewPoint/DisplayBoard) are procedural and don't have sourceAssetId,
       // so ensure they still get a runtime Object3D during refresh.
-      rebuildProceduralRuntimeObjects(nodes)
+      rebuildProceduralRuntimeObjects(nodes, {
+        hasRuntimeObject: (nodeId) => runtimeObjectRegistry.has(nodeId),
+        registerRuntimeObject,
+        tagObjectWithNodeId,
+      })
 
       reattachRuntimeObjectsForNodes(nodes)
       componentManager.syncScene(nodes)
@@ -8640,6 +8572,18 @@ export const useSceneStore = defineStore('scene', {
         }
       })
       this.nodes = [...this.nodes]
+
+      // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
+      // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
+      const updatedMeshType = typeof (target as any)?.dynamicMesh?.type === 'string' ? (target as any).dynamicMesh.type : null
+      if (
+        updatedMeshType === 'Road' ||
+        updatedMeshType === 'Wall' ||
+        updatedMeshType === 'Floor' ||
+        updatedMeshType === 'Ground'
+      ) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {
@@ -9458,383 +9402,51 @@ export const useSceneStore = defineStore('scene', {
       this.selectedAssetId = id
     },
     async ensureSceneAssetsReady(options: EnsureSceneAssetsOptions = {}) {
-      const targetNodes = Array.isArray(options.nodes) ? options.nodes : this.nodes
-      if (!targetNodes.length) {
-        if (options.showOverlay) {
-          useUiStore().hideLoadingOverlay(true)
-        }
-        return
-      }
-
-      const assetNodeMap = collectNodesByAssetId(targetNodes)
-      if (assetNodeMap.size === 0) {
-        if (options.showOverlay) {
-          useUiStore().hideLoadingOverlay(true)
-        }
-        return
-      }
-
       const assetCache = useAssetCacheStore()
       const uiStore = useUiStore()
-      const shouldShowOverlay = options.showOverlay ?? true
-      const refreshViewport = options.refreshViewport ?? options.nodes === undefined
-      const prefabProgressKey = typeof options.prefabAssetIdForDownloadProgress === 'string'
-        ? options.prefabAssetIdForDownloadProgress.trim()
-        : ''
-      const shouldReportPrefabProgress = prefabProgressKey.length > 0
-      const normalizeUrl = (value: string | null | undefined): string | null => {
-        if (!value) {
-          return null
-        }
-        const trimmed = value.trim()
-        return trimmed.length > 0 ? trimmed : null
-      }
 
-      const trackedAssetIds = shouldReportPrefabProgress ? Array.from(assetNodeMap.keys()) : []
-      let stopPrefabProgressWatcher: WatchStopHandle | null = null
-
-      const clampPercent = (value: unknown): number => {
-        const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0
-        return Math.max(0, Math.min(100, Math.round(numeric)))
-      }
-
-      const computePrefabAggregateProgress = (): {
-        active: boolean
-        progress: number
-        error: string | null
-      } => {
-        if (!trackedAssetIds.length) {
-          return { active: false, progress: 100, error: null }
-        }
-        let sum = 0
-        let missing = 0
-        let downloading = 0
-        let errorCount = 0
-        let firstError: string | null = null
-
-        for (const id of trackedAssetIds) {
-          const entry = assetCache.getEntry(id)
-          const cached = assetCache.hasCache(id) || entry?.status === 'cached'
-          if (cached) {
-            sum += 100
-            continue
-          }
-          if (entry?.status === 'downloading') {
-            downloading += 1
-            sum += clampPercent(entry.progress)
-            continue
-          }
-          if (entry?.status === 'error') {
-            errorCount += 1
-            if (!firstError) {
-              firstError = entry.error ?? '资源下载失败'
-            }
-            // Treat errored assets as 0% for aggregate.
-            sum += 0
-            continue
-          }
-          // Not cached yet; download may start later in the loop.
-          missing += 1
-          sum += 0
-        }
-
-        const progress = Math.round(sum / trackedAssetIds.length)
-        const active = downloading > 0 || missing > 0
-        const error = errorCount > 0
-          ? (errorCount === 1 ? firstError : `${errorCount} assets failed`)
-          : null
-        return { active, progress, error }
-      }
-
-      if (shouldReportPrefabProgress) {
-        this.prefabAssetDownloadProgress[prefabProgressKey] = {
-          active: true,
-          progress: 0,
-          error: null,
-          assetIds: trackedAssetIds,
-        }
-        stopPrefabProgressWatcher = watch(
-          () =>
-            trackedAssetIds.map((id) => {
-              const entry = assetCache.getEntry(id)
-              return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
-            }),
-          () => {
-            const next = computePrefabAggregateProgress()
-            const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
-            if (!previous) {
-              return
-            }
-            this.prefabAssetDownloadProgress[prefabProgressKey] = {
-              ...previous,
-              active: next.active,
-              progress: next.progress,
-              error: next.error,
-            }
+      const result = await updateSceneAssets({
+        options,
+        defaultNodes: this.nodes,
+        assetCache,
+        ui: uiStore,
+        watch,
+        getAsset: (assetId) => this.getAsset(assetId),
+        collectNodesByAssetId,
+        getCachedModelObject,
+        getOrLoadModelObject,
+        loadObjectFromFile,
+        createInstancedRuntimeProxy,
+        findObjectByPath,
+        pruneCloneByRelativePaths,
+        isPathAncestor,
+        registerRuntimeForNode: (node, runtimeObject) => {
+          prepareRuntimeObjectForNode(runtimeObject)
+          tagObjectWithNodeId(runtimeObject, node.id)
+          registerRuntimeObject(node.id, runtimeObject)
+          componentManager.attachRuntime(node, runtimeObject)
+          componentManager.syncNode(node)
+        },
+        queueSceneNodePatch: (nodeId, fields, patchOptions) =>
+          this.queueSceneNodePatch(nodeId, fields as any, patchOptions),
+        prefabProgress: {
+          init: (key, value) => {
+            this.prefabAssetDownloadProgress[key] = value
           },
-          { immediate: true },
-        )
-      }
+          update: (key, value) => {
+            this.prefabAssetDownloadProgress[key] = value
+          },
+          finalize: (key, value) => {
+            this.prefabAssetDownloadProgress[key] = value
+          },
+          clear: (key) => {
+            delete this.prefabAssetDownloadProgress[key]
+          },
+        },
+      })
 
-      if (shouldShowOverlay) {
-        uiStore.showLoadingOverlay({
-          title: 'Loading Scene Assets',
-          message: 'Preparing assets…',
-          mode: 'determinate',
-          progress: 0,
-          closable: false,
-          autoClose: false,
-        })
-      }
-
-      const total = assetNodeMap.size
-      let completed = 0
-      const errors: Array<{ assetId: string; message: string }> = []
-
-      try {
-
-      for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
-        const asset = this.getAsset(assetId)
-        const assetLabel = normalizeUrl(asset?.name) ?? nodesForAsset[0]?.name ?? assetId
-        const fallbackDownloadUrl = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
-    
-        try {
-          if (shouldShowOverlay) {
-            uiStore.updateLoadingOverlay({
-              message: `Loading asset: ${assetLabel}`,
-            })
-          }
-
-          const shouldCacheModelObject = asset?.type === 'model' || asset?.type === 'mesh'
-          let modelGroup: ModelInstanceGroup | null = null
-          let baseObject: Object3D | null = null
-
-          if (shouldCacheModelObject) {
-            const cachedGroup = getCachedModelObject(assetId)
-            if (cachedGroup) {
-              modelGroup = cachedGroup
-              baseObject = cachedGroup.object
-              assetCache.touch(assetId)
-            }
-          }
-
-          let stopDownloadWatcher: WatchStopHandle | null = null
-          if (!baseObject) {
-            let entry = assetCache.getEntry(assetId)
-            if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
-              entry.downloadUrl = fallbackDownloadUrl
-            }
-            if (entry.status !== 'cached') {
-              await assetCache.loadFromIndexedDb(assetId)
-              entry = assetCache.getEntry(assetId)
-              if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
-                entry.downloadUrl = fallbackDownloadUrl
-              }
-            }
-            const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
-
-            const completedBeforeAsset = completed
-            const overlayTotal = total > 0 ? total : 1
-
-            try {
-              if (!assetCache.hasCache(assetId)) {
-                if (!downloadUrl) {
-                  throw new Error('Missing asset download URL')
-                }
-
-                if (shouldShowOverlay) {
-                  stopDownloadWatcher = watch(
-                    () => {
-                      const current = assetCache.getEntry(assetId)
-                      return [current.status, current.progress, current.filename] as const
-                    },
-                    ([status, progress, filename]) => {
-                      if (status !== 'downloading') {
-                        return
-                      }
-                      const normalizedProgress = Number.isFinite(progress)
-                        ? Math.max(0, Math.round(progress))
-                        : 0
-                      const displayName = filename?.trim() || assetLabel
-                      const aggregateProgress = Math.max(
-                        0,
-                        Math.min(100, Math.round(((completedBeforeAsset + normalizedProgress / 100) / overlayTotal) * 100)),
-                      )
-                      uiStore.updateLoadingOverlay({
-                        message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
-                        progress: aggregateProgress,
-                        mode: 'determinate',
-                      })
-                      uiStore.updateLoadingProgress(aggregateProgress, { autoClose: false })
-                    },
-                    { immediate: true },
-                  )
-                }
-
-                await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
-                if (shouldShowOverlay) {
-                  uiStore.updateLoadingOverlay({
-                    message: `Loading asset: ${assetLabel}`,
-                  })
-                }
-              } else {
-                assetCache.touch(assetId)
-              }
-            } finally {
-              stopDownloadWatcher?.()
-            }
-
-            entry = assetCache.getEntry(assetId)
-
-            const file = assetCache.createFileFromCache(assetId)
-            if (!file) {
-              throw new Error('Missing asset file in cache')
-            }
-
-            if (shouldCacheModelObject) {
-              const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
-              modelGroup = loadedGroup
-              baseObject = loadedGroup.object
-              assetCache.releaseInMemoryBlob(assetId)
-            } else {
-              baseObject = await loadObjectFromFile(file)
-            }
-          }
-
-          if (!baseObject) {
-            throw new Error('Failed to resolve base object')
-          }
-          const baseObjectResolved = modelGroup?.object ?? baseObject
-          const canUseInstancing = Boolean(modelGroup?.meshes.length)
-
-          const metadataEntries = nodesForAsset
-            .map((node) => {
-              const metadata = node.importMetadata
-              return metadata && Array.isArray(metadata.objectPath)
-                ? { node, path: metadata.objectPath }
-                : null
-            })
-            .filter((entry): entry is { node: SceneNode; path: number[] } => Boolean(entry))
-
-          const descendantCache = new Map<string, number[][]>()
-          metadataEntries.forEach((entry) => {
-            const basePath = entry.path
-            const key = basePath.join('.')
-            const descendants: number[][] = []
-            metadataEntries.forEach((candidate) => {
-              if (candidate === entry) {
-                return
-              }
-              if (isPathAncestor(basePath, candidate.path)) {
-                descendants.push(candidate.path.slice(basePath.length))
-              }
-            })
-            descendantCache.set(key, descendants)
-          })
-
-          let baseObjectAssigned = false
-
-          nodesForAsset.forEach((node) => {
-            const metadata = node.importMetadata
-            let runtimeObject: Object3D | null = null
-
-            if (!runtimeObject && canUseInstancing && !metadata && modelGroup) {
-              runtimeObject = createInstancedRuntimeProxy(node, modelGroup)
-            }
-
-            if (metadata && Array.isArray(metadata.objectPath)) {
-              const target = findObjectByPath(baseObjectResolved, metadata.objectPath) ?? baseObjectResolved
-              runtimeObject = target.clone(true)
-              const descendantKey = metadata.objectPath.join('.')
-              const descendantPaths = descendantCache.get(descendantKey) ?? []
-              pruneCloneByRelativePaths(runtimeObject, descendantPaths)
-            } else if (!runtimeObject) {
-              const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
-              runtimeObject = reuseOriginal ? baseObjectResolved : baseObjectResolved.clone(true)
-              baseObjectAssigned = baseObjectAssigned || reuseOriginal
-            }
-
-            if (!runtimeObject) {
-              throw new Error('Failed to create runtime object')
-            }
-
-            runtimeObject.name = node.name ?? runtimeObject.name
-            prepareRuntimeObjectForNode(runtimeObject)
-            tagObjectWithNodeId(runtimeObject, node.id)
-            registerRuntimeObject(node.id, runtimeObject)
-            componentManager.attachRuntime(node, runtimeObject)
-            componentManager.syncNode(node)
-          })
-        } catch (error) {
-          const message = (error as Error).message ?? 'Unknown error'
-          errors.push({ assetId, message })
-          console.warn(`Failed to load asset ${assetId}`, error)
-          if (shouldShowOverlay) {
-            uiStore.updateLoadingOverlay({
-              message: `Failed to load asset ${assetLabel}: ${message}`,
-              closable: true,
-              autoClose: false,
-            })
-          }
-        } finally {
-          completed += 1
-          if (shouldShowOverlay) {
-            const percent = Math.round((completed / total) * 100)
-            uiStore.updateLoadingProgress(percent, { autoClose: false })
-          }
-        }
-      }
-
-      } finally {
-        stopPrefabProgressWatcher?.()
-        if (shouldReportPrefabProgress) {
-          const latest = this.prefabAssetDownloadProgress[prefabProgressKey]
-          const next = computePrefabAggregateProgress()
-          if (errors.length > 0) {
-            this.prefabAssetDownloadProgress[prefabProgressKey] = {
-              ...(latest ?? { assetIds: trackedAssetIds }),
-              active: false,
-              progress: next.progress,
-              error: errors.length === 1 ? errors[0]?.message ?? next.error : `${errors.length} assets failed`,
-              assetIds: trackedAssetIds,
-            }
-          } else {
-            delete this.prefabAssetDownloadProgress[prefabProgressKey]
-          }
-        }
-      }
-
-      if (shouldShowOverlay) {
-        if (errors.length === 0) {
-          uiStore.updateLoadingOverlay({
-            message: 'Assets loaded successfully',
-            autoClose: true,
-            autoCloseDelay: 600,
-          })
-          uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 600 })
-        } else {
-          uiStore.updateLoadingOverlay({
-            message: `${errors.length} assets failed to load. Please check the logs.`,
-            closable: true,
-            autoClose: false,
-          })
-          uiStore.updateLoadingProgress(100, { autoClose: false })
-        }
-      }
-
-      if (errors.length === 0 && refreshViewport) {
-        // Avoid forcing a full scene graph reconcile.
-        // Signal consumers (viewport) to refresh/recreate affected runtime objects incrementally.
-        let queued = false
-        assetNodeMap.forEach((nodesForAsset) => {
-          nodesForAsset.forEach((node) => {
-            const ok = this.queueSceneNodePatch(node.id, ['runtime'], { bumpVersion: false })
-            queued = queued || ok
-          })
-        })
-        if (queued) {
-          this.sceneNodePropertyVersion += 1
-        }
+      if (result.queuedRuntimeRefreshPatches) {
+        this.sceneNodePropertyVersion += 1
       }
     },
     async spawnAssetAtPosition(
