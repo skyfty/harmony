@@ -9,6 +9,26 @@ import { useProtagonistPreview } from './useProtagonistPreview'
 import { createNormalizedPointerGuard } from './normalizedPointerGuard'
 import { createPointerCaptureGuard } from './pointerCaptureGuard'
 import { usePointerInteractionStateMachine } from './usePointerInteractionStateMachine'
+import { handlePointerDownGuards } from './SceneViewportPointerDownGuards'
+import { handlePointerDownScatter } from './SceneViewportPointerDownScatter'
+import { handlePointerDownTools } from './SceneViewportPointerDownTools'
+import { handlePointerDownSelection } from './SceneViewportPointerDownSelection'
+import { handlePointerMoveDrag, handlePointerMoveFloorEdgeDrag } from './SceneViewportPointerMoveDrag'
+import { handlePointerMoveScatter } from './SceneViewportPointerMoveScatter'
+import { handlePointerMoveTools } from './SceneViewportPointerMoveTools'
+import { handlePointerMoveBuildTools } from './SceneViewportPointerMoveBuildTools'
+import { handlePointerMoveSelection } from './SceneViewportPointerMoveSelection'
+import { handlePointerUpDrag } from './SceneViewportPointerUpDrag'
+import { handlePointerUpScatter } from './SceneViewportPointerUpScatter'
+import { handlePointerUpTools } from './SceneViewportPointerUpTools'
+import { handlePointerUpSelection } from './SceneViewportPointerUpSelection'
+import type {
+  InstancedEraseDragState,
+  PointerDownResult,
+  PointerMoveResult,
+  PointerUpResult,
+  RoadVertexDragState,
+} from './SceneViewportPointerDownTypes'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -1024,13 +1044,6 @@ const wallRenderer = createWallRenderer({
 })
 
 // (gesture state moved into `pointerInteraction`)
-
-type InstancedEraseDragState = {
-  pointerId: number
-  lastKey: string | null
-  lastAtMs: number
-}
-
 let instancedEraseDragState: InstancedEraseDragState | null = null
 
 const repairHoverGroup = new THREE.Group()
@@ -1803,21 +1816,6 @@ function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false):
 type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
 // road build session moved into `roadBuildTool`
-
-type RoadVertexDragState = {
-  pointerId: number
-  nodeId: string
-  vertexIndex: number
-  startX: number
-  startY: number
-  moved: boolean
-  startVertex: [number, number]
-  containerObject: THREE.Object3D
-  roadGroup: THREE.Object3D
-  baseDefinition: RoadDynamicMesh
-  workingDefinition: RoadDynamicMesh
-}
-
 let roadVertexDragState: RoadVertexDragState | null = null
 
 type FloorEdgeDragState = {
@@ -5361,779 +5359,304 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
 }
 
 async function handlePointerDown(event: PointerEvent) {
-  if (!canvasRef.value || !camera || !scene) {
-    pointerTrackingState = null
-    return
-  }
-
-  if (!event.isPrimary) {
-    pointerTrackingState = null
-    return
-  }
-
-  if (isAltOverrideActive) {
-    pointerTrackingState = null
-    return
-  }
-
-  // Scatter erase mode: middle click (and drag) erases continuous instanced instances.
-  // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle middle click.
-  if (scatterEraseModeActive.value && hasInstancedMeshes.value && event.button === 1) {
-    const hit = pickSceneInstancedTargetAtPointer(event)
-    if (hit || !selectedNodeIsGround.value) {
+  const applyPointerDownResult = (result: PointerDownResult) => {
+    if (result.clearPointerTrackingState) {
       pointerTrackingState = null
-      instancedEraseDragState = {
-        pointerId: event.pointerId,
-        lastKey: null,
-        lastAtMs: 0,
-      }
-      const result = tryEraseRepairTargetAtPointer(event)
-      if (result.handled && result.erasedKey) {
-        instancedEraseDragState.lastKey = result.erasedKey
-        instancedEraseDragState.lastAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
-      }
-      pointerInteraction.capture(event.pointerId)
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
+      instancedEraseDragState = result.nextInstancedEraseDragState ?? null
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
+      roadVertexDragState = result.nextRoadVertexDragState ?? null
+    }
+    if (result.preventDefault) {
       event.preventDefault()
+    }
+    if (result.stopPropagation) {
       event.stopPropagation()
+    }
+    if (result.stopImmediatePropagation) {
       event.stopImmediatePropagation()
-      return
     }
-    // If Ground is selected and no instanced target is under the cursor, fall through
-    // so the ground-scatter erase can handle middle click.
-  }
-
-  // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
-  if (
-    !scatterEraseModeActive.value &&
-    event.button === 1 &&
-    props.activeTool === 'select' &&
-    activeBuildTool.value !== 'wall' &&
-    activeBuildTool.value !== 'road' &&
-    activeBuildTool.value !== 'floor'
-  ) {
-    const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
-      const node = findSceneNode(sceneStore.nodes, nodeId)
-      const object = objectMap.get(nodeId) ?? null
-      if (node && object) {
-        const handled = beginContinuousInstancedCreate(event, node, object)
-        if (handled) {
-          pointerTrackingState = null
-          return
-        }
-      }
+    if (typeof result.capturePointerId === 'number') {
+      pointerInteraction.capture(result.capturePointerId)
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextPointerTrackingState')) {
+      pointerTrackingState = result.nextPointerTrackingState ?? null
     }
   }
 
-  // Scatter erase mode: if continuous instanced models exist, allow camera controls.
-  // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
-  if (scatterEraseModeActive.value && hasInstancedMeshes.value && event.button === 0) {
-    pointerTrackingState = null
-    pointerInteraction.beginRepairClick(event)
+  const guard = handlePointerDownGuards(event, {
+    hasCanvas: !!canvasRef.value,
+    hasCamera: !!camera,
+    hasScene: !!scene,
+    isAltOverrideActive,
+  })
+  if (guard) {
+    applyPointerDownResult(guard)
     return
   }
 
-  if (handleGroundEditorPointerDown(event)) {
-    pointerTrackingState = null
+  const scatter = handlePointerDownScatter(event, {
+    scatterEraseModeActive: scatterEraseModeActive.value,
+    hasInstancedMeshes: hasInstancedMeshes.value,
+    selectedNodeIsGround: selectedNodeIsGround.value,
+    activeTool: props.activeTool,
+    activeBuildTool: activeBuildTool.value,
+    selectedNodeId: sceneStore.selectedNodeId ?? props.selectedNodeId ?? null,
+    nodes: sceneStore.nodes,
+    objectMap,
+    isNodeSelectionLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
+    findSceneNode,
+    beginContinuousInstancedCreate,
+    pickSceneInstancedTargetAtPointer,
+    tryEraseRepairTargetAtPointer,
+    beginRepairClick: (e) => pointerInteraction.beginRepairClick(e),
+    handleGroundEditorPointerDown,
+  })
+  if (scatter) {
+    applyPointerDownResult(scatter)
     return
   }
 
-  const button = event.button
-  const isSelectionButton = button === 0 || button === 2
-
-  if (nodePickerStore.isActive) {
-    pointerTrackingState = null
-    if (button === 0) {
-      const hit = pickNodeAtPointer(event)
-      if (hit) {
-        nodePickerStore.completePick(hit.nodeId)
-      }
-    }
-    hideNodePickerHighlight()
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+  const tools = handlePointerDownTools(event, {
+    activeBuildTool: activeBuildTool.value,
+    isAltOverrideActive,
+    nodePickerActive: nodePickerStore.isActive,
+    nodePickerCompletePick: (nodeId) => nodePickerStore.completePick(nodeId),
+    hideNodePickerHighlight,
+    pickNodeAtPointer: (e) => pickNodeAtPointer(e),
+    wallBuildToolHandlePointerDown: (e) => wallBuildTool.handlePointerDown(e),
+    floorBuildToolHandlePointerDown: (e) => floorBuildTool.handlePointerDown(e),
+    roadBuildToolGetSession: () => roadBuildTool.getSession(),
+    beginBuildToolRightClick: (e, options) => pointerInteraction.beginBuildToolRightClick(e, options),
+    tryBeginFloorEdgeDrag,
+    ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
+    pickRoadVertexHandleAtPointer,
+    nodes: sceneStore.nodes,
+    findSceneNode,
+    objectMap,
+  })
+  if (tools) {
+    applyPointerDownResult(tools)
     return
   }
 
+  const selection = await handlePointerDownSelection(event, {
+    activeTool: props.activeTool,
+    selectedNodeIdProp: props.selectedNodeId ?? null,
+    sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
+    selectedNodeIds: sceneStore.selectedNodeIds,
+    nodes: sceneStore.nodes,
+    findSceneNode,
+    isNodeSelectionLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
+    isDescendant: (ancestorId, nodeId) => sceneStore.isDescendant(ancestorId, nodeId),
+    duplicateNodes: (nodeIds, options) => sceneStore.duplicateNodes(nodeIds, options),
+    ensureSceneAssetsReady: (options) => sceneStore.ensureSceneAssetsReady(options),
+    nextTick,
+    objectMap,
+    pickNodeAtPointer,
+    pickActiveSelectionBoundingBoxHit,
+    transformControlsDragging: Boolean(transformControls?.dragging),
+    transformControlsAxis: transformControls?.axis ?? null,
+    createSelectionDragState,
+    disableOrbitForSelectDrag,
+  })
 
-  if (activeBuildTool.value === 'wall') {
-    if (wallBuildTool.handlePointerDown(event)) {
-      pointerTrackingState = null
-      return
-    }
-    // Wall build uses middle click for placement; keep left/right available for camera controls.
-    if (button === 0) {
-      pointerTrackingState = null
-      return
-    }
-    if (button === 2) {
-      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
-      pointerTrackingState = null
-      return
-    }
-  }
-
-  if (activeBuildTool.value === 'floor') {
-    if (button === 1 && !isAltOverrideActive) {
-      if (tryBeginFloorEdgeDrag(event)) {
-        return
-      }
-    }
-    floorBuildTool.handlePointerDown(event)
-    if (button === 1 && !isAltOverrideActive) {
-      pointerTrackingState = null
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    // Floor build uses middle click for placement; keep left/right available for camera controls.
-    if (button === 0) {
-      pointerTrackingState = null
-      return
-    }
-    if (button === 2) {
-      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
-      pointerTrackingState = null
-      return
-    }
-  }
-
-  if (activeBuildTool.value === 'road') {
-    if (button === 1 && !isAltOverrideActive) {
-      // If a road vertex handle is under the cursor, begin vertex interaction (click to branch / drag to move).
-      ensureRoadVertexHandlesForSelectedNode()
-      const handleHit = pickRoadVertexHandleAtPointer(event)
-      if (handleHit) {
-        const node = findSceneNode(sceneStore.nodes, handleHit.nodeId)
-        const runtime = objectMap.get(handleHit.nodeId) ?? null
-        if (node?.dynamicMesh?.type === 'Road' && runtime) {
-          const roadGroupCandidate = (runtime.userData?.roadGroup as THREE.Object3D | undefined) ?? runtime.getObjectByName('RoadGroup') ?? null
-          if (!roadGroupCandidate) {
-            pointerTrackingState = null
-            event.preventDefault()
-            event.stopPropagation()
-            event.stopImmediatePropagation()
-            return
-          }
-          const baseVertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
-          const baseVertex = baseVertices[handleHit.vertexIndex]
-          const startVertex: [number, number] = Array.isArray(baseVertex) && baseVertex.length >= 2
-            ? [Number(baseVertex[0]) || 0, Number(baseVertex[1]) || 0]
-            : [0, 0]
-          roadVertexDragState = {
-            pointerId: event.pointerId,
-            nodeId: handleHit.nodeId,
-            vertexIndex: handleHit.vertexIndex,
-            startX: event.clientX,
-            startY: event.clientY,
-            moved: false,
-            startVertex,
-            containerObject: runtime,
-            roadGroup: roadGroupCandidate,
-            baseDefinition: node.dynamicMesh,
-            workingDefinition: {
-              ...node.dynamicMesh,
-              vertices: (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []).map(
-                ([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number],
-              ),
-              segments: (Array.isArray(node.dynamicMesh.segments) ? node.dynamicMesh.segments : []).map((seg) => ({
-                a: Number((seg as any).a) || 0,
-                b: Number((seg as any).b) || 0,
-              })),
-            },
-          }
-          pointerInteraction.capture(event.pointerId)
-          pointerTrackingState = null
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
-          return
-        }
-      }
-
-      pointerTrackingState = null
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    // Road build uses middle click for placement; keep left/right available for camera controls.
-    const roadCancelEligible = button === 2 && Boolean(roadBuildTool.getSession())
-    if (button === 0) {
-      pointerTrackingState = null
-      return
-    }
-    if (button === 2) {
-      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible })
-      pointerTrackingState = null
-      return
-    }
-  }
-
-  if (!isSelectionButton) {
-    pointerTrackingState = null
+  if (selection) {
+    applyPointerDownResult(selection)
     return
-  }
-
-  if (transformControls?.dragging) {
-    pointerTrackingState = null
-    return
-  }
-
-  if (button === 2) {
-    event.preventDefault()
-  }
-
-  const primaryBeforeDuplicate = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const shouldPickForRightClick = button === 2 && props.activeTool === 'select'
-  let hit = button === 0 || shouldPickForRightClick ? pickNodeAtPointer(event) : null
-  const initialHitPoint = hit ? hit.point.clone() : null
-
-  if (
-    button === 0 &&
-    props.activeTool === 'select' &&
-    hit &&
-    (event.ctrlKey || event.metaKey) &&
-    primaryBeforeDuplicate &&
-    hit.nodeId === primaryBeforeDuplicate &&
-    !sceneStore.isNodeSelectionLocked(hit.nodeId)
-  ) {
-    const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
-    const idsToDuplicate = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
-    const duplicateIds = sceneStore.duplicateNodes(idsToDuplicate, { select: true })
-    if (duplicateIds.length) {
-      const duplicateNodes = duplicateIds
-        .map((id) => findSceneNode(sceneStore.nodes, id))
-        .filter((node): node is SceneNode => Boolean(node))
-      if (duplicateNodes.length) {
-        await sceneStore.ensureSceneAssetsReady({ nodes: duplicateNodes, showOverlay: false, refreshViewport: false })
-      }
-      await nextTick()
-      await nextTick()
-      const updatedHit = pickNodeAtPointer(event)
-      if (updatedHit && duplicateIds.includes(updatedHit.nodeId)) {
-        hit = updatedHit
-      } else {
-        const primaryId = sceneStore.selectedNodeId ?? null
-        if (primaryId) {
-          const object = objectMap.get(primaryId) ?? null
-          if (object) {
-            object.updateMatrixWorld(true)
-            const fallbackPoint = initialHitPoint
-              ? initialHitPoint.clone()
-              : (() => {
-                  const world = new THREE.Vector3()
-                  object.getWorldPosition(world)
-                  return world
-                })()
-            hit = {
-              nodeId: primaryId,
-              object,
-              point: fallbackPoint,
-            }
-          }
-        }
-      }
-    }
-  }
-
-  if (!hit && shouldPickForRightClick) {
-    const boundingHit = pickActiveSelectionBoundingBoxHit(event)
-    if (boundingHit) {
-      hit = boundingHit
-    }
-  }
-
-  const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-
-  const allowBoundingBoxDragFallback = (() => {
-    if (!currentPrimaryId) {
-      return true
-    }
-    const node = findSceneNode(sceneStore.nodes, currentPrimaryId)
-    // Roads can be highly concave (e.g. arcs). Using an AABB allows drag-starts from empty space
-    // inside the road's bounding box, which feels like dragging "through" the road.
-    if (node?.dynamicMesh?.type === 'Road' || node?.dynamicMesh?.type === 'Wall') {
-      return false
-    }
-    return true
-  })()
-
-  let dragHit = hit
-  if (button === 0 && props.activeTool === 'select') {
-    if (dragHit && currentPrimaryId && dragHit.nodeId !== currentPrimaryId) {
-      if (sceneStore.isDescendant(currentPrimaryId, dragHit.nodeId)) {
-        const primaryObject = objectMap.get(currentPrimaryId)
-        if (primaryObject) {
-          const worldPoint = dragHit.point.clone()
-          dragHit = {
-            nodeId: currentPrimaryId,
-            object: primaryObject,
-            point: worldPoint,
-          }
-        }
-      }
-    }
-    if (!dragHit) {
-      if (allowBoundingBoxDragFallback) {
-        dragHit = pickActiveSelectionBoundingBoxHit(event)
-      }
-    }
-  }
-
-  const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
-
-  pointerInteraction.capture(event.pointerId)
-
-  const selectionDrag = button === 0 && props.activeTool === 'select' && dragHit && currentPrimaryId && dragHit.nodeId === currentPrimaryId
-    ? createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
-    : null
-
-  if (selectionDrag) {
-    disableOrbitForSelectDrag()
-  }
-
-  pointerTrackingState = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    moved: false,
-    button,
-    hitResult: hit,
-    selectionDrag,
-    ctrlKey: event.ctrlKey,
-    metaKey: event.metaKey,
-    shiftKey: event.shiftKey,
-    transformAxis: activeTransformAxis,
   }
 }
 
 function handlePointerMove(event: PointerEvent) {
-  if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
-    const state = roadVertexDragState
-    const dx = event.clientX - state.startX
-    const dy = event.clientY - state.startY
-    if (!state.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      state.moved = true
+  const applyPointerMoveResult = (result: PointerMoveResult) => {
+    if (result.preventDefault) {
+      event.preventDefault()
     }
+    if (result.stopPropagation) {
+      event.stopPropagation()
+    }
+    if (result.stopImmediatePropagation) {
+      event.stopImmediatePropagation()
+    }
+  }
 
-    const isMiddleDown = (event.buttons & 4) !== 0
-    if (!isMiddleDown) {
-      return
-    }
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
-      return
-    }
-    const snapped = groundPointerHelper.clone()
-    snapped.y = 0
-
-    const local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
-    const working = state.workingDefinition
-    const vertices = Array.isArray(working.vertices) ? working.vertices : []
-    if (!vertices[state.vertexIndex]) {
-      return
-    }
-    vertices[state.vertexIndex] = [local.x, local.z]
-    working.vertices = vertices
-
-    // Treat any actual geometry change as a drag (prevents tiny mouse movement from being interpreted as a click -> branch).
-    const [startVX, startVZ] = state.startVertex
-    if (!state.moved) {
-      const ddx = local.x - startVX
-      const ddz = local.z - startVZ
-      if (ddx * ddx + ddz * ddz > 1e-8) {
-        state.moved = true
-      }
-    }
-
-    const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
-    updateRoadGroup(state.roadGroup, state.workingDefinition, roadOptions)
-
-    // Update all handle mesh positions if present (smoothing adjusts the whole path).
-    const handles = state.containerObject.getObjectByName(ROAD_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
-    if (handles?.isGroup) {
-      const nextVertices = Array.isArray(state.workingDefinition.vertices) ? state.workingDefinition.vertices : []
-      for (const child of handles.children) {
-        const index = Math.trunc(Number(child?.userData?.roadVertexIndex))
-        const v = nextVertices[index]
-        if (!Array.isArray(v) || v.length < 2) {
-          continue
-        }
-        const x = Number(v[0])
-        const z = Number(v[1])
-        if (!Number.isFinite(x) || !Number.isFinite(z)) {
-          continue
-        }
-        child.position.set(x, ROAD_VERTEX_HANDLE_Y, z)
-      }
-    }
+  const roadVertex = handlePointerMoveDrag(event, {
+    clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+    roadVertexDragState,
+    raycastGroundPoint,
+    groundPointerHelper,
+    resolveRoadRenderOptionsForNodeId,
+    updateRoadGroup,
+  })
+  if (roadVertex) {
+    applyPointerMoveResult(roadVertex)
     return
   }
 
-  if (updateContinuousInstancedCreate(event)) {
+  const scatter = handlePointerMoveScatter(event, {
+    updateContinuousInstancedCreate,
+    scatterEraseModeActive: scatterEraseModeActive.value,
+    hasInstancedMeshes: hasInstancedMeshes.value,
+    updateRepairHoverHighlight,
+    instancedEraseDragState,
+    tryEraseRepairTargetAtPointer,
+    pointerInteractionUpdateMoved: (e) => pointerInteraction.updateMoved(e),
+  })
+  if (scatter) {
+    applyPointerMoveResult(scatter)
     return
   }
 
-  if (scatterEraseModeActive.value && hasInstancedMeshes.value) {
-    updateRepairHoverHighlight(event)
-
-    if (instancedEraseDragState && instancedEraseDragState.pointerId === event.pointerId) {
-      const isMiddleDown = (event.buttons & 4) !== 0
-      if (isMiddleDown) {
-        const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-        // Throttle erase attempts slightly to avoid excessive updates.
-        if (now - instancedEraseDragState.lastAtMs >= 24) {
-          const result = tryEraseRepairTargetAtPointer(event, { skipKey: instancedEraseDragState.lastKey })
-          instancedEraseDragState.lastAtMs = now
-          if (result.handled && result.erasedKey) {
-            instancedEraseDragState.lastKey = result.erasedKey
-          }
-        }
-      }
-    }
-
-    pointerInteraction.updateMoved(event)
-  } else {
-    updateRepairHoverHighlight(event)
-  }
-
-  if (nodePickerStore.isActive) {
-    const hit = pickNodeAtPointer(event)
-    updateNodePickerHighlight(hit)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+  const tools = handlePointerMoveTools(event, {
+    nodePickerActive: nodePickerStore.isActive,
+    pickNodeAtPointer,
+    updateNodePickerHighlight,
+    handleGroundEditorPointerMove,
+  })
+  if (tools) {
+    applyPointerMoveResult(tools)
     return
   }
 
-  if (handleGroundEditorPointerMove(event)) {
+  const floorEdge = handlePointerMoveFloorEdgeDrag(event, {
+    clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+    floorEdgeDragState,
+    raycastGroundPoint,
+    groundPointerHelper,
+    updateFloorGroup,
+  })
+  if (floorEdge) {
+    applyPointerMoveResult(floorEdge)
     return
   }
 
-  if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId) {
-    const state = floorEdgeDragState
-    const dx = event.clientX - state.startX
-    const dy = event.clientY - state.startY
-    if (!state.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      state.moved = true
-    }
-
-    const isMiddleDown = (event.buttons & 4) !== 0
-    if (!isMiddleDown) {
-      return
-    }
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
-      return
-    }
-
-    const pointerVec = new THREE.Vector2(groundPointerHelper.x, groundPointerHelper.z)
-    const projection = state.perp.dot(pointerVec.clone().sub(state.referencePoint))
-    const delta = projection - state.initialProjection
-    const vertexCount = state.startVertices.length
-    if (vertexCount < 2) {
-      return
-    }
-    const localPerp = new THREE.Vector2(state.perp.x, -state.perp.y)
-    const offset = localPerp.multiplyScalar(delta)
-    const nextIndex = (state.edgeIndex + 1) % vertexCount
-    const updatedVertices = state.startVertices.map((vertex, index) => {
-      const [startX, startZ] = vertex
-      if (index === state.edgeIndex || index === nextIndex) {
-        return [startX + offset.x, startZ + offset.y] as [number, number]
-      }
-      return [startX, startZ] as [number, number]
-    })
-
-    const working = state.workingDefinition
-    working.vertices = updatedVertices
-    updateFloorGroup(state.runtimeObject, working)
+  const buildTools = handlePointerMoveBuildTools(event, {
+    floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
+    wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
+    roadBuildToolHandlePointerMove: (e) => roadBuildTool.handlePointerMove(e),
+  })
+  if (buildTools) {
+    applyPointerMoveResult(buildTools)
     return
   }
 
-  if (floorBuildTool.handlePointerMove(event)) {
-    return
-  }
-
-  if (wallBuildTool.handlePointerMove(event)) {
-    return
-  }
-
-  if (roadBuildTool.handlePointerMove(event)) {
-    return
-  }
-
-  pointerInteraction.updateMoved(event)
-
-  if (isAltOverrideActive) {
-    return
-  }
-
-  // wall/road build move handling handled by build-tool modules
-
-  if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
-    return
-  }
-
-  if (transformControls?.dragging) {
-    pointerTrackingState.moved = true
-    return
-  }
-
-  const dx = event.clientX - pointerTrackingState.startX
-  const dy = event.clientY - pointerTrackingState.startY
-  const distance = Math.hypot(dx, dy)
-
-  if (pointerTrackingState.button === 2) {
-    if (!pointerTrackingState.moved && distance >= CLICK_DRAG_THRESHOLD_PX) {
-      pointerTrackingState.moved = true
-    }
-    return
-  }
-
-  if (pointerTrackingState.button !== 0) {
-    return
-  }
-
-  const drag = pointerTrackingState.selectionDrag
-
-  if (drag) {
-    if (!drag.hasDragged) {
-      if (distance < CLICK_DRAG_THRESHOLD_PX) {
-        return
-      }
-      drag.hasDragged = true
-      pointerTrackingState.moved = true
-      sceneStore.beginTransformInteraction(drag.nodeId)
-    }
-
-    if (updateSelectDragPosition(drag, event)) {
-      return
-    }
-
-    return
-  }
-
-  if (!pointerTrackingState.moved && distance >= CLICK_DRAG_THRESHOLD_PX) {
-    pointerTrackingState.moved = true
-  }
+  handlePointerMoveSelection(event, {
+    clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+    isAltOverrideActive,
+    pointerInteractionUpdateMoved: (e) => pointerInteraction.updateMoved(e),
+    pointerTrackingState,
+    transformControlsDragging: Boolean(transformControls?.dragging),
+    sceneStoreBeginTransformInteraction: (nodeId) => sceneStore.beginTransformInteraction(nodeId),
+    updateSelectDragPosition,
+  })
 }
 
 function handlePointerUp(event: PointerEvent) {
   try {
-  if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId && event.button === 1) {
-    const state = roadVertexDragState
-    roadVertexDragState = null
-    pointerInteraction.releaseIfCaptured(event.pointerId)
-
-    if (state.moved) {
-      sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
-      // Runtime road group sync happens via reactive scene graph reconciliation; rebuild handles after that.
-      ensureRoadVertexHandlesForSelectedNode()
-      void nextTick(() => {
-        ensureRoadVertexHandlesForSelectedNode()
-      })
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-
-    // No drag: ensure any preview mutations are reverted before treating this as a click.
-    try {
-      const roadOptions = resolveRoadRenderOptionsForNodeId(state.nodeId) ?? undefined
-      updateRoadGroup(state.roadGroup, state.baseDefinition, roadOptions)
-      const handles = state.containerObject.getObjectByName(ROAD_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
-      if (handles?.isGroup) {
-        const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
-        if (mesh) {
-          const [vx, vz] = state.startVertex
-          mesh.position.set(vx, ROAD_VERTEX_HANDLE_Y, vz)
-        }
+    const applyPointerUpResult = (result: PointerUpResult) => {
+      if (result.clearPointerTrackingState) {
+        pointerTrackingState = null
       }
-    } catch {
-      /* noop */
-    }
-
-    // Click (no drag): start a branch build session from this vertex.
-    const node = findSceneNode(sceneStore.nodes, state.nodeId)
-    if (node?.dynamicMesh?.type === 'Road') {
-      const v = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices[state.vertexIndex] : null
-      if (v && Array.isArray(v) && v.length >= 2) {
-        const runtime = objectMap.get(state.nodeId) ?? null
-        if (runtime) {
-          const world = runtime.localToWorld(new THREE.Vector3(Number(v[0]) || 0, 0, Number(v[1]) || 0))
-          roadBuildTool.beginBranchFromVertex({
-            nodeId: state.nodeId,
-            vertexIndex: state.vertexIndex,
-            worldPoint: world,
-            width: Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : ROAD_DEFAULT_WIDTH,
-          })
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
-          return
-        }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
+        roadVertexDragState = result.nextRoadVertexDragState ?? null
       }
-    }
-    return
-  }
-
-  if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId && event.button === 1) {
-    const state = floorEdgeDragState
-    floorEdgeDragState = null
-    pointerInteraction.releaseIfCaptured(event.pointerId)
-
-    if (state.moved) {
-      sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
-    } else {
-      const resetVertices = state.startVertices.map(
-        ([x, z]) => [x, z] as [number, number],
-      )
-      state.workingDefinition.vertices = resetVertices
-      updateFloorGroup(state.runtimeObject, state.workingDefinition)
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  if (finalizeContinuousInstancedCreate(event, false)) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  if (instancedEraseDragState && event.pointerId === instancedEraseDragState.pointerId && event.button === 1) {
-    instancedEraseDragState = null
-    pointerInteraction.releaseIfCaptured(event.pointerId)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  const interaction = pointerInteraction.get()
-  if (scatterEraseModeActive.value && interaction?.kind === 'repairClick' && interaction.pointerId === event.pointerId && event.button === 0) {
-    const moved = interaction.moved || pointerInteraction.ensureMoved(event)
-    pointerInteraction.clearIfPointer(event.pointerId)
-    if (!moved) {
-      const result = tryEraseRepairTargetAtPointer(event)
-      if (result.handled) {
+      if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
+        instancedEraseDragState = result.nextInstancedEraseDragState ?? null
+      }
+      if (result.clearFloorEdgeDragState) {
+        floorEdgeDragState = null
+      }
+      if (result.preventDefault) {
         event.preventDefault()
+      }
+      if (result.stopPropagation) {
         event.stopPropagation()
+      }
+      if (result.stopImmediatePropagation) {
         event.stopImmediatePropagation()
       }
     }
-    return
-  }
 
-  const overrideActive = isAltOverrideActive
-
-  if (event.button === 2 && maybeCancelBuildToolOnRightDoubleClick(event)) {
-    return
-  }
-
-  if (handleGroundEditorPointerUp(event)) {
-    return
-  }
-
-  if (wallBuildTool.handlePointerUp(event)) {
-    return
-  }
-
-  if (roadBuildTool.handlePointerUp(event)) {
-    return
-  }
-
-  if (activeBuildTool.value === 'floor') {
-    const handled = floorBuildTool.handlePointerUp(event)
-    if (handled) {
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-    }
-    return
-  }
-
-  // road build pointer-up handled by roadBuildTool
-
-  if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
-    return
-  }
-
-  const trackingState = pointerTrackingState
-  pointerTrackingState = null
-
-  pointerInteraction.releaseIfCaptured(event.pointerId)
-
-  if (transformControls?.dragging) {
-    return
-  }
-
-  const drag = trackingState.selectionDrag
-  if (drag) {
-    restoreOrbitAfterSelectDrag()
-    updateGridHighlightFromObject(drag.object)
-    if (drag.hasDragged) {
-      commitSelectionDragTransforms(drag)
-      sceneStore.endTransformInteraction()
-      updateSelectionHighlights()
+    const drag = handlePointerUpDrag(event, {
+      roadDefaultWidth: ROAD_DEFAULT_WIDTH,
+      roadVertexDragState,
+      floorEdgeDragState,
+      findSceneNode,
+      nodes: sceneStore.nodes,
+      objectMap,
+      sceneStoreUpdateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
+      pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+      ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
+      nextTick,
+      resolveRoadRenderOptionsForNodeId,
+      updateRoadGroup,
+      updateFloorGroup,
+      roadBuildToolBeginBranchFromVertex: (options) => roadBuildTool.beginBranchFromVertex(options),
+    })
+    if (drag) {
+      applyPointerUpResult(drag)
       return
     }
-  }
 
-  if (trackingState.button === 2) {
-    if (!trackingState.moved) {
-      if (props.activeTool === 'select') {
-        const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-        if (primaryId && !sceneStore.isNodeSelectionLocked(primaryId)) {
-          let hit = pickNodeAtPointer(event) ?? trackingState.hitResult
-          if (!hit) {
-            hit = pickActiveSelectionBoundingBoxHit(event)
-          }
-
-          const primaryNode = findSceneNode(props.sceneNodes, primaryId)
-          const hitMatchesPrimary = Boolean(
-            hit &&
-            (hit.nodeId === primaryId ||
-              (primaryNode?.nodeType === 'Group' && sceneStore.isDescendant(primaryId, hit.nodeId)))
-          )
-
-          if (hitMatchesPrimary) {
-            event.preventDefault()
-            event.stopPropagation()
-            rotateActiveSelection(primaryId)
-            return
-          }
-        }
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
+    const scatter = handlePointerUpScatter(event, {
+      finalizeContinuousInstancedCreate,
+      instancedEraseDragState,
+      pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+      scatterEraseModeActive: scatterEraseModeActive.value,
+      pointerInteractionGet: () => pointerInteraction.get(),
+      pointerInteractionEnsureMoved: (e) => pointerInteraction.ensureMoved(e),
+      pointerInteractionClearIfPointer: (pointerId) => pointerInteraction.clearIfPointer(pointerId),
+      tryEraseRepairTargetAtPointer,
+    })
+    if (scatter) {
+      applyPointerUpResult(scatter)
+      return
     }
-    return
-  }
 
-  if (trackingState.button !== 0) {
-    return
-  }
+    const tools = handlePointerUpTools(event, {
+      maybeCancelBuildToolOnRightDoubleClick,
+      handleGroundEditorPointerUp,
+      wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
+      roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
+      activeBuildTool: activeBuildTool.value,
+      floorBuildToolHandlePointerUp: (e) => floorBuildTool.handlePointerUp(e),
+    })
+    if (tools) {
+      applyPointerUpResult(tools)
+      return
+    }
 
-  if (trackingState.moved) {
-    return
-  }
+    const selection = handlePointerUpSelection(event, {
+      pointerTrackingState,
+      clearPointerTrackingState: () => {
+        pointerTrackingState = null
+      },
+      pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+      transformControlsDragging: Boolean(transformControls?.dragging),
+      restoreOrbitAfterSelectDrag,
+      updateGridHighlightFromObject,
+      commitSelectionDragTransforms,
+      sceneStoreEndTransformInteraction: () => sceneStore.endTransformInteraction(),
+      updateSelectionHighlights,
+      activeTool: props.activeTool,
+      rotateActiveSelection,
+      sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
+      selectedNodeIdProp: props.selectedNodeId ?? null,
+      sceneStoreIsNodeSelectionLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
+      sceneStoreIsDescendant: (ancestorId, nodeId) => sceneStore.isDescendant(ancestorId, nodeId),
+      findSceneNode,
+      sceneNodes: props.sceneNodes,
+      pickNodeAtPointer,
+      pickActiveSelectionBoundingBoxHit,
+      handleClickSelection,
+    })
 
-  if (props.activeTool !== 'select' && trackingState.transformAxis) {
-    return
-  }
-
-  handleClickSelection(event, trackingState, {
-    allowDeselectOnReselect: props.activeTool === 'select',
-  })
+    if (selection) {
+      applyPointerUpResult(selection)
+      return
+    }
   } finally {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
