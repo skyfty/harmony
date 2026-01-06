@@ -9,26 +9,26 @@ import { useProtagonistPreview } from './useProtagonistPreview'
 import { createNormalizedPointerGuard } from './normalizedPointerGuard'
 import { createPointerCaptureGuard } from './pointerCaptureGuard'
 import { usePointerInteractionStateMachine } from './usePointerInteractionStateMachine'
-import { handlePointerDownGuards } from './SceneViewportPointerDownGuards'
-import { handlePointerDownScatter } from './SceneViewportPointerDownScatter'
-import { handlePointerDownTools } from './SceneViewportPointerDownTools'
-import { handlePointerDownSelection } from './SceneViewportPointerDownSelection'
-import { handlePointerMoveDrag, handlePointerMoveFloorEdgeDrag } from './SceneViewportPointerMoveDrag'
-import { handlePointerMoveScatter } from './SceneViewportPointerMoveScatter'
-import { handlePointerMoveTools } from './SceneViewportPointerMoveTools'
-import { handlePointerMoveBuildTools } from './SceneViewportPointerMoveBuildTools'
-import { handlePointerMoveSelection } from './SceneViewportPointerMoveSelection'
-import { handlePointerUpDrag } from './SceneViewportPointerUpDrag'
-import { handlePointerUpScatter } from './SceneViewportPointerUpScatter'
-import { handlePointerUpTools } from './SceneViewportPointerUpTools'
-import { handlePointerUpSelection } from './SceneViewportPointerUpSelection'
+import { handlePointerDownGuards } from './pointer/downGuards'
+import { handlePointerDownScatter } from './pointer/downScatter'
+import { handlePointerDownTools } from './pointer/downTools'
+import { handlePointerDownSelection } from './pointer/downSelection'
+import { handlePointerMoveDrag, handlePointerMoveFloorEdgeDrag } from './pointer/moveDrag'
+import { handlePointerMoveScatter } from './pointer/moveScatter'
+import { handlePointerMoveTools } from './pointer/moveTools'
+import { handlePointerMoveBuildTools } from './pointer/moveBuild'
+import { handlePointerMoveSelection } from './pointer/moveSelection'
+import { handlePointerUpDrag } from './pointer/upDrag'
+import { handlePointerUpScatter } from './pointer/upScatter'
+import { handlePointerUpTools } from './pointer/upTools'
+import { handlePointerUpSelection } from './pointer/upSelection'
 import type {
   InstancedEraseDragState,
   PointerDownResult,
   PointerMoveResult,
   PointerUpResult,
   RoadVertexDragState,
-} from './SceneViewportPointerDownTypes'
+} from './pointer/types'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'

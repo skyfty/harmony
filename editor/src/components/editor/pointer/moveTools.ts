@@ -5,7 +5,7 @@ export function handlePointerMoveTools(
   ctx: {
     nodePickerActive: boolean
     pickNodeAtPointer: (event: PointerEvent) => unknown | null
-    updateNodePickerHighlight: (hit: unknown | null) => void
+    updateNodePickerHighlight: (hit: any) => void
 
     handleGroundEditorPointerMove: (event: PointerEvent) => boolean
   },

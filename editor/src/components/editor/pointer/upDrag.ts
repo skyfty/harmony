@@ -31,7 +31,7 @@ export function handlePointerUpDrag(
     nextTick: (cb?: () => void) => Promise<void>
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
-    updateRoadGroup: (roadGroup: THREE.Object3D, definition: any, options?: unknown) => void
+    updateRoadGroup: (roadGroup: THREE.Object3D, definition: any, options?: any) => any
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
 
     roadBuildToolBeginBranchFromVertex: (options: {

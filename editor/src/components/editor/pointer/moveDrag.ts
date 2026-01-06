@@ -29,7 +29,7 @@ export function handlePointerMoveDrag(
     groundPointerHelper: THREE.Vector3
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
-    updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: unknown) => void
+    updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
   },
 ): PointerMoveResult | null {
   if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId) {
