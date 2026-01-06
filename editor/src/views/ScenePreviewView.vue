@@ -7729,11 +7729,17 @@ function updateVehicleWheelVisuals(delta: number): void {
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
+	const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+	const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id)
 	if (node.position) {
-		object.position.set(node.position.x, node.position.y, node.position.z)
+		if (!skipTransformSync) {
+			object.position.set(node.position.x, node.position.y, node.position.z)
+		}
 	}
 	if (node.rotation) {
-		object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+		if (!skipTransformSync) {
+			object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+		}
 	}
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
