@@ -23,8 +23,6 @@ type PolylinePlanarData = {
 }
 
 const DEFAULT_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
-const REVERSE_ENTER_DOT = -0.2
-const REVERSE_EXIT_DOT = 0.2
 
 const upAxis = new THREE.Vector3(0, 1, 0)
 
@@ -266,12 +264,10 @@ export function applyPurePursuitVehicleControl(params: {
 
   desiredDir.copy(toLookahead).normalize()
 
-  const forwardDotTarget = THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1)
-  const reversePrev = Boolean(state.reverseActive)
-  const reverse = reversePrev
-    ? forwardDotTarget < REVERSE_EXIT_DOT
-    : forwardDotTarget < REVERSE_ENTER_DOT
-  state.reverseActive = reverse
+  // For auto-tour behavior we prefer stability near the endpoint.
+  // Disallow reversing entirely to avoid forward/backward oscillation when the lookahead point ends up behind the vehicle.
+  const reverse = false
+  state.reverseActive = false
 
   const crossY = cross.copy(forwardWorld).cross(desiredDir).dot(upAxis)
   const dot = THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1)
@@ -280,9 +276,6 @@ export function applyPurePursuitVehicleControl(params: {
   const safeMaxSteer = Number.isFinite(maxSteerRad) && maxSteerRad > 1e-6 ? maxSteerRad : DEFAULT_MAX_STEER_RADIANS
   let steering = Math.atan2(2 * wheelbaseMeters * Math.sin(alpha), Math.max(1e-6, toTargetLen))
   steering = THREE.MathUtils.clamp(steering, -safeMaxSteer, safeMaxSteer)
-  if (reverse) {
-    steering = -steering
-  }
 
   const lastSteer = typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0
   steering = THREE.MathUtils.clamp(steering, lastSteer - maxSteerStep, lastSteer + maxSteerStep)
@@ -300,7 +293,7 @@ export function applyPurePursuitVehicleControl(params: {
     speedTarget = Math.min(speedTarget, approachSpeed)
   }
 
-  const desiredSpeedSigned = reverse ? -speedTarget : speedTarget
+  const desiredSpeedSigned = speedTarget
 
   planarVelocity.set(chassisBody.velocity.x, 0, chassisBody.velocity.z)
   const forwardSpeed = planarVelocity.dot(forwardWorld)
@@ -319,7 +312,7 @@ export function applyPurePursuitVehicleControl(params: {
     pursuitProps.engineForceMax,
   )
 
-  const desiredSign = desiredSpeedSigned >= 0 ? 1 : -1
+  const desiredSign = 1
   const useEngine = engineForceCmd * desiredSign >= 0
   let engineForce = useEngine ? engineForceCmd : 0
   let brakeForce = useEngine
@@ -339,17 +332,8 @@ export function applyPurePursuitVehicleControl(params: {
     engineForce = 0
     brakeForce = Math.max(brakeForce, pursuitProps.brakeForceMax * 6)
 
-    const errX = planarEnd.x - currentPosition.x
-    const errZ = planarEnd.z - currentPosition.z
-    const errLen = Math.sqrt(errX * errX + errZ * errZ)
-    if (errLen > 1e-6) {
-      const desiredDockSpeed = Math.min(pursuitProps.dockMaxSpeedMps, errLen * pursuitProps.dockVelocityKp)
-      chassisBody.velocity.x = (errX / errLen) * desiredDockSpeed
-      chassisBody.velocity.z = (errZ / errLen) * desiredDockSpeed
-    } else {
-      chassisBody.velocity.x = 0
-      chassisBody.velocity.z = 0
-    }
+    // Do not directly overwrite linear velocity in docking mode.
+    // Overwriting velocity can cause the direction to flip as the chassis crosses the endpoint, resulting in jitter.
 
     if (pursuitProps.dockYawEnabled) {
       const prev = points[Math.max(0, endIndex - 1)]!
@@ -386,7 +370,16 @@ export function applyPurePursuitVehicleControl(params: {
     const vx = chassisBody.velocity.x
     const vz = chassisBody.velocity.z
     const planarSpeed = Math.sqrt(vx * vx + vz * vz)
-    if (distanceToEnd <= pursuitProps.dockStopEpsilonMeters && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
+
+    // Tolerant stopping: once we're within the docking zone, we only require a sufficiently low planar speed.
+    // This avoids hunting around the exact endpoint.
+    const stopDistance = Math.max(pursuitProps.dockStopEpsilonMeters, pursuitProps.dockStartDistanceMeters)
+    if (distanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
+      chassisBody.velocity.x = 0
+      chassisBody.velocity.z = 0
+      chassisBody.angularVelocity.x = 0
+      chassisBody.angularVelocity.y = 0
+      chassisBody.angularVelocity.z = 0
       return { reachedStop: true }
     }
   }
