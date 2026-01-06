@@ -119,6 +119,7 @@ const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
+const scatterPreviewProjectedHelper = new THREE.Vector3()
 
 function clampFinite(value: unknown, fallback: number): number {
 	const num = typeof value === 'number' ? value : Number(value)
@@ -558,6 +559,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	brushMesh.visible = false
 	brushMesh.renderOrder = 999
 
+	const scatterPreviewGroup = new THREE.Group()
+	scatterPreviewGroup.name = 'ScatterHoverPreview'
+	scatterPreviewGroup.visible = false
+	scatterPreviewGroup.renderOrder = 998
+
+	let scatterPreviewAssetId: string | null = null
+	let scatterPreviewObject: THREE.Object3D | null = null
+
 	const groundSelectionGroup = new THREE.Group()
 	groundSelectionGroup.visible = false
 	groundSelectionGroup.name = 'GroundSelection'
@@ -667,12 +676,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			cancelScatterPlacement()
 			cancelScatterErase()
 			scatterLayer = null
+			scatterPreviewGroup.visible = false
 			if (!category) {
 				refreshBrushAppearance()
 				return
 			}
 			if (!asset) {
 				scatterModelGroup = null
+				scatterPreviewAssetId = null
+				scatterPreviewObject = null
+				scatterPreviewGroup.clear()
 				scatterStore = ensureScatterStoreRef()
 				scatterLayer = findScatterLayerByAsset(null, category)
 				refreshBrushAppearance()
@@ -683,6 +696,98 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		},
 		{ immediate: true },
 	)
+
+	function ensureScatterPreviewObject(bindingAssetId: string): void {
+		if (!bindingAssetId) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (scatterPreviewAssetId === bindingAssetId && scatterPreviewObject) {
+			return
+		}
+		const group = getCachedModelObject(bindingAssetId)
+		if (!group) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!group.object) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		scatterPreviewGroup.clear()
+		const cloned = group.object.clone(true)
+		cloned.name = `ScatterPreview:${bindingAssetId}`
+		scatterPreviewGroup.add(cloned)
+		scatterPreviewAssetId = bindingAssetId
+		scatterPreviewObject = cloned
+	}
+
+	function isPointerOverGround(definition: GroundDynamicMesh, worldPoint: THREE.Vector3): boolean {
+		const halfWidth = definition.width * 0.5
+		const halfDepth = definition.depth * 0.5
+		return (
+			Number.isFinite(worldPoint.x) &&
+			Number.isFinite(worldPoint.z) &&
+			worldPoint.x >= -halfWidth &&
+			worldPoint.x <= halfWidth &&
+			worldPoint.z >= -halfDepth &&
+			worldPoint.z <= halfDepth
+		)
+	}
+
+	function updateScatterHoverPreview(event: PointerEvent): void {
+		if (!scatterModeEnabled()) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundObject()
+		const asset = options.scatterAsset.value
+		const category = options.scatterCategory.value
+		const modelGroup = scatterModelGroup
+		const bindingAssetId = scatterResolvedBindingAssetId
+		if (!definition || !groundMesh || !asset || !category || !modelGroup || !bindingAssetId) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!isPointerOverGround(definition, scatterPointerHelper)) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		clampPointToGround(definition, scatterPointerHelper)
+
+		// Project onto terrain height.
+		scatterPreviewProjectedHelper.copy(scatterPointerHelper)
+		groundMesh.updateMatrixWorld(true)
+		groundMesh.worldToLocal(scatterPreviewProjectedHelper)
+		const height = sampleGroundHeight(definition, scatterPreviewProjectedHelper.x, scatterPreviewProjectedHelper.z)
+		scatterPreviewProjectedHelper.y = height
+		groundMesh.localToWorld(scatterPreviewProjectedHelper)
+
+		ensureScatterPreviewObject(bindingAssetId)
+		if (!scatterPreviewObject) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+
+		const preset = getScatterPreset(category)
+		const minScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 0.9
+		const maxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1.1
+		const scaleFactor = THREE.MathUtils.clamp(
+			(minScale + maxScale) * 0.5,
+			Math.min(minScale, maxScale),
+			Math.max(minScale, maxScale),
+		)
+		const yaw = 0
+		scatterPreviewGroup.position.copy(scatterPreviewProjectedHelper)
+		scatterPreviewGroup.rotation.set(0, yaw, 0)
+		scatterPreviewGroup.scale.setScalar(scaleFactor)
+		scatterPreviewGroup.visible = true
+	}
 
 	function resetScatterStoreState(reason: string) {
 		try {
@@ -1416,7 +1521,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			label: 'Scatter',
 			icon: 'mdi-cube-outline',
 			path: '',
-			spacing: 1.2,
 			minScale: 0.9,
 			maxScale: 1.1,
 		}
@@ -1531,17 +1635,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const maxAttempts = Math.min(SCATTER_SAMPLE_ATTEMPTS_MAX, Math.max(80, targetCount * 40))
 
 		const accepted: THREE.Vector3[] = []
-		// Guarantee center placement (strategy A: allow overlap with existing instances).
 		const centerProjected = projectScatterPoint(worldCenterPoint)
 		if (!centerProjected) {
 			return []
 		}
-		accepted.push(centerProjected.clone())
 
 		// Budget for overlap checks against existing instances.
 		const existingBudget = { totalChecks: 0 }
 		// Avoid repeated matrix updates during sampling.
 		scatterSession.groundMesh.updateMatrixWorld(true)
+
+		// Always place one instance at the click center.
+		// Center placement is not restricted by overlap checks.
+		accepted.push(centerProjected.clone())
 
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			const u = Math.random()
@@ -1665,17 +1771,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
 		let minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
-		// If the asset units are mismatched (e.g. authored in cm but treated as meters), the bbox-derived
-		// spacing can dwarf the brush radius and collapse the stamp count to 1. Clamp to keep the tool usable.
-		if (minSpacing > effectiveRadius * 2) {
-			minSpacing = Math.max(0.01, effectiveRadius * 0.9)
-		}
+		// Spacing is derived from the scatter model bounding box (prevents overlap).
+		minSpacing = Math.max(0.01, minSpacing)
 		const area = Math.PI * effectiveRadius * effectiveRadius
-		const maxNonOverlapping = Math.max(1, Math.floor(area / Math.max(minSpacing * minSpacing, 1e-4)))
-		// Use a conservative packing factor so distribution stays "natural".
+		const expectedCapacity = area / Math.max(minSpacing * minSpacing, 1e-4)
+		// Use a conservative packing factor so distribution stays "natural", but avoid nested floors that
+		// can make the count stick at 1 for a wide range of radii.
 		const targetCountPerStamp = Math.min(
 			SCATTER_MAX_PER_STAMP,
-			Math.max(1, Math.floor(maxNonOverlapping * SCATTER_PACKING_FACTOR)),
+			Math.max(1, Math.round(expectedCapacity * SCATTER_PACKING_FACTOR)),
 		)
 		const effectiveSpacing = minSpacing
 		const chunkCells = resolveChunkCellsForDefinition(definition)
@@ -2551,11 +2655,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			(options.groundPanelTab.value === 'terrain' || options.scatterEraseModeActive.value || scatterModeEnabled())
 		if (showBrush) {
 			updateBrush(event)
+			updateScatterHoverPreview(event)
 			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
 			brushMesh.visible = false
+			scatterPreviewGroup.visible = false
 		}
 
 		if (options.isAltOverrideActive()) {
@@ -2778,12 +2884,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const material = brushMesh.material as THREE.Material
 		material.dispose()
 		groundSelectionGroup.clear()
+		scatterPreviewGroup.clear()
 		sculptSessionState = null
 		resetScatterStoreState('dispose')
 	}
 
 	return {
 		brushMesh,
+		scatterPreviewGroup,
 		groundSelectionGroup,
 		groundSelection,
 		isGroundToolbarVisible,
