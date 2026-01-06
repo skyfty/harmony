@@ -1083,6 +1083,7 @@ const groundEditor = createGroundEditor({
 
 const {
   brushMesh,
+  scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
   groundTextureInputRef,
@@ -3745,6 +3746,7 @@ function initScene() {
   scene.add(terrainGridHelper)
   scene.add(axesHelper)
   scene.add(brushMesh)
+  scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()

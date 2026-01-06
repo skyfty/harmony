@@ -119,6 +119,7 @@ const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
+const scatterPreviewProjectedHelper = new THREE.Vector3()
 
 function clampFinite(value: unknown, fallback: number): number {
 	const num = typeof value === 'number' ? value : Number(value)
@@ -558,6 +559,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	brushMesh.visible = false
 	brushMesh.renderOrder = 999
 
+	const scatterPreviewGroup = new THREE.Group()
+	scatterPreviewGroup.name = 'ScatterHoverPreview'
+	scatterPreviewGroup.visible = false
+	scatterPreviewGroup.renderOrder = 998
+
+	let scatterPreviewAssetId: string | null = null
+	let scatterPreviewObject: THREE.Object3D | null = null
+
 	const groundSelectionGroup = new THREE.Group()
 	groundSelectionGroup.visible = false
 	groundSelectionGroup.name = 'GroundSelection'
@@ -667,12 +676,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			cancelScatterPlacement()
 			cancelScatterErase()
 			scatterLayer = null
+			scatterPreviewGroup.visible = false
 			if (!category) {
 				refreshBrushAppearance()
 				return
 			}
 			if (!asset) {
 				scatterModelGroup = null
+				scatterPreviewAssetId = null
+				scatterPreviewObject = null
+				scatterPreviewGroup.clear()
 				scatterStore = ensureScatterStoreRef()
 				scatterLayer = findScatterLayerByAsset(null, category)
 				refreshBrushAppearance()
@@ -683,6 +696,83 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		},
 		{ immediate: true },
 	)
+
+	function stableRandom01FromXZ(x: number, z: number): number {
+		// Deterministic pseudo-random in [0,1) for stable preview yaw.
+		const seed = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453
+		return seed - Math.floor(seed)
+	}
+
+	function ensureScatterPreviewObject(bindingAssetId: string): void {
+		if (!bindingAssetId) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (scatterPreviewAssetId === bindingAssetId && scatterPreviewObject) {
+			return
+		}
+		const group = getCachedModelObject(bindingAssetId)
+		if (!group) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		scatterPreviewGroup.clear()
+		const cloned = (group as unknown as THREE.Object3D).clone(true)
+		cloned.name = `ScatterPreview:${bindingAssetId}`
+		scatterPreviewGroup.add(cloned)
+		scatterPreviewAssetId = bindingAssetId
+		scatterPreviewObject = cloned
+	}
+
+	function updateScatterHoverPreview(event: PointerEvent): void {
+		if (!scatterModeEnabled()) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundObject()
+		const asset = options.scatterAsset.value
+		const category = options.scatterCategory.value
+		const modelGroup = scatterModelGroup
+		const bindingAssetId = scatterResolvedBindingAssetId
+		if (!definition || !groundMesh || !asset || !category || !modelGroup || !bindingAssetId) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		clampPointToGround(definition, scatterPointerHelper)
+
+		// Project onto terrain height.
+		scatterPreviewProjectedHelper.copy(scatterPointerHelper)
+		groundMesh.updateMatrixWorld(true)
+		groundMesh.worldToLocal(scatterPreviewProjectedHelper)
+		const height = sampleGroundHeight(definition, scatterPreviewProjectedHelper.x, scatterPreviewProjectedHelper.z)
+		scatterPreviewProjectedHelper.y = height
+		groundMesh.localToWorld(scatterPreviewProjectedHelper)
+
+		ensureScatterPreviewObject(bindingAssetId)
+		if (!scatterPreviewObject) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+
+		const preset = getScatterPreset(category)
+		const minScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 0.9
+		const maxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1.1
+		const yaw = stableRandom01FromXZ(scatterPreviewProjectedHelper.x, scatterPreviewProjectedHelper.z) * Math.PI * 2
+		const scaleJitter = stableRandom01FromXZ(
+			scatterPreviewProjectedHelper.x + 19.17,
+			scatterPreviewProjectedHelper.z + 43.03,
+		)
+		const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, scaleJitter)
+		scatterPreviewGroup.position.copy(scatterPreviewProjectedHelper)
+		scatterPreviewGroup.rotation.set(0, yaw, 0)
+		scatterPreviewGroup.scale.setScalar(scaleFactor)
+		scatterPreviewGroup.visible = true
+	}
 
 	function resetScatterStoreState(reason: string) {
 		try {
@@ -2550,11 +2640,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			(options.groundPanelTab.value === 'terrain' || options.scatterEraseModeActive.value || scatterModeEnabled())
 		if (showBrush) {
 			updateBrush(event)
+			updateScatterHoverPreview(event)
 			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
 			brushMesh.visible = false
+			scatterPreviewGroup.visible = false
 		}
 
 		if (options.isAltOverrideActive()) {
@@ -2777,12 +2869,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const material = brushMesh.material as THREE.Material
 		material.dispose()
 		groundSelectionGroup.clear()
+		scatterPreviewGroup.clear()
 		sculptSessionState = null
 		resetScatterStoreState('dispose')
 	}
 
 	return {
 		brushMesh,
+		scatterPreviewGroup,
 		groundSelectionGroup,
 		groundSelection,
 		isGroundToolbarVisible,
