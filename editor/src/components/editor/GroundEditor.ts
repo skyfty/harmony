@@ -1540,29 +1540,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// Avoid repeated matrix updates during sampling.
 		scatterSession.groundMesh.updateMatrixWorld(true)
 
-		// Option B: center point also participates in non-overlap checks.
-		let centerOk = true
-		scatterPlacementCandidateLocalHelper.copy(centerProjected)
-		scatterSession.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
-		if (
-			scatterSession.neighborIndex &&
-			scatterSession.neighborIndex.size &&
-			!isScatterPlacementAvailableByIndex(
-				scatterSession,
-				scatterPlacementCandidateLocalHelper.x,
-				scatterPlacementCandidateLocalHelper.z,
-				spacingSq,
-				existingBudget,
-			)
-		) {
-			centerOk = false
-		}
-		if (!scatterSession.neighborIndex.size && !isScatterPlacementAvailable(centerProjected, spacing, scatterSession)) {
-			centerOk = false
-		}
-		if (centerOk) {
-			accepted.push(centerProjected.clone())
-		}
+		// Always place one instance at the click center.
+		// Center placement is not restricted by overlap checks.
+		accepted.push(centerProjected.clone())
 
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			const u = Math.random()
