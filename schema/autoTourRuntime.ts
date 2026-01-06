@@ -3,12 +3,14 @@ import * as CANNON from 'cannon-es'
 import type { SceneNode } from './index'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe } from './purePursuitRuntime'
+import { syncBodyFromObject } from './physicsEngine'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
   clampAutoTourComponentProps,
   clampGuideRouteComponentProps,
   PURE_PURSUIT_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
   clampPurePursuitComponentProps,
   type AutoTourComponentProps,
   type GuideRouteComponentProps,
@@ -175,8 +177,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
       const tourProps = clampAutoTourComponentProps(autoTour.props)
+
+      const vehicleComponent = resolveEnabledComponentState<any>(node, VEHICLE_COMPONENT_TYPE)
+      const hasVehicleComponent = Boolean(vehicleComponent)
       const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
-      const pursuitProps = clampPurePursuitComponentProps((purePursuit?.props ?? (autoTour.props as any)) ?? null)
+      const hasPurePursuitComponent = Boolean(purePursuit)
+      // Only use PurePursuit component props; do NOT fall back to AutoTour props.
+      // This ensures that vehicle nodes without PurePursuit do not enter the pure-pursuit driving branch.
+      const pursuitProps = clampPurePursuitComponentProps(purePursuit?.props ?? null)
       const routeNodeId = tourProps.routeNodeId
       if (!routeNodeId) {
         continue
@@ -198,9 +206,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       let state = cached
 
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
-      const hasVehicle = Boolean(vehicleInstance?.vehicle?.chassisBody)
-      const nodeObject = hasVehicle ? null : (deps.nodeObjectMap.get(node.id) ?? null)
-      if (!hasVehicle && !nodeObject) {
+      const hasVehicleInstance = Boolean(vehicleInstance?.vehicle?.chassisBody)
+      const shouldDriveAsVehicle = hasVehicleComponent && hasPurePursuitComponent && hasVehicleInstance
+      const directMoveVehicle = hasVehicleComponent && !hasPurePursuitComponent
+      const nodeObject = deps.nodeObjectMap.get(node.id) ?? null
+
+      if (shouldDriveAsVehicle) {
+        // OK: can drive purely via physics.
+      } else if (!nodeObject) {
+        // Direct-move branch requires a render object.
         continue
       }
 
@@ -210,7 +224,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           : (state.routeNodeId !== routeNodeId ? 'route-changed' : 'waypoint-count-changed')
         // Initialize by heading to the nearest waypoint (includes start/end/intermediate).
         const positionSample = autoTourCurrentPosition
-        if (hasVehicle) {
+        if (hasVehicleInstance) {
           const body = vehicleInstance!.vehicle.chassisBody
           positionSample.set(body.position.x, body.position.y, body.position.z)
         } else {
@@ -220,7 +234,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         const nearestWaypointIndex = findClosestWaypointIndex(points, positionSample)
 
         let initialYaw = 0
-        if (hasVehicle) {
+        if (hasVehicleInstance) {
           autoTourObjectWorldQuaternion
             .set(
               vehicleInstance!.vehicle.chassisBody.quaternion.x,
@@ -251,6 +265,19 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
 
+      // Vehicle nodes that are moving via direct node transforms should not use the
+      // stopping/stopped state machine (they can still respect loop via index wrap).
+      if (directMoveVehicle) {
+        if (state.mode === 'stopping' || state.mode === 'loop-to-start') {
+          state.mode = 'path'
+        }
+        // When direct-moving a vehicle and not looping, fully stop updating once we
+        // have reached the final waypoint.
+        if (!tourProps.loop && state.mode === 'stopped') {
+          continue
+        }
+      }
+
       // When stopped and not looping:
       // - non-vehicle: do nothing (object already at final position)
       // - vehicle: keep holding brake to avoid rolling
@@ -259,7 +286,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state.mode = 'loop-to-start'
           state.targetIndex = 0
         } else {
-          if (hasVehicle) {
+          if (shouldDriveAsVehicle) {
             holdVehicleBrakeSafe({
               vehicleInstance: vehicleInstance! as any,
               brakeForce: pursuitProps.brakeForceMax * 6,
@@ -276,7 +303,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
 
       const target = points[state.targetIndex]!
-      if (hasVehicle) {
+      if (hasVehicleInstance) {
         const chassisBody = vehicleInstance!.vehicle.chassisBody
         autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
       } else {
@@ -298,8 +325,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
         const beforeIndex = state.targetIndex
         const beforeMode = state.mode
-        // Snap to the waypoint visually for non-vehicle nodes to avoid leaving a visible gap.
-        if (!hasVehicle) {
+
+        // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
+        if (!shouldDriveAsVehicle) {
           state.smoothedWorldPosition.copy(autoTourPlanarTarget)
           if (nodeObject!.parent) {
             nodeObject!.parent.updateMatrixWorld(true)
@@ -311,6 +339,33 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           }
           syncNodeTransformFromObject(node, nodeObject!)
           deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
+
+          // If this is a vehicle node being moved via direct transforms, keep the physics chassis in sync.
+          if (directMoveVehicle && hasVehicleInstance) {
+            syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
+            holdVehicleBrakeSafe({
+              vehicleInstance: vehicleInstance! as any,
+              brakeForce: pursuitProps.brakeForceMax * 6,
+            })
+          }
+        }
+
+        // Direct-move vehicle nodes: advance indices simply (no stopping/stopped/loop-to-start modes).
+        if (directMoveVehicle) {
+          if (state.targetIndex >= endIndex) {
+            if (tourProps.loop) {
+              state.targetIndex = 0
+            } else {
+              // Terminal stop: do not keep writing transforms/teleports after arrival.
+              state.targetIndex = endIndex
+              state.mode = 'stopped'
+            }
+          } else {
+            state.targetIndex += 1
+          }
+          state.routeNodeId = routeNodeId
+          state.routeWaypointCount = points.length
+          continue
         }
 
         // Advance state machine:
@@ -363,7 +418,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       // Vehicle branch (drive as a car).
-      if (hasVehicle) {
+      if (shouldDriveAsVehicle) {
         const isStopping = state.mode === 'stopping'
         const result = applyPurePursuitVehicleControlSafe({
           vehicleInstance: vehicleInstance! as any,
@@ -389,7 +444,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       autoTourDesiredDir.normalize()
 
-      if (state.mode === 'stopping') {
+      if (!directMoveVehicle && state.mode === 'stopping') {
         // Ease into the final endpoint by smoothing toward the exact target.
         autoTourNextWorldPosition.copy(autoTourPlanarTarget)
       } else {
@@ -421,7 +476,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       if (tourProps.alignToPath) {
-        const desiredYaw = Math.atan2(autoTourDesiredDir.x, autoTourDesiredDir.z)
+        // Align node local X+ (forward) to the path direction.
+        const desiredYaw = Math.atan2(-autoTourDesiredDir.z, autoTourDesiredDir.x)
         const yawAlpha = expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds)
         state.smoothedYaw = dampAngleRadians(state.smoothedYaw, desiredYaw, yawAlpha)
         autoTourWorldQuaternion.setFromAxisAngle(autoTourUp, state.smoothedYaw)
@@ -437,6 +493,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       syncNodeTransformFromObject(node, nodeObject!)
 
       deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
+
+      // Keep physics chassis in sync for vehicle nodes that are moved via direct transforms.
+      if (directMoveVehicle && hasVehicleInstance) {
+        syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
+        holdVehicleBrakeSafe({
+          vehicleInstance: vehicleInstance! as any,
+          brakeForce: pursuitProps.brakeForceMax * 6,
+        })
+      }
 
       if (state.mode === 'stopping') {
         if (state.smoothedWorldPosition.distanceToSquared(autoTourPlanarTarget) <= AUTO_TOUR_STOP_POSITION_EPSILON * AUTO_TOUR_STOP_POSITION_EPSILON) {
