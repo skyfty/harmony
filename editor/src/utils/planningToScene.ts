@@ -25,6 +25,8 @@ import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildRandom, generateFpsScatterPointsInPolygon, hashSeedFromString } from '@/utils/scatterSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
+import { loadObjectFromFile } from '@schema/assetImport'
 import {
   FLOOR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -395,33 +397,84 @@ type ScatterAssignment = {
   footprintMaxSizeM?: number
 }
 
-function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
-  const preset = terrainScatterPresets[category]
-  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
-  return Math.max(0.01, spacing * spacing)
+function computeFootprintFromCachedModelBounds(assetId: string): { footprintAreaM2: number; footprintMaxSizeM: number } | null {
+  const group = getCachedModelObject(assetId)
+  const box = group?.boundingBox
+  if (!group || !box || box.isEmpty()) {
+    return null
+  }
+  const sizeX = Math.abs(box.max.x - box.min.x)
+  const sizeZ = Math.abs(box.max.z - box.min.z)
+  if (!Number.isFinite(sizeX) || !Number.isFinite(sizeZ) || sizeX <= 1e-4 || sizeZ <= 1e-4) {
+    return null
+  }
+  const footprintAreaM2 = Math.max(0.0001, sizeX * sizeZ)
+  const footprintMaxSizeM = Math.max(0.01, Math.max(sizeX, sizeZ))
+  return { footprintAreaM2, footprintMaxSizeM }
 }
 
-function clampFootprintAreaM2(category: TerrainScatterCategory, value: unknown): number {
+async function ensureModelBoundsCachedForAssetId(assetId: string, assetCacheStore: ReturnType<typeof useAssetCacheStore>): Promise<void> {
+  if (!assetId) {
+    return
+  }
+  if (getCachedModelObject(assetId)) {
+    return
+  }
+  try {
+    await assetCacheStore.loadFromIndexedDb(assetId)
+  } catch (_error) {
+    return
+  }
+  const file = assetCacheStore.createFileFromCache(assetId)
+  if (!file) {
+    return
+  }
+  try {
+    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file))
+  } catch (_error) {
+    // noop
+  } finally {
+    assetCacheStore.releaseInMemoryBlob(assetId)
+  }
+}
+
+function defaultFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory): number {
+  void category
+  if (assetId) {
+    const cached = computeFootprintFromCachedModelBounds(assetId)
+    if (cached) {
+      return cached.footprintAreaM2
+    }
+  }
+  return 1
+}
+
+function clampFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory, value: unknown): number {
   const num = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(num) || num <= 0) {
-    return defaultFootprintAreaM2(category)
+    return defaultFootprintAreaM2(assetId, category)
   }
   return Math.min(1e6, Math.max(0.0001, num))
 }
 
-function defaultFootprintMaxSizeM(category: TerrainScatterCategory): number {
-  const preset = terrainScatterPresets[category]
-  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
-  return Math.max(0.05, spacing)
+function defaultFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory): number {
+  void category
+  if (assetId) {
+    const cached = computeFootprintFromCachedModelBounds(assetId)
+    if (cached) {
+      return cached.footprintMaxSizeM
+    }
+  }
+  return 1
 }
 
-function clampFootprintMaxSizeM(category: TerrainScatterCategory, value: unknown, fallbackAreaM2?: number): number {
+function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory, value: unknown, fallbackAreaM2?: number): number {
   const num = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(num) || num <= 0) {
     if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
       return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
     }
-    return defaultFootprintMaxSizeM(category)
+    return defaultFootprintMaxSizeM(assetId, category)
   }
   return Math.min(1000, Math.max(0.01, num))
 }
@@ -810,9 +863,18 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   const normalizedDensity = Number.isFinite(densityPercent)
     ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
     : 50
-  const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(category, payload.footprintMaxSizeM, footprintAreaM2)
+  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, payload.footprintAreaM2)
+  const footprintMaxSizeM = clampFootprintMaxSizeM(assetId, category, payload.footprintMaxSizeM, footprintAreaM2)
   return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
+}
+
+function extractScatterAssetId(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const payload = raw as Record<string, unknown>
+  const assetId = typeof payload.assetId === 'string' ? payload.assetId.trim() : ''
+  return assetId.length ? assetId : null
 }
 
 function polygonArea2D(points: PlanningPoint[]): number {
@@ -913,6 +975,7 @@ function upsertPlanningScatterLayer(
 
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options
+  const assetCacheStore = useAssetCacheStore()
 
   emitProgress(options, 'Preparing…', 0)
 
@@ -962,6 +1025,22 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     points: normalizePlanningPoints(line?.points, planningUnitsToMeters),
     waypoints: Array.isArray((line as any)?.waypoints) ? (line as any).waypoints : undefined,
   }))
+
+  const referencedScatterAssetIds = new Set<string>()
+  for (const poly of polygons) {
+    const id = extractScatterAssetId(poly.scatter)
+    if (id) referencedScatterAssetIds.add(id)
+  }
+  for (const line of polylines) {
+    const id = extractScatterAssetId(line.scatter)
+    if (id) referencedScatterAssetIds.add(id)
+  }
+  if (referencedScatterAssetIds.size) {
+    emitProgress(options, 'Caching scatter models…', 18)
+    for (const assetId of referencedScatterAssetIds) {
+      await ensureModelBoundsCachedForAssetId(assetId, assetCacheStore)
+    }
+  }
 
   const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
 
@@ -1393,7 +1472,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           const preset = terrainScatterPresets[scatter.category] ?? {
             label: 'Scatter',
             icon: 'mdi-cube-outline',
-            spacing: 1.2,
             minScale: 0.9,
             maxScale: 1.1,
           }
@@ -1424,8 +1502,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
           const minScaleForCapacity = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : presetMinScale
           const maxScaleForCapacity = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : presetMaxScale
-          const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.category, scatter.footprintAreaM2)
-          const baseFootprintMaxSizeM = clampFootprintMaxSizeM(scatter.category, scatter.footprintMaxSizeM, baseFootprintAreaM2)
+          const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.assetId, scatter.category, scatter.footprintAreaM2)
+          const baseFootprintMaxSizeM = clampFootprintMaxSizeM(
+            scatter.assetId,
+            scatter.category,
+            scatter.footprintMaxSizeM,
+            baseFootprintAreaM2,
+          )
           const baseDiagonal = estimateFootprintDiagonalM(baseFootprintAreaM2, baseFootprintMaxSizeM)
           const effectiveFootprintAreaM2 = baseFootprintAreaM2 * maxScaleForCapacity * maxScaleForCapacity
           const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScaleForCapacity)

@@ -143,7 +143,6 @@ export const assetProvider: ResourceProvider = {
 export interface TerrainScatterPreset {
   label: string
   icon: string
-  spacing: number
   minScale: number
   maxScale: number
 }
@@ -152,35 +151,30 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
   flora: {
     label: 'Flora',
     icon: 'mdi-flower',
-    spacing: 1.25,
     minScale: 0.85,
     maxScale: 1.2,
   },
   rocks: {
     label: 'Rocks',
     icon: 'mdi-terrain',
-    spacing: 2.2,
     minScale: 0.9,
     maxScale: 1.15,
   },
   trees: {
     label: 'Trees',
     icon: 'mdi-pine-tree',
-    spacing: 0.5,
     minScale: 0.8,
     maxScale: 1.35,
   },
   water: {
     label: 'Water',
     icon: 'mdi-water',
-    spacing: 2.6,
     minScale: 0.95,
     maxScale: 1.05,
   },
   ground: {
     label: 'Ground',
     icon: 'mdi-grass',
-    spacing: 1.4,
     minScale: 0.9,
     maxScale: 1.1,
   },

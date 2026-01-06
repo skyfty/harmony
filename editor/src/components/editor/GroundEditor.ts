@@ -1416,7 +1416,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			label: 'Scatter',
 			icon: 'mdi-cube-outline',
 			path: '',
-			spacing: 1.2,
 			minScale: 0.9,
 			maxScale: 1.1,
 		}
@@ -1687,8 +1686,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
 		let minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
-		// Enforce both bbox-derived spacing (prevents overlap) and preset spacing (category density hint).
-		minSpacing = Math.max(0.01, Math.max(minSpacing, preset.spacing))
+		// Spacing is derived from the scatter model bounding box (prevents overlap).
+		minSpacing = Math.max(0.01, minSpacing)
 		const area = Math.PI * effectiveRadius * effectiveRadius
 		const expectedCapacity = area / Math.max(minSpacing * minSpacing, 1e-4)
 		// Use a conservative packing factor so distribution stays "natural", but avoid nested floors that
