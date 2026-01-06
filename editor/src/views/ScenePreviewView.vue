@@ -12,6 +12,9 @@ import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer
 import {
 	ENVIRONMENT_NODE_ID,
 	createAutoTourRuntime,
+	rebuildSceneNodeIndex,
+	resolveSceneNodeById,
+	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
 	type EnvironmentSettings,
 	type GroundDynamicMesh,
@@ -1340,37 +1343,15 @@ function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | nul
 }
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
-	previewNodeMap.clear()
-	previewParentMap.clear()
-	if (!Array.isArray(nodes)) {
-		return
-	}
-	const stack: Array<{ node: SceneNode; parentId: string | null }> = nodes.map((node) => ({
-		node,
-		parentId: null,
-	}))
-	while (stack.length) {
-		const entry = stack.pop()
-		if (!entry) {
-			continue
-		}
-		const { node, parentId } = entry
-		previewNodeMap.set(node.id, node)
-		previewParentMap.set(node.id, parentId)
-		if (Array.isArray(node.children) && node.children.length) {
-			node.children.forEach((child) => {
-				stack.push({ node: child, parentId: node.id })
-			})
-		}
-	}
+	rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap)
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
-	return previewParentMap.get(nodeId) ?? null
+	return resolveSceneParentNodeId(previewParentMap, nodeId)
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
-	return previewNodeMap.get(nodeId) ?? null
+	return resolveSceneNodeById(previewNodeMap, nodeId)
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {

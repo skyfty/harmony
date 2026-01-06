@@ -36,6 +36,9 @@ export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike,
 
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
 
+export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from './nodeIndexUtils'
+export type { SceneNodeId, SceneNodeMap, SceneNodeParentMap } from './nodeIndexUtils'
+
 export {
   AssetTypes,
   DEFAULT_ASSET_TYPE,

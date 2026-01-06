@@ -374,6 +374,9 @@ import type { ViewerOptions } from 'viewerjs';
 import {
   ENVIRONMENT_NODE_ID,
   createAutoTourRuntime,
+  rebuildSceneNodeIndex,
+  resolveSceneNodeById,
+  resolveSceneParentNodeId,
   resolveEnabledComponentState,
   type EnvironmentSettings,
   type SceneNode,
@@ -2781,21 +2784,9 @@ function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined
 }
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
-  previewNodeMap.clear();
-  previewParentMap.clear();
   assetNodeIdMap.clear();
-  if (!Array.isArray(nodes)) {
-    return;
-  }
-  const stack: Array<{ node: SceneNode; parentId: string | null }> = nodes.map((node) => ({ node, parentId: null }));
-  while (stack.length) {
-    const entry = stack.pop();
-    if (!entry) {
-      continue;
-    }
-    const { node, parentId } = entry;
-    previewNodeMap.set(node.id, node);
-    previewParentMap.set(node.id, parentId);
+  rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
+  for (const node of previewNodeMap.values()) {
     if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length) {
       const assetId = node.sourceAssetId.trim();
       let bucket = assetNodeIdMap.get(assetId);
@@ -2805,14 +2796,11 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       }
       bucket.add(node.id);
     }
-    if (Array.isArray(node.children) && node.children.length) {
-      node.children.forEach((child) => stack.push({ node: child, parentId: node.id }));
-    }
   }
 }
 
 function resolveParentNodeId(nodeId: string): string | null {
-  return previewParentMap.get(nodeId) ?? null;
+  return resolveSceneParentNodeId(previewParentMap, nodeId);
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -2866,7 +2854,7 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
-  return previewNodeMap.get(nodeId) ?? null;
+  return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
