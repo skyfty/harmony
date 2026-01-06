@@ -101,22 +101,6 @@ function applyWaypointNameUpdate(index: number, rawValue: unknown) {
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div v-if="localWaypoints.length" class="guide-route-waypoint-list">
-        <div v-for="(wp, index) in localWaypoints" :key="index" class="guide-route-waypoint-row">
-          <div class="guide-route-waypoint-meta">
-            <span class="guide-route-waypoint-type">{{ waypointTypeLabel(index, localWaypoints.length - 1) }}</span>
-            <span class="guide-route-waypoint-index">#{{ index + 1 }}</span>
-          </div>
-          <v-text-field
-            :model-value="wp.name"
-            density="compact"
-            variant="solo"
-            hide-details
-            @update:modelValue="(value) => { wp.name = String(value ?? ''); applyWaypointNameUpdate(index, value) }"
-          />
-        </div>
-      </div>
-      <div v-else class="guide-route-empty">No waypoints</div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>

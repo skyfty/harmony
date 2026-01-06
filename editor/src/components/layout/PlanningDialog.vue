@@ -212,6 +212,8 @@ interface LineDraft {
   continuation?: LineContinuation
   /** Snapshot of points before starting a continuation edit (used to rollback on cancel). */
   startPoints?: PlanningPoint[]
+  /** Snapshot of waypoint metadata before starting a guide-route continuation edit (used to rollback on cancel). */
+  startWaypoints?: Array<{ name?: string }>
 }
 
 const layerPresets: PlanningLayer[] = [
@@ -3436,53 +3438,71 @@ function startLineDraft(point: PlanningPoint) {
     return
   }
 
-  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
-  const reuse = findNearbyPolylineEndpointInLayer(point, targetLayerId, ENDPOINT_MERGE_RADIUS_PX)
-  const reusePoint = reuse?.point
-
-  if (!lineDraft.value && selectedVertex.value?.feature === 'polyline') {
-    const sourceLine = polylines.value.find((item) => item.id === selectedVertex.value?.targetId)
-    const sourcePoint = sourceLine?.points[selectedVertex.value.vertexIndex]
+  const pendingSelectedVertex = selectedVertex.value
+  if (!lineDraft.value && pendingSelectedVertex?.feature === 'polyline') {
+    const sourceLine = polylines.value.find((item) => item.id === pendingSelectedVertex.targetId)
+    const sourcePoint = sourceLine?.points[pendingSelectedVertex.vertexIndex]
     if (sourceLine && sourcePoint) {
-      const newPoint = reusePoint ?? createVertexPoint(point)
-      if (newPoint === sourcePoint) {
-        return
-      }
       const sourceKind = getLayerKind(sourceLine.layerId)
       if (sourceKind === 'guide-route') {
-        ensureGuideRouteWaypoints(sourceLine)
+        const isEndpoint = pendingSelectedVertex.vertexIndex === 0 || pendingSelectedVertex.vertexIndex === sourceLine.points.length - 1
+        if (!isEndpoint) {
+          // Guide-route disallows branching: only allow extending an existing polyline from its endpoints.
+          return
+        }
+        // Treat "selected endpoint -> click somewhere" as a continuation (extend the same polyline),
+        // instead of creating a new polyline segment anchored on the selected vertex.
+        startLineContinuation(sourceLine.id, pendingSelectedVertex.vertexIndex)
+      } else {
+        const reuse = findNearbyPolylineEndpointInLayer(point, sourceLine.layerId, ENDPOINT_MERGE_RADIUS_PX)
+        const reusePoint = reuse?.point
+
+        const newPoint = reusePoint ?? createVertexPoint(point)
+        if (newPoint === sourcePoint) {
+          return
+        }
+        if (sourceKind === 'guide-route') {
+          ensureGuideRouteWaypoints(sourceLine)
+        }
+        const sourceWaypointName = sourceKind === 'guide-route'
+          ? (sourceLine.waypoints?.[pendingSelectedVertex.vertexIndex]?.name ?? '')
+          : ''
+        const newLine: PlanningPolyline = {
+          id: createId('line'),
+          name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
+          layerId: sourceLine.layerId,
+          points: [sourcePoint, newPoint],
+          waypoints: sourceKind === 'guide-route'
+            ? [{ name: sourceWaypointName }, { name: '点2' }]
+            : undefined,
+          cornerSmoothness: sourceKind === 'wall'
+            ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
+            : undefined,
+        }
+        polylines.value = [...polylines.value, newLine]
+        activeLayerId.value = sourceLine.layerId
+        selectFeature({ type: 'polyline', id: newLine.id })
+        selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 1 }
+        lineDraft.value = { lineId: newLine.id, layerId: sourceLine.layerId }
+        lineDraftHoverPoint.value = null
+        pendingLineHoverClient = null
+        markPlanningDirty()
+        return
       }
-      const sourceWaypointName = sourceKind === 'guide-route'
-        ? (sourceLine.waypoints?.[selectedVertex.value.vertexIndex]?.name ?? '')
-        : ''
-      const newLine: PlanningPolyline = {
-        id: createId('line'),
-        name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
-        layerId: sourceLine.layerId,
-        points: [sourcePoint, newPoint],
-        waypoints: sourceKind === 'guide-route'
-          ? [{ name: sourceWaypointName }, { name: '点2' }]
-          : undefined,
-        cornerSmoothness: sourceKind === 'wall'
-          ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
-          : undefined,
-      }
-      polylines.value = [...polylines.value, newLine]
-      activeLayerId.value = sourceLine.layerId
-      selectFeature({ type: 'polyline', id: newLine.id })
-      selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 1 }
-      lineDraft.value = { lineId: newLine.id, layerId: sourceLine.layerId }
-      lineDraftHoverPoint.value = null
-      pendingLineHoverClient = null
-      markPlanningDirty()
-      return
     }
   }
+
+  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
+  const targetKind = getLayerKind(targetLayerId)
+  // Guide-route disallows shared endpoints (no branching). Do not reuse endpoints across polylines.
+  const reuse = targetKind === 'guide-route'
+    ? null
+    : findNearbyPolylineEndpointInLayer(point, targetLayerId, ENDPOINT_MERGE_RADIUS_PX)
+  const reusePoint = reuse?.point
 
   const nextPoint = reusePoint ?? createVertexPoint(point)
   const draftLine = getDraftLine()
   if (!draftLine) {
-    const targetKind = getLayerKind(targetLayerId)
     const newLine: PlanningPolyline = {
       id: createId('line'),
       name: `${getLayerName(targetLayerId)} Segment ${lineCounter.value++}`,
@@ -4310,6 +4330,13 @@ function cancelActiveDrafts() {
       if (Array.isArray(draft.startPoints) && draft.startPoints.length) {
         draftLine.points = clonePoints(draft.startPoints)
       }
+
+      if (isGuideRoutePolyline(draftLine)) {
+        if (Array.isArray(draft.startWaypoints)) {
+          draftLine.waypoints = draft.startWaypoints.map((w) => ({ name: w?.name }))
+        }
+        ensureGuideRouteWaypoints(draftLine)
+      }
       clearLineDraft({ keepLine: true })
     } else {
       // New line draft (or newly created segment): remove it entirely.
@@ -4524,6 +4551,12 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   // While drawing a line, clicking an existing endpoint should connect the draft to it,
   // not switch selection to that endpoint.
   if (currentTool.value === 'line' && canUseLineTool.value && lineDraft.value && lineDraft.value.layerId === line.layerId) {
+    if (getLayerKind(line.layerId) === 'guide-route' && lineDraft.value.lineId !== lineId) {
+      // Guide-route disallows branching: do not connect a draft polyline to another polyline's vertex.
+      event.stopPropagation()
+      event.preventDefault()
+      return
+    }
     const point = line.points[vertexIndex]
     if (!point) {
       return
@@ -4669,11 +4702,20 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   if (!point) {
     return
   }
+
+  const isGuideRoute = getLayerKind(line.layerId) === 'guide-route'
+  if (isGuideRoute) {
+    ensureGuideRouteWaypoints(line)
+  }
+
   activeLayerId.value = line.layerId
   lineDraft.value = {
     lineId,
     layerId: line.layerId,
     startPoints: clonePoints(line.points),
+    startWaypoints: isGuideRoute
+      ? (line.waypoints ?? []).map((w) => ({ name: w?.name }))
+      : undefined,
     continuation: {
       lineId,
       anchorIndex: vertexIndex,
