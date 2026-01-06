@@ -19,6 +19,10 @@ export interface PlanningPolylineData {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** Optional per-vertex metadata aligned with `points` when layer kind is 'guide-route'. */
+  waypoints?: Array<{
+    name?: string
+  }>
   /** 0-1. Only meaningful when layer kind is 'wall'. */
   cornerSmoothness?: number
   /** Optional; when true conversion may create/mark an air wall for this feature. */
@@ -40,7 +44,7 @@ export interface PlanningImageData {
   alignMarker?: { x: number; y: number }
 }
 
-export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water'
+export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water' | 'guide-route'
 
 export interface PlanningLayerState {
   id: string

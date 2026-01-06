@@ -25,6 +25,7 @@ import type {
   GroundDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
+  GuideRouteDynamicMesh,
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
@@ -97,6 +98,7 @@ import {
 } from '@schema/groundMesh'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
+import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -142,6 +144,8 @@ import {
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
   clampWallProps,
+  GUIDE_ROUTE_COMPONENT_TYPE,
+  clampGuideRouteComponentProps,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -153,6 +157,7 @@ import type {
   WarpGateEffectInstance,
   GuideboardEffectInstance,
   LodComponentProps,
+  GuideRouteComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
@@ -372,6 +377,9 @@ let cloudRenderer: SceneCloudRenderer | null = null
 
 // Building label font/meshes (planning-conversion buildings)
 const buildingLabelMeshes = new Map<string, THREE.Mesh>()
+
+// Guide route waypoint label meshes (key: `${nodeId}:${index}`)
+const guideRouteWaypointLabelMeshes = new Map<string, THREE.Mesh>()
 // fontPromise will be defined below with a relaxed type to satisfy typings
 function clampInclusive(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
@@ -451,6 +459,104 @@ async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
   } catch (err) {
     // ignore font/load errors silently
     console.warn('Failed to create building label', err)
+  }
+}
+
+async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container: THREE.Object3D) {
+  try {
+    if (!node || !container) return
+
+    const componentState = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideRouteComponentProps>
+      | undefined
+    if (!componentState || componentState.enabled === false) {
+      // Remove any existing labels for this node
+      const prefix = `${node.id}:`
+      for (const [key, mesh] of guideRouteWaypointLabelMeshes.entries()) {
+        if (!key.startsWith(prefix)) continue
+        mesh.geometry.dispose()
+        ;(mesh.material as THREE.Material).dispose?.()
+        mesh.removeFromParent()
+        guideRouteWaypointLabelMeshes.delete(key)
+      }
+      return
+    }
+
+    const props = clampGuideRouteComponentProps(componentState.props as Partial<GuideRouteComponentProps> | null | undefined)
+    const waypoints = Array.isArray(props.waypoints) ? props.waypoints : []
+
+    const desiredKeys = new Set<string>()
+    for (let index = 0; index < waypoints.length; index += 1) {
+      desiredKeys.add(`${node.id}:${index}`)
+    }
+
+    const prefix = `${node.id}:`
+    for (const [key, mesh] of guideRouteWaypointLabelMeshes.entries()) {
+      if (!key.startsWith(prefix)) continue
+      if (desiredKeys.has(key)) continue
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose?.()
+      mesh.removeFromParent()
+      guideRouteWaypointLabelMeshes.delete(key)
+    }
+
+    if (!waypoints.length) {
+      return
+    }
+
+    const font = await loadLabelFont()
+    const size = 0.6
+    const height = 0.06
+    const yOffset = 0.22
+
+    for (let index = 0; index < waypoints.length; index += 1) {
+      const key = `${node.id}:${index}`
+      const waypoint = waypoints[index]
+      const rawName = typeof waypoint?.name === 'string' ? waypoint.name : ''
+      const labelText = rawName.trim() || `P${index + 1}`
+
+      const existing = guideRouteWaypointLabelMeshes.get(key)
+      if (existing && existing.userData?.labelText === labelText) {
+        // Update position in case waypoint moved
+        const pos = waypoint?.position
+        if (pos) {
+          existing.position.set(Number(pos.x) || 0, (Number(pos.y) || 0) + yOffset, Number(pos.z) || 0)
+        }
+        continue
+      }
+
+      if (existing) {
+        existing.geometry.dispose()
+        ;(existing.material as THREE.Material).dispose?.()
+        existing.removeFromParent()
+        guideRouteWaypointLabelMeshes.delete(key)
+      }
+
+      const geom = new TextGeometry(labelText, { font, size, height, curveSegments: 6, bevelEnabled: false })
+      geom.computeBoundingBox()
+      const bbox = geom.boundingBox
+      if (bbox) {
+        const center = new THREE.Vector3()
+        bbox.getCenter(center)
+        geom.translate(-center.x, -center.y, -center.z)
+      }
+
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+      mat.depthTest = false
+      mat.toneMapped = false
+
+      const mesh = new THREE.Mesh(geom, mat)
+      mesh.name = `${node.name ?? 'GuideRoute'} waypoint ${index + 1} (label)`
+      mesh.userData = { nodeId: node.id, editorOnly: true, labelText, waypointIndex: index }
+      mesh.renderOrder = 9999
+
+      const pos = waypoint?.position
+      mesh.position.set(Number(pos?.x) || 0, (Number(pos?.y) || 0) + yOffset, Number(pos?.z) || 0)
+      container.add(mesh)
+      guideRouteWaypointLabelMeshes.set(key, mesh)
+    }
+  } catch (err) {
+    console.warn('Failed to create guide route waypoint labels', err)
   }
 }
 
@@ -806,6 +912,11 @@ function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string 
     typeof definition.materialId === 'string' ? definition.materialId : null,
     Number.isFinite(definition.smooth) ? definition.smooth : null,
   ])
+  return hashString(serialized)
+}
+
+function computeGuideRouteDynamicMeshSignature(definition: GuideRouteDynamicMesh): string {
+  const serialized = stableSerialize([Array.isArray(definition.vertices) ? definition.vertices : []])
   return hashString(serialized)
 }
 
@@ -4470,6 +4581,21 @@ function animate() {
     }
     prof.buildingLabels = performance.now() - t0_labels
   }
+  if (guideRouteWaypointLabelMeshes.size > 0 && camera) {
+    const t0_labels = performance.now()
+    const tmpParentQuat = new THREE.Quaternion()
+    const tmpInvParentQuat = new THREE.Quaternion()
+    for (const mesh of guideRouteWaypointLabelMeshes.values()) {
+      const nodeId = mesh.userData?.nodeId as string | undefined
+      if (!nodeId) continue
+      const parent = objectMap.get(nodeId)
+      if (!parent) continue
+      parent.getWorldQuaternion(tmpParentQuat)
+      tmpInvParentQuat.copy(tmpParentQuat).invert()
+      mesh.quaternion.multiplyQuaternions(tmpInvParentQuat, camera.quaternion)
+    }
+    prof.buildingLabels = (prof.buildingLabels ?? 0) + (performance.now() - t0_labels)
+  }
   const t0_render = performance.now()
   renderViewportFrame()
   prof.render = performance.now() - t0_render
@@ -4557,6 +4683,14 @@ function disposeScene() {
       mesh.removeFromParent()
     }
     buildingLabelMeshes.clear()
+  }
+  if (guideRouteWaypointLabelMeshes.size) {
+    for (const mesh of guideRouteWaypointLabelMeshes.values()) {
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose?.()
+      mesh.removeFromParent()
+    }
+    guideRouteWaypointLabelMeshes.clear()
   }
   isGroundSelectionOrbitDisabled = false
 
@@ -8370,6 +8504,25 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       }
     }
 
+  } else if (node.dynamicMesh?.type === 'GuideRoute') {
+    const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
+    let guideGroup = userData.guideRouteGroup as THREE.Group | undefined
+    if (!guideGroup) {
+      guideGroup = createGuideRouteGroup(guideDefinition)
+      guideGroup.userData.nodeId = node.id
+      guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)
+      object.add(guideGroup)
+      userData.guideRouteGroup = guideGroup
+    } else {
+      const groupData = guideGroup.userData ?? (guideGroup.userData = {})
+      const nextSignature = computeGuideRouteDynamicMeshSignature(guideDefinition)
+      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateGuideRouteGroup(guideGroup, guideDefinition)
+        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
+
+    void createOrUpdateGuideRouteWaypointLabels(node, object)
   } else if (node.dynamicMesh?.type === 'Road') {
     const roadDefinition = node.dynamicMesh as RoadDynamicMesh
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)
@@ -9157,6 +9310,16 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       }
       container.add(floorGroup)
       containerData.floorGroup = floorGroup
+    } else if (node.dynamicMesh?.type === 'GuideRoute') {
+      containerData.dynamicMeshType = 'GuideRoute'
+      const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
+      const guideGroup = createGuideRouteGroup(guideDefinition)
+      guideGroup.removeFromParent()
+      guideGroup.userData.nodeId = node.id
+      guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)
+      container.add(guideGroup)
+      ;(containerData as any).guideRouteGroup = guideGroup
+      void createOrUpdateGuideRouteWaypointLabels(node, container)
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {

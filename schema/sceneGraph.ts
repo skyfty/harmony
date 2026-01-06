@@ -18,6 +18,7 @@ import type {
   WallDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
+  GuideRouteDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
 } from '@harmony/schema';
@@ -55,6 +56,7 @@ import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicM
 import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
 import { buildRoadMesh as buildRoadDynamicMesh } from './sceneGraph/dynamicMeshes/road';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
+import { buildGuideRouteMesh as buildGuideRouteDynamicMesh } from './sceneGraph/dynamicMeshes/guideRoute';
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -926,6 +928,9 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Floor') {
       return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
     }
+    if (meshInfo?.type === 'GuideRoute') {
+      return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
+    }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
@@ -1211,6 +1216,19 @@ class SceneGraphBuilder {
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     return buildFloorDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private async buildGuideRouteMesh(meshInfo: GuideRouteDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildGuideRouteDynamicMesh(
       {
         resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
         pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),

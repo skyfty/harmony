@@ -27,6 +27,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   FLOOR_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
   ROAD_DEFAULT_JUNCTION_SMOOTHING,
   RIGIDBODY_COMPONENT_TYPE,
@@ -79,6 +80,12 @@ export type ConvertPlanningToSceneOptions = {
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
+    createGuideRouteNode: (payload: {
+      points: Array<{ x: number; y: number; z: number }>
+      waypoints?: Array<{ name?: string }>
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }) => SceneNode | null
     addNodeComponent: (nodeId: string, type: string) => unknown
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
@@ -119,7 +126,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 
-type LayerKind = 'road' | 'green' | 'wall' | 'floor' | 'water' | 'building'
+type LayerKind = 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water' | 'building'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -137,6 +144,7 @@ type PlanningPolylineAny = {
   name?: string
   layerId: string
   points: PlanningPoint[]
+  waypoints?: Array<{ name?: string }>
   scatter?: unknown
   cornerSmoothness?: unknown
   airWallEnabled?: unknown
@@ -487,6 +495,8 @@ function layerKindFromId(layerId: string): LayerKind | null {
   switch (layerId) {
     case 'road-layer':
       return 'road'
+    case 'guide-route-layer':
+      return 'guide-route'
     case 'floor-layer':
       return 'floor'
     case 'green-layer':
@@ -502,7 +512,7 @@ function layerKindFromId(layerId: string): LayerKind | null {
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(road|floor|green|water|wall|building)-layer\b/i.exec(layerId)
+  const match = /^(road|guide-route|floor|green|water|wall|building)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -519,7 +529,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['road-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
+  return ['road-layer', 'guide-route-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -531,6 +541,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
       const normalized = kind.toLowerCase()
       if (
         normalized === 'road'
+        || normalized === 'guide-route'
         || normalized === 'floor'
         || normalized === 'green'
         || normalized === 'water'
@@ -949,6 +960,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const polylines = rawPolylines.map((line) => ({
     ...line,
     points: normalizePlanningPoints(line?.points, planningUnitsToMeters),
+    waypoints: Array.isArray((line as any)?.waypoints) ? (line as any).waypoints : undefined,
   }))
 
   const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
@@ -1064,6 +1076,71 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.setNodeLocked(roadNode.id, true)
+      }
+    } else if (kind === 'guide-route') {
+      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+
+      for (const line of group.polylines) {
+        updateProgressForUnit(`Converting guide route: ${line.name?.trim() || line.id}`)
+
+        const names = Array.isArray(line.waypoints) ? line.waypoints : []
+        const points: Array<{ x: number; y: number; z: number }> = []
+        const waypoints: Array<{ name?: string }> = []
+        const duplicateEpsilon = 1e-10
+
+        for (let i = 0; i < (line.points ?? []).length; i += 1) {
+          const point = line.points[i]
+          if (!point) continue
+
+          const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+          const y = groundHeightAt(world.x, world.z)
+
+          const previous = points[points.length - 1]
+          if (previous) {
+            const dx = world.x - previous.x
+            const dz = world.z - previous.z
+            if (dx * dx + dz * dz <= duplicateEpsilon) {
+              continue
+            }
+          }
+
+          points.push({ x: world.x, y, z: world.z })
+          waypoints.push({ name: names[i]?.name })
+        }
+
+        if (points.length < 2) {
+          continue
+        }
+
+        const nodeName = line.name?.trim()
+          ? line.name.trim()
+          : (layerName ? `${layerName} Guide Route` : 'Planning Guide Route')
+
+        const guideRouteNode = sceneStore.createGuideRouteNode({
+          points,
+          waypoints,
+          name: nodeName,
+        })
+
+        if (!guideRouteNode) {
+          continue
+        }
+
+        sceneStore.moveNode({ nodeId: guideRouteNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.updateNodeUserData(guideRouteNode.id, {
+          source: PLANNING_CONVERSION_SOURCE,
+          planningLayerId: layerId,
+          kind: 'guide-route',
+          planningFeatureId: line.id,
+        })
+
+        // Safety: ensure guideRoute component exists for identification.
+        const component = guideRouteNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as { id?: string } | undefined
+        if (!component?.id) {
+          sceneStore.addNodeComponent(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
+        }
+
+        sceneStore.setNodeLocked(guideRouteNode.id, true)
       }
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)

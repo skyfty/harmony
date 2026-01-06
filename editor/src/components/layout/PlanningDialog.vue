@@ -28,19 +28,20 @@ const { currentSceneId } = storeToRefs(sceneStore)
 const uiStore = useUiStore()
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
-type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water'
+type LayerKind = 'terrain' | 'building' | 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
   building: 'Building',
   road: 'Road',
+  'guide-route': '导览线路',
   floor: 'Floor',
   green: 'Green',
   wall: 'Wall',
   water: 'Water',
 }
 
-const addableLayerKinds: LayerKind[] = ['road', 'floor', 'water', 'green', 'wall', 'building']
+const addableLayerKinds: LayerKind[] = ['road', 'guide-route', 'floor', 'water', 'green', 'wall', 'building']
 
 interface PlanningLayer {
   id: string
@@ -117,6 +118,8 @@ interface PlanningPolyline {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** Guide-route waypoint metadata aligned with points (only meaningful when layer kind is 'guide-route'). */
+  waypoints?: Array<{ name?: string }>
   scatter?: PlanningScatterAssignment
   /** 0-1. Only meaningful when layer kind is 'wall'. */
   cornerSmoothness?: number
@@ -214,6 +217,7 @@ interface LineDraft {
 const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.09 },
+  { id: 'guide-route-layer', name: '导览线路', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
@@ -1387,6 +1391,11 @@ function buildPlanningSnapshot() {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
+      waypoints: getLayerKind(line.layerId) === 'guide-route'
+        ? (Array.isArray(line.waypoints)
+          ? line.waypoints.map((w) => ({ name: typeof w?.name === 'string' ? w.name : undefined }))
+          : undefined)
+        : undefined,
       cornerSmoothness: getLayerKind(line.layerId) === 'wall'
         ? clampWallCornerSmoothness(line.cornerSmoothness)
         : undefined,
@@ -1757,11 +1766,22 @@ function loadPlanningFromScene() {
         })
         : []
 
+      const layerKind = getLayerKind(line.layerId)
+      const rawWaypoints = Array.isArray((line as any).waypoints) ? ((line as any).waypoints as any[]) : null
+      const waypoints = layerKind === 'guide-route'
+        ? points.map((_point, index) => {
+          const rawName = rawWaypoints?.[index]?.name
+          const name = typeof rawName === 'string' ? rawName : `点${index + 1}`
+          return { name }
+        })
+        : undefined
+
       return {
         id: line.id,
         name: line.name,
         layerId: line.layerId,
         points,
+        waypoints,
         cornerSmoothness: getLayerKind(line.layerId) === 'wall'
           ? clampWallCornerSmoothness((line as any).cornerSmoothness)
           : undefined,
@@ -1913,12 +1933,12 @@ function tryBeginRightPan(event: PointerEvent) {
 }
 const canUseLineTool = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind === 'road' || kind === 'wall'
+  return kind === 'road' || kind === 'wall' || kind === 'guide-route'
 })
 
 const canUseAreaTools = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind !== 'road' && kind !== 'wall'
+  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route'
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
@@ -1945,6 +1965,65 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
     return { type: 'polyline', shape: polyline, layer }
   }
   return null
+})
+
+function isGuideRoutePolyline(line: PlanningPolyline | null | undefined): boolean {
+  if (!line) return false
+  return getLayerKind(line.layerId) === 'guide-route'
+}
+
+function ensureGuideRouteWaypoints(line: PlanningPolyline) {
+  if (!isGuideRoutePolyline(line)) {
+    return
+  }
+  const count = line.points.length
+  const current = Array.isArray(line.waypoints) ? [...line.waypoints] : []
+  while (current.length < count) {
+    current.push({ name: `点${current.length + 1}` })
+  }
+  if (current.length > count) {
+    current.length = count
+  }
+  line.waypoints = current
+}
+
+const selectedGuideRouteVertex = computed<{
+  line: PlanningPolyline
+  vertexIndex: number
+  typeLabel: '起点' | '终点' | '途径点'
+} | null>(() => {
+  const sel = selectedVertex.value
+  if (!sel || sel.feature !== 'polyline') {
+    return null
+  }
+  const line = polylines.value.find((item) => item.id === sel.targetId) ?? null
+  if (!line || !isGuideRoutePolyline(line)) {
+    return null
+  }
+  const count = line.points.length
+  if (sel.vertexIndex < 0 || sel.vertexIndex >= count) {
+    return null
+  }
+  const typeLabel = sel.vertexIndex === 0
+    ? '起点'
+    : (sel.vertexIndex === count - 1 ? '终点' : '途径点')
+  return { line, vertexIndex: sel.vertexIndex, typeLabel }
+})
+
+const guideRouteWaypointNameModel = computed<string>({
+  get: () => {
+    const info = selectedGuideRouteVertex.value
+    if (!info) return ''
+    const waypoint = info.line.waypoints?.[info.vertexIndex]
+    return typeof waypoint?.name === 'string' ? waypoint.name : ''
+  },
+  set: (value: string) => {
+    const info = selectedGuideRouteVertex.value
+    if (!info) return
+    ensureGuideRouteWaypoints(info.line)
+    info.line.waypoints![info.vertexIndex]!.name = value
+    markPlanningDirty()
+  },
 })
 
 const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
@@ -3370,11 +3449,20 @@ function startLineDraft(point: PlanningPoint) {
         return
       }
       const sourceKind = getLayerKind(sourceLine.layerId)
+      if (sourceKind === 'guide-route') {
+        ensureGuideRouteWaypoints(sourceLine)
+      }
+      const sourceWaypointName = sourceKind === 'guide-route'
+        ? (sourceLine.waypoints?.[selectedVertex.value.vertexIndex]?.name ?? '')
+        : ''
       const newLine: PlanningPolyline = {
         id: createId('line'),
         name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
         layerId: sourceLine.layerId,
         points: [sourcePoint, newPoint],
+        waypoints: sourceKind === 'guide-route'
+          ? [{ name: sourceWaypointName }, { name: '点2' }]
+          : undefined,
         cornerSmoothness: sourceKind === 'wall'
           ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
           : undefined,
@@ -3400,6 +3488,7 @@ function startLineDraft(point: PlanningPoint) {
       name: `${getLayerName(targetLayerId)} Segment ${lineCounter.value++}`,
       layerId: targetLayerId,
       points: [nextPoint],
+      waypoints: targetKind === 'guide-route' ? [{ name: '点1' }] : undefined,
       cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
     }
     polylines.value = [...polylines.value, newLine]
@@ -3419,10 +3508,21 @@ function startLineDraft(point: PlanningPoint) {
     }
   }
 
+  const isGuideRoute = getLayerKind(draftLine.layerId) === 'guide-route'
+  if (isGuideRoute) {
+    ensureGuideRouteWaypoints(draftLine)
+  }
+
   if (lineDraft.value?.continuation?.direction === 'prepend') {
     draftLine.points.unshift(nextPoint)
+    if (isGuideRoute) {
+      draftLine.waypoints!.unshift({ name: '点1' })
+    }
   } else {
     draftLine.points.push(nextPoint)
+    if (isGuideRoute) {
+      draftLine.waypoints!.push({ name: `点${draftLine.waypoints!.length + 1}` })
+    }
   }
   lineDraftHoverPoint.value = null
   pendingLineHoverClient = null
@@ -3444,6 +3544,7 @@ function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
     name: `${getLayerName(layerId)} Segment ${lineCounter.value++}`,
     layerId,
     points: [point],
+    waypoints: targetKind === 'guide-route' ? [{ name: '点1' }] : undefined,
     cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
   }
   polylines.value = [...polylines.value, newLine]
@@ -3469,6 +3570,9 @@ function finalizeLineDraft() {
     polylines.value = polylines.value.filter((item) => item.id !== line.id)
     clearLineDraft({ keepLine: true })
     return
+  }
+  if (getLayerKind(line.layerId) === 'guide-route') {
+    ensureGuideRouteWaypoints(line)
   }
   selectFeature({ type: 'polyline', id: line.id })
   clearLineDraft({ keepLine: true })
@@ -3586,6 +3690,9 @@ function deleteSelectedFeature() {
   }
   const removeIndex = Math.min(feature.segmentIndex + 1, line.points.length - 1)
   line.points.splice(removeIndex, 1)
+  if (getLayerKind(line.layerId) === 'guide-route' && Array.isArray(line.waypoints)) {
+    line.waypoints.splice(removeIndex, 1)
+  }
   selectedFeature.value = null
   selectedVertex.value = null
 
@@ -6241,6 +6348,28 @@ onBeforeUnmount(() => {
                   <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
                   <div class="property-panel__density-value">{{ Math.round(imageOpacityModel * 100) }}%</div>
                 </div>
+              </div>
+            </div>
+
+            <div v-if="selectedGuideRouteVertex" class="property-panel__block">
+              <div style="display:flex;gap:8px;align-items:center;">
+                <v-text-field
+                  v-model="guideRouteWaypointNameModel"
+                  density="compact"
+                  hide-details
+                  label="名称"
+                  :disabled="propertyPanelDisabled"
+                  style="flex:1"
+                />
+              </div>
+              <div style="margin-top:8px;">
+                <v-text-field
+                  :model-value="selectedGuideRouteVertex.typeLabel"
+                  density="compact"
+                  hide-details
+                  label="类型"
+                  readonly
+                />
               </div>
             </div>
 

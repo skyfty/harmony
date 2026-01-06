@@ -767,7 +767,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'GuideRoute'
 
 export interface GroundHeightMap {
   [key: string]: number
@@ -873,7 +873,13 @@ export interface FloorDynamicMesh {
   smooth?: number
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh
+export interface GuideRouteDynamicMesh {
+  type: 'GuideRoute'
+  /** Ordered waypoint vertices in local space relative to the node origin. */
+  vertices: Vector3Like[]
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh | GuideRouteDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

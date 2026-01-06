@@ -56,6 +56,7 @@ import type {
   WallDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
+  GuideRouteDynamicMesh,
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -141,6 +142,7 @@ import {
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup, updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
+import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -179,6 +181,7 @@ import {
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
+  GuideRouteComponentProps,
   GuideboardComponentProps,
   ProtagonistComponentProps,
   RigidbodyComponentProps,
@@ -193,6 +196,7 @@ import type {
 import {
   WALL_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -237,6 +241,9 @@ import {
   cloneVehicleComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
+  clampGuideRouteComponentProps,
+  cloneGuideRouteComponentProps,
+  resolveGuideRouteComponentPropsFromMesh,
   FLOOR_COMPONENT_TYPE,
   clampFloorComponentProps,
   cloneFloorComponentProps,
@@ -678,6 +685,29 @@ function normalizeNodeComponents(
     normalized[FLOOR_COMPONENT_TYPE] = {
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
       type: FLOOR_COMPONENT_TYPE,
+      enabled: existing?.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  }
+
+  if (node.dynamicMesh?.type === 'GuideRoute') {
+    const baseProps = resolveGuideRouteComponentPropsFromMesh(node.dynamicMesh as GuideRouteDynamicMesh)
+    const existing = normalized[GUIDE_ROUTE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideRouteComponentProps>
+      | undefined
+    const existingProps = existing?.props as GuideRouteComponentProps | undefined
+    const nextProps = cloneGuideRouteComponentProps(
+      clampGuideRouteComponentProps({
+        waypoints: existingProps?.waypoints ?? baseProps.waypoints,
+      }),
+    )
+
+    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
+
+    normalized[GUIDE_ROUTE_COMPONENT_TYPE] = {
+      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
+      type: GUIDE_ROUTE_COMPONENT_TYPE,
       enabled: existing?.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
@@ -1881,9 +1911,96 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         smooth: Number.isFinite(floorMesh.smooth) ? floorMesh.smooth : FLOOR_DEFAULT_SMOOTH,
       }
     }
+    case 'GuideRoute': {
+      const guide = mesh as GuideRouteDynamicMesh
+      const raw = Array.isArray(guide.vertices) ? guide.vertices : []
+      const vertices = raw
+        .map((entry: unknown) => {
+          if (!entry || typeof entry !== 'object') {
+            return null
+          }
+          const v = entry as Vector3Like
+          return cloneDynamicMeshVector3(v)
+        })
+        .filter((value: Vector3Like | null): value is Vector3Like => !!value)
+
+      return {
+        type: 'GuideRoute',
+        vertices,
+      }
+    }
     default:
       return undefined
   }
+}
+
+function buildGuideRouteWorldPoints(points: Vector3Like[]): Vector3[] {
+  const out: Vector3[] = []
+  points.forEach((p) => {
+    if (!p) {
+      return
+    }
+    const x = Number(p.x)
+    const y = Number(p.y)
+    const z = Number(p.z)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const vec = new Vector3(x, Number.isFinite(y) ? y : 0, z)
+    const prev = out[out.length - 1]
+    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
+      return
+    }
+    out.push(vec)
+  })
+  return out
+}
+
+function computeGuideRouteCenter(points: Vector3[]): Vector3 {
+  const min = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+  const max = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
+
+  points.forEach((p) => {
+    min.x = Math.min(min.x, p.x)
+    min.y = Math.min(min.y, p.y)
+    min.z = Math.min(min.z, p.z)
+    max.x = Math.max(max.x, p.x)
+    max.y = Math.max(max.y, p.y)
+    max.z = Math.max(max.z, p.z)
+  })
+
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+    return new Vector3(0, 0, 0)
+  }
+
+  return new Vector3(
+    (min.x + max.x) * 0.5,
+    (min.y + max.y) * 0.5,
+    (min.z + max.z) * 0.5,
+  )
+}
+
+function buildGuideRouteDynamicMeshFromWorldPoints(
+  points: Vector3Like[],
+): { center: Vector3; definition: GuideRouteDynamicMesh } | null {
+  const worldPoints = buildGuideRouteWorldPoints(points)
+  if (worldPoints.length < 2) {
+    return null
+  }
+
+  const center = computeGuideRouteCenter(worldPoints)
+  const vertices: Vector3Like[] = worldPoints.map((p) => ({
+    x: p.x - center.x,
+    y: p.y - center.y,
+    z: p.z - center.z,
+  }))
+
+  const definition: GuideRouteDynamicMesh = {
+    type: 'GuideRoute',
+    vertices,
+  }
+
+  return { center, definition }
 }
 
 function createGroundDynamicMeshDefinition(
@@ -3284,7 +3401,7 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
   }
 
   const meshType = normalizeDynamicMeshType(meshDefinition.type)
-  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor') {
+  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor' && meshType !== 'GuideRoute') {
     return false
   }
 
@@ -3300,6 +3417,8 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
       });
     } else if (meshType === 'Floor') {
       runtime = createFloorGroup(meshDefinition as FloorDynamicMesh);
+    } else if (meshType === 'GuideRoute') {
+      runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
     } else {
       runtime = createWallGroup(meshDefinition as WallDynamicMesh, { smoothing: resolveWallSmoothing(node) });
     }
@@ -13013,6 +13132,55 @@ export const useSceneStore = defineStore('scene', {
           if (component) {
             const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
             this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
+          }
+        }
+
+        return node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    createGuideRouteNode(payload: {
+      points: Vector3Like[]
+      waypoints?: Array<{ name?: string }>
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const build = buildGuideRouteDynamicMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+
+      const group = createGuideRouteGroup(build.definition)
+      const nodeName = payload.name ?? 'Guide Route'
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeType: 'Mesh',
+          object: group,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(0, 0, 0),
+          scale: createVector(1, 1, 1),
+          dynamicMesh: build.definition,
+          editorFlags: payload.editorFlags,
+        })
+
+        if (node) {
+          const component = this.addNodeComponent(node.id, GUIDE_ROUTE_COMPONENT_TYPE) as
+            | SceneNodeComponentState<GuideRouteComponentProps>
+            | null
+          if (component) {
+            const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
+            const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
+              const rawName = (names[index]?.name ?? '').trim()
+              const name = rawName.length ? rawName : `P${index + 1}`
+              return { name, position }
+            })
+            this.updateNodeComponentProps(node.id, component.id, { waypoints })
           }
         }
 
