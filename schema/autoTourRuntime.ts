@@ -39,8 +39,7 @@ export type AutoTourRuntime = {
 }
 
 type AutoTourPlaybackState = {
-  mode: 'seek-endpoint' | 'path' | 'loop-to-start' | 'return-to-start' | 'stopped' | 'stopping'
-  endpointIndex: 0 | 1
+  mode: 'seek-waypoint' | 'path' | 'loop-to-start' | 'stopped' | 'stopping'
   targetIndex: number
   routeNodeId: string
   routeWaypointCount: number
@@ -89,17 +88,6 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
     }
   }
   return bestIndex
-}
-
-function findNearestEndpointIndex(points: THREE.Vector3[], position: THREE.Vector3): 0 | 1 {
-  const start = points[0]
-  const end = points[points.length - 1]
-  if (!start || !end) {
-    return 0
-  }
-  const d0 = position.distanceToSquared(start)
-  const d1 = position.distanceToSquared(end)
-  return d1 < d0 ? 1 : 0
 }
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
@@ -188,7 +176,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       if (!state || state.routeNodeId !== routeNodeId || state.routeWaypointCount !== points.length) {
-        // Initialize by heading to the nearest endpoint (start/end).
+        // Initialize by heading to the nearest waypoint (includes start/end/intermediate).
         const positionSample = autoTourCurrentPosition
         if (hasVehicle) {
           const body = vehicleInstance!.vehicle.chassisBody
@@ -197,8 +185,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           nodeObject!.getWorldPosition(positionSample)
         }
 
-        const nearestEndpoint = findNearestEndpointIndex(points, positionSample)
-        const endpointTargetIndex = nearestEndpoint === 0 ? 0 : endIndex
+        const nearestWaypointIndex = findClosestWaypointIndex(points, positionSample)
 
         let initialYaw = 0
         if (hasVehicle) {
@@ -217,9 +204,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         }
 
         state = {
-          mode: 'seek-endpoint',
-          endpointIndex: nearestEndpoint,
-          targetIndex: endpointTargetIndex,
+          mode: 'seek-waypoint',
+          targetIndex: nearestWaypointIndex,
           routeNodeId,
           routeWaypointCount: points.length,
           hasSmoothedState: true,
@@ -290,23 +276,22 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         }
 
         // Advance state machine:
-        // - Intermediate points: no stop, advance to next.
-        // - Start point: advance to next.
-        // - End point: return to start before traversing.
-        if (state.mode === 'seek-endpoint') {
-          if (state.endpointIndex === 0) {
-            // Reached start endpoint: begin forward traversal.
-            state.mode = 'path'
-            state.targetIndex = Math.min(1, endIndex)
+        // - Intermediate points (including start): no stop, advance to next.
+        // - End point: stop unless looping, in which case go to start.
+        if (state.mode === 'seek-waypoint') {
+          if (state.targetIndex >= endIndex) {
+            if (props.loop) {
+              state.mode = 'loop-to-start'
+              state.targetIndex = 0
+            } else {
+              // Ease into the end position before fully stopping.
+              state.mode = 'stopping'
+              state.targetIndex = endIndex
+            }
           } else {
-            // Reached end endpoint: return to start before traversing the full path.
-            state.mode = 'return-to-start'
-            state.targetIndex = 0
+            state.mode = 'path'
+            state.targetIndex = Math.min(state.targetIndex + 1, endIndex)
           }
-        } else if (state.mode === 'return-to-start') {
-          // Returned to start from end: now begin forward traversal.
-          state.mode = 'path'
-          state.targetIndex = Math.min(1, endIndex)
         } else if (state.mode === 'loop-to-start') {
           // Arrived at start; continue along the route toward the end.
           state.mode = 'path'
