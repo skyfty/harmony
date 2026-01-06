@@ -32,7 +32,7 @@ export type {
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 
 export { createAutoTourRuntime } from './autoTourRuntime'
-export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike, AutoTourRigidbodyInstanceLike } from './autoTourRuntime'
+export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike } from './autoTourRuntime'
 
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
 

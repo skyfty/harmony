@@ -1744,9 +1744,11 @@ const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
-	rigidbodyInstances,
 	vehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
+	onNodeObjectTransformUpdated: (_nodeId, object) => {
+		syncInstancedTransform(object)
+	},
 })
 
 function resolveLodComponent(
@@ -7555,6 +7557,15 @@ function stepPhysicsWorld(delta: number): void {
 	rigidbodyInstances.forEach((entry) => {
 		if (entry.syncObjectFromBody === false) {
 			return
+		}
+		// AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
+		const nodeState = resolveNodeById(entry.nodeId)
+		const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(nodeState, AUTO_TOUR_COMPONENT_TYPE)
+		if (autoTour) {
+			const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE)
+			if (!vehicle) {
+				return
+			}
 		}
 		syncSharedObjectFromBody(entry, syncInstancedTransform)
 	})
