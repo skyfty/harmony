@@ -386,13 +386,6 @@ function handleScatterAssetSelect(
     min-width: 40px;
 }
 
-.scatter-spacing-panel {
-  margin-top: 8px;
-  padding: 6px 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
 
 .scatter-spacing-item {
   display: flex;
