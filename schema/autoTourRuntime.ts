@@ -2,13 +2,17 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import type { SceneNode } from './index'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
+import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe } from './purePursuitRuntime'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
   clampAutoTourComponentProps,
   clampGuideRouteComponentProps,
+  PURE_PURSUIT_COMPONENT_TYPE,
+  clampPurePursuitComponentProps,
   type AutoTourComponentProps,
   type GuideRouteComponentProps,
+  type PurePursuitComponentProps,
 } from './components'
 
 export type AutoTourVehicleInstanceLike = {
@@ -47,19 +51,14 @@ type AutoTourPlaybackState = {
   smoothedWorldPosition: THREE.Vector3
   smoothedYaw: number
 
-  // Debug-only fields (used to throttle console logs).
-  debugLastLoggedAtMs?: number
-  debugLastMode?: AutoTourPlaybackState['mode']
-  debugLastTargetIndex?: number
+  // Vehicle-only control state.
+  speedIntegral?: number
+  lastSteerRad?: number
+  reverseActive?: boolean
 }
-
-const AUTO_TOUR_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
-const AUTO_TOUR_ENGINE_FORCE = 320
-const AUTO_TOUR_BRAKE_FORCE = 16
 const AUTO_TOUR_POSITION_SMOOTHING = 14
 const AUTO_TOUR_YAW_SMOOTHING = 12
 const AUTO_TOUR_STOP_POSITION_EPSILON = 0.03
-const AUTO_TOUR_STOP_VEHICLE_SPEED_EPSILON = 0.25
 
 function expSmoothingAlpha(smoothing: number, deltaSeconds: number): number {
   const k = Math.max(0, smoothing)
@@ -121,30 +120,10 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
   const autoTourPlaybackState = new Map<string, AutoTourPlaybackState>()
 
-  let debugTickLastLoggedAtMs = 0
-  let debugTickCallCount = 0
-  let debugTickLastDeltaSeconds = 0
-  let debugTickLastManualDrive = false
-  let debugTickLastNodeCount = 0
-  let debugTickLastAutoTourCount = 0
-  let debugTickLastSkipSpeed = 0
-  let debugTickLastSkipNoRoute = 0
-  let debugTickLastSkipNoPoints = 0
-  let debugTickLastSkipNoObject = 0
-
-  function debugLog(message: string, payload?: Record<string, unknown>): void {
-    // Logs are intentionally transition-focused and throttled to avoid spamming.
-    // eslint-disable-next-line no-console
-    console.log(`[AutoTourRuntime] ${message}`, payload ?? '')
-  }
-
   const autoTourTargetPosition = new THREE.Vector3()
   const autoTourCurrentPosition = new THREE.Vector3()
   const autoTourDirection = new THREE.Vector3()
-  const autoTourForward = new THREE.Vector3()
   const autoTourDesiredDir = new THREE.Vector3()
-  const autoTourCross = new THREE.Vector3()
-  const autoTourChassisQuaternion = new THREE.Quaternion()
   const autoTourObjectWorldQuaternion = new THREE.Quaternion()
   const autoTourParentWorldQuaternion = new THREE.Quaternion()
   const autoTourWorldQuaternion = new THREE.Quaternion()
@@ -181,70 +160,36 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   }
 
   function update(deltaSeconds: number): void {
-    debugTickCallCount += 1
-    debugTickLastDeltaSeconds = deltaSeconds
-    debugTickLastManualDrive = deps.isManualDriveActive()
-
-    // Reset per-tick counters (we only log them at 1Hz).
-    debugTickLastNodeCount = 0
-    debugTickLastAutoTourCount = 0
-    debugTickLastSkipSpeed = 0
-    debugTickLastSkipNoRoute = 0
-    debugTickLastSkipNoPoints = 0
-    debugTickLastSkipNoObject = 0
-
-    const now = Date.now()
-    const shouldLogTick = now - debugTickLastLoggedAtMs >= 1000
+    const manualDriveActive = deps.isManualDriveActive()
 
     if (deltaSeconds <= 0) {
-      if (shouldLogTick) {
-        debugTickLastLoggedAtMs = now
-        debugLog('tick', {
-          calls: debugTickCallCount,
-          deltaSeconds,
-          manualDriveActive: debugTickLastManualDrive,
-          note: 'deltaSeconds<=0 (skipping update)',
-        })
-      }
       return
     }
-    if (debugTickLastManualDrive) {
-      if (shouldLogTick) {
-        debugTickLastLoggedAtMs = now
-        debugLog('tick', {
-          calls: debugTickCallCount,
-          deltaSeconds,
-          manualDriveActive: true,
-          note: 'manual drive active (AutoTour paused)',
-        })
-      }
+    if (manualDriveActive) {
       return
     }
 
     for (const node of deps.iterNodes()) {
-      debugTickLastNodeCount += 1
       const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
       if (!autoTour) {
         continue
       }
-      debugTickLastAutoTourCount += 1
-      const props = clampAutoTourComponentProps(autoTour.props)
-      const routeNodeId = props.routeNodeId
+      const tourProps = clampAutoTourComponentProps(autoTour.props)
+      const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
+      const pursuitProps = clampPurePursuitComponentProps((purePursuit?.props ?? (autoTour.props as any)) ?? null)
+      const routeNodeId = tourProps.routeNodeId
       if (!routeNodeId) {
-        debugTickLastSkipNoRoute += 1
         continue
       }
       const points = getGuideRouteWorldWaypoints(routeNodeId)
       if (!points) {
-        debugTickLastSkipNoPoints += 1
         continue
       }
 
       const endIndex = points.length - 1
 
-      const speed = Math.max(0, props.speedMps)
+      const speed = Math.max(0, tourProps.speedMps)
       if (speed <= 0) {
-        debugTickLastSkipSpeed += 1
         continue
       }
 
@@ -256,7 +201,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const hasVehicle = Boolean(vehicleInstance?.vehicle?.chassisBody)
       const nodeObject = hasVehicle ? null : (deps.nodeObjectMap.get(node.id) ?? null)
       if (!hasVehicle && !nodeObject) {
-        debugTickLastSkipNoObject += 1
         continue
       }
 
@@ -299,24 +243,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           hasSmoothedState: true,
           smoothedWorldPosition: positionSample.clone(),
           smoothedYaw: initialYaw,
-          debugLastLoggedAtMs: 0,
-          debugLastMode: 'seek-waypoint',
-          debugLastTargetIndex: nearestWaypointIndex,
         }
         autoTourPlaybackState.set(key, state)
-
-        debugLog('init', {
-          reason: initReason,
-          key,
-          nodeId: node.id,
-          autoTourId: autoTour.id,
-          routeNodeId,
-          waypointCount: points.length,
-          nearestWaypointIndex,
-          hasVehicle,
-          speed,
-          position: { x: positionSample.x, y: positionSample.y, z: positionSample.z },
-        })
       }
 
       if (!state) {
@@ -327,21 +255,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // - non-vehicle: do nothing (object already at final position)
       // - vehicle: keep holding brake to avoid rolling
       if (state.mode === 'stopped') {
-        if (props.loop) {
+        if (tourProps.loop) {
           state.mode = 'loop-to-start'
           state.targetIndex = 0
         } else {
           if (hasVehicle) {
-            try {
-              const vehicle = vehicleInstance!.vehicle
-              for (let index = 0; index < vehicleInstance!.wheelCount; index += 1) {
-                vehicle.setBrake(AUTO_TOUR_BRAKE_FORCE * 6, index)
-                vehicle.applyEngineForce(0, index)
-                vehicle.setSteeringValue(0, index)
-              }
-            } catch (error) {
-              console.warn('[AutoTourRuntime] AutoTour vehicle hold brake failed', error)
-            }
+            holdVehicleBrakeSafe({
+              vehicleInstance: vehicleInstance! as any,
+              brakeForce: pursuitProps.brakeForceMax * 6,
+            })
           }
           continue
         }
@@ -352,10 +274,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.targetIndex = 0
       }
       state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
-
-      // Track mode/index transitions.
-      const previousMode = state.debugLastMode ?? state.mode
-      const previousIndex = typeof state.debugLastTargetIndex === 'number' ? state.debugLastTargetIndex : state.targetIndex
 
       const target = points[state.targetIndex]!
       if (hasVehicle) {
@@ -373,7 +291,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       autoTourDirection.copy(autoTourPlanarTarget).sub(autoTourCurrentPosition)
       autoTourDirection.y = 0
       const distance = Math.sqrt(autoTourDirection.x * autoTourDirection.x + autoTourDirection.z * autoTourDirection.z)
-      const arrivalDistance = Math.max(0.35, Math.min(1.25, speed * 0.2))
+      const arrivalDistance = Math.max(
+        pursuitProps.arrivalDistanceMinMeters,
+        Math.min(pursuitProps.arrivalDistanceMaxMeters, speed * pursuitProps.arrivalDistanceSpeedFactor),
+      )
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
         const beforeIndex = state.targetIndex
         const beforeMode = state.mode
@@ -397,7 +318,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         // - End point: stop unless looping, in which case go to start.
         if (state.mode === 'seek-waypoint') {
           if (state.targetIndex >= endIndex) {
-            if (props.loop) {
+            if (tourProps.loop) {
               state.mode = 'loop-to-start'
               state.targetIndex = 0
             } else {
@@ -415,7 +336,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state.targetIndex = Math.min(1, endIndex)
         } else if (state.mode === 'path') {
           if (state.targetIndex >= endIndex) {
-            if (props.loop) {
+            if (tourProps.loop) {
               state.mode = 'loop-to-start'
               state.targetIndex = 0
             } else {
@@ -435,104 +356,28 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.routeNodeId = routeNodeId
         state.routeWaypointCount = points.length
 
-        debugLog('arrive', {
-          key,
-          nodeId: node.id,
-          autoTourId: autoTour.id,
-          hasVehicle,
-          routeNodeId,
-          waypointCount: points.length,
-          endIndex,
-          distance,
-          arrivalDistance,
-          before: { mode: beforeMode, targetIndex: beforeIndex },
-          after: { mode: state.mode, targetIndex: state.targetIndex },
-          target: { x: autoTourPlanarTarget.x, y: autoTourPlanarTarget.y, z: autoTourPlanarTarget.z },
-          current: { x: autoTourCurrentPosition.x, y: autoTourCurrentPosition.y, z: autoTourCurrentPosition.z },
-        })
-
         // If we transitioned into stopping mode, fall through to let the movement branch ease/brake.
         if (state.mode !== 'stopping') {
           continue
         }
       }
 
-      // Log sparse state changes (avoid per-frame spam).
-      const now = Date.now()
-      const shouldLogChange = state.mode !== previousMode || state.targetIndex !== previousIndex
-      const lastLogged = typeof state.debugLastLoggedAtMs === 'number' ? state.debugLastLoggedAtMs : 0
-      if (shouldLogChange && now - lastLogged > 150) {
-        state.debugLastLoggedAtMs = now
-        state.debugLastMode = state.mode
-        state.debugLastTargetIndex = state.targetIndex
-        debugLog('state-change', {
-          key,
-          nodeId: node.id,
-          autoTourId: autoTour.id,
-          hasVehicle,
-          mode: { from: previousMode, to: state.mode },
-          targetIndex: { from: previousIndex, to: state.targetIndex },
-          distance,
-          arrivalDistance,
-        })
-      }
-
       // Vehicle branch (drive as a car).
       if (hasVehicle) {
-        const instance = vehicleInstance!
-        const vehicle = instance.vehicle
-        const chassisBody = vehicle.chassisBody
-        autoTourDesiredDir.copy(autoTourDirection)
-        if (autoTourDesiredDir.lengthSq() < 1e-10) {
-          continue
-        }
-        autoTourDesiredDir.normalize()
-
-        autoTourChassisQuaternion
-          .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
-          .normalize()
-        autoTourForward.copy(instance.axisForward)
-        autoTourForward.applyQuaternion(autoTourChassisQuaternion)
-        autoTourForward.y = 0
-        if (autoTourForward.lengthSq() < 1e-10) {
-          autoTourForward.set(0, 0, 1)
-        }
-        autoTourForward.normalize()
-
-        const crossY = autoTourCross.copy(autoTourForward).cross(autoTourDesiredDir).dot(autoTourUp)
-        const dot = THREE.MathUtils.clamp(autoTourForward.dot(autoTourDesiredDir), -1, 1)
-        const angle = Math.acos(dot)
-        const signedAngle = crossY >= 0 ? angle : -angle
-        const steering =
-          THREE.MathUtils.clamp(signedAngle / AUTO_TOUR_MAX_STEER_RADIANS, -1, 1) * AUTO_TOUR_MAX_STEER_RADIANS
-
-        const steeringPenalty = Math.min(1, Math.abs(signedAngle) / Math.PI)
-        const throttle = THREE.MathUtils.clamp(1 - steeringPenalty * 1.4, 0, 1)
-        const shouldBrake = distance < Math.max(2.5, speed * 0.9)
         const isStopping = state.mode === 'stopping'
-        const engineForce = isStopping ? 0 : AUTO_TOUR_ENGINE_FORCE * throttle
-        const brakeForce = isStopping ? AUTO_TOUR_BRAKE_FORCE * 6 : (shouldBrake ? AUTO_TOUR_BRAKE_FORCE : 0)
-
-        try {
-          for (let index = 0; index < instance.wheelCount; index += 1) {
-            vehicle.setBrake(brakeForce, index)
-            vehicle.applyEngineForce(engineForce, index)
-            vehicle.setSteeringValue(0, index)
-          }
-          instance.steerableWheelIndices.forEach((wheelIndex) => {
-            vehicle.setSteeringValue(steering, wheelIndex)
-          })
-        } catch (error) {
-          console.warn('[AutoTourRuntime] AutoTour vehicle drive failed', error)
-        }
-
-        if (isStopping) {
-          const vx = chassisBody.velocity.x
-          const vz = chassisBody.velocity.z
-          const planarSpeed = Math.sqrt(vx * vx + vz * vz)
-          if (distance <= AUTO_TOUR_STOP_POSITION_EPSILON && planarSpeed <= AUTO_TOUR_STOP_VEHICLE_SPEED_EPSILON) {
-            state.mode = 'stopped'
-          }
+        const result = applyPurePursuitVehicleControlSafe({
+          vehicleInstance: vehicleInstance! as any,
+          points,
+          loop: Boolean(tourProps.loop),
+          deltaSeconds,
+          speedMps: speed,
+          pursuitProps,
+          state,
+          modeStopping: isStopping,
+          distanceToTarget: distance,
+        })
+        if (isStopping && result.reachedStop) {
+          state.mode = 'stopped'
         }
         continue
       }
@@ -575,7 +420,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         nodeObject!.position.copy(state.smoothedWorldPosition)
       }
 
-      if (props.alignToPath) {
+      if (tourProps.alignToPath) {
         const desiredYaw = Math.atan2(autoTourDesiredDir.x, autoTourDesiredDir.z)
         const yawAlpha = expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds)
         state.smoothedYaw = dampAngleRadians(state.smoothedYaw, desiredYaw, yawAlpha)
@@ -611,22 +456,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
     }
 
-    if (shouldLogTick) {
-      debugTickLastLoggedAtMs = now
-      debugLog('tick', {
-        calls: debugTickCallCount,
-        deltaSeconds: debugTickLastDeltaSeconds,
-        manualDriveActive: debugTickLastManualDrive,
-        nodesSeen: debugTickLastNodeCount,
-        autoTourNodes: debugTickLastAutoTourCount,
-        skipped: {
-          speedZero: debugTickLastSkipSpeed,
-          noRouteNodeId: debugTickLastSkipNoRoute,
-          noWaypoints: debugTickLastSkipNoPoints,
-          noObject3D: debugTickLastSkipNoObject,
-        },
-      })
-    }
   }
 
   return {
