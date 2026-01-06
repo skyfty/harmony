@@ -1531,17 +1531,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const maxAttempts = Math.min(SCATTER_SAMPLE_ATTEMPTS_MAX, Math.max(80, targetCount * 40))
 
 		const accepted: THREE.Vector3[] = []
-		// Guarantee center placement (strategy A: allow overlap with existing instances).
 		const centerProjected = projectScatterPoint(worldCenterPoint)
 		if (!centerProjected) {
 			return []
 		}
-		accepted.push(centerProjected.clone())
 
 		// Budget for overlap checks against existing instances.
 		const existingBudget = { totalChecks: 0 }
 		// Avoid repeated matrix updates during sampling.
 		scatterSession.groundMesh.updateMatrixWorld(true)
+
+		// Option B: center point also participates in non-overlap checks.
+		let centerOk = true
+		scatterPlacementCandidateLocalHelper.copy(centerProjected)
+		scatterSession.groundMesh.worldToLocal(scatterPlacementCandidateLocalHelper)
+		if (
+			scatterSession.neighborIndex &&
+			scatterSession.neighborIndex.size &&
+			!isScatterPlacementAvailableByIndex(
+				scatterSession,
+				scatterPlacementCandidateLocalHelper.x,
+				scatterPlacementCandidateLocalHelper.z,
+				spacingSq,
+				existingBudget,
+			)
+		) {
+			centerOk = false
+		}
+		if (!scatterSession.neighborIndex.size && !isScatterPlacementAvailable(centerProjected, spacing, scatterSession)) {
+			centerOk = false
+		}
+		if (centerOk) {
+			accepted.push(centerProjected.clone())
+		}
 
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			const u = Math.random()
@@ -1665,17 +1687,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
 		let minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
-		// If the asset units are mismatched (e.g. authored in cm but treated as meters), the bbox-derived
-		// spacing can dwarf the brush radius and collapse the stamp count to 1. Clamp to keep the tool usable.
-		if (minSpacing > effectiveRadius * 2) {
-			minSpacing = Math.max(0.01, effectiveRadius * 0.9)
-		}
+		// Enforce both bbox-derived spacing (prevents overlap) and preset spacing (category density hint).
+		minSpacing = Math.max(0.01, Math.max(minSpacing, preset.spacing))
 		const area = Math.PI * effectiveRadius * effectiveRadius
-		const maxNonOverlapping = Math.max(1, Math.floor(area / Math.max(minSpacing * minSpacing, 1e-4)))
-		// Use a conservative packing factor so distribution stays "natural".
+		const expectedCapacity = area / Math.max(minSpacing * minSpacing, 1e-4)
+		// Use a conservative packing factor so distribution stays "natural", but avoid nested floors that
+		// can make the count stick at 1 for a wide range of radii.
 		const targetCountPerStamp = Math.min(
 			SCATTER_MAX_PER_STAMP,
-			Math.max(1, Math.floor(maxNonOverlapping * SCATTER_PACKING_FACTOR)),
+			Math.max(1, Math.round(expectedCapacity * SCATTER_PACKING_FACTOR)),
 		)
 		const effectiveSpacing = minSpacing
 		const chunkCells = resolveChunkCellsForDefinition(definition)
