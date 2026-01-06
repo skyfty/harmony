@@ -722,6 +722,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterPreviewObject = cloned
 	}
 
+	function isPointerOverGround(definition: GroundDynamicMesh, worldPoint: THREE.Vector3): boolean {
+		const halfWidth = definition.width * 0.5
+		const halfDepth = definition.depth * 0.5
+		return (
+			Number.isFinite(worldPoint.x) &&
+			Number.isFinite(worldPoint.z) &&
+			worldPoint.x >= -halfWidth &&
+			worldPoint.x <= halfWidth &&
+			worldPoint.z >= -halfDepth &&
+			worldPoint.z <= halfDepth
+		)
+	}
+
 	function updateScatterHoverPreview(event: PointerEvent): void {
 		if (!scatterModeEnabled()) {
 			scatterPreviewGroup.visible = false
@@ -738,6 +751,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			scatterPreviewGroup.visible = false
+			return
+		}
+		if (!isPointerOverGround(definition, scatterPointerHelper)) {
 			scatterPreviewGroup.visible = false
 			return
 		}
