@@ -8639,6 +8639,18 @@ export const useSceneStore = defineStore('scene', {
         }
       })
       this.nodes = [...this.nodes]
+
+      // Dynamic mesh edits are runtime-visible (Road/Wall/Floor/Ground) and must enqueue a node patch
+      // so the viewport can reconcile and rebuild the corresponding Three.js objects immediately.
+      const updatedMeshType = typeof (target as any)?.dynamicMesh?.type === 'string' ? (target as any).dynamicMesh.type : null
+      if (
+        updatedMeshType === 'Road' ||
+        updatedMeshType === 'Wall' ||
+        updatedMeshType === 'Floor' ||
+        updatedMeshType === 'Ground'
+      ) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {
