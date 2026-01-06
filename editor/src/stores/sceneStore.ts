@@ -208,6 +208,7 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
+  AUTO_TOUR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -12924,6 +12925,18 @@ export const useSceneStore = defineStore('scene', {
       const statesToAdd: SceneNodeComponentState<any>[] = [requestedState]
 
       if (type === VEHICLE_COMPONENT_TYPE && !target.components?.[RIGIDBODY_COMPONENT_TYPE]) {
+        const rigidbodyDefinition = componentManager.getDefinition(RIGIDBODY_COMPONENT_TYPE)
+        if (rigidbodyDefinition?.canAttach(target)) {
+          statesToAdd.unshift({
+            id: generateUuid(),
+            type: RIGIDBODY_COMPONENT_TYPE,
+            enabled: true,
+            props: rigidbodyDefinition.createDefaultProps(target),
+          })
+        }
+      }
+
+      if (type === AUTO_TOUR_COMPONENT_TYPE && !target.components?.[RIGIDBODY_COMPONENT_TYPE]) {
         const rigidbodyDefinition = componentManager.getDefinition(RIGIDBODY_COMPONENT_TYPE)
         if (rigidbodyDefinition?.canAttach(target)) {
           statesToAdd.unshift({

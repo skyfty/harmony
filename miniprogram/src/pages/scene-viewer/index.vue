@@ -373,6 +373,7 @@ import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
 import {
   ENVIRONMENT_NODE_ID,
+  createAutoTourRuntime,
   type EnvironmentSettings,
   type SceneNode,
   type SceneNodeComponentState,
@@ -401,6 +402,8 @@ import {
   waterComponentDefinition,
   protagonistComponentDefinition,
   onlineComponentDefinition,
+  guideRouteComponentDefinition,
+  autoTourComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -412,9 +415,13 @@ import {
   VEHICLE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
+  AUTO_TOUR_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   clampVehicleComponentProps,
+  clampGuideRouteComponentProps,
+  clampAutoTourComponentProps,
   clampLodComponentProps,
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
@@ -437,6 +444,8 @@ import type {
   RigidbodyComponentProps,
   RigidbodyComponentMetadata,
   RigidbodyPhysicsShape,
+  GuideRouteComponentProps,
+  AutoTourComponentProps,
   VehicleComponentProps,
   VehicleWheelProps,
 } from '@schema/components';
@@ -1157,6 +1166,8 @@ previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
+previewComponentManager.registerDefinition(guideRouteComponentDefinition);
+previewComponentManager.registerDefinition(autoTourComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
@@ -3418,6 +3429,15 @@ function resolveVehicleComponent(
   }
   return component;
 }
+
+const autoTourRuntime = createAutoTourRuntime({
+  iterNodes: () => previewNodeMap.values(),
+  resolveNodeById,
+  nodeObjectMap,
+  rigidbodyInstances,
+  vehicleInstances,
+  isManualDriveActive: () => vehicleDriveActive.value,
+});
 
 function extractRigidbodyShape(
   component: SceneNodeComponentState<RigidbodyComponentProps> | null,
@@ -7873,6 +7893,8 @@ function startRenderLoop(
               console.warn('更新特效动画失败', error);
             }
           });
+
+          autoTourRuntime.update(deltaSeconds);
 
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces();

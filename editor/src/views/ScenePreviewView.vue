@@ -11,6 +11,7 @@ import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
 	ENVIRONMENT_NODE_ID,
+	createAutoTourRuntime,
 	type EnvironmentSettings,
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
@@ -92,6 +93,8 @@ import {
 	waterComponentDefinition,
 	protagonistComponentDefinition,
 	lodComponentDefinition,
+	guideRouteComponentDefinition,
+	autoTourComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -100,11 +103,15 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
+	GUIDE_ROUTE_COMPONENT_TYPE,
+	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
+	clampGuideRouteComponentProps,
+	clampAutoTourComponentProps,
 	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
@@ -116,6 +123,8 @@ import type {
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
+	GuideRouteComponentProps,
+	AutoTourComponentProps,
 	VehicleComponentProps,
 	VehicleWheelProps,
 	WarpGateComponentProps,
@@ -423,6 +432,8 @@ previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
 previewComponentManager.registerDefinition(lodComponentDefinition)
+previewComponentManager.registerDefinition(guideRouteComponentDefinition)
+previewComponentManager.registerDefinition(autoTourComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -1756,6 +1767,15 @@ function resolveVehicleComponent(
 	}
 	return component
 }
+
+const autoTourRuntime = createAutoTourRuntime({
+	iterNodes: () => previewNodeMap.values(),
+	resolveNodeById,
+	nodeObjectMap,
+	rigidbodyInstances,
+	vehicleInstances,
+	isManualDriveActive: () => vehicleDriveState.active,
+})
 
 function resolveLodComponent(
 	node: SceneNode | null | undefined,
@@ -5321,6 +5341,7 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 			console.warn('[ScenePreview] Failed to advance effect runtime', error)
 		}
 	})
+	autoTourRuntime.update(delta)
 	applyVehicleDriveForces()
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
