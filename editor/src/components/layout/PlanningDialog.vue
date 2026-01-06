@@ -2409,7 +2409,7 @@ function getLayerColor(layerId: string, alpha = 1) {
   return hexToRgba(layer.color, effectiveAlpha)
 }
 
-function getLayerKind(layerId: string) {
+function getLayerKind(layerId: string): LayerKind | null {
   return layers.value.find((layer) => layer.id === layerId)?.kind ?? null
 }
 
@@ -3461,20 +3461,11 @@ function startLineDraft(point: PlanningPoint) {
         if (newPoint === sourcePoint) {
           return
         }
-        if (sourceKind === 'guide-route') {
-          ensureGuideRouteWaypoints(sourceLine)
-        }
-        const sourceWaypointName = sourceKind === 'guide-route'
-          ? (sourceLine.waypoints?.[pendingSelectedVertex.vertexIndex]?.name ?? '')
-          : ''
         const newLine: PlanningPolyline = {
           id: createId('line'),
           name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
           layerId: sourceLine.layerId,
           points: [sourcePoint, newPoint],
-          waypoints: sourceKind === 'guide-route'
-            ? [{ name: sourceWaypointName }, { name: '点2' }]
-            : undefined,
           cornerSmoothness: sourceKind === 'wall'
             ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
             : undefined,

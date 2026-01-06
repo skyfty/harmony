@@ -25,6 +25,7 @@ import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import LodPanel from '@/components/inspector/LodPanel.vue'
 import GuideRoutePanel from '@/components/inspector/GuideRoutePanel.vue'
+import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@harmony/schema'
@@ -35,6 +36,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
+  AUTO_TOUR_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -568,6 +570,7 @@ watch(
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
+              <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
               <BehaviorPanel
