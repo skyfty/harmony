@@ -3,7 +3,8 @@ import { generateUuid } from '@/utils/uuid'
 import { useClipboardStore } from './clipboardStore'
 import * as clipboardHelpers from './clipboardHelpers'
 import { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID } from '@harmony/schema'
-import type { SceneNode, NodePrefabData, AssetIndexEntry } from '@harmony/schema'
+import type { SceneNode, AssetIndexEntry } from '@harmony/schema'
+import type { NodePrefabData } from '@/types/node-prefab'
 
 function createVector(x: number, y: number, z: number) {
   return { x, y, z }
@@ -346,7 +347,7 @@ export async function pasteClipboardAction(store: any, targetId?: string | null)
   const rootsToInsert: SceneNode[] = []
   if (multiRoot && duplicate.nodeType === 'Group' && duplicate.children?.length) {
     const wrapperWorld = clipboardHelpers.composeNodeMatrix(duplicate)
-    duplicate.children.forEach((child) => {
+    duplicate.children.forEach((child: SceneNode) => {
       const childWorld = new Matrix4().multiplyMatrices(wrapperWorld, clipboardHelpers.composeNodeMatrix(child))
       applyWorldToParentLocal(child, childWorld, resolvedParentId)
       rootsToInsert.push(child)

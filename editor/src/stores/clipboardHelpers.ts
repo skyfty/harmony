@@ -1,5 +1,6 @@
 import { Matrix4, Vector3, Quaternion, Euler } from 'three'
-import type { SceneNode, NodePrefabData, AssetIndexEntry } from '@harmony/schema'
+import type { SceneNode, AssetIndexEntry } from '@harmony/schema'
+import type { NodePrefabData } from '@/types/node-prefab'
 
 import { generateUuid } from '@/utils/uuid'
 import type { Vector3Like } from '@/types/transform-update-payload'
@@ -76,11 +77,7 @@ function composeNodeMatrix(node: SceneNode): Matrix4 {
   return new Matrix4().compose(position, quaternion, scale)
 }
 
-function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
-  const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
-  const root = prepareNodePrefabRoot(node)
-  return { formatVersion: NODE_PREFAB_FORMAT_VERSION, name: normalizedName, root }
-}
+
 
 function parseNodePrefab(raw: string): NodePrefabData {
   let parsed: unknown
@@ -307,9 +304,22 @@ export {
   createNodePrefabData,
   parseNodePrefab,
   deserializeSceneNode,
+  computeWorldMatrixForNode,
+  findNodeById,
+  
+  prepareNodePrefabRoot,
+  ensurePrefabGroupRoot,
+  serializeNodePrefab,
+  stripPrefabTransientFields,
 }
 
 export default {
+  composeNodeMatrix,
+  createNodePrefabData,
+  parseNodePrefab,
+  deserializeSceneNode,
+  computeWorldMatrixForNode,
+  findNodeById,
   collectClipboardPayload,
   buildSerializedPrefabPayload,
   prepareNodePrefabRoot,

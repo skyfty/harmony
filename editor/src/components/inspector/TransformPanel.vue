@@ -2,7 +2,7 @@
 import { onBeforeUnmount, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
-import type Direction from '@/components/common/VectorControls.vue'
+import type { Direction } from '@/components/common/VectorControls.vue'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 
