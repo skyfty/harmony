@@ -908,6 +908,7 @@ export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamic
 
 export interface ClipboardEntry {
   sourceId: string
+  sourceParentId?: string | null
   root: SceneNode
   serialized: string
 }
