@@ -206,73 +206,18 @@ const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.45
 const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3 // 降低目标抬升比例
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.5   // 降低最小抬升
-// 跟随相机位置插值速度
-const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
-// 跟随相机目标插值速度
-const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
-// 跟随相机朝向插值速度
-const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
 // 目标点前向偏移比例
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.82
 // 目标点最小前向偏移
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
-// 跟随相机前瞻时间（秒）
-const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
-// 跟随相机最大前瞻距离
-const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
-// 前瞻激活的最小速度平方
-const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
-// 前瞻混合起始速度
-const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START = 0.25
-// 前瞻完全激活的速度
-const VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED = Math.sqrt(VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ)
-const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START)
-// 锚点插值速度
-const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
-// 判断倒车的点积阈值
-const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
-// 判断前进的点积阈值
-const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
-// 碰撞锁定锚点的速度平方阈值
-const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
-// 碰撞锁定锚点的方向点积阈值
-const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
-// 碰撞锁定锚点的持续时间（秒）
-const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
-// 前瞻混合插值速度
-const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_SPEED = 4
-// 跟随相机运动混合起始速度
-const VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD = 0.7
-// 跟随相机运动混合最大速度
-const VEHICLE_FOLLOW_MOTION_SPEED_FULL = 6
-// 跟随相机运动混合插值速度
-const VEHICLE_FOLLOW_MOTION_BLEND_SPEED = 3.2
-// 跟随相机运动距离提升比例
-const VEHICLE_FOLLOW_MOTION_DISTANCE_BOOST = 0.28
-// 跟随相机运动高度提升比例
-const VEHICLE_FOLLOW_MOTION_HEIGHT_BOOST = 0.22
-// 跟随相机运动混合速度区间
-const VEHICLE_FOLLOW_MOTION_SPEED_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_MOTION_SPEED_FULL - VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD)
 // 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
-// 判断车辆移动的速度平方阈值
-const VEHICLE_CAMERA_MOVING_SPEED_SQ = 0.04
 
 function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
   }
   return Math.max(-1, Math.min(1, value))
-}
-
-function computeVehicleFollowLerpAlpha(delta: number, speed: number): number {
-  if (!Number.isFinite(delta) || delta <= 0) {
-    return 0
-  }
-  if (speed <= 0) {
-    return 1
-  }
-  return 1 - Math.exp(-speed * delta)
 }
 
 function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: number; height: number; length: number } {
@@ -851,66 +796,10 @@ export class VehicleDriveController {
     target.addScaledVector(VEHICLE_CAMERA_WORLD_UP, upOffset)
   }
 
-  private ensureVehicleFollowLocalOffset(placement: VehicleFollowPlacement): void {
-    const follow = this.bindings.cameraFollowState
-    if (!follow.hasLocalOffset) {
-      follow.localOffset.set(0, placement.heightOffset, -placement.distance)
-      follow.hasLocalOffset = true
-      return
-    }
-    this.clampVehicleFollowLocalOffset(placement)
-  }
-
   private resetVehicleFollowLocalOffset(): void {
     const follow = this.bindings.cameraFollowState
     follow.localOffset.set(0, 0, 0)
     follow.hasLocalOffset = false
-  }
-
-  private enforceVehicleFollowBehind(placement: VehicleFollowPlacement): void {
-    const follow = this.bindings.cameraFollowState
-    const local = follow.localOffset
-    const minBack = Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN)
-    const minHeight = Math.max(placement.heightOffset, VEHICLE_FOLLOW_HEIGHT_MIN)
-    if (!Number.isFinite(local.x) || !Number.isFinite(local.y) || !Number.isFinite(local.z)) {
-      local.set(0, minHeight, -minBack)
-      follow.hasLocalOffset = true
-      return
-    }
-    let adjusted = false
-    if (local.z > -minBack) {
-      local.z = -minBack
-      adjusted = true
-    }
-    if (local.y < minHeight) {
-      local.y = minHeight
-      adjusted = true
-    }
-    if (Math.abs(local.x) > 1e-4) {
-      local.x = 0
-      adjusted = true
-    }
-    if (adjusted) {
-      follow.hasLocalOffset = true
-    }
-  }
-
-  private clampVehicleFollowLocalOffset(placement?: VehicleFollowPlacement): void {
-    const follow = this.bindings.cameraFollowState
-    const local = follow.localOffset
-    const length = local.length()
-    const minDistance = VEHICLE_FOLLOW_DISTANCE_MIN
-    const maxDistance = VEHICLE_FOLLOW_DISTANCE_MAX
-    const fallbackHeight = placement ? Math.max(placement.heightOffset, VEHICLE_FOLLOW_HEIGHT_MIN) : VEHICLE_FOLLOW_HEIGHT_MIN
-    const fallbackDistance = placement ? Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN) : VEHICLE_FOLLOW_DISTANCE_MIN
-    if (!Number.isFinite(length) || length < 1e-3) {
-      local.set(0, fallbackHeight, -Math.max(minDistance, fallbackDistance))
-      return
-    }
-    const clamped = Math.min(maxDistance, Math.max(minDistance, length))
-    if (Math.abs(clamped - length) > 1e-4) {
-      local.multiplyScalar(clamped / length)
-    }
   }
 
   updateCamera(delta: number, ctx: VehicleDriveCameraContext, options: VehicleDriveCameraOptions = {}): boolean {
