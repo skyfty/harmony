@@ -59,6 +59,7 @@ import type {
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
+import type { ClipboardEnvelope, ClipboardMeta, QuaternionJson } from '@/types/prefab'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
 import type { EditorTool } from '@/types/editor-tool'
@@ -10171,17 +10172,23 @@ export const useSceneStore = defineStore('scene', {
         runtimeSnapshots,
         regenerateBehaviorIds: true,
       })
-      const spawnPosition = options.position
-        ? options.position.clone()
-        : resolveSpawnPosition({
-            baseY: 0,
-            radius: DEFAULT_SPAWN_RADIUS,
-            localCenter: new Vector3(0, 0, 0),
-            camera: this.camera,
-            nodes: this.nodes,
-            snapToGrid: true,
-          })
-      duplicate.position = toPlainVector(spawnPosition)
+      const requestedPosition = options.position
+      const spawnPosition =
+        requestedPosition === undefined
+          ? resolveSpawnPosition({
+              baseY: 0,
+              radius: DEFAULT_SPAWN_RADIUS,
+              localCenter: new Vector3(0, 0, 0),
+              camera: this.camera,
+              nodes: this.nodes,
+              snapToGrid: true,
+            })
+          : requestedPosition === null
+            ? null
+            : requestedPosition.clone()
+      if (spawnPosition) {
+        duplicate.position = toPlainVector(spawnPosition)
+      }
       duplicate.rotation = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
       duplicate.scale = duplicate.scale ?? { x: 1, y: 1, z: 1 }
       if (duplicate.nodeType === 'Group') {
@@ -13876,31 +13883,90 @@ export const useSceneStore = defineStore('scene', {
 
       const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, topLevelIds)
 
+      const computeSelectionBoundsCenterWorld = (): Vector3 => {
+        const boundingInfo = collectNodeBoundingInfo(this.nodes)
+        const selectionBounds = new Box3()
+        let boundsInitialized = false
+        topLevelIds.forEach((id) => {
+          const info = boundingInfo.get(id)
+          if (!info || info.bounds.isEmpty()) {
+            return
+          }
+          if (!boundsInitialized) {
+            selectionBounds.copy(info.bounds)
+            boundsInitialized = true
+          } else {
+            selectionBounds.union(info.bounds)
+          }
+        })
+
+        if (boundsInitialized && !selectionBounds.isEmpty()) {
+          return selectionBounds.getCenter(new Vector3())
+        }
+
+        const fallbackCenter = new Vector3()
+        let count = 0
+        topLevelIds.forEach((id) => {
+          const matrix = computeWorldMatrixForNode(this.nodes, id)
+          if (!matrix) return
+          const position = new Vector3()
+          const quaternion = new Quaternion()
+          const scale = new Vector3()
+          matrix.decompose(position, quaternion, scale)
+          fallbackCenter.add(position)
+          count += 1
+        })
+        if (count > 0) fallbackCenter.multiplyScalar(1 / count)
+        return fallbackCenter
+      }
+
       const buildClipboardPrefab = (): { serialized: string; cut: boolean } | null => {
         if (topLevelIds.length === 1) {
           const node = findNodeById(this.nodes, topLevelIds[0]!)
           if (!node) return null
           if (node.nodeType === 'Group') {
+            const rootWorld = computeWorldMatrixForNode(this.nodes, node.id)
+            let rootWorldPosition: Vector3Like | undefined
+            let rootWorldRotation: QuaternionJson | undefined
+            let rootWorldScale: Vector3Like | undefined
+            if (rootWorld) {
+              const position = new Vector3()
+              const quaternion = new Quaternion()
+              const scale = new Vector3()
+              rootWorld.decompose(position, quaternion, scale)
+              rootWorldPosition = toPlainVector(position)
+              rootWorldRotation = { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+              rootWorldScale = toPlainVector(scale)
+            }
             const payload = buildSerializedPrefabPayload(node, {
               name: node.name ?? '',
               assetIndex: this.assetIndex,
               packageAssetMap: this.packageAssetMap,
               sceneNodes: this.nodes,
             })
-            const serialized = JSON.stringify({ ...payload.prefab, clipboard: { mode: 'copy', multiRoot: false } }, null, 2)
+            const serialized = JSON.stringify(
+              {
+                ...payload.prefab,
+                clipboard: {
+                  mode: 'copy',
+                  multiRoot: false,
+                  meta: {
+                    rootWorldPosition,
+                    rootWorldRotation,
+                    rootWorldScale,
+                  },
+                },
+              },
+              null,
+              2,
+            )
             return { serialized, cut: false }
           }
         }
 
-        const firstWorld = computeWorldMatrixForNode(this.nodes, topLevelIds[0]!)
+        const pivotWorldCenter = computeSelectionBoundsCenterWorld()
         const pivotTranslation = new Matrix4().identity()
-        if (firstWorld) {
-          const pivotPos = new Vector3()
-          const pivotQuat = new Quaternion()
-          const pivotScale = new Vector3()
-          firstWorld.decompose(pivotPos, pivotQuat, pivotScale)
-          pivotTranslation.makeTranslation(pivotPos.x, pivotPos.y, pivotPos.z)
-        }
+        pivotTranslation.makeTranslation(pivotWorldCenter.x, pivotWorldCenter.y, pivotWorldCenter.z)
         const pivotInverse = pivotTranslation.clone().invert()
 
         const wrapperId = generateUuid()
@@ -13951,7 +14017,21 @@ export const useSceneStore = defineStore('scene', {
           sceneNodes: this.nodes,
         })
 
-        const serialized = JSON.stringify({ ...payload.prefab, clipboard: { mode: 'copy', multiRoot: true, rootChildIds } }, null, 2)
+        const serialized = JSON.stringify(
+          {
+            ...payload.prefab,
+            clipboard: {
+              mode: 'copy',
+              multiRoot: true,
+              rootChildIds,
+              meta: {
+                pivotWorldPosition: toPlainVector(pivotWorldCenter),
+              },
+            },
+          },
+          null,
+          2,
+        )
         return { serialized, cut: false }
       }
 
@@ -13986,30 +14066,89 @@ export const useSceneStore = defineStore('scene', {
 
       const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, topLevelIds)
 
+      const computeSelectionBoundsCenterWorld = (): Vector3 => {
+        const boundingInfo = collectNodeBoundingInfo(this.nodes)
+        const selectionBounds = new Box3()
+        let boundsInitialized = false
+        topLevelIds.forEach((id) => {
+          const info = boundingInfo.get(id)
+          if (!info || info.bounds.isEmpty()) {
+            return
+          }
+          if (!boundsInitialized) {
+            selectionBounds.copy(info.bounds)
+            boundsInitialized = true
+          } else {
+            selectionBounds.union(info.bounds)
+          }
+        })
+
+        if (boundsInitialized && !selectionBounds.isEmpty()) {
+          return selectionBounds.getCenter(new Vector3())
+        }
+
+        const fallbackCenter = new Vector3()
+        let count = 0
+        topLevelIds.forEach((id) => {
+          const matrix = computeWorldMatrixForNode(this.nodes, id)
+          if (!matrix) return
+          const position = new Vector3()
+          const quaternion = new Quaternion()
+          const scale = new Vector3()
+          matrix.decompose(position, quaternion, scale)
+          fallbackCenter.add(position)
+          count += 1
+        })
+        if (count > 0) fallbackCenter.multiplyScalar(1 / count)
+        return fallbackCenter
+      }
+
       const buildClipboardPrefab = (): string | null => {
         if (topLevelIds.length === 1) {
           const node = findNodeById(this.nodes, topLevelIds[0]!)
           if (!node) return null
           if (node.nodeType === 'Group') {
+            const rootWorld = computeWorldMatrixForNode(this.nodes, node.id)
+            let rootWorldPosition: Vector3Like | undefined
+            let rootWorldRotation: QuaternionJson | undefined
+            let rootWorldScale: Vector3Like | undefined
+            if (rootWorld) {
+              const position = new Vector3()
+              const quaternion = new Quaternion()
+              const scale = new Vector3()
+              rootWorld.decompose(position, quaternion, scale)
+              rootWorldPosition = toPlainVector(position)
+              rootWorldRotation = { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+              rootWorldScale = toPlainVector(scale)
+            }
             const payload = buildSerializedPrefabPayload(node, {
               name: node.name ?? '',
               assetIndex: this.assetIndex,
               packageAssetMap: this.packageAssetMap,
               sceneNodes: this.nodes,
             })
-            return JSON.stringify({ ...payload.prefab, clipboard: { mode: 'cut', multiRoot: false } }, null, 2)
+            return JSON.stringify(
+              {
+                ...payload.prefab,
+                clipboard: {
+                  mode: 'cut',
+                  multiRoot: false,
+                  meta: {
+                    rootWorldPosition,
+                    rootWorldRotation,
+                    rootWorldScale,
+                  },
+                },
+              },
+              null,
+              2,
+            )
           }
         }
 
-        const firstWorld = computeWorldMatrixForNode(this.nodes, topLevelIds[0]!)
+        const pivotWorldCenter = computeSelectionBoundsCenterWorld()
         const pivotTranslation = new Matrix4().identity()
-        if (firstWorld) {
-          const pivotPos = new Vector3()
-          const pivotQuat = new Quaternion()
-          const pivotScale = new Vector3()
-          firstWorld.decompose(pivotPos, pivotQuat, pivotScale)
-          pivotTranslation.makeTranslation(pivotPos.x, pivotPos.y, pivotPos.z)
-        }
+        pivotTranslation.makeTranslation(pivotWorldCenter.x, pivotWorldCenter.y, pivotWorldCenter.z)
         const pivotInverse = pivotTranslation.clone().invert()
 
         const wrapperId = generateUuid()
@@ -14060,7 +14199,21 @@ export const useSceneStore = defineStore('scene', {
           sceneNodes: this.nodes,
         })
 
-        return JSON.stringify({ ...payload.prefab, clipboard: { mode: 'cut', multiRoot: true, rootChildIds } }, null, 2)
+        return JSON.stringify(
+          {
+            ...payload.prefab,
+            clipboard: {
+              mode: 'cut',
+              multiRoot: true,
+              rootChildIds,
+              meta: {
+                pivotWorldPosition: toPlainVector(pivotWorldCenter),
+              },
+            },
+          },
+          null,
+          2,
+        )
       }
 
       const serialized = buildClipboardPrefab()
@@ -14088,12 +14241,12 @@ export const useSceneStore = defineStore('scene', {
       const normalized = serialized?.trim()
       if (!normalized) return false
 
-      let clipboardMeta: { mode?: string; multiRoot?: boolean; rootChildIds?: unknown } | null = null
+      let clipboardMeta: ClipboardMeta | null = null
       try {
         const parsed = JSON.parse(normalized) as unknown
         if (parsed && typeof parsed === 'object' && 'clipboard' in (parsed as any)) {
           const candidate = (parsed as any).clipboard
-          if (candidate && typeof candidate === 'object') clipboardMeta = candidate as { mode?: string; multiRoot?: boolean; rootChildIds?: unknown }
+          if (candidate && typeof candidate === 'object') clipboardMeta = candidate as ClipboardMeta
         }
       } catch {
         // ignore
@@ -14142,9 +14295,24 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const runtimeSnapshots = clipboardStore.clipboard?.runtimeSnapshots ?? new Map<string, any>()
-      const duplicate = await this.instantiatePrefabData(prefab, { runtimeSnapshots, position: null })
 
       const multiRoot = Boolean(clipboardMeta?.multiRoot)
+      const metaPayload = clipboardMeta?.meta ?? null
+      const pivotWorld = metaPayload?.pivotWorldPosition
+      const rootWorldPosition = metaPayload?.rootWorldPosition
+
+      const requestedPosition = multiRoot
+        ? pivotWorld
+          ? new Vector3(pivotWorld.x ?? 0, pivotWorld.y ?? 0, pivotWorld.z ?? 0)
+          : undefined
+        : rootWorldPosition
+          ? new Vector3(rootWorldPosition.x ?? 0, rootWorldPosition.y ?? 0, rootWorldPosition.z ?? 0)
+          : undefined
+
+      const duplicate = await this.instantiatePrefabData(prefab, {
+        runtimeSnapshots,
+        position: requestedPosition,
+      })
       this.syncComponentSubtree(duplicate)
 
       const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
@@ -14175,7 +14343,16 @@ export const useSceneStore = defineStore('scene', {
           rootsToInsert.push(child)
         })
       } else {
-        const rootWorld = composeNodeMatrix(duplicate)
+        const rotation = metaPayload?.rootWorldRotation
+        const scale = metaPayload?.rootWorldScale
+        const hasFullRootTransform = Boolean(rootWorldPosition && rotation && scale)
+        const rootWorld = hasFullRootTransform
+          ? new Matrix4().compose(
+              new Vector3(rootWorldPosition!.x ?? 0, rootWorldPosition!.y ?? 0, rootWorldPosition!.z ?? 0),
+              new Quaternion(rotation!.x, rotation!.y, rotation!.z, rotation!.w),
+              new Vector3(scale!.x ?? 1, scale!.y ?? 1, scale!.z ?? 1),
+            )
+          : composeNodeMatrix(duplicate)
         applyWorldToParentLocal(duplicate, rootWorld, resolvedParentId)
         rootsToInsert.push(duplicate)
       }
