@@ -4561,6 +4561,122 @@ function alignCameraToVehicleExit(): boolean {
 	return success
 }
 
+const VEHICLE_EXIT_LATERAL_RATIO = 0.6
+const VEHICLE_EXIT_FORWARD_RATIO = 0.35
+const VEHICLE_EXIT_VERTICAL_RATIO = 0.25
+const VEHICLE_EXIT_LATERAL_MIN = 1.25
+const VEHICLE_EXIT_FORWARD_MIN = 1.25
+const VEHICLE_EXIT_VERTICAL_MIN = 0.6
+const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
+const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45
+const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
+
+function alignCameraToVehicleExitForNode(nodeId: string): boolean {
+	if (!camera) {
+		return false
+	}
+	const vehicleNodeId = normalizeNodeId(nodeId)
+	if (!vehicleNodeId) {
+		return false
+	}
+	const vehicleObject = nodeObjectMap.get(vehicleNodeId) ?? null
+	if (!vehicleObject) {
+		return false
+	}
+	const instance = vehicleInstances.get(vehicleNodeId) ?? null
+
+	vehicleObject.updateMatrixWorld(true)
+
+	// --- seat position (fallback) ---
+	tempBox.makeEmpty()
+	tempBox.setFromObject(vehicleObject)
+	if (!Number.isFinite(tempBox.min.x) || tempBox.isEmpty()) {
+		vehicleObject.getWorldPosition(tempPosition)
+		tempPosition.addScaledVector(AUTO_TOUR_CAMERA_WORLD_UP, VEHICLE_CAMERA_FALLBACK_HEIGHT)
+	} else {
+		tempBox.getCenter(tempPosition)
+		tempBox.getSize(tempTarget)
+		const upOffset = Math.max(tempTarget.y * VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO, VEHICLE_CAMERA_FALLBACK_HEIGHT)
+		tempPosition.addScaledVector(AUTO_TOUR_CAMERA_WORLD_UP, upOffset)
+	}
+
+	// --- basis vectors (match VehicleDriveController.computeVehicleBasis) ---
+	vehicleObject.getWorldQuaternion(tempQuaternion)
+	if (instance) {
+		tempDirection.copy(instance.axisForward).applyQuaternion(tempQuaternion)
+		tempTarget.copy(instance.axisUp).applyQuaternion(tempQuaternion)
+	} else {
+		tempDirection.set(0, 0, -1).applyQuaternion(tempQuaternion)
+		tempTarget.set(0, 1, 0).applyQuaternion(tempQuaternion)
+	}
+	if (tempDirection.lengthSq() < 1e-8) {
+		tempDirection.set(0, 0, -1)
+	} else {
+		tempDirection.normalize()
+	}
+	if (tempTarget.lengthSq() < 1e-8) {
+		tempTarget.copy(AUTO_TOUR_CAMERA_WORLD_UP)
+	} else {
+		tempTarget.normalize()
+	}
+	const seatForward = tempDirection
+	const seatUp = tempTarget
+	const seatRight = protagonistPoseDirection.copy(seatForward).cross(seatUp)
+	if (seatRight.lengthSq() < 1e-8) {
+		seatRight.copy(AUTO_TOUR_CAMERA_WORLD_UP).cross(seatForward)
+	}
+	if (seatRight.lengthSq() < 1e-8) {
+		seatRight.set(1, 0, 0)
+	} else {
+		seatRight.normalize()
+	}
+	seatUp.crossVectors(seatRight, seatForward)
+	if (seatUp.lengthSq() < 1e-8) {
+		seatUp.copy(AUTO_TOUR_CAMERA_WORLD_UP)
+	} else {
+		seatUp.normalize()
+	}
+
+	// --- dimensions (match VehicleDriveController.getVehicleApproxDimensions) ---
+	tempBox.makeEmpty()
+	tempBox.setFromObject(vehicleObject)
+	let width = VEHICLE_SIZE_FALLBACK.width
+	let height = VEHICLE_SIZE_FALLBACK.height
+	let length = VEHICLE_SIZE_FALLBACK.length
+	if (Number.isFinite(tempBox.min.x) && !tempBox.isEmpty()) {
+		tempBox.getSize(tempTarget)
+		width = Math.max(tempTarget.x, VEHICLE_SIZE_FALLBACK.width)
+		height = Math.max(tempTarget.y, VEHICLE_SIZE_FALLBACK.height)
+		length = Math.max(tempTarget.z, VEHICLE_SIZE_FALLBACK.length)
+	}
+	const lateralOffset = Math.max(width * VEHICLE_EXIT_LATERAL_RATIO, VEHICLE_EXIT_LATERAL_MIN)
+	const verticalOffset = Math.max(height * VEHICLE_EXIT_VERTICAL_RATIO, VEHICLE_EXIT_VERTICAL_MIN)
+	const forwardOffset = Math.max(length * VEHICLE_EXIT_FORWARD_RATIO, VEHICLE_EXIT_FORWARD_MIN)
+
+	// Camera position: left side (-right), a bit up; look a bit forward.
+	tempPosition.addScaledVector(seatRight, -lateralOffset)
+	tempPosition.addScaledVector(seatUp, verticalOffset)
+	protagonistPoseTarget.copy(tempPosition).addScaledVector(seatForward, forwardOffset)
+
+	camera.up.copy(seatUp)
+	camera.position.copy(tempPosition)
+	camera.lookAt(protagonistPoseTarget)
+	camera.updateMatrixWorld(true)
+	if (mapControls) {
+		mapControls.target.copy(protagonistPoseTarget)
+		mapControls.update()
+	}
+
+	lastOrbitState.position.copy(camera.position)
+	if (mapControls) {
+		lastOrbitState.target.copy(mapControls.target)
+	} else {
+		lastOrbitState.target.copy(protagonistPoseTarget)
+	}
+	syncLastFirstPersonStateFromCamera()
+	return true
+}
+
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (!targetNodeId) {
@@ -4671,7 +4787,15 @@ function handleVehicleAutoTourStopClick(): void {
 	if (!event || vehicleDrivePromptBusy.value) {
 		return
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	const currentTourNodeId = resolveAutoTourFollowNodeId(
+		autoTourFollowNodeId.value,
+		cameraViewState.watchTargetId,
+		activeAutoTourNodeIds,
+		previewNodeMap.keys(),
+		autoTourRuntime,
+	)
+	const promptNodeId = event.targetNodeId ?? event.nodeId ?? null
+	const targetNodeId = currentTourNodeId ?? promptNodeId
 	if (!targetNodeId) {
 		return
 	}
@@ -4690,7 +4814,12 @@ function handleVehicleAutoTourStopClick(): void {
 				setCameraCaging(false, { force: true })
 			}
 		})
-		// Remain in normal state; user can choose Drive again or stay idle.
+		// Stop-tour should close the prompt and place the camera at the vehicle's left-side exit.
+		pendingVehicleDriveEvent.value = null
+		const aligned = alignCameraToVehicleExitForNode(targetNodeId)
+		if (!aligned) {
+			appendWarningMessage('Could not find the default exit position after stopping the tour.')
+		}
 	} finally {
 		vehicleDrivePromptBusy.value = false
 	}
@@ -4735,6 +4864,22 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	}
 }
 
+function handleVehicleDrivePromptClose(): void {
+	const event = pendingVehicleDriveEvent.value
+ 	if (!event) {
+ 		return
+ 	}
+	// Resolve token as an abort so scripts know the request was cancelled
+	try {
+		resolveBehaviorToken(event.token, { type: 'abort', message: 'User cancelled drive request' })
+	} catch (_e) {
+		// ignore
+	}
+	pendingVehicleDriveEvent.value = null
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+}
+
 function handleVehicleDriveExitClick(): void {
 	if (!vehicleDriveState.active || vehicleDriveExitBusy.value) {
 		return
@@ -4746,7 +4891,8 @@ function handleVehicleDriveExitClick(): void {
 			appendWarningMessage('Could not find the default exit position; restoring the previous view.')
 		}
 		handleHideVehicleCockpitEvent()
-		stopVehicleDriveMode({ resolution: { type: 'continue' } })
+		pendingVehicleDriveEvent.value = null
+		stopVehicleDriveMode({ resolution: { type: 'continue' }, preserveCamera: true })
 	} finally {
 		vehicleDriveExitBusy.value = false
 	}
@@ -9137,6 +9283,16 @@ onBeforeUnmount(() => {
 				@click="handleVehicleAutoTourStopClick"
 			>
 				停止巡游 {{ vehicleDrivePrompt.label }}
+			</v-btn>
+			<v-btn
+				v-if="!vehicleDrivePrompt.showStopTour"
+				color="" 
+				variant="flat"
+				size="large"
+				:loading="false"
+				@click="handleVehicleDrivePromptClose"
+			>
+				关闭
 			</v-btn>
 		</v-btn-group>
 		<div

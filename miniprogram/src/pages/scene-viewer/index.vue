@@ -198,43 +198,56 @@
         v-if="vehicleDrivePrompt.visible"
         class="viewer-drive-start"
       >
-        <view class="viewer-drive-start__group">
-          <button
-            v-if="vehicleDrivePrompt.showDrive"
-            class="viewer-drive-start__text-button"
-            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-            :disabled="vehicleDrivePrompt.busy"
-            type="button"
-            hover-class="none"
-            aria-label="进入驾驶模式"
-            @tap="handleVehicleDrivePromptTap"
-          >
-            <text>驾驶 {{ vehicleDrivePrompt.label }}</text>
-          </button>
-          <button
-            v-if="vehicleDrivePrompt.showAutoTour"
-            class="viewer-drive-start__text-button"
-            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-            :disabled="vehicleDrivePrompt.busy"
-            type="button"
-            hover-class="none"
-            aria-label="自动巡游"
-            @tap="handleVehicleAutoTourStartTap"
-          >
-            <text>自动巡游</text>
-          </button>
-          <button
-            v-if="vehicleDrivePrompt.showStopTour"
-            class="viewer-drive-start__text-button viewer-drive-start__text-button--stop"
-            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-            :disabled="vehicleDrivePrompt.busy"
-            type="button"
-            hover-class="none"
-            aria-label="停止巡游"
-            @tap="handleVehicleAutoTourStopTap"
-          >
-            <text>停止巡游 {{ vehicleDrivePrompt.label }}</text>
-          </button>
+        <view class="viewer-drive-start__panel">
+          <view class="viewer-drive-start__group">
+            <button
+              v-if="vehicleDrivePrompt.showDrive"
+              class="viewer-drive-start__text-button"
+              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+              :disabled="vehicleDrivePrompt.busy"
+              type="button"
+              hover-class="none"
+              aria-label="进入驾驶模式"
+              @tap="handleVehicleDrivePromptTap"
+            >
+              <text>驾驶 {{ vehicleDrivePrompt.label }}</text>
+            </button>
+            <button
+              v-if="vehicleDrivePrompt.showAutoTour"
+              class="viewer-drive-start__text-button"
+              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+              :disabled="vehicleDrivePrompt.busy"
+              type="button"
+              hover-class="none"
+              aria-label="自动巡游"
+              @tap="handleVehicleAutoTourStartTap"
+            >
+              <text>自动巡游</text>
+            </button>
+            <button
+              v-if="vehicleDrivePrompt.showStopTour"
+              class="viewer-drive-start__text-button viewer-drive-start__text-button--stop"
+              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+              :disabled="vehicleDrivePrompt.busy"
+              type="button"
+              hover-class="none"
+              aria-label="停止巡游"
+              @tap="handleVehicleAutoTourStopTap"
+            >
+              <text>停止巡游 {{ vehicleDrivePrompt.label }}</text>
+            </button>
+            <!-- Close prompt without entering drive or tour (text button) -->
+            <button
+              v-if="!vehicleDrivePrompt.showStopTour"
+              class="viewer-drive-start__text-button viewer-drive-start__text-button--close"
+              type="button"
+              hover-class="none"
+              aria-label="关闭"
+              @tap="handleVehicleDrivePromptClose"
+            >
+              <text>关闭</text>
+            </button>
+          </view>
         </view>
       </view>
       <view
@@ -6546,6 +6559,25 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
   }
 }
 
+function handleVehicleDrivePromptClose(): void {
+  const event = pendingVehicleDriveEvent.value;
+  if (!event) {
+    return;
+  }
+  // Resolve the behavior token to indicate the request was aborted by user.
+  try {
+    resolveBehaviorToken(event.token, {
+      type: 'abort',
+      message: '用户取消驾驶请求',
+    });
+  } catch (e) {
+    // ignore
+  }
+  pendingVehicleDriveEvent.value = null;
+  vehicleDrivePromptBusy.value = false;
+  setVehicleDriveUiOverride('hide');
+}
+
 function handleVehicleAutoTourStartTap(): void {
   const event = pendingVehicleDriveEvent.value;
   if (!event || vehicleDrivePromptBusy.value) {
@@ -8826,9 +8858,13 @@ onUnmounted(() => {
 
 .viewer-drive-start {
   position: absolute;
-  right: 16px;
-  bottom: 320px;
+  /* place start controls at bottom center and horizontal */
+  left: 50%;
+  right: auto;
+  bottom: calc(16px + var(--viewer-safe-area-bottom, 0px));
+  transform: translateX(-50%);
   z-index: 1540;
+  transition: transform 220ms cubic-bezier(.2,.9,.2,1), left 220ms ease;
 }
 
 .viewer-drive-start__button {
@@ -8942,16 +8978,18 @@ onUnmounted(() => {
 }
 
 .viewer-drive-cluster--joystick {
-  left: 16px;
+  right: 16px;
+  left: auto;
   bottom: 16px;
   align-items: center;
 }
 
 .viewer-drive-cluster--floating {
-  left: 0;
+  right: 50%;
+  left: auto;
   top: 0;
   bottom: auto;
-  transform: translate(-50%, -50%);
+  transform: translate(50%, -50%);
   transition: opacity 0.24s ease;
 }
 
@@ -8962,12 +9000,14 @@ onUnmounted(() => {
 .viewer-drive-cluster--throttle {
   right: 16px;
   bottom: 16px;
+  left: auto;
   align-items: flex-end;
   gap: 14px;
 }
 
 .viewer-drive-cluster--actions {
   right: 16px;
+  left: auto;
   top: calc(30% + var(--viewer-safe-area-top, 0px));
   transform: translateY(-50%);
   align-items: flex-end;
@@ -8988,7 +9028,9 @@ onUnmounted(() => {
   color: #f4f6ff;
   box-shadow: 0 10px 24px rgba(4, 6, 18, 0.45);
   backdrop-filter: blur(12px);
-  transition: background-color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+  transition: background-color 0.18s ease, transform 0.18s cubic-bezier(.2,.9,.2,1), opacity 0.18s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .viewer-drive-icon-button--danger {
@@ -9004,6 +9046,112 @@ onUnmounted(() => {
 
 .viewer-drive-icon-button:active {
   transform: scale(0.95);
+}
+
+/* Tooltip from aria-label on hover (desktop/H5) */
+.viewer-drive-icon-button:hover::after {
+  content: attr(aria-label);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  bottom: 100%;
+  margin-bottom: 8px;
+  background: rgba(6,10,24,0.9);
+  color: #f7fbff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* small click ripple effect */
+.viewer-drive-icon-button::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  transition: transform 420ms cubic-bezier(.2,.9,.2,1), opacity 420ms linear;
+}
+.viewer-drive-icon-button:active::before {
+  transform: translate(-50%, -50%) scale(10);
+  opacity: 1;
+}
+
+/* Text-style start buttons (drive / auto-tour) */
+.viewer-drive-start__text-button {
+  position: relative;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(8,12,28,0.6);
+  color: #f7fbff;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 10px 22px rgba(3,6,18,0.30);
+  backdrop-filter: blur(10px);
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease, background-color 160ms ease;
+}
+.viewer-drive-start__text-button:active {
+  transform: translateY(1px) scale(0.985);
+}
+.viewer-drive-start__text-button:hover::after {
+  content: attr(aria-label);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 8px);
+  background: rgba(6,10,24,0.9);
+  color: #f7fbff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+  pointer-events: none;
+}
+
+.viewer-drive-start__text-button--stop {
+  background: rgba(74, 6, 24, 0.55);
+  border-color: rgba(255, 143, 167, 0.35);
+}
+
+/* group layout: arrange start buttons horizontally and center */
+.viewer-drive-start__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+/* Prompt panel wrapper */
+.viewer-drive-start__panel {
+  padding: 10px 12px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(12, 18, 38, 0.82), rgba(6, 10, 24, 0.66));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 18px 36px rgba(2, 8, 20, 0.55),
+    inset 0 0 0 1px rgba(120, 160, 255, 0.10);
+  backdrop-filter: blur(14px);
+}
+
+.viewer-drive-start__text-button--close {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.06);
+  color: rgba(245,248,255,0.95);
+  padding: 8px 12px;
+  border-radius: 10px;
+  box-shadow: none;
 }
 
 .viewer-drive-speed-floating {
