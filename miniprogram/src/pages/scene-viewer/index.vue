@@ -1622,12 +1622,58 @@ const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
 const autoTourCameraFollowBox = new THREE.Box3();
 let autoTourCameraFollowHasSample = false;
+let autoTourActiveSyncAccumSeconds = 0;
 
 function resetAutoTourCameraFollowState(): void {
   resetCameraFollowState(autoTourCameraFollowState);
   autoTourCameraFollowHasSample = false;
   autoTourCameraFollowLastAnchor.set(0, 0, 0);
   autoTourCameraFollowVelocity.set(0, 0, 0);
+}
+
+function syncAutoTourActiveNodesFromRuntime(): void {
+  // Keep `activeAutoTourNodeIds` in sync with the runtime even if tours are started/stopped by scripts.
+  const nextActive = new Set<string>();
+  previewNodeMap.forEach((_node, nodeId) => {
+    if (autoTourRuntime.isTourActive(nodeId)) {
+      nextActive.add(nodeId);
+    }
+  });
+
+  // Remove stale.
+  activeAutoTourNodeIds.forEach((nodeId) => {
+    if (!nextActive.has(nodeId)) {
+      activeAutoTourNodeIds.delete(nodeId);
+    }
+  });
+  // Add new.
+  nextActive.forEach((nodeId) => {
+    if (!activeAutoTourNodeIds.has(nodeId)) {
+      activeAutoTourNodeIds.add(nodeId);
+    }
+  });
+}
+
+function resolveAutoTourFollowNodeId(): string | null {
+  const existing = autoTourFollowNodeId.value;
+  if (existing && autoTourRuntime.isTourActive(existing)) {
+    return existing;
+  }
+  const preferred = cameraViewState.targetNodeId;
+  if (preferred && autoTourRuntime.isTourActive(preferred)) {
+    return preferred;
+  }
+  for (const nodeId of activeAutoTourNodeIds) {
+    if (autoTourRuntime.isTourActive(nodeId)) {
+      return nodeId;
+    }
+  }
+  for (const nodeId of previewNodeMap.keys()) {
+    if (autoTourRuntime.isTourActive(nodeId)) {
+      return nodeId;
+    }
+  }
+  return null;
 }
 
 const vehicleDriveController = new VehicleDriveController(
@@ -6394,25 +6440,26 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     return false;
   }
 
-  let nodeId = autoTourFollowNodeId.value;
-  if (!nodeId) {
-    // If auto-tour was started by behavior/scripts (no explicit UI start), follow the only active tour.
-    if (activeAutoTourNodeIds.size === 1) {
-      for (const entry of activeAutoTourNodeIds) {
-        nodeId = entry;
-        break;
-      }
-      autoTourFollowNodeId.value = nodeId ?? null;
-      resetAutoTourCameraFollowState();
-    }
+  // Sync active tours from runtime (covers script-triggered startTour/stopTour).
+  if (deltaSeconds > 0) {
+    autoTourActiveSyncAccumSeconds += deltaSeconds;
+  }
+  if (autoTourActiveSyncAccumSeconds >= 0.2 || !autoTourFollowNodeId.value) {
+    autoTourActiveSyncAccumSeconds = 0;
+    syncAutoTourActiveNodesFromRuntime();
   }
 
-  if (!nodeId || !activeAutoTourNodeIds.has(nodeId)) {
-    if (nodeId && !activeAutoTourNodeIds.has(nodeId)) {
+  const nodeId = resolveAutoTourFollowNodeId();
+  if (!nodeId) {
+    if (autoTourFollowNodeId.value) {
       autoTourFollowNodeId.value = null;
       resetAutoTourCameraFollowState();
     }
     return false;
+  }
+  if (autoTourFollowNodeId.value !== nodeId) {
+    autoTourFollowNodeId.value = nodeId;
+    resetAutoTourCameraFollowState();
   }
 
   const object = nodeObjectMap.get(nodeId) ?? null;
