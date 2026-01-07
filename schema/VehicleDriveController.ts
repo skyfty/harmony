@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
+import { FollowCameraController } from './followCameraController'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
 type SceneNodeComponentState<T> = { props: T } | null | undefined
@@ -305,6 +306,7 @@ function computeVehicleFollowPlacement(dimensions: { width: number; height: numb
 export class VehicleDriveController {
   private readonly deps: VehicleDriveControllerDeps
   private readonly bindings: VehicleDriveControllerBindings
+  private readonly followCameraController = new FollowCameraController()
   private readonly temp = {
     box: new THREE.Box3(),
     size: new THREE.Vector3(),
@@ -945,242 +947,26 @@ export class VehicleDriveController {
   ): boolean {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
-    const worldUp = VEHICLE_CAMERA_WORLD_UP
     const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
     const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
-    let planarSpeedSq = 0
-    let planarSpeed = 0
+
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
-    const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
-    let lookaheadActive = false
-    if (vehicleVelocity) {
-      temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
-      planarSpeedSq = temp.planarVelocity.lengthSq()
-      planarSpeed = Math.sqrt(planarSpeedSq)
-      const lookaheadBlend = planarSpeed > VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START
-        ? Math.min(
-            1,
-            (planarSpeed - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START) / VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE,
-          )
-        : 0
-      if (lookaheadBlend > 0) {
-        temp.predictionOffset.copy(temp.planarVelocity)
-        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME * lookaheadBlend)
-        const offsetLength = temp.predictionOffset.length()
-        const maxLookahead = Math.max(0, VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX * lookaheadBlend)
-        if (maxLookahead > 1e-4 && offsetLength > maxLookahead) {
-          temp.predictionOffset.multiplyScalar(maxLookahead / offsetLength)
-        }
-        lookaheadActive = maxLookahead > 1e-4 && temp.predictionOffset.lengthSq() > 1e-8
-      } else {
-        temp.predictionOffset.set(0, 0, 0)
-      }
-      if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
-        const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
-        const dirLength = normalizedDir.length()
-        if (dirLength > 1e-6 && follow.lastVelocityDirection.lengthSq() > 1e-6) {
-          normalizedDir.multiplyScalar(1 / dirLength)
-          if (normalizedDir.dot(follow.lastVelocityDirection) < VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD) {
-            follow.anchorHoldSeconds = VEHICLE_FOLLOW_COLLISION_HOLD_TIME
-            follow.shouldHoldAnchorForReverse = true
-          }
-        }
-      }
-      const movementDot = temp.planarVelocity.dot(follow.heading)
-      if (planarSpeedSq > 1e-6) {
-        temp.tempVector.copy(temp.planarVelocity).normalize()
-        follow.lastVelocityDirection.copy(temp.tempVector)
-        if (movementDot > VEHICLE_FOLLOW_FORWARD_RELEASE_DOT) {
-          follow.shouldHoldAnchorForReverse = false
-        }
-      }
-    } else {
-      temp.planarVelocity.set(0, 0, 0)
-      follow.lastVelocityDirection.set(0, 0, 0)
-    }
-    const motionBlendTarget = planarSpeed <= VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD
-      ? 0
-      : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD) / VEHICLE_FOLLOW_MOTION_SPEED_RANGE)
-    const motionBlendAlpha = options.immediate || !follow.initialized
-      ? 1
-      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_MOTION_BLEND_SPEED)
-    if (motionBlendAlpha >= 1) {
-      follow.motionDistanceBlend = motionBlendTarget
-    } else {
-      follow.motionDistanceBlend += (motionBlendTarget - follow.motionDistanceBlend) * motionBlendAlpha
-    }
-    const baseDistanceScale = this.getFollowDistanceScale()
-    const motionDistanceScale = 1 + follow.motionDistanceBlend * VEHICLE_FOLLOW_MOTION_DISTANCE_BOOST
-    placement.distance = Math.min(
-      VEHICLE_FOLLOW_DISTANCE_MAX,
-      Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * baseDistanceScale * motionDistanceScale),
-    )
-    const motionHeightScale = 1 + follow.motionDistanceBlend * VEHICLE_FOLLOW_MOTION_HEIGHT_BOOST
-    placement.heightOffset *= motionHeightScale
-    placement.targetLift *= motionHeightScale
-    placement.targetForward *= motionDistanceScale
-    if (follow.anchorHoldSeconds > 0) {
-      follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
-    }
 
-    if (!follow.initialized) {
-      follow.heading.copy(temp.seatForward)
-      follow.heading.y = 0
-      if (follow.heading.lengthSq() < 1e-6) {
-        follow.heading.set(0, 0, 1)
-      } else {
-        follow.heading.normalize()
-      }
-      follow.anchorHoldSeconds = 0
-      follow.lastVelocityDirection.set(0, 0, 0)
-      follow.shouldHoldAnchorForReverse = false
-      follow.motionDistanceBlend = 0
-      follow.lookaheadOffset.set(0, 0, 0)
-    }
-
-    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
-    const isVehicleMoving = speedSq > VEHICLE_CAMERA_MOVING_SPEED_SQ
-    const desiredHeading = temp.cameraForward
-    if (temp.seatForward.lengthSq() > 1e-6) {
-      desiredHeading.copy(temp.seatForward)
-    } else if (follow.heading.lengthSq() > 1e-6) {
-      desiredHeading.copy(follow.heading)
-    } else {
-      desiredHeading.set(0, 0, 1)
-    }
-    desiredHeading.y = 0
-    if (desiredHeading.lengthSq() < 1e-6) {
-      desiredHeading.set(0, 0, 1)
-    } else {
-      desiredHeading.normalize()
-    }
-
-    const headingLerp = follow.initialized ? computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_HEADING_LERP_SPEED) : 1
-    follow.heading.lerp(desiredHeading, headingLerp)
-    if (follow.heading.lengthSq() < 1e-6) {
-      follow.heading.copy(desiredHeading)
-    } else {
-      follow.heading.normalize()
-    }
-
-    const headingForward = temp.cameraForward.copy(follow.heading)
-    const headingRight = temp.cameraRight.crossVectors(worldUp, headingForward)
-    if (headingRight.lengthSq() < 1e-6) {
-      headingRight.set(1, 0, 0)
-    } else {
-      headingRight.normalize()
-    }
-    const headingUp = temp.cameraUp.copy(worldUp)
-    const movingBackward = vehicleVelocity
-      ? temp.planarVelocity.dot(follow.heading) < VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD
-      : false
-    const reversing = movingBackward
-    follow.shouldHoldAnchorForReverse = reversing
-    if (lookaheadActive) {
-      if (reversing) {
-        const lookaheadLength = temp.predictionOffset.length()
-        if (lookaheadLength > 1e-6) {
-          temp.tempVector.copy(follow.heading)
-          if (temp.tempVector.lengthSq() < 1e-6) {
-            temp.tempVector.copy(temp.planarVelocity)
-          }
-          if (temp.tempVector.lengthSq() < 1e-6) {
-            temp.tempVector.set(0, 0, 1)
-          }
-          temp.tempVector.normalize().multiplyScalar(-lookaheadLength)
-          temp.predictionOffset.copy(temp.tempVector)
-        } else {
-          temp.predictionOffset.set(0, 0, 0)
-        }
-      }
-    } else {
-      temp.predictionOffset.set(0, 0, 0)
-    }
-    const lookaheadAlpha = options.immediate || !follow.initialized
-      ? 1
-      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_LOOKAHEAD_BLEND_SPEED)
-    if (lookaheadAlpha >= 1) {
-      follow.lookaheadOffset.copy(temp.predictionOffset)
-    } else {
-      follow.lookaheadOffset.lerp(temp.predictionOffset, lookaheadAlpha)
-    }
-    predictedAnchor.add(follow.lookaheadOffset)
-    follow.desiredAnchor.copy(predictedAnchor)
-    const anchorHoldActive = follow.anchorHoldSeconds > 0
-    const baseAnchorAlpha = options.immediate || !follow.initialized
-      ? 1
-      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
-    const anchorAlpha = anchorHoldActive ? 0 : baseAnchorAlpha
-    if (anchorAlpha >= 1) {
-      follow.currentAnchor.copy(follow.desiredAnchor)
-    } else if (anchorAlpha > 0) {
-      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
-    }
-    const anchorForCamera = follow.currentAnchor
-
-    this.ensureVehicleFollowLocalOffset(placement)
-    this.enforceVehicleFollowBehind(placement)
-
-    const targetOffsetLocal = temp.followOffset.set(0, placement.targetLift, placement.targetForward)
-    const targetWorldOffset = temp.followTarget
-      .copy(headingRight)
-      .multiplyScalar(targetOffsetLocal.x)
-      .addScaledVector(headingUp, targetOffsetLocal.y)
-      .addScaledVector(headingForward, targetOffsetLocal.z)
-    follow.desiredTarget.copy(anchorForCamera).add(targetWorldOffset)
-
-    const mapControls = ctx.mapControls
-    if (mapControls) {
-      mapControls.target.copy(follow.desiredTarget)
-      if (options.applyOrbitTween && this.deps.updateOrbitLookTween) {
-        this.deps.updateOrbitLookTween(deltaSeconds)
-      }
-      mapControls.update?.()
-    }
-
-    const allowCameraAdjustments = !isVehicleMoving
-    let userAdjusted = allowCameraAdjustments && Boolean(options.followControlsDirty)
-    if (allowCameraAdjustments && !userAdjusted && follow.initialized && ctx.camera) {
-      const deltaPosition = ctx.camera.position.distanceTo(follow.currentPosition)
-      userAdjusted = deltaPosition > 1e-3
-    }
-    if (allowCameraAdjustments && userAdjusted && ctx.camera) {
-      temp.followWorldOffset.copy(ctx.camera.position).sub(anchorForCamera)
-      follow.localOffset.set(
-        temp.followWorldOffset.dot(headingRight),
-        temp.followWorldOffset.dot(headingUp),
-        temp.followWorldOffset.dot(headingForward),
-      )
-      follow.hasLocalOffset = true
-      this.enforceVehicleFollowBehind(placement)
-      this.clampVehicleFollowLocalOffset(placement)
-    }
-
-    const desiredWorldOffset = temp.followWorldOffset
-      .copy(headingRight)
-      .multiplyScalar(follow.localOffset.x)
-      .addScaledVector(headingUp, follow.localOffset.y)
-      .addScaledVector(headingForward, follow.localOffset.z)
-    follow.desiredPosition.copy(anchorForCamera).add(desiredWorldOffset)
-
-    const immediate = Boolean(options.immediate) || !follow.initialized
-    if (immediate) {
-      follow.currentPosition.copy(follow.desiredPosition)
-      follow.currentTarget.copy(follow.desiredTarget)
-      follow.initialized = true
-    } else {
-      const positionAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_POSITION_LERP_SPEED)
-      const targetAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_TARGET_LERP_SPEED)
-      follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
-      follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
-    }
-
-    ctx.camera!.position.copy(follow.currentPosition)
-    ctx.camera!.up.copy(headingUp)
-    ctx.camera!.lookAt(follow.currentTarget)
-
-    follow.initialized = true
-    return true
+    return this.followCameraController.update({
+      follow: follow as any,
+      placement,
+      anchorWorld: temp.followAnchor,
+      desiredForwardWorld: temp.seatForward,
+      velocityWorld: vehicleVelocity as any,
+      deltaSeconds,
+      ctx: ctx as any,
+      worldUp: VEHICLE_CAMERA_WORLD_UP,
+      distanceScale: this.getFollowDistanceScale(),
+      applyOrbitTween: options.applyOrbitTween,
+      followControlsDirty: options.followControlsDirty,
+      immediate: options.immediate,
+      onUpdateOrbitLookTween: this.deps.updateOrbitLookTween,
+    })
   }
 
   private updateFirstPersonCamera(ctx: VehicleDriveCameraContext): boolean {

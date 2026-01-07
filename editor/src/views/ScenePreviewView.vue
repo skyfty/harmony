@@ -107,27 +107,31 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
-	GUIDE_ROUTE_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
-	clampGuideRouteComponentProps,
-	clampAutoTourComponentProps,
 	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
+import {
+	FollowCameraController,
+	computeFollowLerpAlpha,
+	computeFollowPlacement,
+	createCameraFollowState,
+	getApproxDimensions,
+	resetCameraFollowState,
+} from '@schema/followCameraController'
 import type {
 	GuideboardComponentProps,
 	LodComponentProps,
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
-	GuideRouteComponentProps,
 	AutoTourComponentProps,
 	VehicleComponentProps,
 	VehicleWheelProps,
@@ -522,23 +526,45 @@ const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
+const activeAutoTourNodeIds = reactive(new Set<string>())
+
+const autoTourFollowNodeId = ref<string | null>(null)
+const autoTourCameraFollowState = createCameraFollowState()
+const autoTourCameraFollowController = new FollowCameraController()
+const autoTourCameraFollowLastAnchor = new THREE.Vector3()
+const autoTourCameraFollowVelocity = new THREE.Vector3()
+const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
+let autoTourCameraFollowHasSample = false
+const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 const vehicleDrivePrompt = computed(() => {
+	// Ensure this computed updates when the set changes.
+	activeAutoTourNodeIds.size
 	const event = pendingVehicleDriveEvent.value
 	if (!event) {
 		return {
 			visible: false,
 			label: '',
 			busy: false,
+			showDrive: false,
+			showAutoTour: false,
+			showStopTour: false,
 		}
 	}
 	const targetNodeId = event.targetNodeId ?? event.nodeId
 	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
 	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
+	const canDrive = Boolean(resolveVehicleComponent(node))
+	const canAutoTour = Boolean(resolveAutoTourComponent(node))
+	const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId))
+	const hasAnyAction = isTouring || canDrive || canAutoTour
 	return {
-		visible: true,
+		visible: hasAnyAction,
 		label,
 		busy: vehicleDrivePromptBusy.value,
+		showDrive: canDrive && !isTouring,
+		showAutoTour: canAutoTour && !isTouring,
+		showStopTour: isTouring,
 	}
 })
 
@@ -1740,12 +1766,35 @@ function resolveVehicleComponent(
 	return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
 }
 
+function resolveAutoTourComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<AutoTourComponentProps> | null {
+	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+}
+
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
 	vehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
+	requiresExplicitStart: true,
+	stopNodeMotion: (nodeId) => {
+		const entry = rigidbodyInstances.get(nodeId) ?? null
+		if (!entry) {
+			return
+		}
+		try {
+			if (entry.object) {
+				syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment)
+			}
+			entry.body.velocity.set(0, 0, 0)
+			entry.body.angularVelocity.set(0, 0, 0)
+			entry.body.sleep?.()
+		} catch {
+			// Best-effort; body may be disposed/resetting.
+		}
+	},
 	onNodeObjectTransformUpdated: (_nodeId, object) => {
 		syncInstancedTransform(object)
 	},
@@ -4516,6 +4565,18 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided to drive.' })
 		return
 	}
+	const targetNode = resolveNodeById(targetNodeId)
+	const canDrive = Boolean(resolveVehicleComponent(targetNode))
+	const canAutoTour = Boolean(resolveAutoTourComponent(targetNode))
+	const isTouring = activeAutoTourNodeIds.has(targetNodeId)
+	if (!isTouring && !canDrive && !canAutoTour) {
+		appendWarningMessage('Target node cannot be driven or auto-toured (missing enabled components).')
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: 'Target node cannot be driven or auto-toured (missing enabled components).',
+		})
+		return
+	}
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
@@ -4555,10 +4616,99 @@ function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
 }
 
+async function handleVehicleAutoTourStartClick(): Promise<void> {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	const node = resolveNodeById(targetNodeId)
+	if (!resolveAutoTourComponent(node)) {
+		appendWarningMessage('AutoTour component is not enabled on the target node.')
+		return
+	}
+
+	vehicleDrivePromptBusy.value = true
+	try {
+		// Auto tour and manual drive must be mutually exclusive.
+		if (vehicleDriveState.active) {
+			handleHideVehicleCockpitEvent()
+			stopVehicleDriveMode({ resolution: { type: 'continue' } })
+		}
+
+		resetVehicleDriveInputs()
+		setVehicleDriveUiOverride('hide')
+		autoTourRuntime.startTour(targetNodeId)
+		activeAutoTourNodeIds.add(targetNodeId)
+		autoTourFollowNodeId.value = targetNodeId
+		resetCameraFollowState(autoTourCameraFollowState)
+		autoTourCameraFollowVelocity.set(0, 0, 0)
+		autoTourCameraFollowHasSample = false
+		followCameraControlActive = false
+		followCameraControlDirty = false
+		setCameraViewState('watching', targetNodeId)
+		setCameraCaging(true, { force: true })
+
+		// Behavior script tokens should not hang: auto-tour starts immediately.
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'continue' })
+			pendingVehicleDriveEvent.value = { ...event, token: '' }
+		}
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
+function handleVehicleAutoTourStopClick(): void {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		autoTourRuntime.stopTour(targetNodeId)
+		activeAutoTourNodeIds.delete(targetNodeId)
+		if (autoTourFollowNodeId.value === targetNodeId) {
+			autoTourFollowNodeId.value = null
+			resetCameraFollowState(autoTourCameraFollowState)
+			autoTourCameraFollowVelocity.set(0, 0, 0)
+			autoTourCameraFollowHasSample = false
+			followCameraControlActive = false
+			followCameraControlDirty = false
+			setCameraViewState('level', null)
+			setCameraCaging(false, { force: true })
+		}
+		// Remain in normal state; user can choose Drive again or stay idle.
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
 async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	const event = pendingVehicleDriveEvent.value
 	if (!event || vehicleDrivePromptBusy.value) {
 		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
+		autoTourRuntime.stopTour(targetNodeId)
+		activeAutoTourNodeIds.delete(targetNodeId)
+		if (autoTourFollowNodeId.value === targetNodeId) {
+			autoTourFollowNodeId.value = null
+			resetCameraFollowState(autoTourCameraFollowState)
+			autoTourCameraFollowVelocity.set(0, 0, 0)
+			autoTourCameraFollowHasSample = false
+		}
+	}
+	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
+		controlMode.value = 'third-person'
 	}
 	vehicleDrivePromptBusy.value = true
 	try {
@@ -4769,10 +4919,6 @@ function handleCanvasClick(event: MouseEvent) {
 		return
 	}
 
-	const previousControlMode = controlMode.value
-	if (previousControlMode !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
 	pendingVehicleDriveEvent.value = null
 	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
 		type: 'vehicle-drive',
@@ -4785,15 +4931,10 @@ function handleCanvasClick(event: MouseEvent) {
 		seatNodeId: null,
 		token: '',
 	}
-	const result = startVehicleDriveMode(manualEvent)
-	if (!result.success) {
-		appendWarningMessage(result.message ?? 'Failed to enter driving mode.')
-		if (previousControlMode !== 'third-person') {
-			controlMode.value = previousControlMode
-		}
-		return
-	}
-	handleShowVehicleCockpitEvent()
+	pendingVehicleDriveEvent.value = manualEvent
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+	resetVehicleDriveInputs()
 }
 
 function resetFirstPersonPointerDelta() {
@@ -5322,6 +5463,72 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	updateVehicleWheelVisuals(delta)
 }
 
+function updateAutoTourCameraForFrame(
+	delta: number,
+	followCameraActive: boolean,
+	activeCamera: THREE.PerspectiveCamera,
+): void {
+	if (!followCameraActive) {
+		return
+	}
+	if (vehicleDriveState.active) {
+		return
+	}
+	const nodeId = autoTourFollowNodeId.value
+	if (!nodeId) {
+		return
+	}
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
+		return
+	}
+	object.updateMatrixWorld(true)
+	// Use bounding-box center as anchor (fallback to world position).
+	tempBox.makeEmpty()
+	tempBox.setFromObject(object)
+	if (tempBox.isEmpty()) {
+		object.getWorldPosition(tempPosition)
+	} else {
+		tempBox.getCenter(tempPosition)
+	}
+
+	if (!autoTourCameraFollowHasSample || delta <= 0) {
+		autoTourCameraFollowLastAnchor.copy(tempPosition)
+		autoTourCameraFollowVelocity.set(0, 0, 0)
+		autoTourCameraFollowHasSample = true
+	} else {
+		const rawVelocity = autoTourCameraFollowVelocityScratch
+			.copy(tempPosition)
+			.sub(autoTourCameraFollowLastAnchor)
+			.multiplyScalar(1 / delta)
+		autoTourCameraFollowLastAnchor.copy(tempPosition)
+		const alpha = computeFollowLerpAlpha(delta, 8)
+		autoTourCameraFollowVelocity.lerp(rawVelocity, alpha)
+	}
+
+	object.getWorldQuaternion(tempQuaternion)
+	tempDirection.set(0, 0, 1).applyQuaternion(tempQuaternion)
+
+	const placement = computeFollowPlacement(getApproxDimensions(object))
+	const updated = autoTourCameraFollowController.update({
+		follow: autoTourCameraFollowState,
+		placement,
+		anchorWorld: tempPosition,
+		desiredForwardWorld: tempDirection,
+		velocityWorld: autoTourCameraFollowVelocity,
+		deltaSeconds: delta,
+		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
+		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
+		applyOrbitTween: true,
+		followControlsDirty: followCameraControlDirty,
+		onUpdateOrbitLookTween: updateOrbitCameraLookTween,
+	})
+	if (updated && mapControls) {
+		lastOrbitState.position.copy(activeCamera.position)
+		lastOrbitState.target.copy(mapControls.target)
+	}
+}
+
 /**
  * Updates the vehicle drive camera and keeps orbit-state cache in sync.
  */
@@ -5420,7 +5627,9 @@ function startAnimationLoop() {
 
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
-		const followCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
+		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
+		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
+		const followCameraActive = vehicleFollowCameraActive || autoTourFollowCameraActive
 		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
 
 		// 2) Simulation (only when playing)
@@ -5429,7 +5638,8 @@ function startAnimationLoop() {
 		}
 
 		// 3) Vehicle camera and camera-dependent systems
-		updateVehicleCameraForFrame(delta, followCameraActive, activeCamera)
+		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
+		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updatePerFrameDiagnostics(delta)
 		// cloudRenderer?.update(delta)
@@ -5467,6 +5677,14 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Scene reset; driving ended.' } })
 	}
+	autoTourRuntime.reset()
+	activeAutoTourNodeIds.clear()
+	autoTourFollowNodeId.value = null
+	resetCameraFollowState(autoTourCameraFollowState)
+	autoTourCameraFollowVelocity.set(0, 0, 0)
+	autoTourCameraFollowHasSample = false
+	followCameraControlActive = false
+	followCameraControlDirty = false
 	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
@@ -5480,6 +5698,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
+	setCameraViewState('level', null)
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	resetAssetResolutionCaches()
@@ -7560,8 +7779,8 @@ function stepPhysicsWorld(delta: number): void {
 		}
 		// AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
 		const nodeState = resolveNodeById(entry.nodeId)
-		const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(nodeState, AUTO_TOUR_COMPONENT_TYPE)
-		if (autoTour) {
+		const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId)
+		if (isAutoTourActive) {
 			const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE)
 			if (!vehicle) {
 				return
@@ -7729,8 +7948,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
-	const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
-	const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id)
+	const skipTransformSync = activeAutoTourNodeIds.has(node.id) && !vehicleInstances.has(node.id)
 	if (node.position) {
 		if (!skipTransformSync) {
 			object.position.set(node.position.x, node.position.y, node.position.z)
@@ -8833,19 +9051,49 @@ onBeforeUnmount(() => {
 				<span class="scene-preview__purpose-label">Level</span>
 			</v-btn>
 		</div>
-		<v-btn
+		<v-btn-group
 			v-if="vehicleDrivePrompt.visible"
 			class="scene-preview__drive-start-button"
-			color="primary"
-			variant="flat"
-			size="large"
-			prepend-icon="mdi-steering"
-			:loading="vehicleDrivePrompt.busy"
-			:disabled="vehicleDrivePrompt.busy"
-			@click="handleVehicleDrivePromptConfirm"
+			density="comfortable"
+			divided
 		>
-			Drive {{ vehicleDrivePrompt.label }}
-		</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showDrive"
+				color="primary"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-steering"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleDrivePromptConfirm"
+			>
+				Drive {{ vehicleDrivePrompt.label }}
+			</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showAutoTour"
+				color="secondary"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-map-marker-path"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleAutoTourStartClick"
+			>
+				自动巡游
+			</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showStopTour"
+				color="warning"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-stop-circle"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleAutoTourStopClick"
+			>
+				停止巡游 {{ vehicleDrivePrompt.label }}
+			</v-btn>
+		</v-btn-group>
 		<div
 			v-if="vehicleDriveUi.visible"
 			class="scene-preview__drive-panel"
