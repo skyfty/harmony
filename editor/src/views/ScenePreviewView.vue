@@ -4735,6 +4735,22 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	}
 }
 
+function handleVehicleDrivePromptClose(): void {
+	const event = pendingVehicleDriveEvent.value
+ 	if (!event) {
+ 		return
+ 	}
+	// Resolve token as an abort so scripts know the request was cancelled
+	try {
+		resolveBehaviorToken(event.token, { type: 'abort', message: 'User cancelled drive request' })
+	} catch (_e) {
+		// ignore
+	}
+	pendingVehicleDriveEvent.value = null
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+}
+
 function handleVehicleDriveExitClick(): void {
 	if (!vehicleDriveState.active || vehicleDriveExitBusy.value) {
 		return
@@ -9137,6 +9153,16 @@ onBeforeUnmount(() => {
 				@click="handleVehicleAutoTourStopClick"
 			>
 				停止巡游 {{ vehicleDrivePrompt.label }}
+			</v-btn>
+			<v-btn
+				v-if="!vehicleDrivePrompt.showStopTour"
+				color="" 
+				variant="flat"
+				size="large"
+				:loading="false"
+				@click="handleVehicleDrivePromptClose"
+			>
+				关闭
 			</v-btn>
 		</v-btn-group>
 		<div
