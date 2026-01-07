@@ -470,6 +470,9 @@ import {
   getApproxDimensions,
   resetCameraFollowState,
 } from '@schema/followCameraController';
+import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers';
+import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync';
+import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@schema/cameraGuard';
 import type {
   GuideboardComponentProps,
   LodComponentProps,
@@ -1296,7 +1299,6 @@ const protagonistPoseTarget = new THREE.Vector3();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
-let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
 
@@ -1629,51 +1631,6 @@ function resetAutoTourCameraFollowState(): void {
   autoTourCameraFollowHasSample = false;
   autoTourCameraFollowLastAnchor.set(0, 0, 0);
   autoTourCameraFollowVelocity.set(0, 0, 0);
-}
-
-function syncAutoTourActiveNodesFromRuntime(): void {
-  // Keep `activeAutoTourNodeIds` in sync with the runtime even if tours are started/stopped by scripts.
-  const nextActive = new Set<string>();
-  previewNodeMap.forEach((_node, nodeId) => {
-    if (autoTourRuntime.isTourActive(nodeId)) {
-      nextActive.add(nodeId);
-    }
-  });
-
-  // Remove stale.
-  activeAutoTourNodeIds.forEach((nodeId) => {
-    if (!nextActive.has(nodeId)) {
-      activeAutoTourNodeIds.delete(nodeId);
-    }
-  });
-  // Add new.
-  nextActive.forEach((nodeId) => {
-    if (!activeAutoTourNodeIds.has(nodeId)) {
-      activeAutoTourNodeIds.add(nodeId);
-    }
-  });
-}
-
-function resolveAutoTourFollowNodeId(): string | null {
-  const existing = autoTourFollowNodeId.value;
-  if (existing && autoTourRuntime.isTourActive(existing)) {
-    return existing;
-  }
-  const preferred = cameraViewState.targetNodeId;
-  if (preferred && autoTourRuntime.isTourActive(preferred)) {
-    return preferred;
-  }
-  for (const nodeId of activeAutoTourNodeIds) {
-    if (autoTourRuntime.isTourActive(nodeId)) {
-      return nodeId;
-    }
-  }
-  for (const nodeId of previewNodeMap.keys()) {
-    if (autoTourRuntime.isTourActive(nodeId)) {
-      return nodeId;
-    }
-  }
-  return null;
 }
 
 const vehicleDriveController = new VehicleDriveController(
@@ -5126,10 +5083,17 @@ function setCameraCaging(enabled: boolean): void {
   isCameraCaged.value = enabled;
   const controls = renderContext?.controls;
   if (controls) {
-    runWithProgrammaticCameraMutation(() => {
-      controls.enabled = !enabled;
-      controls.update();
-    });
+    runWithProgrammaticCameraMutation(
+      () => {
+        controls.enabled = !enabled;
+        controls.update();
+      },
+      () => {
+        if (renderContext) {
+          cameraRotationAnchor.copy(renderContext.camera.position);
+        }
+      },
+    );
   }
 }
 
@@ -6446,10 +6410,16 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
   if (autoTourActiveSyncAccumSeconds >= 0.2 || !autoTourFollowNodeId.value) {
     autoTourActiveSyncAccumSeconds = 0;
-    syncAutoTourActiveNodesFromRuntime();
+    syncAutoTourActiveNodesFromRuntime(activeAutoTourNodeIds, previewNodeMap.keys(), autoTourRuntime);
   }
 
-  const nodeId = resolveAutoTourFollowNodeId();
+  const nodeId = resolveAutoTourFollowNodeId(
+    autoTourFollowNodeId.value,
+    cameraViewState.targetNodeId,
+    activeAutoTourNodeIds,
+    previewNodeMap.keys(),
+    autoTourRuntime,
+  );
   if (!nodeId) {
     if (autoTourFollowNodeId.value) {
       autoTourFollowNodeId.value = null;
@@ -6552,12 +6522,13 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
     // If an auto-tour is active for this node, stop it first.
     const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
     if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
-      autoTourRuntime.stopTour(targetNodeId);
-      activeAutoTourNodeIds.delete(targetNodeId);
-      if (autoTourFollowNodeId.value === targetNodeId) {
-        autoTourFollowNodeId.value = null;
-        resetAutoTourCameraFollowState();
-      }
+      stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
+        activeAutoTourNodeIds.delete(n);
+        if (autoTourFollowNodeId.value === n) {
+          autoTourFollowNodeId.value = null;
+          resetAutoTourCameraFollowState();
+        }
+      });
     }
     const result = startVehicleDriveMode(event);
     if (!result.success) {
@@ -6600,14 +6571,14 @@ function handleVehicleAutoTourStartTap(): void {
     }
     resetVehicleDriveInputs();
     setVehicleDriveUiOverride('hide');
-    autoTourRuntime.startTour(targetNodeId);
-    activeAutoTourNodeIds.add(targetNodeId);
-
-    autoTourFollowNodeId.value = targetNodeId;
-    resetAutoTourCameraFollowState();
-    setCameraViewState('watching', targetNodeId);
-    setCameraCaging(true);
-    updateAutoTourFollowCamera(0, { immediate: true });
+    startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
+      activeAutoTourNodeIds.add(n);
+      autoTourFollowNodeId.value = n;
+      resetAutoTourCameraFollowState();
+      setCameraViewState('watching', n);
+      setCameraCaging(true);
+      updateAutoTourFollowCamera(0, { immediate: true });
+    });
 
     // Resolve behavior token so scripts continue.
     if (event.token) {
@@ -6630,15 +6601,15 @@ function handleVehicleAutoTourStopTap(): void {
   }
   vehicleDrivePromptBusy.value = true;
   try {
-    autoTourRuntime.stopTour(targetNodeId);
-    activeAutoTourNodeIds.delete(targetNodeId);
-
-    if (autoTourFollowNodeId.value === targetNodeId) {
-      autoTourFollowNodeId.value = null;
-    }
-    resetAutoTourCameraFollowState();
-    setCameraViewState('level', null);
-    setCameraCaging(false);
+    stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
+      activeAutoTourNodeIds.delete(n);
+      if (autoTourFollowNodeId.value === n) {
+        autoTourFollowNodeId.value = null;
+      }
+      resetAutoTourCameraFollowState();
+      setCameraViewState('level', null);
+      setCameraCaging(false);
+    });
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
