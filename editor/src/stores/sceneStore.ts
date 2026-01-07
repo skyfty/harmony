@@ -4220,17 +4220,10 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
           runtimeObject.updateMatrixWorld(true)
           const bounds = new Box3().setFromObject(runtimeObject)
           if (!bounds.isEmpty()) {
-            const localCenter = bounds.getCenter(new Vector3())
+            // `setFromObject` returns world-space bounds (using `matrixWorld`).
+            const worldCenter = bounds.getCenter(new Vector3())
             const size = bounds.getSize(new Vector3())
-            const localRadius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
-            const worldCenter = localCenter.clone().applyMatrix4(worldMatrix)
-
-            const position = new Vector3()
-            const quaternion = new Quaternion()
-            const scale = new Vector3()
-            worldMatrix.decompose(position, quaternion, scale)
-            const scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z), 1)
-            const radius = localRadius * scaleFactor
+            const radius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
             spheres.push({ center: worldCenter, radius })
           }
         }
@@ -4266,7 +4259,8 @@ function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingIn
           runtimeObject.updateMatrixWorld(true)
           const localBounds = new Box3().setFromObject(runtimeObject)
           if (!localBounds.isEmpty()) {
-            nodeBounds = localBounds.clone().applyMatrix4(worldMatrix)
+            // `setFromObject` already returns bounds in world space (uses `matrixWorld`).
+            nodeBounds = localBounds.clone()
           }
         }
       }
@@ -9438,12 +9432,12 @@ export const useSceneStore = defineStore('scene', {
 
       const parentMap = buildParentMap(this.nodes)
       const parentId = parentMap.get(nodeId) ?? null
-      const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new Matrix4()
-      if (parentId && !parentWorldMatrix) {
+      const resolvedParentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new Matrix4()
+      if (resolvedParentWorldMatrix == null) {
         return false
       }
 
-      const parentInverse = parentWorldMatrix.clone().invert()
+      const parentInverse = resolvedParentWorldMatrix.clone().invert()
       const localPosition = worldPosition.clone().applyMatrix4(parentInverse)
 
       this.updateNodeProperties({
@@ -13529,7 +13523,7 @@ export const useSceneStore = defineStore('scene', {
 
     groupSelection(): boolean {
       const selection = Array.from(new Set(this.selectedNodeIds))
-      if (selection.length < 2) {
+      if (selection.length < 1) {
         return false
       }
 
@@ -13544,12 +13538,12 @@ export const useSceneStore = defineStore('scene', {
         return parentMap.has(id)
       })
 
-      if (validIds.length < 2) {
+      if (validIds.length < 1) {
         return false
       }
 
       const topLevelIds = filterTopLevelNodeIds(validIds, parentMap)
-      if (topLevelIds.length < 2) {
+      if (topLevelIds.length < 1) {
         return false
       }
 
@@ -13820,6 +13814,10 @@ export const useSceneStore = defineStore('scene', {
         tree = nextTree
       }
       this.nodes = tree
+      // The viewport relies on structure patches to reconcile its Object3D tree.
+      // Without this, the newly created group node may not exist in `objectMap` yet,
+      // which prevents TransformControls from attaching when the group is selected.
+      this.queueSceneStructurePatch('groupSelection')
       this.setSelection([groupId], {primaryId: groupId })
       commitSceneSnapshot(this)
       return true

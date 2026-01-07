@@ -35,7 +35,7 @@
         variant="text"
         class="toolbar-button"
         title="分组选中"
-        :disabled="selectionCount < 2"
+        :disabled="selectionCount < 1"
         @click="handleGroupSelection"
       />
       <v-btn
@@ -360,7 +360,7 @@ const canRecenterGroupOrigin = computed(() => {
 })
 
 function handleGroupSelection() {
-  if ((selectionCount.value ?? 0) < 2) return
+  if ((selectionCount.value ?? 0) < 1) return
   // call the store action to group selected nodes
   const result = sceneStore.groupSelection()
   if (!result) {
