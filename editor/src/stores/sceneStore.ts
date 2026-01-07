@@ -3904,6 +3904,7 @@ function collectClipboardPayload(
       const serialized = JSON.stringify(rootNode, null, 2)
       entries.push({
         sourceId: id,
+        sourceParentId: parentMap.get(id) ?? null,
         root: rootNode,
         serialized: serialized
       })
@@ -14416,6 +14417,44 @@ export const useSceneStore = defineStore('scene', {
 
       if (!rootsToInsert.length) return false
 
+      // UX: When pasting a single node into a Group, place it at the Group origin so it's easy to find.
+      // This intentionally changes the pasted node's world position (it moves to the group's center),
+      // while keeping the Group node itself unchanged.
+      const pasteTargetNode = resolvedParentId ? findNodeById(this.nodes, resolvedParentId) : null
+      const shouldConsiderSnapToGroupOrigin = Boolean(
+        pasteTargetNode
+        && pasteTargetNode.nodeType === 'Group'
+        && rootsToInsert.length === 1,
+      )
+
+      // Rule:
+      // - If pasting within the same parent (same Group / both root), preserve world transform.
+      // - If pasting into an ancestor/descendant of the source node, preserve world transform.
+      // - Otherwise (changing parent group), snap local position to the target Group origin.
+      const soleClipboardEntry = clipboardStore.clipboard?.entries?.length === 1 ? clipboardStore.clipboard.entries[0] : null
+      const sourceParentId = soleClipboardEntry?.sourceParentId ?? null
+      const sourceId = soleClipboardEntry?.sourceId
+      const isSameParent = sourceParentId === resolvedParentId
+      const isPasteWithinSourceLineage = Boolean(
+        typeof sourceId === 'string'
+        && resolvedParentId
+        && (
+          isDescendantNode(this.nodes, sourceId, resolvedParentId)
+          || isDescendantNode(this.nodes, resolvedParentId, sourceId)
+        ),
+      )
+
+      const shouldSnapPasteToGroupOrigin = Boolean(
+        shouldConsiderSnapToGroupOrigin
+        && !isSameParent
+        && !isPasteWithinSourceLineage,
+      )
+      if (shouldSnapPasteToGroupOrigin) {
+        const node = rootsToInsert[0]!
+        node.position = createVector(0, 0, 0)
+        componentManager.syncNode(node)
+      }
+
       const undoOps: any[] = []
       let workingTree = [...this.nodes]
       rootsToInsert.forEach((node) => {
@@ -14433,7 +14472,9 @@ export const useSceneStore = defineStore('scene', {
 
       this.nodes = workingTree
 
-      if (resolvedParentId) this.recenterGroupAncestry(resolvedParentId, { captureHistory: false })
+      if (resolvedParentId && !shouldSnapPasteToGroupOrigin) {
+        this.recenterGroupAncestry(resolvedParentId, { captureHistory: false })
+      }
 
       await this.ensureSceneAssetsReady({ nodes: rootsToInsert, showOverlay: false, refreshViewport: true })
 
