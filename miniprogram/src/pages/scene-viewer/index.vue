@@ -198,24 +198,44 @@
         v-if="vehicleDrivePrompt.visible"
         class="viewer-drive-start"
       >
-        <button
-          class="viewer-drive-start__button"
-          :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-          :disabled="vehicleDrivePrompt.busy"
-          type="button"
-          hover-class="none"
-          aria-label="进入驾驶模式"
-          @tap="handleVehicleDrivePromptTap"
-        >
-          <view class="viewer-drive-start__glow" aria-hidden="true"></view>
-          <view class="viewer-drive-start__icon" aria-hidden="true">
-            <v-icon icon="mdi-steering" size="18" />
-          </view>
-          <view class="viewer-drive-start__sparkline" aria-hidden="true"></view>
-          <view v-if="vehicleDrivePrompt.busy" class="viewer-drive-start__busy" aria-hidden="true">
-            <view class="viewer-drive-start__busy-dot"></view>
-          </view>
-        </button>
+        <view class="viewer-drive-start__group">
+          <button
+            v-if="vehicleDrivePrompt.showDrive"
+            class="viewer-drive-start__text-button"
+            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+            :disabled="vehicleDrivePrompt.busy"
+            type="button"
+            hover-class="none"
+            aria-label="进入驾驶模式"
+            @tap="handleVehicleDrivePromptTap"
+          >
+            <text>驾驶 {{ vehicleDrivePrompt.label }}</text>
+          </button>
+          <button
+            v-if="vehicleDrivePrompt.showAutoTour"
+            class="viewer-drive-start__text-button"
+            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+            :disabled="vehicleDrivePrompt.busy"
+            type="button"
+            hover-class="none"
+            aria-label="自动巡游"
+            @tap="handleVehicleAutoTourStartTap"
+          >
+            <text>自动巡游</text>
+          </button>
+          <button
+            v-if="vehicleDrivePrompt.showStopTour"
+            class="viewer-drive-start__text-button viewer-drive-start__text-button--stop"
+            :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+            :disabled="vehicleDrivePrompt.busy"
+            type="button"
+            hover-class="none"
+            aria-label="停止巡游"
+            @tap="handleVehicleAutoTourStopTap"
+          >
+            <text>停止巡游 {{ vehicleDrivePrompt.label }}</text>
+          </button>
+        </view>
       </view>
       <view
         v-if="vehicleDriveUi.visible"
@@ -408,6 +428,7 @@ import {
   onlineComponentDefinition,
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
+  purePursuitComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -1172,6 +1193,7 @@ previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
+previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
@@ -1580,6 +1602,7 @@ const vehicleDriveUi = computed(() => {
 
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
 const vehicleDrivePromptBusy = ref(false);
+const activeAutoTourNodeIds = reactive(new Set<string>());
 
 const vehicleDriveController = new VehicleDriveController(
   {
@@ -1628,10 +1651,17 @@ const vehicleDrivePrompt = computed(() => {
   const targetNodeId = event.targetNodeId ?? event.nodeId;
   const node = targetNodeId ? resolveNodeById(targetNodeId) : null;
   const label = node?.name?.trim() || targetNodeId || 'Vehicle';
+  const canDrive = Boolean(resolveVehicleComponent(node));
+  const canAutoTour = Boolean(resolveAutoTourComponent(node));
+  const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId));
+  const hasAnyAction = isTouring || canDrive || canAutoTour;
   return {
-    visible: true,
+    visible: hasAnyAction,
     label,
     busy: vehicleDrivePromptBusy.value,
+    showDrive: canDrive && !isTouring,
+    showAutoTour: canAutoTour && !isTouring,
+    showStopTour: isTouring,
   } as const;
 });
 
@@ -3407,6 +3437,12 @@ function resolveVehicleComponent(
   return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE);
 }
 
+function resolveAutoTourComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<AutoTourComponentProps> | null {
+  return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
+}
+
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
@@ -3415,6 +3451,23 @@ const autoTourRuntime = createAutoTourRuntime({
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
+  },
+  requiresExplicitStart: true,
+  stopNodeMotion: (nodeId) => {
+    const entry = rigidbodyInstances.get(nodeId) ?? null;
+    if (!entry) {
+      return;
+    }
+    try {
+      if (entry.object) {
+        syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
+      }
+      entry.body.velocity.set(0, 0, 0);
+      entry.body.angularVelocity.set(0, 0, 0);
+      entry.body.sleep?.();
+    } catch {
+      // best-effort
+    }
   },
 });
 
@@ -4108,10 +4161,11 @@ function stepPhysicsWorld(delta: number): void {
     if (entry.syncObjectFromBody === false) {
       return;
     }
-    // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
-    const nodeState = resolveNodeById(entry.nodeId);
-    const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(nodeState, AUTO_TOUR_COMPONENT_TYPE);
-    if (autoTour) {
+    // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics
+    // unless the tour is actually active for this node.
+    const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId);
+    if (isAutoTourActive) {
+      const nodeState = resolveNodeById(entry.nodeId);
       const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE);
       if (!vehicle) {
         return;
@@ -6334,6 +6388,12 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
   }
   vehicleDrivePromptBusy.value = true;
   try {
+    // If an auto-tour is active for this node, stop it first.
+    const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
+    if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
+      autoTourRuntime.stopTour(targetNodeId);
+      activeAutoTourNodeIds.delete(targetNodeId);
+    }
     const result = startVehicleDriveMode(event);
     if (!result.success) {
       const message = result.message ?? '无法进入驾驶模式';
@@ -6344,6 +6404,62 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
     }
     pendingVehicleDriveEvent.value = null;
     handleShowVehicleCockpitEvent();
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
+}
+
+function handleVehicleAutoTourStartTap(): void {
+  const event = pendingVehicleDriveEvent.value;
+  if (!event || vehicleDrivePromptBusy.value) {
+    return;
+  }
+  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
+  if (!targetNodeId) {
+    return;
+  }
+  const node = resolveNodeById(targetNodeId);
+  if (!resolveAutoTourComponent(node)) {
+    uni.showToast({ title: '目标未启用自动巡游组件', icon: 'none' });
+    return;
+  }
+  vehicleDrivePromptBusy.value = true;
+  try {
+    // Ensure manual drive is stopped.
+    if (vehicleDriveActive.value) {
+      handleHideVehicleCockpitEvent();
+      vehicleDriveController.stopDrive(
+        { resolution: { type: 'continue' }, preserveCamera: false },
+        renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+      );
+    }
+    resetVehicleDriveInputs();
+    setVehicleDriveUiOverride('hide');
+    autoTourRuntime.startTour(targetNodeId);
+    activeAutoTourNodeIds.add(targetNodeId);
+    // Resolve behavior token so scripts continue.
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'continue' });
+      pendingVehicleDriveEvent.value = { ...event, token: '' } as any;
+    }
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
+}
+
+function handleVehicleAutoTourStopTap(): void {
+  const event = pendingVehicleDriveEvent.value;
+  if (!event || vehicleDrivePromptBusy.value) {
+    return;
+  }
+  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
+  if (!targetNodeId) {
+    return;
+  }
+  vehicleDrivePromptBusy.value = true;
+  try {
+    autoTourRuntime.stopTour(targetNodeId);
+    activeAutoTourNodeIds.delete(targetNodeId);
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
@@ -7480,6 +7596,8 @@ function teardownRenderer() {
   activeBehaviorDelayTimers.clear();
   resetAnimationControllers();
   previewNodeMap.clear();
+  autoTourRuntime.reset();
+  activeAutoTourNodeIds.clear();
   nodeObjectMap.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId);
   });
