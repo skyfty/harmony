@@ -1301,6 +1301,7 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
+let programmaticCameraMutationDepth = 0;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
