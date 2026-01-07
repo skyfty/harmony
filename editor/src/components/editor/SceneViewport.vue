@@ -3617,8 +3617,6 @@ function applyCameraControlMode() {
     mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
   mapControls.enabled = previousEnabled
-  mapControls.maxPolarAngle = Math.PI / 2; // 最大角度：垂直向下
-  mapControls.minPolarAngle = 9 * (Math.PI / 180); // 最小角度：1度，防止完全水平视角
   mapControls.minDistance = 2;
   mapControls.maxDistance = 200;
   mapControls.addEventListener('change', handleControlsChange)
