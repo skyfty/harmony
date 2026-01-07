@@ -728,16 +728,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterPreviewObject = cloned
 	}
 
-	function isPointerOverGround(definition: GroundDynamicMesh, worldPoint: THREE.Vector3): boolean {
+	function isPointerOverGround(
+		definition: GroundDynamicMesh,
+		groundMesh: THREE.Object3D,
+		worldPoint: THREE.Vector3,
+	): boolean {
 		const halfWidth = definition.width * 0.5
 		const halfDepth = definition.depth * 0.5
+		if (!Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.z) || !Number.isFinite(worldPoint.y)) {
+			return false
+		}
+		// Evaluate bounds in the ground's local space so translation/rotation doesn't break the test.
+		groundLocalVertexHelper.copy(worldPoint)
+		groundMesh.updateMatrixWorld(true)
+		groundMesh.worldToLocal(groundLocalVertexHelper)
 		return (
-			Number.isFinite(worldPoint.x) &&
-			Number.isFinite(worldPoint.z) &&
-			worldPoint.x >= -halfWidth &&
-			worldPoint.x <= halfWidth &&
-			worldPoint.z >= -halfDepth &&
-			worldPoint.z <= halfDepth
+			Number.isFinite(groundLocalVertexHelper.x) &&
+			Number.isFinite(groundLocalVertexHelper.z) &&
+			groundLocalVertexHelper.x >= -halfWidth &&
+			groundLocalVertexHelper.x <= halfWidth &&
+			groundLocalVertexHelper.z >= -halfDepth &&
+			groundLocalVertexHelper.z <= halfDepth
 		)
 	}
 
@@ -760,11 +771,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterPreviewGroup.visible = false
 			return
 		}
-		if (!isPointerOverGround(definition, scatterPointerHelper)) {
+		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
 			scatterPreviewGroup.visible = false
 			return
 		}
-		clampPointToGround(definition, scatterPointerHelper)
 
 		// Project onto terrain height.
 		scatterPreviewProjectedHelper.copy(scatterPointerHelper)
@@ -1570,6 +1580,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const { groundMesh, definition } = scatterSession
 		const localPoint = worldPoint.clone()
 		groundMesh.worldToLocal(localPoint)
+		// Never place scatter outside the ground bounds.
+		// (We still use the heightmap for Y, but XZ must remain inside the ground region.)
+		const halfWidth = definition.width * 0.5
+		const halfDepth = definition.depth * 0.5
+		if (
+			!Number.isFinite(localPoint.x) ||
+			!Number.isFinite(localPoint.z) ||
+			localPoint.x < -halfWidth ||
+			localPoint.x > halfWidth ||
+			localPoint.z < -halfDepth ||
+			localPoint.z > halfDepth
+		) {
+			return null
+		}
 		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
 		localPoint.y = height
 		groundMesh.localToWorld(localPoint)
@@ -1805,7 +1829,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		clampPointToGround(definition, scatterPointerHelper)
+		// Do not place scatter if the pointer is not over the ground region.
+		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+			return false
+		}
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
@@ -1831,8 +1858,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
 		const densityPercent = Number(options.scatterDensityPercent.value)
 
+		const spacingStats = computeOccupancyMinDistance({
+			footprintMaxSizeM,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			minFloor: 0.01,
+		})
+
 		const brushAreaM2 = Math.PI * effectiveRadius * effectiveRadius
-		const { targetCount: targetCountPerStamp } = computeOccupancyTargetCount({
+		let { targetCount: targetCountPerStamp } = computeOccupancyTargetCount({
 			areaM2: brushAreaM2,
 			footprintAreaM2,
 			densityPercent,
@@ -1841,15 +1875,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxCap: SCATTER_MAX_INSTANCES_PER_STAMP,
 		})
 		if (targetCountPerStamp <= 0) {
-			return false
+			// UX guard: if density > 0, still place 1 instance so a click always produces feedback
+			// even when occupancy math rounds down to 0.
+			const clampedDensity = Number.isFinite(densityPercent) ? densityPercent : 0
+			if (clampedDensity <= 0) {
+				return false
+			}
+			targetCountPerStamp = 1
 		}
 
-		const { minDistance: effectiveSpacing } = computeOccupancyMinDistance({
-			footprintMaxSizeM,
-			minScale: presetMinScale,
-			maxScale: presetMaxScale,
-			minFloor: 0.01,
-		})
+		const effectiveSpacing = spacingStats.minDistance
 		const chunkCells = resolveChunkCellsForDefinition(definition)
 		scatterSession = {
 			pointerId: event.pointerId,
@@ -1997,7 +2032,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		clampPointToGround(scatterSession.definition, scatterPointerHelper)
+		if (!isPointerOverGround(scatterSession.definition, scatterSession.groundMesh, scatterPointerHelper)) {
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
+		}
 		traceScatterPath(scatterPointerHelper.clone())
 		event.preventDefault()
 		event.stopPropagation()
@@ -2118,7 +2158,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		clampPointToGround(definition, scatterPointerHelper)
+		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+			return false
+		}
 		const eraseRadius = resolveScatterEraseRadius()
 		eraseScatterInstances(scatterPointerHelper.clone(), eraseRadius, groundMesh)
 		scatterEraseState = {
@@ -2146,7 +2188,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		clampPointToGround(scatterEraseState.definition, scatterPointerHelper)
+		if (!isPointerOverGround(scatterEraseState.definition, scatterEraseState.groundMesh, scatterPointerHelper)) {
+			event.preventDefault()
+			event.stopPropagation()
+			event.stopImmediatePropagation()
+			return true
+		}
 		scatterEraseState.radius = resolveScatterEraseRadius()
 		eraseScatterInstances(scatterPointerHelper.clone(), scatterEraseState.radius, scatterEraseState.groundMesh)
 		event.preventDefault()
