@@ -9426,6 +9426,65 @@ export const useSceneStore = defineStore('scene', {
         this.sceneNodePropertyVersion += 1
       }
     },
+
+    setNodeWorldPositionPositionOnly(nodeId: string, worldPosition: THREE.Vector3): boolean {
+      if (!nodeId) {
+        return false
+      }
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return false
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(nodeId) ?? null
+      const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new Matrix4()
+      if (parentId && !parentWorldMatrix) {
+        return false
+      }
+
+      const parentInverse = parentWorldMatrix.clone().invert()
+      const localPosition = worldPosition.clone().applyMatrix4(parentInverse)
+
+      this.updateNodeProperties({
+        id: nodeId,
+        position: toPlainVector(localPosition),
+      })
+
+      return true
+    },
+
+    async spawnAssetIntoEmptyGroupAtPosition(
+      assetId: string,
+      groupId: string,
+      worldPosition: THREE.Vector3,
+    ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+      const groupNode = groupId ? findNodeById(this.nodes, groupId) : null
+      const isEmptyGroup = Boolean(
+        groupNode
+        && groupNode.nodeType === 'Group'
+        && (!groupNode.children || groupNode.children.length === 0),
+      )
+
+      if (isEmptyGroup) {
+        this.setNodeWorldPositionPositionOnly(groupId, worldPosition)
+      }
+
+      const result = await this.spawnAssetAtPosition(assetId, worldPosition, {
+        parentId: groupId,
+        preserveWorldPosition: Boolean(groupId),
+      })
+
+      if (isEmptyGroup) {
+        this.updateNodeProperties({
+          id: result.node.id,
+          position: { x: 0, y: 0, z: 0 },
+        })
+      }
+
+      return result
+    },
+
     async spawnAssetAtPosition(
       assetId: string,
       position: THREE.Vector3,
