@@ -2,6 +2,7 @@
 import { onBeforeUnmount, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
+import type Direction from '@/components/common/VectorControls.vue'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 
@@ -33,6 +34,26 @@ function resetRotation() {
 
 function resetScale() {
   applyTransformReset({ scale: createNumericVector(1, 1, 1) })
+}
+
+function ratioScale(direction: Direction) {
+  if (props.disabled) {
+    return
+  }
+  const node = selectedNode.value
+  if (!node) {
+    return
+  }
+  const scaleFactor = direction === 'up' ? 1.1 : 0.9
+  const newScale = {
+    x: Math.max(MIN_SCALE, node.scale.x * scaleFactor),
+    y: Math.max(MIN_SCALE, node.scale.y * scaleFactor),
+    z: Math.max(MIN_SCALE, node.scale.z * scaleFactor),
+  }
+  sceneStore.updateNodeProperties({
+    id: node.id,
+    scale: newScale,
+  })
 }
 
 function applyTransformReset(patch: Partial<Pick<TransformUpdatePayload, 'position' | 'rotation' | 'scale'>>) {
@@ -246,6 +267,7 @@ function cloneVector(field: TransformField, source?: NumericVector): NumericVect
           min="0.01"
           :disabled="props.disabled"
           @dblclick:label="resetScale"
+          @wheel:label="ratioScale"
           @update:axis="(axis, value) => handleVectorChange('scale', axis, value)"
         />
       </div>

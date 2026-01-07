@@ -1,6 +1,6 @@
 <template>
   <div class="vector-group">
-    <div class="vector-label" @dblclick="onLabelDblClick">{{ props.label }}</div>
+    <div class="vector-label" @dblclick="onLabelDblClick" @mousedown="onLabelMouseDown" @wheel.prevent="onLabelWheel">{{ props.label }}</div>
     <v-text-field
       v-for="axis in axes"
       :key="axis"
@@ -25,7 +25,9 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, watch, onUnmounted } from 'vue'
+
+export type Direction = 'up' | 'down'
 
 type VectorAxis = 'x' | 'y' | 'z'
 type VectorValue = number | string
@@ -42,6 +44,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'update:axis', axis: VectorAxis, value: string): void
   (event: 'dblclick:label'): void
+  (event: 'horizontalswipe:label', delta: number): void
+  (event: 'wheel:label', direction: Direction): void
 }>()
 
 const axes: VectorAxis[] = ['x', 'y', 'z']
@@ -53,6 +57,13 @@ const localValues = reactive<Record<VectorAxis, string>>({
 })
 
 const editingAxis = ref<VectorAxis | null>(null)
+
+// Horizontal swipe (label drag) state
+const swiping = ref(false)
+const swipeStartX = ref(0)
+const swipeDelta = ref(0)
+const swipeThreshold = 4 // pixels: minimum movement to consider a swipe
+const prevCursor = ref<string | null>(null)
 
 watch(
   () => props.modelValue,
@@ -100,6 +111,72 @@ function onInput(axis: VectorAxis, value: string | number) {
 function onLabelDblClick() {
   emit('dblclick:label')
 }
+
+function onLabelWheel(e: WheelEvent) {
+  if (props.disabled || props.readonly) return
+  // deltaY < 0 means wheel scrolled up, deltaY > 0 means down
+  const direction = e.deltaY < 0 ? 'up' : 'down'
+  emit('wheel:label', direction)
+}
+
+function onLabelMouseDown(e: MouseEvent) {
+  // Only start for left mouse button and when not disabled/readonly
+  if (e.button !== 0) return
+  if (props.disabled || props.readonly) return
+  e.preventDefault()
+  swipeStartX.value = e.clientX
+  swipeDelta.value = 0
+  swiping.value = true
+
+  window.addEventListener('mousemove', onWindowMouseMove)
+  window.addEventListener('mouseup', onWindowMouseUp)
+}
+
+function onWindowMouseMove(e: MouseEvent) {
+  if (!swiping.value) return
+  swipeDelta.value = e.clientX - swipeStartX.value
+
+  // Emit continuously during drag once threshold is exceeded
+  const absDelta = Math.abs(swipeDelta.value)
+    if (absDelta >= swipeThreshold) {
+      // set horizontal resize cursor when threshold first exceeded
+      if (prevCursor.value === null) {
+        prevCursor.value = document.body.style.cursor
+        document.body.style.cursor = 'ew-resize'
+      }
+      emit('horizontalswipe:label', swipeDelta.value)
+    } else if (prevCursor.value !== null && absDelta < swipeThreshold) {
+      // restore if moved back below threshold (restore to default if original was empty)
+      document.body.style.cursor = prevCursor.value ?? ''
+      prevCursor.value = null
+    }
+}
+
+function onWindowMouseUp() {
+  if (!swiping.value) return
+  window.removeEventListener('mousemove', onWindowMouseMove)
+  window.removeEventListener('mouseup', onWindowMouseUp)
+  swiping.value = false
+
+  // Reset stored delta but do not emit here (emitted continuously during move)
+  swipeDelta.value = 0
+  // restore cursor if we changed it (restore to default if original was empty)
+  if (prevCursor.value !== null) {
+    document.body.style.cursor = prevCursor.value ?? ''
+    prevCursor.value = null
+  }
+}
+
+onUnmounted(() => {
+  // Remove listeners unconditionally to be safe
+  window.removeEventListener('mousemove', onWindowMouseMove)
+  window.removeEventListener('mouseup', onWindowMouseUp)
+  // restore cursor if it was changed
+  if (prevCursor.value !== null) {
+    document.body.style.cursor = prevCursor.value ?? ''
+    prevCursor.value = null
+  }
+})
 
 function formatValue(value: VectorValue): string {
   if (typeof value === 'number') return truncateNumberToTwoDecimals(value)
