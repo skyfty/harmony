@@ -169,6 +169,20 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
+    const before = {
+      v: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
+      w: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z },
+      sleepState: (chassisBody as any).sleepState,
+    }
+    // stopVehicleImmediately: begin (debug logs removed)
+
+    // Ensure the body is awake while we apply braking/force resets.
+    try {
+      chassisBody.wakeUp?.()
+    } catch {
+      // ignore
+    }
+
     // Apply strong braking and reset steering/engine via the shared safe helper.
     const pursuitProps = clampPurePursuitComponentProps(null)
     try {
@@ -186,12 +200,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
     // Hard-stop velocity to prevent coasting.
     try {
+      chassisBody.allowSleep = true
+      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
+      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
       chassisBody.velocity.set(0, 0, 0)
       chassisBody.angularVelocity.set(0, 0, 0)
-      chassisBody.wakeUp()
+      // Sleep to avoid solver jitter once stopped.
+      chassisBody.sleep?.()
     } catch {
       // ignore
     }
+
+    // stopVehicleImmediately: end (debug logs removed)
   }
 
   function getGuideRouteWorldWaypoints(routeNodeId: string): THREE.Vector3[] | null {

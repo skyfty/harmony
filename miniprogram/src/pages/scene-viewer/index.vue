@@ -1262,6 +1262,7 @@ const airWallBodies = new Map<string, CANNON.Body>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
+const vehicleRaycastInWorld = new Set<string>();
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
 const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
@@ -1271,6 +1272,7 @@ const PHYSICS_FIXED_TIMESTEP = 1 / 60;
 const PHYSICS_MAX_SUB_STEPS = 5;
 const PHYSICS_SOLVER_ITERATIONS = 18
 const PHYSICS_SOLVER_TOLERANCE = 5e-4
+const vehicleIdleFreezeLastLogMs = new Map<string, number>();
 const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
@@ -3726,6 +3728,7 @@ function resetPhysicsWorld(): void {
     });
   }
   vehicleInstances.clear();
+  vehicleRaycastInWorld.clear();
   rigidbodyInstances.clear();
   airWallBodies.clear();
   physicsWorld = null;
@@ -3968,6 +3971,7 @@ function createVehicleInstance(
     });
   });
   vehicle.addToWorld(physicsWorld);
+  vehicleRaycastInWorld.add(node.id);
   const initialChassisPosition = new THREE.Vector3(
     rigidbody.body.position.x,
     rigidbody.body.position.y,
@@ -4011,6 +4015,7 @@ function removeVehicleInstance(nodeId: string): void {
     }
   }
   vehicleInstances.delete(nodeId);
+  vehicleRaycastInWorld.delete(nodeId);
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
@@ -4195,11 +4200,117 @@ function stepPhysicsWorld(delta: number): void {
   if (!physicsWorld || !rigidbodyInstances.size) {
     return;
   }
+
+  // RaycastVehicle registers postStep callbacks that can introduce micro-jitter even when idle.
+  // When not in manual drive nor auto-tour, remove the vehicle from the world to fully freeze it.
+  const world = physicsWorld;
+  vehicleInstances.forEach((instance) => {
+    const nodeId = instance.nodeId;
+    if (!nodeId) {
+      return;
+    }
+    const manualActive = vehicleDriveActive.value && vehicleDriveNodeId.value === nodeId;
+    const tourActive = activeAutoTourNodeIds.has(nodeId);
+    const shouldBeInWorld = manualActive || tourActive;
+    const isInWorld = vehicleRaycastInWorld.has(nodeId);
+
+    if (shouldBeInWorld && !isInWorld) {
+      try {
+        instance.vehicle.addToWorld(world);
+        vehicleRaycastInWorld.add(nodeId);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to add vehicle to world', error);
+      }
+      return;
+    }
+    if (!shouldBeInWorld && isInWorld) {
+      try {
+        instance.vehicle.removeFromWorld(world);
+        vehicleRaycastInWorld.delete(nodeId);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to remove vehicle from world', error);
+      }
+      const chassisBody = instance.vehicle?.chassisBody;
+      if (chassisBody) {
+        try {
+          chassisBody.allowSleep = true;
+          chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
+          chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
+          chassisBody.velocity.set(0, 0, 0);
+          chassisBody.angularVelocity.set(0, 0, 0);
+          (chassisBody as any).sleep?.();
+        } catch {
+          // best-effort
+        }
+      }
+    }
+  });
   try {
     physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
   } catch (error) {
     console.warn('[SceneViewer] Physics step failed', error);
   }
+
+  // Ensure vehicles are truly static after exiting drive/auto-tour.
+  // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
+  const nowMs = Date.now();
+  vehicleInstances.forEach((instance) => {
+    const nodeId = instance.nodeId;
+    if (!nodeId) {
+      return;
+    }
+    const manualActive = vehicleDriveActive.value && vehicleDriveNodeId.value === nodeId;
+    const tourActive = activeAutoTourNodeIds.has(nodeId);
+    if (manualActive || tourActive) {
+      return;
+    }
+    const chassisBody = instance.vehicle?.chassisBody;
+    if (!chassisBody) {
+      return;
+    }
+    const vx = chassisBody.velocity?.x ?? 0;
+    const vy = chassisBody.velocity?.y ?? 0;
+    const vz = chassisBody.velocity?.z ?? 0;
+    const wx = chassisBody.angularVelocity?.x ?? 0;
+    const wy = chassisBody.angularVelocity?.y ?? 0;
+    const wz = chassisBody.angularVelocity?.z ?? 0;
+    const fx = (chassisBody as any).force?.x ?? 0;
+    const fy = (chassisBody as any).force?.y ?? 0;
+    const fz = (chassisBody as any).force?.z ?? 0;
+    const tx = (chassisBody as any).torque?.x ?? 0;
+    const ty = (chassisBody as any).torque?.y ?? 0;
+    const tz = (chassisBody as any).torque?.z ?? 0;
+    const speedSq = vx * vx + vy * vy + vz * vz;
+    const angSq = wx * wx + wy * wy + wz * wz;
+    const sleepState = (chassisBody as any).sleepState as number | undefined;
+    const drifting = speedSq > 1e-10 || angSq > 1e-10;
+    const awake = sleepState === 0;
+    if (!drifting && !awake) {
+      return;
+    }
+
+    const lastLog = vehicleIdleFreezeLastLogMs.get(nodeId) ?? 0;
+    if (nowMs - lastLog > 750) {
+      vehicleIdleFreezeLastLogMs.set(nodeId, nowMs);
+      // idle drift detected; forcing stop (no debug log)
+    }
+    try {
+      chassisBody.allowSleep = true;
+      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
+      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
+      const wheelCount = Math.max(0, (instance as any).wheelCount ?? (instance.vehicle as any)?.wheelInfos?.length ?? 0);
+      for (let index = 0; index < wheelCount; index += 1) {
+        instance.vehicle.applyEngineForce(0, index);
+        instance.vehicle.setSteeringValue(0, index);
+        instance.vehicle.setBrake(VEHICLE_BRAKE_FORCE, index);
+      }
+      chassisBody.velocity.set(0, 0, 0);
+      chassisBody.angularVelocity.set(0, 0, 0);
+      (chassisBody as any).sleep?.();
+    } catch {
+      // best-effort
+    }
+  });
   rigidbodyInstances.forEach((entry) => {
     if (entry.syncObjectFromBody === false) {
       return;

@@ -537,7 +537,75 @@ export class VehicleDriveController {
     if (!state.active) {
       return
     }
+
+    const nodeId = state.nodeId
     const token = state.token
+    const inputSnapshot = {
+      throttle: this.input.throttle,
+      steering: this.input.steering,
+      brake: this.input.brake,
+      flags: { ...this.inputFlags },
+    }
+
+    const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
+    const chassisBody = instance?.vehicle?.chassisBody ?? null
+    const beforeMotion = chassisBody
+      ? {
+          v: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
+          w: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z },
+          f: chassisBody.force ? { x: chassisBody.force.x, y: chassisBody.force.y, z: chassisBody.force.z } : undefined,
+          t: chassisBody.torque ? { x: chassisBody.torque.x, y: chassisBody.torque.y, z: chassisBody.torque.z } : undefined,
+          sleepState: (chassisBody as any).sleepState,
+        }
+      : null
+
+    // stopDrive: begin (debug logs removed)
+
+    // --- HARD STOP ---
+    // RaycastVehicle keeps last engine/brake/steer values if we stop calling it.
+    // Clear all control state and forcibly stop the chassis body to guarantee that exiting drive leaves the vehicle static.
+    this.resetInputs()
+    if (instance?.vehicle) {
+      try {
+        const vehicle = instance.vehicle
+        const wheelCount = Math.max(0, instance.wheelCount ?? vehicle.wheelInfos?.length ?? 0)
+        for (let i = 0; i < wheelCount; i += 1) {
+          vehicle.applyEngineForce(0, i)
+          vehicle.setSteeringValue(0, i)
+          vehicle.setBrake(VEHICLE_BRAKE_FORCE, i)
+        }
+      } catch {
+        // best-effort
+      }
+    }
+    if (chassisBody) {
+      try {
+        chassisBody.allowSleep = true
+        // Treat tiny residual jitter as sleep-eligible.
+        chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
+        chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
+        chassisBody.velocity.set(0, 0, 0)
+        chassisBody.angularVelocity.set(0, 0, 0)
+        ;(chassisBody as any).sleep?.()
+      } catch {
+        // best-effort
+      }
+    }
+    // Some runtimes use rigidbodyInstances as the authoritative body; also stop it to avoid drift.
+    const rigidbodyEntry = nodeId ? (this.deps.rigidbodyInstances.get(nodeId) ?? null) : null
+    const body = rigidbodyEntry?.body ?? null
+    if (body) {
+      try {
+        body.allowSleep = true
+        body.sleepSpeedLimit = Math.max(0.05, body.sleepSpeedLimit ?? 0)
+        body.sleepTimeLimit = Math.max(0.05, body.sleepTimeLimit ?? 0)
+        body.velocity.set(0, 0, 0)
+        body.angularVelocity.set(0, 0, 0)
+        ;(body as any).sleep?.()
+      } catch {
+        // best-effort
+      }
+    }
     state.active = false
     state.nodeId = null
     state.seatNodeId = null
@@ -561,6 +629,8 @@ export class VehicleDriveController {
     if (token && this.deps.onResolveBehaviorToken) {
       this.deps.onResolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
     }
+
+    // stopDrive: end (debug logs removed)
   }
 
   applyForces(): void {
