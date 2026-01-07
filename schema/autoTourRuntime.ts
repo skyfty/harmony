@@ -37,11 +37,26 @@ export type AutoTourRuntimeDeps = {
   isManualDriveActive: () => boolean
   /** Optional callback when AutoTour updates a runtime object's transform (useful for instanced meshes). */
   onNodeObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
+
+  /** Optional callback to stop any node motion instantly (e.g., rigidbody velocity reset). */
+  stopNodeMotion?: (nodeId: string) => void
+
+  /**
+   * When true, auto-tour will only run after calling `startTour(nodeId)`.
+   * When false/omitted, enabled AutoTour components will run automatically (legacy behavior).
+   */
+  requiresExplicitStart?: boolean
 }
 
 export type AutoTourRuntime = {
   update: (deltaSeconds: number) => void
   reset: () => void
+  /** Enables auto-tour playback for the given nodeId (if it has an enabled AutoTour component). */
+  startTour: (nodeId: string) => void
+  /** Stops auto-tour playback for the given nodeId and immediately stops motion. */
+  stopTour: (nodeId: string) => void
+  /** Returns whether the given nodeId is currently marked as touring. */
+  isTourActive: (nodeId: string) => boolean
 }
 
 type AutoTourPlaybackState = {
@@ -121,6 +136,9 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
   const autoTourPlaybackState = new Map<string, AutoTourPlaybackState>()
+  const requiresExplicitStart = deps.requiresExplicitStart === true
+  const activeTourNodes = new Set<string>()
+  const disabledTourNodes = new Set<string>()
 
   const autoTourTargetPosition = new THREE.Vector3()
   const autoTourCurrentPosition = new THREE.Vector3()
@@ -134,6 +152,47 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const autoTourNextWorldPosition = new THREE.Vector3()
   const autoTourLocalPosition = new THREE.Vector3()
   const autoTourPlanarTarget = new THREE.Vector3()
+
+  function clearPlaybackStateForNode(nodeId: string): void {
+    const prefix = `${nodeId}:`
+    for (const key of autoTourPlaybackState.keys()) {
+      if (key.startsWith(prefix)) {
+        autoTourPlaybackState.delete(key)
+      }
+    }
+  }
+
+  function stopVehicleImmediately(nodeId: string): void {
+    const vehicleInstance = deps.vehicleInstances.get(nodeId) ?? null
+    const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
+    if (!vehicleInstance || !chassisBody) {
+      return
+    }
+
+    // Apply strong braking and reset steering/engine via the shared safe helper.
+    const pursuitProps = clampPurePursuitComponentProps(null)
+    try {
+      holdVehicleBrakeSafe({
+        vehicleInstance: vehicleInstance as any,
+        brakeForce: pursuitProps.brakeForceMax * 6,
+      })
+      for (let index = 0; index < vehicleInstance.wheelCount; index += 1) {
+        vehicleInstance.vehicle.applyEngineForce(0, index)
+        vehicleInstance.vehicle.setSteeringValue(0, index)
+      }
+    } catch {
+      // Best-effort; physics may be resetting.
+    }
+
+    // Hard-stop velocity to prevent coasting.
+    try {
+      chassisBody.velocity.set(0, 0, 0)
+      chassisBody.angularVelocity.set(0, 0, 0)
+      chassisBody.wakeUp()
+    } catch {
+      // ignore
+    }
+  }
 
   function getGuideRouteWorldWaypoints(routeNodeId: string): THREE.Vector3[] | null {
     const routeNode = deps.resolveNodeById(routeNodeId)
@@ -172,6 +231,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
 
     for (const node of deps.iterNodes()) {
+      if (disabledTourNodes.has(node.id)) {
+        continue
+      }
+      if (requiresExplicitStart && !activeTourNodes.has(node.id)) {
+        continue
+      }
       const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
       if (!autoTour) {
         continue
@@ -527,6 +592,71 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     update,
     reset: () => {
       autoTourPlaybackState.clear()
+      activeTourNodes.clear()
+      disabledTourNodes.clear()
+    },
+    startTour: (nodeId: string) => {
+      if (!nodeId) {
+        return
+      }
+      disabledTourNodes.delete(nodeId)
+      if (requiresExplicitStart) {
+        activeTourNodes.add(nodeId)
+      }
+      // Force a clean re-initialization on next update.
+      clearPlaybackStateForNode(nodeId)
+    },
+    stopTour: (nodeId: string) => {
+      if (!nodeId) {
+        return
+      }
+      if (requiresExplicitStart) {
+        activeTourNodes.delete(nodeId)
+      } else {
+        disabledTourNodes.add(nodeId)
+      }
+
+      // Freeze any cached smoothing/controller state for this node so restart is clean.
+      const prefix = `${nodeId}:`
+      for (const [key, state] of autoTourPlaybackState.entries()) {
+        if (!key.startsWith(prefix)) {
+          continue
+        }
+        state.mode = 'stopped'
+        state.speedIntegral = undefined
+        state.lastSteerRad = undefined
+        state.reverseActive = undefined
+
+        const node = deps.resolveNodeById(nodeId)
+        const object = deps.nodeObjectMap.get(nodeId) ?? null
+        if (node && object) {
+          object.getWorldPosition(state.smoothedWorldPosition)
+          object.getWorldQuaternion(autoTourObjectWorldQuaternion)
+          state.smoothedYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
+          state.hasSmoothedState = true
+          syncNodeTransformFromObject(node, object)
+          deps.onNodeObjectTransformUpdated?.(nodeId, object)
+        }
+      }
+
+      // Vehicles need explicit braking + velocity zeroing.
+      stopVehicleImmediately(nodeId)
+
+      // Non-vehicle motion may still be driven by a physics body in the host runtime.
+      deps.stopNodeMotion?.(nodeId)
+    },
+    isTourActive: (nodeId: string) => {
+      if (!nodeId) {
+        return false
+      }
+      if (disabledTourNodes.has(nodeId)) {
+        return false
+      }
+      if (requiresExplicitStart) {
+        return activeTourNodes.has(nodeId)
+      }
+      const node = deps.resolveNodeById(nodeId)
+      return Boolean(resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE))
     },
   }
 }

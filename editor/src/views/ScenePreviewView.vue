@@ -522,23 +522,36 @@ const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
+const activeAutoTourNodeIds = reactive(new Set<string>())
 
 const vehicleDrivePrompt = computed(() => {
+	// Ensure this computed updates when the set changes.
+	activeAutoTourNodeIds.size
 	const event = pendingVehicleDriveEvent.value
 	if (!event) {
 		return {
 			visible: false,
 			label: '',
 			busy: false,
+			showDrive: false,
+			showAutoTour: false,
+			showStopTour: false,
 		}
 	}
 	const targetNodeId = event.targetNodeId ?? event.nodeId
 	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
 	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
+	const canDrive = Boolean(resolveVehicleComponent(node))
+	const canAutoTour = Boolean(resolveAutoTourComponent(node))
+	const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId))
+	const hasAnyAction = isTouring || canDrive || canAutoTour
 	return {
-		visible: true,
+		visible: hasAnyAction,
 		label,
 		busy: vehicleDrivePromptBusy.value,
+		showDrive: canDrive && !isTouring,
+		showAutoTour: canAutoTour && !isTouring,
+		showStopTour: isTouring,
 	}
 })
 
@@ -1740,12 +1753,35 @@ function resolveVehicleComponent(
 	return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
 }
 
+function resolveAutoTourComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<AutoTourComponentProps> | null {
+	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+}
+
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
 	vehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
+	requiresExplicitStart: true,
+	stopNodeMotion: (nodeId) => {
+		const entry = rigidbodyInstances.get(nodeId) ?? null
+		if (!entry) {
+			return
+		}
+		try {
+			if (entry.object) {
+				syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment)
+			}
+			entry.body.velocity.set(0, 0, 0)
+			entry.body.angularVelocity.set(0, 0, 0)
+			entry.body.sleep?.()
+		} catch {
+			// Best-effort; body may be disposed/resetting.
+		}
+	},
 	onNodeObjectTransformUpdated: (_nodeId, object) => {
 		syncInstancedTransform(object)
 	},
@@ -4516,6 +4552,18 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided to drive.' })
 		return
 	}
+	const targetNode = resolveNodeById(targetNodeId)
+	const canDrive = Boolean(resolveVehicleComponent(targetNode))
+	const canAutoTour = Boolean(resolveAutoTourComponent(targetNode))
+	const isTouring = activeAutoTourNodeIds.has(targetNodeId)
+	if (!isTouring && !canDrive && !canAutoTour) {
+		appendWarningMessage('Target node cannot be driven or auto-toured (missing enabled components).')
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: 'Target node cannot be driven or auto-toured (missing enabled components).',
+		})
+		return
+	}
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
@@ -4555,10 +4603,75 @@ function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
 }
 
+async function handleVehicleAutoTourStartClick(): Promise<void> {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	const node = resolveNodeById(targetNodeId)
+	if (!resolveAutoTourComponent(node)) {
+		appendWarningMessage('AutoTour component is not enabled on the target node.')
+		return
+	}
+
+	vehicleDrivePromptBusy.value = true
+	try {
+		// Auto tour and manual drive must be mutually exclusive.
+		if (vehicleDriveState.active) {
+			handleHideVehicleCockpitEvent()
+			stopVehicleDriveMode({ resolution: { type: 'continue' } })
+		}
+
+		resetVehicleDriveInputs()
+		setVehicleDriveUiOverride('hide')
+		autoTourRuntime.startTour(targetNodeId)
+		activeAutoTourNodeIds.add(targetNodeId)
+
+		// Behavior script tokens should not hang: auto-tour starts immediately.
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'continue' })
+			pendingVehicleDriveEvent.value = { ...event, token: '' }
+		}
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
+function handleVehicleAutoTourStopClick(): void {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		autoTourRuntime.stopTour(targetNodeId)
+		activeAutoTourNodeIds.delete(targetNodeId)
+		// Remain in normal state; user can choose Drive again or stay idle.
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
 async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	const event = pendingVehicleDriveEvent.value
 	if (!event || vehicleDrivePromptBusy.value) {
 		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
+		autoTourRuntime.stopTour(targetNodeId)
+		activeAutoTourNodeIds.delete(targetNodeId)
+	}
+	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
+		controlMode.value = 'third-person'
 	}
 	vehicleDrivePromptBusy.value = true
 	try {
@@ -4769,10 +4882,6 @@ function handleCanvasClick(event: MouseEvent) {
 		return
 	}
 
-	const previousControlMode = controlMode.value
-	if (previousControlMode !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
 	pendingVehicleDriveEvent.value = null
 	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
 		type: 'vehicle-drive',
@@ -4785,15 +4894,10 @@ function handleCanvasClick(event: MouseEvent) {
 		seatNodeId: null,
 		token: '',
 	}
-	const result = startVehicleDriveMode(manualEvent)
-	if (!result.success) {
-		appendWarningMessage(result.message ?? 'Failed to enter driving mode.')
-		if (previousControlMode !== 'third-person') {
-			controlMode.value = previousControlMode
-		}
-		return
-	}
-	handleShowVehicleCockpitEvent()
+	pendingVehicleDriveEvent.value = manualEvent
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+	resetVehicleDriveInputs()
 }
 
 function resetFirstPersonPointerDelta() {
@@ -5467,6 +5571,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Scene reset; driving ended.' } })
 	}
+	autoTourRuntime.reset()
+	activeAutoTourNodeIds.clear()
 	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
@@ -7560,8 +7666,8 @@ function stepPhysicsWorld(delta: number): void {
 		}
 		// AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
 		const nodeState = resolveNodeById(entry.nodeId)
-		const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(nodeState, AUTO_TOUR_COMPONENT_TYPE)
-		if (autoTour) {
+		const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId)
+		if (isAutoTourActive) {
 			const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE)
 			if (!vehicle) {
 				return
@@ -7729,8 +7835,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
-	const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
-	const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id)
+	const skipTransformSync = activeAutoTourNodeIds.has(node.id) && !vehicleInstances.has(node.id)
 	if (node.position) {
 		if (!skipTransformSync) {
 			object.position.set(node.position.x, node.position.y, node.position.z)
@@ -8833,19 +8938,49 @@ onBeforeUnmount(() => {
 				<span class="scene-preview__purpose-label">Level</span>
 			</v-btn>
 		</div>
-		<v-btn
+		<v-btn-group
 			v-if="vehicleDrivePrompt.visible"
 			class="scene-preview__drive-start-button"
-			color="primary"
-			variant="flat"
-			size="large"
-			prepend-icon="mdi-steering"
-			:loading="vehicleDrivePrompt.busy"
-			:disabled="vehicleDrivePrompt.busy"
-			@click="handleVehicleDrivePromptConfirm"
+			density="comfortable"
+			divided
 		>
-			Drive {{ vehicleDrivePrompt.label }}
-		</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showDrive"
+				color="primary"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-steering"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleDrivePromptConfirm"
+			>
+				Drive {{ vehicleDrivePrompt.label }}
+			</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showAutoTour"
+				color="secondary"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-map-marker-path"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleAutoTourStartClick"
+			>
+				自动巡游
+			</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showStopTour"
+				color="warning"
+				variant="flat"
+				size="large"
+				prepend-icon="mdi-stop-circle"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleAutoTourStopClick"
+			>
+				停止巡游 {{ vehicleDrivePrompt.label }}
+			</v-btn>
+		</v-btn-group>
 		<div
 			v-if="vehicleDriveUi.visible"
 			class="scene-preview__drive-panel"
