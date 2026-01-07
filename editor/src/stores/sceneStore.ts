@@ -128,7 +128,6 @@ import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
-import { copyNodesAction, cutNodesAction, pasteClipboardAction } from './clipboardActions'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
@@ -6435,7 +6434,7 @@ function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHis
   return { kind: 'node-basics', snapshots }
 }
 
-function findNodeLocationInTree(nodes: SceneNode[], targetId: string): SceneHistoryNodeLocation | null {
+export function findNodeLocationInTree(nodes: SceneNode[], targetId: string): SceneHistoryNodeLocation | null {
   if (!targetId) {
     return null
   }
@@ -10200,6 +10199,12 @@ export const useSceneStore = defineStore('scene', {
       componentManager.syncNode(duplicate)
       return duplicate
     },
+    syncComponentSubtree(node: SceneNode) {
+        componentManager.syncNode(node)
+        if (node.children?.length) {
+          node.children.forEach(this.syncComponentSubtree.bind(this))
+        }
+      },
     async instantiateNodePrefabAsset(
       assetId: string,
       position?: THREE.Vector3,
@@ -10310,13 +10315,8 @@ export const useSceneStore = defineStore('scene', {
       // Ensure all nodes in the prefab subtree are correctly synced to the runtime scene graph.
       // ensureSceneAssetsReady only processes nodes with assets, so we need to explicitly sync the hierarchy
       // to ensure parenting is correct for all nodes (including Groups and those without assets).
-      const syncSubtree = (node: SceneNode) => {
-        componentManager.syncNode(node)
-        if (node.children?.length) {
-          node.children.forEach(syncSubtree)
-        }
-      }
-      syncSubtree(duplicate)
+
+      this.syncComponentSubtree(duplicate)
 
       // Prefab dependencies are ready; now create the subtree in the viewport.
       this.queueSceneNodePatch(duplicate.id, ['transform'])
@@ -13854,13 +13854,360 @@ export const useSceneStore = defineStore('scene', {
       return duplicates.map((node) => node.id)
     },
     copyNodes(nodeIds: string[]) {
-      return copyNodesAction(this, nodeIds)
+      if (!Array.isArray(nodeIds) || nodeIds.length === 0) return false
+
+      const uniqueIds = Array.from(new Set(nodeIds)).filter((id) => typeof id === 'string' && id.trim().length > 0)
+      if (!uniqueIds.length) return false
+
+      const existingIds = uniqueIds.filter((id) => !!findNodeById(this.nodes, id) && !this.isNodeSelectionLocked(id))
+      if (!existingIds.length) return false
+
+      const parentMap = buildParentMap(this.nodes)
+      const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
+        .filter((id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+        .filter((id) => {
+          const node = findNodeById(this.nodes, id)
+          if (!node) return false
+          if (node.canPrefab === false) return false
+          return true
+        })
+
+      if (!topLevelIds.length) return false
+
+      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, topLevelIds)
+
+      const buildClipboardPrefab = (): { serialized: string; cut: boolean } | null => {
+        if (topLevelIds.length === 1) {
+          const node = findNodeById(this.nodes, topLevelIds[0]!)
+          if (!node) return null
+          if (node.nodeType === 'Group') {
+            const payload = buildSerializedPrefabPayload(node, {
+              name: node.name ?? '',
+              assetIndex: this.assetIndex,
+              packageAssetMap: this.packageAssetMap,
+              sceneNodes: this.nodes,
+            })
+            const serialized = JSON.stringify({ ...payload.prefab, clipboard: { mode: 'copy', multiRoot: false } }, null, 2)
+            return { serialized, cut: false }
+          }
+        }
+
+        const firstWorld = computeWorldMatrixForNode(this.nodes, topLevelIds[0]!)
+        const pivotTranslation = new Matrix4().identity()
+        if (firstWorld) {
+          const pivotPos = new Vector3()
+          const pivotQuat = new Quaternion()
+          const pivotScale = new Vector3()
+          firstWorld.decompose(pivotPos, pivotQuat, pivotScale)
+          pivotTranslation.makeTranslation(pivotPos.x, pivotPos.y, pivotPos.z)
+        }
+        const pivotInverse = pivotTranslation.clone().invert()
+
+        const wrapperId = generateUuid()
+        const rootChildIds: string[] = []
+        const children: SceneNode[] = []
+
+        topLevelIds.forEach((id) => {
+          const source = findNodeById(this.nodes, id)
+            if (!source) return
+            const sourceWorld = computeWorldMatrixForNode(this.nodes, id)
+          const cloned = prepareNodePrefabRoot(source, { regenerateIds: false })
+
+          if (sourceWorld) {
+            const localMatrix = new Matrix4().multiplyMatrices(pivotInverse, sourceWorld)
+            const position = new Vector3()
+            const quaternion = new Quaternion()
+            const scale = new Vector3()
+            localMatrix.decompose(position, quaternion, scale)
+            const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
+            cloned.position = toPlainVector(position)
+            cloned.rotation = { x: euler.x, y: euler.y, z: euler.z }
+            cloned.scale = { x: scale.x, y: scale.y, z: scale.z }
+          }
+
+          rootChildIds.push(cloned.id)
+          children.push(cloned)
+        })
+
+        if (!children.length) return null
+
+        const wrapper: SceneNode = {
+          id: wrapperId,
+          name: 'Clipboard',
+          nodeType: 'Group',
+          position: toPlainVector(new Vector3(0, 0, 0)),
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          visible: true,
+          locked: false,
+          groupExpanded: false,
+          children,
+        }
+
+        const payload = buildSerializedPrefabPayload(wrapper, {
+          name: 'Clipboard',
+          assetIndex: this.assetIndex,
+          packageAssetMap: this.packageAssetMap,
+          sceneNodes: this.nodes,
+        })
+
+        const serialized = JSON.stringify({ ...payload.prefab, clipboard: { mode: 'copy', multiRoot: true, rootChildIds } }, null, 2)
+        return { serialized, cut: false }
+      }
+
+      const prefabPayload = buildClipboardPrefab()
+      if (!prefabPayload) return false
+
+      const clipboardStore = useClipboardStore()
+      clipboardStore.setClipboard({ entries, runtimeSnapshots, cut: false })
+      void clipboardStore.writeSystem(prefabPayload.serialized)
+      return true
     },
     cutNodes(nodeIds: string[]) {
-      return cutNodesAction(this, nodeIds)
+      if (!Array.isArray(nodeIds) || nodeIds.length === 0) return false
+
+      const uniqueIds = Array.from(new Set(nodeIds)).filter((id) => typeof id === 'string' && id.trim().length > 0)
+      if (!uniqueIds.length) return false
+
+      const existingIds = uniqueIds.filter((id) => !!findNodeById(this.nodes, id) && !this.isNodeSelectionLocked(id))
+      if (!existingIds.length) return false
+
+      const parentMap = buildParentMap(this.nodes)
+      const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
+        .filter((id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+        .filter((id) => {
+          const node = findNodeById(this.nodes, id)
+          if (!node) return false
+          if (node.canPrefab === false) return false
+          return true
+        })
+
+      if (!topLevelIds.length) return false
+
+      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, topLevelIds)
+
+      const buildClipboardPrefab = (): string | null => {
+        if (topLevelIds.length === 1) {
+          const node = findNodeById(this.nodes, topLevelIds[0]!)
+          if (!node) return null
+          if (node.nodeType === 'Group') {
+            const payload = buildSerializedPrefabPayload(node, {
+              name: node.name ?? '',
+              assetIndex: this.assetIndex,
+              packageAssetMap: this.packageAssetMap,
+              sceneNodes: this.nodes,
+            })
+            return JSON.stringify({ ...payload.prefab, clipboard: { mode: 'cut', multiRoot: false } }, null, 2)
+          }
+        }
+
+        const firstWorld = computeWorldMatrixForNode(this.nodes, topLevelIds[0]!)
+        const pivotTranslation = new Matrix4().identity()
+        if (firstWorld) {
+          const pivotPos = new Vector3()
+          const pivotQuat = new Quaternion()
+          const pivotScale = new Vector3()
+          firstWorld.decompose(pivotPos, pivotQuat, pivotScale)
+          pivotTranslation.makeTranslation(pivotPos.x, pivotPos.y, pivotPos.z)
+        }
+        const pivotInverse = pivotTranslation.clone().invert()
+
+        const wrapperId = generateUuid()
+        const rootChildIds: string[] = []
+        const children: SceneNode[] = []
+
+        topLevelIds.forEach((id) => {
+          const source = findNodeById(this.nodes, id)
+          if (!source) return
+          const sourceWorld = computeWorldMatrixForNode(this.nodes, id)
+          const cloned = prepareNodePrefabRoot(source, { regenerateIds: false })
+
+          if (sourceWorld) {
+            const localMatrix = new Matrix4().multiplyMatrices(pivotInverse, sourceWorld)
+            const position = new Vector3()
+            const quaternion = new Quaternion()
+            const scale = new Vector3()
+            localMatrix.decompose(position, quaternion, scale)
+            const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
+            cloned.position = toPlainVector(position)
+            cloned.rotation = { x: euler.x, y: euler.y, z: euler.z }
+            cloned.scale = { x: scale.x, y: scale.y, z: scale.z }
+          }
+
+          rootChildIds.push(cloned.id)
+          children.push(cloned)
+        })
+
+        if (!children.length) return null
+
+        const wrapper: SceneNode = {
+          id: wrapperId,
+          name: 'Clipboard',
+          nodeType: 'Group',
+          position: toPlainVector(new Vector3(0, 0, 0)),
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          visible: true,
+          locked: false,
+          groupExpanded: false,
+          children,
+        }
+
+        const payload = buildSerializedPrefabPayload(wrapper, {
+          name: 'Clipboard',
+          assetIndex: this.assetIndex,
+          packageAssetMap: this.packageAssetMap,
+          sceneNodes: this.nodes,
+        })
+
+        return JSON.stringify({ ...payload.prefab, clipboard: { mode: 'cut', multiRoot: true, rootChildIds } }, null, 2)
+      }
+
+      const serialized = buildClipboardPrefab()
+      if (!serialized) return false
+
+      const clipboardStore = useClipboardStore()
+      clipboardStore.setClipboard({ entries, runtimeSnapshots, cut: true })
+      void clipboardStore.writeSystem(serialized)
+
+      // Cut semantics: remove from scene immediately
+      this.removeSceneNodes(topLevelIds)
+      return true
     },
     async pasteClipboard(targetId?: string | null): Promise<boolean> {
-      return pasteClipboardAction(this, targetId)
+      if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') return false
+
+      let serialized: string
+      try {
+        serialized = await navigator.clipboard.readText()
+      } catch (error) {
+        console.warn('Failed to read clipboard', error)
+        return false
+      }
+
+      const normalized = serialized?.trim()
+      if (!normalized) return false
+
+      let clipboardMeta: { mode?: string; multiRoot?: boolean; rootChildIds?: unknown } | null = null
+      try {
+        const parsed = JSON.parse(normalized) as unknown
+        if (parsed && typeof parsed === 'object' && 'clipboard' in (parsed as any)) {
+          const candidate = (parsed as any).clipboard
+          if (candidate && typeof candidate === 'object') clipboardMeta = candidate as { mode?: string; multiRoot?: boolean; rootChildIds?: unknown }
+        }
+      } catch {
+        // ignore
+      }
+
+      let prefab: NodePrefabData | null = null
+      try {
+        prefab = parseNodePrefab(normalized)
+      } catch (_error) {
+        const node = deserializeSceneNode(normalized)
+        if (!node) return false
+        const root = ensurePrefabGroupRoot(node)
+        prefab = createNodePrefabData(root, node.name ?? 'Clipboard')
+      }
+
+      if (!prefab) return false
+
+      const clipboardStore = useClipboardStore()
+      const clipboardSourceIds = (clipboardStore.clipboard?.entries ?? []).map((entry: any) => entry?.sourceId).filter((id: any) => typeof id === 'string') as string[]
+
+      let parentId = typeof targetId === 'string' ? targetId.trim() : ''
+      if (!parentId.length) parentId = ''
+      let resolvedParentId: string | null = parentId.length ? parentId : null
+      if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
+      if (resolvedParentId) {
+        const targetNode = findNodeById(this.nodes, resolvedParentId)
+        if (!targetNode) {
+          resolvedParentId = null
+        } else {
+          const targetIsGroup = targetNode.nodeType === 'Group'
+          const targetIsClosedGroup = targetIsGroup && (targetNode as any).groupExpanded === false
+          const targetMatchesClipboardSource = clipboardSourceIds.includes(resolvedParentId)
+          const pasteIntoParent = !targetIsGroup || targetIsClosedGroup || targetMatchesClipboardSource
+
+          if (pasteIntoParent) {
+            const parentMap = buildParentMap(this.nodes)
+            resolvedParentId = parentMap.get(resolvedParentId) ?? null
+            if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
+          }
+
+          if (resolvedParentId) {
+            const parentNode = findNodeById(this.nodes, resolvedParentId)
+            if (!parentNode || parentNode.nodeType !== 'Group' || !allowsChildNodes(parentNode)) resolvedParentId = null
+          }
+        }
+      }
+
+      const runtimeSnapshots = clipboardStore.clipboard?.runtimeSnapshots ?? new Map<string, any>()
+      const duplicate = await this.instantiatePrefabData(prefab, { runtimeSnapshots, position: null })
+
+      const multiRoot = Boolean(clipboardMeta?.multiRoot)
+      this.syncComponentSubtree(duplicate)
+
+      const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
+        let parentInverse = new Matrix4().identity()
+        if (targetParentId) {
+          const parentWorld = computeWorldMatrixForNode(this.nodes, targetParentId)
+          if (!parentWorld) targetParentId = null
+          else parentInverse = parentWorld.clone().invert()
+        }
+        const localMatrix = targetParentId ? new Matrix4().multiplyMatrices(parentInverse, worldMatrix) : worldMatrix.clone()
+        const position = new Vector3()
+        const quaternion = new Quaternion()
+        const scale = new Vector3()
+        localMatrix.decompose(position, quaternion, scale)
+        const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
+        node.position = toPlainVector(position)
+        node.rotation = { x: euler.x, y: euler.y, z: euler.z }
+        node.scale = { x: scale.x, y: scale.y, z: scale.z }
+        this.syncComponentSubtree(node)
+      }
+
+      const rootsToInsert: SceneNode[] = []
+      if (multiRoot && duplicate.nodeType === 'Group' && duplicate.children?.length) {
+        const wrapperWorld = composeNodeMatrix(duplicate)
+        duplicate.children.forEach((child: SceneNode) => {
+          const childWorld = new Matrix4().multiplyMatrices(wrapperWorld, composeNodeMatrix(child))
+          applyWorldToParentLocal(child, childWorld, resolvedParentId)
+          rootsToInsert.push(child)
+        })
+      } else {
+        const rootWorld = composeNodeMatrix(duplicate)
+        applyWorldToParentLocal(duplicate, rootWorld, resolvedParentId)
+        rootsToInsert.push(duplicate)
+      }
+
+      if (!rootsToInsert.length) return false
+
+      const undoOps: any[] = []
+      let workingTree = [...this.nodes]
+      rootsToInsert.forEach((node) => {
+        if (resolvedParentId) {
+          const inserted = insertNodeMutable(workingTree, resolvedParentId, node, 'inside')
+          if (!inserted) workingTree.push(node)
+        } else {
+          workingTree.push(node)
+        }
+        const location = findNodeLocationInTree(workingTree, node.id)
+        if (location) undoOps.push({ type: 'remove', location, nodeId: node.id })
+      })
+
+      if (undoOps.length) this.captureNodeStructureHistorySnapshot(undoOps)
+
+      this.nodes = workingTree
+
+      if (resolvedParentId) this.recenterGroupAncestry(resolvedParentId, { captureHistory: false })
+
+      await this.ensureSceneAssetsReady({ nodes: rootsToInsert, showOverlay: false, refreshViewport: true })
+
+      rootsToInsert.forEach((node) => this.queueSceneNodePatch(node.id, ['transform']))
+
+      const insertedIds = rootsToInsert.map((node) => node.id)
+      this.setSelection(insertedIds, { primaryId: insertedIds[0] ?? null })
+      return true
     },
     clearClipboard() {
       const clipboardStore = useClipboardStore()
