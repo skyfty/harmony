@@ -16,7 +16,7 @@ import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterBrushRadius } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterBrushRadius, scatterDensityPercent } =
   storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
@@ -60,6 +60,12 @@ const scatterBrushRadiusModel = computed({
   set: (value: number) => terrainStore.setScatterBrushRadius(Number(value)),
 })
 const scatterBrushRadiusDisplay = computed(() => scatterBrushRadius.value.toFixed(2))
+
+const scatterDensityPercentModel = computed({
+  get: () => scatterDensityPercent.value,
+  set: (value: number) => terrainStore.setScatterDensityPercent(Number(value)),
+})
+const scatterDensityPercentDisplay = computed(() => `${Math.round(scatterDensityPercent.value)}%`)
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -286,6 +292,22 @@ function handleScatterAssetSelect(
                 :min="0.1"
                 :max="SCATTER_BRUSH_RADIUS_MAX"
                 :step="0.1"
+                density="compact"
+                track-color="rgba(77, 208, 225, 0.4)"
+                color="primary"
+              />
+            </div>
+
+            <div class="scatter-spacing-item">
+              <div class="scatter-spacing-labels">
+                <span>Density</span>
+                <span>{{ scatterDensityPercentDisplay }}</span>
+              </div>
+              <v-slider
+                v-model="scatterDensityPercentModel"
+                :min="0"
+                :max="100"
+                :step="1"
                 density="compact"
                 track-color="rgba(77, 208, 225, 0.4)"
                 color="primary"

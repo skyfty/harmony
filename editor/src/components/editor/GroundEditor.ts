@@ -48,6 +48,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
+import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -90,6 +91,7 @@ export type GroundEditorOptions = {
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
 	scatterEraseRadius: Ref<number>
+	scatterDensityPercent: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
@@ -176,6 +178,10 @@ const SCATTER_PACKING_FACTOR = 0.6
 const SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX = 256
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
+
+// Safety cap to avoid runaway interactive placement on tiny assets / huge brushes.
+// Keep this high so densityPercent remains proportional for common use-cases.
+const SCATTER_MAX_INSTANCES_PER_STAMP = 20000
 
 function getScatterChunkKeyFromLocal(
 	definition: GroundDynamicMesh,
@@ -1630,14 +1636,60 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const spacing = scatterSession.spacing
 		const spacingSq = spacing * spacing
 
-		// Try to place a bounded number of instances per stamp for performance.
 		const targetCount = scatterSession.targetCountPerStamp
-		const maxAttempts = Math.min(SCATTER_SAMPLE_ATTEMPTS_MAX, Math.max(80, targetCount * 40))
+		if (targetCount <= 0) {
+			return []
+		}
+
+		// Budget random samples so we can actually approach targetCount for dense brushes.
+		// Keep bounded for interactivity.
+		const maxAttempts = Math.min(
+			20000,
+			Math.max(Math.max(2000, SCATTER_SAMPLE_ATTEMPTS_MAX), Math.max(200, targetCount * 120)),
+		)
 
 		const accepted: THREE.Vector3[] = []
 		const centerProjected = projectScatterPoint(worldCenterPoint)
 		if (!centerProjected) {
 			return []
+		}
+
+		// Local grid index for points accepted in this stamp (fast intra-stamp overlap checks).
+		const cellSize = Math.max(1e-6, spacing)
+		const stampIndex = new Map<string, THREE.Vector3[]>()
+		const stampCellKey = (p: THREE.Vector3) => {
+			const cx = Math.floor(p.x / cellSize)
+			const cz = Math.floor(p.z / cellSize)
+			return `${cx}:${cz}`
+		}
+		const stampIndexInsert = (p: THREE.Vector3) => {
+			const key = stampCellKey(p)
+			const bucket = stampIndex.get(key)
+			if (bucket) {
+				bucket.push(p)
+			} else {
+				stampIndex.set(key, [p])
+			}
+		}
+		const stampIndexHasNeighborTooClose = (p: THREE.Vector3) => {
+			const cx = Math.floor(p.x / cellSize)
+			const cz = Math.floor(p.z / cellSize)
+			for (let dz = -1; dz <= 1; dz += 1) {
+				for (let dx = -1; dx <= 1; dx += 1) {
+					const bucket = stampIndex.get(`${cx + dx}:${cz + dz}`)
+					if (!bucket?.length) {
+						continue
+					}
+					for (const q of bucket) {
+						const ddx = q.x - p.x
+						const ddz = q.z - p.z
+						if (ddx * ddx + ddz * ddz < spacingSq) {
+							return true
+						}
+					}
+				}
+			}
+			return false
 		}
 
 		// Budget for overlap checks against existing instances.
@@ -1647,7 +1699,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		// Always place one instance at the click center.
 		// Center placement is not restricted by overlap checks.
-		accepted.push(centerProjected.clone())
+		{
+			const p = centerProjected.clone()
+			accepted.push(p)
+			stampIndexInsert(p)
+		}
 
 		for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt += 1) {
 			const u = Math.random()
@@ -1664,16 +1720,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				continue
 			}
 			// Avoid overlaps within this stamp (XZ plane).
-			let ok = true
-			for (const point of accepted) {
-				const dx = point.x - projected.x
-				const dz = point.z - projected.z
-				if (dx * dx + dz * dz < spacingSq) {
-					ok = false
-					break
-				}
-			}
-			if (!ok) {
+			if (stampIndexHasNeighborTooClose(projected)) {
 				continue
 			}
 
@@ -1697,7 +1744,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!scatterSession.neighborIndex.size && !isScatterPlacementAvailable(projected, spacing, scatterSession)) {
 				continue
 			}
-			accepted.push(projected.clone())
+			const p = projected.clone()
+			accepted.push(p)
+			stampIndexInsert(p)
 		}
 		return accepted
 	}
@@ -1770,18 +1819,37 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
-		let minSpacing = computeScatterMinSpacingFromModel(scatterModelGroup, preset.maxScale)
-		// Spacing is derived from the scatter model bounding box (prevents overlap).
-		minSpacing = Math.max(0.01, minSpacing)
-		const area = Math.PI * effectiveRadius * effectiveRadius
-		const expectedCapacity = area / Math.max(minSpacing * minSpacing, 1e-4)
-		// Use a conservative packing factor so distribution stays "natural", but avoid nested floors that
-		// can make the count stick at 1 for a wide range of radii.
-		const targetCountPerStamp = Math.min(
-			SCATTER_MAX_PER_STAMP,
-			Math.max(1, Math.round(expectedCapacity * SCATTER_PACKING_FACTOR)),
-		)
-		const effectiveSpacing = minSpacing
+
+		// Estimate capacity from brush area / (model footprint area * E[scale^2]).
+		scatterModelGroup.boundingBox.getSize(scatterBboxSizeHelper)
+		const sizeX = Math.max(0.01, Math.abs(scatterBboxSizeHelper.x))
+		const sizeZ = Math.max(0.01, Math.abs(scatterBboxSizeHelper.z))
+		const footprintAreaM2 = Math.max(1e-6, sizeX * sizeZ)
+		const footprintMaxSizeM = Math.sqrt(sizeX * sizeX + sizeZ * sizeZ)
+
+		const presetMinScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 1
+		const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
+		const densityPercent = Number(options.scatterDensityPercent.value)
+
+		const brushAreaM2 = Math.PI * effectiveRadius * effectiveRadius
+		const { targetCount: targetCountPerStamp } = computeOccupancyTargetCount({
+			areaM2: brushAreaM2,
+			footprintAreaM2,
+			densityPercent,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			maxCap: SCATTER_MAX_INSTANCES_PER_STAMP,
+		})
+		if (targetCountPerStamp <= 0) {
+			return false
+		}
+
+		const { minDistance: effectiveSpacing } = computeOccupancyMinDistance({
+			footprintMaxSizeM,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
+			minFloor: 0.01,
+		})
 		const chunkCells = resolveChunkCellsForDefinition(definition)
 		scatterSession = {
 			pointerId: event.pointerId,
@@ -1794,8 +1862,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			spacing: effectiveSpacing,
 			radius: effectiveRadius,
 			targetCountPerStamp,
-			minScale: preset.minScale,
-			maxScale: preset.maxScale,
+			minScale: presetMinScale,
+			maxScale: presetMaxScale,
 			store: ensureScatterStoreRef(),
 			layer,
 			modelGroup: scatterModelGroup,

@@ -284,7 +284,18 @@ const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, isSceneReady, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterBrushRadius, scatterEraseRadius } =
+const {
+  brushRadius,
+  brushStrength,
+  brushShape,
+  brushOperation,
+  groundPanelTab,
+  scatterCategory,
+  scatterSelectedAsset,
+  scatterBrushRadius,
+  scatterEraseRadius,
+  scatterDensityPercent,
+} =
   storeToRefs(terrainStore)
 
 const groundTerrainScatterUpdatedAt = computed(() => {
@@ -1071,6 +1082,7 @@ const groundEditor = createGroundEditor({
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
   scatterEraseRadius,
+  scatterDensityPercent,
   activeBuildTool,
   scatterEraseModeActive,
   disableOrbitForGroundSelection,

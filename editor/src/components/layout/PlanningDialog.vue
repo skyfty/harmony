@@ -18,6 +18,7 @@ import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@sche
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -970,15 +971,6 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
     const preset = terrainScatterPresets[poly.scatter.category]
     const minScale = preset && Number.isFinite(preset.minScale) ? preset.minScale : 1
     const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
-    const scaleLo = Math.max(0.0001, Math.min(minScale, maxScale))
-    const scaleHi = Math.max(scaleLo, Math.max(0.0001, maxScale))
-    // Assume uniform scale distribution in [minScale, maxScale]. Use E[scale^2] for area scaling.
-    const expectedScaleSq = (scaleLo * scaleLo + scaleLo * scaleHi + scaleHi * scaleHi) / 3
-    const scaleEq = Math.sqrt(Math.max(1e-12, expectedScaleSq))
-
-    // New semantics: densityPercent is the occupancy percentage of a non-overlap-like packing capacity.
-    // capacity ~= polygonArea / (footprintArea * E[scale^2])
-    const perInstanceArea = Math.max(1e-6, footprintAreaM2 * expectedScaleSq)
 
     // 多边形几何过滤：无边界则跳过
     const bounds = getPointsBounds(poly.points)
@@ -992,18 +984,24 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
-    // Capacity model:
-    // - maxByArea = floor(polygonArea / (footprintArea * E[scale^2]))
-    // - targetDots = round(maxByArea * densityPercent/100)
-    const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
-    const targetDots = Math.round((maxByArea * densityPercent) / 100)
+    const { targetCount: targetDots } = computeOccupancyTargetCount({
+      areaM2: area,
+      footprintAreaM2,
+      densityPercent,
+      minScale,
+      maxScale,
+    })
     if (targetDots <= 0) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // Non-overlap-ish spacing: scale footprint by sqrt(E[scale^2]).
-    const minDistance = Math.max(footprintMaxSizeM * scaleEq, 0.05)
+    const { minDistance, expectedScaleSq } = computeOccupancyMinDistance({
+      footprintMaxSizeM,
+      minScale,
+      maxScale,
+      minFloor: 0.05,
+    })
 
     // 基于 polygon 点集与参数构建缓存 key，避免重复昂贵计算
     const pointsHash = hashPlanningPoints(poly.points)

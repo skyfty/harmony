@@ -30,6 +30,7 @@ import {
   polygonCentroid,
   selectFarthestPointsFromCandidates,
 } from '@/utils/scatterSampling'
+import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
@@ -1524,22 +1525,17 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           // - capacity is estimated by polygonArea / (footprintArea * E[scale^2])
           //   (assuming uniform scale distribution in [minScale, maxScale]).
           const area = polygonArea2D(poly.points)
-          const clampedDensity = THREE.MathUtils.clamp(densityPercent, 0, 100)
 
-          const minScale = Math.max(0.0001, Math.min(minScaleForCapacity, maxScaleForCapacity))
-          const maxScale = Math.max(minScale, Math.max(0.0001, maxScaleForCapacity))
-          const expectedScaleSq = (minScale * minScale + minScale * maxScale + maxScale * maxScale) / 3
-          const scaleEq = Math.sqrt(Math.max(1e-12, expectedScaleSq))
-
-          const perInstanceArea = Math.max(1e-6, baseFootprintAreaM2 * expectedScaleSq)
-          const maxByArea = (Number.isFinite(area) && area > 0)
-            ? Math.floor(area / perInstanceArea)
-            : 0
-
-          const targetCount = Math.min(
-            MAX_SCATTER_INSTANCES_PER_POLYGON,
-            Math.max(0, Math.round((maxByArea * clampedDensity) / 100)),
-          )
+          const minScale = minScaleForCapacity
+          const maxScale = maxScaleForCapacity
+          const { targetCount } = computeOccupancyTargetCount({
+            areaM2: area,
+            footprintAreaM2: baseFootprintAreaM2,
+            densityPercent,
+            minScale,
+            maxScale,
+            maxCap: MAX_SCATTER_INSTANCES_PER_POLYGON,
+          })
 
           if (targetCount <= 0) {
             // Still remove previously generated instances for this feature to stay idempotent.
@@ -1560,16 +1556,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             continue
           }
           if (targetCount > 0) {
-            // Non-overlap-ish spacing: scale footprint by sqrt(E[scale^2]).
-            const minDistance = Math.max(0.05, baseFootprintMaxSizeM * scaleEq)
+            const { minDistance } = computeOccupancyMinDistance({
+              footprintMaxSizeM: baseFootprintMaxSizeM,
+              minScale,
+              maxScale,
+              minFloor: 0.05,
+            })
 
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))
               : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
             const randomProps = buildRandom(hashSeedFromString(`${seedBase}:props`))
 
-            const minScale = minScaleForCapacity
-            const maxScale = maxScaleForCapacity
             const minHeight = Number.isFinite(layerParams.minHeight) ? Number(layerParams.minHeight) : -10000
             const maxHeight = Number.isFinite(layerParams.maxHeight) ? Number(layerParams.maxHeight) : 10000
             const minSlope = Number.isFinite(layerParams.minSlope) ? Number(layerParams.minSlope) : 0
