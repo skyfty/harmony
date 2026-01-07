@@ -20,6 +20,9 @@ export const useTerrainStore = defineStore('terrain', () => {
   // Scatter placement brush radius (visual only). Kept independent from terrain sculpt brush and erase radius.
   const scatterBrushRadius = ref(0.5)
   const scatterEraseRadius = ref(1)
+  // Scatter density (0-100). Used to scale instance count linearly.
+  // Default 60 roughly matches the previous packing factor behavior.
+  const scatterDensityPercent = ref(60)
   const isDigging = computed(() => brushOperation.value === 'depress')
   const scatterPreset = computed(() => terrainScatterPresets[scatterCategory.value])
   const scatterModeActive = computed(() => groundPanelTab.value !== 'terrain' && !!scatterSelectedAsset.value)
@@ -52,6 +55,12 @@ export const useTerrainStore = defineStore('terrain', () => {
   function setScatterEraseRadius(value: number) {
     scatterEraseRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))
   }
+
+  function setScatterDensityPercent(value: number) {
+    const num = Number(value)
+    const clamped = Number.isFinite(num) ? Math.min(100, Math.max(0, Math.round(num))) : 60
+    scatterDensityPercent.value = clamped
+  }
   
   return {
     brushRadius,
@@ -67,11 +76,13 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterModeActive,
     scatterBrushRadius,
     scatterEraseRadius,
+    scatterDensityPercent,
     setBrushOperation,
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,
     setScatterBrushRadius,
     setScatterEraseRadius,
+    setScatterDensityPercent,
   }
 })

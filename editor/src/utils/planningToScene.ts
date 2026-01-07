@@ -22,7 +22,15 @@ import {
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { buildRandom, generateFpsScatterPointsInPolygon, hashSeedFromString } from '@/utils/scatterSampling'
+import {
+  buildRandom,
+  generateUniformCandidatesInPolygon,
+  getPointsBounds,
+  hashSeedFromString,
+  polygonCentroid,
+  selectFarthestPointsFromCandidates,
+} from '@/utils/scatterSampling'
+import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
@@ -126,7 +134,9 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
   return next <= prev ? prev + 1 : next
 }
 
-const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
+// Safety cap to avoid runaway instance generation on huge polygons.
+// NOTE: This should be high enough so densityPercent behaves proportionally for common use-cases.
+const MAX_SCATTER_INSTANCES_PER_POLYGON = 20000
 
 type LayerKind = 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water' | 'building'
 
@@ -1509,21 +1519,23 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             scatter.footprintMaxSizeM,
             baseFootprintAreaM2,
           )
-          const baseDiagonal = estimateFootprintDiagonalM(baseFootprintAreaM2, baseFootprintMaxSizeM)
-          const effectiveFootprintAreaM2 = baseFootprintAreaM2 * maxScaleForCapacity * maxScaleForCapacity
-          const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScaleForCapacity)
-          // Treat the (scaled) max side length as an approximate "diameter" for overlap avoidance.
-          const effectiveModelDiameterM = Math.max(0.01, baseFootprintMaxSizeM * maxScaleForCapacity)
 
+          // New semantics:
+          // - densityPercent (0-100) is the occupancy percentage of a non-overlap-like packing capacity.
+          // - capacity is estimated by polygonArea / (footprintArea * E[scale^2])
+          //   (assuming uniform scale distribution in [minScale, maxScale]).
           const area = polygonArea2D(poly.points)
-          const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM, 1e-6)
-          const maxByArea = (Number.isFinite(area) && area > 0 && perInstanceArea > 1e-6)
-            ? Math.floor(area / perInstanceArea)
-            : 0
-          const targetCount = Math.min(
-            MAX_SCATTER_INSTANCES_PER_POLYGON,
-            Math.max(0, Math.round((maxByArea * THREE.MathUtils.clamp(densityPercent, 0, 100)) / 100)),
-          )
+
+          const minScale = minScaleForCapacity
+          const maxScale = maxScaleForCapacity
+          const { targetCount } = computeOccupancyTargetCount({
+            areaM2: area,
+            footprintAreaM2: baseFootprintAreaM2,
+            densityPercent,
+            minScale,
+            maxScale,
+            maxCap: MAX_SCATTER_INSTANCES_PER_POLYGON,
+          })
 
           if (targetCount <= 0) {
             // Still remove previously generated instances for this feature to stay idempotent.
@@ -1544,30 +1556,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             continue
           }
           if (targetCount > 0) {
-            const spacingFromCount = (Number.isFinite(area) && area > 0)
-              ? Math.sqrt(area / targetCount)
-              : 0
-            const densityNormalized = THREE.MathUtils.clamp(densityPercent, 0.0001, 100)
-            const spacingFromDensity = 100 / densityNormalized
-            const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, spacingFromDensity + effectiveModelDiameterM, 0.05)
+            const { minDistance } = computeOccupancyMinDistance({
+              footprintMaxSizeM: baseFootprintMaxSizeM,
+              minScale,
+              maxScale,
+              minFloor: 0.05,
+            })
 
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))
               : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
-            const randomPoints = buildRandom(seedBase)
             const randomProps = buildRandom(hashSeedFromString(`${seedBase}:props`))
 
-            const maxCandidates = Math.min(8000, Math.max(600, Math.ceil(targetCount * 6)))
-            const selected = generateFpsScatterPointsInPolygon({
-              polygon: poly.points,
-              targetCount,
-              minDistance,
-              random: randomPoints,
-              maxCandidates,
-            })
-
-            const minScale = minScaleForCapacity
-            const maxScale = maxScaleForCapacity
             const minHeight = Number.isFinite(layerParams.minHeight) ? Number(layerParams.minHeight) : -10000
             const maxHeight = Number.isFinite(layerParams.maxHeight) ? Number(layerParams.maxHeight) : 10000
             const minSlope = Number.isFinite(layerParams.minSlope) ? Number(layerParams.minSlope) : 0
@@ -1588,42 +1588,128 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
               return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
             })
 
+            const bounds = getPointsBounds(poly.points)
+            const centroid = polygonCentroid(poly.points)
+              ?? (bounds ? { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 } : null)
+
             const additions: TerrainScatterInstance[] = []
-            for (const sample of selected) {
-              const localXZ = toWorldPoint(sample, groundWidth, groundDepth, 0)
-              const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
-              if (height < minHeight || height > maxHeight) {
-                continue
+            const acceptedSamples: PlanningPoint[] = []
+
+            const cellSize = minDistance
+            const cellKey = (p: PlanningPoint) => {
+              const cx = Math.floor(p.x / cellSize)
+              const cy = Math.floor(p.y / cellSize)
+              return `${cx},${cy}`
+            }
+            const spatial = new Map<string, PlanningPoint[]>()
+            const addToSpatial = (p: PlanningPoint) => {
+              const key = cellKey(p)
+              const bucket = spatial.get(key)
+              if (bucket) bucket.push(p)
+              else spatial.set(key, [p])
+            }
+            const isFarEnough = (p: PlanningPoint) => {
+              const cx = Math.floor(p.x / cellSize)
+              const cy = Math.floor(p.y / cellSize)
+              const minDistSq = minDistance * minDistance
+              for (let dx = -1; dx <= 1; dx += 1) {
+                for (let dy = -1; dy <= 1; dy += 1) {
+                  const bucket = spatial.get(`${cx + dx},${cy + dy}`)
+                  if (!bucket) continue
+                  for (const q of bucket) {
+                    const ox = p.x - q.x
+                    const oy = p.y - q.y
+                    if (ox * ox + oy * oy < minDistSq) {
+                      return false
+                    }
+                  }
+                }
               }
-              const normal = groundDefinition ? sampleGroundNormal(groundDefinition, localXZ.x, localXZ.z) : null
-              const slopeDeg = normal ? (Math.acos(THREE.MathUtils.clamp(normal.y, -1, 1)) * (180 / Math.PI)) : 0
-              if (slopeDeg < minSlope || slopeDeg > maxSlope) {
+              return true
+            }
+
+            const MAX_PASSES = 5
+            for (let pass = 0; pass < MAX_PASSES && acceptedSamples.length < targetCount; pass += 1) {
+              if (!centroid) {
+                break
+              }
+
+              const needed = targetCount - acceptedSamples.length
+              const randomPoints = buildRandom(hashSeedFromString(`${seedBase}:points:${pass}`))
+              const maxAttemptsMultiplier = 4 + pass * 2
+              const maxCandidates = Math.min(
+                60000,
+                Math.max(2000, Math.ceil((targetCount + 10) * (12 + pass * 6))),
+              )
+
+              const candidates = generateUniformCandidatesInPolygon(
+                poly.points,
+                randomPoints,
+                maxCandidates,
+                { maxAttemptsMultiplier },
+              )
+              if (!candidates.length) {
                 continue
               }
 
-              const yaw = randomYawEnabled ? (randomProps() * Math.PI * 2) : 0
-              const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, randomProps())
-              additions.push({
-                id: generateUuid(),
-                assetId: scatter.assetId,
-                layerId: layer.id,
-                profileId: layer.profileId ?? scatter.assetId,
-                seed: Math.floor(randomProps() * Number.MAX_SAFE_INTEGER),
-                localPosition: { x: localXZ.x, y: height, z: localXZ.z },
-                localRotation: { x: 0, y: yaw, z: 0 },
-                localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
-                groundCoords: {
-                  x: localXZ.x,
-                  z: localXZ.z,
-                  height,
-                  normal: normal ? { x: normal.x, y: normal.y, z: normal.z } : null,
-                },
-                binding: null,
-                metadata: {
-                  source: PLANNING_CONVERSION_SOURCE,
-                  featureId: poly.id,
-                },
-              })
+              const filtered = candidates.filter((p) => isFarEnough(p as PlanningPoint))
+              if (!filtered.length) {
+                continue
+              }
+
+              const selected = selectFarthestPointsFromCandidates(filtered, needed, minDistance, centroid)
+              if (!selected.length) {
+                continue
+              }
+
+              for (const sample of selected) {
+                const localXZ = toWorldPoint(sample as PlanningPoint, groundWidth, groundDepth, 0)
+                const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
+                if (height < minHeight || height > maxHeight) {
+                  continue
+                }
+                const normal = groundDefinition ? sampleGroundNormal(groundDefinition, localXZ.x, localXZ.z) : null
+                const slopeDeg = normal ? (Math.acos(THREE.MathUtils.clamp(normal.y, -1, 1)) * (180 / Math.PI)) : 0
+                if (slopeDeg < minSlope || slopeDeg > maxSlope) {
+                  continue
+                }
+
+                const samplePoint: PlanningPoint = { x: (sample as any).x, y: (sample as any).y }
+                if (!isFarEnough(samplePoint)) {
+                  continue
+                }
+
+                acceptedSamples.push(samplePoint)
+                addToSpatial(samplePoint)
+
+                const yaw = randomYawEnabled ? (randomProps() * Math.PI * 2) : 0
+                const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, randomProps())
+                additions.push({
+                  id: generateUuid(),
+                  assetId: scatter.assetId,
+                  layerId: layer.id,
+                  profileId: layer.profileId ?? scatter.assetId,
+                  seed: Math.floor(randomProps() * Number.MAX_SAFE_INTEGER),
+                  localPosition: { x: localXZ.x, y: height, z: localXZ.z },
+                  localRotation: { x: 0, y: yaw, z: 0 },
+                  localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
+                  groundCoords: {
+                    x: localXZ.x,
+                    z: localXZ.z,
+                    height,
+                    normal: normal ? { x: normal.x, y: normal.y, z: normal.z } : null,
+                  },
+                  binding: null,
+                  metadata: {
+                    source: PLANNING_CONVERSION_SOURCE,
+                    featureId: poly.id,
+                  },
+                })
+
+                if (acceptedSamples.length >= targetCount) {
+                  break
+                }
+              }
             }
 
             replaceTerrainScatterInstances(store, layer.id, [...existing, ...additions])

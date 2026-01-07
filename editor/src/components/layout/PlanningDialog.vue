@@ -18,6 +18,7 @@ import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@sche
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -937,20 +938,27 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
+    // 如果没有散布配置，则确保缓存中不存在对应条目并跳过
     if (!poly.scatter) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
+
+    // 仅对绿地层（planning -> terrain scatter）进行点密度预览
     const layerKind = getLayerKind(poly.layerId)
     if (layerKind !== 'green') {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
+
+    // 规范化密度百分比 (0-100)。0 或负值表示不生成点
     const densityPercent = clampDensityPercent(poly.scatter.densityPercent)
     if (densityPercent <= 0) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
+
+    // 计算模型占地相关量：优先使用缓存的包围盒推断值，否则回退到 asset 元数据
     const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
     const footprintMaxSizeM = clampFootprintMaxSizeM(
       poly.scatter.assetId,
@@ -958,44 +966,46 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       poly.scatter.footprintMaxSizeM,
       footprintAreaM2,
     )
+
+    // 读取所选散布预设（用于缩放区间与容量估算）
     const preset = terrainScatterPresets[poly.scatter.category]
+    const minScale = preset && Number.isFinite(preset.minScale) ? preset.minScale : 1
     const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
-    const baseDiagonal = estimateFootprintDiagonalM(footprintAreaM2, footprintMaxSizeM)
-    const effectiveDiagonalM = Math.max(0.01, baseDiagonal * maxScale)
-    const effectiveFootprintAreaM2 = footprintAreaM2 * maxScale * maxScale
-    // Treat the (scaled) max side length as an approximate "diameter" to keep instances from overlapping.
-    const effectiveModelDiameterM = Math.max(0.01, footprintMaxSizeM * maxScale)
+
+    // 多边形几何过滤：无边界则跳过
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
     const area = polygonArea(poly.points)
-    if (!Number.isFinite(area) || area < 60) {
+    if (!Number.isFinite(area) || area <= 0) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // Capacity model (same idea as conversion):
-    // max = floor(polygonArea / modelFootprintArea)
-    // target = round(max * densityPercent/100)
-    const perInstanceArea = Math.max(effectiveFootprintAreaM2, effectiveDiagonalM * effectiveDiagonalM)
-    const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
-    const targetDots = Math.round((maxByArea * densityPercent) / 100)
+    const { targetCount: targetDots } = computeOccupancyTargetCount({
+      areaM2: area,
+      footprintAreaM2,
+      densityPercent,
+      minScale,
+      maxScale,
+    })
     if (targetDots <= 0) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // Derive a spacing from (area, targetDots), but never smaller than the model bounding box.
-    const spacingFromCount = Math.sqrt(area / Math.max(1, targetDots))
-    // Density-to-spacing rule (user expectation): baseSpacing = 100/densityPercent meters.
-    // Then add model diameter so instances don't overlap.
-    const spacingFromDensity = 100 / Math.max(0.0001, densityPercent)
-    const minDistance = Math.max(spacingFromCount, effectiveDiagonalM, spacingFromDensity + effectiveModelDiameterM)
+    const { minDistance, expectedScaleSq } = computeOccupancyMinDistance({
+      footprintMaxSizeM,
+      minScale,
+      maxScale,
+      minFloor: 0.05,
+    })
 
+    // 基于 polygon 点集与参数构建缓存 key，避免重复昂贵计算
     const pointsHash = hashPlanningPoints(poly.points)
-    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}`
+    const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}|${Math.round(expectedScaleSq * 1000)}`
     const cached = polygonScatterDensityDotsCache.get(poly.id)
     if (cached?.key === cacheKey) {
       if (cached.dots.length) {
@@ -1004,18 +1014,23 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
-    // Preview should stay responsive.
+    // 限制预览点数上限以保证交互性
     const cappedTarget = Math.min(800, targetDots)
-    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}`))
+    // 使用稳定随机数种子以使预览在相同输入下可复现
+    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}:${Math.round(expectedScaleSq * 1000)}`))
 
+    // 最小间距再做下限保护，避免数值过小导致采样逻辑崩溃
     const minDistanceForDots = Math.max(minDistance, 0.05)
     const selected = generateFpsScatterPointsInPolygon({
       polygon: poly.points,
       targetCount: cappedTarget,
       minDistance: minDistanceForDots,
       random,
+      // maxCandidates 控制 FPS 算法的尝试次数，基于目标点数动态调整以在性能与质量间权衡
       maxCandidates: Math.min(4000, Math.max(800, Math.ceil(cappedTarget * 6))),
     })
+
+    // 缓存结果以便短期内重复请求命中
     polygonScatterDensityDotsCache.set(poly.id, { key: cacheKey, dots: selected })
     if (selected.length) {
       result[poly.id] = selected
@@ -3842,35 +3857,65 @@ function handleLayerSelection(layerId: string) {
 }
 
 async function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
+  // 如果属性面板不可编辑，则直接返回（例如没有选中目标或图层被锁定）
   if (propertyPanelDisabled.value) {
     return
   }
+
+  // 目标可以是多边形或折线，必须存在才能继续
   const target = selectedScatterTarget.value
   if (!target) {
     return
   }
+
+  // 当前属性面板所选的散布类别（例如 flora/vegetation 等），必须是已知的预设之一
   const category = propertyScatterTab.value
   if (!(category in terrainScatterPresets)) {
     return
   }
+
+  // 缩略图可能用于 UI 预览（若 asset 没有缩略图则为 null）
   const thumbnail = payload.asset.thumbnail ?? null
+
+  // 如果已经为该目标设置了 density，则尝试保留原值，否则使用默认值（绿地多边形默认较低密度）
   const existingDensity = target.shape.scatter?.densityPercent
   const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 19 : 50
 
+  // 确保模型边界信息已缓存（可能触发异步下载或解析），以便后续根据模型包围盒推断占地面积
   await ensureModelBoundsCachedForAsset(payload.asset)
+  // 从缓存中读取模型的包围盒推断出的占地信息（可能为 null）
   const cachedFootprint = computeFootprintFromCachedModelBounds(payload.asset.id)
 
+  // 如果 asset metadata 中提供 length/width（模型元数据），则作为备选来源计算原始面积/最大边长
   const length = payload.asset.dimensionLength ?? null
   const width = payload.asset.dimensionWidth ?? null
-  const rawArea = (typeof length === 'number' && typeof width === 'number' && Number.isFinite(length) && Number.isFinite(width) && length > 0 && width > 0)
+  const rawArea = (
+    typeof length === 'number'
+    && typeof width === 'number'
+    && Number.isFinite(length)
+    && Number.isFinite(width)
+    && length > 0
+    && width > 0
+  )
     ? length * width
     : undefined
+
+  // 优先使用从缓存的模型包围盒推断出的面积，否则回退到 asset metadata 的计算值，再通过 clamp 函数进行合理约束
   const footprintAreaM2 = clampFootprintAreaM2(
     payload.asset.id,
     category,
     cachedFootprint?.footprintAreaM2 ?? rawArea,
   )
-  const rawMaxSize = (typeof length === 'number' && typeof width === 'number' && Number.isFinite(length) && Number.isFinite(width) && length > 0 && width > 0)
+
+  // 同上，计算最大边长度：优先缓存推断值，否则从 metadata 中取 max(length,width)
+  const rawMaxSize = (
+    typeof length === 'number'
+    && typeof width === 'number'
+    && Number.isFinite(length)
+    && Number.isFinite(width)
+    && length > 0
+    && width > 0
+  )
     ? Math.max(length, width)
     : undefined
   const footprintMaxSizeM = clampFootprintMaxSizeM(
@@ -3880,16 +3925,22 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
     footprintAreaM2,
   )
 
+  // 将散布分配对象写入选中形状（polygon 或 polyline）的 scatter 字段。
+  // 字段含义：providerAssetId/assetId 用于在转换时找到对应模型，category 指定散布预设类型，
+  // name/thumbnail 用于 UI 展示，densityPercent 控制生成数量比例，footprint* 用于容量估算避免重叠。
   target.shape.scatter = {
     providerAssetId: payload.providerAssetId,
     assetId: payload.asset.id,
     category,
     name: payload.asset.name,
     thumbnail,
+    // 保留原有 density（若存在），否则使用默认并通过 clamp 确保 0-100 的有效值
     densityPercent: clampDensityPercent(typeof existingDensity === 'number' ? existingDensity : defaultDensity),
     footprintAreaM2,
     footprintMaxSizeM,
   }
+
+  // 标记规划已更改，以便后续持久化或转换时生效
   markPlanningDirty()
 }
 
