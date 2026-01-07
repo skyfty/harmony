@@ -608,16 +608,36 @@ export async function pasteClipboardAction(store: any, targetId?: string | null)
 
   if (!prefab) return false
 
+  const clipboardStore = useClipboardStore()
+  const clipboardSourceIds = (clipboardStore.clipboard?.entries ?? []).map((entry: any) => entry?.sourceId).filter((id: any) => typeof id === 'string') as string[]
+
   let parentId = typeof targetId === 'string' ? targetId.trim() : ''
   if (!parentId.length) parentId = ''
   let resolvedParentId: string | null = parentId.length ? parentId : null
   if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
   if (resolvedParentId) {
-    const parentNode = clipboardHelpers.findNodeById(store.nodes, resolvedParentId)
-    if (!parentNode || parentNode.nodeType !== 'Group' || !store.allowsChildNodes(parentNode)) resolvedParentId = null
+    const targetNode = clipboardHelpers.findNodeById(store.nodes, resolvedParentId)
+    if (!targetNode) {
+      resolvedParentId = null
+    } else {
+      const targetIsGroup = targetNode.nodeType === 'Group'
+      const targetIsClosedGroup = targetIsGroup && (targetNode as any).groupExpanded === false
+      const targetMatchesClipboardSource = clipboardSourceIds.includes(resolvedParentId)
+      const pasteIntoParent = !targetIsGroup || targetIsClosedGroup || targetMatchesClipboardSource
+
+      if (pasteIntoParent) {
+        const parentMap = buildParentMap(store.nodes)
+        resolvedParentId = parentMap.get(resolvedParentId) ?? null
+        if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
+      }
+
+      if (resolvedParentId) {
+        const parentNode = clipboardHelpers.findNodeById(store.nodes, resolvedParentId)
+        if (!parentNode || parentNode.nodeType !== 'Group' || !store.allowsChildNodes(parentNode)) resolvedParentId = null
+      }
+    }
   }
 
-  const clipboardStore = useClipboardStore()
   const runtimeSnapshots = clipboardStore.clipboard?.runtimeSnapshots ?? new Map<string, any>()
   const duplicate = await store.instantiatePrefabData(prefab, { runtimeSnapshots, position: null })
 
