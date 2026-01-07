@@ -5507,14 +5507,29 @@ function updateAutoTourCameraForFrame(
 	}
 
 	object.getWorldQuaternion(tempQuaternion)
-	tempDirection.set(0, 0, 1).applyQuaternion(tempQuaternion)
+
+	// Prefer movement direction as heading so “behind” matches vehicle-drive behavior.
+	// Many scene nodes use +X (or other) as visual forward; using quaternion axes directly can place the camera on the side.
+	const planarVelocityDir = tempDirection.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z)
+	if (planarVelocityDir.lengthSq() > 1e-6) {
+		planarVelocityDir.normalize()
+	} else {
+		// Fallback: use Three.js world direction (object -Z), projected to XZ.
+		object.getWorldDirection(planarVelocityDir)
+		planarVelocityDir.y = 0
+		if (planarVelocityDir.lengthSq() > 1e-6) {
+			planarVelocityDir.normalize()
+		} else {
+			planarVelocityDir.set(0, 0, 1)
+		}
+	}
 
 	const placement = computeFollowPlacement(getApproxDimensions(object))
 	const updated = autoTourCameraFollowController.update({
 		follow: autoTourCameraFollowState,
 		placement,
 		anchorWorld: tempPosition,
-		desiredForwardWorld: tempDirection,
+		desiredForwardWorld: planarVelocityDir,
 		velocityWorld: autoTourCameraFollowVelocity,
 		deltaSeconds: delta,
 		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },

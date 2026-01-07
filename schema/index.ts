@@ -34,6 +34,23 @@ export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuse
 export { createAutoTourRuntime } from './autoTourRuntime'
 export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike } from './autoTourRuntime'
 
+export {
+  DEFAULT_CAMERA_FOLLOW_TUNING,
+  DEFAULT_OBJECT_SIZE_FALLBACK,
+  FollowCameraController,
+  computeFollowLerpAlpha,
+  computeFollowPlacement,
+  createCameraFollowState,
+  resetCameraFollowState,
+} from './followCameraController'
+export type {
+  CameraFollowContext,
+  CameraFollowOptions,
+  CameraFollowPlacement,
+  CameraFollowState,
+  CameraFollowTuning,
+} from './followCameraController'
+
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
 
 export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from './nodeIndexUtils'
