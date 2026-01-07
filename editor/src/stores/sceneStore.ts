@@ -127,6 +127,8 @@ import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
+import { useClipboardStore } from './clipboardStore'
+import { copyNodesAction, cutNodesAction, pasteClipboardAction } from './clipboardActions'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
@@ -4955,33 +4957,7 @@ function deserializeSceneNode(raw: string): SceneNode | null {
   }
 }
 
-async function writeSystemClipboard(serialized: string): Promise<void> {
-  if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(serialized)
-  } catch (error) {
-    console.warn('Failed to write prefab data to clipboard', error)
-  }
-}
-
-async function readSceneNodeFromSystemClipboard(): Promise<SceneNode | null> {
-  if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
-    return null
-  }
-  try {
-    const text = await navigator.clipboard.readText()
-    const normalized = text?.trim()
-    if (!normalized) {
-      return null
-    }
-    return deserializeSceneNode(normalized)
-  } catch (error) {
-    console.warn('Failed to read prefab data from clipboard', error)
-    return null
-  }
-}
+// System clipboard I/O has been moved to clipboardStore
 
 function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: string): ProjectAsset | null {
   for (const list of Object.values(catalog)) {
@@ -7467,6 +7443,7 @@ export const useSceneStore = defineStore('scene', {
       cameraFocusRequestId: 0,
     nodeHighlightTargetId: null,
     nodeHighlightRequestId: 0,
+      // clipboard moved to dedicated clipboard store (legacy field kept for typing compatibility)
       clipboard: null,
       draggingAssetId: null,
       draggingAssetObject: null,
@@ -13877,155 +13854,17 @@ export const useSceneStore = defineStore('scene', {
       return duplicates.map((node) => node.id)
     },
     copyNodes(nodeIds: string[]) {
-      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, nodeIds)
-      if (!entries.length) {
-        this.clipboard = null
-        return false
-      }
-      this.clipboard = {
-        entries,
-        runtimeSnapshots,
-        cut: false,
-      }
-      void writeSystemClipboard(entries[0]?.serialized ?? '')
-      return true
+      return copyNodesAction(this, nodeIds)
     },
     cutNodes(nodeIds: string[]) {
-      const success = this.copyNodes(nodeIds)
-      if (!success || !this.clipboard) {
-        return false
-      }
-      this.clipboard.cut = true
-      const idsToRemove = this.clipboard.entries.map((entry) => entry.sourceId)
-      if (idsToRemove.length) {
-        this.removeSceneNodes(idsToRemove)
-      }
-      return true
+      return cutNodesAction(this, nodeIds)
     },
     async pasteClipboard(targetId?: string | null): Promise<boolean> {
-      let clipboardEntries = this.clipboard?.entries ?? []
-      let runtimeSnapshots = this.clipboard?.runtimeSnapshots ?? new Map<string, Object3D>()
-
-      if (!clipboardEntries.length) {
-        const clipboardNode = await readSceneNodeFromSystemClipboard()
-        if (!clipboardNode) {
-          return false
-        }
-        const serialized = JSON.stringify(clipboardNode, null, 2)
-        const entry: ClipboardEntry = {
-          sourceId: clipboardNode.id,
-          root: clipboardNode,
-          serialized,
-        }
-        clipboardEntries = [entry]
-        runtimeSnapshots = new Map<string, Object3D>()
-        this.clipboard = {
-          entries: clipboardEntries,
-          runtimeSnapshots,
-          cut: false,
-        }
-      }
-
-      if (!clipboardEntries.length) {
-        return false
-      }
-
-      const working = cloneSceneNodes(this.nodes)
-      const parentMap = buildParentMap(working)
-
-      let anchorId: string | null = null
-      let insertionPosition: HierarchyDropPosition = 'after'
-      let insertionParentId: string | null = null
-
-      if (targetId) {
-        const targetNode = findNodeById(working, targetId)
-        if (targetNode && allowsChildNodes(targetNode)) {
-          anchorId = targetNode.id
-          insertionPosition = 'inside'
-          insertionParentId = targetNode.id
-        } else if (targetNode) {
-          anchorId = targetNode.id
-          insertionPosition = 'after'
-          insertionParentId = parentMap.get(targetNode.id) ?? null
-        }
-      }
-
-      const assetCache = useAssetCacheStore()
-      const duplicateContext: DuplicateContext = {
-        assetCache,
-        runtimeSnapshots,
-        idMap: new Map<string, string>(),
-        regenerateBehaviorIds: true,
-      }
-
-      const insertedNodes: SceneNode[] = []
-      const insertedIds: string[] = []
-      const affectedParentIds = new Set<string>()
-      const undoOps: SceneHistoryNodeStructureOp[] = []
-
-      for (const entry of clipboardEntries) {
-        const duplicate = duplicateNodeTree(entry.root, duplicateContext)
-        let parentForInsertion: string | null = null
-        let inserted = insertNodeMutable(working, anchorId, duplicate, insertionPosition)
-        if (!inserted) {
-          inserted = insertNodeMutable(working, null, duplicate, 'after')
-          anchorId = duplicate.id
-          insertionPosition = 'after'
-          insertionParentId = null
-          parentForInsertion = null
-        } else {
-          if (insertionPosition === 'inside') {
-            parentForInsertion = anchorId
-          } else {
-            parentForInsertion = insertionParentId ?? null
-            anchorId = duplicate.id
-          }
-        }
-
-        if (parentForInsertion) {
-          affectedParentIds.add(parentForInsertion)
-        }
-
-        insertedNodes.push(duplicate)
-        insertedIds.push(duplicate.id)
-
-        const location = findNodeLocationInTree(working, duplicate.id)
-        if (location) {
-          undoOps.push({ type: 'remove', location, nodeId: duplicate.id })
-        }
-      }
-
-      if (!insertedNodes.length) {
-        return false
-      }
-
-      if (undoOps.length) {
-        this.captureNodeStructureHistorySnapshot(undoOps)
-      }
-      this.nodes = working
-
-      affectedParentIds.forEach((parentId) => {
-        if (parentId && findNodeById(this.nodes, parentId)) {
-          this.recenterGroupAncestry(parentId, { captureHistory: false })
-        }
-      })
-
-      const primaryId = insertedIds[insertedIds.length - 1] ?? null
-      this.setSelection(insertedIds, { primaryId })
-      commitSceneSnapshot(this)
-
-      if (this.clipboard) {
-        this.clipboard = {
-          entries: clipboardEntries,
-          runtimeSnapshots,
-          cut: false,
-        }
-      }
-
-      return true
+      return pasteClipboardAction(this, targetId)
     },
     clearClipboard() {
-      this.clipboard = null
+      const clipboardStore = useClipboardStore()
+      clipboardStore.clearClipboard()
     },
     async saveActiveScene(options: { force?: boolean } = {}): Promise<StoredSceneDocument | null> {
       if (!this.currentSceneId) {
