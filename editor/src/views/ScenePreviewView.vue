@@ -108,12 +108,15 @@ import {
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
+	PURE_PURSUIT_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
+	clampPurePursuitComponentProps,
 	clampLodComponentProps,
+	DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
@@ -128,6 +131,7 @@ import {
 } from '@schema/followCameraController'
 import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
+import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
 import type {
 	GuideboardComponentProps,
 	LodComponentProps,
@@ -135,6 +139,7 @@ import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
 	AutoTourComponentProps,
+	PurePursuitComponentProps,
 	VehicleComponentProps,
 	VehicleWheelProps,
 	WarpGateComponentProps,
@@ -530,6 +535,9 @@ const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
 
+// Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
+const autoTourPaused = ref(false)
+
 const autoTourFollowNodeId = ref<string | null>(null)
 const autoTourCameraFollowState = createCameraFollowState()
 const autoTourCameraFollowController = new FollowCameraController()
@@ -543,6 +551,7 @@ const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const vehicleDrivePrompt = computed(() => {
 	// Ensure this computed updates when the set changes.
 	activeAutoTourNodeIds.size
+	autoTourPaused.value
 	const event = pendingVehicleDriveEvent.value
 	if (!event) {
 		return {
@@ -552,6 +561,9 @@ const vehicleDrivePrompt = computed(() => {
 			showDrive: false,
 			showAutoTour: false,
 			showStopTour: false,
+			showPauseTour: false,
+			pauseTourLabel: '暂停巡游',
+			pauseTourIcon: 'mdi-pause-circle',
 		}
 	}
 	const targetNodeId = event.targetNodeId ?? event.nodeId
@@ -561,6 +573,8 @@ const vehicleDrivePrompt = computed(() => {
 	const canAutoTour = Boolean(resolveAutoTourComponent(node))
 	const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId))
 	const hasAnyAction = isTouring || canDrive || canAutoTour
+	const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游'
+	const pauseTourIcon = autoTourPaused.value ? 'mdi-play-circle' : 'mdi-pause-circle'
 	return {
 		visible: hasAnyAction,
 		label,
@@ -568,6 +582,9 @@ const vehicleDrivePrompt = computed(() => {
 		showDrive: canDrive && !isTouring,
 		showAutoTour: canAutoTour && !isTouring,
 		showStopTour: isTouring,
+		showPauseTour: isTouring,
+		pauseTourLabel,
+		pauseTourIcon,
 	}
 })
 
@@ -4724,6 +4741,61 @@ function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
 }
 
+function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
+	const node = resolveNodeById(nodeId)
+	const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
+	const brakeForceMax = purePursuit
+		? clampPurePursuitComponentProps(purePursuit.props).brakeForceMax
+		: DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX
+	// Match schema autoTourRuntime: hold brake strongly to avoid rolling.
+	return brakeForceMax * 6
+}
+
+function applyAutoTourVehicleHoldBrake(nodeId: string): void {
+	const vehicleInstance = vehicleInstances.get(nodeId) ?? null
+	if (!vehicleInstance) {
+		return
+	}
+	const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId)
+	holdVehicleBrakeSafe({ vehicleInstance, brakeForce })
+	try {
+		const chassisBody = vehicleInstance.vehicle.chassisBody
+		chassisBody.velocity.set(0, 0, 0)
+		chassisBody.angularVelocity.set(0, 0, 0)
+		chassisBody.sleep?.()
+	} catch {
+		// Best-effort; vehicle may be disposed/resetting.
+	}
+}
+
+function applyAutoTourRigidBodyStop(nodeId: string): void {
+	const entry = rigidbodyInstances.get(nodeId) ?? null
+	if (!entry) {
+		return
+	}
+	try {
+		if (entry.object) {
+			syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment)
+		}
+		entry.body.velocity.set(0, 0, 0)
+		entry.body.angularVelocity.set(0, 0, 0)
+		entry.body.sleep?.()
+	} catch {
+		// Best-effort; body may be disposed/resetting.
+	}
+}
+
+function applyAutoTourPauseForActiveNodes(): void {
+	const manualNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
+	activeAutoTourNodeIds.forEach((nodeId) => {
+		if (manualNodeId && manualNodeId === nodeId) {
+			return
+		}
+		applyAutoTourVehicleHoldBrake(nodeId)
+		applyAutoTourRigidBodyStop(nodeId)
+	})
+}
+
 async function handleVehicleAutoTourStartClick(): Promise<void> {
 	const event = pendingVehicleDriveEvent.value
 	if (!event || vehicleDrivePromptBusy.value) {
@@ -4741,6 +4813,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 	vehicleDrivePromptBusy.value = true
 	try {
+		autoTourPaused.value = false
 		// Auto tour and manual drive must be mutually exclusive.
 		if (vehicleDriveState.active) {
 			handleHideVehicleCockpitEvent()
@@ -4771,6 +4844,25 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 	}
 }
 
+function handleVehicleAutoTourPauseToggleClick(): void {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	if (!activeAutoTourNodeIds.has(targetNodeId)) {
+		return
+	}
+	const nextPaused = !autoTourPaused.value
+	autoTourPaused.value = nextPaused
+	if (nextPaused) {
+		applyAutoTourPauseForActiveNodes()
+	}
+}
+
 function handleVehicleAutoTourStopClick(): void {
 	const event = pendingVehicleDriveEvent.value
 	if (!event || vehicleDrivePromptBusy.value) {
@@ -4790,6 +4882,7 @@ function handleVehicleAutoTourStopClick(): void {
 	}
 	vehicleDrivePromptBusy.value = true
 	try {
+		autoTourPaused.value = false
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
@@ -5563,7 +5656,11 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 			console.warn('[ScenePreview] Failed to advance effect runtime', error)
 		}
 	})
-	autoTourRuntime.update(delta)
+	if (autoTourPaused.value) {
+		applyAutoTourPauseForActiveNodes()
+	} else {
+		autoTourRuntime.update(delta)
+	}
 	applyVehicleDriveForces()
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
@@ -5621,6 +5718,12 @@ function updateAutoTourCameraForFrame(
 		object.getWorldPosition(tempPosition)
 	} else {
 		tempBox.getCenter(tempPosition)
+	}
+
+	// Pause only affects auto-tour (keep manual-drive behavior unchanged).
+	// Still allow active-node sync / follow-node resolution above, but freeze camera placement updates.
+	if (autoTourPaused.value) {
+		return
 	}
 
 	if (!autoTourCameraFollowHasSample || delta <= 0) {
@@ -9345,6 +9448,18 @@ onBeforeUnmount(() => {
 				@click="handleVehicleAutoTourStopClick"
 			>
 				停止巡游 {{ vehicleDrivePrompt.label }}
+			</v-btn>
+			<v-btn
+				v-if="vehicleDrivePrompt.showPauseTour"
+				color="secondary"
+				variant="flat"
+				size="large"
+				:prepend-icon="vehicleDrivePrompt.pauseTourIcon"
+				:loading="vehicleDrivePrompt.busy"
+				:disabled="vehicleDrivePrompt.busy"
+				@click="handleVehicleAutoTourPauseToggleClick"
+			>
+				{{ vehicleDrivePrompt.pauseTourLabel }} {{ vehicleDrivePrompt.label }}
 			</v-btn>
 			<v-btn
 				v-if="!vehicleDrivePrompt.showStopTour"
