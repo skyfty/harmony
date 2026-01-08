@@ -1661,6 +1661,33 @@ const autoTourCameraFollowForwardScratch = new THREE.Vector3();
 const autoTourCameraFollowBox = new THREE.Box3();
 let autoTourCameraFollowHasSample = false;
 let autoTourActiveSyncAccumSeconds = 0;
+const autoTourRotationOnlyHold = ref(false);
+let autoTourLastAnyActive = false;
+
+function applyAutoTourCameraInputPolicy(): void {
+  if (vehicleDriveActive.value) {
+    return;
+  }
+  const anyActive = activeAutoTourNodeIds.size > 0;
+  const shouldLock = anyActive && !autoTourPaused.value;
+  const shouldRotateOnly = (anyActive && autoTourPaused.value) || (!anyActive && autoTourRotationOnlyHold.value);
+
+  if (shouldLock) {
+    setCameraCaging(true);
+    return;
+  }
+
+  setCameraCaging(false);
+  const controls = renderContext?.controls;
+  if (controls) {
+    runWithProgrammaticCameraMutation(() => {
+      controls.enabled = true;
+      controls.enableRotate = true;
+      controls.enablePan = shouldRotateOnly ? false : true;
+      controls.update();
+    });
+  }
+}
 
 function resetAutoTourCameraFollowState(): void {
   resetCameraFollowState(autoTourCameraFollowState);
@@ -6565,7 +6592,7 @@ function updateVehicleDriveCamera(
 
 function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): boolean {
   const context = renderContext;
-  if (!context || vehicleDriveActive.value || activeCameraWatchTween) {
+  if (!context) {
     return false;
   }
 
@@ -6576,6 +6603,20 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   if (autoTourActiveSyncAccumSeconds >= 0.2 || !autoTourFollowNodeId.value) {
     autoTourActiveSyncAccumSeconds = 0;
     syncAutoTourActiveNodesFromRuntime(activeAutoTourNodeIds, previewNodeMap.keys(), autoTourRuntime);
+  }
+
+  const anyActive = activeAutoTourNodeIds.size > 0;
+  if (autoTourLastAnyActive && !anyActive) {
+    autoTourRotationOnlyHold.value = true;
+  }
+  if (anyActive) {
+    autoTourRotationOnlyHold.value = false;
+  }
+  autoTourLastAnyActive = anyActive;
+  applyAutoTourCameraInputPolicy();
+
+  if (vehicleDriveActive.value || activeCameraWatchTween) {
+    return false;
   }
 
   const nodeId = resolveAutoTourFollowNodeId(
@@ -6820,7 +6861,9 @@ function handleVehicleAutoTourStartTap(): void {
       autoTourFollowNodeId.value = n;
       resetAutoTourCameraFollowState();
       setCameraViewState('watching', n);
+      autoTourRotationOnlyHold.value = false;
       setCameraCaging(true);
+      applyAutoTourCameraInputPolicy();
       updateAutoTourFollowCamera(0, { immediate: true });
     });
 
@@ -6834,12 +6877,13 @@ function handleVehicleAutoTourStartTap(): void {
   }
 }
 
-function handleVehicleAutoTourResumeTap(): void {
+function handleVehicleAutoTourResumeTap(options: { rotateOnly?: boolean } = {}): void {
     const context = renderContext;
     if (context) {
       const { camera, controls } = context;
       activeCameraWatchTween = null;
-      setCameraCaging(false);
+  autoTourRotationOnlyHold.value = Boolean(options.rotateOnly);
+  applyAutoTourCameraInputPolicy();
       setCameraViewState('level', null);
 
       runWithProgrammaticCameraMutation(() => {
@@ -6864,13 +6908,15 @@ function handleVehicleAutoTourStopTap(): void {
   vehicleDrivePromptBusy.value = true;
   try {
     autoTourPaused.value = false;
+    autoTourRotationOnlyHold.value = true;
     stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
       activeAutoTourNodeIds.delete(n);
       if (autoTourFollowNodeId.value === n) {
         autoTourFollowNodeId.value = null;
       }
-      handleVehicleAutoTourResumeTap();
+      handleVehicleAutoTourResumeTap({ rotateOnly: true });
     });
+    applyAutoTourCameraInputPolicy();
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
@@ -6893,6 +6939,7 @@ function handleVehicleAutoTourPauseToggleTap(): void {
   if (nextPaused) {
     applyAutoTourPauseForActiveNodes();
   }
+  applyAutoTourCameraInputPolicy();
 }
 
 function handleVehicleDriveExitTap(): void {
@@ -6918,7 +6965,8 @@ function handleVehicleDriveExitTap(): void {
       { resolution: { type: 'continue' }, preserveCamera: true },
       renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
     );
-    handleVehicleAutoTourResumeTap();
+    autoTourRotationOnlyHold.value = false;
+    handleVehicleAutoTourResumeTap({ rotateOnly: false });
     handleHideVehicleCockpitEvent();
     setVehicleDriveUiOverride('hide');
     resetVehicleDriveInputs();
@@ -8042,6 +8090,7 @@ function teardownRenderer() {
   previewNodeMap.clear();
   autoTourRuntime.reset();
   activeAutoTourNodeIds.clear();
+  autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
   resetAutoTourCameraFollowState();
   nodeObjectMap.forEach((_object, nodeId) => {

@@ -546,6 +546,8 @@ const autoTourCameraFollowVelocity = new THREE.Vector3()
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
+let autoTourRotationOnlyHold = false
+let autoTourLastAnyActive = false
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 const vehicleDrivePrompt = computed(() => {
@@ -3191,6 +3193,52 @@ function updateCameraControlActivation(): void {
 	updateCanvasCursor()
 }
 
+function applyAutoTourCameraInputPolicy(): void {
+	if (vehicleDriveState.active) {
+		return
+	}
+	const anyActive = activeAutoTourNodeIds.size > 0
+	const shouldLock = anyActive && !autoTourPaused.value
+	const shouldRotateOnly = (anyActive && autoTourPaused.value) || (!anyActive && autoTourRotationOnlyHold)
+
+	if (shouldLock) {
+		setCameraCaging(true, { force: true })
+		if (mapControls) {
+			mapControls.enablePan = false
+			;(mapControls as any).enableRotate = false
+		}
+		return
+	}
+
+	setCameraCaging(false, { force: true })
+	if (mapControls) {
+		;(mapControls as any).enableRotate = true
+		mapControls.enablePan = shouldRotateOnly ? false : MAP_CONTROL_DEFAULTS.enablePan
+	}
+}
+
+function syncAutoTourCameraInputPolicyForFrame(delta: number): void {
+	if (vehicleDriveState.active) {
+		return
+	}
+	if (delta > 0) {
+		autoTourActiveSyncAccumSeconds += delta
+	}
+	if (autoTourActiveSyncAccumSeconds >= 0.2) {
+		autoTourActiveSyncAccumSeconds = 0
+		syncAutoTourActiveNodesFromRuntime(activeAutoTourNodeIds, previewNodeMap.keys(), autoTourRuntime)
+	}
+	const anyActive = activeAutoTourNodeIds.size > 0
+	if (autoTourLastAnyActive && !anyActive) {
+		autoTourRotationOnlyHold = true
+	}
+	if (anyActive) {
+		autoTourRotationOnlyHold = false
+	}
+	autoTourLastAnyActive = anyActive
+	applyAutoTourCameraInputPolicy()
+}
+
 function updateCanvasCursor() {
 	const canvas = renderer?.domElement
 	if (!canvas) {
@@ -4824,6 +4872,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
+		autoTourRotationOnlyHold = false
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
@@ -4834,6 +4883,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 			followCameraControlDirty = false
 			setCameraViewState('watching', n)
 			setCameraCaging(true, { force: true })
+			applyAutoTourCameraInputPolicy()
 		})
 
 		// Behavior script tokens should not hang: auto-tour starts immediately.
@@ -4863,6 +4913,7 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 	if (nextPaused) {
 		applyAutoTourPauseForActiveNodes()
 	}
+	applyAutoTourCameraInputPolicy()
 }
 
 function handleVehicleAutoTourStopClick(): void {
@@ -4885,6 +4936,7 @@ function handleVehicleAutoTourStopClick(): void {
 	vehicleDrivePromptBusy.value = true
 	try {
 		autoTourPaused.value = false
+		autoTourRotationOnlyHold = true
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
@@ -4895,9 +4947,9 @@ function handleVehicleAutoTourStopClick(): void {
 				followCameraControlActive = false
 				followCameraControlDirty = false
 				setCameraViewState('level', null)
-				setCameraCaging(false, { force: true })
 			}
 		})
+		applyAutoTourCameraInputPolicy()
 		// Stop-tour should close the prompt and place the camera at the vehicle's left-side exit.
 		pendingVehicleDriveEvent.value = null
 		const aligned = alignCameraToVehicleExitForNode(targetNodeId)
@@ -5686,13 +5738,7 @@ function updateAutoTourCameraForFrame(
 		return
 	}
 	// Keep in sync with runtime for script-triggered starts/stops.
-	if (delta > 0) {
-		autoTourActiveSyncAccumSeconds += delta
-	}
-	if (autoTourActiveSyncAccumSeconds >= 0.2 || !autoTourFollowNodeId.value) {
-		autoTourActiveSyncAccumSeconds = 0
-		syncAutoTourActiveNodesFromRuntime(activeAutoTourNodeIds, previewNodeMap.keys(), autoTourRuntime)
-	}
+	// (active tour syncing + camera input policy are handled by syncAutoTourCameraInputPolicyForFrame)
 	const nodeId = resolveAutoTourFollowNodeId(
 		autoTourFollowNodeId.value,
 		cameraViewState.watchTargetId,
@@ -5885,6 +5931,7 @@ function startAnimationLoop() {
 
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
+		syncAutoTourCameraInputPolicyForFrame(delta)
 		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
 		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
 		const followCameraActive = vehicleFollowCameraActive || autoTourFollowCameraActive
@@ -5937,6 +5984,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	}
 	autoTourRuntime.reset()
 	activeAutoTourNodeIds.clear()
+	autoTourRotationOnlyHold = false
+	autoTourLastAnyActive = false
 	autoTourFollowNodeId.value = null
 	resetCameraFollowState(autoTourCameraFollowState)
 	autoTourCameraFollowVelocity.set(0, 0, 0)
