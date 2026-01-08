@@ -6873,12 +6873,39 @@ function handleVehicleDriveExitTap(): void {
   }
   vehicleDriveExitBusy.value = true;
   try {
+
     const aligned = alignVehicleDriveExitCamera();
     if (!aligned) {
       uni.showToast({ title: '无法定位默认下车位置，已恢复默认视角', icon: 'none' });
     }
+
+    // Stop driving but keep the aligned exit camera pose.
+    vehicleDriveController.stopDrive(
+      { resolution: { type: 'continue' }, preserveCamera: true },
+      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+    );
+
+    // Apply default view: horizontal + fixed eye height, without snapping to protagonist.
+    const context = renderContext;
+    if (context) {
+      const { camera, controls } = context;
+      activeCameraWatchTween = null;
+      setCameraCaging(false);
+      setCameraViewState('level', null);
+
+      runWithProgrammaticCameraMutation(() => {
+        camera.position.y = HUMAN_EYE_HEIGHT;
+        controls.target.y = HUMAN_EYE_HEIGHT;
+        controls.update();
+      });
+
+      lockControlsPitchToCurrent(controls, camera);
+    }
+
     handleHideVehicleCockpitEvent();
-    handleVehicleDebusEvent();
+    setVehicleDriveUiOverride('hide');
+    resetVehicleDriveInputs();
+    activeVehicleDriveEvent.value = null;
   } finally {
     vehicleDriveExitBusy.value = false;
   }
