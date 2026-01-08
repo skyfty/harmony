@@ -413,6 +413,7 @@ import {
   findNodeIdForInstance,
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache';
+import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker';
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel';
 import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
@@ -3366,6 +3367,8 @@ function clearInstancedMeshes(): void {
   instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
     instancedMeshGroup.remove(mesh);
   });
+  // Clear shared dirty tracking
+  clearInstancedBounds();
 }
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
@@ -4988,6 +4991,21 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     }
 
     updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
+    // Mark any associated InstancedMesh objects as dirty so their bounding spheres
+    // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
+    try {
+      const binding = getModelInstanceBinding(nodeId) as any | null;
+      if (binding && Array.isArray(binding.slots)) {
+        for (const slot of binding.slots) {
+          const mesh = slot?.mesh as THREE.InstancedMesh | null;
+          if (mesh && (mesh as any).isInstancedMesh) {
+            addInstancedBoundsMesh(mesh);
+          }
+        }
+      }
+    } catch (_error) {
+      // ignore binding lookup errors
+    }
     instancedTransformCache.set(nodeId, {
       assetId,
       visible,
@@ -5000,6 +5018,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
   // Some objects (e.g. wheel visuals) may contain nested instanced proxies.
   object.traverse(handleTarget);
 }
+
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
@@ -7076,6 +7095,10 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       return;
     }
     raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+    // Ensure moved instanced meshes are pickable immediately by flushing any pending bounds updates.
+    if (instancedBoundsHasPending()) {
+      flushInstancedBounds();
+    }
     const intersections = behaviorRaycaster.intersectObjects(raycastRoots, true);
     if (!intersections.length) {
       return;
@@ -8470,6 +8493,8 @@ function startRenderLoop(
         terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         updateInstancedCullingAndLod();
         cloudRenderer?.update(deltaSeconds);
+        // Throttled update of instanced mesh bounding spheres when instance matrices changed.
+        tickInstancedBounds(deltaSeconds);
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {

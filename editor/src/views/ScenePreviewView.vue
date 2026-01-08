@@ -79,6 +79,7 @@ import {
 	type ModelInstanceGroup,
 	type ModelInstanceBinding,
 } from '@schema/modelObjectCache'
+import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
@@ -240,9 +241,6 @@ const groundChunkDebug = reactive({
 
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
-const instancedBoundsDirtyMeshes = new Set<THREE.InstancedMesh>()
-let instancedBoundsUpdateAccumSeconds = 0
-const INSTANCED_BOUNDS_UPDATE_INTERVAL_SECONDS = 0.15
 const isRigidbodyDebugVisible = computed(
 	() => isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value,
 )
@@ -2496,11 +2494,12 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 }
 
 function clearInstancedMeshes() {
-	instancedBoundsDirtyMeshes.clear()
-	instancedBoundsUpdateAccumSeconds = 0
 	instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
-		instancedMeshGroup.remove(mesh)
-	})
+		instancedMeshGroup.remove(mesh);
+	});
+	// Clear shared dirty tracking
+	clearInstancedBounds();
+
 }
 
 function extractEnvironmentSettingsFromNodes(
@@ -5095,9 +5094,8 @@ function handleCanvasClick(event: MouseEvent) {
 	behaviorRaycaster.layers.enable(LAYER_VEHICLE_INTERACTIVE)
 
 	// Keep InstancedMesh bounds in sync before raycasting so recently moved instances remain pickable.
-	if (instancedBoundsDirtyMeshes.size) {
-		instancedBoundsUpdateAccumSeconds = 0
-		flushInstancedBoundsDirtyMeshes()
+	if (instancedBoundsHasPending()) {
+		flushInstancedBounds()
 	}
 
 	const raycastRoots: THREE.Object3D[] = [];
@@ -5883,15 +5881,8 @@ function startAnimationLoop() {
 		if (isInstancingDebugVisible.value) {
 			instancedMatrixUploadMeshes.clear()
 		}
-		if (instancedBoundsDirtyMeshes.size) {
-			instancedBoundsUpdateAccumSeconds += delta
-			if (instancedBoundsUpdateAccumSeconds >= INSTANCED_BOUNDS_UPDATE_INTERVAL_SECONDS) {
-				instancedBoundsUpdateAccumSeconds = 0
-				flushInstancedBoundsDirtyMeshes()
-			}
-		} else if (instancedBoundsUpdateAccumSeconds !== 0) {
-			instancedBoundsUpdateAccumSeconds = 0
-		}
+		// Tick shared instanced-bounds tracker (handles throttled flush)
+		tickInstancedBounds(delta)
 
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
@@ -6719,25 +6710,12 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 			})
 		}
 		binding.slots.forEach((slot) => {
-			instancedBoundsDirtyMeshes.add(slot.mesh)
+			addInstancedBoundsMesh(slot.mesh)
 		})
 		updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
 	})
 }
 
-function flushInstancedBoundsDirtyMeshes(): void {
-	if (!instancedBoundsDirtyMeshes.size) {
-		return
-	}
-	instancedBoundsDirtyMeshes.forEach((mesh) => {
-		try {
-			mesh.computeBoundingSphere()
-		} catch {
-			// Best-effort: ignore meshes that are being disposed.
-		}
-	})
-	instancedBoundsDirtyMeshes.clear()
-}
 
 function resetPhysicsWorld(): void {
 	if (vehicleDriveState.active) {
