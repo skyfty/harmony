@@ -421,35 +421,50 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       // Safety clamp.
+      // 如果目标索引不是有限数字，则重置为0
       if (!Number.isFinite(state.targetIndex)) {
         state.targetIndex = 0
       }
+      // 保证目标索引在合法范围内（0 ~ endIndex），并取整
       state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
 
+      // 获取当前目标点
       const target = points[state.targetIndex]!
       if (hasVehicleInstance) {
+        // 如果是物理车辆，直接读取底盘的世界坐标
         const chassisBody = vehicleInstance!.vehicle.chassisBody
         autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
       } else {
+        // 否则用Three.js对象的世界坐标
         nodeObject!.getWorldPosition(autoTourCurrentPosition)
       }
 
-      // Use planar (XZ) movement and arrival checks.
-      // This avoids getting stuck when the waypoint differs only in Y (we intentionally drive yaw-only on XZ).
+      // 只在XZ平面上进行移动和到达检测
+      // 这样可以避免仅Y轴不同导致的卡住（我们只在XZ上控制朝向）
       autoTourPlanarTarget.copy(target)
       autoTourPlanarTarget.y = autoTourCurrentPosition.y
 
+      // 计算XZ平面上的方向向量
       autoTourDirection.copy(autoTourPlanarTarget).sub(autoTourCurrentPosition)
       autoTourDirection.y = 0
+      // 计算XZ平面上的距离
       const distance = Math.sqrt(autoTourDirection.x * autoTourDirection.x + autoTourDirection.z * autoTourDirection.z)
-      const arrivalDistance = Math.max(
-        pursuitProps.arrivalDistanceMinMeters,
-        Math.min(pursuitProps.arrivalDistanceMaxMeters, speed * pursuitProps.arrivalDistanceSpeedFactor),
-      )
+      // 计算到达判定距离（基于速度和PurePursuit参数）
+      /**
+       * 计算到达距离（arrivalDistance）。
+       *
+       * 算法原理：
+       * - 首先根据当前速度（speed）和到达距离速度因子（pursuitProps.arrivalDistanceSpeedFactor）计算一个基础距离。
+       * - 然后将该基础距离限制在最小到达距离（pursuitProps.arrivalDistanceMinMeters）和最大到达距离（pursuitProps.arrivalDistanceMaxMeters）之间。
+       * - 具体做法是：先用 `Math.min` 保证基础距离不超过最大值，再用 `Math.max` 保证结果不小于最小值。
+       *
+       * 这样可以根据速度动态调整到达距离，同时保证其在合理范围内，避免过大或过小导致异常行为。
+       *
+       * @remarks
+       * 此算法常用于追踪或寻路系统中，根据目标速度自适应调整停止或减速的距离，提高运动的自然性和安全性。
+       */
+      const arrivalDistance = Math.max(pursuitProps.arrivalDistanceMinMeters,pursuitProps.arrivalDistanceMaxMeters)
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
-        const beforeIndex = state.targetIndex
-        const beforeMode = state.mode
-
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
         if (!shouldDriveAsVehicle) {
           state.smoothedWorldPosition.copy(autoTourPlanarTarget)
@@ -565,7 +580,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           distanceToTarget: distance,
         })
         if (isStopping && result.reachedStop) {
-          const before = state.mode
           state.mode = 'stopped'
           finalizeTourTerminalStop({
             nodeId: node.id,
