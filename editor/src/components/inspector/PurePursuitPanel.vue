@@ -95,6 +95,8 @@ const purePursuitComponent = computed(() =>
     | undefined,
 )
 
+const componentEnabled = computed(() => purePursuitComponent.value?.enabled !== false)
+
 const normalizedProps = computed(() => {
   const props = purePursuitComponent.value?.props as Partial<PurePursuitComponentProps> | undefined
   return clampPurePursuitComponentProps(props ?? null)
@@ -250,6 +252,24 @@ function handleDockYawEnabledChange(value: boolean | null) {
   }
   updateComponent({ dockYawEnabled: value })
 }
+
+function handleToggleComponent() {
+  const component = purePursuitComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = purePursuitComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 </script>
 
 <template>
@@ -258,11 +278,39 @@ function handleDockYawEnabledChange(value: boolean | null) {
       <div class="pure-pursuit-panel-header">
         <span class="pure-pursuit-panel-title">Pure Pursuit</span>
         <v-spacer />
+        <v-menu
+          v-if="purePursuitComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
 
     <v-expansion-panel-text>
-      <div class="pure-pursuit-panel-body">
+      <div class="pure-pursuit-panel-body" :class="{ 'is-disabled': !componentEnabled }">
         <v-text-field
           label="Lookahead Base (m)"
           type="number"
@@ -272,6 +320,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_LOOKAHEAD_BASE_METERS"
           :max="MAX_PURE_PURSUIT_LOOKAHEAD_BASE_METERS"
           :model-value="localLookaheadBaseMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('lookaheadBaseMeters', v)"
         />
 
@@ -284,6 +333,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_LOOKAHEAD_SPEED_GAIN"
           :max="MAX_PURE_PURSUIT_LOOKAHEAD_SPEED_GAIN"
           :model-value="localLookaheadSpeedGain"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('lookaheadSpeedGain', v)"
         />
 
@@ -296,6 +346,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
           :max="MAX_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
           :model-value="localLookaheadMinMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('lookaheadMinMeters', v)"
         />
 
@@ -308,6 +359,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
           :max="MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
           :model-value="localLookaheadMaxMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('lookaheadMaxMeters', v)"
         />
 
@@ -320,6 +372,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_WHEELBASE_METERS"
           :max="MAX_PURE_PURSUIT_WHEELBASE_METERS"
           :model-value="localWheelbaseMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('wheelbaseMeters', v)"
         />
 
@@ -332,6 +385,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_MAX_STEER_DEGREES"
           :max="MAX_PURE_PURSUIT_MAX_STEER_DEGREES"
           :model-value="localMaxSteerDegrees"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('maxSteerDegrees', v)"
         />
 
@@ -344,6 +398,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC"
           :max="MAX_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC"
           :model-value="localMaxSteerRateDegPerSec"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('maxSteerRateDegPerSec', v)"
         />
 
@@ -358,6 +413,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_ENGINE_FORCE_MAX"
           :max="MAX_PURE_PURSUIT_ENGINE_FORCE_MAX"
           :model-value="localEngineForceMax"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('engineForceMax', v)"
         />
 
@@ -370,6 +426,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_BRAKE_FORCE_MAX"
           :max="MAX_PURE_PURSUIT_BRAKE_FORCE_MAX"
           :model-value="localBrakeForceMax"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('brakeForceMax', v)"
         />
 
@@ -382,6 +439,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_SPEED_KP"
           :max="MAX_PURE_PURSUIT_SPEED_KP"
           :model-value="localSpeedKp"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('speedKp', v)"
         />
 
@@ -394,6 +452,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_SPEED_KI"
           :max="MAX_PURE_PURSUIT_SPEED_KI"
           :model-value="localSpeedKi"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('speedKi', v)"
         />
 
@@ -406,6 +465,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
           :max="MAX_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
           :model-value="localSpeedIntegralMax"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('speedIntegralMax', v)"
         />
 
@@ -418,6 +478,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_MIN_SPEED_MPS"
           :max="MAX_PURE_PURSUIT_MIN_SPEED_MPS"
           :model-value="localMinSpeedMps"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('minSpeedMps', v)"
         />
 
@@ -430,6 +491,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
           :max="MAX_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
           :model-value="localCurvatureSpeedFactor"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('curvatureSpeedFactor', v)"
         />
 
@@ -444,6 +506,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
           :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
           :model-value="localArrivalDistanceMinMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('arrivalDistanceMinMeters', v)"
         />
 
@@ -456,6 +519,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
           :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
           :model-value="localArrivalDistanceMaxMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('arrivalDistanceMaxMeters', v)"
         />
 
@@ -468,6 +532,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
           :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
           :model-value="localArrivalDistanceSpeedFactor"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('arrivalDistanceSpeedFactor', v)"
         />
 
@@ -480,6 +545,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
           :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
           :model-value="localBrakeDistanceMinMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('brakeDistanceMinMeters', v)"
         />
 
@@ -492,6 +558,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
           :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
           :model-value="localBrakeDistanceSpeedFactor"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('brakeDistanceSpeedFactor', v)"
         />
 
@@ -500,9 +567,9 @@ function handleDockYawEnabledChange(value: boolean | null) {
         <v-switch
           label="Docking Enabled"
           density="compact"
-          inset
           hide-details
           :model-value="localDockingEnabled"
+          :disabled="!componentEnabled"
           @update:model-value="handleDockingEnabledChange"
         />
 
@@ -515,6 +582,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
           :max="MAX_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
           :model-value="localDockStartDistanceMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockStartDistanceMeters', v)"
         />
 
@@ -527,6 +595,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_MAX_SPEED_MPS"
           :max="MAX_PURE_PURSUIT_DOCK_MAX_SPEED_MPS"
           :model-value="localDockMaxSpeedMps"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockMaxSpeedMps', v)"
         />
 
@@ -539,15 +608,16 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_VELOCITY_KP"
           :max="MAX_PURE_PURSUIT_DOCK_VELOCITY_KP"
           :model-value="localDockVelocityKp"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockVelocityKp', v)"
         />
 
         <v-switch
           label="Dock Yaw Enabled"
           density="compact"
-          inset
           hide-details
           :model-value="localDockYawEnabled"
+          :disabled="!componentEnabled"
           @update:model-value="handleDockYawEnabledChange"
         />
 
@@ -560,6 +630,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
           :max="MAX_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
           :model-value="localDockYawSlerpRate"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockYawSlerpRate', v)"
         />
 
@@ -572,6 +643,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
           :max="MAX_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
           :model-value="localDockStopEpsilonMeters"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockStopEpsilonMeters', v)"
         />
 
@@ -584,6 +656,7 @@ function handleDockYawEnabledChange(value: boolean | null) {
           :min="MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS"
           :max="MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS"
           :model-value="localDockStopSpeedEpsilonMps"
+          :disabled="!componentEnabled"
           @update:modelValue="(v) => handleNumberField('dockStopSpeedEpsilonMps', v)"
         />
       </div>
@@ -607,5 +680,18 @@ function handleDockYawEnabledChange(value: boolean | null) {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
+}
+
+.pure-pursuit-panel-body.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 </style>

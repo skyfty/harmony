@@ -22,6 +22,8 @@ const autoTourComponent = computed(() =>
     | undefined,
 )
 
+const componentEnabled = computed(() => autoTourComponent.value?.enabled !== false)
+
 const normalizedProps = computed(() => {
   const props = autoTourComponent.value?.props as Partial<AutoTourComponentProps> | undefined
   return clampAutoTourComponentProps(props ?? null)
@@ -94,6 +96,24 @@ function handleAlignToPathChange(value: boolean | null) {
   }
   updateComponent({ alignToPath: value })
 }
+
+function handleToggleComponent() {
+  const component = autoTourComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = autoTourComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 </script>
 
 <template>
@@ -102,13 +122,42 @@ function handleAlignToPathChange(value: boolean | null) {
       <div class="auto-tour-panel-header">
         <span class="auto-tour-panel-title">Auto Tour</span>
         <v-spacer />
+        <v-menu
+          v-if="autoTourComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
 
     <v-expansion-panel-text>
-      <div class="auto-tour-panel-body">
+      <div class="auto-tour-panel-body" :class="{ 'is-disabled': !componentEnabled }">
         <NodePicker
           :model-value="localRouteNodeId"
+          :disabled="!componentEnabled"
           owner="behavior-target"
           pick-hint="选择导览线路节点 (GuideRoute)"
           placeholder="未选择导览线路"
@@ -124,24 +173,25 @@ function handleAlignToPathChange(value: boolean | null) {
           :min="MIN_AUTO_TOUR_SPEED_MPS"
           :max="MAX_AUTO_TOUR_SPEED_MPS"
           :model-value="localSpeedMps"
+          :disabled="!componentEnabled"
           @update:modelValue="handleSpeedInput"
         />
 
         <v-switch
           label="Loop"
           density="compact"
-          inset
           hide-details
           :model-value="localLoop"
+          :disabled="!componentEnabled"
           @update:model-value="handleLoopChange"
         />
 
         <v-switch
           label="Align To Path"
           density="compact"
-          inset
           hide-details
           :model-value="localAlignToPath"
+          :disabled="!componentEnabled"
           @update:model-value="handleAlignToPathChange"
         />
       </div>
@@ -166,5 +216,18 @@ function handleAlignToPathChange(value: boolean | null) {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
+}
+
+.auto-tour-panel-body.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 </style>
