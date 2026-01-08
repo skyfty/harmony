@@ -6816,6 +6816,24 @@ function handleVehicleAutoTourStartTap(): void {
   }
 }
 
+function handleVehicleAutoTourResumeTap(): void {
+    const context = renderContext;
+    if (context) {
+      const { camera, controls } = context;
+      activeCameraWatchTween = null;
+      setCameraCaging(false);
+      setCameraViewState('level', null);
+
+      runWithProgrammaticCameraMutation(() => {
+        camera.position.y = HUMAN_EYE_HEIGHT;
+        controls.target.y = HUMAN_EYE_HEIGHT;
+        controls.update();
+      });
+
+      lockControlsPitchToCurrent(controls, camera);
+    }
+}
+
 function handleVehicleAutoTourStopTap(): void {
   const event = pendingVehicleDriveEvent.value;
   if (!event || vehicleDrivePromptBusy.value) {
@@ -6833,9 +6851,7 @@ function handleVehicleAutoTourStopTap(): void {
       if (autoTourFollowNodeId.value === n) {
         autoTourFollowNodeId.value = null;
       }
-      resetAutoTourCameraFollowState();
-      setCameraViewState('level', null);
-      setCameraCaging(false);
+      handleVehicleAutoTourResumeTap();
     });
   } finally {
     vehicleDrivePromptBusy.value = false;
@@ -6884,24 +6900,7 @@ function handleVehicleDriveExitTap(): void {
       { resolution: { type: 'continue' }, preserveCamera: true },
       renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
     );
-
-    // Apply default view: horizontal + fixed eye height, without snapping to protagonist.
-    const context = renderContext;
-    if (context) {
-      const { camera, controls } = context;
-      activeCameraWatchTween = null;
-      setCameraCaging(false);
-      setCameraViewState('level', null);
-
-      runWithProgrammaticCameraMutation(() => {
-        camera.position.y = HUMAN_EYE_HEIGHT;
-        controls.target.y = HUMAN_EYE_HEIGHT;
-        controls.update();
-      });
-
-      lockControlsPitchToCurrent(controls, camera);
-    }
-
+    handleVehicleAutoTourResumeTap();
     handleHideVehicleCockpitEvent();
     setVehicleDriveUiOverride('hide');
     resetVehicleDriveInputs();
