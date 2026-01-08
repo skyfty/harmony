@@ -191,6 +191,10 @@ function computeDefaultExpandedPanels() {
     }
   })
 
+  // Ensure Pure Pursuit component panel is expanded by default when present
+  if (node?.components?.[PURE_PURSUIT_COMPONENT_TYPE]) {
+    panels.push(PURE_PURSUIT_COMPONENT_TYPE)
+  }
   return Array.from(new Set(panels))
 }
 
