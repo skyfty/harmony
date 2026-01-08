@@ -109,7 +109,6 @@ export type VehicleDriveControllerDeps = {
   normalizeNodeId: (id: string | null | undefined) => string | null
   setCameraViewState?: (mode: unknown, targetId?: string | null) => void
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
-  runWithProgrammaticCameraMutation?: (fn: () => void) => void
   withControlsVerticalFreedom?: <T>(controls: any, callback: () => T) => T
   lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
   syncLastFirstPersonStateFromCamera?: () => void
@@ -472,19 +471,17 @@ export class VehicleDriveController {
       restore.hasSnapshot = false
       return
     }
-    const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
-    run(() => {
-      ctx.camera!.position.copy(restore.position)
-      ctx.camera!.up.copy(restore.up)
-      ctx.camera!.quaternion.copy(restore.quaternion)
-      ctx.camera!.updateMatrixWorld(true)
-      if (ctx.mapControls) {
-        ctx.mapControls.target.copy(restore.target)
-        ctx.mapControls.update?.()
-      } else {
-        ctx.camera!.lookAt(restore.target)
-      }
-    })
+    ctx.camera!.position.copy(restore.position)
+    ctx.camera!.up.copy(restore.up)
+    ctx.camera!.quaternion.copy(restore.quaternion)
+    ctx.camera!.updateMatrixWorld(true)
+    if (ctx.mapControls) {
+      ctx.mapControls.target.copy(restore.target)
+      ctx.mapControls.update?.()
+    } else {
+      ctx.camera!.lookAt(restore.target)
+    }
+
     if (this.deps.lockControlsPitchToCurrent && ctx.mapControls && ctx.camera) {
       this.deps.lockControlsPitchToCurrent(ctx.mapControls, ctx.camera)
     }
@@ -929,20 +926,18 @@ export class VehicleDriveController {
   }
 
   private updateFirstPersonCamera(ctx: VehicleDriveCameraContext): boolean {
-    const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
     const temp = this.temp
-    run(() => {
-      if (!ctx.camera) {
-        return
-      }
-      ctx.camera.position.copy(temp.seatPosition)
-      ctx.camera.up.copy(temp.seatUp)
-      ctx.camera.lookAt(temp.cameraLook.copy(temp.seatPosition).addScaledVector(temp.seatForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
-      if (ctx.mapControls) {
-        ctx.mapControls!.target.copy(temp.cameraLook)
-        ctx.mapControls!.update?.()
-      }
-    })
+    if (!ctx.camera) {
+      return false
+    }
+    ctx.camera.position.copy(temp.seatPosition)
+    ctx.camera.up.copy(temp.seatUp)
+    ctx.camera.lookAt(temp.cameraLook.copy(temp.seatPosition).addScaledVector(temp.seatForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
+    if (ctx.mapControls) {
+      ctx.mapControls!.target.copy(temp.cameraLook)
+      ctx.mapControls!.update?.()
+    }
+   
     this.deps.syncLastFirstPersonStateFromCamera?.()
     return true
   }
@@ -995,16 +990,13 @@ export class VehicleDriveController {
     this.temp.seatPosition.addScaledVector(this.temp.seatRight, -lateralOffset)
     this.temp.seatPosition.addScaledVector(this.temp.seatUp, verticalOffset)
     this.temp.cameraLook.copy(this.temp.seatPosition).addScaledVector(this.temp.seatForward, forwardOffset)
-    const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
-    run(() => {
-      ctx.camera!.position.copy(this.temp.seatPosition)
-      ctx.camera!.up.copy(this.temp.seatUp)
-      ctx.camera!.lookAt(this.temp.cameraLook)
-      if (ctx.mapControls) {
-        ctx.mapControls.target.copy(this.temp.cameraLook)
-        ctx.mapControls.update?.()
-      }
-    })
+    ctx.camera!.position.copy(this.temp.seatPosition)
+    ctx.camera!.up.copy(this.temp.seatUp)
+    ctx.camera!.lookAt(this.temp.cameraLook)
+    if (ctx.mapControls) {
+      ctx.mapControls.target.copy(this.temp.cameraLook)
+      ctx.mapControls.update?.()
+    }
     if (this.deps.lockControlsPitchToCurrent && ctx.mapControls && ctx.camera) {
       this.deps.lockControlsPitchToCurrent(ctx.mapControls, ctx.camera)
     }

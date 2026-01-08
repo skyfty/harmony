@@ -1556,7 +1556,6 @@ const vehicleDriveController = new VehicleDriveController(
 		normalizeNodeId,
 		setCameraViewState: (mode, targetId) => setCameraViewState(mode as any, targetId ?? null),
 		setCameraCaging,
-		syncLastFirstPersonStateFromCamera,
 		updateOrbitLookTween: updateOrbitCameraLookTween,
 		onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution as any),
 	},
