@@ -141,6 +141,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const requiresExplicitStart = deps.requiresExplicitStart === true
   const activeTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
+  // Nodes that reached a terminal (loop=false) stop and must remain "parked" via continuous braking.
+  // This is intentionally independent of autoTourPlaybackState, since terminal stop clears playback state.
+  const terminalBrakeHoldNodes = new Set<string>()
   
 
   const autoTourTargetPosition = new THREE.Vector3()
@@ -187,6 +190,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     } else {
       disabledTourNodes.add(nodeId)
     }
+
+    // Plan B: keep the vehicle locked in place after a terminal stop by continuously holding brake.
+    terminalBrakeHoldNodes.add(nodeId)
 
     // Apply a one-time hard stop so the node truly "parks" at the end even if physics is active.
     stopVehicleImmediately(nodeId)
@@ -285,7 +291,36 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
     if (manualDriveActive) {
+      // Manual drive has priority; do not keep auto-parking brakes applied.
+      terminalBrakeHoldNodes.clear()
       return
+    }
+
+    // Pre-pass: apply continuous braking for vehicles that reached a terminal stop,
+    // even if their AutoTour is disabled and/or playback state has been cleared.
+    if (terminalBrakeHoldNodes.size > 0) {
+      for (const nodeId of Array.from(terminalBrakeHoldNodes)) {
+        const vehicleInstance = deps.vehicleInstances.get(nodeId) ?? null
+        const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
+        if (!vehicleInstance || !chassisBody) {
+          terminalBrakeHoldNodes.delete(nodeId)
+          continue
+        }
+
+        const node = deps.resolveNodeById(nodeId) ?? null
+        const vehicleComponent = node
+          ? resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
+          : null
+        const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
+        try {
+          holdVehicleBrakeSafe({
+            vehicleInstance: vehicleInstance as any,
+            brakeForce: vehicleProps.brakeForceMax * 6,
+          })
+        } catch {
+          // Best-effort; the host runtime might be resetting physics.
+        }
+      }
     }
 
     for (const node of deps.iterNodes()) {
@@ -463,7 +498,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
        * @remarks
        * 此算法常用于追踪或寻路系统中，根据目标速度自适应调整停止或减速的距离，提高运动的自然性和安全性。
        */
-      const arrivalDistance = Math.max(pursuitProps.arrivalDistanceMinMeters,pursuitProps.arrivalDistanceMaxMeters)
+      const baseArrivalDistance = speed * pursuitProps.arrivalDistanceSpeedFactor
+      const arrivalDistance = Math.max(
+        pursuitProps.arrivalDistanceMinMeters,
+        Math.min(pursuitProps.arrivalDistanceMaxMeters, Number.isFinite(baseArrivalDistance) ? baseArrivalDistance : pursuitProps.arrivalDistanceMaxMeters),
+      )
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
         if (!shouldDriveAsVehicle) {
@@ -694,11 +733,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       autoTourPlaybackState.clear()
       activeTourNodes.clear()
       disabledTourNodes.clear()
+      terminalBrakeHoldNodes.clear()
     },
     startTour: (nodeId: string) => {
       if (!nodeId) {
         return
       }
+      terminalBrakeHoldNodes.delete(nodeId)
       disabledTourNodes.delete(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.add(nodeId)
@@ -710,6 +751,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (!nodeId) {
         return
       }
+      // Explicit stop should not keep "park" brakes applied forever.
+      terminalBrakeHoldNodes.delete(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.delete(nodeId)
       } else {
