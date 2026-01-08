@@ -20,26 +20,6 @@ export const DEFAULT_PURE_PURSUIT_LOOKAHEAD_MAX_METERS = 7
 export const MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS = 0.1
 export const MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS = 200
 
-export const DEFAULT_PURE_PURSUIT_WHEELBASE_METERS = 2.6
-export const MIN_PURE_PURSUIT_WHEELBASE_METERS = 0.2
-export const MAX_PURE_PURSUIT_WHEELBASE_METERS = 20
-
-export const DEFAULT_PURE_PURSUIT_MAX_STEER_DEGREES = 26
-export const MIN_PURE_PURSUIT_MAX_STEER_DEGREES = 1
-export const MAX_PURE_PURSUIT_MAX_STEER_DEGREES = 89
-
-export const DEFAULT_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC = 140
-export const MIN_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC = 1
-export const MAX_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC = 1080
-
-export const DEFAULT_PURE_PURSUIT_ENGINE_FORCE_MAX = 320
-export const MIN_PURE_PURSUIT_ENGINE_FORCE_MAX = 0
-export const MAX_PURE_PURSUIT_ENGINE_FORCE_MAX = 2000
-
-export const DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX = 16
-export const MIN_PURE_PURSUIT_BRAKE_FORCE_MAX = 0
-export const MAX_PURE_PURSUIT_BRAKE_FORCE_MAX = 1000
-
 export const DEFAULT_PURE_PURSUIT_SPEED_KP = 1.1
 export const MIN_PURE_PURSUIT_SPEED_KP = 0
 export const MAX_PURE_PURSUIT_SPEED_KP = 50
@@ -111,12 +91,6 @@ export interface PurePursuitComponentProps {
   lookaheadSpeedGain: number
   lookaheadMinMeters: number
   lookaheadMaxMeters: number
-  wheelbaseMeters: number
-  maxSteerDegrees: number
-  maxSteerRateDegPerSec: number
-
-  engineForceMax: number
-  brakeForceMax: number
   speedKp: number
   speedKi: number
   speedIntegralMax: number
@@ -210,37 +184,6 @@ export function clampPurePursuitComponentProps(
     ),
     lookaheadMinMeters: normalizedLookaheadMin,
     lookaheadMaxMeters: normalizedLookaheadMax,
-    wheelbaseMeters: clampNumber(
-      raw.wheelbaseMeters,
-      DEFAULT_PURE_PURSUIT_WHEELBASE_METERS,
-      MIN_PURE_PURSUIT_WHEELBASE_METERS,
-      MAX_PURE_PURSUIT_WHEELBASE_METERS,
-    ),
-    maxSteerDegrees: clampNumber(
-      raw.maxSteerDegrees,
-      DEFAULT_PURE_PURSUIT_MAX_STEER_DEGREES,
-      MIN_PURE_PURSUIT_MAX_STEER_DEGREES,
-      MAX_PURE_PURSUIT_MAX_STEER_DEGREES,
-    ),
-    maxSteerRateDegPerSec: clampNumber(
-      raw.maxSteerRateDegPerSec,
-      DEFAULT_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-      MIN_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-      MAX_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-    ),
-
-    engineForceMax: clampNumber(
-      raw.engineForceMax,
-      DEFAULT_PURE_PURSUIT_ENGINE_FORCE_MAX,
-      MIN_PURE_PURSUIT_ENGINE_FORCE_MAX,
-      MAX_PURE_PURSUIT_ENGINE_FORCE_MAX,
-    ),
-    brakeForceMax: clampNumber(
-      raw.brakeForceMax,
-      DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX,
-      MIN_PURE_PURSUIT_BRAKE_FORCE_MAX,
-      MAX_PURE_PURSUIT_BRAKE_FORCE_MAX,
-    ),
     speedKp: clampNumber(raw.speedKp, DEFAULT_PURE_PURSUIT_SPEED_KP, MIN_PURE_PURSUIT_SPEED_KP, MAX_PURE_PURSUIT_SPEED_KP),
     speedKi: clampNumber(raw.speedKi, DEFAULT_PURE_PURSUIT_SPEED_KI, MIN_PURE_PURSUIT_SPEED_KI, MAX_PURE_PURSUIT_SPEED_KI),
     speedIntegralMax: clampNumber(
@@ -325,12 +268,6 @@ export function clonePurePursuitComponentProps(props: PurePursuitComponentProps)
     lookaheadSpeedGain: props.lookaheadSpeedGain,
     lookaheadMinMeters: props.lookaheadMinMeters,
     lookaheadMaxMeters: props.lookaheadMaxMeters,
-    wheelbaseMeters: props.wheelbaseMeters,
-    maxSteerDegrees: props.maxSteerDegrees,
-    maxSteerRateDegPerSec: props.maxSteerRateDegPerSec,
-
-    engineForceMax: props.engineForceMax,
-    brakeForceMax: props.brakeForceMax,
     speedKp: props.speedKp,
     speedKi: props.speedKi,
     speedIntegralMax: props.speedIntegralMax,

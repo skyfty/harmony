@@ -28,6 +28,12 @@ export interface VehicleComponentProps {
   indexRightAxis: number
   indexUpAxis: number
   indexForwardAxis: number
+  maxSteerDegrees: number
+  maxSteerRateDegPerSec: number
+  engineForceMax: number
+  brakeForceMax: number
+  // Derived value (auto-computed) representing the vehicle wheelbase in meters.
+  wheelbaseMeters: number
   wheels: VehicleWheelProps[]
 }
 
@@ -53,6 +59,55 @@ function cloneVectorLike(vector: Vector3Like): Vector3Like {
   return { x, y, z }
 }
 
+function getVectorAxisValue(vector: Vector3Like, axisIndex: number): number {
+  const [x, y, z] = normalizeVectorComponents(vector)
+  if (axisIndex === 1) return y
+  if (axisIndex === 2) return z
+  return x
+}
+
+function average(values: number[]): number {
+  if (!values.length) return 0
+  const total = values.reduce((sum, value) => sum + value, 0)
+  return total / values.length
+}
+
+function computeWheelbaseMeters(props: { indexForwardAxis: number; wheels: VehicleWheelProps[] }): number {
+  const wheels = props.wheels ?? []
+  if (!wheels.length) {
+    return 0
+  }
+
+  const axis = props.indexForwardAxis
+
+  const frontValues: number[] = []
+  const rearValues: number[] = []
+  const allValues: number[] = []
+
+  wheels.forEach((wheel) => {
+    const value = getVectorAxisValue(wheel.chassisConnectionPointLocal, axis)
+    if (!Number.isFinite(value)) {
+      return
+    }
+    allValues.push(value)
+    if (wheel.isFrontWheel) {
+      frontValues.push(value)
+    } else {
+      rearValues.push(value)
+    }
+  })
+
+  if (frontValues.length && rearValues.length) {
+    return Math.max(0, Math.abs(average(frontValues) - average(rearValues)))
+  }
+  if (allValues.length >= 2) {
+    const min = Math.min(...allValues)
+    const max = Math.max(...allValues)
+    return Math.max(0, Math.abs(max - min))
+  }
+  return 0
+}
+
 function clampVectorLike(value: unknown, fallback: Vector3Like): Vector3Like {
   const [fx, fy, fz] = normalizeVectorComponents(fallback)
   if (Array.isArray(value) && value.length === 3) {
@@ -76,6 +131,22 @@ function clampVectorLike(value: unknown, fallback: Vector3Like): Vector3Like {
 export const DEFAULT_RIGHT_AXIS = 2
 export const DEFAULT_UP_AXIS = 1
 export const DEFAULT_FORWARD_AXIS = 0
+
+export const DEFAULT_VEHICLE_MAX_STEER_DEGREES = 26
+export const MIN_VEHICLE_MAX_STEER_DEGREES = 1
+export const MAX_VEHICLE_MAX_STEER_DEGREES = 89
+
+export const DEFAULT_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC = 140
+export const MIN_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC = 1
+export const MAX_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC = 1080
+
+export const DEFAULT_VEHICLE_ENGINE_FORCE_MAX = 320
+export const MIN_VEHICLE_ENGINE_FORCE_MAX = 0
+export const MAX_VEHICLE_ENGINE_FORCE_MAX = 2000
+
+export const DEFAULT_VEHICLE_BRAKE_FORCE_MAX = 16
+export const MIN_VEHICLE_BRAKE_FORCE_MAX = 0
+export const MAX_VEHICLE_BRAKE_FORCE_MAX = 1000
 export const DEFAULT_RADIUS = 0.5
 export const DEFAULT_DIRECTION: Vector3Like = createVector(0, -1, 0)
 export const DEFAULT_AXLE: Vector3Like = createVector(0, 0, 1)
@@ -139,6 +210,14 @@ function clampNumber(value: unknown, fallback: number): number {
     return fallback
   }
   return numeric
+}
+
+function clampNumberRange(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, numeric))
 }
 
 function clampBoolean(value: unknown, fallback: boolean): boolean {
@@ -300,12 +379,40 @@ export function clampVehicleComponentProps(
     axleLocal: clampVectorLike(props?.axleLocal, DEFAULT_AXLE),
   }
   const wheelTemplate = resolveLegacyWheelTemplate(props ?? null, legacyVectors)
-  return {
+  const clamped: VehicleComponentProps = {
     indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
     indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
     indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
+    maxSteerDegrees: clampNumberRange(
+      props?.maxSteerDegrees,
+      DEFAULT_VEHICLE_MAX_STEER_DEGREES,
+      MIN_VEHICLE_MAX_STEER_DEGREES,
+      MAX_VEHICLE_MAX_STEER_DEGREES,
+    ),
+    maxSteerRateDegPerSec: clampNumberRange(
+      props?.maxSteerRateDegPerSec,
+      DEFAULT_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+      MIN_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+      MAX_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+    ),
+    engineForceMax: clampNumberRange(
+      props?.engineForceMax,
+      DEFAULT_VEHICLE_ENGINE_FORCE_MAX,
+      MIN_VEHICLE_ENGINE_FORCE_MAX,
+      MAX_VEHICLE_ENGINE_FORCE_MAX,
+    ),
+    brakeForceMax: clampNumberRange(
+      props?.brakeForceMax,
+      DEFAULT_VEHICLE_BRAKE_FORCE_MAX,
+      MIN_VEHICLE_BRAKE_FORCE_MAX,
+      MAX_VEHICLE_BRAKE_FORCE_MAX,
+    ),
+    wheelbaseMeters: 0,
     wheels: clampWheelList(props?.wheels, wheelTemplate),
   }
+  // Always compute wheelbase from wheels + forward axis to keep it in sync.
+  clamped.wheelbaseMeters = computeWheelbaseMeters(clamped)
+  return clamped
 }
 
 export function cloneVehicleComponentProps(props: VehicleComponentProps): VehicleComponentProps {
@@ -313,6 +420,11 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
     indexRightAxis: props.indexRightAxis,
     indexUpAxis: props.indexUpAxis,
     indexForwardAxis: props.indexForwardAxis,
+    maxSteerDegrees: props.maxSteerDegrees,
+    maxSteerRateDegPerSec: props.maxSteerRateDegPerSec,
+    engineForceMax: props.engineForceMax,
+    brakeForceMax: props.brakeForceMax,
+    wheelbaseMeters: props.wheelbaseMeters,
     wheels: props.wheels.map((wheel) => ({
       id: wheel.id,
       nodeId: wheel.nodeId ?? null,

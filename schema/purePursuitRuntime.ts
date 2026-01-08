@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import type { PurePursuitComponentProps } from './components'
+import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
 
 export type PurePursuitVehicleInstanceLike = {
   vehicle: CANNON.RaycastVehicle
@@ -179,6 +179,7 @@ export function applyPurePursuitVehicleControl(params: {
   deltaSeconds: number
   speedMps: number
   pursuitProps: PurePursuitComponentProps
+  vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
   modeStopping: boolean
   distanceToTarget: number
@@ -190,6 +191,7 @@ export function applyPurePursuitVehicleControl(params: {
     deltaSeconds,
     speedMps,
     pursuitProps,
+    vehicleProps,
     state,
     modeStopping,
     distanceToTarget,
@@ -203,12 +205,12 @@ export function applyPurePursuitVehicleControl(params: {
   const currentY = currentPosition.y
 
   const maxSteerRad = THREE.MathUtils.degToRad(
-    Number.isFinite(pursuitProps.maxSteerDegrees)
-      ? pursuitProps.maxSteerDegrees
+    Number.isFinite(vehicleProps.maxSteerDegrees)
+      ? vehicleProps.maxSteerDegrees
       : THREE.MathUtils.radToDeg(DEFAULT_MAX_STEER_RADIANS),
   )
   const maxSteerRateRadPerSec = THREE.MathUtils.degToRad(
-    Number.isFinite(pursuitProps.maxSteerRateDegPerSec) ? pursuitProps.maxSteerRateDegPerSec : 140,
+    Number.isFinite(vehicleProps.maxSteerRateDegPerSec) ? vehicleProps.maxSteerRateDegPerSec : 140,
   )
   const maxSteerStep = Math.max(0, maxSteerRateRadPerSec) * deltaSeconds
 
@@ -251,7 +253,7 @@ export function applyPurePursuitVehicleControl(params: {
 
   const dockActive = modeStopping && pursuitProps.dockingEnabled && distanceToEnd <= pursuitProps.dockStartDistanceMeters
 
-  const wheelbaseMeters = Math.max(0.01, pursuitProps.wheelbaseMeters)
+  const wheelbaseMeters = Math.max(0.01, vehicleProps.wheelbaseMeters)
   rearAxle.set(currentPosition.x, currentY, currentPosition.z)
   rearAxle.addScaledVector(forwardWorld, -wheelbaseMeters * 0.5)
 
@@ -306,31 +308,30 @@ export function applyPurePursuitVehicleControl(params: {
   state.speedIntegral = integral
 
   const control = pursuitProps.speedKp * speedError + pursuitProps.speedKi * integral
-  const engineForceCmd = THREE.MathUtils.clamp(
-    control * pursuitProps.engineForceMax,
-    -pursuitProps.engineForceMax,
-    pursuitProps.engineForceMax,
-  )
+
+  const engineForceMax = Number.isFinite(vehicleProps.engineForceMax) ? Math.max(0, vehicleProps.engineForceMax) : 0
+  const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
+  const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax, -engineForceMax, engineForceMax)
 
   const desiredSign = 1
   const useEngine = engineForceCmd * desiredSign >= 0
   let engineForce = useEngine ? engineForceCmd : 0
   let brakeForce = useEngine
     ? 0
-    : Math.min(pursuitProps.brakeForceMax, Math.max(0, Math.abs(control) * pursuitProps.brakeForceMax))
+    : Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
 
   const shouldBrake = distanceToTarget < Math.max(
     pursuitProps.brakeDistanceMinMeters,
     speedMps * pursuitProps.brakeDistanceSpeedFactor,
   )
   if (shouldBrake && !dockActive) {
-    brakeForce = Math.max(brakeForce, Math.min(pursuitProps.brakeForceMax, pursuitProps.brakeForceMax * 0.35))
+    brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
   }
 
   if (dockActive) {
     steering = 0
     engineForce = 0
-    brakeForce = Math.max(brakeForce, pursuitProps.brakeForceMax * 6)
+    brakeForce = Math.max(brakeForce, brakeForceMax * 6)
 
     // Do not directly overwrite linear velocity in docking mode.
     // Overwriting velocity can cause the direction to flip as the chassis crosses the endpoint, resulting in jitter.
@@ -394,6 +395,7 @@ export function applyPurePursuitVehicleControlSafe(params: {
   deltaSeconds: number
   speedMps: number
   pursuitProps: PurePursuitComponentProps
+  vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
   modeStopping: boolean
   distanceToTarget: number

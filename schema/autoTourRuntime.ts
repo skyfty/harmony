@@ -11,10 +11,12 @@ import {
   clampGuideRouteComponentProps,
   PURE_PURSUIT_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
+  clampVehicleComponentProps,
   clampPurePursuitComponentProps,
   type AutoTourComponentProps,
   type GuideRouteComponentProps,
   type PurePursuitComponentProps,
+  type VehicleComponentProps,
 } from './components'
 
 export type AutoTourVehicleInstanceLike = {
@@ -216,11 +218,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
 
     // Apply strong braking and reset steering/engine via the shared safe helper.
-    const pursuitProps = clampPurePursuitComponentProps(null)
+    const node = deps.resolveNodeById(nodeId) ?? null
+    const vehicleComponent = node
+      ? resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
+      : null
+    const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
     try {
       holdVehicleBrakeSafe({
         vehicleInstance: vehicleInstance as any,
-        brakeForce: pursuitProps.brakeForceMax * 6,
+        brakeForce: vehicleProps.brakeForceMax * 6,
       })
       for (let index = 0; index < vehicleInstance.wheelCount; index += 1) {
         vehicleInstance.vehicle.applyEngineForce(0, index)
@@ -295,13 +301,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       const tourProps = clampAutoTourComponentProps(autoTour.props)
 
-      const vehicleComponent = resolveEnabledComponentState<any>(node, VEHICLE_COMPONENT_TYPE)
+      const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
       const hasVehicleComponent = Boolean(vehicleComponent)
       const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
       const hasPurePursuitComponent = Boolean(purePursuit)
       // Only use PurePursuit component props; do NOT fall back to AutoTour props.
       // This ensures that vehicle nodes without PurePursuit do not enter the pure-pursuit driving branch.
       const pursuitProps = clampPurePursuitComponentProps(purePursuit?.props ?? null)
+      const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
       const routeNodeId = tourProps.routeNodeId
       if (!routeNodeId) {
         continue
@@ -406,7 +413,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           if (shouldDriveAsVehicle) {
             holdVehicleBrakeSafe({
               vehicleInstance: vehicleInstance! as any,
-              brakeForce: pursuitProps.brakeForceMax * 6,
+              brakeForce: vehicleProps.brakeForceMax * 6,
             })
           }
           continue
@@ -462,7 +469,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
             holdVehicleBrakeSafe({
               vehicleInstance: vehicleInstance! as any,
-              brakeForce: pursuitProps.brakeForceMax * 6,
+              brakeForce: vehicleProps.brakeForceMax * 6,
             })
           }
         }
@@ -552,6 +559,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           deltaSeconds,
           speedMps: speed,
           pursuitProps,
+          vehicleProps,
           state,
           modeStopping: isStopping,
           distanceToTarget: distance,
@@ -633,7 +641,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
         holdVehicleBrakeSafe({
           vehicleInstance: vehicleInstance! as any,
-          brakeForce: pursuitProps.brakeForceMax * 6,
+          brakeForce: vehicleProps.brakeForceMax * 6,
         })
       }
 

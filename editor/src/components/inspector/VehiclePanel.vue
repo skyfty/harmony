@@ -496,6 +496,14 @@ function handleOpenSuspensionEditor(): void {
               :disabled="!vehicleComponent?.enabled"
               @update:modelValue="(value) => handleAxisChange('indexForwardAxis', value as number | null)"
             />
+            <v-text-field
+              label="Wheelbase (m)"
+              density="compact"
+              variant="underlined"
+              :model-value="normalizedProps.wheelbaseMeters"
+              readonly
+              :disabled="!vehicleComponent?.enabled"
+            />
           </div>
         </div>
 

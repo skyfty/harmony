@@ -19,21 +19,6 @@ import {
   DEFAULT_PURE_PURSUIT_LOOKAHEAD_MAX_METERS,
   MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS,
   MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS,
-  DEFAULT_PURE_PURSUIT_WHEELBASE_METERS,
-  MIN_PURE_PURSUIT_WHEELBASE_METERS,
-  MAX_PURE_PURSUIT_WHEELBASE_METERS,
-  DEFAULT_PURE_PURSUIT_MAX_STEER_DEGREES,
-  MIN_PURE_PURSUIT_MAX_STEER_DEGREES,
-  MAX_PURE_PURSUIT_MAX_STEER_DEGREES,
-  DEFAULT_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-  MIN_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-  MAX_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC,
-  DEFAULT_PURE_PURSUIT_ENGINE_FORCE_MAX,
-  MIN_PURE_PURSUIT_ENGINE_FORCE_MAX,
-  MAX_PURE_PURSUIT_ENGINE_FORCE_MAX,
-  DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX,
-  MIN_PURE_PURSUIT_BRAKE_FORCE_MAX,
-  MAX_PURE_PURSUIT_BRAKE_FORCE_MAX,
   DEFAULT_PURE_PURSUIT_SPEED_KP,
   MIN_PURE_PURSUIT_SPEED_KP,
   MAX_PURE_PURSUIT_SPEED_KP,
@@ -106,12 +91,6 @@ const localLookaheadBaseMeters = ref(DEFAULT_PURE_PURSUIT_LOOKAHEAD_BASE_METERS)
 const localLookaheadSpeedGain = ref(DEFAULT_PURE_PURSUIT_LOOKAHEAD_SPEED_GAIN)
 const localLookaheadMinMeters = ref(DEFAULT_PURE_PURSUIT_LOOKAHEAD_MIN_METERS)
 const localLookaheadMaxMeters = ref(DEFAULT_PURE_PURSUIT_LOOKAHEAD_MAX_METERS)
-const localWheelbaseMeters = ref(DEFAULT_PURE_PURSUIT_WHEELBASE_METERS)
-const localMaxSteerDegrees = ref(DEFAULT_PURE_PURSUIT_MAX_STEER_DEGREES)
-const localMaxSteerRateDegPerSec = ref(DEFAULT_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC)
-
-const localEngineForceMax = ref(DEFAULT_PURE_PURSUIT_ENGINE_FORCE_MAX)
-const localBrakeForceMax = ref(DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX)
 const localSpeedKp = ref(DEFAULT_PURE_PURSUIT_SPEED_KP)
 const localSpeedKi = ref(DEFAULT_PURE_PURSUIT_SPEED_KI)
 const localSpeedIntegralMax = ref(DEFAULT_PURE_PURSUIT_SPEED_INTEGRAL_MAX)
@@ -140,12 +119,6 @@ watch(
     localLookaheadSpeedGain.value = props.lookaheadSpeedGain
     localLookaheadMinMeters.value = props.lookaheadMinMeters
     localLookaheadMaxMeters.value = props.lookaheadMaxMeters
-    localWheelbaseMeters.value = props.wheelbaseMeters
-    localMaxSteerDegrees.value = props.maxSteerDegrees
-    localMaxSteerRateDegPerSec.value = props.maxSteerRateDegPerSec
-
-    localEngineForceMax.value = props.engineForceMax
-    localBrakeForceMax.value = props.brakeForceMax
     localSpeedKp.value = props.speedKp
     localSpeedKi.value = props.speedKi
     localSpeedIntegralMax.value = props.speedIntegralMax
@@ -183,17 +156,11 @@ type PurePursuitNumericKey = {
   [K in keyof PurePursuitComponentProps]-?: PurePursuitComponentProps[K] extends number ? K : never
 }[keyof PurePursuitComponentProps]
 
-const numberLocals: Partial<Record<PurePursuitNumericKey, typeof localWheelbaseMeters>> = {
+const numberLocals: Partial<Record<PurePursuitNumericKey, typeof localLookaheadBaseMeters>> = {
   lookaheadBaseMeters: localLookaheadBaseMeters,
   lookaheadSpeedGain: localLookaheadSpeedGain,
   lookaheadMinMeters: localLookaheadMinMeters,
   lookaheadMaxMeters: localLookaheadMaxMeters,
-  wheelbaseMeters: localWheelbaseMeters,
-  maxSteerDegrees: localMaxSteerDegrees,
-  maxSteerRateDegPerSec: localMaxSteerRateDegPerSec,
-
-  engineForceMax: localEngineForceMax,
-  brakeForceMax: localBrakeForceMax,
   speedKp: localSpeedKp,
   speedKi: localSpeedKi,
   speedIntegralMax: localSpeedIntegralMax,
@@ -363,72 +330,7 @@ function handleRemoveComponent() {
           @update:modelValue="(v) => handleNumberField('lookaheadMaxMeters', v)"
         />
 
-        <v-text-field
-          label="Wheelbase (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_WHEELBASE_METERS"
-          :max="MAX_PURE_PURSUIT_WHEELBASE_METERS"
-          :model-value="localWheelbaseMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('wheelbaseMeters', v)"
-        />
-
-        <v-text-field
-          label="Max Steer (deg)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_MAX_STEER_DEGREES"
-          :max="MAX_PURE_PURSUIT_MAX_STEER_DEGREES"
-          :model-value="localMaxSteerDegrees"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('maxSteerDegrees', v)"
-        />
-
-        <v-text-field
-          label="Max Steer Rate (deg/s)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC"
-          :max="MAX_PURE_PURSUIT_MAX_STEER_RATE_DEG_PER_SEC"
-          :model-value="localMaxSteerRateDegPerSec"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('maxSteerRateDegPerSec', v)"
-        />
-
         <v-divider />
-
-        <v-text-field
-          label="Engine Force Max"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_ENGINE_FORCE_MAX"
-          :max="MAX_PURE_PURSUIT_ENGINE_FORCE_MAX"
-          :model-value="localEngineForceMax"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('engineForceMax', v)"
-        />
-
-        <v-text-field
-          label="Brake Force Max"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_BRAKE_FORCE_MAX"
-          :max="MAX_PURE_PURSUIT_BRAKE_FORCE_MAX"
-          :model-value="localBrakeForceMax"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('brakeForceMax', v)"
-        />
 
         <v-text-field
           label="Speed Kp"

@@ -189,6 +189,7 @@ import type {
   ProtagonistComponentProps,
   RigidbodyComponentProps,
   VehicleComponentProps,
+  VehicleWheelProps,
   ViewPointComponentProps,
   WallComponentProps,
   RoadComponentProps,
@@ -268,6 +269,64 @@ export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFro
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
 export type HierarchyDropPosition = 'before' | 'after' | 'inside'
+
+function isVehicleWheelCandidateNode(node: SceneNode): boolean {
+  const name = (node.name ?? '').trim().toLowerCase()
+  if (!name) return false
+  // Best-effort heuristic: common wheel/tire naming patterns (including Chinese).
+  return name.includes('wheel') || name.includes('tire') || name.includes('tyre') || name.includes('轮')
+}
+
+function collectVehicleWheelCandidates(root: SceneNode, maxDepth = 3): SceneNode[] {
+  const result: SceneNode[] = []
+  const visit = (node: SceneNode, depth: number) => {
+    if (depth > maxDepth) return
+    const children = Array.isArray(node.children) ? node.children : []
+    children.forEach((child) => {
+      if (isVehicleWheelCandidateNode(child)) {
+        result.push(child)
+      }
+      visit(child, depth + 1)
+    })
+  }
+  visit(root, 1)
+  return result
+}
+
+function inferVehicleWheelsFromNode(
+  chassisNode: SceneNode,
+  axisIndexForward: number,
+): Array<Partial<VehicleWheelProps>> {
+  const candidates = collectVehicleWheelCandidates(chassisNode)
+  if (!candidates.length) {
+    return []
+  }
+
+  const axisKey = axisIndexForward === 1 ? 'y' : axisIndexForward === 2 ? 'z' : 'x'
+  const forwardValues = candidates
+    .map((node) => {
+      const raw = (node.position as any)?.[axisKey]
+      const numeric = typeof raw === 'number' ? raw : Number(raw)
+      return Number.isFinite(numeric) ? numeric : null
+    })
+    .filter((value): value is number => value !== null)
+
+  const center = forwardValues.length
+    ? forwardValues.reduce((sum, value) => sum + value, 0) / forwardValues.length
+    : 0
+
+  return candidates.map((node) => {
+    const rawForward = (node.position as any)?.[axisKey]
+    const forward = typeof rawForward === 'number' ? rawForward : Number(rawForward)
+    const isFrontWheel = Number.isFinite(forward) ? forward >= center : true
+    return {
+      id: generateUuid(),
+      nodeId: node.id,
+      chassisConnectionPointLocal: { x: node.position.x, y: node.position.y, z: node.position.z },
+      isFrontWheel,
+    }
+  })
+}
 
 export const SCENE_BUNDLE_FORMAT_VERSION = 1
 
@@ -12958,6 +13017,17 @@ export const useSceneStore = defineStore('scene', {
         type,
         enabled: true,
         props: definition.createDefaultProps(target),
+      }
+
+      if (type === VEHICLE_COMPONENT_TYPE) {
+        const base = clampVehicleComponentProps(requestedState.props as VehicleComponentProps)
+        const inferredWheels = inferVehicleWheelsFromNode(target, base.indexForwardAxis)
+        if (inferredWheels.length) {
+          requestedState.props = clampVehicleComponentProps({
+            ...base,
+            wheels: inferredWheels,
+          } as any)
+        }
       }
 
       const statesToAdd: SceneNodeComponentState<any>[] = [requestedState]

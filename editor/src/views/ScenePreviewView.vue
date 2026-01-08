@@ -117,7 +117,6 @@ import {
 	clampVehicleComponentProps,
 	clampPurePursuitComponentProps,
 	clampLodComponentProps,
-	DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 } from '@schema/components'
@@ -4746,10 +4745,10 @@ function handleHideVehicleCockpitEvent(): void {
 
 function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
 	const node = resolveNodeById(nodeId)
-	const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
-	const brakeForceMax = purePursuit
-		? clampPurePursuitComponentProps(purePursuit.props).brakeForceMax
-		: DEFAULT_PURE_PURSUIT_BRAKE_FORCE_MAX
+	const vehicle = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
+	const brakeForceMax = vehicle
+		? clampVehicleComponentProps(vehicle.props).brakeForceMax
+		: clampVehicleComponentProps(null).brakeForceMax
 	// Match schema autoTourRuntime: hold brake strongly to avoid rolling.
 	return brakeForceMax * 6
 }
