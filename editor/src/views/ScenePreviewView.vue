@@ -5014,7 +5014,6 @@ function handleCanvasClick(event: MouseEvent) {
 		return
 	}
 
-	let vehicleCandidateNodeId: string | null = null
 	for (const intersection of intersections) {
 		const resolvedId = resolveNodeIdFromIntersection(intersection)
 		if (!resolvedId) {
@@ -5042,40 +5041,7 @@ function handleCanvasClick(event: MouseEvent) {
 			}
 		}
 
-		// 2) Otherwise, remember the closest vehicle candidate.
-		if (!vehicleCandidateNodeId) {
-			vehicleCandidateNodeId = resolveVehicleAncestorNodeId(resolvedId)
-		}
 	}
-
-	if (!vehicleCandidateNodeId || vehicleDriveState.active) {
-		return
-	}
-	const node = resolveNodeById(vehicleCandidateNodeId)
-	if (!node || !resolveVehicleComponent(node)) {
-		return
-	}
-	const actions = listRegisteredBehaviorActions(vehicleCandidateNodeId)
-	if (actions.includes('click')) {
-		return
-	}
-
-	pendingVehicleDriveEvent.value = null
-	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
-		type: 'vehicle-drive',
-		nodeId: vehicleCandidateNodeId,
-		action: 'click',
-		sequenceId: '__manual_vehicle_drive__',
-		behaviorSequenceId: '__manual_vehicle_drive__',
-		behaviorId: '__manual_vehicle_drive__',
-		targetNodeId: vehicleCandidateNodeId,
-		seatNodeId: null,
-		token: '',
-	}
-	pendingVehicleDriveEvent.value = manualEvent
-	vehicleDrivePromptBusy.value = false
-	setVehicleDriveUiOverride('hide')
-	resetVehicleDriveInputs()
 }
 
 function resetFirstPersonPointerDelta() {
