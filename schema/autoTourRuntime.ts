@@ -139,6 +139,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const requiresExplicitStart = deps.requiresExplicitStart === true
   const activeTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
+  
 
   const autoTourTargetPosition = new THREE.Vector3()
   const autoTourCurrentPosition = new THREE.Vector3()
@@ -153,6 +154,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const autoTourLocalPosition = new THREE.Vector3()
   const autoTourPlanarTarget = new THREE.Vector3()
 
+  
+
   function clearPlaybackStateForNode(nodeId: string): void {
     const prefix = `${nodeId}:`
     for (const key of autoTourPlaybackState.keys()) {
@@ -160,6 +163,35 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         autoTourPlaybackState.delete(key)
       }
     }
+  }
+
+  function finalizeTourTerminalStop(options: {
+    nodeId: string
+    reason: string
+    key?: string
+    state?: AutoTourPlaybackState
+    tourProps: AutoTourComponentProps
+    pursuitProps?: PurePursuitComponentProps
+  }): void {
+    const { nodeId, reason, key, state, tourProps, pursuitProps } = options
+    if (tourProps.loop) {
+      return
+    }
+
+    
+
+    if (requiresExplicitStart) {
+      activeTourNodes.delete(nodeId)
+    } else {
+      disabledTourNodes.add(nodeId)
+    }
+
+    // Apply a one-time hard stop so the node truly "parks" at the end even if physics is active.
+    stopVehicleImmediately(nodeId)
+    deps.stopNodeMotion?.(nodeId)
+
+    // Free cached state; restart will re-init cleanly via startTour().
+    clearPlaybackStateForNode(nodeId)
   }
 
   function stopVehicleImmediately(nodeId: string): void {
@@ -444,6 +476,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
               // Terminal stop: do not keep writing transforms/teleports after arrival.
               state.targetIndex = endIndex
               state.mode = 'stopped'
+              finalizeTourTerminalStop({
+                nodeId: node.id,
+                reason: 'direct-move-vehicle-end',
+                key,
+                state,
+                tourProps,
+                pursuitProps,
+              })
             }
           } else {
             state.targetIndex += 1
@@ -517,7 +557,16 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           distanceToTarget: distance,
         })
         if (isStopping && result.reachedStop) {
+          const before = state.mode
           state.mode = 'stopped'
+          finalizeTourTerminalStop({
+            nodeId: node.id,
+            reason: 'vehicle-reached-stop',
+            key,
+            state,
+            tourProps,
+            pursuitProps,
+          })
         }
         continue
       }
@@ -601,7 +650,16 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             nodeObject!.position.copy(autoTourPlanarTarget)
           }
           deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
+          const before = state.mode
           state.mode = 'stopped'
+          finalizeTourTerminalStop({
+            nodeId: node.id,
+            reason: 'non-vehicle-snapped-end',
+            key,
+            state,
+            tourProps,
+            pursuitProps,
+          })
         }
       }
     }
