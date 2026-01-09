@@ -1616,9 +1616,10 @@ async function handleConvertTo3DScene() {
   convertingTo3DScene.value = true
 
   try {
+    // Always clear previously generated conversion output.
+    // Conversion recreates nodes each time, but node ids remain stable.
+    await clearPlanningGeneratedContent(sceneStore as any)
     if (!planningData) {
-      // When there's no planning snapshot, allow users to clear previously generated conversion output.
-      await clearPlanningGeneratedContent(sceneStore as any)
       dialogOpen.value = false
       return
     }

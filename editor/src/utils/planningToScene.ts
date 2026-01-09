@@ -623,9 +623,27 @@ export function findPlanningConversionRootIds(nodes: SceneNode[]): string[] {
 
 export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningToSceneOptions['sceneStore']) {
   // 1) Remove previously converted scene nodes (walls/roads/floors/etc.).
-  const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
-  if (existingRoots.length) {
-    sceneStore.removeSceneNodes(existingRoots)
+  // Remove both:
+  // - the conversion roots (which removes their subtrees)
+  // - any stray planning-conversion nodes that may have been moved out of the root
+  const idsToRemove: string[] = []
+  const visit = (list: SceneNode[]) => {
+    for (const node of list) {
+      if (!node) continue
+      const userData = (node.userData ?? {}) as Record<string, unknown>
+      if (userData[PLANNING_CONVERSION_ROOT_TAG] === true || userData.source === PLANNING_CONVERSION_SOURCE) {
+        idsToRemove.push(node.id)
+        // No need to descend; removeSceneNodes handles subtrees.
+        continue
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+  visit(sceneStore.nodes)
+  if (idsToRemove.length) {
+    sceneStore.removeSceneNodes(idsToRemove)
   }
 
   // 2) Remove previously generated terrain scatter (managed by ground node).
@@ -1094,42 +1112,24 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     sceneStore.setGroundDimensions({ width: groundWidth, depth: groundDepth })
   }
 
-  const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
-  let root: SceneNode | null = existingRoots.length ? findNodeById(sceneStore.nodes, existingRoots[0]!) : null
-  if (existingRoots.length > 1 && options.overwriteExisting) {
-    // Keep first root, remove any duplicates.
-    const dupes = existingRoots.slice(1)
-    sceneStore.removeSceneNodes(dupes)
+  if (options.overwriteExisting) {
+    emitProgress(options, 'Removing existing converted content…', 10)
+    await clearPlanningGeneratedContent(sceneStore)
   }
 
-  if (!root) {
-    emitProgress(options, 'Creating root group…', 15)
-    root = sceneStore.addSceneNode({
-      nodeType: 'Group',
-      object: new THREE.Group(),
-      name: 'Planning 3D Scene',
-      canPrefab: false,
-      userData: {
-        [PLANNING_CONVERSION_ROOT_TAG]: true,
-        source: PLANNING_CONVERSION_SOURCE,
-        createdAt: Date.now(),
-      },
-    })
-    sceneStore.setNodeLocked(root.id, true)
-  } else {
-    // Ensure root stays tagged/locked.
-    const userData = (root.userData ?? {}) as Record<string, unknown>
-    if (userData[PLANNING_CONVERSION_ROOT_TAG] !== true || userData.source !== PLANNING_CONVERSION_SOURCE) {
-      sceneStore.updateNodeUserData(root.id, {
-        ...userData,
-        [PLANNING_CONVERSION_ROOT_TAG]: true,
-        source: PLANNING_CONVERSION_SOURCE,
-      })
-    }
-    sceneStore.setNodeLocked(root.id, true)
-  }
-
-  const generatedNodeIds = new Set<string>([root.id])
+  emitProgress(options, 'Creating root group…', 15)
+  const root = sceneStore.addSceneNode({
+    nodeType: 'Group',
+    object: new THREE.Group(),
+    name: 'Planning 3D Scene',
+    canPrefab: false,
+    userData: {
+      [PLANNING_CONVERSION_ROOT_TAG]: true,
+      source: PLANNING_CONVERSION_SOURCE,
+      createdAt: Date.now(),
+    },
+  })
+  sceneStore.setNodeLocked(root.id, true)
 
   // Collect features
   const rawPolygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
@@ -1256,7 +1256,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         sceneStore.updateNodeDynamicMesh(roadNode.id, component.dynamicMesh)
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
 
-        generatedNodeIds.add(roadNode.id)
 
         if (roadMaterials.length) {
           sceneStore.setNodeMaterials(roadNode.id, roadMaterials)
@@ -1334,7 +1333,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: guideRouteNode.id, targetId: root.id, position: 'inside' })
-        generatedNodeIds.add(guideRouteNode.id)
         sceneStore.updateNodeUserData(guideRouteNode.id, {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
@@ -1376,7 +1374,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
-        generatedNodeIds.add(floorNode.id)
 
         const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1417,7 +1414,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
-        generatedNodeIds.add(floorNode.id)
 
         // 设置building图层为wireframe模式，方便查看边界
         sceneStore.setNodeMaterials(floorNode.id, [
@@ -1533,7 +1529,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
-        generatedNodeIds.add(waterNode.id)
 
         const floorComponent = waterNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1567,7 +1562,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             end.y = groundHeightAt(end.x, end.z)
             return { start, end }
           })
-          const airWall = await createAirWallFromSegments({
+          await createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
             name: `${nodeName} (Air Wall)`,
@@ -1576,9 +1571,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             ownerFeatureKind: 'water',
             segments,
           })
-          if (airWall) {
-            generatedNodeIds.add(airWall.id)
-          }
         }
       }
     } else if (kind === 'green') {
@@ -1595,7 +1587,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             end.y = groundHeightAt(end.x, end.z)
             return { start, end }
           })
-          const airWall = await createAirWallFromSegments({
+          await createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
             name: `${baseName} (Air Wall)`,
@@ -1604,9 +1596,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             ownerFeatureKind: 'green',
             segments,
           })
-          if (airWall) {
-            generatedNodeIds.add(airWall.id)
-          }
         }
 
         const scatter = normalizeScatter(poly.scatter)
@@ -1872,7 +1861,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
-            generatedNodeIds.add(wall.id)
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1905,7 +1893,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
-            generatedNodeIds.add(wall.id)
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1916,24 +1903,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
       }
-    }
-  }
-
-  // Prune orphaned generated nodes under the conversion root.
-  if (options.overwriteExisting) {
-    const refreshedRoot = findNodeById(sceneStore.nodes, root.id)
-    const subtreeIds = collectSubtreeIds(refreshedRoot)
-    const toRemove: string[] = []
-    for (const id of subtreeIds) {
-      if (id === root.id) continue
-      const node = findNodeById(sceneStore.nodes, id)
-      const userData = (node?.userData ?? {}) as Record<string, unknown>
-      if (userData?.source === PLANNING_CONVERSION_SOURCE && !generatedNodeIds.has(id)) {
-        toRemove.push(id)
-      }
-    }
-    if (toRemove.length) {
-      sceneStore.removeSceneNodes(toRemove)
     }
   }
 
