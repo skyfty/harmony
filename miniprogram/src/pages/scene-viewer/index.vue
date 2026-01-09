@@ -6379,7 +6379,8 @@ function shouldActivateDrivePad(clientY: number): boolean {
   if (height <= 0) {
     return true;
   }
-  return clientY >= drivePadViewportRect.top + height / 2;
+  // Activate only when touching the bottom third of the viewport
+  return clientY >= drivePadViewportRect.top + (height * 2) / 3;
 }
 
 function updateDrivePadViewportRect(target: EventTarget | null): void {
