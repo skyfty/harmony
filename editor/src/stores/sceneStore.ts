@@ -12726,6 +12726,7 @@ export const useSceneStore = defineStore('scene', {
       return created
     },
     createWallNode(payload: {
+      nodeId?: string
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
@@ -12744,7 +12745,46 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
       try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+          this.updateNodeDynamicMesh(desiredId, build.definition)
+          if (payload.editorFlags) {
+            existing.editorFlags = cloneEditorFlags(payload.editorFlags)
+            this.queueSceneNodePatch(desiredId, ['visibility'])
+          }
+
+          // Ensure required components exist and are configured.
+          this.ensureStaticRigidbodyComponent(desiredId)
+          const wallComponent = (findNodeById(this.nodes, desiredId)?.components?.[WALL_COMPONENT_TYPE] as
+            | SceneNodeComponentState<WallComponentProps>
+            | undefined)
+          if (wallComponent?.id) {
+            const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+              ? payload.bodyAssetId
+              : null
+            const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
+              ? payload.jointAssetId
+              : null
+            if (bodyAssetId || jointAssetId) {
+              this.updateNodeComponentProps(desiredId, wallComponent.id, { bodyAssetId, jointAssetId })
+            }
+          }
+          return findNodeById(this.nodes, desiredId)
+        }
+
         const node = this.addSceneNode({
+          nodeId: desiredId ?? undefined,
           nodeType: 'Mesh',
           object: wallGroup,
           name: nodeName,
@@ -12783,6 +12823,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     createRoadNode(payload: {
+      nodeId?: string
       points: Vector3Like[]
       width?: number
       name?: string
@@ -12825,7 +12866,31 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
       try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+          this.updateNodeDynamicMesh(desiredId, build.definition)
+
+          // Ensure road component exists so the node remains identifiable.
+          const roadComponent = (findNodeById(this.nodes, desiredId)?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined)
+          if (!roadComponent?.id) {
+            this.addNodeComponent(desiredId, ROAD_COMPONENT_TYPE)
+          }
+          return findNodeById(this.nodes, desiredId)
+        }
+
         const node = this.addSceneNode({
+          nodeId: desiredId ?? undefined,
           nodeType: 'Mesh',
           object: roadGroup,
           name: nodeName,
@@ -12859,6 +12924,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     createFloorNode(payload: {
+      nodeId?: string
       points: Vector3Like[]
       name?: string,
       editorFlags?: SceneNodeEditorFlags
@@ -12874,7 +12940,36 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
       try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+          this.updateNodeDynamicMesh(desiredId, build.definition)
+
+          const floorComponent = (findNodeById(this.nodes, desiredId)?.components?.[FLOOR_COMPONENT_TYPE] as { id?: string } | undefined)
+          if (!floorComponent?.id) {
+            this.addNodeComponent(desiredId, FLOOR_COMPONENT_TYPE)
+          }
+          const updated = findNodeById(this.nodes, desiredId)
+          const component = (updated?.components?.[FLOOR_COMPONENT_TYPE] as { id?: string } | undefined)
+          if (component?.id) {
+            const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
+            this.updateNodeComponentProps(desiredId, component.id, { smooth: nextProps.smooth })
+          }
+          return updated
+        }
+
         const node = this.addSceneNode({
+          nodeId: desiredId ?? undefined,
           nodeType: 'Mesh',
           object: floorGroup,
           name: nodeName,
@@ -12901,6 +12996,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     createGuideRouteNode(payload: {
+      nodeId?: string
       points: Vector3Like[]
       waypoints?: Array<{ name?: string; dock?: boolean }>
       name?: string
@@ -12917,7 +13013,40 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
       try {
+        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+
+        const applyGuideRouteProps = (nodeId: string) => {
+          const result = this.addNodeComponent(nodeId, GUIDE_ROUTE_COMPONENT_TYPE)
+          const component = result?.component ?? (findNodeById(this.nodes, nodeId)?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as any)
+          if (component?.id) {
+            const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
+            const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
+              const rawName = (names[index]?.name ?? '').trim()
+              const name = rawName.length ? rawName : `P${index + 1}`
+              return { name, position, dock: names[index]?.dock === true }
+            })
+            this.updateNodeComponentProps(node.id, component.id, { waypoints })
+          }
+        }
+
+        if (existing && desiredId) {
+          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+            this.renameNode(desiredId, payload.name.trim())
+          }
+          this.updateNodeTransform({
+            id: desiredId,
+            position: createVector(build.center.x, build.center.y, build.center.z),
+            rotation: createVector(0, 0, 0),
+            scale: createVector(1, 1, 1),
+          })
+          this.updateNodeDynamicMesh(desiredId, build.definition)
+          applyGuideRouteProps(desiredId)
+          return findNodeById(this.nodes, desiredId)
+        }
+
         const node = this.addSceneNode({
+          nodeId: desiredId ?? undefined,
           nodeType: 'Mesh',
           object: group,
           name: nodeName,
@@ -12929,17 +13058,7 @@ export const useSceneStore = defineStore('scene', {
         })
 
         if (node) {
-          const result = this.addNodeComponent(node.id, GUIDE_ROUTE_COMPONENT_TYPE)
-          const component = result?.component
-          if (component?.id) {
-            const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
-            const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
-              const rawName = (names[index]?.name ?? '').trim()
-              const name = rawName.length ? rawName : `P${index + 1}`
-              return { name, position, dock: names[index]?.dock === true }
-            })
-            this.updateNodeComponentProps(node.id, component.id, { waypoints })
-          }
+          applyGuideRouteProps(node.id)
         }
 
         return node

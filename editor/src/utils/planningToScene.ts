@@ -74,23 +74,27 @@ export type ConvertPlanningToSceneOptions = {
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode
     createWallNode: (payload: {
+      nodeId?: string
       segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createRoadNode: (payload: {
+      nodeId?: string
       points: Array<{ x: number; y: number; z: number }>
       width?: number
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createFloorNode: (payload: {
+      nodeId?: string
       points: Array<{ x: number; y: number; z: number }>
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
     createGuideRouteNode: (payload: {
+      nodeId?: string
       points: Array<{ x: number; y: number; z: number }>
       waypoints?: Array<{ name?: string; dock?: boolean }>
       name?: string
@@ -118,6 +122,88 @@ export type ConvertPlanningToSceneOptions = {
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 const PLANNING_PIXELS_PER_METER = 10
+
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
+  const visit = (list: SceneNode[]): SceneNode | null => {
+    for (const node of list) {
+      if (!node) continue
+      if (node.id === id) return node
+      const child = visit(Array.isArray(node.children) ? node.children : [])
+      if (child) return child
+    }
+    return null
+  }
+  return visit(nodes)
+}
+
+function collectSubtreeIds(node: SceneNode | null | undefined): string[] {
+  if (!node) return []
+  const ids: string[] = []
+  const stack: SceneNode[] = [node]
+  while (stack.length) {
+    const current = stack.pop()!
+    ids.push(current.id)
+    const children = Array.isArray(current.children) ? current.children : []
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      const child = children[i]
+      if (child) stack.push(child)
+    }
+  }
+  return ids
+}
+
+function uuidToBytes(uuid: string): Uint8Array | null {
+  const normalized = uuid.trim().toLowerCase()
+  if (!UUID_V4_PATTERN.test(normalized) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
+    return null
+  }
+  const hex = normalized.replace(/-/g, '')
+  if (hex.length !== 32) return null
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 16; i += 1) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  return bytes
+}
+
+function bytesToUuid(bytes: Uint8Array): string {
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+// Deterministic UUID (v5) for derived planning nodes (e.g. multi-feature road components, air walls).
+// Keeps ids stable across conversions without needing extra persisted mapping.
+const PLANNING_UUID_NAMESPACE = '6f1a7f2f-40c6-4b6d-9c0e-6c760f0b8d4a'
+
+async function stableUuidV5(name: string, namespaceUuid = PLANNING_UUID_NAMESPACE): Promise<string> {
+  const ns = uuidToBytes(namespaceUuid)
+  if (!ns) {
+    // Should never happen; fallback to random UUID.
+    return generateUuid()
+  }
+
+  const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null
+  const nameBytes = encoder ? encoder.encode(name) : new Uint8Array(Array.from(name, (c) => c.charCodeAt(0) & 0xff))
+  const input = new Uint8Array(ns.length + nameBytes.length)
+  input.set(ns, 0)
+  input.set(nameBytes, ns.length)
+
+  const cryptoRef = (globalThis as any)?.crypto
+  const subtle = cryptoRef?.subtle
+  if (!subtle || typeof subtle.digest !== 'function') {
+    // No deterministic digest available; fall back to random.
+    return generateUuid()
+  }
+
+  const hash = new Uint8Array(await subtle.digest('SHA-1', input))
+  const bytes = hash.slice(0, 16)
+  // Set version (5) and variant (RFC 4122)
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  return bytesToUuid(bytes)
+}
 
 // Air walls are invisible collision boundaries.
 // Use fixed dimensions (do not depend on wall-layer settings).
@@ -349,7 +435,7 @@ function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], 
   ensureStaticRigidbody(sceneStore, node)
 }
 
-function createAirWallFromSegments(options: {
+async function createAirWallFromSegments(options: {
   sceneStore: ConvertPlanningToSceneOptions['sceneStore']
   rootNodeId: string
   name: string
@@ -360,7 +446,10 @@ function createAirWallFromSegments(options: {
 }) {
   const { sceneStore, rootNodeId, name, planningLayerId, ownerFeatureId, ownerFeatureKind, segments } = options
   if (!segments.length) return null
+
+  const nodeId = await stableUuidV5(`planning:airwall:${ownerFeatureKind}:${ownerFeatureId}`)
   const wall = sceneStore.createWallNode({
+    nodeId,
     segments,
     dimensions: { height: AIR_WALL_HEIGHT_M, thickness: AIR_WALL_THICKNESS_M, width: AIR_WALL_WIDTH_M },
     name,
@@ -1006,24 +1095,41 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   }
 
   const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
-  if (existingRoots.length && options.overwriteExisting) {
-    emitProgress(options, 'Removing existing converted content…', 10)
-    sceneStore.removeSceneNodes(existingRoots)
+  let root: SceneNode | null = existingRoots.length ? findNodeById(sceneStore.nodes, existingRoots[0]!) : null
+  if (existingRoots.length > 1 && options.overwriteExisting) {
+    // Keep first root, remove any duplicates.
+    const dupes = existingRoots.slice(1)
+    sceneStore.removeSceneNodes(dupes)
   }
 
-  emitProgress(options, 'Creating root group…', 15)
-  const root = sceneStore.addSceneNode({
-    nodeType: 'Group',
-    object: new THREE.Group(),
-    name: 'Planning 3D Scene',
-    canPrefab: false,
-    userData: {
-      [PLANNING_CONVERSION_ROOT_TAG]: true,
-      source: PLANNING_CONVERSION_SOURCE,
-      createdAt: Date.now(),
-    },
-  })
-  sceneStore.setNodeLocked(root.id, true)
+  if (!root) {
+    emitProgress(options, 'Creating root group…', 15)
+    root = sceneStore.addSceneNode({
+      nodeType: 'Group',
+      object: new THREE.Group(),
+      name: 'Planning 3D Scene',
+      canPrefab: false,
+      userData: {
+        [PLANNING_CONVERSION_ROOT_TAG]: true,
+        source: PLANNING_CONVERSION_SOURCE,
+        createdAt: Date.now(),
+      },
+    })
+    sceneStore.setNodeLocked(root.id, true)
+  } else {
+    // Ensure root stays tagged/locked.
+    const userData = (root.userData ?? {}) as Record<string, unknown>
+    if (userData[PLANNING_CONVERSION_ROOT_TAG] !== true || userData.source !== PLANNING_CONVERSION_SOURCE) {
+      sceneStore.updateNodeUserData(root.id, {
+        ...userData,
+        [PLANNING_CONVERSION_ROOT_TAG]: true,
+        source: PLANNING_CONVERSION_SOURCE,
+      })
+    }
+    sceneStore.setNodeLocked(root.id, true)
+  }
+
+  const generatedNodeIds = new Set<string>([root.id])
 
   // Collect features
   const rawPolygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
@@ -1122,6 +1228,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         const component = components[index]!
         const nodeName = components.length > 1 ? `${baseName} ${index + 1}` : baseName
 
+        const featureIds = (component.featureIds ?? []).filter((id) => typeof id === 'string' && id.trim().length)
+        const nodeId = featureIds.length === 1
+          ? featureIds[0]!
+          : await stableUuidV5(`planning:road:${layerId}:${featureIds.slice().sort().join(',')}`)
+
         // Create a placeholder road node whose computed center matches the component center.
         // We'll overwrite its dynamic mesh with a branching road graph afterwards.
         const cx = component.center.x
@@ -1132,6 +1243,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         ]
 
         const roadNode = sceneStore.createRoadNode({
+          nodeId,
           points: placeholder,
           width: roadWidth,
           name: nodeName,
@@ -1144,11 +1256,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         sceneStore.updateNodeDynamicMesh(roadNode.id, component.dynamicMesh)
         sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
 
+        generatedNodeIds.add(roadNode.id)
+
         if (roadMaterials.length) {
           sceneStore.setNodeMaterials(roadNode.id, roadMaterials)
         }
 
-        const featureIds = component.featureIds
         const userData: Record<string, unknown> = {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
@@ -1210,6 +1323,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           : (layerName ? `${layerName} Guide Route` : 'Planning Guide Route')
 
         const guideRouteNode = sceneStore.createGuideRouteNode({
+          nodeId: line.id,
           points,
           waypoints,
           name: nodeName,
@@ -1220,6 +1334,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: guideRouteNode.id, targetId: root.id, position: 'inside' })
+        generatedNodeIds.add(guideRouteNode.id)
         sceneStore.updateNodeUserData(guideRouteNode.id, {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
@@ -1251,6 +1366,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           : (layerName ? `${layerName} Floor` : 'Planning Floor')
 
         const floorNode = sceneStore.createFloorNode({
+          nodeId: poly.id,
           points: worldPoints,
           name: nodeName,
         })
@@ -1260,6 +1376,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+        generatedNodeIds.add(floorNode.id)
 
         const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1270,6 +1387,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
           kind: 'floor',
+          planningFeatureId: poly.id,
         })
         sceneStore.setNodeLocked(floorNode.id, true)
       }
@@ -1288,6 +1406,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           : (layerName ? `${layerName} Building` : 'Planning Building')
 
         const floorNode = sceneStore.createFloorNode({
+          nodeId: poly.id,
           points: worldPoints,
           name: nodeName,
           editorFlags: {editorOnly: true},
@@ -1298,6 +1417,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+        generatedNodeIds.add(floorNode.id)
 
         // 设置building图层为wireframe模式，方便查看边界
         sceneStore.setNodeMaterials(floorNode.id, [
@@ -1355,6 +1475,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           : (layerName ? `${layerName} Water` : 'Planning Water')
 
         const waterNode = sceneStore.createFloorNode({
+          nodeId: poly.id,
           points: worldPoints,
           name: nodeName,
         })
@@ -1412,6 +1533,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
+        generatedNodeIds.add(waterNode.id)
 
         const floorComponent = waterNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1445,7 +1567,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             end.y = groundHeightAt(end.x, end.z)
             return { start, end }
           })
-          createAirWallFromSegments({
+          const airWall = await createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
             name: `${nodeName} (Air Wall)`,
@@ -1454,6 +1576,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             ownerFeatureKind: 'water',
             segments,
           })
+          if (airWall) {
+            generatedNodeIds.add(airWall.id)
+          }
         }
       }
     } else if (kind === 'green') {
@@ -1470,7 +1595,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             end.y = groundHeightAt(end.x, end.z)
             return { start, end }
           })
-          createAirWallFromSegments({
+          const airWall = await createAirWallFromSegments({
             sceneStore,
             rootNodeId: root.id,
             name: `${baseName} (Air Wall)`,
@@ -1479,6 +1604,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             ownerFeatureKind: 'green',
             segments,
           })
+          if (airWall) {
+            generatedNodeIds.add(airWall.id)
+          }
         }
 
         const scatter = normalizeScatter(poly.scatter)
@@ -1737,12 +1865,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (segments.length) {
           const smoothing = clampWallCornerSmoothness((line as PlanningPolylineAny).cornerSmoothness)
           const wall = sceneStore.createWallNode({
+            nodeId: line.id,
             segments,
             dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
             name: line.name?.trim() || 'Wall',
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            generatedNodeIds.add(wall.id)
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1768,12 +1898,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         if (segments.length) {
           const wall = sceneStore.createWallNode({
+            nodeId: poly.id,
             segments,
             dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
             name: poly.name?.trim() || 'Wall',
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            generatedNodeIds.add(wall.id)
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1784,6 +1916,24 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
       }
+    }
+  }
+
+  // Prune orphaned generated nodes under the conversion root.
+  if (options.overwriteExisting) {
+    const refreshedRoot = findNodeById(sceneStore.nodes, root.id)
+    const subtreeIds = collectSubtreeIds(refreshedRoot)
+    const toRemove: string[] = []
+    for (const id of subtreeIds) {
+      if (id === root.id) continue
+      const node = findNodeById(sceneStore.nodes, id)
+      const userData = (node?.userData ?? {}) as Record<string, unknown>
+      if (userData?.source === PLANNING_CONVERSION_SOURCE && !generatedNodeIds.has(id)) {
+        toRemove.push(id)
+      }
+    }
+    if (toRemove.length) {
+      sceneStore.removeSceneNodes(toRemove)
     }
   }
 

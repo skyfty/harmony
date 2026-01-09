@@ -1616,14 +1616,15 @@ async function handleConvertTo3DScene() {
   convertingTo3DScene.value = true
 
   try {
-    // Always clear previously generated conversion output so users can clean the scene
-    // even when the current planning snapshot is empty.
-    await clearPlanningGeneratedContent(sceneStore as any)
     if (!planningData) {
+      // When there's no planning snapshot, allow users to clear previously generated conversion output.
+      await clearPlanningGeneratedContent(sceneStore as any)
       dialogOpen.value = false
       return
     }
 
+    // Conversion uses stable feature ids as node ids and will re-use/update existing nodes.
+    // We still keep overwriteExisting=true so conversion can prune orphaned generated nodes.
     const overwriteExisting = true
 
     // Close dialog first, then start conversion.
@@ -1737,6 +1738,8 @@ function loadPlanningFromScene() {
     return
   }
 
+  const usedFeatureIds = new Set<string>()
+
   if (Array.isArray((data as any).guides)) {
     planningGuides.value = ((data as any).guides as unknown[]).map(normalizeGuide).filter((g): g is PlanningGuide => !!g)
   }
@@ -1831,10 +1834,10 @@ function loadPlanningFromScene() {
 
   polygons.value = Array.isArray(data.polygons)
     ? data.polygons.map((poly) => ({
-      id: poly.id,
-      name: poly.name,
-      layerId: poly.layerId,
-      points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      id: normalizePlanningFeatureId((poly as any).id, usedFeatureIds),
+      name: (poly as any).name,
+      layerId: (poly as any).layerId,
+      points: Array.isArray((poly as any).points) ? (poly as any).points.map((p: any) => ({ x: p.x, y: p.y })) : [],
       airWallEnabled: Boolean((poly as any).airWallEnabled),
       scatter: normalizeScatterAssignment((poly as Record<string, unknown>).scatter),
     }))
@@ -1881,9 +1884,9 @@ function loadPlanningFromScene() {
         : undefined
 
       return {
-        id: line.id,
-        name: line.name,
-        layerId: line.layerId,
+        id: normalizePlanningFeatureId((line as any).id, usedFeatureIds),
+        name: (line as any).name,
+        layerId: (line as any).layerId,
         points,
         waypoints,
         cornerSmoothness: getLayerKind(line.layerId) === 'wall'
@@ -2793,6 +2796,33 @@ function createId(prefix: string) {
   return `${prefix}-${generateUuid().slice(0, 8)}`
 }
 
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isUuidV4(value: unknown): value is string {
+  return typeof value === 'string' && UUID_V4_PATTERN.test(value)
+}
+
+// Planning features (polygons/polylines) are converted to scene nodes.
+// Their ids must follow the same UUID rule as scene node ids so that conversion
+// can re-use nodes by id without collisions.
+function createPlanningFeatureId(): string {
+  return generateUuid()
+}
+
+function normalizePlanningFeatureId(raw: unknown, used: Set<string>): string {
+  const candidate = typeof raw === 'string' ? raw.trim() : ''
+  if (isUuidV4(candidate) && !used.has(candidate)) {
+    used.add(candidate)
+    return candidate
+  }
+  let next = generateUuid()
+  while (used.has(next)) {
+    next = generateUuid()
+  }
+  used.add(next)
+  return next
+}
+
 function getDefaultLayerColor(kind: LayerKind): string {
   return layerPresets.find((l) => l.kind === kind)?.color ?? '#ffffff'
 }
@@ -3503,7 +3533,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
   }
   const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
   polygons.value.push({
-    id: createId('poly'),
+    id: createPlanningFeatureId(),
     name: `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`,
     layerId: targetLayerId,
     points: clonePoints(points),
@@ -3580,7 +3610,7 @@ function startLineDraft(point: PlanningPoint) {
           return
         }
         const newLine: PlanningPolyline = {
-          id: createId('line'),
+          id: createPlanningFeatureId(),
           name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
           layerId: sourceLine.layerId,
           points: [sourcePoint, newPoint],
@@ -3613,7 +3643,7 @@ function startLineDraft(point: PlanningPoint) {
   const draftLine = getDraftLine()
   if (!draftLine) {
     const newLine: PlanningPolyline = {
-      id: createId('line'),
+      id: createPlanningFeatureId(),
       name: `${getLayerName(targetLayerId)} Segment ${lineCounter.value++}`,
       layerId: targetLayerId,
       points: [nextPoint],
@@ -3669,7 +3699,7 @@ function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
   activeLayerId.value = layerId
   const targetKind = getLayerKind(layerId)
   const newLine: PlanningPolyline = {
-    id: createId('line'),
+    id: createPlanningFeatureId(),
     name: `${getLayerName(layerId)} Segment ${lineCounter.value++}`,
     layerId,
     points: [point],
