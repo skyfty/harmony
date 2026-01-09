@@ -2869,7 +2869,11 @@ function confirmBehaviorAlert() {
   if (!token) {
     return;
   }
-  resolveBehaviorToken(token, { type: 'continue' });
+  try {
+    resolveBehaviorToken(token, { type: 'continue' });
+  } finally {
+    closeBehaviorAlert();
+  }
 }
 
 function cancelBehaviorAlert() {
@@ -2877,7 +2881,22 @@ function cancelBehaviorAlert() {
   if (!token) {
     return;
   }
-  resolveBehaviorToken(token, { type: 'abort', message: '用户取消了提示框' });
+  try {
+    resolveBehaviorToken(token, { type: 'abort', message: '用户取消了提示框' });
+  } finally {
+    closeBehaviorAlert();
+  }
+}
+
+function closeBehaviorAlert() {
+  behaviorAlertVisible.value = false;
+  behaviorAlertTitle.value = '';
+  behaviorAlertMessage.value = '';
+  behaviorAlertToken.value = null;
+  behaviorAlertShowConfirm.value = true;
+  behaviorAlertShowCancel.value = false;
+  behaviorAlertConfirmText.value = '确定';
+  behaviorAlertCancelText.value = '取消';
 }
 
 function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
