@@ -336,6 +336,101 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     return points.length >= 2 ? { points, dock } : null
   }
 
+  /**
+   * 更新自动导览系统的核心函数，负责处理所有节点的路径跟随、制动和停靠逻辑。
+   * 
+   * @param deltaSeconds - 自上次更新以来经过的时间（秒）。如果 ≤ 0，则跳过更新。
+   * 
+   * @remarks
+   * 该函数执行以下主要流程：
+   * 
+   * 1. **手动驾驶检测**：
+   *    - 如果手动驾驶模式激活，清除所有自动制动状态并立即返回，确保手动控制优先级最高。
+   * 
+   * 2. **终端制动保持**（Pre-pass）：
+   *    - 遍历 `terminalBrakeHoldNodes` 集合，为已到达终点的车辆持续施加强制动力。
+   *    - 即使 AutoTour 组件被禁用或播放状态已清除，仍保持制动以防止车辆滑动。
+   *    - 使用 6 倍最大制动力确保车辆完全静止。
+   * 
+   * 3. **节点遍历与状态管理**：
+   *    对每个启用 AutoTour 组件的节点：
+   *    
+   *    a. **过滤条件**：
+   *       - 跳过已禁用、未显式启动或已终端停止的节点。
+   *       - 验证 AutoTour 组件、路线数据和目标速度的有效性。
+   *    
+   *    b. **组件解析**：
+   *       - 解析 `AutoTour`、`Vehicle`、`PurePursuit` 组件及其属性。
+   *       - 根据组件配置决定驱动模式：
+   *         * `shouldDriveAsVehicle`: 使用物理引擎 + PurePursuit 算法驱动（真实车辆行为）。
+   *         * `directMoveVehicle`: 直接移动变换（无 PurePursuit，但有 Vehicle 组件）。
+   *         * 其他：直接移动渲染对象（非车辆节点）。
+   *    
+   *    c. **播放状态初始化/恢复**：
+   *       - 如果状态不存在或路线已更改，重新初始化播放状态。
+   *       - 使用 3D 折线投影找到最近航点并计算初始朝向。
+   *       - 构建弧长查找表（`waypointArcLengths3d`）用于后续快进逻辑。
+   *    
+   *    d. **停靠保持模式处理**：
+   *       - 当处于 `dock-hold` 模式时（宿主暂停后恢复），立即前进到下一个航点，避免重复停靠。
+   *    
+   *    e. **终点停止与循环处理**：
+   *       - 非循环路线到达终点：保持制动（车辆）或静止（非车辆）。
+   *       - 循环路线：切换到 `loop-to-start` 模式重新开始。
+   *    
+   *    f. **目标索引快进**（仅限 `shouldDriveAsVehicle`）：
+   *       - 基于车辆在路线上的弧长投影位置动态调整 `targetIndex`。
+   *       - 防止因物理超调/跳过航点导致卡住。
+   *       - 遇到停靠航点时停止快进，确保强制停靠点不被跳过。
+   *       - 自动检测非循环路线的终点并进入 `stopping` 模式。
+   *    
+   *    g. **到达判定**：
+   *       - 仅在 XZ 平面（水平面）上计算距离和方向，忽略 Y 轴差异。
+   *       - 使用动态到达距离（`arrivalDistance`）判定是否到达当前航点。
+   *       - 到达后对齐位置（直接移动节点）并推进状态机。
+   *    
+   *    h. **停靠逻辑**：
+   *       - 检测航点是否启用停靠标志（`dockFlags`）或为终点。
+   *       - 进入 `stopping` 模式，触发减速/制动直至完全停止。
+   *       - 停止后切换到 `dock-hold` 并调用宿主回调请求暂停。
+   *       - 终点停止后清理播放状态并标记为 `stopped`。
+   *    
+   *    i. **运动控制分支**：
+   *       
+   *       **车辆分支（`shouldDriveAsVehicle`）**：
+   *       - 调用 `applyPurePursuitVehicleControlSafe` 应用纯追踪算法。
+   *       - 根据前瞻距离、速度、制动参数控制油门/转向/制动。
+   *       - 停止模式下逐渐减速至零速并保持制动。
+   *       
+   *       **非车辆分支**：
+   *       - 计算目标位置并使用指数平滑（`expSmoothingAlpha`）插值移动。
+   *       - 如果 `alignToPath` 启用，平滑旋转朝向路径方向。
+   *       - 直接更新对象的 `position` 和 `quaternion`（仅运行时，不持久化）。
+   *       - 停止模式下平滑到精确终点位置（误差 < `AUTO_TOUR_STOP_POSITION_EPSILON`）。
+   *       
+   *       **直接移动车辆分支（`directMoveVehicle`）**：
+   *       - 移动渲染对象后同步物理底盘位置。
+   *       - 应用强制制动防止物理引擎干扰。
+   * 
+   * 4. **状态持久化**：
+   *    - 所有播放状态存储在 `autoTourPlaybackState` Map 中。
+   *    - 状态包含目标索引、平滑位置/朝向、弧长数据等，确保帧间连续性。
+   * 
+   * @example
+   * ```typescript
+   * // 每帧调用（通常在渲染循环中）
+   * const dt = clock.getDelta();
+   * autoTourRuntime.update(dt);
+   * ```
+   * 
+   * @internal
+   * 内部使用的临时变量（避免 GC 压力）：
+   * - `autoTourCurrentPosition`: 当前世界位置
+   * - `autoTourNextWorldPosition`: 下一帧目标世界位置
+   * - `autoTourDirection`: XZ 平面移动方向向量
+   * - `autoTourObjectWorldQuaternion`: 世界四元数缓存
+   * - 等等...
+   */
   function update(deltaSeconds: number): void {
     const manualDriveActive = deps.isManualDriveActive()
 
@@ -440,7 +535,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       if (!state || state.routeNodeId !== routeNodeId || state.routeWaypointCount !== points.length) {
         // Initialize by heading to the nearest waypoint (includes start/end/intermediate).
+        // 使用共享的 autoTourCurrentPosition 作为初始位置样本（避免额外分配）。
+        // 含义：positionSample 表示用于初始化播放状态时的“当前世界位置采样”。
         const positionSample = autoTourCurrentPosition
+
+        // 如果存在物理车辆实例，则从刚体（chassisBody）读取位置；否则使用渲染对象的世界位置。
+        // 这样保证无论该节点是由物理驱动还是直接变换驱动，都能获得一致的世界坐标用于初始化。
         if (hasVehicleInstance) {
           const body = vehicleInstance!.vehicle.chassisBody
           positionSample.set(body.position.x, body.position.y, body.position.z)
@@ -448,22 +548,34 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           nodeObject!.getWorldPosition(positionSample)
         }
 
+        // initialTargetIndex：基于当前位置决定初始目标航点索引（先取最近点，后续可能基于折线投影调整）。
         let initialTargetIndex = findClosestWaypointIndex(points, positionSample)
+
+        // polylineData3d：折线的度量信息（段长度、总长等），用于把点数组视为连续曲线做投影/弧长计算。
+        // waypointArcLengths3d：每个顶点在折线弧长坐标上的累积长度（顶点 -> s）。
+        // projectedS：当前位置投影到折线后的弧长坐标 s（用于决定“前方下一个航点”）。
         let polylineData3d: PolylineMetricData | undefined
         let waypointArcLengths3d: number[] | undefined
         let projectedS: number | undefined
 
-        const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
-        if (polyline) {
-          polylineData3d = polyline
-          waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
-          const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
-          projectedS = proj.s
-          initialTargetIndex = findNextWaypointIndexByS(waypointArcLengths3d, proj.s)
-        }
+        // 尝试构建三维折线度量数据（考虑是否闭合，即 loop 与否）。
+        // 如果成功，计算顶点弧长表并把当前位置投影到这条折线上，用以确定“前方”的目标航点而不是仅仅最近点。
+        // const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
+        // if (polyline) {
+        //   polylineData3d = polyline
+        //   waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
+        //   const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
+        //   // proj.s 是投影点在折线弧长坐标系中的位置；proj.distanceSq 是投影误差平方。
+        //   projectedS = proj.s
+        //   // 使用弧长查找下一个航点索引，确保初始目标是“在当前位置前方/之后”的第一个航点（避免向后回溯）。
+        //   initialTargetIndex = findNextWaypointIndexByS(waypointArcLengths3d, proj.s)
+        // }
 
+        // 初始朝向（航向角 yaw）。
+        // 含义：initialYaw 表示以世界 Y 轴为上方向时对象的朝向角（弧度，范围 -π..π）。
         let initialYaw = 0
         if (hasVehicleInstance) {
+          // 车辆：直接从物理底盘读取四元数并规范化以防数值误差，然后提取 yaw。
           autoTourObjectWorldQuaternion
             .set(
               vehicleInstance!.vehicle.chassisBody.quaternion.x,
@@ -474,6 +586,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             .normalize()
           initialYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
         } else {
+          // 非车辆：从渲染对象读取世界四元数并提取 yaw。
           nodeObject!.getWorldQuaternion(autoTourObjectWorldQuaternion)
           initialYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
         }
@@ -601,7 +714,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             while (nextIndex < stopBarrierIndex && (waypointS[nextIndex + 1] ?? 0) <= sAhead) {
               nextIndex += 1
             }
-            const beforeIndex = state.targetIndex
             state.targetIndex = Math.max(state.targetIndex, Math.min(stopBarrierIndex, nextIndex))
 
             // End handling for non-looping tours: once progress reaches the end, enter stopping mode.

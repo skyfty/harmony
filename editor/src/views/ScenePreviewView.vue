@@ -5552,10 +5552,10 @@ function initRenderer() {
 	}
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
-  camera.position.set(0, CAMERA_HEIGHT, 0)
+  	camera.position.set(0, CAMERA_HEIGHT, 0)
 	listener = new THREE.AudioListener()
 	camera.add(listener)
-  listener.setMasterVolume(volumePercent.value / 100)
+  	listener.setMasterVolume(volumePercent.value / 100)
 	scene.add(camera)
 
 	rootGroup = new THREE.Group()

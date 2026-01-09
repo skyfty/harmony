@@ -3573,6 +3573,13 @@ const autoTourRuntime = createAutoTourRuntime({
   onTerminalStop: () => {
     autoTourPaused.value = true;
   },
+  onDockRequestedPause: () => {
+		if (autoTourPaused.value) {
+			return
+		}
+		autoTourPaused.value = true
+		applyAutoTourPauseForActiveNodes()
+	},
   stopNodeMotion: (nodeId) => {
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (!entry) {
