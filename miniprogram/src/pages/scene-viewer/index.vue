@@ -1895,6 +1895,7 @@ const cameraViewFrustum = new THREE.Frustum();
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
+const tempObserverVector = new THREE.Vector3();
 const tempVehicleSize = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
@@ -5502,6 +5503,25 @@ function updateBehaviorProximity(): void {
     return;
   }
   const cameraPosition = camera.position;
+  let observerPosition = cameraPosition;
+  let observerNodeId: string | null = null;
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    observerNodeId = vehicleDriveNodeId.value;
+  } else if (activeAutoTourNodeIds.size > 0) {
+    observerNodeId = resolveAutoTourFollowNodeId(
+      autoTourFollowNodeId.value,
+      cameraViewState.targetNodeId,
+      activeAutoTourNodeIds,
+      previewNodeMap.keys(),
+      autoTourRuntime,
+    );
+  }
+  if (observerNodeId) {
+    const obs = resolveNodeFocusPoint(observerNodeId) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(tempObserverVector) ?? null;
+    if (obs) {
+      observerPosition = obs instanceof THREE.Vector3 ? obs : tempObserverVector;
+    }
+  }
   behaviorProximityCandidates.forEach((candidate, nodeId) => {
     const object = nodeObjectMap.get(nodeId);
     if (!object) {
@@ -5513,7 +5533,7 @@ function updateBehaviorProximity(): void {
       return;
     }
     const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
-    const distance = focusPoint.distanceTo(cameraPosition);
+    const distance = focusPoint.distanceTo(observerPosition);
     if (!Number.isFinite(distance)) {
       return;
     }
