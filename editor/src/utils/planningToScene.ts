@@ -96,9 +96,9 @@ export type ConvertPlanningToSceneOptions = {
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
-    addNodeComponent: (
+    addNodeComponent: <T extends string = string>(
       nodeId: string,
-      type: string,
+      type: T,
     ) => { component: { id: string; props?: unknown }; created: boolean } | null
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
@@ -395,7 +395,7 @@ function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneS
     return
   }
 
-  const result = sceneStore.addNodeComponent(node.id, RIGIDBODY_COMPONENT_TYPE)
+  const result = sceneStore.addNodeComponent<typeof RIGIDBODY_COMPONENT_TYPE>(node.id, RIGIDBODY_COMPONENT_TYPE)
   const created = result?.component as { id?: string } | undefined
   if (created?.id) {
     sceneStore.updateNodeComponentProps(node.id, created.id, { bodyType: 'STATIC', mass: 0 })
@@ -1230,7 +1230,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         // Safety: ensure guideRoute component exists for identification.
         const component = guideRouteNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as { id?: string } | undefined
         if (!component?.id) {
-          sceneStore.addNodeComponent(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
+          sceneStore.addNodeComponent<typeof GUIDE_ROUTE_COMPONENT_TYPE>(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
         }
 
         sceneStore.setNodeLocked(guideRouteNode.id, true)
@@ -1418,7 +1418,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           sceneStore.updateNodeComponentProps(waterNode.id, floorComponent.id, { smooth: waterSmooth })
         }
 
-        sceneStore.addNodeComponent(waterNode.id, WATER_COMPONENT_TYPE)
+        sceneStore.addNodeComponent<typeof WATER_COMPONENT_TYPE>(waterNode.id, WATER_COMPONENT_TYPE)
 
         // Build userData including any preset info persisted on the planning polygon
         const userData: Record<string, unknown> = {

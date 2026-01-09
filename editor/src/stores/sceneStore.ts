@@ -10856,8 +10856,8 @@ export const useSceneStore = defineStore('scene', {
 
       const preset = await this.loadLodPreset(assetId)
 
-      if (!node.components?.[LOD_COMPONENT_TYPE]) {
-        const result = this.addNodeComponent(nodeId, LOD_COMPONENT_TYPE)
+        if (!node.components?.[LOD_COMPONENT_TYPE]) {
+        const result = this.addNodeComponent<typeof LOD_COMPONENT_TYPE>(nodeId, LOD_COMPONENT_TYPE)
         if (!result) {
           throw new Error('无法为节点添加 LOD 组件')
         }
@@ -10925,7 +10925,7 @@ export const useSceneStore = defineStore('scene', {
       const instantiated = instantiateBehaviorPrefab(prefab, { nodeId })
 
       if (!node.components?.[BEHAVIOR_COMPONENT_TYPE]) {
-        const result = this.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+        const result = this.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
         if (!result) {
           throw new Error('无法为节点添加行为组件')
         }
@@ -12714,7 +12714,7 @@ export const useSceneStore = defineStore('scene', {
         return existing
       }
 
-      const result = this.addNodeComponent(nodeId, RIGIDBODY_COMPONENT_TYPE)
+      const result = this.addNodeComponent<typeof RIGIDBODY_COMPONENT_TYPE>(nodeId, RIGIDBODY_COMPONENT_TYPE)
       const created = result?.component
       if (!created) {
         return null

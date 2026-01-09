@@ -1111,7 +1111,7 @@ function initializeWarpGateBehavior(nodeId: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    const result = sceneStore.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
     if (!result) {
       return
     }
@@ -1831,7 +1831,7 @@ async function handleCreateMultiuserNode(): Promise<void> {
     return
   }
 
-  const result = sceneStore.addNodeComponent(created.id, ONLINE_COMPONENT_TYPE)
+  const result = sceneStore.addNodeComponent<typeof ONLINE_COMPONENT_TYPE>(created.id, ONLINE_COMPONENT_TYPE)
   if (result?.component && result.created) {
     sceneStore.updateNodeComponentProps(created.id, result.component.id, {
       enabled: true,
