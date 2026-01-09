@@ -3551,56 +3551,20 @@ const autoTourRuntime = createAutoTourRuntime({
     syncInstancedTransform(object);
   },
   requiresExplicitStart: true,
-  onTerminalStop: (nodeId, reason) => {
-    // When a tour reaches the terminal (non-looping) end, keep it parked and
-    // prompt the user to either continue or stop the tour.
-    try {
-      const node = resolveNodeById(nodeId);
-      const label = node?.name?.trim() || nodeId;
-      // Pause the runtime (keep vehicles parked)
-      autoTourPaused.value = true;
-      // Show a modal offering to continue or stop the tour.
-      uni.showModal({
-        title: '巡游已结束',
-        content: `${label} 已到达终点。要继续巡游还是停止巡游？`,
-        confirmText: '继续巡游',
-        cancelText: '停止巡游',
-        success: (res) => {
-          if (res.confirm) {
-            // Resume the tour
-            autoTourPaused.value = false;
-            handleVehicleAutoTourResumeTap({ rotateOnly: false });
-          } else if (res.cancel) {
-            // Stop and unfollow
-            stopTourAndUnfollow(autoTourRuntime, nodeId, (n) => {
-              activeAutoTourNodeIds.delete(n);
-              if (autoTourFollowNodeId.value === n) {
-                autoTourFollowNodeId.value = null;
-              }
-              handleVehicleAutoTourResumeTap({ rotateOnly: true });
-            });
-          }
-        },
-      });
-    } catch (e) {
-      // ignore
-    }
+  onTerminalStop: () => {
+    autoTourPaused.value = true;
   },
   stopNodeMotion: (nodeId) => {
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (!entry) {
       return;
     }
-    try {
-      if (entry.object) {
-        syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
-      }
-      entry.body.velocity.set(0, 0, 0);
-      entry.body.angularVelocity.set(0, 0, 0);
-      entry.body.sleep?.();
-    } catch {
-      // best-effort
+    if (entry.object) {
+      syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
     }
+    entry.body.velocity.set(0, 0, 0);
+    entry.body.angularVelocity.set(0, 0, 0);
+    entry.body.sleep?.();
   },
 });
 
