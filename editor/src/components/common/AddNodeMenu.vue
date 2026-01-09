@@ -820,8 +820,8 @@ function ensureBehaviorComponent(nodeId: string): SceneNodeComponentState<Behavi
     | SceneNodeComponentState<BehaviorComponentProps>
     | undefined
   if (!behaviorComponent) {
-    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
-    behaviorComponent = result?.component as SceneNodeComponentState<BehaviorComponentProps> | undefined
+    const result = sceneStore.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    behaviorComponent = result?.component
   }
   return behaviorComponent ?? null
 }
@@ -902,11 +902,11 @@ function initializeGuideboardBehavior(nodeId: string, nodeName: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    const result = sceneStore.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
     if (!result) {
       return
     }
-    behaviorComponent = result.component as unknown as SceneNodeComponentState<BehaviorComponentProps>
+    behaviorComponent = result.component
   }
 
   if (!behaviorComponent) {
@@ -959,11 +959,11 @@ function initializeViewPointBehavior(nodeId: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    const result = sceneStore.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
     if (!result) {
       return
     }
-    behaviorComponent = result.component as unknown as SceneNodeComponentState<BehaviorComponentProps>
+    behaviorComponent = result.component
   }
 
   if (!behaviorComponent) {
@@ -1378,8 +1378,8 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
       | SceneNodeComponentState<ViewPointComponentProps>
       | undefined
     if (!viewPointComponent) {
-      const added = sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
-      viewPointComponent = added?.component as unknown as SceneNodeComponentState<ViewPointComponentProps> | undefined
+      const added = sceneStore.addNodeComponent<typeof VIEW_POINT_COMPONENT_TYPE>(created.id, VIEW_POINT_COMPONENT_TYPE)
+      viewPointComponent = added?.component
     }
     ensureBehaviorComponent(created.id)
     if (autoBehaviors) {
@@ -1439,8 +1439,8 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
       | SceneNodeComponentState<GuideboardComponentProps>
       | undefined
     if (!guideboardComponent) {
-      const added = sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
-      guideboardComponent = added?.component as unknown as SceneNodeComponentState<GuideboardComponentProps> | undefined
+      const added = sceneStore.addNodeComponent<typeof GUIDEBOARD_COMPONENT_TYPE>(created.id, GUIDEBOARD_COMPONENT_TYPE)
+      guideboardComponent = added?.component
     }
     if (guideboardComponent && (guideboardComponent.props as GuideboardComponentProps | undefined)?.initiallyVisible !== false) {
       sceneStore.updateNodeComponentProps(created.id, guideboardComponent.id, { initiallyVisible: false })
@@ -1506,8 +1506,8 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
       | SceneNodeComponentState<WarpGateComponentProps>
       | undefined
     if (!warpGateComponent) {
-      const added = sceneStore.addNodeComponent(created.id, WARP_GATE_COMPONENT_TYPE)
-      warpGateComponent = added?.component as unknown as SceneNodeComponentState<WarpGateComponentProps> | undefined
+      const added = sceneStore.addNodeComponent<typeof WARP_GATE_COMPONENT_TYPE>(created.id, WARP_GATE_COMPONENT_TYPE)
+      warpGateComponent = added?.component
     }
     ensureBehaviorComponent(created.id)
     if (autoBehaviors) {
@@ -1787,8 +1787,8 @@ async function handleCreateProtagonistNode(): Promise<void> {
     | SceneNodeComponentState<ProtagonistComponentProps>
     | undefined
   if (!protagonistComponent) {
-    const added = sceneStore.addNodeComponent(created.id, PROTAGONIST_COMPONENT_TYPE)
-    protagonistComponent = added?.component as unknown as SceneNodeComponentState<ProtagonistComponentProps> | undefined
+    const added = sceneStore.addNodeComponent<typeof PROTAGONIST_COMPONENT_TYPE>(created.id, PROTAGONIST_COMPONENT_TYPE)
+    protagonistComponent = added?.component
   }
 
   if (protagonistComponent && (protagonistComponent.props as ProtagonistComponentProps | undefined)?.name !== name) {

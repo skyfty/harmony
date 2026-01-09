@@ -186,8 +186,10 @@ import type {
   EffectComponentProps,
   GuideRouteComponentProps,
   GuideboardComponentProps,
+  OnlineComponentProps,
   ProtagonistComponentProps,
   RigidbodyComponentProps,
+  AutoTourComponentProps,
   VehicleComponentProps,
   VehicleWheelProps,
   ViewPointComponentProps,
@@ -269,6 +271,35 @@ export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFro
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
 export type HierarchyDropPosition = 'before' | 'after' | 'inside'
+
+type NodeComponentPropsByType = {
+  [WALL_COMPONENT_TYPE]: WallComponentProps
+  [ROAD_COMPONENT_TYPE]: RoadComponentProps
+  [FLOOR_COMPONENT_TYPE]: FloorComponentProps
+  [WATER_COMPONENT_TYPE]: WaterComponentProps
+  [GUIDE_ROUTE_COMPONENT_TYPE]: GuideRouteComponentProps
+  [GUIDEBOARD_COMPONENT_TYPE]: GuideboardComponentProps
+  [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
+  [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
+  [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
+  [EFFECT_COMPONENT_TYPE]: EffectComponentProps
+  [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
+  [ONLINE_COMPONENT_TYPE]: OnlineComponentProps
+  [BEHAVIOR_COMPONENT_TYPE]: BehaviorComponentProps
+  [RIGIDBODY_COMPONENT_TYPE]: RigidbodyComponentProps
+  [VEHICLE_COMPONENT_TYPE]: VehicleComponentProps
+  [AUTO_TOUR_COMPONENT_TYPE]: AutoTourComponentProps
+  [LOD_COMPONENT_TYPE]: LodComponentProps
+}
+
+type NodeComponentPropsOf<T extends NodeComponentType> = T extends keyof NodeComponentPropsByType
+  ? NodeComponentPropsByType[T]
+  : Record<string, unknown>
+
+type AddNodeComponentResult<T extends NodeComponentType> = {
+  component: SceneNodeComponentState<NodeComponentPropsOf<T>>
+  created: boolean
+}
 
 function isVehicleWheelCandidateNode(node: SceneNode): boolean {
   const name = (node.name ?? '').trim().toLowerCase()
@@ -12684,7 +12715,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const result = this.addNodeComponent(nodeId, RIGIDBODY_COMPONENT_TYPE)
-      const created = result?.component as SceneNodeComponentState<RigidbodyComponentProps> | undefined
+      const created = result?.component
       if (!created) {
         return null
       }
@@ -12811,7 +12842,7 @@ export const useSceneStore = defineStore('scene', {
             : null
 
           const result = this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE)
-          const component = result?.component as SceneNodeComponentState<RoadComponentProps> | undefined
+          const component = result?.component
 
           if (component?.id) {
             this.updateNodeComponentProps(node.id, component.id, {
@@ -12856,7 +12887,7 @@ export const useSceneStore = defineStore('scene', {
 
         if (node) {
           const result = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE)
-          const component = result?.component as SceneNodeComponentState<FloorComponentProps> | undefined
+          const component = result?.component
           if (component?.id) {
             const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
             this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
@@ -12899,7 +12930,7 @@ export const useSceneStore = defineStore('scene', {
 
         if (node) {
           const result = this.addNodeComponent(node.id, GUIDE_ROUTE_COMPONENT_TYPE)
-          const component = result?.component as SceneNodeComponentState<GuideRouteComponentProps> | undefined
+          const component = result?.component
           if (component?.id) {
             const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
             const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
@@ -13016,10 +13047,10 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
-    addNodeComponent(
+    addNodeComponent<T extends NodeComponentType>(
       nodeId: string,
-      type: NodeComponentType,
-    ): { component: SceneNodeComponentState; created: boolean } | null {
+      type: T,
+    ): AddNodeComponentResult<T> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
         return null
@@ -13028,16 +13059,16 @@ export const useSceneStore = defineStore('scene', {
       if (!definition || !definition.canAttach(target)) {
         return null
       }
-      const existing = target.components?.[type]
+      const existing = target.components?.[type] as SceneNodeComponentState<NodeComponentPropsOf<T>> | undefined
       if (existing) {
         return { component: existing, created: false }
       }
 
-      const requestedState: SceneNodeComponentState<any> = {
+      const requestedState: SceneNodeComponentState<NodeComponentPropsOf<T>> = {
         id: generateUuid(),
         type,
         enabled: true,
-        props: definition.createDefaultProps(target),
+        props: definition.createDefaultProps(target) as NodeComponentPropsOf<T>,
       }
 
       if (type === VEHICLE_COMPONENT_TYPE) {
@@ -13047,7 +13078,7 @@ export const useSceneStore = defineStore('scene', {
           requestedState.props = clampVehicleComponentProps({
             ...base,
             wheels: inferredWheels,
-          } as any)
+          } as any) as unknown as NodeComponentPropsOf<T>
         }
       }
 
