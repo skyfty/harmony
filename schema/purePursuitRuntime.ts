@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
+import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 
 export type PurePursuitVehicleInstanceLike = {
   vehicle: CANNON.RaycastVehicle
@@ -13,13 +14,6 @@ export type PurePursuitVehicleControlState = {
   speedIntegral?: number
   lastSteerRad?: number
   reverseActive?: boolean
-}
-
-type PolylinePlanarData = {
-  segmentLengths: number[]
-  segmentStarts: number[]
-  totalLength: number
-  closed: boolean
 }
 
 const DEFAULT_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
@@ -44,122 +38,6 @@ function clamp01(value: number): number {
     return 0
   }
   return Math.max(0, Math.min(1, value))
-}
-
-function buildPolylinePlanarData(points: THREE.Vector3[], closed: boolean): PolylinePlanarData | null {
-  if (!points || points.length < 2) {
-    return null
-  }
-  const segmentCount = closed ? points.length : points.length - 1
-  if (segmentCount <= 0) {
-    return null
-  }
-  const segmentLengths = new Array<number>(segmentCount)
-  const segmentStarts = new Array<number>(segmentCount)
-  let totalLength = 0
-  for (let i = 0; i < segmentCount; i += 1) {
-    segmentStarts[i] = totalLength
-    const a = points[i]!
-    const b = points[(i + 1) % points.length]!
-    const dx = b.x - a.x
-    const dz = b.z - a.z
-    const len = Math.sqrt(dx * dx + dz * dz)
-    const safeLen = Number.isFinite(len) ? Math.max(0, len) : 0
-    segmentLengths[i] = safeLen
-    totalLength += safeLen
-  }
-  return { segmentLengths, segmentStarts, totalLength, closed }
-}
-
-type ClosestPointOnPolyline = {
-  segmentIndex: number
-  t: number
-  s: number
-  distanceSq: number
-}
-
-function findClosestPointOnPolylineXZ(
-  points: THREE.Vector3[],
-  data: PolylinePlanarData,
-  position: THREE.Vector3,
-): ClosestPointOnPolyline {
-  const px = position.x
-  const pz = position.z
-  let bestSegmentIndex = 0
-  let bestT = 0
-  let bestDistanceSq = Number.POSITIVE_INFINITY
-  let bestS = 0
-
-  for (let i = 0; i < data.segmentLengths.length; i += 1) {
-    const a = points[i]!
-    const b = points[(i + 1) % points.length]!
-    const abx = b.x - a.x
-    const abz = b.z - a.z
-    const apx = px - a.x
-    const apz = pz - a.z
-    const denom = abx * abx + abz * abz
-    const tRaw = denom > 1e-12 ? (apx * abx + apz * abz) / denom : 0
-    const t = clamp01(tRaw)
-    const cx = a.x + abx * t
-    const cz = a.z + abz * t
-    const dx = px - cx
-    const dz = pz - cz
-    const dSq = dx * dx + dz * dz
-    if (dSq < bestDistanceSq) {
-      bestDistanceSq = dSq
-      bestSegmentIndex = i
-      bestT = t
-      bestS = data.segmentStarts[i]! + data.segmentLengths[i]! * t
-    }
-  }
-
-  return {
-    segmentIndex: bestSegmentIndex,
-    t: bestT,
-    s: bestS,
-    distanceSq: bestDistanceSq,
-  }
-}
-
-function samplePolylineAtS(
-  points: THREE.Vector3[],
-  data: PolylinePlanarData,
-  s: number,
-  y: number,
-  out: THREE.Vector3,
-): void {
-  if (!Number.isFinite(s)) {
-    s = 0
-  }
-  const total = data.totalLength
-  if (total <= 1e-8) {
-    const first = points[0]!
-    out.set(first.x, y, first.z)
-    return
-  }
-  let normalizedS = s
-  if (data.closed) {
-    normalizedS = ((normalizedS % total) + total) % total
-  } else {
-    normalizedS = Math.max(0, Math.min(total, normalizedS))
-  }
-
-  let segIndex = 0
-  for (let i = 0; i < data.segmentStarts.length; i += 1) {
-    const start = data.segmentStarts[i]!
-    const end = start + data.segmentLengths[i]!
-    if (normalizedS <= end || i === data.segmentStarts.length - 1) {
-      segIndex = i
-      break
-    }
-  }
-
-  const segStart = data.segmentStarts[segIndex]!
-  const segLen = Math.max(1e-8, data.segmentLengths[segIndex]!)
-  const t = clamp01((normalizedS - segStart) / segLen)
-  const a = points[segIndex]!
-  const b = points[(segIndex + 1) % points.length]!
-  out.set(a.x + (b.x - a.x) * t, y, a.z + (b.z - a.z) * t)
 }
 
 function setCannonQuaternionFromThree(target: any, q: THREE.Quaternion): void {
@@ -226,13 +104,13 @@ export function applyPurePursuitVehicleControl(params: {
   }
   forwardWorld.normalize()
 
-  const polylineData = buildPolylinePlanarData(points, Boolean(loop))
+  const polylineData = buildPolylineMetricData(points, { closed: Boolean(loop), mode: '3d' })
   if (!polylineData) {
     return { reachedStop: false }
   }
 
   currentPositionThree.set(currentPosition.x, currentPosition.y, currentPosition.z)
-  const closest = findClosestPointOnPolylineXZ(points, polylineData, currentPositionThree)
+  const closest = projectPointToPolyline(points, polylineData, currentPositionThree)
 
   const lookaheadDistance = Math.max(
     pursuitProps.lookaheadMinMeters,
@@ -242,7 +120,7 @@ export function applyPurePursuitVehicleControl(params: {
     ),
   )
 
-  samplePolylineAtS(points, polylineData, closest.s + lookaheadDistance, currentY, lookaheadPoint)
+  samplePolylineAtS(points, polylineData, closest.s + lookaheadDistance, lookaheadPoint)
 
   const endIndex = points.length - 1
   const endPoint = points[endIndex]!

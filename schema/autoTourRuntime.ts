@@ -4,6 +4,8 @@ import type { SceneNode } from './index'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsEngine'
+import type { PolylineMetricData } from './polylineProgress'
+import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline } from './polylineProgress'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -73,6 +75,10 @@ type AutoTourPlaybackState = {
   smoothedWorldPosition: THREE.Vector3
   smoothedYaw: number
 
+  polylineData3d?: PolylineMetricData
+  waypointArcLengths3d?: number[]
+  lastProjectedS?: number
+
   // Vehicle-only control state.
   speedIntegral?: number
   lastSteerRad?: number
@@ -137,6 +143,18 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
     }
   }
   return bestIndex
+}
+
+function findNextWaypointIndexByS(waypointS: readonly number[], s: number): number {
+  if (!waypointS.length) {
+    return 0
+  }
+  const safeS = Number.isFinite(s) ? s : 0
+  let index = 0
+  while (index < waypointS.length - 1 && (waypointS[index] ?? 0) < safeS) {
+    index += 1
+  }
+  return Math.max(0, Math.min(waypointS.length - 1, index))
 }
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
@@ -371,6 +389,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
 
+      const arrivalDistance = Math.max(pursuitProps.arrivalDistanceMinMeters, pursuitProps.arrivalDistanceMaxMeters)
+
       const key = `${node.id}:${autoTour.id}`
       const cached = autoTourPlaybackState.get(key) ?? null
       let state = cached
@@ -389,9 +409,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
 
       if (!state || state.routeNodeId !== routeNodeId || state.routeWaypointCount !== points.length) {
-        const initReason = !state
-          ? 'missing-state'
-          : (state.routeNodeId !== routeNodeId ? 'route-changed' : 'waypoint-count-changed')
         // Initialize by heading to the nearest waypoint (includes start/end/intermediate).
         const positionSample = autoTourCurrentPosition
         if (hasVehicleInstance) {
@@ -401,7 +418,19 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           nodeObject!.getWorldPosition(positionSample)
         }
 
-        const nearestWaypointIndex = findClosestWaypointIndex(points, positionSample)
+        let initialTargetIndex = findClosestWaypointIndex(points, positionSample)
+        let polylineData3d: PolylineMetricData | undefined
+        let waypointArcLengths3d: number[] | undefined
+        let projectedS: number | undefined
+
+        const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
+        if (polyline) {
+          polylineData3d = polyline
+          waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
+          const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
+          projectedS = proj.s
+          initialTargetIndex = findNextWaypointIndexByS(waypointArcLengths3d, proj.s)
+        }
 
         let initialYaw = 0
         if (hasVehicleInstance) {
@@ -421,12 +450,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
         state = {
           mode: 'seek-waypoint',
-          targetIndex: nearestWaypointIndex,
+          targetIndex: initialTargetIndex,
           routeNodeId,
           routeWaypointCount: points.length,
           hasSmoothedState: true,
           smoothedWorldPosition: positionSample.clone(),
           smoothedYaw: initialYaw,
+          polylineData3d,
+          waypointArcLengths3d,
+          lastProjectedS: projectedS,
         }
         autoTourPlaybackState.set(key, state)
       }
@@ -474,16 +506,63 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // 保证目标索引在合法范围内（0 ~ endIndex），并取整
       state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
 
-      // 获取当前目标点
-      const target = points[state.targetIndex]!
+      // Resolve current world position.
       if (hasVehicleInstance) {
-        // 如果是物理车辆，直接读取底盘的世界坐标
         const chassisBody = vehicleInstance!.vehicle.chassisBody
         autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
       } else {
-        // 否则用Three.js对象的世界坐标
         nodeObject!.getWorldPosition(autoTourCurrentPosition)
       }
+
+      // Vehicle + PurePursuit: fast-forward targetIndex based on arc-length progress along the route.
+      // This prevents getting stuck when the vehicle overshoots/skips discrete waypoints.
+      if (shouldDriveAsVehicle && (state.mode === 'seek-waypoint' || state.mode === 'path')) {
+        if (!state.polylineData3d || !state.waypointArcLengths3d) {
+          const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
+          if (polyline) {
+            state.polylineData3d = polyline
+            state.waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
+          }
+        }
+
+        const polylineData3d = state.polylineData3d
+        const waypointS = state.waypointArcLengths3d
+        if (polylineData3d && waypointS) {
+          const proj = projectPointToPolyline(points, polylineData3d, autoTourCurrentPosition, autoTourNextWorldPosition)
+          state.lastProjectedS = proj.s
+
+          const deviation = Math.sqrt(Math.max(0, proj.distanceSq))
+          const maxDeviation = Math.max(1, arrivalDistance * 2)
+          if (Number.isFinite(deviation) && deviation <= maxDeviation) {
+            const baseAhead = speed * deltaSeconds * 2
+            const passAheadMeters = Math.max(arrivalDistance, Math.max(0.5, Math.min(3, Number.isFinite(baseAhead) ? baseAhead : 0)))
+            const sAhead = proj.s + passAheadMeters
+
+            // Advance monotonically; never move the target backwards.
+            let nextIndex = state.targetIndex
+            while (nextIndex < endIndex && (waypointS[nextIndex] ?? 0) <= sAhead) {
+              nextIndex += 1
+            }
+            state.targetIndex = Math.max(state.targetIndex, Math.min(endIndex, nextIndex))
+
+            // End handling for non-looping tours: once progress reaches the end, enter stopping mode.
+            if (!tourProps.loop && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
+              state.mode = 'stopping'
+              state.targetIndex = endIndex
+            } else if (tourProps.loop) {
+              // Looping tours never stop; keep driving continuously.
+              if (state.mode === 'seek-waypoint') {
+                state.mode = 'path'
+              }
+            } else if (state.mode === 'seek-waypoint') {
+              state.mode = 'path'
+            }
+          }
+        }
+      }
+
+      // 获取当前目标点（可能已被快进修正）
+      const target = points[state.targetIndex]!
 
       // 只在XZ平面上进行移动和到达检测
       // 这样可以避免仅Y轴不同导致的卡住（我们只在XZ上控制朝向）
@@ -495,6 +574,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       autoTourDirection.y = 0
       // 计算XZ平面上的距离
       const distance = Math.sqrt(autoTourDirection.x * autoTourDirection.x + autoTourDirection.z * autoTourDirection.z)
+      console.log('distance:', distance,state.targetIndex)
       // 计算到达判定距离（基于速度和PurePursuit参数）
       /**
        * 计算到达距离（arrivalDistance）。
@@ -509,11 +589,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
        * @remarks
        * 此算法常用于追踪或寻路系统中，根据目标速度自适应调整停止或减速的距离，提高运动的自然性和安全性。
        */
-      const baseArrivalDistance = speed * pursuitProps.arrivalDistanceSpeedFactor
-      const arrivalDistance = Math.max(
-        pursuitProps.arrivalDistanceMinMeters,
-        Math.min(pursuitProps.arrivalDistanceMaxMeters, Number.isFinite(baseArrivalDistance) ? baseArrivalDistance : pursuitProps.arrivalDistanceMaxMeters),
-      )
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
         if (!shouldDriveAsVehicle) {

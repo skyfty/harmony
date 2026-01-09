@@ -2131,6 +2131,14 @@ function createGroundSceneNode(
     visible: true,
     locked: true,
     dynamicMesh,
+    components: {
+      [RIGIDBODY_COMPONENT_TYPE]: {
+        id: generateUuid(),
+        type: RIGIDBODY_COMPONENT_TYPE,
+        enabled: true,
+        props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
+      },
+    },
   }
 }
 
@@ -2415,6 +2423,19 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
   if (node.dynamicMesh?.type === 'Ground') {
     const primaryMaterial = getPrimaryNodeMaterial(node)
     const children = node.children?.length ? node.children.map(cloneNode) : undefined
+    const nextComponents: SceneNodeComponentMap | undefined = (() => {
+      const base = { ...(node.components ?? {}) }
+      if (!base[RIGIDBODY_COMPONENT_TYPE]) {
+        base[RIGIDBODY_COMPONENT_TYPE] = {
+          id: generateUuid(),
+          type: RIGIDBODY_COMPONENT_TYPE,
+          enabled: true,
+          props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
+        }
+      }
+      return Object.keys(base).length ? base : undefined
+    })()
+
     return {
       ...node,
       id: GROUND_NODE_ID,
@@ -2435,6 +2456,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       visible: node.visible ?? true,
       locked: true,
       dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
+      components: nextComponents,
       sourceAssetId: undefined,
       children,
     }
