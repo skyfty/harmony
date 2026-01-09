@@ -98,8 +98,7 @@
               class="viewer-drive-cluster viewer-drive-cluster--joystick">
               <view class="viewer-drive-joystick-layout">
                 <view
-                  id="viewer-drive-joystick"
-                  ref="joystickRef"
+                  ref="lanternJoystickRef"
                   class="viewer-drive-joystick"
                   :class="{ 'is-active': vehicleDriveUi.joystickActive }"
                   role="slider"
@@ -304,8 +303,7 @@
           :style="drivePadStyle"
         >
           <view
-            id="viewer-drive-joystick"
-            ref="joystickRef"
+            ref="floatingJoystickRef"
             class="viewer-drive-joystick"
             :class="{ 'is-active': vehicleDriveUi.joystickActive }"
             role="slider"
@@ -1508,7 +1506,8 @@ const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   motionDistanceBlend: 0,
   lookaheadOffset: new THREE.Vector3(),
 });
-const joystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const floatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
 const joystickOffset = reactive({ x: 0, y: 0 });
 const joystickState = reactive({
@@ -6152,22 +6151,95 @@ function handleBrakeButtonRelease(event?: Event): void {
 
 function refreshJoystickMetrics(): void {
   nextTick(() => {
+    const resolveElement = (
+      value: ComponentPublicInstance | HTMLElement | null,
+    ): HTMLElement | null => {
+      if (!value) {
+        return null;
+      }
+      if (typeof (value as HTMLElement).getBoundingClientRect === 'function') {
+        return value as HTMLElement;
+      }
+      const maybeEl = (value as unknown as { $el?: unknown }).$el;
+      if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
+        return maybeEl as HTMLElement;
+      }
+      return null;
+    };
+
+    const preferredElement = drivePadState.visible
+      ? resolveElement(floatingJoystickRef.value)
+      : resolveElement(lanternJoystickRef.value) ?? resolveElement(floatingJoystickRef.value);
+
+    if (preferredElement) {
+      const rect = preferredElement.getBoundingClientRect();
+      joystickState.centerX = rect.left + rect.width / 2;
+      joystickState.centerY = rect.top + rect.height / 2;
+      joystickState.ready = rect.width > 0 && rect.height > 0;
+      return;
+    }
+
     const query = uni.createSelectorQuery();
     if (typeof query.in === 'function') {
       query.in((pageInstance?.proxy as unknown) ?? null);
     }
+
+    const expectedCenter = drivePadState.visible
+      ? {
+          x: drivePadViewportRect.left + drivePadState.x,
+          y: drivePadViewportRect.top + drivePadState.y,
+        }
+      : null;
+
     query
-      .select('#viewer-drive-joystick')
-      .boundingClientRect((rect) => {
-        const info = (rect || null) as UniApp.NodeInfo | null;
-        if (!info) {
+      .selectAll('.viewer-drive-joystick')
+      .boundingClientRect((rects) => {
+        const items = (Array.isArray(rects) ? rects : []) as UniApp.NodeInfo[];
+        if (items.length === 0) {
           joystickState.ready = false;
           return;
         }
-        const left = info.left ?? 0;
-        const top = info.top ?? 0;
-        const width = info.width ?? 0;
-        const height = info.height ?? 0;
+
+        let best: UniApp.NodeInfo | null = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+        let bestArea = -1;
+
+        for (const rect of items) {
+          const left = rect.left ?? 0;
+          const top = rect.top ?? 0;
+          const width = rect.width ?? 0;
+          const height = rect.height ?? 0;
+          if (!(width > 0 && height > 0)) {
+            continue;
+          }
+          if (expectedCenter) {
+            const centerX = left + width / 2;
+            const centerY = top + height / 2;
+            const dx = centerX - expectedCenter.x;
+            const dy = centerY - expectedCenter.y;
+            const score = dx * dx + dy * dy;
+            if (score < bestScore) {
+              bestScore = score;
+              best = rect;
+            }
+          } else {
+            const area = width * height;
+            if (area > bestArea) {
+              bestArea = area;
+              best = rect;
+            }
+          }
+        }
+
+        if (!best) {
+          joystickState.ready = false;
+          return;
+        }
+
+        const left = best.left ?? 0;
+        const top = best.top ?? 0;
+        const width = best.width ?? 0;
+        const height = best.height ?? 0;
         joystickState.centerX = left + width / 2;
         joystickState.centerY = top + height / 2;
         joystickState.ready = true;
@@ -9380,11 +9452,11 @@ onUnmounted(() => {
 }
 
 .viewer-drive-cluster--floating {
-  right: 50%;
+  right: auto;
   left: auto;
   top: 0;
   bottom: auto;
-  transform: translate(50%, -50%);
+  transform: translate(-50%, -50%);
   transition: opacity 0.24s ease;
 }
 
