@@ -88,31 +88,6 @@ const AUTO_TOUR_POSITION_SMOOTHING = 14
 const AUTO_TOUR_YAW_SMOOTHING = 12
 const AUTO_TOUR_STOP_POSITION_EPSILON = 0.03
 
-function isAutoTourDebugEnabled(): boolean {
-  return (globalThis as any).__HARMONY_DEBUG_AUTO_TOUR__ === true
-}
-
-function getAutoTourDebugThrottleMs(): number {
-  const value = (globalThis as any).__HARMONY_DEBUG_AUTO_TOUR_THROTTLE_MS__
-  return Number.isFinite(value) ? Math.max(0, value) : 250
-}
-
-let lastAutoTourDebugLogMs = 0
-let autoTourArrivalCount = 0
-
-function debugAutoTourThrottled(message: string, payload?: any): void {
-  if (!isAutoTourDebugEnabled()) {
-    return
-  }
-  const now = Date.now()
-  const throttleMs = getAutoTourDebugThrottleMs()
-  if (throttleMs > 0 && now - lastAutoTourDebugLogMs < throttleMs) {
-    return
-  }
-  lastAutoTourDebugLogMs = now
-  // eslint-disable-next-line no-console
-  console.log(`[AutoTourDebug] ${message}`, payload ?? '')
-}
 
 function expSmoothingAlpha(smoothing: number, deltaSeconds: number): number {
   const k = Math.max(0, smoothing)
@@ -559,16 +534,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
           const deviation = Math.sqrt(Math.max(0, proj.distanceSq))
           const maxDeviation = Math.max(1, arrivalDistance * 2)
-          debugAutoTourThrottled('project-to-polyline', {
-            nodeId: node.id,
-            mode: state.mode,
-            targetIndex: state.targetIndex,
-            projS: proj.s,
-            deviation,
-            maxDeviation,
-            arrivalDistance,
-            speed,
-          })
           if (Number.isFinite(deviation) && deviation <= maxDeviation) {
             const baseAhead = speed * deltaSeconds * 2
             const passAheadMeters = Math.max(arrivalDistance, Math.max(0.5, Math.min(3, Number.isFinite(baseAhead) ? baseAhead : 0)))
@@ -581,16 +546,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             }
             const beforeIndex = state.targetIndex
             state.targetIndex = Math.max(state.targetIndex, Math.min(endIndex, nextIndex))
-            if (state.targetIndex !== beforeIndex) {
-              debugAutoTourThrottled('fast-forward targetIndex', {
-                nodeId: node.id,
-                beforeIndex,
-                afterIndex: state.targetIndex,
-                sAhead,
-                passAheadMeters,
-                projS: proj.s,
-              })
-            }
 
             // End handling for non-looping tours: once progress reaches the end, enter stopping mode.
             if (!tourProps.loop && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
@@ -636,17 +591,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
        * 此算法常用于追踪或寻路系统中，根据目标速度自适应调整停止或减速的距离，提高运动的自然性和安全性。
        */
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
-        autoTourArrivalCount += 1
-        debugAutoTourThrottled('arrived (coarse threshold)', {
-          count: autoTourArrivalCount,
-          nodeId: node.id,
-          mode: state.mode,
-          targetIndex: state.targetIndex,
-          distance,
-          arrivalDistance,
-          speed,
-          deltaSeconds,
-        })
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
         if (!shouldDriveAsVehicle) {
           state.smoothedWorldPosition.copy(autoTourPlanarTarget)

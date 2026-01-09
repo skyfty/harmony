@@ -18,32 +18,6 @@ export type PurePursuitVehicleControlState = {
 
 const DEFAULT_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
 
-function isPurePursuitDebugEnabled(): boolean {
-  return (globalThis as any).__HARMONY_DEBUG_PURE_PURSUIT__ === true
-}
-
-function getPurePursuitDebugThrottleMs(): number {
-  const value = (globalThis as any).__HARMONY_DEBUG_PURE_PURSUIT_THROTTLE_MS__
-  return Number.isFinite(value) ? Math.max(0, value) : 250
-}
-
-let lastPurePursuitDebugLogMs = 0
-let purePursuitEarlyReturnCount = 0
-
-function debugPurePursuitThrottled(message: string, payload?: any): void {
-  if (!isPurePursuitDebugEnabled()) {
-    return
-  }
-  const now = Date.now()
-  const throttleMs = getPurePursuitDebugThrottleMs()
-  if (throttleMs > 0 && now - lastPurePursuitDebugLogMs < throttleMs) {
-    return
-  }
-  lastPurePursuitDebugLogMs = now
-  // eslint-disable-next-line no-console
-  console.log(`[PurePursuitDebug] ${message}`, payload ?? '')
-}
-
 const upAxis = new THREE.Vector3(0, 1, 0)
 
 const chassisQuat = new THREE.Quaternion()
@@ -132,10 +106,6 @@ export function applyPurePursuitVehicleControl(params: {
 
   const polylineData = buildPolylineMetricData(points, { closed: Boolean(loop), mode: '3d' })
   if (!polylineData) {
-    debugPurePursuitThrottled('polylineData missing', {
-      points: points.length,
-      loop,
-    })
     return { reachedStop: false }
   }
 
@@ -169,15 +139,6 @@ export function applyPurePursuitVehicleControl(params: {
   toLookahead.y = 0
   const toTargetLen = toLookahead.length()
   if (!Number.isFinite(toTargetLen) || toTargetLen < 1e-6) {
-    purePursuitEarlyReturnCount += 1
-    debugPurePursuitThrottled('early-return: invalid/too-small toTargetLen', {
-      count: purePursuitEarlyReturnCount,
-      toTargetLen,
-      speedMps,
-      lookaheadDistance,
-      rearAxle: { x: rearAxle.x, y: rearAxle.y, z: rearAxle.z },
-      lookaheadPoint: { x: lookaheadPoint.x, y: lookaheadPoint.y, z: lookaheadPoint.z },
-    })
     return { reachedStop: false }
   }
 
@@ -246,27 +207,10 @@ export function applyPurePursuitVehicleControl(params: {
   )
   const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {
-    debugPurePursuitThrottled('brake-distance trigger (stopping)', {
-      distanceToEnd,
-      brakeThreshold,
-      brakeDistanceMinMeters: pursuitProps.brakeDistanceMinMeters,
-      brakeDistanceSpeedFactor: pursuitProps.brakeDistanceSpeedFactor,
-      speedMps,
-      steerRatio,
-      steering,
-      speedTarget,
-    })
     brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
   }
 
   if (dockActive) {
-    debugPurePursuitThrottled('dock-active', {
-      distanceToEnd,
-      dockStartDistanceMeters: pursuitProps.dockStartDistanceMeters,
-      planarSpeed: Math.sqrt(
-        chassisBody.velocity.x * chassisBody.velocity.x + chassisBody.velocity.z * chassisBody.velocity.z,
-      ),
-    })
     steering = 0
     engineForce = 0
     brakeForce = Math.max(brakeForce, brakeForceMax * 6)
