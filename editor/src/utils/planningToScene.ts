@@ -96,7 +96,10 @@ export type ConvertPlanningToSceneOptions = {
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
-    addNodeComponent: (nodeId: string, type: string) => unknown
+    addNodeComponent: (
+      nodeId: string,
+      type: string,
+    ) => { component: { id: string; props?: unknown }; created: boolean } | null
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
@@ -392,7 +395,8 @@ function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneS
     return
   }
 
-  const created = sceneStore.addNodeComponent(node.id, RIGIDBODY_COMPONENT_TYPE) as { id?: string } | null
+  const result = sceneStore.addNodeComponent(node.id, RIGIDBODY_COMPONENT_TYPE)
+  const created = result?.component as { id?: string } | undefined
   if (created?.id) {
     sceneStore.updateNodeComponentProps(node.id, created.id, { bodyType: 'STATIC', mass: 0 })
   }

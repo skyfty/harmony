@@ -820,17 +820,8 @@ function ensureBehaviorComponent(nodeId: string): SceneNodeComponentState<Behavi
     | SceneNodeComponentState<BehaviorComponentProps>
     | undefined
   if (!behaviorComponent) {
-    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | null
-    if (created) {
-      behaviorComponent = created as unknown as SceneNodeComponentState<BehaviorComponentProps>
-    } else {
-      const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
-      behaviorComponent = refreshed?.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
-        | SceneNodeComponentState<BehaviorComponentProps>
-        | undefined
-    }
+    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    behaviorComponent = result?.component as SceneNodeComponentState<BehaviorComponentProps> | undefined
   }
   return behaviorComponent ?? null
 }
@@ -911,16 +902,11 @@ function initializeGuideboardBehavior(nodeId: string, nodeName: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | null
-    if (!created) {
+    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    if (!result) {
       return
     }
-    const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
-    behaviorComponent = refreshed?.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | undefined
+    behaviorComponent = result.component as unknown as SceneNodeComponentState<BehaviorComponentProps>
   }
 
   if (!behaviorComponent) {
@@ -973,16 +959,11 @@ function initializeViewPointBehavior(nodeId: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | null
-    if (!created) {
+    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    if (!result) {
       return
     }
-    const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
-    behaviorComponent = refreshed?.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | undefined
+    behaviorComponent = result.component as unknown as SceneNodeComponentState<BehaviorComponentProps>
   }
 
   if (!behaviorComponent) {
@@ -1130,10 +1111,8 @@ function initializeWarpGateBehavior(nodeId: string): void {
     | undefined
 
   if (!behaviorComponent) {
-    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
-      | SceneNodeComponentState<BehaviorComponentProps>
-      | null
-    if (!created) {
+    const result = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+    if (!result) {
       return
     }
     const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
@@ -1400,9 +1379,7 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
       | undefined
     if (!viewPointComponent) {
       const added = sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
-      if (added) {
-        viewPointComponent = added as unknown as SceneNodeComponentState<ViewPointComponentProps>
-      }
+      viewPointComponent = added?.component as unknown as SceneNodeComponentState<ViewPointComponentProps> | undefined
     }
     ensureBehaviorComponent(created.id)
     if (autoBehaviors) {
@@ -1463,9 +1440,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
       | undefined
     if (!guideboardComponent) {
       const added = sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
-      if (added) {
-        guideboardComponent = added as unknown as SceneNodeComponentState<GuideboardComponentProps>
-      }
+      guideboardComponent = added?.component as unknown as SceneNodeComponentState<GuideboardComponentProps> | undefined
     }
     if (guideboardComponent && (guideboardComponent.props as GuideboardComponentProps | undefined)?.initiallyVisible !== false) {
       sceneStore.updateNodeComponentProps(created.id, guideboardComponent.id, { initiallyVisible: false })
@@ -1532,9 +1507,7 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
       | undefined
     if (!warpGateComponent) {
       const added = sceneStore.addNodeComponent(created.id, WARP_GATE_COMPONENT_TYPE)
-      if (added) {
-        warpGateComponent = added as unknown as SceneNodeComponentState<WarpGateComponentProps>
-      }
+      warpGateComponent = added?.component as unknown as SceneNodeComponentState<WarpGateComponentProps> | undefined
     }
     ensureBehaviorComponent(created.id)
     if (autoBehaviors) {
@@ -1815,9 +1788,7 @@ async function handleCreateProtagonistNode(): Promise<void> {
     | undefined
   if (!protagonistComponent) {
     const added = sceneStore.addNodeComponent(created.id, PROTAGONIST_COMPONENT_TYPE)
-    if (added) {
-      protagonistComponent = added as unknown as SceneNodeComponentState<ProtagonistComponentProps>
-    }
+    protagonistComponent = added?.component as unknown as SceneNodeComponentState<ProtagonistComponentProps> | undefined
   }
 
   if (protagonistComponent && (protagonistComponent.props as ProtagonistComponentProps | undefined)?.name !== name) {
@@ -1860,9 +1831,9 @@ async function handleCreateMultiuserNode(): Promise<void> {
     return
   }
 
-  const component = sceneStore.addNodeComponent(created.id, ONLINE_COMPONENT_TYPE)
-  if (component) {
-    sceneStore.updateNodeComponentProps(created.id, component.id, {
+  const result = sceneStore.addNodeComponent(created.id, ONLINE_COMPONENT_TYPE)
+  if (result?.component && result.created) {
+    sceneStore.updateNodeComponentProps(created.id, result.component.id, {
       enabled: true,
       maxUsers: 10,
       syncInterval: 100,

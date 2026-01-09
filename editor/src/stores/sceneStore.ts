@@ -10826,8 +10826,8 @@ export const useSceneStore = defineStore('scene', {
       const preset = await this.loadLodPreset(assetId)
 
       if (!node.components?.[LOD_COMPONENT_TYPE]) {
-        const created = this.addNodeComponent(nodeId, LOD_COMPONENT_TYPE)
-        if (!created) {
+        const result = this.addNodeComponent(nodeId, LOD_COMPONENT_TYPE)
+        if (!result) {
           throw new Error('无法为节点添加 LOD 组件')
         }
       }
@@ -10894,8 +10894,8 @@ export const useSceneStore = defineStore('scene', {
       const instantiated = instantiateBehaviorPrefab(prefab, { nodeId })
 
       if (!node.components?.[BEHAVIOR_COMPONENT_TYPE]) {
-        const created = this.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
-        if (!created) {
+        const result = this.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+        if (!result) {
           throw new Error('无法为节点添加行为组件')
         }
       }
@@ -12683,9 +12683,8 @@ export const useSceneStore = defineStore('scene', {
         return existing
       }
 
-      const created = this.addNodeComponent(nodeId, RIGIDBODY_COMPONENT_TYPE) as
-        | SceneNodeComponentState<RigidbodyComponentProps>
-        | null
+      const result = this.addNodeComponent(nodeId, RIGIDBODY_COMPONENT_TYPE)
+      const created = result?.component as SceneNodeComponentState<RigidbodyComponentProps> | undefined
       if (!created) {
         return null
       }
@@ -12811,12 +12810,10 @@ export const useSceneStore = defineStore('scene', {
             ? payload.bodyAssetId
             : null
 
-          const existing = node.components?.[ROAD_COMPONENT_TYPE] as
-            | SceneNodeComponentState<RoadComponentProps>
-            | undefined
-          const component = existing ?? (this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE) as SceneNodeComponentState<RoadComponentProps> | null)
+          const result = this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE)
+          const component = result?.component as SceneNodeComponentState<RoadComponentProps> | undefined
 
-          if (component) {
+          if (component?.id) {
             this.updateNodeComponentProps(node.id, component.id, {
               ...resolveRoadComponentPropsFromMesh(build.definition),
               bodyAssetId,
@@ -12858,10 +12855,9 @@ export const useSceneStore = defineStore('scene', {
         })
 
         if (node) {
-          const component = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE) as
-            | SceneNodeComponentState<FloorComponentProps>
-            | null
-          if (component) {
+          const result = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE)
+          const component = result?.component as SceneNodeComponentState<FloorComponentProps> | undefined
+          if (component?.id) {
             const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
             this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
           }
@@ -12902,10 +12898,9 @@ export const useSceneStore = defineStore('scene', {
         })
 
         if (node) {
-          const component = this.addNodeComponent(node.id, GUIDE_ROUTE_COMPONENT_TYPE) as
-            | SceneNodeComponentState<GuideRouteComponentProps>
-            | null
-          if (component) {
+          const result = this.addNodeComponent(node.id, GUIDE_ROUTE_COMPONENT_TYPE)
+          const component = result?.component as SceneNodeComponentState<GuideRouteComponentProps> | undefined
+          if (component?.id) {
             const names = Array.isArray(payload.waypoints) ? payload.waypoints : []
             const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
               const rawName = (names[index]?.name ?? '').trim()
@@ -13021,7 +13016,10 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
-    addNodeComponent(nodeId: string, type: NodeComponentType): SceneNodeComponentState | null {
+    addNodeComponent(
+      nodeId: string,
+      type: NodeComponentType,
+    ): { component: SceneNodeComponentState; created: boolean } | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
         return null
@@ -13030,8 +13028,9 @@ export const useSceneStore = defineStore('scene', {
       if (!definition || !definition.canAttach(target)) {
         return null
       }
-      if (target.components?.[type]) {
-        return null
+      const existing = target.components?.[type]
+      if (existing) {
+        return { component: existing, created: false }
       }
 
       const requestedState: SceneNodeComponentState<any> = {
@@ -13095,7 +13094,7 @@ export const useSceneStore = defineStore('scene', {
         componentManager.syncNode(updatedNode)
       }
       commitSceneSnapshot(this)
-      return requestedState
+      return { component: requestedState, created: true }
     },
     removeNodeComponent(nodeId: string, componentId: string): boolean {
       const target = findNodeById(this.nodes, nodeId)

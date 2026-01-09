@@ -444,13 +444,17 @@ function handleAddComponent(type: string) {
   if (!selectedNode.value) {
     return
   }
-  const created = sceneStore.addNodeComponent(selectedNode.value.id, type)
-  if (!created) {
+  const result = sceneStore.addNodeComponent(selectedNode.value.id, type)
+  if (!result) {
     return
   }
   if (type !== RIGIDBODY_COMPONENT_TYPE) {
     return
   }
+  if (!result.created) {
+    return
+  }
+  const created = result.component
   const preferredColliderType = resolvePreferredRigidbodyColliderType(selectedNode.value.nodeType)
   if (!preferredColliderType || (created.props as { colliderType?: RigidbodyColliderType })?.colliderType === preferredColliderType) {
     return
