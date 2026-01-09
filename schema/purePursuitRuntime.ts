@@ -61,6 +61,8 @@ export function applyPurePursuitVehicleControl(params: {
   state: PurePursuitVehicleControlState
   modeStopping: boolean
   distanceToTarget: number
+  /** Optional index to treat as the stopping/docking target (defaults to route end). */
+  stopIndex?: number
 }): { reachedStop: boolean } {
   const {
     vehicleInstance,
@@ -73,6 +75,7 @@ export function applyPurePursuitVehicleControl(params: {
     state,
     modeStopping,
     distanceToTarget,
+    stopIndex,
   } = params
 
   const instance = vehicleInstance
@@ -123,8 +126,10 @@ export function applyPurePursuitVehicleControl(params: {
   samplePolylineAtS(points, polylineData, closest.s + lookaheadDistance, lookaheadPoint)
 
   const endIndex = points.length - 1
-  const endPoint = points[endIndex]!
-  planarEnd.set(endPoint.x, currentY, endPoint.z)
+  const rawStopIndex = typeof stopIndex === 'number' && Number.isFinite(stopIndex) ? Math.floor(stopIndex) : endIndex
+  const clampedStopIndex = Math.max(0, Math.min(endIndex, rawStopIndex))
+  const stopPoint = points[clampedStopIndex]!
+  planarEnd.set(stopPoint.x, currentY, stopPoint.z)
   const dxEnd = planarEnd.x - currentPosition.x
   const dzEnd = planarEnd.z - currentPosition.z
   const distanceToEnd = Math.sqrt(dxEnd * dxEnd + dzEnd * dzEnd)
@@ -219,9 +224,10 @@ export function applyPurePursuitVehicleControl(params: {
     // Overwriting velocity can cause the direction to flip as the chassis crosses the endpoint, resulting in jitter.
 
     if (pursuitProps.dockYawEnabled) {
-      const prev = points[Math.max(0, endIndex - 1)]!
-      const tanX = endPoint.x - prev.x
-      const tanZ = endPoint.z - prev.z
+      const prevIndex = clampedStopIndex > 0 ? clampedStopIndex - 1 : Math.min(clampedStopIndex + 1, endIndex)
+      const prev = points[prevIndex]!
+      const tanX = stopPoint.x - prev.x
+      const tanZ = stopPoint.z - prev.z
       const tanLen = Math.sqrt(tanX * tanX + tanZ * tanZ)
       const yaw = tanLen > 1e-6
         ? Math.atan2(tanX / tanLen, tanZ / tanLen)
@@ -281,6 +287,7 @@ export function applyPurePursuitVehicleControlSafe(params: {
   state: PurePursuitVehicleControlState
   modeStopping: boolean
   distanceToTarget: number
+  stopIndex?: number
 }): { reachedStop: boolean } {
   try {
     return applyPurePursuitVehicleControl(params)

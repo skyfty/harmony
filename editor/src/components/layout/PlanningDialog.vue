@@ -80,7 +80,7 @@ const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
   building: 'Building',
   road: 'Road',
-  'guide-route': '导览线路',
+  'guide-route': 'Guide Route',
   floor: 'Floor',
   green: 'Green',
   wall: 'Wall',
@@ -165,7 +165,7 @@ interface PlanningPolyline {
   layerId: string
   points: PlanningPoint[]
   /** Guide-route waypoint metadata aligned with points (only meaningful when layer kind is 'guide-route'). */
-  waypoints?: Array<{ name?: string }>
+  waypoints?: Array<{ name?: string; dock?: boolean }>
   scatter?: PlanningScatterAssignment
   /** 0-1. Only meaningful when layer kind is 'wall'. */
   cornerSmoothness?: number
@@ -259,13 +259,13 @@ interface LineDraft {
   /** Snapshot of points before starting a continuation edit (used to rollback on cancel). */
   startPoints?: PlanningPoint[]
   /** Snapshot of waypoint metadata before starting a guide-route continuation edit (used to rollback on cancel). */
-  startWaypoints?: Array<{ name?: string }>
+  startWaypoints?: Array<{ name?: string; dock?: boolean }>
 }
 
 const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.09 },
-  { id: 'guide-route-layer', name: '导览线路', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
+  { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
@@ -938,27 +938,27 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
-    // 如果没有散布配置，则确保缓存中不存在对应条目并跳过
+    // If there's no scatter configuration, ensure no cache entry exists and skip
     if (!poly.scatter) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // 仅对绿地层（planning -> terrain scatter）进行点密度预览
+    // Only show density preview for green layers (planning -> terrain scatter)
     const layerKind = getLayerKind(poly.layerId)
     if (layerKind !== 'green') {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // 规范化密度百分比 (0-100)。0 或负值表示不生成点
+    // Normalize density percent (0-100). 0 or negative means generate no points
     const densityPercent = clampDensityPercent(poly.scatter.densityPercent)
     if (densityPercent <= 0) {
       polygonScatterDensityDotsCache.delete(poly.id)
       continue
     }
 
-    // 计算模型占地相关量：优先使用缓存的包围盒推断值，否则回退到 asset 元数据
+    // Compute model footprint values: prefer cached bounding-box inference, fallback to asset metadata
     const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
     const footprintMaxSizeM = clampFootprintMaxSizeM(
       poly.scatter.assetId,
@@ -967,12 +967,12 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       footprintAreaM2,
     )
 
-    // 读取所选散布预设（用于缩放区间与容量估算）
+    // Read selected scatter preset (for scale range and capacity estimation)
     const preset = terrainScatterPresets[poly.scatter.category]
     const minScale = preset && Number.isFinite(preset.minScale) ? preset.minScale : 1
     const maxScale = preset && Number.isFinite(preset.maxScale) ? preset.maxScale : 1
 
-    // 多边形几何过滤：无边界则跳过
+    // Polygon geometry filtering: skip if no bounds
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       polygonScatterDensityDotsCache.delete(poly.id)
@@ -1003,7 +1003,7 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       minFloor: 0.05,
     })
 
-    // 基于 polygon 点集与参数构建缓存 key，避免重复昂贵计算
+    // Build cache key from polygon points and parameters to avoid repeated expensive computation
     const pointsHash = hashPlanningPoints(poly.points)
     const cacheKey = `${pointsHash}|${poly.points.length}|${Math.round(area)}|${densityPercent}|${targetDots}|${Math.round(footprintAreaM2 * 1000)}|${Math.round(footprintMaxSizeM * 1000)}|${Math.round(expectedScaleSq * 1000)}`
     const cached = polygonScatterDensityDotsCache.get(poly.id)
@@ -1014,23 +1014,23 @@ function computePolygonScatterDensityDots(): Record<string, PlanningPoint[]> {
       continue
     }
 
-    // 限制预览点数上限以保证交互性
+    // Cap preview point count to maintain interactivity
     const cappedTarget = Math.min(800, targetDots)
-    // 使用稳定随机数种子以使预览在相同输入下可复现
+    // Use stable RNG seed so previews are reproducible for identical inputs
     const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${targetDots}:${Math.round(footprintAreaM2 * 1000)}:${Math.round(footprintMaxSizeM * 1000)}:${Math.round(expectedScaleSq * 1000)}`))
 
-    // 最小间距再做下限保护，避免数值过小导致采样逻辑崩溃
+    // Apply a lower bound to minimum distance to avoid sampling issues with very small values
     const minDistanceForDots = Math.max(minDistance, 0.05)
     const selected = generateFpsScatterPointsInPolygon({
       polygon: poly.points,
       targetCount: cappedTarget,
       minDistance: minDistanceForDots,
       random,
-      // maxCandidates 控制 FPS 算法的尝试次数，基于目标点数动态调整以在性能与质量间权衡
+      // maxCandidates controls the number of attempts in the FPS algorithm; adjusted by target count to trade off performance and quality
       maxCandidates: Math.min(4000, Math.max(800, Math.ceil(cappedTarget * 6))),
     })
 
-    // 缓存结果以便短期内重复请求命中
+    // Cache results to hit on repeated short-term requests
     polygonScatterDensityDotsCache.set(poly.id, { key: cacheKey, dots: selected })
     if (selected.length) {
       result[poly.id] = selected
@@ -1484,7 +1484,10 @@ function buildPlanningSnapshot() {
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
       waypoints: getLayerKind(line.layerId) === 'guide-route'
         ? (Array.isArray(line.waypoints)
-          ? line.waypoints.map((w) => ({ name: typeof w?.name === 'string' ? w.name : undefined }))
+          ? line.waypoints.map((w) => ({
+            name: typeof w?.name === 'string' ? w.name : undefined,
+            dock: w?.dock === true ? true : undefined,
+          }))
           : undefined)
         : undefined,
       cornerSmoothness: getLayerKind(line.layerId) === 'wall'
@@ -1871,8 +1874,9 @@ function loadPlanningFromScene() {
       const waypoints = layerKind === 'guide-route'
         ? points.map((_point, index) => {
           const rawName = rawWaypoints?.[index]?.name
-          const name = typeof rawName === 'string' ? rawName : `点${index + 1}`
-          return { name }
+          const name = typeof rawName === 'string' ? rawName : `Point ${index + 1}`
+          const dock = rawWaypoints?.[index]?.dock === true
+          return { name, dock }
         })
         : undefined
 
@@ -2079,7 +2083,7 @@ function ensureGuideRouteWaypoints(line: PlanningPolyline) {
   const count = line.points.length
   const current = Array.isArray(line.waypoints) ? [...line.waypoints] : []
   while (current.length < count) {
-    current.push({ name: `点${current.length + 1}` })
+    current.push({ name: `Point ${current.length + 1}`, dock: false })
   }
   if (current.length > count) {
     current.length = count
@@ -2087,10 +2091,10 @@ function ensureGuideRouteWaypoints(line: PlanningPolyline) {
   line.waypoints = current
 }
 
-const selectedGuideRouteVertex = computed<{
+  const selectedGuideRouteVertex = computed<{
   line: PlanningPolyline
   vertexIndex: number
-  typeLabel: '起点' | '终点' | '途径点'
+  typeLabel: 'Start' | 'End' | 'Waypoint'
 } | null>(() => {
   const sel = selectedVertex.value
   if (!sel || sel.feature !== 'polyline') {
@@ -2105,8 +2109,8 @@ const selectedGuideRouteVertex = computed<{
     return null
   }
   const typeLabel = sel.vertexIndex === 0
-    ? '起点'
-    : (sel.vertexIndex === count - 1 ? '终点' : '途径点')
+    ? 'Start'
+    : (sel.vertexIndex === count - 1 ? 'End' : 'Waypoint')
   return { line, vertexIndex: sel.vertexIndex, typeLabel }
 })
 
@@ -2122,6 +2126,22 @@ const guideRouteWaypointNameModel = computed<string>({
     if (!info) return
     ensureGuideRouteWaypoints(info.line)
     info.line.waypoints![info.vertexIndex]!.name = value
+    markPlanningDirty()
+  },
+})
+
+const guideRouteWaypointDockModel = computed<boolean>({
+  get: () => {
+    const info = selectedGuideRouteVertex.value
+    if (!info) return false
+    const waypoint = info.line.waypoints?.[info.vertexIndex]
+    return waypoint?.dock === true
+  },
+  set: (value: boolean) => {
+    const info = selectedGuideRouteVertex.value
+    if (!info) return
+    ensureGuideRouteWaypoints(info.line)
+    info.line.waypoints![info.vertexIndex]!.dock = value === true
     markPlanningDirty()
   },
 })
@@ -3597,7 +3617,7 @@ function startLineDraft(point: PlanningPoint) {
       name: `${getLayerName(targetLayerId)} Segment ${lineCounter.value++}`,
       layerId: targetLayerId,
       points: [nextPoint],
-      waypoints: targetKind === 'guide-route' ? [{ name: '点1' }] : undefined,
+      waypoints: targetKind === 'guide-route' ? [{ name: 'Point 1', dock: false }] : undefined,
       cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
     }
     polylines.value = [...polylines.value, newLine]
@@ -3625,12 +3645,12 @@ function startLineDraft(point: PlanningPoint) {
   if (lineDraft.value?.continuation?.direction === 'prepend') {
     draftLine.points.unshift(nextPoint)
     if (isGuideRoute) {
-      draftLine.waypoints!.unshift({ name: '点1' })
+      draftLine.waypoints!.unshift({ name: 'Point 1', dock: false })
     }
   } else {
     draftLine.points.push(nextPoint)
     if (isGuideRoute) {
-      draftLine.waypoints!.push({ name: `点${draftLine.waypoints!.length + 1}` })
+      draftLine.waypoints!.push({ name: `Point ${draftLine.waypoints!.length + 1}`, dock: false })
     }
   }
   lineDraftHoverPoint.value = null
@@ -3653,7 +3673,7 @@ function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
     name: `${getLayerName(layerId)} Segment ${lineCounter.value++}`,
     layerId,
     points: [point],
-    waypoints: targetKind === 'guide-route' ? [{ name: '点1' }] : undefined,
+    waypoints: targetKind === 'guide-route' ? [{ name: 'Point 1', dock: false }] : undefined,
     cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
   }
   polylines.value = [...polylines.value, newLine]
@@ -3857,36 +3877,36 @@ function handleLayerSelection(layerId: string) {
 }
 
 async function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
-  // 如果属性面板不可编辑，则直接返回（例如没有选中目标或图层被锁定）
+  // If the property panel is not editable, return early (e.g., no selection or layer is locked)
   if (propertyPanelDisabled.value) {
     return
   }
 
-  // 目标可以是多边形或折线，必须存在才能继续
+  // Target must be a polygon or polyline and must exist to proceed
   const target = selectedScatterTarget.value
   if (!target) {
     return
   }
 
-  // 当前属性面板所选的散布类别（例如 flora/vegetation 等），必须是已知的预设之一
+  // The selected scatter category (e.g., flora/vegetation) must be a known preset
   const category = propertyScatterTab.value
   if (!(category in terrainScatterPresets)) {
     return
   }
 
-  // 缩略图可能用于 UI 预览（若 asset 没有缩略图则为 null）
+  // Thumbnail may be used for UI preview (null if the asset doesn't have one)
   const thumbnail = payload.asset.thumbnail ?? null
 
-  // 如果已经为该目标设置了 density，则尝试保留原值，否则使用默认值（绿地多边形默认较低密度）
+  // If the target already has a density set, try to preserve it; otherwise use a default (green polygons default to lower density)
   const existingDensity = target.shape.scatter?.densityPercent
   const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 19 : 50
 
-  // 确保模型边界信息已缓存（可能触发异步下载或解析），以便后续根据模型包围盒推断占地面积
+  // Ensure model bounds are cached (may trigger async download/parse) so footprint can be inferred from the bounding box
   await ensureModelBoundsCachedForAsset(payload.asset)
-  // 从缓存中读取模型的包围盒推断出的占地信息（可能为 null）
+  // Read cached footprint info inferred from the model bounding box (may be null)
   const cachedFootprint = computeFootprintFromCachedModelBounds(payload.asset.id)
 
-  // 如果 asset metadata 中提供 length/width（模型元数据），则作为备选来源计算原始面积/最大边长
+  // If asset metadata provides length/width, use them as a fallback to compute raw area/max side
   const length = payload.asset.dimensionLength ?? null
   const width = payload.asset.dimensionWidth ?? null
   const rawArea = (
@@ -3900,14 +3920,14 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
     ? length * width
     : undefined
 
-  // 优先使用从缓存的模型包围盒推断出的面积，否则回退到 asset metadata 的计算值，再通过 clamp 函数进行合理约束
+  // Prefer footprint area inferred from cached bounding box; otherwise fall back to asset metadata and clamp to a reasonable range
   const footprintAreaM2 = clampFootprintAreaM2(
     payload.asset.id,
     category,
     cachedFootprint?.footprintAreaM2 ?? rawArea,
   )
 
-  // 同上，计算最大边长度：优先缓存推断值，否则从 metadata 中取 max(length,width)
+  // Same for max side length: prefer cached inference, otherwise use max(length, width) from metadata
   const rawMaxSize = (
     typeof length === 'number'
     && typeof width === 'number'
@@ -3925,22 +3945,22 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
     footprintAreaM2,
   )
 
-  // 将散布分配对象写入选中形状（polygon 或 polyline）的 scatter 字段。
-  // 字段含义：providerAssetId/assetId 用于在转换时找到对应模型，category 指定散布预设类型，
-  // name/thumbnail 用于 UI 展示，densityPercent 控制生成数量比例，footprint* 用于容量估算避免重叠。
+  // Write scatter assignment object into the selected shape's (polygon or polyline) scatter field.
+  // Field meanings: providerAssetId/assetId locate the model during conversion; category specifies the scatter preset type,
+  // name/thumbnail used for UI display; densityPercent controls generation proportion; footprint* used for capacity estimation to avoid overlaps.
   target.shape.scatter = {
     providerAssetId: payload.providerAssetId,
     assetId: payload.asset.id,
     category,
     name: payload.asset.name,
     thumbnail,
-    // 保留原有 density（若存在），否则使用默认并通过 clamp 确保 0-100 的有效值
+    // Preserve existing density (if present); otherwise use default and clamp to 0-100
     densityPercent: clampDensityPercent(typeof existingDensity === 'number' ? existingDensity : defaultDensity),
     footprintAreaM2,
     footprintMaxSizeM,
   }
 
-  // 标记规划已更改，以便后续持久化或转换时生效
+  // Mark the planning as changed so it will be persisted or converted later
   markPlanningDirty()
 }
 
@@ -4470,7 +4490,7 @@ function cancelActiveDrafts() {
 
       if (isGuideRoutePolyline(draftLine)) {
         if (Array.isArray(draft.startWaypoints)) {
-          draftLine.waypoints = draft.startWaypoints.map((w) => ({ name: w?.name }))
+          draftLine.waypoints = draft.startWaypoints.map((w) => ({ name: w?.name, dock: w?.dock === true }))
         }
         ensureGuideRouteWaypoints(draftLine)
       }
@@ -4851,7 +4871,7 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
     layerId: line.layerId,
     startPoints: clonePoints(line.points),
     startWaypoints: isGuideRoute
-      ? (line.waypoints ?? []).map((w) => ({ name: w?.name }))
+      ? (line.waypoints ?? []).map((w) => ({ name: w?.name, dock: w?.dock === true }))
       : undefined,
     continuation: {
       lineId,
@@ -6530,28 +6550,6 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <div v-if="selectedGuideRouteVertex" class="property-panel__block">
-              <div style="display:flex;gap:8px;align-items:center;">
-                <v-text-field
-                  v-model="guideRouteWaypointNameModel"
-                  density="compact"
-                  hide-details
-                  label="名称"
-                  :disabled="propertyPanelDisabled"
-                  style="flex:1"
-                />
-              </div>
-              <div style="margin-top:8px;">
-                <v-text-field
-                  :model-value="selectedGuideRouteVertex.typeLabel"
-                  density="compact"
-                  hide-details
-                  label="类型"
-                  readonly
-                />
-              </div>
-            </div>
-
             <div v-if="selectedMeasurementTitle" class="property-panel__density">
               <div class="property-panel__density-title">{{ selectedMeasurementTitle }}</div>
               <div class="property-panel__density-row">
@@ -6562,6 +6560,37 @@ onBeforeUnmount(() => {
                   hide-details
                   readonly
                   :suffix="selectedMeasurementSuffix"
+                />
+              </div>
+            </div>
+
+            <div v-if="selectedGuideRouteVertex" class="property-panel__block">
+              <div style="display:flex;gap:8px;align-items:center;">
+                <v-text-field
+                  v-model="guideRouteWaypointNameModel"
+                  density="compact"
+                  hide-details
+                  label="Name"
+                  :disabled="propertyPanelDisabled"
+                  style="flex:1"
+                />
+              </div>
+              <div style="margin-top:8px;">
+                <v-text-field
+                  :model-value="selectedGuideRouteVertex.typeLabel"
+                  density="compact"
+                  hide-details
+                  label="Type"
+                  readonly
+                />
+              </div>
+              <div style="margin-top:8px;">
+                <v-switch
+                  v-model="guideRouteWaypointDockModel"
+                  density="compact"
+                  hide-details
+                  label="Dock"
+                  :disabled="propertyPanelDisabled"
                 />
               </div>
             </div>

@@ -48,6 +48,9 @@ export type AutoTourRuntimeDeps = {
   /** Optional callback invoked when a tour reaches a terminal stop (non-looping end). */
   onTerminalStop?: (nodeId: string, reason: string) => void
 
+  /** Optional callback invoked when AutoTour requests the host to pause (e.g., after docking at a waypoint). */
+  onDockRequestedPause?: (nodeId: string, payload: { waypointIndex: number; terminal: boolean }) => void
+
   /**
    * When true, auto-tour will only run after calling `startTour(nodeId)`.
    * When false/omitted, enabled AutoTour components will run automatically (legacy behavior).
@@ -67,13 +70,20 @@ export type AutoTourRuntime = {
 }
 
 type AutoTourPlaybackState = {
-  mode: 'seek-waypoint' | 'path' | 'loop-to-start' | 'stopped' | 'stopping'
+  mode: 'seek-waypoint' | 'path' | 'loop-to-start' | 'stopped' | 'stopping' | 'dock-hold'
   targetIndex: number
   routeNodeId: string
   routeWaypointCount: number
   hasSmoothedState: boolean
   smoothedWorldPosition: THREE.Vector3
   smoothedYaw: number
+
+  /** When stopping/docking, the index we are targeting to come to a stop at. */
+  dockStopIndex?: number
+  /** When in dock-hold, the index we have stopped at (used to advance on resume). */
+  dockHoldIndex?: number
+  /** Latch to prevent repeated dock pause callbacks while staying at the same waypoint. */
+  dockLatchIndex?: number
 
   polylineData3d?: PolylineMetricData
   waypointArcLengths3d?: number[]
@@ -166,6 +176,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   // Nodes that reached a terminal (loop=false) stop and must remain "parked" via continuous braking.
   // This is intentionally independent of autoTourPlaybackState, since terminal stop clears playback state.
   const terminalBrakeHoldNodes = new Set<string>()
+  // Nodes that reached a terminal (loop=false) stop and should not re-initialize movement until restarted.
+  const terminalStoppedNodes = new Set<string>()
   
 
   const autoTourTargetPosition = new THREE.Vector3()
@@ -216,6 +228,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
     // Plan B: keep the vehicle locked in place after a terminal stop by continuously holding brake.
     terminalBrakeHoldNodes.add(nodeId)
+    terminalStoppedNodes.add(nodeId)
 
     // Apply a one-time hard stop so the node truly "parks" at the end even if physics is active.
     stopVehicleImmediately(nodeId)
@@ -227,6 +240,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     // Notify host that this node has reached a terminal stop so it can prompt the user.
     try {
       deps.onTerminalStop?.(nodeId, reason)
+    } catch {
+      // Ignore errors in host callback.
+    }
+
+    // Also request the host to pause auto-tour controls (e.g., to reuse pause/resume UX).
+    try {
+      deps.onDockRequestedPause?.(nodeId, { waypointIndex: Number.isFinite(state?.targetIndex) ? state!.targetIndex : 0, terminal: true })
     } catch {
       // Ignore errors in host callback.
     }
@@ -288,7 +308,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     // stopVehicleImmediately: end (debug logs removed)
   }
 
-  function getGuideRouteWorldWaypoints(routeNodeId: string): THREE.Vector3[] | null {
+  function getGuideRouteWorldWaypoints(routeNodeId: string): { points: THREE.Vector3[]; dock: boolean[] } | null {
     const routeNode = deps.resolveNodeById(routeNodeId)
     if (!routeNode) {
       return null
@@ -306,12 +326,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return null
     }
     routeObject.updateMatrixWorld(true)
-    const result: THREE.Vector3[] = []
+    const points: THREE.Vector3[] = []
+    const dock: boolean[] = []
     props.waypoints.forEach((wp) => {
       autoTourTargetPosition.set(wp.position.x, wp.position.y, wp.position.z)
-      result.push(routeObject.localToWorld(autoTourTargetPosition.clone()))
+      points.push(routeObject.localToWorld(autoTourTargetPosition.clone()))
+      dock.push(wp.dock === true)
     })
-    return result.length >= 2 ? result : null
+    return points.length >= 2 ? { points, dock } : null
   }
 
   function update(deltaSeconds: number): void {
@@ -323,6 +345,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (manualDriveActive) {
       // Manual drive has priority; do not keep auto-parking brakes applied.
       terminalBrakeHoldNodes.clear()
+      terminalStoppedNodes.clear()
       return
     }
 
@@ -360,6 +383,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (requiresExplicitStart && !activeTourNodes.has(node.id)) {
         continue
       }
+      if (terminalStoppedNodes.has(node.id)) {
+        continue
+      }
       const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
       if (!autoTour) {
         continue
@@ -378,10 +404,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (!routeNodeId) {
         continue
       }
-      const points = getGuideRouteWorldWaypoints(routeNodeId)
-      if (!points) {
+      const routeData = getGuideRouteWorldWaypoints(routeNodeId)
+      if (!routeData) {
         continue
       }
+
+      const points = routeData.points
+      const dockFlags = routeData.dock
 
       const endIndex = points.length - 1
 
@@ -471,7 +500,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // Vehicle nodes that are moving via direct node transforms should not use the
       // stopping/stopped state machine (they can still respect loop via index wrap).
       if (directMoveVehicle) {
-        if (state.mode === 'stopping' || state.mode === 'loop-to-start') {
+        if (state.mode === 'loop-to-start') {
           state.mode = 'path'
         }
         // When direct-moving a vehicle and not looping, fully stop updating once we
@@ -479,6 +508,23 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         if (!tourProps.loop && state.mode === 'stopped') {
           continue
         }
+      }
+
+      // Dock-hold is entered after coming to a complete stop at a docking waypoint.
+      // The host pauses auto-tour by not calling update(). When update() resumes,
+      // immediately advance to the next waypoint to avoid re-docking at the same point.
+      if (state.mode === 'dock-hold') {
+        const holdIndex = typeof state.dockHoldIndex === 'number' && Number.isFinite(state.dockHoldIndex)
+          ? Math.floor(state.dockHoldIndex)
+          : state.targetIndex
+        const nextIndex = tourProps.loop
+          ? ((holdIndex + 1) % points.length)
+          : Math.max(0, Math.min(endIndex, holdIndex + 1))
+        state.mode = 'path'
+        state.targetIndex = nextIndex
+        state.dockHoldIndex = undefined
+        state.dockStopIndex = undefined
+        state.dockLatchIndex = undefined
       }
 
       // When stopped and not looping:
@@ -539,16 +585,27 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             const passAheadMeters = Math.max(arrivalDistance, Math.max(0.5, Math.min(3, Number.isFinite(baseAhead) ? baseAhead : 0)))
             const sAhead = proj.s + passAheadMeters
 
+            // Do not allow targetIndex to advance past the next docking waypoint.
+            // This ensures that dock-enabled waypoints are treated as mandatory stops.
+            const stopBarrierIndex = (() => {
+              for (let i = Math.max(0, state.targetIndex); i <= endIndex; i += 1) {
+                if (dockFlags[i] === true) return i
+              }
+              return endIndex
+            })()
+
             // Advance monotonically; never move the target backwards.
+            // IMPORTANT: allow advancing *to* stopBarrierIndex (inclusive), otherwise dock waypoints can
+            // never become the active target in 'path' mode.
             let nextIndex = state.targetIndex
-            while (nextIndex < endIndex && (waypointS[nextIndex] ?? 0) <= sAhead) {
+            while (nextIndex < stopBarrierIndex && (waypointS[nextIndex + 1] ?? 0) <= sAhead) {
               nextIndex += 1
             }
             const beforeIndex = state.targetIndex
-            state.targetIndex = Math.max(state.targetIndex, Math.min(endIndex, nextIndex))
+            state.targetIndex = Math.max(state.targetIndex, Math.min(stopBarrierIndex, nextIndex))
 
             // End handling for non-looping tours: once progress reaches the end, enter stopping mode.
-            if (!tourProps.loop && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
+            if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
               state.mode = 'stopping'
               state.targetIndex = endIndex
             } else if (tourProps.loop) {
@@ -590,6 +647,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
        * @remarks
        * 此算法常用于追踪或寻路系统中，根据目标速度自适应调整停止或减速的距离，提高运动的自然性和安全性。
        */
+      const dockEnabledAtTarget = dockFlags[state.targetIndex] === true
+      const isNonLoopTerminalEnd = !tourProps.loop && state.targetIndex >= endIndex
+      const shouldDockStopHere = dockEnabledAtTarget || isNonLoopTerminalEnd
+
       if (!Number.isFinite(distance) || distance <= arrivalDistance) {
         // Snap to the waypoint visually for direct-move nodes to avoid leaving a visible gap.
         if (!shouldDriveAsVehicle) {
@@ -615,35 +676,48 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           }
         }
 
-        // Direct-move vehicle nodes: advance indices simply (no stopping/stopped/loop-to-start modes).
+        // Direct-move vehicle nodes: allow docking via the shared stopping flow.
         if (directMoveVehicle) {
-          if (state.targetIndex >= endIndex) {
-            if (tourProps.loop) {
-              state.targetIndex = 0
-            } else {
-              // Terminal stop: do not keep writing transforms/teleports after arrival.
-              state.targetIndex = endIndex
-              state.mode = 'stopped'
-              finalizeTourTerminalStop({
-                nodeId: node.id,
-                reason: 'direct-move-vehicle-end',
-                key,
-                state,
-                tourProps,
-                pursuitProps,
-              })
-            }
+          if (shouldDockStopHere) {
+            state.mode = 'stopping'
+            state.dockStopIndex = state.targetIndex
           } else {
-            state.targetIndex += 1
+            if (state.targetIndex >= endIndex) {
+              if (tourProps.loop) {
+                state.targetIndex = 0
+              } else {
+                // Terminal stop: do not keep writing transforms/teleports after arrival.
+                state.targetIndex = endIndex
+                state.mode = 'stopped'
+                finalizeTourTerminalStop({
+                  nodeId: node.id,
+                  reason: 'direct-move-vehicle-end',
+                  key,
+                  state,
+                  tourProps,
+                  pursuitProps,
+                })
+              }
+            } else {
+              state.targetIndex += 1
+            }
+            state.routeNodeId = routeNodeId
+            state.routeWaypointCount = points.length
+            continue
           }
-          state.routeNodeId = routeNodeId
-          state.routeWaypointCount = points.length
-          continue
+        }
+
+        // Docking: when enabled for the current waypoint (or forced terminal end in non-loop),
+        // enter stopping mode immediately upon reaching the arrival threshold.
+        if (shouldDockStopHere && state.mode !== 'stopping') {
+          state.mode = 'stopping'
+          state.dockStopIndex = state.targetIndex
         }
 
         // Advance state machine:
-        // - Intermediate points (including start): no stop, advance to next.
+        // - Intermediate points: advance to next.
         // - End point: stop unless looping, in which case go to start.
+        // - Docking waypoints: handled above via stopping mode.
         if (state.mode === 'seek-waypoint') {
           if (state.targetIndex >= endIndex) {
             if (tourProps.loop) {
@@ -677,7 +751,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           }
         } else if (state.mode === 'stopping') {
           // Once in stopping mode, do not advance indices on the coarse arrival threshold.
-          state.targetIndex = endIndex
+          state.targetIndex = typeof state.dockStopIndex === 'number' ? Math.floor(state.dockStopIndex) : endIndex
         }
 
         // Keep cache metadata in sync.
@@ -704,17 +778,40 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state,
           modeStopping: isStopping,
           distanceToTarget: distance,
+          stopIndex: isStopping
+            ? (typeof state.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex)
+              ? Math.floor(state.dockStopIndex)
+              : endIndex)
+            : undefined,
         })
         if (isStopping && result.reachedStop) {
-          state.mode = 'stopped'
-          finalizeTourTerminalStop({
-            nodeId: node.id,
-            reason: 'vehicle-reached-stop',
-            key,
-            state,
-            tourProps,
-            pursuitProps,
-          })
+          const stopIndex = typeof state.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex)
+            ? Math.floor(state.dockStopIndex)
+            : endIndex
+          const isTerminal = !tourProps.loop && stopIndex >= endIndex
+          if (isTerminal) {
+            state.mode = 'stopped'
+            finalizeTourTerminalStop({
+              nodeId: node.id,
+              reason: 'vehicle-reached-stop',
+              key,
+              state,
+              tourProps,
+              pursuitProps,
+            })
+          } else {
+            // Docking stop: request host pause and hold here until resume.
+            state.mode = 'dock-hold'
+            state.dockHoldIndex = stopIndex
+            if (state.dockLatchIndex !== stopIndex) {
+              state.dockLatchIndex = stopIndex
+              try {
+                deps.onDockRequestedPause?.(node.id, { waypointIndex: stopIndex, terminal: false })
+              } catch {
+                // Ignore errors in host callback.
+              }
+            }
+          }
         }
         continue
       }
@@ -726,7 +823,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       autoTourDesiredDir.normalize()
 
-      if (!directMoveVehicle && state.mode === 'stopping') {
+      if (state.mode === 'stopping') {
         // Ease into the final endpoint by smoothing toward the exact target.
         autoTourNextWorldPosition.copy(autoTourPlanarTarget)
       } else {
@@ -798,16 +895,32 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             nodeObject!.position.copy(autoTourPlanarTarget)
           }
           deps.onNodeObjectTransformUpdated?.(node.id, nodeObject!)
-          const before = state.mode
-          state.mode = 'stopped'
-          finalizeTourTerminalStop({
-            nodeId: node.id,
-            reason: 'non-vehicle-snapped-end',
-            key,
-            state,
-            tourProps,
-            pursuitProps,
-          })
+          const stopIndex = typeof state.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex)
+            ? Math.floor(state.dockStopIndex)
+            : endIndex
+          const isTerminal = !tourProps.loop && stopIndex >= endIndex
+          if (isTerminal) {
+            state.mode = 'stopped'
+            finalizeTourTerminalStop({
+              nodeId: node.id,
+              reason: 'non-vehicle-snapped-end',
+              key,
+              state,
+              tourProps,
+              pursuitProps,
+            })
+          } else {
+            state.mode = 'dock-hold'
+            state.dockHoldIndex = stopIndex
+            if (state.dockLatchIndex !== stopIndex) {
+              state.dockLatchIndex = stopIndex
+              try {
+                deps.onDockRequestedPause?.(node.id, { waypointIndex: stopIndex, terminal: false })
+              } catch {
+                // Ignore errors in host callback.
+              }
+            }
+          }
         }
       }
     }
@@ -821,12 +934,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       activeTourNodes.clear()
       disabledTourNodes.clear()
       terminalBrakeHoldNodes.clear()
+      terminalStoppedNodes.clear()
     },
     startTour: (nodeId: string) => {
       if (!nodeId) {
         return
       }
       terminalBrakeHoldNodes.delete(nodeId)
+      terminalStoppedNodes.delete(nodeId)
       disabledTourNodes.delete(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.add(nodeId)
@@ -840,6 +955,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       // Explicit stop should not keep "park" brakes applied forever.
       terminalBrakeHoldNodes.delete(nodeId)
+      terminalStoppedNodes.delete(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.delete(nodeId)
       } else {

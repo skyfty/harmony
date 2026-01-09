@@ -1801,6 +1801,13 @@ const autoTourRuntime = createAutoTourRuntime({
 	vehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
 	requiresExplicitStart: true,
+	onDockRequestedPause: () => {
+		if (autoTourPaused.value) {
+			return
+		}
+		autoTourPaused.value = true
+		applyAutoTourPauseForActiveNodes()
+	},
 	stopNodeMotion: (nodeId) => {
 		const entry = rigidbodyInstances.get(nodeId) ?? null
 		if (!entry) {

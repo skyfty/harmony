@@ -8,6 +8,8 @@ export const GUIDE_ROUTE_COMPONENT_TYPE = 'guideRoute'
 export type GuideRouteWaypoint = {
   name: string
   position: Vector3Like
+  /** When true, AutoTour should pause at this waypoint. */
+  dock?: boolean
 }
 
 export interface GuideRouteComponentProps {
@@ -37,6 +39,7 @@ export function clampGuideRouteComponentProps(props: Partial<GuideRouteComponent
       return {
         name,
         position: clampVector3Like((entry as any).position),
+        dock: (entry as any).dock === true,
       }
     })
     .filter((entry): entry is GuideRouteWaypoint => entry !== null)
@@ -58,6 +61,7 @@ export function cloneGuideRouteComponentProps(props: GuideRouteComponentProps): 
     waypoints: props.waypoints.map((w) => ({
       name: w.name,
       position: { x: w.position.x, y: w.position.y, z: w.position.z },
+      dock: w.dock === true,
     })),
   }
 }

@@ -92,7 +92,7 @@ export type ConvertPlanningToSceneOptions = {
     }) => SceneNode | null
     createGuideRouteNode: (payload: {
       points: Array<{ x: number; y: number; z: number }>
-      waypoints?: Array<{ name?: string }>
+      waypoints?: Array<{ name?: string; dock?: boolean }>
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }) => SceneNode | null
@@ -156,7 +156,7 @@ type PlanningPolylineAny = {
   name?: string
   layerId: string
   points: PlanningPoint[]
-  waypoints?: Array<{ name?: string }>
+  waypoints?: Array<{ name?: string; dock?: boolean }>
   scatter?: unknown
   cornerSmoothness?: unknown
   airWallEnabled?: unknown
@@ -1174,7 +1174,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         const names = Array.isArray(line.waypoints) ? line.waypoints : []
         const points: Array<{ x: number; y: number; z: number }> = []
-        const waypoints: Array<{ name?: string }> = []
+        const waypoints: Array<{ name?: string; dock?: boolean }> = []
         const duplicateEpsilon = 1e-10
 
         for (let i = 0; i < (line.points ?? []).length; i += 1) {
@@ -1194,7 +1194,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           }
 
           points.push({ x: world.x, y, z: world.z })
-          waypoints.push({ name: names[i]?.name })
+          waypoints.push({ name: names[i]?.name, dock: names[i]?.dock === true })
         }
 
         if (points.length < 2) {

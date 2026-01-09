@@ -12875,7 +12875,7 @@ export const useSceneStore = defineStore('scene', {
 
     createGuideRouteNode(payload: {
       points: Vector3Like[]
-      waypoints?: Array<{ name?: string }>
+      waypoints?: Array<{ name?: string; dock?: boolean }>
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
@@ -12910,7 +12910,7 @@ export const useSceneStore = defineStore('scene', {
             const waypoints = build.definition.vertices.map((position: Vector3Like, index: number) => {
               const rawName = (names[index]?.name ?? '').trim()
               const name = rawName.length ? rawName : `P${index + 1}`
-              return { name, position }
+              return { name, position, dock: names[index]?.dock === true }
             })
             this.updateNodeComponentProps(node.id, component.id, { waypoints })
           }
