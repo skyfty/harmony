@@ -202,7 +202,7 @@
           <view class="viewer-drive-start__group">
             <button
               v-if="vehicleDrivePrompt.showDrive"
-              class="viewer-drive-start__text-button"
+              class="viewer-drive-start__btn viewer-drive-start__btn--primary"
               :class="{ 'is-busy': vehicleDrivePrompt.busy }"
               :disabled="vehicleDrivePrompt.busy"
               type="button"
@@ -210,11 +210,11 @@
               aria-label="进入驾驶模式"
               @tap="handleVehicleDrivePromptTap"
             >
-              <text>驾驶 {{ vehicleDrivePrompt.label }}</text>
+              <text class="viewer-drive-start__btn__label">驾驶</text>
             </button>
             <button
               v-if="vehicleDrivePrompt.showAutoTour"
-              class="viewer-drive-start__text-button"
+              class="viewer-drive-start__btn"
               :class="{ 'is-busy': vehicleDrivePrompt.busy }"
               :disabled="vehicleDrivePrompt.busy"
               type="button"
@@ -222,42 +222,44 @@
               aria-label="自动巡游"
               @tap="handleVehicleAutoTourStartTap"
             >
-              <text>自动巡游</text>
+              <text class="viewer-drive-start__btn__label">巡游</text>
             </button>
-            <button
-              v-if="vehicleDrivePrompt.showStopTour"
-              class="viewer-drive-start__text-button viewer-drive-start__text-button--stop"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="停止巡游"
-              @tap="handleVehicleAutoTourStopTap"
-            >
-              <text>停止巡游 {{ vehicleDrivePrompt.label }}</text>
-            </button>
-            <button
-              v-if="vehicleDrivePrompt.showPauseTour"
-              class="viewer-drive-start__text-button viewer-drive-start__text-button--pause"
-              :class="{ 'is-busy': vehicleDrivePrompt.busy }"
-              :disabled="vehicleDrivePrompt.busy"
-              type="button"
-              hover-class="none"
-              aria-label="暂停/继续巡游"
-              @tap="handleVehicleAutoTourPauseToggleTap"
-            >
-              <text>{{ vehicleDrivePrompt.pauseTourLabel }} {{ vehicleDrivePrompt.label }}</text>
-            </button>
-            <!-- Close prompt without entering drive or tour (text button) -->
+
+            <template v-if="vehicleDrivePrompt.showStopTour">
+              <button
+                class="viewer-drive-start__btn viewer-drive-start__btn--pause"
+                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+                :disabled="vehicleDrivePrompt.busy"
+                type="button"
+                hover-class="none"
+                aria-label="暂停巡游"
+                @tap="handleVehicleAutoTourPauseToggleTap"
+                :aria-pressed="autoTourPaused"
+              >
+                  <text class="viewer-drive-start__btn__label">{{ autoTourPaused ? '继续' : '暂停' }}</text>
+              </button>
+              <button
+                class="viewer-drive-start__btn viewer-drive-start__btn--stop"
+                :class="{ 'is-busy': vehicleDrivePrompt.busy }"
+                :disabled="vehicleDrivePrompt.busy"
+                type="button"
+                hover-class="none"
+                aria-label="停止巡游"
+                @tap="handleVehicleAutoTourStopTap"
+              >
+                  <text class="viewer-drive-start__btn__label">停止</text>
+              </button>
+            </template>
+
             <button
               v-if="!vehicleDrivePrompt.showStopTour"
-              class="viewer-drive-start__text-button viewer-drive-start__text-button--close"
+              class="viewer-drive-start__btn viewer-drive-start__btn--close"
               type="button"
               hover-class="none"
               aria-label="关闭"
               @tap="handleVehicleDrivePromptClose"
             >
-              <text>关闭</text>
+              <text class="viewer-drive-start__btn__label">关闭</text>
             </button>
           </view>
         </view>
@@ -3549,6 +3551,41 @@ const autoTourRuntime = createAutoTourRuntime({
     syncInstancedTransform(object);
   },
   requiresExplicitStart: true,
+  onTerminalStop: (nodeId, reason) => {
+    // When a tour reaches the terminal (non-looping) end, keep it parked and
+    // prompt the user to either continue or stop the tour.
+    try {
+      const node = resolveNodeById(nodeId);
+      const label = node?.name?.trim() || nodeId;
+      // Pause the runtime (keep vehicles parked)
+      autoTourPaused.value = true;
+      // Show a modal offering to continue or stop the tour.
+      uni.showModal({
+        title: '巡游已结束',
+        content: `${label} 已到达终点。要继续巡游还是停止巡游？`,
+        confirmText: '继续巡游',
+        cancelText: '停止巡游',
+        success: (res) => {
+          if (res.confirm) {
+            // Resume the tour
+            autoTourPaused.value = false;
+            handleVehicleAutoTourResumeTap({ rotateOnly: false });
+          } else if (res.cancel) {
+            // Stop and unfollow
+            stopTourAndUnfollow(autoTourRuntime, nodeId, (n) => {
+              activeAutoTourNodeIds.delete(n);
+              if (autoTourFollowNodeId.value === n) {
+                autoTourFollowNodeId.value = null;
+              }
+              handleVehicleAutoTourResumeTap({ rotateOnly: true });
+            });
+          }
+        },
+      });
+    } catch (e) {
+      // ignore
+    }
+  },
   stopNodeMotion: (nodeId) => {
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (!entry) {
@@ -8756,6 +8793,45 @@ onUnmounted(() => {
 
 </script>
 
+<style scoped>
+.viewer-drive-start__group > .viewer-drive-start__btn { margin-right: 8px; }
+.viewer-drive-start__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(6,10,24,0.65);
+  color: #fff;
+  font-size: 15px;
+  line-height: 48px;
+}
+.viewer-drive-start__btn__icon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  font-size: 18px;
+}
+.viewer-drive-start__btn__label { display: inline-block; vertical-align: middle; font-size: 15px; color: inherit; transition: opacity .12s ease; }
+.viewer-drive-start__btn--primary { background: linear-gradient(90deg,#28c3ff,#57a6ff); color: #012; border: none; }
+.viewer-drive-start__btn--stop { background: linear-gradient(90deg,#ff6b6b,#ff3b6b); color: #fff; border: none; }
+.viewer-drive-start__btn--pause { background: linear-gradient(90deg,#ffd34d,#ff9a4d); color: #111; border: none; }
+.viewer-drive-start__btn--close { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.08); }
+.viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label { opacity: 0.6; }
+
+/* Small adjustments for very small screens */
+@media (max-width: 320px) {
+  .viewer-drive-start__btn { height: 44px; padding: 0 10px; border-radius: 12px; }
+  .viewer-drive-start__btn__icon { width: 32px; height: 32px; }
+}
+</style>
+
 <style lang="scss">
 :root {
   --viewer-safe-area-top: 0px;
@@ -8821,7 +8897,7 @@ onUnmounted(() => {
 }
 
 .scene-name {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: #1a1a1a;
 }
@@ -9452,12 +9528,6 @@ onUnmounted(() => {
 .viewer-drive-start__panel {
   padding: 10px 12px;
   border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(12, 18, 38, 0.82), rgba(6, 10, 24, 0.66));
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow:
-    0 18px 36px rgba(2, 8, 20, 0.55),
-    inset 0 0 0 1px rgba(120, 160, 255, 0.10);
   backdrop-filter: blur(14px);
 }
 
@@ -10035,5 +10105,63 @@ onUnmounted(() => {
     opacity: 0.65;
     transform: scale(0.94);
   }
+}
+
+/* Drive start buttons: make widths consistent and mobile-friendly */
+.viewer-drive-start__panel {
+  padding: 10px 16px;
+  /* Remove any background/frame coming from global styles */
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  backdrop-filter: none !important;
+}
+.viewer-drive-start__group {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: nowrap; /* keep buttons on one row */
+  -webkit-overflow-scrolling: touch;
+}
+.viewer-drive-start__btn {
+  /* auto-size to content with sensible limits; wrap when needed */
+  flex: 0 1 auto;
+  min-width: 84px;
+  max-width: 320px;
+  height: 52px;
+  padding: 0 18px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 8px 18px rgba(0,0,0,0.28);
+}
+.viewer-drive-start__btn__label {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+.viewer-drive-start__btn--primary {
+  background: linear-gradient(90deg, #2b6ef6, #18c6ff);
+  color: #fff;
+}
+.viewer-drive-start__btn--stop {
+  background: rgba(220, 38, 38, 0.92);
+  color: #fff;
+}
+.viewer-drive-start__btn--close {
+  background: rgba(80,80,80,0.9);
+  color: #fff;
+}
+.viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label,
+.viewer-drive-start__btn.is-busy {
+  opacity: 0.84;
 }
 </style>

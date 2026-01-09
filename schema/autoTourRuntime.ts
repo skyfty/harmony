@@ -43,6 +43,9 @@ export type AutoTourRuntimeDeps = {
   /** Optional callback to stop any node motion instantly (e.g., rigidbody velocity reset). */
   stopNodeMotion?: (nodeId: string) => void
 
+  /** Optional callback invoked when a tour reaches a terminal stop (non-looping end). */
+  onTerminalStop?: (nodeId: string, reason: string) => void
+
   /**
    * When true, auto-tour will only run after calling `startTour(nodeId)`.
    * When false/omitted, enabled AutoTour components will run automatically (legacy behavior).
@@ -186,7 +189,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     
 
     if (requiresExplicitStart) {
-      activeTourNodes.delete(nodeId)
+      // Keep node marked as active so the host UI can offer resume/stop choices.
+      // The node will remain in `activeTourNodes` until explicitly stopped via stopTour().
     } else {
       disabledTourNodes.add(nodeId)
     }
@@ -200,6 +204,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
     // Free cached state; restart will re-init cleanly via startTour().
     clearPlaybackStateForNode(nodeId)
+
+    // Notify host that this node has reached a terminal stop so it can prompt the user.
+    try {
+      deps.onTerminalStop?.(nodeId, reason)
+    } catch {
+      // Ignore errors in host callback.
+    }
   }
 
   function stopVehicleImmediately(nodeId: string): void {
