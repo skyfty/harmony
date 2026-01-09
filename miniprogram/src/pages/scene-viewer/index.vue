@@ -6939,7 +6939,7 @@ function handleVehicleAutoTourPauseToggleTap(): void {
   if (nextPaused) {
     applyAutoTourPauseForActiveNodes();
   }
-  applyAutoTourCameraInputPolicy();
+  // Do not mutate camera when pausing; only stop vehicle motion.
 }
 
 function handleVehicleDriveExitTap(): void {

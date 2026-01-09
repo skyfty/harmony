@@ -546,8 +546,6 @@ const autoTourCameraFollowVelocity = new THREE.Vector3()
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
-let autoTourRotationOnlyHold = false
-let autoTourLastAnyActive = false
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 const vehicleDrivePrompt = computed(() => {
@@ -802,6 +800,7 @@ let mapControls: MapControls | null = null
 let followCameraControlActive = false
 let followCameraControlDirty = false
 let rendererInitialized = false
+let suppressControlModeApply = false
 const MAP_CONTROL_DEFAULTS = {
 	minDistance: 1,
 	maxDistance: 200,
@@ -3202,7 +3201,7 @@ function applyAutoTourCameraInputPolicy(): void {
 	}
 	const anyActive = activeAutoTourNodeIds.size > 0
 	const shouldLock = anyActive && !autoTourPaused.value
-	const shouldRotateOnly = (anyActive && autoTourPaused.value) || (!anyActive && autoTourRotationOnlyHold)
+	const shouldRotateOnly = anyActive && autoTourPaused.value
 
 	if (shouldLock) {
 		setCameraCaging(true, { force: true })
@@ -3231,14 +3230,6 @@ function syncAutoTourCameraInputPolicyForFrame(delta: number): void {
 		autoTourActiveSyncAccumSeconds = 0
 		syncAutoTourActiveNodesFromRuntime(activeAutoTourNodeIds, previewNodeMap.keys(), autoTourRuntime)
 	}
-	const anyActive = activeAutoTourNodeIds.size > 0
-	if (autoTourLastAnyActive && !anyActive) {
-		autoTourRotationOnlyHold = true
-	}
-	if (anyActive) {
-		autoTourRotationOnlyHold = false
-	}
-	autoTourLastAnyActive = anyActive
 	applyAutoTourCameraInputPolicy()
 }
 
@@ -3270,157 +3261,6 @@ function applyMapControlFollowSettings(active: boolean) {
 	mapControls.maxDistance = MAP_CONTROL_DEFAULTS.maxDistance
 }
 
-type PreModeCameraSettingsSnapshot = {
-	hasSnapshot: boolean
-	controlMode: ControlMode
-	isCameraCaged: boolean
-	viewMode: CameraViewMode
-	viewTargetId: string | null
-	mapEnablePan: boolean
-	mapEnableRotate: boolean
-	mapMinDistance: number
-	mapMaxDistance: number
-	cameraFov: number
-	cameraNear: number
-	cameraFar: number
-	cameraZoom: number
-}
-
-type CameraExitPose = {
-	position: THREE.Vector3
-	quaternion: THREE.Quaternion
-	up: THREE.Vector3
-	target: THREE.Vector3
-}
-
-let suppressControlModeApply = false
-
-const preModeCameraSettingsSnapshot: PreModeCameraSettingsSnapshot = {
-	hasSnapshot: false,
-	controlMode: controlMode.value,
-	isCameraCaged: isCameraCaged.value,
-	viewMode: cameraViewState.mode,
-	viewTargetId: cameraViewState.watchTargetId,
-	mapEnablePan: MAP_CONTROL_DEFAULTS.enablePan,
-	mapEnableRotate: true,
-	mapMinDistance: MAP_CONTROL_DEFAULTS.minDistance,
-	mapMaxDistance: MAP_CONTROL_DEFAULTS.maxDistance,
-	cameraFov: 60,
-	cameraNear: 0.1,
-	cameraFar: 2000,
-	cameraZoom: 1,
-}
-
-function capturePreModeCameraSettingsSnapshot(): void {
-	const activeCamera = camera
-	if (!activeCamera) {
-		preModeCameraSettingsSnapshot.hasSnapshot = false
-		return
-	}
-	preModeCameraSettingsSnapshot.hasSnapshot = true
-	preModeCameraSettingsSnapshot.controlMode = controlMode.value
-	preModeCameraSettingsSnapshot.isCameraCaged = isCameraCaged.value
-	preModeCameraSettingsSnapshot.viewMode = cameraViewState.mode
-	preModeCameraSettingsSnapshot.viewTargetId = cameraViewState.watchTargetId
-	preModeCameraSettingsSnapshot.cameraFov = activeCamera.fov
-	preModeCameraSettingsSnapshot.cameraNear = activeCamera.near
-	preModeCameraSettingsSnapshot.cameraFar = activeCamera.far
-	preModeCameraSettingsSnapshot.cameraZoom = activeCamera.zoom
-	if (mapControls) {
-		preModeCameraSettingsSnapshot.mapEnablePan = mapControls.enablePan
-		preModeCameraSettingsSnapshot.mapMinDistance = mapControls.minDistance
-		preModeCameraSettingsSnapshot.mapMaxDistance = mapControls.maxDistance
-		preModeCameraSettingsSnapshot.mapEnableRotate = Boolean((mapControls as any).enableRotate ?? true)
-	} else {
-		preModeCameraSettingsSnapshot.mapEnablePan = MAP_CONTROL_DEFAULTS.enablePan
-		preModeCameraSettingsSnapshot.mapMinDistance = MAP_CONTROL_DEFAULTS.minDistance
-		preModeCameraSettingsSnapshot.mapMaxDistance = MAP_CONTROL_DEFAULTS.maxDistance
-		preModeCameraSettingsSnapshot.mapEnableRotate = true
-	}
-}
-
-function captureCurrentCameraExitPose(): CameraExitPose | null {
-	const activeCamera = camera
-	if (!activeCamera) {
-		return null
-	}
-	const position = activeCamera.position.clone()
-	const quaternion = activeCamera.quaternion.clone()
-	const up = activeCamera.up.clone()
-	const target = mapControls
-		? mapControls.target.clone()
-		: (() => {
-			const direction = new THREE.Vector3()
-			activeCamera.getWorldDirection(direction)
-			return position.clone().addScaledVector(direction, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE)
-		})()
-	return { position, quaternion, up, target }
-}
-
-function restorePreModeCameraSettingsSnapshot(): void {
-	if (!preModeCameraSettingsSnapshot.hasSnapshot) {
-		return
-	}
-	const activeCamera = camera
-	if (!activeCamera) {
-		preModeCameraSettingsSnapshot.hasSnapshot = false
-		return
-	}
-
-	// Restore camera projection settings.
-	const nextFov = preModeCameraSettingsSnapshot.cameraFov
-	const nextNear = preModeCameraSettingsSnapshot.cameraNear
-	const nextFar = preModeCameraSettingsSnapshot.cameraFar
-	const nextZoom = preModeCameraSettingsSnapshot.cameraZoom
-	const projectionDirty =
-		Math.abs(activeCamera.fov - nextFov) > 1e-6
-		|| Math.abs(activeCamera.near - nextNear) > 1e-6
-		|| Math.abs(activeCamera.far - nextFar) > 1e-6
-		|| Math.abs(activeCamera.zoom - nextZoom) > 1e-6
-	activeCamera.fov = nextFov
-	activeCamera.near = nextNear
-	activeCamera.far = nextFar
-	activeCamera.zoom = nextZoom
-	if (projectionDirty) {
-		activeCamera.updateProjectionMatrix()
-	}
-
-	// Restore orbit control settings that driving/touring can mutate.
-	if (mapControls) {
-		mapControls.enablePan = preModeCameraSettingsSnapshot.mapEnablePan
-		;(mapControls as any).enableRotate = preModeCameraSettingsSnapshot.mapEnableRotate
-		mapControls.minDistance = preModeCameraSettingsSnapshot.mapMinDistance
-		mapControls.maxDistance = preModeCameraSettingsSnapshot.mapMaxDistance
-	}
-
-	// Restore view/caging/mode without letting applyControlMode reposition the camera.
-	setCameraViewState(preModeCameraSettingsSnapshot.viewMode, preModeCameraSettingsSnapshot.viewTargetId)
-	setCameraCaging(preModeCameraSettingsSnapshot.isCameraCaged, { force: true })
-	suppressControlModeApply = true
-	try {
-		controlMode.value = preModeCameraSettingsSnapshot.controlMode
-	} finally {
-		suppressControlModeApply = false
-	}
-	updateCameraControlActivation()
-
-	preModeCameraSettingsSnapshot.hasSnapshot = false
-}
-
-function applyExitPose(pose: CameraExitPose | null): void {
-	const activeCamera = camera
-	if (!pose || !activeCamera) {
-		return
-	}
-	activeCamera.up.copy(pose.up)
-	activeCamera.position.copy(pose.position)
-	activeCamera.quaternion.copy(pose.quaternion)
-	activeCamera.updateMatrixWorld(true)
-	if (mapControls) {
-		mapControls.target.copy(pose.target)
-		mapControls.update()
-	}
-}
 
 function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	if (!options.force && vehicleDriveState.active && !enabled) {
@@ -4649,7 +4489,6 @@ function startVehicleDriveMode(
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
 	// Capture camera settings before drive mutates controls/caging/view.
-	capturePreModeCameraSettingsSnapshot()
 	const ctx = camera && renderer
 		? { camera, mapControls: mapControls ?? undefined }
 		: { camera: null as THREE.PerspectiveCamera | null }
@@ -5021,7 +4860,6 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 	vehicleDrivePromptBusy.value = true
 	try {
 		// Capture camera settings before auto-tour mutates controls/caging/view.
-		capturePreModeCameraSettingsSnapshot()
 		autoTourPaused.value = false
 		// Auto tour and manual drive must be mutually exclusive.
 		if (vehicleDriveState.active) {
@@ -5031,7 +4869,6 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
-		autoTourRotationOnlyHold = false
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
@@ -5052,6 +4889,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		}
 	} finally {
 		vehicleDrivePromptBusy.value = false
+		applyAutoTourCameraInputPolicy()
 	}
 }
 
@@ -5095,9 +4933,6 @@ function handleVehicleAutoTourStopClick(): void {
 	vehicleDrivePromptBusy.value = true
 	try {
 		autoTourPaused.value = false
-		// User explicitly stopped the tour: restore the pre-tour camera settings (no rotate-only hold).
-		autoTourRotationOnlyHold = false
-		autoTourLastAnyActive = false
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
@@ -5110,7 +4945,6 @@ function handleVehicleAutoTourStopClick(): void {
 				setCameraViewState('level', null)
 			}
 		})
-		restorePreModeCameraSettingsSnapshot()
 		// Stop-tour should close the prompt and place the camera at the vehicle's left-side exit.
 		pendingVehicleDriveEvent.value = null
 		const aligned = alignCameraToVehicleExitForNode(targetNodeId)
@@ -5187,12 +5021,9 @@ function handleVehicleDriveExitClick(): void {
 		if (!aligned) {
 			appendWarningMessage('Could not find the default exit position; restoring the previous view.')
 		}
-		const exitPose = captureCurrentCameraExitPose()
 		handleHideVehicleCockpitEvent()
 		pendingVehicleDriveEvent.value = null
 		stopVehicleDriveMode({ resolution: { type: 'continue' }, preserveCamera: true })
-		restorePreModeCameraSettingsSnapshot()
-		applyExitPose(exitPose)
 	} finally {
 		vehicleDriveExitBusy.value = false
 	}
@@ -6148,8 +5979,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	}
 	autoTourRuntime.reset()
 	activeAutoTourNodeIds.clear()
-	autoTourRotationOnlyHold = false
-	autoTourLastAnyActive = false
 	autoTourFollowNodeId.value = null
 	resetCameraFollowState(autoTourCameraFollowState)
 	autoTourCameraFollowVelocity.set(0, 0, 0)
