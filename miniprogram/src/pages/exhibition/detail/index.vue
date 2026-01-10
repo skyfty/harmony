@@ -335,7 +335,6 @@ async function publishExhibition(): Promise<void> {
     uni.showToast({ title: getErrorMessage(err), icon: 'none' });
   }
 }
-
 async function withdrawExhibition(): Promise<void> {
   if (!exhibition.value) {
     return;
