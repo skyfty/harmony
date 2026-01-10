@@ -2479,7 +2479,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 :loading="searchLoading"
                 append-inner-icon="mdi-magnify"
                 density="compact"
-                size="small"
                 label="Search..."
                 variant="solo"
                 hide-details
