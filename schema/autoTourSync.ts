@@ -1,5 +1,3 @@
-import type * as THREE from 'three'
-
 export interface AutoTourRuntimeLike {
   isTourActive(nodeId: string): boolean
 }

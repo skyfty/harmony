@@ -3,10 +3,8 @@ import {
   BufferGeometry,
   Color,
   DataTexture,
-  Float32BufferAttribute,
-  LinearFilter,
+  
   RepeatWrapping,
-  MirroredRepeatWrapping,
   NoColorSpace,
   ShaderMaterial,
   Vector2,
@@ -57,140 +55,11 @@ const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
-type PositionAttribute = {
-  count: number
-  getX: (i: number) => number
-  getY: (i: number) => number
-  getZ: (i: number) => number
-}
+// Removed unused PositionAttribute type
 
-function computePositionBounds(positionAttr: PositionAttribute): {
-  min: [number, number, number]
-  max: [number, number, number]
-  size: [number, number, number]
-} | null {
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
+// Removed unused computePositionBounds helper
 
-  for (let i = 0; i < positionAttr.count; i += 1) {
-    const x = positionAttr.getX(i)
-    const y = positionAttr.getY(i)
-    const z = positionAttr.getZ(i)
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      continue
-    }
-    minX = Math.min(minX, x)
-    minY = Math.min(minY, y)
-    minZ = Math.min(minZ, z)
-    maxX = Math.max(maxX, x)
-    maxY = Math.max(maxY, y)
-    maxZ = Math.max(maxZ, z)
-  }
-
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(minZ) || !Number.isFinite(maxX) || !Number.isFinite(maxY) || !Number.isFinite(maxZ)) {
-    return null
-  }
-
-  const sizeX = Math.max(1e-6, maxX - minX)
-  const sizeY = Math.max(1e-6, maxY - minY)
-  const sizeZ = Math.max(1e-6, maxZ - minZ)
-  return {
-    min: [minX, minY, minZ],
-    max: [maxX, maxY, maxZ],
-    size: [sizeX, sizeY, sizeZ],
-  }
-}
-
-function ensurePlanarUVs(geometry: BufferGeometry): void {
-  const positionAttr = geometry.getAttribute('position') as PositionAttribute | null
-  if (!positionAttr || positionAttr.count <= 0) {
-    return
-  }
-
-  const bounds = computePositionBounds(positionAttr)
-  if (!bounds) {
-    return
-  }
-
-  // Choose the two dominant axes as UV plane, so rotated PlaneGeometry (XY) and horizontal ground (XZ)
-  // both get meaningful, continuous UVs.
-  const extents = bounds.size
-  type Axis = 0 | 1 | 2
-  const axes: Axis[] = [0, 1, 2]
-  axes.sort((a, b) => extents[b] - extents[a])
-  const uAxis = axes[0]!
-  const vAxis = axes[1]!
-
-  const uvs = new Float32Array(positionAttr.count * 2)
-  for (let i = 0; i < positionAttr.count; i += 1) {
-    const x = positionAttr.getX(i)
-    const y = positionAttr.getY(i)
-    const z = positionAttr.getZ(i)
-    const coords: [number, number, number] = [x, y, z]
-    const minU = bounds.min[uAxis]
-    const minV = bounds.min[vAxis]
-    const sizeU = bounds.size[uAxis]
-    const sizeV = bounds.size[vAxis]
-    const u = (coords[uAxis] - minU) / sizeU
-    const v = (coords[vAxis] - minV) / sizeV
-    uvs[i * 2 + 0] = Number.isFinite(u) ? u : 0
-    uvs[i * 2 + 1] = Number.isFinite(v) ? v : 0
-  }
-
-  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2))
-}
-
-function ensureFlatNormals(geometry: BufferGeometry): void {
-  const positionAttr = geometry.getAttribute('position') as PositionAttribute | null
-  if (!positionAttr || positionAttr.count <= 0) {
-    return
-  }
-  const bounds = computePositionBounds(positionAttr)
-  if (!bounds) {
-    return
-  }
-
-  // For a planar surface, the axis with the smallest extent corresponds to the local normal axis.
-  const extents = bounds.size
-  let normalAxis = 0
-  if ((extents[1] ?? Number.POSITIVE_INFINITY) < (extents[normalAxis] ?? Number.POSITIVE_INFINITY)) normalAxis = 1
-  if ((extents[2] ?? Number.POSITIVE_INFINITY) < (extents[normalAxis] ?? Number.POSITIVE_INFINITY)) normalAxis = 2
-
-  const normal = new Vector3(
-    normalAxis === 0 ? 1 : 0,
-    normalAxis === 1 ? 1 : 0,
-    normalAxis === 2 ? 1 : 0,
-  )
-
-  // Preserve original normal orientation (sign) if available.
-  const existingNormal = geometry.getAttribute('normal') as { count: number; getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number } | null
-  if (existingNormal && existingNormal.count > 0) {
-    let sumX = 0
-    let sumY = 0
-    let sumZ = 0
-    for (let i = 0; i < existingNormal.count; i += 1) {
-      sumX += existingNormal.getX(i)
-      sumY += existingNormal.getY(i)
-      sumZ += existingNormal.getZ(i)
-    }
-    const avg = new Vector3(sumX, sumY, sumZ)
-    if (avg.lengthSq() > 1e-12 && avg.dot(normal) < 0) {
-      normal.multiplyScalar(-1)
-    }
-  }
-
-  const normals = new Float32Array(positionAttr.count * 3)
-  for (let i = 0; i < positionAttr.count; i += 1) {
-    normals[i * 3 + 0] = normal.x
-    normals[i * 3 + 1] = normal.y
-    normals[i * 3 + 2] = normal.z
-  }
-  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3))
-}
+// Removed unused planar UV / flat normal helpers: ensurePlanarUVs, ensureFlatNormals
 
 function createDefaultNormalTexture(): Texture {
   // Use a small procedural, tileable normal map so the water surface doesn't look flat
@@ -423,13 +292,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     return DEFAULT_WATER_COLOR.clone()
   }
 
-  private resolveMaterialAlpha(material: Material | null): number {
-    if (!material) {
-      return WATER_DEFAULT_ALPHA
-    }
-    const opacity = typeof material.opacity === 'number' ? Math.max(0, Math.min(1, material.opacity)) : WATER_DEFAULT_ALPHA
-    return opacity
-  }
+  // Removed unused resolveMaterialAlpha
 
   private resolveMaterialNormalMap(material: Material | null): Texture | null {
     if (!material) {

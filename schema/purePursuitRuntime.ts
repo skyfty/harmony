@@ -60,7 +60,6 @@ export function applyPurePursuitVehicleControl(params: {
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
   modeStopping: boolean
-  distanceToTarget: number
   /** Optional index to treat as the stopping/docking target (defaults to route end). */
   stopIndex?: number
 }): { reachedStop: boolean } {
@@ -74,7 +73,6 @@ export function applyPurePursuitVehicleControl(params: {
     vehicleProps,
     state,
     modeStopping,
-    distanceToTarget,
     stopIndex,
   } = params
 
@@ -151,7 +149,6 @@ export function applyPurePursuitVehicleControl(params: {
 
   // For auto-tour behavior we prefer stability near the endpoint.
   // Disallow reversing entirely to avoid forward/backward oscillation when the lookahead point ends up behind the vehicle.
-  const reverse = false
   state.reverseActive = false
 
   const crossY = cross.copy(forwardWorld).cross(desiredDir).dot(upAxis)

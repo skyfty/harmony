@@ -330,11 +330,7 @@ const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
 const syncBodyQuaternionHelper = new THREE.Quaternion()
 const bodyQuaternionHelper = new THREE.Quaternion()
-const wallRootPositionHelper = new THREE.Vector3()
-const wallRootQuaternionHelper = new THREE.Quaternion()
-const wallRootQuaternionInverseHelper = new THREE.Quaternion()
-const wallVertexWorldHelper = new THREE.Vector3()
-const wallVertexLocalHelper = new THREE.Vector3()
+// Removed unused wall helper variables to satisfy noUnusedLocals
 const wallAxisXHelper = new THREE.Vector3(1, 0, 0)
 const wallStartHelper = new THREE.Vector3()
 const wallEndHelper = new THREE.Vector3()
@@ -359,24 +355,7 @@ function isWallDynamicMesh(mesh: unknown): mesh is { type: 'Wall' } {
 	return Boolean(typed && typed.type === 'Wall')
 }
 
-function findWallRenderMesh(object: THREE.Object3D): THREE.Mesh | null {
-	let found: THREE.Mesh | null = null
-	object.traverse((child) => {
-		if (found) {
-			return
-		}
-		const candidate = child as unknown as THREE.Mesh
-		if (!candidate || !(candidate as any).isMesh) {
-			return
-		}
-		const userData = (candidate as any).userData as Record<string, unknown> | undefined
-		const dynamicMeshType = typeof userData?.dynamicMeshType === 'string' ? (userData.dynamicMeshType as string) : ''
-		if (candidate.name === 'WallMesh' || dynamicMeshType === 'Wall') {
-			found = candidate
-		}
-	})
-	return found
-}
+// findWallRenderMesh removed (unused)
 
 function resolveWallShape(params: {
 	node: SceneNode

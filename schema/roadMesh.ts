@@ -5,7 +5,6 @@ import polygonClipping from 'polygon-clipping'
 import type {
   Pair as PolygonClippingPair,
   Ring as PolygonClippingRing,
-  Polygon as PolygonClippingPolygon,
   MultiPolygon as PolygonClippingMultiPolygon,
 } from 'polygon-clipping'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
@@ -90,7 +89,6 @@ const ROAD_LANE_LINE_WIDTH = 0.18
 const ROAD_LANE_LINE_DASH_LENGTH = 2.0
 const ROAD_LANE_LINE_GAP_LENGTH = 2.0
 const ROAD_SHOULDER_WIDTH = 0.35
-const ROAD_SHOULDER_GAP = 0.02
 const ROAD_LANE_LINE_OFFSET_Y = 0.002
 const ROAD_SHOULDER_OFFSET_Y = 0.001
 const ROAD_OVERLAY_MIN_WIDTH = 0.01
@@ -730,8 +728,6 @@ function buildOffsetStripGeometry(
   const indices: number[] = []
 
   const center = new THREE.Vector3()
-  const tangent = new THREE.Vector3()
-  const lateral = new THREE.Vector3()
   const left = new THREE.Vector3()
   const right = new THREE.Vector3()
   const leftEdge = new THREE.Vector3()

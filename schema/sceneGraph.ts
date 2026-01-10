@@ -8,9 +8,8 @@ import type {
   SceneJsonExportDocument,
   SceneMaterial,
   SceneNode,
-  SceneNodeComponentMap,
   SceneNodeComponentState,
-  SceneNodeEditorFlags,
+  
   SceneNodeMaterial,
   SceneOutlineMesh,
   SceneOutlineMeshMap,
@@ -26,12 +25,7 @@ import {
   createPrimitiveGeometry,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
-import {
-  GUIDEBOARD_COMPONENT_TYPE,
-  GUIDEBOARD_EFFECT_METADATA_KEY,
-  clampGuideboardComponentProps,
-  cloneGuideboardComponentProps,
-} from './components/definitions/guideboardComponent';
+import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
 import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';

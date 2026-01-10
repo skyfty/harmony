@@ -408,148 +408,9 @@ function clampHeightSeriesSlope(values: number[], minimums: number[], maxDeltaY:
 	return working
 }
 
-type SanitizedRoadSegment = { a: number; b: number; segmentIndex: number }
-type RoadPath = { indices: number[]; closed: boolean }
-type RoadBuildData = { vertexVectors: Array<THREE.Vector3 | null>; paths: RoadPath[] }
-
-function sanitizeRoadVertices(vertices: unknown): Array<THREE.Vector3 | null> {
-	if (!Array.isArray(vertices)) {
-		return []
-	}
-	return vertices.map((entry) => {
-		if (Array.isArray(entry) && entry.length >= 2) {
-			const x = Number(entry[0])
-			const z = Number(entry[1])
-			if (Number.isFinite(x) && Number.isFinite(z)) {
-				return new THREE.Vector3(x, 0, z)
-			}
-			return null
-		}
-		if (entry && typeof entry === 'object') {
-			const source = entry as any
-			const x = typeof source.x === 'number' && Number.isFinite(source.x) ? source.x : null
-			const z = typeof source.z === 'number' && Number.isFinite(source.z) ? source.z : null
-			if (x !== null && z !== null) {
-				return new THREE.Vector3(x, 0, z)
-			}
-		}
-		return null
-	})
-}
-
-function buildAdjacencyMap(segments: SanitizedRoadSegment[]): Map<number, Array<{ neighbor: number; segmentIndex: number }>> {
-	const adjacency = new Map<number, Array<{ neighbor: number; segmentIndex: number }>>()
-	const addEntry = (vertex: number, neighbor: number, segmentIndex: number) => {
-		const existing = adjacency.get(vertex)
-		if (existing) {
-			existing.push({ neighbor, segmentIndex })
-			return
-		}
-		adjacency.set(vertex, [{ neighbor, segmentIndex }])
-	}
-	for (const segment of segments) {
-		addEntry(segment.a, segment.b, segment.segmentIndex)
-		addEntry(segment.b, segment.a, segment.segmentIndex)
-	}
-	adjacency.forEach((entries) => entries.sort((a, b) => a.neighbor - b.neighbor))
-	return adjacency
-}
-
-function collectRoadPaths(
-	adjacency: Map<number, Array<{ neighbor: number; segmentIndex: number }>>,
-	segments: SanitizedRoadSegment[],
-): RoadPath[] {
-	const visited = new Set<number>()
-	const paths: RoadPath[] = []
-
-	const walk = (start: number, preferred?: number): number[] => {
-		const route = [start]
-		let current = start
-		let previous: number | undefined = undefined
-		let nextPreferred = preferred
-		while (true) {
-			const neighbors = adjacency.get(current) ?? []
-			const next = neighbors.find((entry) => entry.neighbor !== previous && !visited.has(entry.segmentIndex))
-				?? (nextPreferred !== undefined
-					? neighbors.find((entry) => entry.neighbor === nextPreferred && !visited.has(entry.segmentIndex))
-					: null)
-			if (!next) {
-				break
-			}
-			visited.add(next.segmentIndex)
-			previous = current
-			current = next.neighbor
-			route.push(current)
-			nextPreferred = undefined
-			if (current === start) {
-				break
-			}
-		}
-		return route
-	}
-
-	const buildPath = (route: number[]): RoadPath | null => {
-		if (route.length < 2) {
-			return null
-		}
-		const closed = route.length > 2 && route[0] === route[route.length - 1]
-		const indices = closed ? route.slice(0, -1) : route.slice()
-		return indices.length >= 2 ? { indices, closed } : null
-	}
-
-	const degrees = new Map<number, number>()
-	adjacency.forEach((entries, vertex) => degrees.set(vertex, entries.length))
-	const endpoints = Array.from(degrees.entries())
-		.filter(([, degree]) => degree === 1)
-		.map(([vertex]) => vertex)
-	for (const endpoint of endpoints) {
-		const route = walk(endpoint)
-		const path = buildPath(route)
-		if (path) {
-			paths.push(path)
-		}
-	}
-	for (const segment of segments) {
-		if (visited.has(segment.segmentIndex)) {
-			continue
-		}
-		const route = walk(segment.a, segment.b)
-		const path = buildPath(route)
-		if (path) {
-			paths.push(path)
-		}
-	}
-	return paths
-}
-
-function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null {
-	const vertexVectors = sanitizeRoadVertices(definition.vertices)
-	if (!vertexVectors.length) {
-		return null
-	}
-	const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
-	const sanitizedSegments: SanitizedRoadSegment[] = []
-	rawSegments.forEach((segment, index) => {
-		if (!segment || typeof segment !== 'object') {
-			return
-		}
-		const a = Math.trunc(Number((segment as any).a))
-		const b = Math.trunc(Number((segment as any).b))
-		if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
-			return
-		}
-		sanitizedSegments.push({ a, b, segmentIndex: index })
-	})
-	if (!sanitizedSegments.length) {
-		return null
-	}
-	const adjacency = buildAdjacencyMap(sanitizedSegments)
-	const paths = collectRoadPaths(adjacency, sanitizedSegments)
-	if (!paths.length) {
-		return null
-	}
-	return { vertexVectors, paths }
-}
+// Removed unused SanitizedRoadSegment type
+// Removed unused road graph helpers: RoadBuildData, sanitizeRoadVertices, buildAdjacencyMap, collectRoadPaths
+// Removed unused `collectRoadBuildData` helper.
 
 type RoadCurveDescriptor = { curve: THREE.Curve<THREE.Vector3> }
 
@@ -568,23 +429,9 @@ function buildRoadCurvesFromGraph(smoothing: number, graph: RoadGraph): RoadCurv
 	return curves
 }
 
-function createRoadCurve(points: THREE.Vector3[], closed: boolean, junctionSmoothing: number): THREE.Curve<THREE.Vector3> {
-	return buildRoadCornerBezierCurvePath(points, closed, junctionSmoothing)
-}
+// createRoadCurve removed (unused)
 
-function buildRoadCurves(smoothing: number, buildData: RoadBuildData): RoadCurveDescriptor[] {
-	const junctionSmoothing = Math.max(0, Math.min(1, Number.isFinite(smoothing) ? smoothing : 0))
-	const curves: RoadCurveDescriptor[] = []
-	for (const path of buildData.paths) {
-		const points = path.indices
-			.map((index) => buildData.vertexVectors[index] ?? null)
-			.filter((p): p is THREE.Vector3 => Boolean(p))
-		if (points.length >= 2) {
-			curves.push({ curve: createRoadCurve(points, path.closed && points.length >= 3, junctionSmoothing) })
-		}
-	}
-	return curves
-}
+// Removed unused `buildRoadCurves` wrapper.
 
 type SmoothedHeightSeriesParams = {
 	curve: THREE.Curve<THREE.Vector3>

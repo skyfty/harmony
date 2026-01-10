@@ -537,25 +537,9 @@ export class VehicleDriveController {
 
     const nodeId = state.nodeId
     const token = state.token
-    const inputSnapshot = {
-      throttle: this.input.throttle,
-      steering: this.input.steering,
-      brake: this.input.brake,
-      flags: { ...this.inputFlags },
-    }
-
     const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
     const chassisBody = instance?.vehicle?.chassisBody ?? null
-    const beforeMotion = chassisBody
-      ? {
-          v: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
-          w: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z },
-          f: chassisBody.force ? { x: chassisBody.force.x, y: chassisBody.force.y, z: chassisBody.force.z } : undefined,
-          t: chassisBody.torque ? { x: chassisBody.torque.x, y: chassisBody.torque.y, z: chassisBody.torque.z } : undefined,
-          sleepState: (chassisBody as any).sleepState,
-        }
-      : null
-
+    // (Removed unused debug snapshots)
     // stopDrive: begin (debug logs removed)
 
     // --- HARD STOP ---

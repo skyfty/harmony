@@ -156,17 +156,7 @@ function findClosestWaypointIndex(points: THREE.Vector3[], position: THREE.Vecto
   return bestIndex
 }
 
-function findNextWaypointIndexByS(waypointS: readonly number[], s: number): number {
-  if (!waypointS.length) {
-    return 0
-  }
-  const safeS = Number.isFinite(s) ? s : 0
-  let index = 0
-  while (index < waypointS.length - 1 && (waypointS[index] ?? 0) < safeS) {
-    index += 1
-  }
-  return Math.max(0, Math.min(waypointS.length - 1, index))
-}
+// helper `findNextWaypointIndexByS` removed — unused
 
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
   const autoTourPlaybackState = new Map<string, AutoTourPlaybackState>()
@@ -207,12 +197,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   function finalizeTourTerminalStop(options: {
     nodeId: string
     reason: string
-    key?: string
     state?: AutoTourPlaybackState
     tourProps: AutoTourComponentProps
-    pursuitProps?: PurePursuitComponentProps
   }): void {
-    const { nodeId, reason, key, state, tourProps, pursuitProps } = options
+    const { nodeId, reason, state, tourProps } = options
     if (tourProps.loop) {
       return
     }
@@ -259,11 +247,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
-    const before = {
-      v: { x: chassisBody.velocity.x, y: chassisBody.velocity.y, z: chassisBody.velocity.z },
-      w: { x: chassisBody.angularVelocity.x, y: chassisBody.angularVelocity.y, z: chassisBody.angularVelocity.z },
-      sleepState: (chassisBody as any).sleepState,
-    }
     // stopVehicleImmediately: begin (debug logs removed)
 
     // Ensure the body is awake while we apply braking/force resets.
@@ -804,10 +787,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
                 finalizeTourTerminalStop({
                   nodeId: node.id,
                   reason: 'direct-move-vehicle-end',
-                  key,
                   state,
                   tourProps,
-                  pursuitProps,
                 })
               }
             } else {
@@ -906,10 +887,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             finalizeTourTerminalStop({
               nodeId: node.id,
               reason: 'vehicle-reached-stop',
-              key,
-              state,
-              tourProps,
-              pursuitProps,
+                state,
+                tourProps,
             })
           } else {
             // Docking stop: request host pause and hold here until resume.
@@ -1016,10 +995,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             finalizeTourTerminalStop({
               nodeId: node.id,
               reason: 'non-vehicle-snapped-end',
-              key,
-              state,
-              tourProps,
-              pursuitProps,
+                state,
+                tourProps,
             })
           } else {
             state.mode = 'dock-hold'
