@@ -12,13 +12,14 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
-import { generateFpsScatterPointsInPolygon } from '@/utils/scatterSampling'
+import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, getPointsBounds, polygonCentroid } from '@/utils/scatterSampling'
 import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
 import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
+
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -465,94 +466,7 @@ function clampFootprintMaxSizeM(
   return Math.min(1000, Math.max(0.01, num))
 }
 
-function estimateFootprintDiagonalM(footprintAreaM2: number, footprintMaxSizeM: number): number {
-  const area = Number.isFinite(footprintAreaM2) ? footprintAreaM2 : 0
-  const maxSide = Number.isFinite(footprintMaxSizeM) ? footprintMaxSizeM : 0
-  if (area <= 0 || maxSide <= 0) {
-    return 0
-  }
-  // Given area = a*b and maxSide = max(a,b), infer the other side and compute diagonal.
-  const otherSide = area / maxSide
-  if (!Number.isFinite(otherSide) || otherSide <= 0) {
-    return 0
-  }
-  return Math.sqrt(maxSide * maxSide + otherSide * otherSide)
-}
 
-function hashSeedFromString(value: string): number {
-  // FNV-1a 32bit
-  let hash = 2166136261
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-function buildRandom(seed: number) {
-  // LCG
-  let s = seed % 2147483647
-  if (s <= 0) s += 2147483646
-  return () => {
-    s = (s * 16807) % 2147483647
-    return (s - 1) / 2147483646
-  }
-}
-
-function getPointsBounds(points: PlanningPoint[]) {
-  if (!points.length) {
-    return null
-  }
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  for (const p of points) {
-    if (!p) continue
-    minX = Math.min(minX, p.x)
-    minY = Math.min(minY, p.y)
-    maxX = Math.max(maxX, p.x)
-    maxY = Math.max(maxY, p.y)
-  }
-  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-    return null
-  }
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    width: maxX - minX,
-    height: maxY - minY,
-  }
-}
-
-function polygonCentroid(points: PlanningPoint[]) {
-  if (points.length < 3) {
-    const bounds = getPointsBounds(points)
-    if (!bounds) return null
-    return { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 }
-  }
-  // Area-weighted centroid (shoelace)
-  let areaTimes2 = 0
-  let cxTimes6 = 0
-  let cyTimes6 = 0
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i]!
-    const b = points[(i + 1) % points.length]!
-    const cross = a.x * b.y - b.x * a.y
-    areaTimes2 += cross
-    cxTimes6 += (a.x + b.x) * cross
-    cyTimes6 += (a.y + b.y) * cross
-  }
-  if (Math.abs(areaTimes2) < 1e-9) {
-    const bounds = getPointsBounds(points)
-    if (!bounds) return null
-    return { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 }
-  }
-  const factor = 1 / (3 * areaTimes2)
-  return { x: cxTimes6 * factor, y: cyTimes6 * factor }
-}
 
 function polygonArea(points: PlanningPoint[]) {
   if (points.length < 3) return 0
@@ -3930,7 +3844,7 @@ async function handleScatterAssetSelect(payload: { asset: ProjectAsset; provider
 
   // If the target already has a density set, try to preserve it; otherwise use a default (green polygons default to lower density)
   const existingDensity = target.shape.scatter?.densityPercent
-  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 19 : 50
+  const defaultDensity = (target.type === 'polygon' && target.layer?.kind === 'green') ? 100 : 50
 
   // Ensure model bounds are cached (may trigger async download/parse) so footprint can be inferred from the bounding box
   await ensureModelBoundsCachedForAsset(payload.asset)

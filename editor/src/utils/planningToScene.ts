@@ -582,19 +582,6 @@ function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatter
   return Math.min(1000, Math.max(0.01, num))
 }
 
-function estimateFootprintDiagonalM(footprintAreaM2: number, footprintMaxSizeM: number): number {
-  const area = Number.isFinite(footprintAreaM2) ? footprintAreaM2 : 0
-  const maxSide = Number.isFinite(footprintMaxSizeM) ? footprintMaxSizeM : 0
-  if (area <= 0 || maxSide <= 0) {
-    return 0
-  }
-  const otherSide = area / maxSide
-  if (!Number.isFinite(otherSide) || otherSide <= 0) {
-    return 0
-  }
-  return Math.sqrt(maxSide * maxSide + otherSide * otherSide)
-}
-
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
   options.onProgress?.({ step, progress: clampProgress(progress) })
 }
@@ -660,9 +647,6 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
   }
-
-  // 3) Sync runtime so the viewport reflects the removals immediately.
-  await sceneStore.refreshRuntimeState({ showOverlay: false, refreshViewport: true })
 }
 
 function layerKindFromId(layerId: string): LayerKind | null {
@@ -1923,8 +1907,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Ensure runtime objects/components are synced so the converted content shows up immediately.
   // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
   emitProgress(options, 'Refreshing scene…', 98)
-
-  await sceneStore.refreshRuntimeState({ showOverlay: false, refreshViewport: true })
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }
