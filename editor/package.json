@@ -11,6 +11,7 @@
   "dependencies": {
     "@harmony/schema": "file:../schema",
     "@mdi/font": "^7.4.47",
+    "@rollup/plugin-replace": "^6.0.3",
     "@types/three": "^0.171.0",
     "@vueuse/core": "^13.9.0",
     "cannon-es": "^0.20.0",
@@ -22,12 +23,12 @@
     "three": "^0.172.0",
     "three-mesh-bvh": "^0.9.1",
     "three-viewport-gizmo": "^2.2.0",
+    "v-viewer": "^3.0.0",
+    "viewerjs": "^1.11.6",
     "vue": "^3.5.13",
     "vue-router": "^4.5.1",
     "vuetify": "^3.10.5",
-    "vuetify_densest": "^0.1.2",
-    "v-viewer": "^3.0.0",
-    "viewerjs": "^1.11.6"
+    "vuetify_densest": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

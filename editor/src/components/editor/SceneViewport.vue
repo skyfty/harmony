@@ -8362,17 +8362,17 @@ defineExpose<SceneViewportHandle>({
 
 .viewport-canvas.cursor-wall,
 .viewport-canvas.cursor-wall:active {
-  cursor: url('/cursors/wall.cur'), url('/cursors/wall.png') 16 16, crosshair !important;
+  cursor: crosshair !important;
 }
 
 .viewport-canvas.cursor-road,
 .viewport-canvas.cursor-road:active {
-  cursor: url('/cursors/road.cur'), url('/cursors/road.png') 16 16, cell !important;
+  cursor: cell !important;
 }
 
 .viewport-canvas.cursor-floor,
 .viewport-canvas.cursor-floor:active {
-  cursor: url('/cursors/floor.cur'), url('/cursors/floor.png') 16 16, copy !important;
+  cursor: copy !important;
 }
 
 .protagonist-preview {
