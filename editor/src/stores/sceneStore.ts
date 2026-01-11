@@ -401,6 +401,15 @@ const HISTORY_LIMIT = 50
 // Module-scoped because the editor typically has a single scene store instance.
 let historyCaptureSuppressionDepth = 0
 
+// Used to suppress scene patch version bumps during bulk operations.
+// Prevents repeated viewport refreshes when creating/moving many nodes.
+let scenePatchSuppressionDepth = 0
+let pendingSceneGraphStructureVersionBump = false
+let pendingSceneNodePropertyVersionBump = false
+let pendingSuppressedScenePatchRequiresFullSync = false
+
+const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
+
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
 function normalizeRemoteCandidate(value: string | null | undefined): string | null {
@@ -7627,21 +7636,84 @@ export const useSceneStore = defineStore('scene', {
   },
   actions: {
 
-    queueSceneStructurePatch(reason?: string): boolean {
-      const entry: ScenePatch = { type: 'structure', reason }
-      const existing = this.pendingScenePatches
-      const hasStructure = existing.some((patch) => patch.type === 'structure')
-      if (hasStructure) {
-        this.pendingScenePatches = [entry]
-      } else {
-        this.pendingScenePatches = [entry]
+    beginScenePatchSuppression() {
+      scenePatchSuppressionDepth += 1
+    },
+
+    endScenePatchSuppression() {
+      scenePatchSuppressionDepth = Math.max(0, scenePatchSuppressionDepth - 1)
+      if (scenePatchSuppressionDepth > 0) {
+        return
+      }
+
+      const shouldBumpStructure = pendingSceneGraphStructureVersionBump || pendingSuppressedScenePatchRequiresFullSync
+      const shouldBumpNode = pendingSceneNodePropertyVersionBump
+      pendingSceneGraphStructureVersionBump = false
+      pendingSceneNodePropertyVersionBump = false
+
+      if (pendingSuppressedScenePatchRequiresFullSync) {
+        pendingSuppressedScenePatchRequiresFullSync = false
+        this.pendingScenePatches = [{ type: 'structure', reason: 'scenePatchSuppressionFlush' }]
+      }
+
+      if (shouldBumpStructure) {
+        this.sceneGraphStructureVersion += 1
+        this.sceneNodePropertyVersion += 1
+        return
+      }
+
+      if (shouldBumpNode) {
+        this.sceneNodePropertyVersion += 1
+      }
+    },
+
+    async withScenePatchesSuppressed<T>(fn: () => Promise<T> | T): Promise<T> {
+      this.beginScenePatchSuppression()
+      try {
+        return await fn()
+      } finally {
+        this.endScenePatchSuppression()
+      }
+    },
+
+    bumpSceneNodePropertyVersion() {
+      if (scenePatchSuppressionDepth > 0) {
+        pendingSceneNodePropertyVersionBump = true
+        return
+      }
+      this.sceneNodePropertyVersion += 1
+    },
+
+    bumpSceneGraphStructureVersion() {
+      if (scenePatchSuppressionDepth > 0) {
+        pendingSceneGraphStructureVersionBump = true
+        pendingSceneNodePropertyVersionBump = true
+        return
       }
       this.sceneGraphStructureVersion += 1
       this.sceneNodePropertyVersion += 1
+    },
+
+    queueSceneStructurePatch(reason?: string): boolean {
+      if (scenePatchSuppressionDepth > 0) {
+        pendingSuppressedScenePatchRequiresFullSync = true
+        this.bumpSceneGraphStructureVersion()
+        return true
+      }
+
+      const entry: ScenePatch = { type: 'structure', reason }
+      this.pendingScenePatches = [entry]
+      this.bumpSceneGraphStructureVersion()
       return true
     },
 
     queueSceneRemovePatch(ids: string[], reason?: string): boolean {
+      if (scenePatchSuppressionDepth > 0) {
+        pendingSuppressedScenePatchRequiresFullSync = true
+        this.bumpSceneGraphStructureVersion()
+        return true
+      }
+
       if (!Array.isArray(ids) || ids.length === 0) {
         return false
       }
@@ -7660,8 +7732,7 @@ export const useSceneStore = defineStore('scene', {
       const existing = this.pendingScenePatches
       if (existing.some((patch) => patch.type === 'structure')) {
         // A structure reconcile is already pending; no need to queue incremental removes.
-        this.sceneGraphStructureVersion += 1
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneGraphStructureVersion()
         return true
       }
 
@@ -7684,8 +7755,7 @@ export const useSceneStore = defineStore('scene', {
       next.push({ type: 'remove', ids: Array.from(mergedIds), reason })
 
       this.pendingScenePatches = next
-      this.sceneGraphStructureVersion += 1
-      this.sceneNodePropertyVersion += 1
+      this.bumpSceneGraphStructureVersion()
       return true
     },
 
@@ -7703,12 +7773,20 @@ export const useSceneStore = defineStore('scene', {
       if (!requested.length) {
         return false
       }
+
+      if (scenePatchSuppressionDepth > 0) {
+        pendingSuppressedScenePatchRequiresFullSync = true
+        if (bumpVersion) {
+          this.bumpSceneNodePropertyVersion()
+        }
+        return true
+      }
       const existing = this.pendingScenePatches
       if (existing.some((patch) => patch.type === 'structure')) {
         // A structure reconcile is already pending.
         // Still bump version so consumers (viewport/overlays) can refresh from latest store state.
         if (bumpVersion) {
-          this.sceneNodePropertyVersion += 1
+          this.bumpSceneNodePropertyVersion()
         }
         return true
       }
@@ -7736,7 +7814,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.pendingScenePatches = next
       if (bumpVersion) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
       return true
     },
@@ -8352,7 +8430,7 @@ export const useSceneStore = defineStore('scene', {
         patchQueued = this.queueSceneNodePatch(node.id, ['groupExpanded'], { bumpVersion: false }) || patchQueued
       })
       if (patchQueued) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
       if (selectionNeedsNormalization) {
         this.setSelection([...this.selectedNodeIds])
@@ -8590,7 +8668,7 @@ export const useSceneStore = defineStore('scene', {
           this.queueSceneNodePatch(update.id, ['transform'], { bumpVersion: false }) || patchQueued
       })
       if (patchQueued) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
       if (scaleRefreshTargets.size) {
         scaleRefreshTargets.forEach((id) => {
@@ -9475,7 +9553,7 @@ export const useSceneStore = defineStore('scene', {
         patchQueued = this.queueSceneNodePatch(node.id, ['materials'], { bumpVersion: false }) || patchQueued
       })
       if (patchQueued) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
       return true
     },
@@ -9530,7 +9608,7 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (result.queuedRuntimeRefreshPatches) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
     },
 
@@ -11415,7 +11493,7 @@ export const useSceneStore = defineStore('scene', {
         patchQueued = this.queueSceneNodePatch(adjustment.id, ['transform'], { bumpVersion: false }) || patchQueued
       })
       if (patchQueued) {
-        this.sceneNodePropertyVersion += 1
+        this.bumpSceneNodePropertyVersion()
       }
       if (options.commit) {
         commitSceneSnapshot(this)
@@ -11425,12 +11503,13 @@ export const useSceneStore = defineStore('scene', {
 
     recenterGroupAncestry(
       startGroupId: string | null,
-      options: { captureHistory?: boolean; parentMap?: Map<string, string | null> } = {},
+      options: { captureHistory?: boolean; parentMap?: Map<string, string | null>; skipIds?: string[] } = {},
     ) {
       if (!startGroupId) {
         return false
       }
       const parentMap = options.parentMap ?? buildParentMap(this.nodes)
+      const skipSet = new Set(Array.isArray(options.skipIds) ? options.skipIds : [])
       const visited = new Set<string>()
       let current: string | null = startGroupId
       let changed = false
@@ -11441,13 +11520,21 @@ export const useSceneStore = defineStore('scene', {
         if (visited.has(current)) {
           break
         }
-        const recentered = this.recenterGroupNode(current, {
-          captureHistory: captureFirst && isFirst,
-          commit: false,
-          parentMap,
-        })
-        if (recentered) {
-          changed = true
+
+        const currentNode = findNodeById(this.nodes, current)
+        const currentUserData = currentNode?.userData as Record<string, unknown> | null | undefined
+        if (currentUserData?.[PLANNING_CONVERSION_ROOT_TAG] === true) {
+          break
+        }
+        if (!skipSet.has(current)) {
+          const recentered = this.recenterGroupNode(current, {
+            captureHistory: captureFirst && isFirst,
+            commit: false,
+            parentMap,
+          })
+          if (recentered) {
+            changed = true
+          }
         }
         visited.add(current)
         current = parentMap.get(current) ?? null
@@ -11503,7 +11590,12 @@ export const useSceneStore = defineStore('scene', {
       return allowsChildNodes(node)
     },
 
-    moveNode(payload: { nodeId: string; targetId: string | null; position: HierarchyDropPosition }) {
+    moveNode(payload: {
+      nodeId: string
+      targetId: string | null
+      position: HierarchyDropPosition
+      recenterSkipGroupIds?: string[]
+    }) {
       const { nodeId, targetId, position } = payload
       if (!nodeId) return false
       if (targetId && nodeId === targetId) return false
@@ -11639,12 +11731,24 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistoryEntry({ kind: 'batch', entries: batchEntries })
 
       this.nodes = tree
+
+      // Ensure viewport/overlays can update topology even when group recentering is skipped.
+      this.queueSceneNodePatch(nodeId, ['transform'])
+
       const postMoveParentMap = buildParentMap(this.nodes)
       if (oldParentId) {
-        this.recenterGroupAncestry(oldParentId, { captureHistory: false, parentMap: postMoveParentMap })
+        this.recenterGroupAncestry(oldParentId, {
+          captureHistory: false,
+          parentMap: postMoveParentMap,
+          skipIds: payload.recenterSkipGroupIds,
+        })
       }
       if (newParentId && newParentId !== oldParentId) {
-        this.recenterGroupAncestry(newParentId, { captureHistory: false, parentMap: postMoveParentMap })
+        this.recenterGroupAncestry(newParentId, {
+          captureHistory: false,
+          parentMap: postMoveParentMap,
+          skipIds: payload.recenterSkipGroupIds,
+        })
       }
       commitSceneSnapshot(this)
       return true
