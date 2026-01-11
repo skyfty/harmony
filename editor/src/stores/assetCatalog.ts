@@ -1,6 +1,7 @@
 import { resourceProviders } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import { getKnownExtensionFromFilename, normalizeExtension } from '@harmony/schema'
 
 export interface AssetCategoryDefinition {
   key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'hdri'| 'others'
@@ -107,23 +108,16 @@ export function cloneAssetList(list: ProjectAsset[]): ProjectAsset[] {
   return list.map((asset) => ({ ...asset }))
 }
 
-function extractExtension(value: string | null | undefined): string | null {
-  if (!value) {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  const withoutFragment = trimmed.split(/[?#]/)[0] ?? trimmed
-  const match = /\.([a-z0-9]+)$/i.exec(withoutFragment)
-  return match ? match[1]!.toLowerCase() : null
-}
+const KNOWN_CATEGORY_EXTENSIONS = Array.from(
+  new Set(
+    ASSET_CATEGORY_CONFIG.flatMap((category) => category.extensions.map((extension) => normalizeExtension(extension))),
+  ),
+).filter((extension): extension is string => Boolean(extension))
 
 function inferAssetExtension(asset: ProjectAsset): string | null {
   const candidates: Array<string | null | undefined> = [asset.downloadUrl, asset.description, asset.id, asset.thumbnail]
   for (const candidate of candidates) {
-    const extension = extractExtension(candidate)
+    const extension = getKnownExtensionFromFilename(candidate, KNOWN_CATEGORY_EXTENSIONS)
     if (extension) {
       return extension
     }

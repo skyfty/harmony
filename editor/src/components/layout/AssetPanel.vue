@@ -21,8 +21,9 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { assetProvider } from '@/resources/projectProviders/asset'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
-import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import { dataUrlToBlob } from '@/utils/blob'
 import type { SceneNode } from '@harmony/schema'
+import { getExtensionFromMimeType, inferAssetType } from '@harmony/schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -1519,96 +1520,6 @@ function extractSceneNodeDragId(event: DragEvent): string | null {
   return null
 }
 
-function assetTypeFromMimeType(mime: string | null | undefined): ProjectAsset['type'] | null {
-  if (!mime) {
-    return null
-  }
-  const normalized = mime.toLowerCase()
-  if (normalized.startsWith('image/')) {
-    return 'image'
-  }
-  if (normalized.startsWith('model/')) {
-    return 'model'
-  }
-  if (normalized.includes('gltf') || normalized.includes('fbx') || normalized.includes('obj') || normalized.includes('stl')) {
-    return 'model'
-  }
-  if (normalized.includes('ktx') || normalized.includes('texture') || normalized.includes('dds') || normalized.includes('tga')) {
-    return 'texture'
-  }
-  if (normalized.includes('material')) {
-    return 'material'
-  }
-  return null
-}
-
-const EXTENSION_TYPE_MAP: Map<string, ProjectAsset['type']> = new Map([
-  ['jpg', 'image'],
-  ['jpeg', 'image'],
-  ['png', 'image'],
-  ['gif', 'image'],
-  ['webp', 'image'],
-  ['bmp', 'image'],
-  ['svg', 'image'],
-  ['tiff', 'image'],
-  ['ico', 'image'],
-  ['ktx', 'texture'],
-  ['ktx2', 'texture'],
-  ['dds', 'texture'],
-  ['tga', 'texture'],
-  ['gltf', 'model'],
-  ['glb', 'model'],
-  ['fbx', 'model'],
-  ['obj', 'model'],
-  ['stl', 'model'],
-  ['prefab', 'prefab'],
-  ['mtl', 'material'],
-  ['hdr', 'hdri'],
-  ['exr', 'hdri'],
-])
-
-function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
-  if (!extension) {
-    return null
-  }
-  const normalized = extension.replace(/^[.]/, '').toLowerCase()
-  return EXTENSION_TYPE_MAP.get(normalized) ?? null
-}
-
-function inferAssetTypeFromFile(file: File, options: { fallbackType?: ProjectAsset['type'] } = {}): ProjectAsset['type'] {
-  const mimeType = file.type ?? null
-  const mimeTypeResult = assetTypeFromMimeType(mimeType)
-  if (mimeTypeResult) {
-    return mimeTypeResult
-  }
-  const extension = extractExtension(file.name ?? '')
-  const extensionResult = inferAssetTypeFromExtension(extension)
-  if (extensionResult) {
-    return extensionResult
-  }
-  return options.fallbackType ?? 'file'
-}
-
-function inferAssetTypeFromUrl(url: string): ProjectAsset['type'] {
-  const trimmed = url.trim()
-  if (trimmed.startsWith('data:')) {
-    const mimeMatch = /^data:([^;,]+);/i.exec(trimmed)
-    if (mimeMatch) {
-      const mimeType = mimeMatch[1]?.toLowerCase() ?? null
-      const inferred = assetTypeFromMimeType(mimeType)
-      if (inferred) {
-        return inferred
-      }
-    }
-    return 'file'
-  }
-  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
-  const extensionResult = inferAssetTypeFromExtension(extension)
-  if (extensionResult) {
-    return extensionResult
-  }
-  return 'file'
-}
 
 const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   model: '#455A64',
@@ -1649,38 +1560,6 @@ function getDroppedFiles(dataTransfer: DataTransfer): File[] {
   return files
 }
 
-function extensionFromMimeType(mime: string | null | undefined): string | null {
-  if (!mime) {
-    return null
-  }
-  const mapping: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-    'image/bmp': 'bmp',
-    'image/svg+xml': 'svg',
-    'image/tiff': 'tiff',
-    'image/x-icon': 'ico',
-    'model/gltf+json': 'gltf',
-    'model/gltf-binary': 'glb',
-    'model/obj': 'obj',
-    'model/stl': 'stl',
-    'application/octet-stream': 'bin',
-  }
-  if (mapping[mime]) {
-    return mapping[mime]
-  }
-  const imageMatch = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
-  if (imageMatch) {
-    return imageMatch[1]!.toLowerCase()
-  }
-  const modelMatch = /^model\/([a-z0-9.+-]+)$/i.exec(mime)
-  if (modelMatch) {
-    return modelMatch[1]!.toLowerCase()
-  }
-  return null
-}
 
 function normalizeRemoteUrl(url: string): string {
   return url.trim()
@@ -1725,11 +1604,8 @@ function isLikelyImageUrl(url: string): boolean {
   if (!/^https?:\/\//i.test(trimmed)) {
     return false
   }
-  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
-  if (!extension) {
-    return true
-  }
-  return (inferAssetTypeFromExtension(extension) ?? null) === 'image'
+  const inferred = inferAssetType({ nameOrUrl: trimmed, fallbackType: 'file' })
+  return inferred === 'image'
 }
 
 function extractAssetUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] {
@@ -1788,7 +1664,7 @@ async function importLocalFile(
   file: File,
   options: { displayName?: string; type?: ProjectAsset['type'] } = {},
 ): Promise<ProjectAsset> {
-  const type = options.type ?? inferAssetTypeFromFile(file)
+  const type = options.type ?? inferAssetType({ mimeType: file.type ?? null, nameOrUrl: file.name ?? null, fallbackType: 'file' })
   const fallbackName = options.displayName ?? (file.name && file.name.trim().length ? file.name : 'Dropped Asset')
   const { asset } = await sceneStore.ensureLocalAssetFromFile(file, {
     type,
@@ -1803,8 +1679,8 @@ async function importLocalFile(
 async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
   const blob = dataUrlToBlob(dataUrl)
   const mimeType = blob.type && blob.type.length ? blob.type : 'application/octet-stream'
-  const extension = extensionFromMimeType(mimeType) ?? 'bin'
-  const type = assetTypeFromMimeType(mimeType) ?? inferAssetTypeFromExtension(extension) ?? 'file'
+  const extension = getExtensionFromMimeType(mimeType) ?? 'bin'
+  const type = inferAssetType({ mimeType, nameOrUrl: `pasted.${extension}`, fallbackType: 'file' })
   const fileName = `pasted-asset-${Date.now().toString(36)}.${extension}`
   const file = new File([blob], fileName, { type: mimeType })
   return importLocalFile(file, { displayName: fileName, type })
@@ -1812,7 +1688,7 @@ async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
 
 function importRemoteAssetFromUrl(url: string): ProjectAsset {
   const normalizedUrl = normalizeRemoteUrl(url)
-  const assetType = inferAssetTypeFromUrl(normalizedUrl)
+  const assetType = inferAssetType({ nameOrUrl: normalizedUrl, fallbackType: 'file' })
   const name = deriveAssetNameFromUrl(normalizedUrl)
   const asset: ProjectAsset = {
     id: normalizedUrl,

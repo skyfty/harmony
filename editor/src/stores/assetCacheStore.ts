@@ -4,6 +4,7 @@ import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { extractExtension } from '@/utils/blob'
 import { invalidateModelObject } from '@schema/modelObjectCache'
+import { isImageLikeExtension } from '@harmony/schema'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
 
@@ -28,22 +29,6 @@ interface FetchedAssetData {
   contentType: string | null
   filename: string | null
 }
-
-const IMAGE_FILE_EXTENSIONS = new Set<string>([
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'bmp',
-  'tif',
-  'tiff',
-  'svg',
-  'avif',
-  'ico',
-  'heic',
-  'heif',
-])
 
 function sanitizeUrlCandidate(url: string | null | undefined): string | null {
   if (!url) {
@@ -72,7 +57,7 @@ function isLikelyImageAssetUrl(url: string | null | undefined): boolean {
   if (!extension) {
     return true
   }
-  return IMAGE_FILE_EXTENSIONS.has(extension)
+  return isImageLikeExtension(extension)
 }
 
 function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {

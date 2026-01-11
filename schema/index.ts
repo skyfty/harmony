@@ -64,6 +64,8 @@ export {
   type AssetType,
 } from './asset-types'
 
+export * from './assetTypeConversion'
+
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 

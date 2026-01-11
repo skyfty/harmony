@@ -93,6 +93,7 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
+import { getAssetTypeFromCategoryIdSuffix, inferAssetTypeOrNull } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
@@ -412,38 +413,6 @@ const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
-const PREFAB_DEPENDENCY_EXTENSION_TYPE_MAP: Map<string, ProjectAsset['type']> = new Map([
-  ['jpg', 'image'],
-  ['jpeg', 'image'],
-  ['png', 'image'],
-  ['gif', 'image'],
-  ['webp', 'image'],
-  ['bmp', 'image'],
-  ['svg', 'image'],
-  ['tiff', 'image'],
-  ['ico', 'image'],
-  ['ktx', 'texture'],
-  ['ktx2', 'texture'],
-  ['dds', 'texture'],
-  ['tga', 'texture'],
-  ['gltf', 'model'],
-  ['glb', 'model'],
-  ['fbx', 'model'],
-  ['obj', 'model'],
-  ['stl', 'model'],
-  ['prefab', 'prefab'],
-  ['mtl', 'material'],
-  ['material', 'material'],
-  ['mat', 'material'],
-  ['hdr', 'hdri'],
-  ['exr', 'hdri'],
-  ['mp4', 'video'],
-  ['mov', 'video'],
-  ['webm', 'video'],
-  ['mkv', 'video'],
-  ['avi', 'video'],
-])
-
 const PREFAB_DEPENDENCY_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   model: '#455A64',
   image: '#5E35B1',
@@ -457,44 +426,13 @@ const PREFAB_DEPENDENCY_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   hdri: '#0097A7',
 }
 
-function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
-  if (!extension) {
-    return null
-  }
-  const normalized = extension.replace(/^[.]/, '').toLowerCase()
-  return PREFAB_DEPENDENCY_EXTENSION_TYPE_MAP.get(normalized) ?? null
-}
 
-function inferAssetTypeFromUrlOrId(candidate: string | null | undefined): ProjectAsset['type'] | null {
-  if (!candidate) {
-    return null
+function inferPrefabDependencyAssetType(options: { nameOrUrl?: string | null; categoryId?: string | null }): ProjectAsset['type'] {
+  const inferred = inferAssetTypeOrNull({ nameOrUrl: options?.nameOrUrl ?? null, mimeType: null })
+  if (inferred) {
+    return inferred
   }
-  const trimmed = candidate.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  if (trimmed.startsWith('data:')) {
-    return 'file'
-  }
-  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
-  return inferAssetTypeFromExtension(extension)
-}
-
-function inferAssetTypeFromCategoryId(categoryId: string | null | undefined): ProjectAsset['type'] | null {
-  if (!categoryId) {
-    return null
-  }
-  const normalized = categoryId.toLowerCase()
-  if (normalized.endsWith('-models')) return 'model'
-  if (normalized.endsWith('-meshes')) return 'mesh'
-  if (normalized.endsWith('-images')) return 'image'
-  if (normalized.endsWith('-textures')) return 'texture'
-  if (normalized.endsWith('-materials')) return 'material'
-  if (normalized.endsWith('-behaviors')) return 'behavior'
-  if (normalized.endsWith('-prefabs')) return 'prefab'
-  if (normalized.endsWith('-videos')) return 'video'
-  if (normalized.endsWith('-hdri')) return 'hdri'
-  return null
+  return getAssetTypeFromCategoryIdSuffix(options?.categoryId ?? null) ?? 'file'
 }
 
 function resolvePreviewColorForAssetType(type: ProjectAsset['type']): string {
@@ -10428,10 +10366,10 @@ export const useSceneStore = defineStore('scene', {
           const source = indexEntry?.source
 
           const inferredUrl = resolveAssetDownloadUrl(assetId, indexEntry, null, mergedPackageMap)
-          const inferredType =
-            inferAssetTypeFromUrlOrId(inferredUrl ?? assetId)
-            ?? inferAssetTypeFromCategoryId(categoryId)
-            ?? 'file'
+          const inferredType = inferPrefabDependencyAssetType({
+            nameOrUrl: inferredUrl ?? assetId,
+            categoryId: categoryId ?? null,
+          })
 
           const placeholder: ProjectAsset = {
             id: assetId,

@@ -8,6 +8,7 @@ import type {
   SceneSphericalCloudSettings,
   SceneVolumetricCloudSettings,
 } from '@harmony/schema'
+import { isImageLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -369,10 +370,7 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
 }
 
 function isImageExtension(extension: string | null): boolean {
-  if (!extension) {
-    return false
-  }
-  return ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tga', 'gif', 'exr', 'hdr'].includes(extension)
+  return isImageLikeExtension(extension)
 }
 
 function isCubeTextureAsset(asset: ProjectAsset | null): asset is ProjectAsset {
