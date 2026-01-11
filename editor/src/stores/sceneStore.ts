@@ -412,6 +412,159 @@ const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
+const PREFAB_DEPENDENCY_EXTENSION_TYPE_MAP: Map<string, ProjectAsset['type']> = new Map([
+  ['jpg', 'image'],
+  ['jpeg', 'image'],
+  ['png', 'image'],
+  ['gif', 'image'],
+  ['webp', 'image'],
+  ['bmp', 'image'],
+  ['svg', 'image'],
+  ['tiff', 'image'],
+  ['ico', 'image'],
+  ['ktx', 'texture'],
+  ['ktx2', 'texture'],
+  ['dds', 'texture'],
+  ['tga', 'texture'],
+  ['gltf', 'model'],
+  ['glb', 'model'],
+  ['fbx', 'model'],
+  ['obj', 'model'],
+  ['stl', 'model'],
+  ['prefab', 'prefab'],
+  ['mtl', 'material'],
+  ['material', 'material'],
+  ['mat', 'material'],
+  ['hdr', 'hdri'],
+  ['exr', 'hdri'],
+  ['mp4', 'video'],
+  ['mov', 'video'],
+  ['webm', 'video'],
+  ['mkv', 'video'],
+  ['avi', 'video'],
+])
+
+const PREFAB_DEPENDENCY_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
+  model: '#455A64',
+  image: '#5E35B1',
+  texture: '#00897B',
+  material: '#6D4C41',
+  behavior: '#546E7A',
+  prefab: '#7B1FA2',
+  file: '#37474F',
+  video: '#1E88E5',
+  mesh: '#8D6E63',
+  hdri: '#0097A7',
+}
+
+function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
+  if (!extension) {
+    return null
+  }
+  const normalized = extension.replace(/^[.]/, '').toLowerCase()
+  return PREFAB_DEPENDENCY_EXTENSION_TYPE_MAP.get(normalized) ?? null
+}
+
+function inferAssetTypeFromUrlOrId(candidate: string | null | undefined): ProjectAsset['type'] | null {
+  if (!candidate) {
+    return null
+  }
+  const trimmed = candidate.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  if (trimmed.startsWith('data:')) {
+    return 'file'
+  }
+  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
+  return inferAssetTypeFromExtension(extension)
+}
+
+function inferAssetTypeFromCategoryId(categoryId: string | null | undefined): ProjectAsset['type'] | null {
+  if (!categoryId) {
+    return null
+  }
+  const normalized = categoryId.toLowerCase()
+  if (normalized.endsWith('-models')) return 'model'
+  if (normalized.endsWith('-meshes')) return 'mesh'
+  if (normalized.endsWith('-images')) return 'image'
+  if (normalized.endsWith('-textures')) return 'texture'
+  if (normalized.endsWith('-materials')) return 'material'
+  if (normalized.endsWith('-behaviors')) return 'behavior'
+  if (normalized.endsWith('-prefabs')) return 'prefab'
+  if (normalized.endsWith('-videos')) return 'video'
+  if (normalized.endsWith('-hdri')) return 'hdri'
+  return null
+}
+
+function resolvePreviewColorForAssetType(type: ProjectAsset['type']): string {
+  return PREFAB_DEPENDENCY_PREVIEW_COLORS[type] ?? PREFAB_DEPENDENCY_PREVIEW_COLORS.file
+}
+
+function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
+  if (!asset) {
+    return false
+  }
+  const name = typeof asset.name === 'string' ? asset.name : ''
+  const id = typeof asset.id === 'string' ? asset.id : ''
+  const nameLooksPlaceholder = name === id || name.trim().length === 0
+  const missingVisuals = !asset.thumbnail
+  return Boolean(asset.gleaned && nameLooksPlaceholder && missingVisuals)
+}
+
+type AssetRegistrationOptions = {
+  categoryIdForAsset: (asset: ProjectAsset) => string
+  sourceForAsset: (asset: ProjectAsset) => AssetSourceMetadata | undefined
+}
+
+function upsertAssetsIntoCatalogAndIndex(
+  currentCatalog: Record<string, ProjectAsset[]>,
+  currentIndex: Record<string, AssetIndexEntry>,
+  assets: ProjectAsset[],
+  options: AssetRegistrationOptions,
+): {
+  nextCatalog: Record<string, ProjectAsset[]>
+  nextIndex: Record<string, AssetIndexEntry>
+  registeredAssets: ProjectAsset[]
+  sourceByAssetId: Record<string, AssetSourceMetadata | undefined>
+} {
+  const nextCatalog: Record<string, ProjectAsset[]> = { ...currentCatalog }
+  const nextIndex: Record<string, AssetIndexEntry> = { ...currentIndex }
+  const registeredAssets: ProjectAsset[] = []
+  const sourceByAssetId: Record<string, AssetSourceMetadata | undefined> = {}
+
+  const seen = new Set<string>()
+  assets.forEach((asset) => {
+    const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
+    if (!assetId || seen.has(assetId)) {
+      return
+    }
+    seen.add(assetId)
+
+    const categoryId = options.categoryIdForAsset(asset)
+    const source = options.sourceForAsset(asset)
+
+    const existingEntry = nextIndex[assetId]
+    if (existingEntry?.categoryId && nextCatalog[existingEntry.categoryId]) {
+      nextCatalog[existingEntry.categoryId] = nextCatalog[existingEntry.categoryId]!.filter((item) => item.id !== assetId)
+    }
+
+    const registeredAsset: ProjectAsset = { ...asset, id: assetId }
+    const currentList = nextCatalog[categoryId] ?? []
+    nextCatalog[categoryId] = [...currentList.filter((item) => item.id !== assetId), registeredAsset]
+
+    nextIndex[assetId] = {
+      categoryId,
+      source,
+    }
+
+    registeredAssets.push(registeredAsset)
+    sourceByAssetId[assetId] = source
+  })
+
+  return { nextCatalog, nextIndex, registeredAssets, sourceByAssetId }
+}
+
 function normalizeRemoteCandidate(value: string | null | undefined): string | null {
   if (!value) {
     return null
@@ -9863,38 +10016,66 @@ export const useSceneStore = defineStore('scene', {
 
       return { asset: registered, isNew: true }
     },
+
+    registerAssets(
+      assets: ProjectAsset[],
+      options: {
+        categoryId?: string | ((asset: ProjectAsset) => string)
+        source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+        commitOptions?: { updateNodes?: boolean }
+      } = {},
+    ): ProjectAsset[] {
+      const normalizedAssets = Array.isArray(assets) ? assets.filter(Boolean) : []
+      if (!normalizedAssets.length) {
+        return []
+      }
+
+      const categoryIdForAsset = (asset: ProjectAsset): string => {
+        if (typeof options.categoryId === 'string' && options.categoryId.trim().length) {
+          return options.categoryId
+        }
+        if (typeof options.categoryId === 'function') {
+          return options.categoryId(asset)
+        }
+        return determineAssetCategoryId(asset)
+      }
+
+      const sourceForAsset = (asset: ProjectAsset): AssetSourceMetadata | undefined => {
+        if (typeof options.source === 'function') {
+          return options.source(asset)
+        }
+        return options.source
+      }
+
+      const { nextCatalog, nextIndex, registeredAssets, sourceByAssetId } = upsertAssetsIntoCatalogAndIndex(
+        this.assetCatalog,
+        this.assetIndex,
+        normalizedAssets,
+        { categoryIdForAsset, sourceForAsset },
+      )
+
+      if (!registeredAssets.length) {
+        return []
+      }
+
+      this.assetCatalog = nextCatalog
+      this.assetIndex = nextIndex
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+
+      registeredAssets.forEach((asset) => {
+        void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
+      })
+
+      return registeredAssets
+    },
+
     registerAsset(
       asset: ProjectAsset,
       options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean } } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
-      const existingEntry = this.assetIndex[asset.id]
-      const nextCatalog: Record<string, ProjectAsset[]> = { ...this.assetCatalog }
-
-      if (existingEntry) {
-        const previousCategoryId = existingEntry.categoryId
-        if (nextCatalog[previousCategoryId]) {
-          nextCatalog[previousCategoryId] = nextCatalog[previousCategoryId]!.filter((item) => item.id !== asset.id)
-        }
-      }
-
-      const registeredAsset: ProjectAsset = { ...asset }
-      const currentList = nextCatalog[categoryId] ?? []
-      nextCatalog[categoryId] = [...currentList.filter((item) => item.id !== registeredAsset.id), registeredAsset]
-
-      this.assetCatalog = nextCatalog
-      this.assetIndex = {
-        ...this.assetIndex,
-        [registeredAsset.id]: {
-          categoryId,
-          source: options.source,
-        },
-      }
-
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      // commitOptions removed (unused)
-      void this.syncAssetPackageMapEntry(registeredAsset, options.source)
-      return registeredAsset
+      const registered = this.registerAssets([asset], { categoryId, source: options.source, commitOptions: options.commitOptions })
+      return registered[0] ?? { ...asset }
     },
     async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {
       if (!this.currentSceneId) {
@@ -10177,7 +10358,12 @@ export const useSceneStore = defineStore('scene', {
     },
     async ensurePrefabDependencies(
       assetIds: string[],
-      options: { providerId?: string | null; prefabAssetIdForDownloadProgress?: string | null } = {},
+      options: {
+        providerId?: string | null
+        prefabAssetIdForDownloadProgress?: string | null
+        prefabAssetIndex?: Record<string, AssetIndexEntry> | null
+        prefabPackageAssetMap?: Record<string, string> | null
+      } = {},
     ) {
       const providerId = options.providerId ?? null
       const prefabProgressKey = typeof options.prefabAssetIdForDownloadProgress === 'string'
@@ -10199,17 +10385,82 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       const missingIds = normalizedIds.filter((assetId) => !this.getAsset(assetId))
 
-      if (missingIds.length && providerId) {
+      const mergedPackageMap: Record<string, string> = {
+        ...(this.packageAssetMap ?? {}),
+        ...(options.prefabPackageAssetMap ?? {}),
+      }
+
+      if (providerId) {
         const providerDirectories = this.packageDirectoryCache[providerId]
         if (providerDirectories?.length) {
-          missingIds.forEach((assetId) => {
+          const providerAssets: ProjectAsset[] = []
+          normalizedIds.forEach((assetId) => {
             const providerAsset = findAssetInTree(providerDirectories, assetId)
-            if (providerAsset) {
-              this.copyPackageAssetToAssets(providerId, providerAsset)
+            if (!providerAsset) {
+              return
+            }
+            const existing = this.getAsset(assetId)
+            if (!existing || isPrefabDependencyPlaceholderAsset(existing)) {
+              providerAssets.push(providerAsset)
             }
           })
-        } else {
+          if (providerAssets.length) {
+            // Register in a batch to avoid repeated tree rebuilds.
+            this.copyPackageAssetsToAssets(providerId, providerAssets)
+          }
+        } else if (missingIds.length) {
           console.warn(`Provider ${providerId} is not loaded; prefab dependencies may be unavailable.`)
+        }
+      }
+
+      // Register placeholders for any remaining dependencies so the Asset panel can display them.
+      const unresolvedIds = normalizedIds.filter((assetId) => !this.getAsset(assetId))
+      if (unresolvedIds.length) {
+        const placeholderAssets: ProjectAsset[] = []
+        const categoryOverrideById: Record<string, string | undefined> = {}
+        const sourceOverrideById: Record<string, AssetSourceMetadata | undefined> = {}
+
+        unresolvedIds.forEach((assetId) => {
+          const indexEntry = (options.prefabAssetIndex && options.prefabAssetIndex[assetId])
+            ? options.prefabAssetIndex[assetId]
+            : this.assetIndex[assetId]
+          const categoryId = typeof indexEntry?.categoryId === 'string' ? indexEntry!.categoryId : undefined
+          const source = indexEntry?.source
+
+          const inferredUrl = resolveAssetDownloadUrl(assetId, indexEntry, null, mergedPackageMap)
+          const inferredType =
+            inferAssetTypeFromUrlOrId(inferredUrl ?? assetId)
+            ?? inferAssetTypeFromCategoryId(categoryId)
+            ?? 'file'
+
+          const placeholder: ProjectAsset = {
+            id: assetId,
+            name: assetId,
+            type: inferredType,
+            downloadUrl: inferredUrl ?? assetId,
+            previewColor: resolvePreviewColorForAssetType(inferredType),
+            thumbnail: null,
+            description: inferredUrl ?? undefined,
+            gleaned: true,
+          }
+
+          placeholderAssets.push(placeholder)
+          if (categoryId) {
+            categoryOverrideById[assetId] = categoryId
+          }
+          if (source) {
+            sourceOverrideById[assetId] = source
+          } else if (providerId) {
+            sourceOverrideById[assetId] = { type: 'package', providerId, originalAssetId: assetId }
+          }
+        })
+
+        if (placeholderAssets.length) {
+          this.registerAssets(placeholderAssets, {
+            categoryId: (asset) => categoryOverrideById[asset.id] ?? determineAssetCategoryId(asset),
+            source: (asset) => sourceOverrideById[asset.id],
+            commitOptions: { updateNodes: false },
+          })
         }
       }
 
@@ -10357,13 +10608,6 @@ export const useSceneStore = defineStore('scene', {
       const dependencyAssetIds = options.dependencyAssetIds ?? collectPrefabAssetReferences(prefab.root)
       const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
       const providerId = options.providerId ?? null
-      if (dependencyAssetIds.length) {
-        await this.ensurePrefabDependencies(dependencyAssetIds, {
-          providerId,
-          prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? null,
-        })
-      }
-
       const prefabAssetIndex = prefab.assetIndex && isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
       const prefabPackageAssetMap = prefab.packageAssetMap && isPackageAssetMap(prefab.packageAssetMap)
         ? prefab.packageAssetMap
@@ -10385,6 +10629,15 @@ export const useSceneStore = defineStore('scene', {
         if (packageMapChanged) {
           this.packageAssetMap = mergedPackageMap
         }
+      }
+
+      if (dependencyAssetIds.length) {
+        await this.ensurePrefabDependencies(dependencyAssetIds, {
+          providerId,
+          prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? null,
+          prefabAssetIndex: prefabAssetIndex ?? null,
+          prefabPackageAssetMap: prefabPackageAssetMap ?? null,
+        })
       }
 
       const assetCache = useAssetCacheStore()
@@ -11025,37 +11278,66 @@ export const useSceneStore = defineStore('scene', {
       return instantiated
     },
     copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
-      const mapKey = `${providerId}::${asset.id}`
-      const existingId = this.packageAssetMap[mapKey]
-      if (existingId) {
-        const existingAsset = this.getAsset(existingId)
-        if (existingAsset) {
-          return existingAsset
-        }
-        const { [mapKey]: _removed, ...rest } = this.packageAssetMap
-        this.packageAssetMap = rest
+      return this.copyPackageAssetsToAssets(providerId, [asset])[0] ?? asset
+    },
+
+    copyPackageAssetsToAssets(providerId: string, assets: ProjectAsset[]): ProjectAsset[] {
+      const normalized = Array.isArray(assets)
+        ? assets
+            .filter((asset) => asset && typeof asset.id === 'string' && asset.id.trim().length > 0)
+            .map((asset) => ({ ...asset, id: asset.id.trim() }))
+        : []
+      if (!normalized.length) {
+        return []
       }
 
-      const assetClone: ProjectAsset = {
-        ...asset,
-        gleaned: true
-      }
-      const categoryId = determineAssetCategoryId(assetClone)
-      const registered = this.registerAsset(assetClone, {
-        categoryId,
-        source: {
-          type: 'package',
-          providerId,
-          originalAssetId: asset.id,
-        },
+      const nextPackageMap: Record<string, string> = { ...this.packageAssetMap }
+      let packageMapChanged = false
+      const resolved: ProjectAsset[] = []
+      const toRegister: ProjectAsset[] = []
+
+      normalized.forEach((asset) => {
+        const mapKey = `${providerId}::${asset.id}`
+        const existingId = nextPackageMap[mapKey]
+        if (existingId) {
+          const existingAsset = this.getAsset(existingId)
+          if (existingAsset) {
+            resolved.push(existingAsset)
+            return
+          }
+          delete nextPackageMap[mapKey]
+          packageMapChanged = true
+        }
+
+        toRegister.push({
+          ...asset,
+          gleaned: true,
+        })
       })
 
-      this.packageAssetMap = {
-        ...this.packageAssetMap,
-        [mapKey]: registered.id,
+      if (toRegister.length) {
+        const registered = this.registerAssets(toRegister, {
+          categoryId: (asset) => determineAssetCategoryId(asset),
+          source: (asset) => ({
+            type: 'package',
+            providerId,
+            originalAssetId: asset.id,
+          }),
+          commitOptions: { updateNodes: false },
+        })
+
+        registered.forEach((asset) => {
+          nextPackageMap[`${providerId}::${asset.id}`] = asset.id
+        })
+        packageMapChanged = true
+        resolved.push(...registered)
       }
 
-      return registered
+      if (packageMapChanged) {
+        this.packageAssetMap = nextPackageMap
+      }
+
+      return resolved
     },
     async deleteProjectAssets(assetIds: string[]): Promise<string[]> {
       const uniqueIds = Array.from(
