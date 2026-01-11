@@ -215,7 +215,6 @@ import {
   MIN_TARGET_HEIGHT,
   GRID_MAJOR_SPACING,
   GRID_SNAP_SPACING,
-  WALL_DIAGONAL_SNAP_THRESHOLD,
   GRID_HIGHLIGHT_HEIGHT,
   GRID_HIGHLIGHT_PADDING,
   GRID_HIGHLIGHT_MIN_SIZE,
@@ -418,12 +417,6 @@ const buildingLabelMeshes = new Map<string, THREE.Mesh>()
 // Guide route waypoint label meshes (key: `${nodeId}:${index}`)
 const guideRouteWaypointLabelMeshes = new Map<string, THREE.Mesh>()
 // fontPromise will be defined below with a relaxed type to satisfy typings
-function clampInclusive(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min
-  if (value < min) return min
-  if (value > max) return max
-  return value
-}
 
 let fontPromise: Promise<any> | null = null
 function loadLabelFont(): Promise<any> {
@@ -2881,25 +2874,7 @@ const draggingChangedHandler = (event: unknown) => {
   }
 }
 
-let patchAppliedInCurrentFlush = false
-let patchAppliedResetScheduled = false
-
-function markPatchAppliedInCurrentFlush(): void {
-  patchAppliedInCurrentFlush = true
-  if (patchAppliedResetScheduled) {
-    return
-  }
-  patchAppliedResetScheduled = true
-  const reset = () => {
-    patchAppliedInCurrentFlush = false
-    patchAppliedResetScheduled = false
-  }
-  if (typeof queueMicrotask === 'function') {
-    queueMicrotask(reset)
-  } else {
-    Promise.resolve().then(reset)
-  }
-}
+// patchApplied tracking removed (unused)
 
 function removeNodeObjects(removedIds: Set<string>): void {
   removedIds.forEach((id) => disposeNodeSubtree(id))
@@ -3104,7 +3079,7 @@ function applyPendingScenePatches(): boolean {
     return false
   }
 
-  markPatchAppliedInCurrentFlush()
+  // previously recorded patch flag removed
 
   const needsPlaceholderOverlayRefresh = shouldRefreshPlaceholderOverlaysFromPatches(patches as Array<{ type: string }>)
   if (patches.some((patch) => patch.type === 'structure')) {

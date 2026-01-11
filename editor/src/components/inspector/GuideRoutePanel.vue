@@ -9,7 +9,7 @@ import type { GuideRouteComponentProps } from '@schema/components'
 type WaypointDraft = { name: string }
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode } = storeToRefs(sceneStore)
 
 const guideRouteComponent = computed(() => {
   const component = selectedNode.value?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]
@@ -48,47 +48,7 @@ watch(
   { immediate: true },
 )
 
-function waypointTypeLabel(index: number, lastIndex: number): string {
-  if (index === 0) return 'Start'
-  if (index === lastIndex) return 'End'
-  return 'Waypoint'
-}
-
-function applyWaypointNameUpdate(index: number, rawValue: unknown) {
-  if (isSyncingFromScene.value) {
-    return
-  }
-
-  const nodeId = selectedNodeId.value
-  const component = guideRouteComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-
-  const nextName = typeof rawValue === 'string' ? rawValue : String(rawValue ?? '')
-  const trimmed = nextName.trim()
-
-  const currentWaypoints = Array.isArray(component.props.waypoints) ? component.props.waypoints : []
-  if (index < 0 || index >= currentWaypoints.length) {
-    return
-  }
-
-  const currentEntry = currentWaypoints[index]
-  const currentName = typeof currentEntry?.name === 'string' ? currentEntry.name : ''
-  if (currentName === trimmed) {
-    return
-  }
-
-  const nextWaypoints = currentWaypoints.map((entry, i) => {
-    if (i !== index) return entry
-    return {
-      ...entry,
-      name: trimmed,
-    }
-  })
-
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { waypoints: nextWaypoints })
-}
+// waypoint helpers removed (not referenced)
 </script>
 
 <template>

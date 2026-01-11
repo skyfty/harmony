@@ -3122,32 +3122,7 @@ function distancePointToPointSquared(a: PlanningPoint, b: PlanningPoint) {
   return dx * dx + dy * dy
 }
 
-function findNearbyPolylineVertexInLayer(world: PlanningPoint, layerId: string) {
-  const radiusWorld = pxToWorld(LINE_VERTEX_SNAP_RADIUS_PX)
-  const radiusSq = radiusWorld * radiusWorld
-  for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
-    const line = polylines.value[i]
-    if (!line) {
-      continue
-    }
-    if (line.layerId !== layerId) {
-      continue
-    }
-    if (!visibleLayerIds.value.has(line.layerId)) {
-      continue
-    }
-    for (let index = 0; index < line.points.length; index += 1) {
-      const point = line.points[index]
-      if (!point) {
-        continue
-      }
-      if (distancePointToPointSquared(world, point) <= radiusSq) {
-        return { line, point, vertexIndex: index }
-      }
-    }
-  }
-  return null
-}
+// findNearbyPolylineVertexInLayer removed (unused)
 
 function findNearbyPolylineEndpointInLayer(world: PlanningPoint, layerId: string, radiusPx = LINE_VERTEX_SNAP_RADIUS_PX) {
   const radiusWorld = pxToWorld(radiusPx)
@@ -3672,8 +3647,6 @@ const lineDraftPreviewPath = computed(() => {
 })
 
 const lineDraftPreviewStroke = computed(() => {
-  const layerId = lineDraft.value?.layerId ?? activeLayerId.value
-  const kind = getLayerKind(layerId as string)
   // Use a high-contrast, fully opaque preview color for drawing (no transparency)
   // Bright yellow chosen for contrast against dark/light backgrounds.
   return 'rgba(255, 196, 0, 1)'
@@ -3972,17 +3945,7 @@ const imageOpacityModel = computed<number>({
 })
 
 
-function clearSelectedScatterAssignment() {
-  if (propertyPanelDisabled.value) {
-    return
-  }
-  const target = selectedScatterTarget.value
-  if (!target || !target.shape.scatter) {
-    return
-  }
-  target.shape.scatter = undefined
-  markPlanningDirty()
-}
+// clearSelectedScatterAssignment removed (unused)
 
 function handleEditorPointerDown(event: PointerEvent) {
   if (!dialogOpen.value) {
@@ -5181,13 +5144,7 @@ function handleImageLayerSelect(imageId: string) {
   activeImageId.value = imageId
 }
 
-function handleImageLayerOpacityChange(imageId: string, opacity: number) {
-  const image = planningImages.value.find((img) => img.id === imageId)
-  if (image) {
-    image.opacity = opacity
-    markPlanningDirty()
-  }
-}
+// handleImageLayerOpacityChange removed (unused)
 
 async function handleImageLayerDelete(imageId: string) {
   const idx = planningImages.value.findIndex((img) => img.id === imageId)

@@ -59,7 +59,7 @@ import type {
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
-import type { ClipboardEnvelope, ClipboardMeta, QuaternionJson } from '@/types/prefab'
+import type { ClipboardMeta, QuaternionJson } from '@/types/prefab'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
 import type { EditorTool } from '@/types/editor-tool'
@@ -3842,29 +3842,7 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
   return proxy
 }
 
-function restoreRuntimeFromSnapshot(node: SceneNode, snapshot: Object3D): Object3D | null {
-  const instancedAssetId = snapshot.userData?.instancedAssetId as string | undefined
-  if (instancedAssetId) {
-    const group = getCachedModelObject(instancedAssetId)
-    if (group) {
-      const applied = applyInstancedRuntimeToNode(node, group)
-      if (applied) {
-        return applied
-      }
-    }
-  }
-  try {
-    const clonedObject = snapshot.clone(true)
-    tagObjectWithNodeId(clonedObject, node.id)
-    registerRuntimeObject(node.id, clonedObject)
-    componentManager.attachRuntime(node, clonedObject)
-    componentManager.syncNode(node)
-    return clonedObject
-  } catch (error) {
-    console.warn('Failed to clone runtime snapshot for node', node.id, error)
-    return null
-  }
-}
+// restoreRuntimeFromSnapshot removed (unused)
 
 function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
   const map = new Map<string, SceneNode[]>()
@@ -6512,7 +6490,7 @@ type NodeBasicsHistoryRequest = {
 }
 
 function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHistoryRequest[]): SceneHistoryEntry {
-  const hasOwn = (obj: object, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+  
   const snapshots: any[] = []
 
   const normalized = Array.isArray(requests)
@@ -9914,7 +9892,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      const commitOptions = options.commitOptions ?? { updateNodes: false }
+      // commitOptions removed (unused)
       void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
     },

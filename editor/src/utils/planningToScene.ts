@@ -131,34 +131,9 @@ const PLANNING_PIXELS_PER_METER = 10
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
-  const visit = (list: SceneNode[]): SceneNode | null => {
-    for (const node of list) {
-      if (!node) continue
-      if (node.id === id) return node
-      const child = visit(Array.isArray(node.children) ? node.children : [])
-      if (child) return child
-    }
-    return null
-  }
-  return visit(nodes)
-}
+// findNodeById removed (unused)
 
-function collectSubtreeIds(node: SceneNode | null | undefined): string[] {
-  if (!node) return []
-  const ids: string[] = []
-  const stack: SceneNode[] = [node]
-  while (stack.length) {
-    const current = stack.pop()!
-    ids.push(current.id)
-    const children = Array.isArray(current.children) ? current.children : []
-    for (let i = children.length - 1; i >= 0; i -= 1) {
-      const child = children[i]
-      if (child) stack.push(child)
-    }
-  }
-  return ids
-}
+// collectSubtreeIds removed (unused)
 
 function uuidToBytes(uuid: string): Uint8Array | null {
   const normalized = uuid.trim().toLowerCase()
@@ -736,17 +711,7 @@ function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layer
   return null
 }
 
-function resolveLayerColorFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const color = found?.color
-    if (typeof color === 'string' && color.trim()) {
-      return color.trim()
-    }
-  }
-  return null
-}
+// resolveLayerColorFromPlanningData removed (unused)
 
 function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers

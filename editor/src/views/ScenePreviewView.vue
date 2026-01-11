@@ -109,13 +109,11 @@ import {
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
-	PURE_PURSUIT_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	LOD_COMPONENT_TYPE,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
-	clampPurePursuitComponentProps,
 	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
@@ -139,7 +137,7 @@ import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
 	AutoTourComponentProps,
-	PurePursuitComponentProps,
+    
 	VehicleComponentProps,
 	VehicleWheelProps,
 	WarpGateComponentProps,
@@ -8178,12 +8176,7 @@ function stepPhysicsWorld(delta: number): void {
 		const wx = chassisBody.angularVelocity?.x ?? 0
 		const wy = chassisBody.angularVelocity?.y ?? 0
 		const wz = chassisBody.angularVelocity?.z ?? 0
-		const fx = (chassisBody as any).force?.x ?? 0
-		const fy = (chassisBody as any).force?.y ?? 0
-		const fz = (chassisBody as any).force?.z ?? 0
-		const tx = (chassisBody as any).torque?.x ?? 0
-		const ty = (chassisBody as any).torque?.y ?? 0
-		const tz = (chassisBody as any).torque?.z ?? 0
+		// forces/torque not needed here
 		const speedSq = vx * vx + vy * vy + vz * vz
 		const angSq = wx * wx + wy * wy + wz * wz
 		const sleepState = (chassisBody as any).sleepState as number | undefined

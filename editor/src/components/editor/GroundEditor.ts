@@ -133,15 +133,6 @@ function clampScatterBrushRadius(value: unknown): number {
 	return Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, num))
 }
 
-function computeScatterMinSpacingFromModel(modelGroup: ModelInstanceGroup, maxScale: number): number {
-	const scale = Number.isFinite(maxScale) && maxScale > 0 ? maxScale : 1
-	modelGroup.boundingBox.getSize(scatterBboxSizeHelper)
-	const x = Math.max(0.01, scatterBboxSizeHelper.x)
-	const z = Math.max(0.01, scatterBboxSizeHelper.z)
-	// Use bounding-circle diameter in XZ (box diagonal) so instances can't overlap even when rotated.
-	const base = Math.sqrt(x * x + z * z)
-	return Math.max(0.01, base * scale)
-}
 const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
 const scatterFrustumCuller = createInstancedBvhFrustumCuller()
@@ -173,8 +164,7 @@ type ScatterSessionState = {
 
 let scatterSession: ScatterSessionState | null = null
 
-const SCATTER_MAX_PER_STAMP = 25
-const SCATTER_PACKING_FACTOR = 0.6
+// (removed unused scatter constants)
 const SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX = 256
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
