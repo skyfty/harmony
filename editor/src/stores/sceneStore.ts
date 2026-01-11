@@ -1862,11 +1862,11 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
   if (runtime) {
     runtime.traverse((child) => {
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData.dynamicMeshType ==='Wall') {
-          if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
-            updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
-          }
-          return false;
-      }
+            if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
+              updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+            }
+            return
+        }
     });
   }
   return true
