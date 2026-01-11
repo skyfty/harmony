@@ -59,6 +59,7 @@ export type ConvertPlanningToSceneOptions = {
     groundSettings: { width: number; depth: number }
     captureHistorySnapshot: (options?: { resetRedo?: boolean }) => void
     withHistorySuppressed: <T>(fn: () => Promise<T> | T) => Promise<T>
+    withScenePatchesSuppressed: <T>(fn: () => Promise<T> | T) => Promise<T>
     setGroundDimensions: (payload: { width?: number; depth?: number }) => boolean
     addSceneNode: (payload: {
       nodeId?: string
@@ -105,7 +106,12 @@ export type ConvertPlanningToSceneOptions = {
       type: T,
     ) => { component: { id: string; props?: unknown }; created: boolean } | null
     updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
-    moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
+    moveNode: (payload: {
+      nodeId: string
+      targetId: string | null
+      position: 'before' | 'after' | 'inside'
+      recenterSkipGroupIds?: string[]
+    }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
     setNodeLocked: (nodeId: string, locked: boolean) => void
@@ -456,7 +462,12 @@ async function createAirWallFromSegments(options: {
   })
   if (!wall) return null
 
-  sceneStore.moveNode({ nodeId: wall.id, targetId: rootNodeId, position: 'inside' })
+  sceneStore.moveNode({
+    nodeId: wall.id,
+    targetId: rootNodeId,
+    position: 'inside',
+    recenterSkipGroupIds: [rootNodeId],
+  })
   sceneStore.setNodeLocked(wall.id, true)
   ensureAirWall(sceneStore, wall)
   sceneStore.updateNodeUserData(wall.id, {
@@ -1082,7 +1093,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const { sceneStore, planningData } = options
   const assetCacheStore = useAssetCacheStore()
 
-  emitProgress(options, 'Preparing…', 0)
+  return await sceneStore.withScenePatchesSuppressed(async () => {
+    emitProgress(options, 'Preparing…', 0)
 
 
   // Ensure ground exists when missing.
@@ -1238,7 +1250,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
 
         sceneStore.updateNodeDynamicMesh(roadNode.id, component.dynamicMesh)
-        sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.moveNode({
+          nodeId: roadNode.id,
+          targetId: root.id,
+          position: 'inside',
+          recenterSkipGroupIds: [root.id],
+        })
 
 
         if (roadMaterials.length) {
@@ -1316,7 +1333,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
-        sceneStore.moveNode({ nodeId: guideRouteNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.moveNode({
+          nodeId: guideRouteNode.id,
+          targetId: root.id,
+          position: 'inside',
+          recenterSkipGroupIds: [root.id],
+        })
         sceneStore.updateNodeUserData(guideRouteNode.id, {
           source: PLANNING_CONVERSION_SOURCE,
           planningLayerId: layerId,
@@ -1357,7 +1379,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
-        sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.moveNode({
+          nodeId: floorNode.id,
+          targetId: root.id,
+          position: 'inside',
+          recenterSkipGroupIds: [root.id],
+        })
 
         const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1397,7 +1424,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
-        sceneStore.moveNode({ nodeId: floorNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.moveNode({
+          nodeId: floorNode.id,
+          targetId: root.id,
+          position: 'inside',
+          recenterSkipGroupIds: [root.id],
+        })
 
         // 设置building图层为wireframe模式，方便查看边界
         sceneStore.setNodeMaterials(floorNode.id, [
@@ -1512,7 +1544,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           continue
         }
 
-        sceneStore.moveNode({ nodeId: waterNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.moveNode({
+          nodeId: waterNode.id,
+          targetId: root.id,
+          position: 'inside',
+          recenterSkipGroupIds: [root.id],
+        })
 
         const floorComponent = waterNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1844,7 +1881,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             name: line.name?.trim() || 'Wall',
           })
           if (wall) {
-            sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            sceneStore.moveNode({
+              nodeId: wall.id,
+              targetId: root.id,
+              position: 'inside',
+              recenterSkipGroupIds: [root.id],
+            })
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1876,7 +1918,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             name: poly.name?.trim() || 'Wall',
           })
           if (wall) {
-            sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            sceneStore.moveNode({
+              nodeId: wall.id,
+              targetId: root.id,
+              position: 'inside',
+              recenterSkipGroupIds: [root.id],
+            })
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
@@ -1910,4 +1957,5 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }
+  })
 }
