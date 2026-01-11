@@ -6,6 +6,7 @@ import type {
   EnvironmentFogMode,
   EnvironmentMapMode,
 } from '@/types/environment'
+import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -582,15 +583,11 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
     return null
   }
   const source = asset.name || asset.downloadUrl || asset.id
-  const match = source?.match(/\.([a-z0-9]+)(?:$|[?#])/i)
-  return match ? match[1]?.toLowerCase() ?? null : null
+  return getLastExtensionFromFilenameOrUrl(source)
 }
 
 function isHdrExtension(extension: string | null): boolean {
-  if (!extension) {
-    return false
-  }
-  return extension === 'hdr' || extension === 'hdri' || extension === 'exr'
+  return isHdriLikeExtension(extension)
 }
 
 function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {

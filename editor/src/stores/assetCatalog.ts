@@ -1,10 +1,11 @@
 import { resourceProviders } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import { getKnownExtensionFromFilename, normalizeExtension } from '@harmony/schema'
+import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@harmony/schema'
 
 export interface AssetCategoryDefinition {
   key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'hdri'| 'others'
+  assetType?: AssetType
   id: string
   label: string
   extensions: string[]
@@ -17,54 +18,63 @@ export const PACKAGE_DIRECTORY_PREFIX = 'dir-package-'
 export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
   {
     key: 'models',
+    assetType: 'model',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-models`,
     label: 'Models',
     extensions: ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.dae', '.3ds', '.ply', '.usdz', '.blend', '.3mf'],
   },
   {
     key: 'meshes',
+    assetType: 'mesh',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-meshes`,
     label: 'Meshes',
     extensions: ['.mesh', '.geom'],
   },
   {
     key: 'images',
+    assetType: 'image',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-images`,
     label: 'Images',
     extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.svg', '.hdr', '.exr'],
   },
   {
     key: 'textures',
+    assetType: 'texture',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-textures`,
     label: 'Textures',
     extensions: ['.ktx', '.ktx2', '.dds', '.tga'],
   },
   {
     key: 'materials',
+    assetType: 'material',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-materials`,
     label: 'Materials',
     extensions: ['.material', '.material.json', '.mat', '.mat.json'],
   },
   {
     key: 'behaviors',
+    assetType: 'behavior',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-behaviors`,
     label: 'Behaviors',
     extensions: ['.behavior'],
   },
   {
     key: 'prefabs',
+    assetType: 'prefab',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
     label: 'Prefabs',
     extensions: ['.prefab', '.lod'],
   },
   {
     key: 'videos',
+    assetType: 'video',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-videos`,
     label: 'Videos',
     extensions: ['.mp4', '.mov', '.webm', '.mkv', '.avi'],
   },
   {
     key: 'hdri',
+    assetType: 'hdri',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-hdri`,
     label: 'HDRi',
     extensions: ['.hdr', '.exr'],
@@ -83,6 +93,13 @@ const ASSET_CATEGORY_ID_BY_KEY = ASSET_CATEGORY_CONFIG.reduce<Record<AssetCatego
   acc[category.key] = category.id
   return acc
 }, {} as Record<AssetCategoryKey, string>)
+
+const ASSET_CATEGORY_ID_BY_ASSET_TYPE = ASSET_CATEGORY_CONFIG.reduce<Partial<Record<AssetType, string>>>((acc, category) => {
+  if (category.assetType) {
+    acc[category.assetType] = category.id
+  }
+  return acc
+}, {})
 
 const ASSET_EXTENSION_CATEGORY_MAP = new Map<string, string>()
 ASSET_CATEGORY_CONFIG.forEach((category) => {
@@ -133,25 +150,9 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
       return mapped
     }
   }
-  switch (asset.type) {
-    case 'model':
-      return ASSET_CATEGORY_ID_BY_KEY.models
-    case 'mesh':
-      return ASSET_CATEGORY_ID_BY_KEY.meshes
-    case 'image':
-      return ASSET_CATEGORY_ID_BY_KEY.images
-    case 'texture':
-      return ASSET_CATEGORY_ID_BY_KEY.textures
-    case 'material':
-      return ASSET_CATEGORY_ID_BY_KEY.materials
-    case 'behavior':
-      return ASSET_CATEGORY_ID_BY_KEY.behaviors
-    case 'prefab':
-      return ASSET_CATEGORY_ID_BY_KEY.prefabs
-    case 'video':
-      return ASSET_CATEGORY_ID_BY_KEY.videos
-    default:
-      break
+  const fallbackByType = ASSET_CATEGORY_ID_BY_ASSET_TYPE[asset.type]
+  if (fallbackByType) {
+    return fallbackByType
   }
   return FALLBACK_ASSET_CATEGORY_ID
 }

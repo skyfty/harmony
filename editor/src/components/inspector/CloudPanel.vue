@@ -8,7 +8,7 @@ import type {
   SceneSphericalCloudSettings,
   SceneVolumetricCloudSettings,
 } from '@harmony/schema'
-import { isImageLikeExtension } from '@harmony/schema'
+import { getLastExtensionFromFilenameOrUrl, isImageLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -365,8 +365,7 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
     return null
   }
   const source = asset.name || asset.downloadUrl || asset.id
-  const match = source?.match(/\.([a-z0-9]+)(?:$|[?#])/i)
-  return match ? (match[1]?.toLowerCase() ?? null) : null
+  return getLastExtensionFromFilenameOrUrl(source)
 }
 
 function isImageExtension(extension: string | null): boolean {

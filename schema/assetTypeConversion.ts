@@ -50,6 +50,9 @@ const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
   mp4: 'video',
   mov: 'video',
   webm: 'video',
+  ogv: 'video',
+  ogg: 'video',
+  m4v: 'video',
   mkv: 'video',
   avi: 'video',
 }
@@ -89,6 +92,22 @@ export function normalizeExtension(input: string | null | undefined): string | n
   const withoutDot = withoutQuery.replace(/^[.]/, '')
   const normalized = withoutDot.toLowerCase()
   return normalized.length ? normalized : null
+}
+
+export function getLastExtensionFromFilenameOrUrl(filenameOrUrl: string | null | undefined): string | null {
+  if (!filenameOrUrl) {
+    return null
+  }
+  const trimmed = filenameOrUrl.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  if (trimmed.startsWith('data:')) {
+    return null
+  }
+  const withoutFragment = trimmed.split(/[?#]/)[0] ?? trimmed
+  const match = /\.([a-z0-9]+)$/i.exec(withoutFragment)
+  return match ? match[1]!.toLowerCase() : null
 }
 
 export function getKnownExtensionFromFilename(
@@ -225,6 +244,32 @@ export function isImageLikeExtension(extension: string | null | undefined): bool
     return false
   }
   return IMAGE_LIKE_EXTENSIONS.has(normalized)
+}
+
+export function isVideoLikeExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  if (!normalized) {
+    return false
+  }
+  return normalized === 'mp4'
+    || normalized === 'webm'
+    || normalized === 'ogv'
+    || normalized === 'ogg'
+    || normalized === 'mov'
+    || normalized === 'm4v'
+    || normalized === 'mkv'
+    || normalized === 'avi'
+}
+
+export function isHdriLikeExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  if (!normalized) {
+    return false
+  }
+  return normalized === 'hdr'
+    || normalized === 'hdri'
+    || normalized === 'rgbe'
+    || normalized === 'exr'
 }
 
 export function getAssetTypeFromCategoryIdSuffix(categoryId: string | null | undefined): AssetType | null {

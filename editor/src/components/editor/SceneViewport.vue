@@ -48,6 +48,7 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
+import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isVideoLikeExtension } from '@harmony/schema'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -682,7 +683,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
     try {
       const extension = resolveAssetExtension(asset ?? null, file.name ?? null)
       let texture: THREE.Texture
-      if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+      if (isHdriLikeExtension(extension) && extension !== 'exr') {
         texture = await rgbeLoader.loadAsync(blobUrl)
       } else {
         texture = await textureLoader.loadAsync(blobUrl)
@@ -4065,8 +4066,7 @@ async function resolveCloudAssetUrl(source: string): Promise<{ url: string; disp
 
 function resolveAssetExtension(asset: ProjectAsset | null, override?: string | null): string | null {
   const source = override ?? asset?.name ?? asset?.downloadUrl ?? asset?.description ?? asset?.id ?? ''
-  const match = source.match(/\.([a-z0-9]+)(?:$|[?#])/i)
-  return match ? match[1]?.toLowerCase() ?? null : null
+  return getLastExtensionFromFilenameOrUrl(source)
 }
 
 async function resolveEnvironmentAssetUrl(assetId: string): Promise<{ url: string; extension: string | null; asset: ProjectAsset } | null> {
@@ -4103,16 +4103,16 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
   const { url, extension } = resolved
 
   try {
-    if (extension === 'hdr' || extension === 'hdri') {
-      const texture = await rgbeLoader.loadAsync(url)
-      texture.mapping = THREE.EquirectangularReflectionMapping
-      texture.needsUpdate = true
-      return texture
-    }
     if (extension === 'exr') {
       const texture = await exrLoader.loadAsync(url)
       texture.mapping = THREE.EquirectangularReflectionMapping
       texture.flipY = false
+      texture.needsUpdate = true
+      return texture
+    }
+    if (isHdriLikeExtension(extension)) {
+      const texture = await rgbeLoader.loadAsync(url)
+      texture.mapping = THREE.EquirectangularReflectionMapping
       texture.needsUpdate = true
       return texture
     }
@@ -6011,8 +6011,6 @@ function resolveBehaviorDropTarget(event: DragEvent): { nodeId: string; object: 
   return null
 }
 
-const DISPLAY_BOARD_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'])
-
 function inferAssetExtension(asset: ProjectAsset | null): string | null {
   if (!asset) {
     return null
@@ -6021,8 +6019,7 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
   if (!source) {
     return null
   }
-  const match = source.match(/\.([a-z0-9]+)(?:$|[?#])/i)
-  return match ? match[1]?.toLowerCase() ?? null : null
+  return getLastExtensionFromFilenameOrUrl(source)
 }
 
 function isDisplayBoardCompatibleAsset(asset: ProjectAsset | null): asset is ProjectAsset {
@@ -6034,7 +6031,7 @@ function isDisplayBoardCompatibleAsset(asset: ProjectAsset | null): asset is Pro
   }
   if (asset.type === 'file') {
     const extension = inferAssetExtension(asset)
-    return extension ? DISPLAY_BOARD_VIDEO_EXTENSIONS.has(extension) : false
+    return isVideoLikeExtension(extension)
   }
   return false
 }

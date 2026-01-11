@@ -8,6 +8,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   type DisplayBoardComponentProps,
 } from '@schema/components'
+import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@harmony/schema'
 import AssetDialog from '@/components/common/AssetDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
@@ -149,15 +150,11 @@ function isSupportedAsset(asset: ProjectAsset | null): asset is ProjectAsset {
 
 function inferAssetExtension(asset: ProjectAsset): string | null {
   const source = asset.name || asset.downloadUrl || asset.id
-  const match = source?.match(/\.([a-z0-9]+)(?:$|[?#])/i)
-  return match ? match[1]?.toLowerCase() ?? null : null
+  return getLastExtensionFromFilenameOrUrl(source)
 }
 
 function isVideoExtension(extension: string | null): boolean {
-  if (!extension) {
-    return false
-  }
-  return ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'].includes(extension.toLowerCase())
+  return isVideoLikeExtension(extension)
 }
 
 function handleDragEnter(event: DragEvent) {
