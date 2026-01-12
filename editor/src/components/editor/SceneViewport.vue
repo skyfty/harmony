@@ -966,7 +966,6 @@ const {
   pointer,
   rootGroup,
   instancedMeshGroup,
-  instancedMeshes,
   objectMap
 )
 const renderClock = new THREE.Clock()

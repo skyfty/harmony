@@ -136,7 +136,7 @@ async function loadLocalPresetsOnce(): Promise<void> {
   if (localPresetsLoaded.value) {
     return
   }
-  const modules = import.meta.glob<{ default: unknown }>('@/resources/scenes/*.json', { eager: true })
+  const modules = import.meta.glob<{ default: unknown }>('../../resources/scenes/*.json', { eager: true })
   const entries: PresetListEntry[] = []
   const details: Record<string, PresetSceneDetail> = {}
   Object.entries(modules).forEach(([path, mod]) => {

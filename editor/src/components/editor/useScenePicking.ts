@@ -11,7 +11,6 @@ export function useScenePicking(
   pointer: THREE.Vector2,
   rootGroup: THREE.Group,
   instancedMeshGroup: THREE.Group,
-  instancedMeshes: THREE.InstancedMesh[],
   objectMap: Map<string, THREE.Object3D>
 ) {
   const sceneStore = useSceneStore()
@@ -73,12 +72,8 @@ export function useScenePicking(
     instancedMeshGroup.updateWorldMatrix(true, true)
 
     const pickTargets: THREE.Object3D[] = [...rootGroup.children]
-    const seen = new Set<THREE.Object3D>(pickTargets)
 
     const addInstancedPickTarget = (candidate: THREE.Object3D) => {
-      if (seen.has(candidate)) {
-        return
-      }
       const mesh = candidate as THREE.InstancedMesh
       if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
         return
@@ -88,17 +83,12 @@ export function useScenePicking(
       }
       mesh.updateWorldMatrix(true, false)
       pickTargets.push(mesh)
-      seen.add(mesh)
     }
 
     instancedMeshGroup.children.forEach((child) => {
       if (child) {
         addInstancedPickTarget(child)
       }
-    })
-
-    instancedMeshes.forEach((mesh) => {
-      addInstancedPickTarget(mesh)
     })
 
     const intersections = raycaster.intersectObjects(pickTargets, recursive)
