@@ -1332,7 +1332,6 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
-let programmaticCameraMutationDepth = 0;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
@@ -1362,20 +1361,16 @@ type VehicleInstanceWithWheels = VehicleInstance & {
   hasChassisPositionSample: boolean;
 };
 
-function runWithProgrammaticCameraMutation<T>(callback: () => T): T {
-  programmaticCameraMutationDepth += 1;
-  try {
-    return callback();
-  } finally {
-    programmaticCameraMutationDepth = Math.max(0, programmaticCameraMutationDepth - 1);
-    if (programmaticCameraMutationDepth === 0 && renderContext) {
-      cameraRotationAnchor.copy(renderContext.camera.position);
+function runWithProgrammaticCameraMutationAndAnchor<T>(callback: () => T, onComplete?: () => void): T {
+  return runWithProgrammaticCameraMutation(callback, () => {
+    try {
+      onComplete?.();
+    } finally {
+      if (renderContext) {
+        cameraRotationAnchor.copy(renderContext.camera.position);
+      }
     }
-  }
-}
-
-function isProgrammaticCameraMutationActive(): boolean {
-  return programmaticCameraMutationDepth > 0;
+  });
 }
 
 // Placeholder to satisfy controller dependency; first-person state persistence is editor-only.
@@ -1681,12 +1676,11 @@ function applyAutoTourCameraInputPolicy(): void {
   setCameraCaging(false);
   const controls = renderContext?.controls;
   if (controls) {
-    runWithProgrammaticCameraMutation(() => {
       controls.enabled = true;
       controls.enableRotate = true;
       controls.enablePan = shouldRotateOnly ? false : true;
       controls.update();
-    });
+
   }
 }
 
@@ -5302,17 +5296,10 @@ function setCameraCaging(enabled: boolean): void {
   isCameraCaged.value = enabled;
   const controls = renderContext?.controls;
   if (controls) {
-    runWithProgrammaticCameraMutation(
-      () => {
-        controls.enabled = !enabled;
-        controls.update();
-      },
-      () => {
-        if (renderContext) {
-          cameraRotationAnchor.copy(renderContext.camera.position);
-        }
-      },
-    );
+    runWithProgrammaticCameraMutationAndAnchor(() => {
+      controls.enabled = !enabled;
+      controls.update();
+    });
   }
 }
 
@@ -5357,7 +5344,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   if (options.applyToCamera) {
     const context = renderContext;
     if (context) {
-      runWithProgrammaticCameraMutation(() => {
+      runWithProgrammaticCameraMutationAndAnchor(() => {
         withControlsVerticalFreedom(context.controls, () => {
           context.camera.position.copy(protagonistPosePosition);
           context.controls.target.copy(protagonistPoseTarget);
@@ -5391,7 +5378,7 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   tween.elapsed = Math.min(tween.elapsed + deltaSeconds, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
   tempMovementVec.copy(tween.from).lerp(tween.to, eased);
-  runWithProgrammaticCameraMutation(() => {
+  runWithProgrammaticCameraMutationAndAnchor(() => {
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(tempMovementVec);
       camera.position.copy(tween.startPosition);
@@ -5402,7 +5389,7 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   });
   lockControlsPitchToCurrent(controls, camera);
   if (tween.elapsed >= tween.duration) {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         controls.target.copy(tween.to);
         camera.lookAt(controls.target);
@@ -5784,7 +5771,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.lerpVectors(startPosition, destination, alpha);
         controls.target.lerpVectors(startTarget, lookTarget, alpha);
@@ -5794,7 +5781,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     lockControlsPitchToCurrent(controls, camera);
   };
   const finalize = () => {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(destination);
         controls.update();
@@ -5953,7 +5940,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         controls.target.copy(focus);
         camera.position.copy(startPosition);
@@ -5969,7 +5956,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
   const startTarget = controls.target.clone();
   if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(startPosition);
         controls.target.copy(tempForwardVec);
@@ -6066,7 +6053,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     return { success: true };
   };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-    runWithProgrammaticCameraMutation(() => {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
         controls.target.copy(levelTarget);
         camera.lookAt(levelTarget);
@@ -6805,7 +6792,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
 
   const placement = computeFollowPlacement(getApproxDimensions(object));
 
-  const updated = runWithProgrammaticCameraMutation(() =>
+  const updated = runWithProgrammaticCameraMutationAndAnchor(() =>
     autoTourCameraFollowController.update({
       follow: autoTourCameraFollowState,
       placement,
@@ -7006,7 +6993,7 @@ function handleVehicleAutoTourResumeTap(options: { rotateOnly?: boolean } = {}):
   applyAutoTourCameraInputPolicy();
       setCameraViewState('level', null);
 
-      runWithProgrammaticCameraMutation(() => {
+      runWithProgrammaticCameraMutationAndAnchor(() => {
         camera.position.y = HUMAN_EYE_HEIGHT;
         controls.target.y = HUMAN_EYE_HEIGHT;
         controls.update();
@@ -8168,7 +8155,7 @@ function handleWheelEvent(event: WheelEvent): void {
   }
   const direction = deltaY < 0 ? 1 : -1;
   const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
-  runWithProgrammaticCameraMutation(() => {
+  runWithProgrammaticCameraMutationAndAnchor(() => {
     translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
     context.controls.update();
   });
@@ -8323,7 +8310,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
     cameraRotationAnchor.copy(camera.position);
   });
 
-  runWithProgrammaticCameraMutation(() => {
+  runWithProgrammaticCameraMutationAndAnchor(() => {
     controls.update();
   });
   cameraRotationAnchor.copy(camera.position);
