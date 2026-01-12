@@ -75,26 +75,26 @@ function openPlanningDialog() {
               </template>
               <v-list class="menu-dropdown">
                   <v-list-item @click="handleMenuAction('New')" class="menu-list-item">
-                    New
+                    New Scene
                     <template  #append>
                       <span class="shortcut-label">Ctrl+N</span>
                     </template>
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Open')" class="menu-list-item">
-                    Open
+                    Open Scene
                     <template #append>
                       <span class="shortcut-label">Ctrl+O</span>
                     </template>
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Save')" class="menu-list-item">
-                    Save
+                    Save Scene
                     <template   #append>
                       <span class="shortcut-label">Ctrl+S</span>
                     </template>
                   </v-list-item>
-                  <v-list-item @click="handleMenuAction('SaveAs')" class="menu-list-item">
+                  <!-- <v-list-item @click="handleMenuAction('SaveAs')" class="menu-list-item">
                     Save as
-                  </v-list-item>      
+                  </v-list-item>       -->
                   <v-divider />
                   <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
                     Import
