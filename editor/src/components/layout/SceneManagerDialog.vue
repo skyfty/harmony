@@ -246,7 +246,7 @@ function formatDateTime(value: string) {
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" width="880" max-width="960">
+  <v-dialog v-model="dialogOpen" width="760" max-width="880">
     <v-card class="scene-manager-card" elevation="8">
       <v-card-title class="scene-manager-header">
         <span>Manage Scenes</span>
@@ -310,36 +310,7 @@ function formatDateTime(value: string) {
               </v-list>
             </div>
           </div>
-          <div class="scene-preview-panel">
-            <div v-if="previewScene" class="scene-preview-card">
-              <div class="scene-preview-header">
-                <span class="preview-title">{{ previewScene.name }}</span>
-                <span v-if="previewScene.id === currentSceneId" class="preview-badge">当前</span>
-              </div>
-              <div class="scene-preview-meta">
-                <div class="scene-preview-meta-label">Created</div>
-                <div class="scene-preview-meta-value">{{ formatDateTime(previewScene.createdAt) }}</div>
-                <div class="scene-preview-meta-label">Last updated</div>
-                <div class="scene-preview-meta-value">{{ formatDateTime(previewScene.updatedAt) }}</div>
-              </div>
-              <div class="scene-preview-media">
-                <v-img
-                  v-if="previewScene.thumbnail"
-                  :src="previewScene.thumbnail"
-                  contain
-                  class="scene-preview-image"
-                />
-                <div v-else class="scene-preview-placeholder">
-                  <v-icon size="72">mdi-image-outline</v-icon>
-                    <p>No thumbnail available</p>
-                </div>
-              </div>
-            </div>
-            <div v-else class="scene-preview-empty">
-              <v-icon size="48">mdi-cube-outline</v-icon>
-                <p>Please select a scene on the left to view its thumbnail.</p>
-            </div>
-          </div>
+          <!-- scene-preview-panel removed: list now takes the full dialog width -->
         </div>
         <template v-else>
           <div class="empty-state">
@@ -399,7 +370,7 @@ function formatDateTime(value: string) {
   background: rgba(18, 21, 26, 0.96);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  min-height: 540px;
+  min-height: 460px;
 }
 
 .scene-manager-header {
@@ -417,12 +388,13 @@ function formatDateTime(value: string) {
 
 .scene-content {
   display: flex;
-  gap: 16px;
+  gap: 8px;
   height: 100%;
 }
 
 .scene-list-panel {
-  width: 260px;
+  width: 100%;
+  max-width: 100%;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -434,7 +406,7 @@ function formatDateTime(value: string) {
   min-height: 0;
   max-height: 500px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(129, 212, 250, 0.5) transparent;
 }
@@ -457,6 +429,7 @@ function formatDateTime(value: string) {
   flex: 1;
   min-height: 0;
   max-height: 100%;
+  width: 100%;
 }
 
 .scene-list-item {
@@ -464,6 +437,9 @@ function formatDateTime(value: string) {
   transition: background-color 0.18s ease, border-color 0.18s ease;
   border: 1px solid transparent;
   margin-bottom: 6px;
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .scene-list-item:last-of-type {
@@ -558,107 +534,7 @@ function formatDateTime(value: string) {
   font-weight: 500;
 }
 
-.scene-preview-panel {
-  flex: 1;
-  min-width: 0;
-  background: rgba(15, 17, 22, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.scene-preview-card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  width: min(520px, 100%);
-  height: 420px;
-  margin: 0 auto;
-  flex: none;
-}
-
-.scene-preview-meta {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 16px;
-  font-size: 0.85rem;
-  color: rgba(233, 236, 241, 0.75);
-}
-
-.scene-preview-meta-label {
-  opacity: 0.7;
-}
-
-.scene-preview-meta-value {
-  font-weight: 500;
-}
-
-.scene-preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.preview-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: rgba(233, 236, 241, 0.96);
-}
-
-.preview-badge {
-  font-size: 0.75rem;
-  color: rgba(129, 212, 250, 0.95);
-  border: 1px solid rgba(129, 212, 250, 0.4);
-  border-radius: 999px;
-  padding: 2px 10px;
-  letter-spacing: 0.06em;
-}
-
-.scene-preview-media {
-  flex: 1;
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.04);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  max-height: 100%;
-  min-height: 0;
-}
-
-.scene-preview-media :deep(img) {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.scene-preview-image {
-  width: 100%;
-  height: 100%;
-}
-
-.scene-preview-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: rgba(233, 236, 241, 0.68);
-}
-
-.scene-preview-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: rgba(233, 236, 241, 0.65);
-}
+.scene-preview-removed {}
 
 .scene-manager-actions {
   padding-inline: 16px;
