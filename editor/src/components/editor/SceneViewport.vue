@@ -89,6 +89,7 @@ import {
   syncContinuousInstancedModelCommitted,
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
+import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import {createPrimitiveMesh}  from '@harmony/schema'
@@ -1280,6 +1281,10 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
 }
 
 function collectInstancedPickTargets(): THREE.InstancedMesh[] {
+  if (instancedBoundsHasPending()) {
+    flushInstancedBounds()
+  }
+
   // Ensure the instanced meshes' world matrices are up-to-date for raycasting.
   instancedMeshGroup.updateWorldMatrix(true, true)
 
@@ -1642,6 +1647,10 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
 
       instancedMeshGroup.children.forEach((child) => addPickTarget(child))
       instancedMeshes.forEach((mesh) => addPickTarget(mesh))
+
+      if (instancedBoundsHasPending()) {
+        flushInstancedBounds()
+      }
 
       const intersections = raycaster.intersectObjects(pickTargets, false)
       intersections.sort((a, b) => a.distance - b.distance)

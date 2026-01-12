@@ -10,6 +10,7 @@ import {
   type Material,
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 
 const DEFAULT_INSTANCE_CAPACITY = 2048
 
@@ -135,7 +136,10 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
             while (nextCount > 0 && !allocatedHandle.bindingByIndex.has(nextCount - 1)) {
               nextCount -= 1
             }
-            allocatedHandle.mesh.count = nextCount
+            if (allocatedHandle.mesh.count !== nextCount) {
+              allocatedHandle.mesh.count = nextCount
+              markInstancedBoundsDirty(allocatedHandle.mesh)
+            }
           }
         })
         return null
@@ -144,7 +148,11 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
       handle.nextIndex += 1
     }
     handle.bindingByIndex.set(index, bindingId)
+    const previousCount = handle.mesh.count
     handle.mesh.count = Math.max(handle.mesh.count, index + 1)
+    if (handle.mesh.count !== previousCount) {
+      markInstancedBoundsDirty(handle.mesh)
+    }
     slots.push({ mesh: handle.mesh, handleId: handle.id, index })
   }
 
@@ -218,6 +226,7 @@ export function releaseModelInstanceBinding(bindingId: string): void {
         handle.mesh.getMatrixAt(lastVisibleIndex, tempInstanceMatrix)
         handle.mesh.setMatrixAt(index, tempInstanceMatrix)
         handle.mesh.instanceMatrix.needsUpdate = true
+        markInstancedBoundsDirty(handle.mesh)
 
         handle.bindingByIndex.set(index, movingBindingId)
         handle.bindingByIndex.delete(lastVisibleIndex)
@@ -253,6 +262,7 @@ export function updateModelInstanceMatrix(nodeId: string, matrix: Matrix4): void
   binding.slots.forEach(({ mesh, index }) => {
     mesh.setMatrixAt(index, matrix)
     mesh.instanceMatrix.needsUpdate = true
+    markInstancedBoundsDirty(mesh)
   })
 }
 
@@ -264,6 +274,7 @@ export function updateModelInstanceBindingMatrix(bindingId: string, matrix: Matr
   binding.slots.forEach(({ mesh, index }) => {
     mesh.setMatrixAt(index, matrix)
     mesh.instanceMatrix.needsUpdate = true
+    markInstancedBoundsDirty(mesh)
   })
 }
 
@@ -474,5 +485,6 @@ function shrinkInstancedMeshCount(handle: InstancedMeshHandle): void {
   }
   if (nextCount !== handle.mesh.count) {
     handle.mesh.count = nextCount
+    markInstancedBoundsDirty(handle.mesh)
   }
 }
