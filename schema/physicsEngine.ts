@@ -904,7 +904,6 @@ export function createRigidbodyBody(
 	object.getWorldScale(physicsScaleHelper)
 	const shapeScale = normalizeScaleVector(physicsScaleHelper)
 	let offsetTuple: RigidbodyVector3Tuple | null = null
-	let shouldScaleOffset = false
 	let resolvedShape: CANNON.Shape | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let needsHeightfieldOrientation = false
@@ -913,7 +912,6 @@ export function createRigidbodyBody(
 		if (groundEntry) {
 			resolvedShape = groundEntry.shape
 			offsetTuple = groundEntry.offset
-			shouldScaleOffset = false
 			needsHeightfieldOrientation = true
 		}
 	}
@@ -928,7 +926,6 @@ export function createRigidbodyBody(
 	if (!resolvedShape && shapeDefinition) {
 		resolvedShape = createCannonShape(shapeDefinition, loggerTag, shapeScale)
 		offsetTuple = shapeDefinition.offset ?? null
-		shouldScaleOffset = shapeDefinition.applyScale
 		if (shapeDefinition.kind === 'heightfield') {
 			needsHeightfieldOrientation = true
 		}
@@ -952,13 +949,10 @@ export function createRigidbodyBody(
 	let shapeOffset: CANNON.Vec3 | undefined
 	if (offsetTuple) {
 		const [ox, oy, oz] = offsetTuple
-		const offsetScaleX = shouldScaleOffset ? shapeScale.x : 1
-		const offsetScaleY = shouldScaleOffset ? shapeScale.y : 1
-		const offsetScaleZ = shouldScaleOffset ? shapeScale.z : 1
 		shapeOffset = heightfieldShapeOffsetHelper.set(
-			(ox ?? 0) * offsetScaleX,
-			(oy ?? 0) * offsetScaleY,
-			(oz ?? 0) * offsetScaleZ,
+			(ox ?? 0) * shapeScale.x,
+			(oy ?? 0) * shapeScale.y,
+			(oz ?? 0) * shapeScale.z,
 		)
 	}
 	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null

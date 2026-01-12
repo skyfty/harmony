@@ -749,6 +749,7 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
     for (let i = 0; i < positions.count; i += 1) {
       scratch.fromBufferAttribute(positions, i)
       scratch.multiply(colliderGroup.scale)
+      scratch.add(offset)
       vertices.push([scratch.x / scale.x, scratch.y / scale.y, scratch.z / scale.z])
     }
     const faces: number[][] = []
