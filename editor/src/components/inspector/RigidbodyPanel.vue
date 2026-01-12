@@ -64,6 +64,11 @@ const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
 const LOCKED_BODY_TYPE_MASS = 0
 const isMassLocked = computed(() => LOCKED_BODY_TYPES.has(localBodyType.value))
 
+const colliderTypeLabel = computed(() => {
+  const opt = COLLIDER_TYPE_OPTIONS.find((o) => o.value === localColliderType.value)
+  return opt ? opt.label : String(localColliderType.value ?? '')
+})
+
 watch(
   () => normalizedProps.value,
   (props) => {
@@ -331,18 +336,13 @@ watch(selectedNodeId, () => {
           @update:modelValue="handleBodyTypeChange"
         />
         <div class="rigidbody-panel__collider-row">
-          <v-select
-            class="rigidbody-panel__collider-select"
-            label="Collider Type"
-            density="compact"
-            variant="underlined"
-            :items="COLLIDER_TYPE_OPTIONS"
-            item-title="label"
-            item-value="value"
-            :model-value="localColliderType"
-            :disabled="!rigidbodyComponent?.enabled"
-            @update:modelValue="handleColliderTypeChange"
-          />
+          <div
+            class="rigidbody-panel__collider-select rigidbody-panel__collider-text"
+            :class="{ disabled: !rigidbodyComponent?.enabled }"
+          >
+            <div class="rigidbody-panel__picker-label">Collider Type</div>
+            <div class="rigidbody-panel__collider-value">{{ colliderTypeLabel }}</div>
+          </div>
           <v-tooltip text="Manual collider editor" location="top">
             <template #activator="{ props }">
               <v-btn
@@ -476,6 +476,21 @@ watch(selectedNodeId, () => {
   margin: 0;
   font-size: 0.75rem;
   color: rgba(233, 236, 241, 0.55);
+}
+
+.rigidbody-panel__collider-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.rigidbody-panel__collider-value {
+  font-size: 0.95rem;
+  color: rgba(233, 236, 241, 0.9);
+  padding: 0.25rem 0 0.1rem 0;
+}
+
+.rigidbody-panel__collider-text.disabled .rigidbody-panel__collider-value {
+  color: rgba(233, 236, 241, 0.45);
 }
 
 .component-menu-btn {
