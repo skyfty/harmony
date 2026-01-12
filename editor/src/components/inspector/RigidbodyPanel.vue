@@ -198,17 +198,6 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
   updateComponent({ bodyType: value })
 }
 
-function handleColliderTypeChange(value: RigidbodyColliderType | null) {
-  if (!value) {
-    return
-  }
-  localColliderType.value = value
-  if (value === normalizedProps.value.colliderType) {
-    return
-  }
-  updateComponent({ colliderType: value })
-}
-
 function handleOpenColliderEditor() {
   if (!rigidbodyComponent.value?.enabled) {
     return

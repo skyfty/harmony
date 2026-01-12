@@ -30,6 +30,26 @@ export interface RigidbodyComponentProps {
 
 export type RigidbodyVector3Tuple = [number, number, number]
 
+export type RigidbodyConvexSimplifyPass = {
+  pointTarget: number
+  decimalPrecision: number
+  vertexMergeTolerance: number
+  inflate: number
+}
+
+export type RigidbodyConvexSimplifyLimits = {
+  maxVertices: number
+  maxFaces: number
+}
+
+export type RigidbodyConvexSimplifyConfig = {
+  version: 1
+  primary: RigidbodyConvexSimplifyPass
+  fallback: RigidbodyConvexSimplifyPass
+  limits: RigidbodyConvexSimplifyLimits
+  usedPass?: 'primary' | 'fallback'
+}
+
 type RigidbodyPhysicsShapeBase = {
   offset?: RigidbodyVector3Tuple
   applyScale: boolean
@@ -69,6 +89,7 @@ export const RIGIDBODY_METADATA_KEY = '__harmonyRigidbody'
 export interface RigidbodyComponentMetadata {
   shape?: RigidbodyPhysicsShape | null
   generatedAt?: string
+  convexSimplify?: RigidbodyConvexSimplifyConfig
 }
 
 export const DEFAULT_RIGIDBODY_MASS = 10000

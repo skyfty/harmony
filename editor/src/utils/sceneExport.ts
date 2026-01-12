@@ -13,6 +13,11 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
 import {
+  DEFAULT_CONVEX_SIMPLIFY_CONFIG,
+  buildConservativeConvexGeometryFromObject,
+  geometryStats,
+} from '@/utils/convexSimplify'
+import {
   resolveNodeScaleFactors,
   buildBoxShapeFromObject,
   buildSphereShapeFromObject,
@@ -25,6 +30,7 @@ import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
+  type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
   type RigidbodyColliderType,
   clampRigidbodyComponentProps,
@@ -587,8 +593,41 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     }
     const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
     const nodeScale = resolveNodeScaleFactors(samplingNode)
-    const outline = buildOutlineMeshFromObject(samplingObject)
-    const buildConvex = () => (outline ? buildConvexShapeFromOutline(outline) : null)
+
+    let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
+    const buildConvex = () => {
+      const base = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
+      const config: RigidbodyConvexSimplifyConfig = {
+        version: 1,
+        primary: { ...base.primary },
+        fallback: { ...base.fallback },
+        limits: { ...base.limits },
+      }
+
+      const primaryBuilt = buildConservativeConvexGeometryFromObject(samplingObject, config.primary)
+      if (!primaryBuilt) {
+        return null
+      }
+
+      let usedPass: 'primary' | 'fallback' = 'primary'
+      let outline = primaryBuilt.outline
+      const primaryGeometryStats = geometryStats(primaryBuilt.geometry)
+      primaryBuilt.geometry.dispose()
+
+      if (primaryGeometryStats.vertices > config.limits.maxVertices || primaryGeometryStats.faces > config.limits.maxFaces) {
+        const fallbackBuilt = buildConservativeConvexGeometryFromObject(samplingObject, config.fallback)
+        if (fallbackBuilt) {
+          usedPass = 'fallback'
+          outline = fallbackBuilt.outline
+          fallbackBuilt.geometry.dispose()
+        }
+      }
+
+      config.usedPass = usedPass
+      generatedConvexSimplify = config
+      return buildConvexShapeFromOutline(outline)
+    }
+
     const buildBox = () => buildBoxShapeFromObject(samplingObject, nodeScale)
     const buildSphere = () => buildSphereShapeFromObject(samplingObject, nodeScale)
     const buildCylinder = () => buildCylinderShapeFromObject(samplingObject, nodeScale)
@@ -608,7 +647,11 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!shape) {
       continue
     }
-    entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, shape)
+    entry.component.metadata = mergeRigidbodyMetadata(
+      entry.component.metadata,
+      shape,
+      shape.kind === 'convex' ? generatedConvexSimplify : undefined,
+    )
   }
 }
 
@@ -650,11 +693,13 @@ function resolveRigidbodySamplingNode(
 function mergeRigidbodyMetadata(
   existing: Record<string, unknown> | undefined,
   shape: RigidbodyPhysicsShape,
+  convexSimplify?: RigidbodyConvexSimplifyConfig,
 ): Record<string, unknown> {
   const nextMetadata: Record<string, unknown> = existing ? { ...existing } : {}
   const payload: RigidbodyComponentMetadata = {
     shape,
     generatedAt: new Date().toISOString(),
+    convexSimplify,
   }
   nextMetadata[RIGIDBODY_METADATA_KEY] = payload
   return nextMetadata

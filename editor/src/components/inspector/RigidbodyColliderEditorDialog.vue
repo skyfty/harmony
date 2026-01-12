@@ -12,9 +12,14 @@ import {
   RIGIDBODY_METADATA_KEY,
   type RigidbodyComponentMetadata,
   type RigidbodyComponentProps,
+  type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
 } from '@schema/components'
-import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
+import {
+  DEFAULT_CONVEX_SIMPLIFY_CONFIG,
+  buildConservativeConvexGeometryFromObject,
+  geometryStats,
+} from '@/utils/convexSimplify'
 import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
 import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 
@@ -94,6 +99,15 @@ const nodeLabel = computed(() => targetNode.value?.name ?? selectedNode.value?.n
 const componentMetadataShape = computed<RigidbodyPhysicsShape | null>(() => {
   const metadata = rigidbodyComponent.value?.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
   return metadata?.shape ?? null
+})
+
+const componentConvexSimplify = computed<RigidbodyConvexSimplifyConfig>(() => {
+  const metadata = rigidbodyComponent.value?.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
+  const config = metadata?.convexSimplify
+  if (config && config.version === 1 && config.primary && config.fallback && config.limits) {
+    return config
+  }
+  return DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
 })
 
 const nodeScaleFactors = computed(() => targetNode.value ? resolveNodeScaleFactors(targetNode.value) : { x: 1, y: 1, z: 1 })
@@ -280,25 +294,9 @@ function buildConvexGeometryFromPreview(): THREE.BufferGeometry | null {
   if (!previewModelGroup) {
     return null
   }
-  const outline = buildOutlineMeshFromObject(previewModelGroup, { pointTarget: 320 })
-  if (!outline || !outline.positions || outline.positions.length < 12) {
-    return null
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(outline.positions, 3))
-  if (Array.isArray(outline.indices) && outline.indices.length >= 3) {
-    geometry.setIndex(outline.indices)
-  } else {
-    const fallback: number[] = []
-    for (let index = 0; index + 2 < outline.positions.length / 3; index += 3) {
-      fallback.push(index, index + 1, index + 2)
-    }
-    geometry.setIndex(fallback)
-  }
-  geometry.computeVertexNormals()
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return geometry
+
+  const built = buildConservativeConvexGeometryFromObject(previewModelGroup, componentConvexSimplify.value.primary)
+  return built?.geometry ?? null
 }
 
 function buildConvexGeometryFromDefinition(definition: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>, scale: THREE.Vector3): THREE.BufferGeometry | null {
@@ -343,14 +341,16 @@ function buildConvexGeometryFromDefinition(definition: Extract<RigidbodyPhysicsS
   return geometry
 }
 
-function rebuildColliderGeometry(kind: ColliderShapeKind) {
+function rebuildColliderGeometry(kind: ColliderShapeKind, options: { forceConvexRebuild?: boolean } = {}) {
   if (!previewScene) {
     return
   }
   let geometry: THREE.BufferGeometry | null = null
   if (kind === 'convex') {
-    previewConvexGeometry?.dispose()
-    previewConvexGeometry = buildConvexGeometryFromPreview()
+    if (options.forceConvexRebuild || !previewConvexGeometry) {
+      previewConvexGeometry?.dispose()
+      previewConvexGeometry = buildConvexGeometryFromPreview()
+    }
     geometry = previewConvexGeometry
   } else if (kind === 'sphere') {
     geometry = new THREE.SphereGeometry(0.5, 36, 24)
@@ -368,7 +368,9 @@ function rebuildColliderGeometry(kind: ColliderShapeKind) {
 
   if (colliderMesh) {
     colliderGroup.remove(colliderMesh)
-    colliderMesh.geometry.dispose()
+    if (colliderMesh.geometry && colliderMesh.geometry !== previewConvexGeometry) {
+      colliderMesh.geometry.dispose()
+    }
     ;(colliderMesh.material as THREE.Material).dispose?.()
   }
 
@@ -384,7 +386,9 @@ function rebuildColliderGeometry(kind: ColliderShapeKind) {
 
   if (colliderEdges) {
     colliderGroup.remove(colliderEdges)
-    colliderEdges.geometry.dispose()
+    if (colliderEdges.geometry && colliderEdges.geometry !== previewConvexGeometry) {
+      colliderEdges.geometry.dispose()
+    }
     ;(colliderEdges.material as THREE.Material).dispose?.()
   }
   colliderEdges = new THREE.LineSegments(
@@ -510,8 +514,13 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
 }
 
 function applyEditableShape(shape: EditableShape) {
+  const previousKind = colliderKind.value
   colliderKind.value = shape.kind
-  rebuildColliderGeometry(shape.kind)
+  if (shape.kind === 'convex') {
+    rebuildColliderGeometry('convex', { forceConvexRebuild: !previewConvexGeometry && previousKind !== 'convex' })
+  } else {
+    rebuildColliderGeometry(shape.kind)
+  }
   if (!colliderGroup) {
     return
   }
@@ -707,91 +716,145 @@ function handleAutoFit() {
   }
 }
 
-function buildMetadataShape(): RigidbodyPhysicsShape | null {
+function cloneConvexSimplifyConfig(config: RigidbodyConvexSimplifyConfig): RigidbodyConvexSimplifyConfig {
+  return {
+    version: 1,
+    primary: { ...config.primary },
+    fallback: { ...config.fallback },
+    limits: { ...config.limits },
+    usedPass: config.usedPass,
+  }
+}
+
+function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?: RigidbodyConvexSimplifyConfig } | null {
   if (!colliderGroup) {
     return null
   }
+
   const scale = nodeScaleFactors.value
   const offset = colliderGroup.position.clone().add(previewOriginShift)
 
   if (colliderKind.value === 'box') {
     return {
-      kind: 'box',
-      halfExtents: [
-        Math.max(1e-4, (colliderGroup.scale.x * 0.5) / scale.x),
-        Math.max(1e-4, (colliderGroup.scale.y * 0.5) / scale.y),
-        Math.max(1e-4, (colliderGroup.scale.z * 0.5) / scale.z),
-      ],
-      offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-      applyScale: true,
+      shape: {
+        kind: 'box',
+        halfExtents: [
+          Math.max(1e-4, (colliderGroup.scale.x * 0.5) / scale.x),
+          Math.max(1e-4, (colliderGroup.scale.y * 0.5) / scale.y),
+          Math.max(1e-4, (colliderGroup.scale.z * 0.5) / scale.z),
+        ],
+        offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        applyScale: true,
+      },
     }
   }
+
   if (colliderKind.value === 'sphere') {
     const radius = colliderGroup.scale.x * 0.5
     const dominant = Math.max(scale.x, scale.y, scale.z)
     return {
-      kind: 'sphere',
-      radius: Math.max(1e-4, radius / dominant),
-      offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-      applyScale: true,
+      shape: {
+        kind: 'sphere',
+        radius: Math.max(1e-4, radius / dominant),
+        offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        applyScale: true,
+      },
     }
   }
-  if (colliderKind.value === 'convex') {
-    if (!previewConvexGeometry) {
-      previewConvexGeometry = buildConvexGeometryFromPreview()
+
+  if (colliderKind.value !== 'convex') {
+    return null
+  }
+  if (!previewModelGroup) {
+    return null
+  }
+
+  const baseConfig = componentConvexSimplify.value
+  const config = cloneConvexSimplifyConfig(baseConfig)
+
+  const primaryBuilt = buildConservativeConvexGeometryFromObject(previewModelGroup, config.primary)
+  if (!primaryBuilt) {
+    return null
+  }
+
+  let usedPass: 'primary' | 'fallback' = 'primary'
+  let chosenGeometry = primaryBuilt.geometry
+  const primaryStats = geometryStats(chosenGeometry)
+
+  if (primaryStats.vertices > config.limits.maxVertices || primaryStats.faces > config.limits.maxFaces) {
+    const fallbackBuilt = buildConservativeConvexGeometryFromObject(previewModelGroup, config.fallback)
+    if (fallbackBuilt) {
+      usedPass = 'fallback'
+      chosenGeometry = fallbackBuilt.geometry
+      primaryBuilt.geometry.dispose()
     }
-    const positions = (previewConvexGeometry?.getAttribute('position') as THREE.BufferAttribute | undefined)
-    if (!positions) {
-      return null
+  }
+
+  config.usedPass = usedPass
+
+  // Keep preview consistent with what we save.
+  if (previewConvexGeometry && previewConvexGeometry !== chosenGeometry) {
+    previewConvexGeometry.dispose()
+  }
+  previewConvexGeometry = chosenGeometry
+  rebuildColliderGeometry('convex')
+
+  const positions = (chosenGeometry.getAttribute('position') as THREE.BufferAttribute | undefined)
+  if (!positions) {
+    return null
+  }
+
+  const vertices: [number, number, number][] = []
+  const scratch = new THREE.Vector3()
+  for (let i = 0; i < positions.count; i += 1) {
+    scratch.fromBufferAttribute(positions, i)
+    scratch.multiply(colliderGroup.scale)
+    vertices.push([scratch.x / scale.x, scratch.y / scale.y, scratch.z / scale.z])
+  }
+
+  const faces: number[][] = []
+  const index = chosenGeometry.getIndex()
+  if (index && index.count >= 3) {
+    for (let i = 0; i + 2 < index.count; i += 3) {
+      faces.push([index.getX(i), index.getX(i + 1), index.getX(i + 2)])
     }
-    const vertices: [number, number, number][] = []
-    const scratch = new THREE.Vector3()
-    for (let i = 0; i < positions.count; i += 1) {
-      scratch.fromBufferAttribute(positions, i)
-      scratch.multiply(colliderGroup.scale)
-      scratch.add(offset)
-      vertices.push([scratch.x / scale.x, scratch.y / scale.y, scratch.z / scale.z])
+  } else {
+    for (let i = 0; i + 2 < positions.count; i += 3) {
+      faces.push([i, i + 1, i + 2])
     }
-    const faces: number[][] = []
-    const index = previewConvexGeometry?.getIndex()
-    if (index && index.count >= 3) {
-      for (let i = 0; i + 2 < index.count; i += 3) {
-        faces.push([index.getX(i), index.getX(i + 1), index.getX(i + 2)])
-      }
-    } else {
-      for (let i = 0; i + 2 < positions.count; i += 3) {
-        faces.push([i, i + 1, i + 2])
-      }
-    }
-    if (!vertices.length || !faces.length) {
-      return null
-    }
-    return {
+  }
+
+  if (!vertices.length || !faces.length) {
+    return null
+  }
+
+  return {
+    shape: {
       kind: 'convex',
       vertices,
       faces,
       offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
       applyScale: true,
-    }
+    },
+    convexSimplify: config,
   }
-
-  return null
 }
 
 function handleConfirm() {
   if (!canSave.value || !rigidbodyComponent.value || !selectedNodeId.value) {
     return
   }
-  const shape = buildMetadataShape()
-  if (!shape) {
+  const payload = buildMetadataPayload()
+  if (!payload) {
     return
   }
   const metadata: Record<string, unknown> = { ...(rigidbodyComponent.value.metadata ?? {}) }
-  const payload: RigidbodyComponentMetadata = {
-    shape,
+  const next: RigidbodyComponentMetadata = {
+    shape: payload.shape,
     generatedAt: new Date().toISOString(),
+    convexSimplify: payload.convexSimplify,
   }
-  metadata[RIGIDBODY_METADATA_KEY] = payload
+  metadata[RIGIDBODY_METADATA_KEY] = next
   sceneStore.updateNodeComponentMetadata(selectedNodeId.value, rigidbodyComponent.value.id, metadata)
   sceneStore.updateNodeComponentProps(selectedNodeId.value, rigidbodyComponent.value.id, {
     colliderType: colliderKind.value,
