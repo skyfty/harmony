@@ -9846,9 +9846,58 @@ export const useSceneStore = defineStore('scene', {
     resetProjectTree() {
       this.packageDirectoryCache = {}
       this.packageDirectoryLoaded = {}
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.refreshProjectTree()
       this.activeDirectoryId = defaultDirectoryId
       this.selectedAssetId = null
+    },
+    // Helper: rebuild project tree from current catalog + package directory cache
+    refreshProjectTree() {
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+    },
+    // Helper: ensure active directory and selected asset are valid in the current projectTree
+    ensureActiveDirectoryAndSelectionValid() {
+      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
+      if (this.selectedAssetId && !findAssetInTree(this.projectTree, this.selectedAssetId)) {
+        this.selectedAssetId = null
+      }
+    },
+    // Helper: atomically apply catalog/index/packageMap updates and refresh tree
+    applyCatalogUpdate(
+      nextCatalog: Record<string, ProjectAsset[]>,
+      options?: {
+        nextIndex?: Record<string, AssetIndexEntry>
+        nextPackageMap?: Record<string, string>
+        commitSnapshot?: boolean
+        updateNodes?: boolean
+      },
+    ) {
+      this.assetCatalog = nextCatalog
+      if (options?.nextIndex) {
+        this.assetIndex = options.nextIndex
+      }
+      if (options?.nextPackageMap) {
+        this.packageAssetMap = options.nextPackageMap
+      }
+      this.refreshProjectTree()
+      if (options?.commitSnapshot) {
+        commitSceneSnapshot(this, { updateNodes: !!options.updateNodes })
+      }
+    },
+    // Helper: find asset by id inside catalog using assetIndex.categoryId
+    findAssetInCatalog(assetId: string): ProjectAsset | null {
+      return getAssetFromCatalog(this.assetCatalog, assetId)
+    },
+    // Helper: collect all assets from catalog into a Map by id
+    collectCatalogAssetMap(): Map<string, ProjectAsset> {
+      const map = new Map<string, ProjectAsset>()
+      Object.values(this.assetCatalog).forEach((list) => {
+        list.forEach((asset) => {
+          map.set(asset.id, asset)
+        })
+      })
+      return map
     },
     getPackageDirectories(providerId: string): ProjectDirectory[] | null {
       const cached = this.packageDirectoryCache[providerId]
@@ -9863,21 +9912,15 @@ export const useSceneStore = defineStore('scene', {
     setPackageDirectories(providerId: string, directories: ProjectDirectory[]) {
       this.packageDirectoryCache[providerId] = cloneProjectTree(directories)
       this.packageDirectoryLoaded[providerId] = true
-      const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      this.projectTree = nextTree
-      if (!this.activeDirectoryId || !findDirectory(nextTree, this.activeDirectoryId)) {
-        this.activeDirectoryId = defaultDirectoryId
-      }
+      this.refreshProjectTree()
+      this.ensureActiveDirectoryAndSelectionValid()
       this.selectedAssetId = null
     },
+    
     getAsset(assetId: string): ProjectAsset | null {
-      const meta = this.assetIndex[assetId]
-      if (meta) {
-        const catalogList = this.assetCatalog[meta.categoryId] ?? []
-        const found = catalogList.find((item) => item.id === assetId)
-        if (found) {
-          return found
-        }
+      const foundInCatalog = this.findAssetInCatalog(assetId)
+      if (foundInCatalog) {
+        return foundInCatalog
       }
       return findAssetInTree(this.projectTree, assetId)
     },
@@ -9996,9 +10039,7 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
-      this.assetCatalog = nextCatalog
-      this.assetIndex = nextIndex
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.applyCatalogUpdate(nextCatalog, { nextIndex })
 
       registeredAssets.forEach((asset) => {
         void this.syncAssetPackageMapEntry(asset, sourceByAssetId[asset.id])
@@ -10055,17 +10096,11 @@ export const useSceneStore = defineStore('scene', {
         return { removedAssetIds: [] }
       }
 
-      this.assetCatalog = nextCatalog
-      this.assetIndex = nextAssetIndex
-      this.packageAssetMap = nextPackageAssetMap
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-
+      this.applyCatalogUpdate(nextCatalog, { nextIndex: nextAssetIndex, nextPackageMap: nextPackageAssetMap })
       if (shouldResetSelection) {
         this.selectedAssetId = null
       }
-      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
-        this.activeDirectoryId = defaultDirectoryId
-      }
+      this.ensureActiveDirectoryAndSelectionValid()
 
       commitSceneSnapshot(this, { updateNodes: false })
 
@@ -11287,12 +11322,7 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
-      const catalogAssets = new Map<string, ProjectAsset>()
-      Object.values(this.assetCatalog).forEach((list) => {
-        list.forEach((asset) => {
-          catalogAssets.set(asset.id, asset)
-        })
-      })
+      const catalogAssets = this.collectCatalogAssetMap()
 
       const deletableIds = uniqueIds.filter((id) => catalogAssets.has(id))
       if (!deletableIds.length) {
@@ -11339,20 +11369,11 @@ export const useSceneStore = defineStore('scene', {
           .filter((asset) => !assetIdSet.has(asset.id))
           .map((asset) => ({ ...asset }))
       })
-      this.assetCatalog = nextCatalog
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
-        this.activeDirectoryId = defaultDirectoryId
-      }
-      if (this.selectedAssetId && assetIdSet.has(this.selectedAssetId)) {
-        this.selectedAssetId = null
-      }
 
       const nextIndex = { ...this.assetIndex }
       deletableIds.forEach((assetId) => {
         delete nextIndex[assetId]
       })
-      this.assetIndex = nextIndex
 
       const nextPackageMap: Record<string, string> = {}
       Object.entries(this.packageAssetMap).forEach(([key, value]) => {
@@ -11367,7 +11388,13 @@ export const useSceneStore = defineStore('scene', {
         }
         nextPackageMap[key] = value
       })
-      this.packageAssetMap = nextPackageMap
+
+      // Apply catalog/index/packageMap update and refresh project tree
+      this.applyCatalogUpdate(nextCatalog, { nextIndex, nextPackageMap })
+      this.ensureActiveDirectoryAndSelectionValid()
+      if (this.selectedAssetId && assetIdSet.has(this.selectedAssetId)) {
+        this.selectedAssetId = null
+      }
 
       nonMaterialAssetIds.forEach((assetId) => {
         assetCache.removeCache(assetId)
@@ -11401,7 +11428,6 @@ export const useSceneStore = defineStore('scene', {
 
       const targetList = nextCatalog[nextCategoryId] ?? []
       nextCatalog[nextCategoryId] = [...targetList.filter((asset) => asset.id !== storedAsset.id), storedAsset]
-      this.assetCatalog = nextCatalog
 
       const nextIndex = { ...this.assetIndex }
       delete nextIndex[localAssetId]
@@ -11409,7 +11435,6 @@ export const useSceneStore = defineStore('scene', {
         categoryId: nextCategoryId,
         source: options.source ?? { type: 'url' },
       }
-      this.assetIndex = nextIndex
 
       const nextPackageMap: Record<string, string> = {}
       Object.entries(this.packageAssetMap).forEach(([key, value]) => {
@@ -11422,7 +11447,9 @@ export const useSceneStore = defineStore('scene', {
         }
         nextPackageMap[key] = value
       })
-      this.packageAssetMap = nextPackageMap
+
+      // Atomically apply catalog/index/packageMap and rebuild project tree
+      this.applyCatalogUpdate(nextCatalog, { nextIndex, nextPackageMap })
 
       replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
       replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
@@ -11435,8 +11462,6 @@ export const useSceneStore = defineStore('scene', {
       if (this.draggingAssetId === localAssetId) {
         this.draggingAssetId = storedAsset.id
       }
-
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
 
       commitSceneSnapshot(this, { updateNodes: true })
       return storedAsset
