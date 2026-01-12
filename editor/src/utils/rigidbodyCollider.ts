@@ -84,7 +84,7 @@ export function buildBoxShapeFromObject(
     kind: 'box',
     halfExtents,
     offset,
-    scaleNormalized: true,
+    applyScale: true,
   }
 }
 
@@ -112,7 +112,7 @@ export function buildSphereShapeFromObject(
       center.y / scaleFactors.y,
       center.z / scaleFactors.z,
     ],
-    scaleNormalized: true,
+    applyScale: true,
   }
 }
 
@@ -144,6 +144,6 @@ export function buildCylinderShapeFromObject(
       center.y / scaleFactors.y,
       center.z / scaleFactors.z,
     ],
-    scaleNormalized: true,
+    applyScale: true,
   }
 }

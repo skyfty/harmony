@@ -158,7 +158,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 					kind: 'box',
 					halfExtents: [roadWidth * 0.5, thickness * 0.5, tileLength * 0.5],
 					offset: [0, 0, 0],
-					scaleNormalized: false,
+					applyScale: false,
 				}
 			} else {
 				tileObject.position.set(centerPoint.x, 0, centerPoint.z)
@@ -541,7 +541,7 @@ function buildHeightfieldShapeFromSeries({
 		width,
 		depth,
 		offset: [-halfWidth, -halfDepth, 0],
-		scaleNormalized: false,
+		applyScale: false,
 	}
 }
 

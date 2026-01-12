@@ -848,6 +848,7 @@ function buildConvexShapeFromOutline(outline: SceneOutlineMesh): RigidbodyPhysic
     kind: 'convex',
     vertices,
     faces,
+    applyScale: false,
   }
 }
 

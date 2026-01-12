@@ -190,7 +190,7 @@ const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
 const isGroundWireframeVisible = ref(false)
-const isOtherRigidbodyWireframeVisible = ref(false)
+const isOtherRigidbodyWireframeVisible = ref(true)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
@@ -7508,11 +7508,12 @@ function ensureRigidbodyDebugHelperForShape(
 	lineSegments.renderOrder = 9999
 	const offsetTuple = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
 	const [ox = 0, oy = 0, oz = 0] = offsetTuple
-	const offsetScale = shape.scaleNormalized === false ? new THREE.Vector3(1, 1, 1) : worldScale
-	lineSegments.position.set(ox * offsetScale.x, oy * offsetScale.y, oz * offsetScale.z)
+	// Offset is expressed in the same local-space units as the shape definition.
+	// When applyScale is enabled we scale the whole helper group, which also scales this translation.
+	lineSegments.position.set(ox, oy, oz)
 	helperGroup.add(lineSegments)
 	helperGroup.visible = false
-	helperGroup.scale.copy(shape.scaleNormalized === false ? new THREE.Vector3(1, 1, 1) : worldScale)
+	helperGroup.scale.copy(shape.applyScale ? worldScale : new THREE.Vector3(1, 1, 1))
 	container.add(helperGroup)
 	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
 }
@@ -7652,7 +7653,7 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		return
 	}
 	const scale = new THREE.Vector3(1, 1, 1)
-	if (shapeDefinition.scaleNormalized !== false) {
+	if (shapeDefinition.applyScale) {
 		const object = node ? nodeObjectMap.get(node.id) ?? null : null
 		if (object) {
 			object.updateMatrixWorld(true)

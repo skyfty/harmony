@@ -712,7 +712,7 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
     const nx = raw?.[0] ?? 0
     const ny = raw?.[1] ?? 0
     const nz = raw?.[2] ?? 0
-    if (metadataShape.scaleNormalized) {
+    if (metadataShape.applyScale) {
       return new CANNON.Vec3(nx * scale.x, ny * scale.y, nz * scale.z)
     }
     return new CANNON.Vec3(nx, ny, nz)
@@ -721,9 +721,9 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
   const offset = makeOffset((metadataShape as any).offset)
 
   const resolveBox = (shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): ChassisColliderInfo => {
-    const hx = shape.scaleNormalized ? shape.halfExtents[0] * scale.x : shape.halfExtents[0]
-    const hy = shape.scaleNormalized ? shape.halfExtents[1] * scale.y : shape.halfExtents[1]
-    const hz = shape.scaleNormalized ? shape.halfExtents[2] * scale.z : shape.halfExtents[2]
+    const hx = shape.applyScale ? shape.halfExtents[0] * scale.x : shape.halfExtents[0]
+    const hy = shape.applyScale ? shape.halfExtents[1] * scale.y : shape.halfExtents[1]
+    const hz = shape.applyScale ? shape.halfExtents[2] * scale.z : shape.halfExtents[2]
     const halfExtents = new CANNON.Vec3(Math.max(1e-4, hx), Math.max(1e-4, hy), Math.max(1e-4, hz))
     return {
       shape: new CANNON.Box(halfExtents),
@@ -735,7 +735,7 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
 
   const resolveSphere = (shape: Extract<RigidbodyPhysicsShape, { kind: 'sphere' }>): ChassisColliderInfo => {
     const dominantScale = Math.max(scale.x, scale.y, scale.z)
-    const radius = shape.scaleNormalized ? shape.radius * dominantScale : shape.radius
+    const radius = shape.applyScale ? shape.radius * dominantScale : shape.radius
     const safeRadius = Math.max(1e-4, radius)
     return {
       shape: new CANNON.Sphere(safeRadius),
@@ -747,9 +747,9 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
 
   const resolveCylinder = (shape: Extract<RigidbodyPhysicsShape, { kind: 'cylinder' }>): ChassisColliderInfo => {
     const horizontalScale = Math.max(scale.x, scale.z)
-    const radiusTop = shape.scaleNormalized ? shape.radiusTop * horizontalScale : shape.radiusTop
-    const radiusBottom = shape.scaleNormalized ? shape.radiusBottom * horizontalScale : shape.radiusBottom
-    const height = shape.scaleNormalized ? shape.height * scale.y : shape.height
+    const radiusTop = shape.applyScale ? shape.radiusTop * horizontalScale : shape.radiusTop
+    const radiusBottom = shape.applyScale ? shape.radiusBottom * horizontalScale : shape.radiusBottom
+    const height = shape.applyScale ? shape.height * scale.y : shape.height
     const segments = Math.max(4, shape.segments ?? 16)
     const safeTop = Math.max(1e-4, radiusTop)
     const safeBottom = Math.max(1e-4, radiusBottom)
@@ -765,9 +765,9 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
   const resolveConvex = (shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): ChassisColliderInfo => {
     const vertices = (shape.vertices ?? []).map((vertex) => {
       const [x, y, z] = vertex
-      const vx = metadataShape.scaleNormalized ? x * scale.x : x
-      const vy = metadataShape.scaleNormalized ? y * scale.y : y
-      const vz = metadataShape.scaleNormalized ? z * scale.z : z
+      const vx = shape.applyScale ? x * scale.x : x
+      const vy = shape.applyScale ? y * scale.y : y
+      const vz = shape.applyScale ? z * scale.z : z
       return new CANNON.Vec3(vx, vy, vz)
     })
     const faces = (shape.faces ?? []).map((face) => face.slice())

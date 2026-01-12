@@ -352,5 +352,6 @@ export function buildHeightfieldShapeFromGroundNode(node: SceneNode): RigidbodyP
     width: data.width,
     depth: data.depth,
     offset: data.offset,
+    applyScale: false,
   }
 }

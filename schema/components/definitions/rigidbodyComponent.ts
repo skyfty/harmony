@@ -32,7 +32,7 @@ export type RigidbodyVector3Tuple = [number, number, number]
 
 type RigidbodyPhysicsShapeBase = {
   offset?: RigidbodyVector3Tuple
-  scaleNormalized?: boolean
+  applyScale: boolean
 }
 
 export type RigidbodyPhysicsShape =

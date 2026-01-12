@@ -454,10 +454,10 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
 }
 
 function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeKind): EditableShape | null {
-  const normalized = shape.scaleNormalized !== false
-  const scaleX = normalized ? nodeScaleFactors.value.x : 1
-  const scaleY = normalized ? nodeScaleFactors.value.y : 1
-  const scaleZ = normalized ? nodeScaleFactors.value.z : 1
+  const applyScale = shape.applyScale === true
+  const scaleX = applyScale ? nodeScaleFactors.value.x : 1
+  const scaleY = applyScale ? nodeScaleFactors.value.y : 1
+  const scaleZ = applyScale ? nodeScaleFactors.value.z : 1
   const offsetTuple = shape.offset ?? [0, 0, 0]
   const actualOffset = new THREE.Vector3(
     offsetTuple[0] * scaleX,
@@ -723,7 +723,7 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
         Math.max(1e-4, (colliderGroup.scale.z * 0.5) / scale.z),
       ],
       offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-      scaleNormalized: true,
+      applyScale: true,
     }
   }
   if (colliderKind.value === 'sphere') {
@@ -733,7 +733,7 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
       kind: 'sphere',
       radius: Math.max(1e-4, radius / dominant),
       offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-      scaleNormalized: true,
+      applyScale: true,
     }
   }
   if (colliderKind.value === 'convex') {
@@ -749,7 +749,6 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
     for (let i = 0; i < positions.count; i += 1) {
       scratch.fromBufferAttribute(positions, i)
       scratch.multiply(colliderGroup.scale)
-      scratch.add(offset)
       vertices.push([scratch.x / scale.x, scratch.y / scale.y, scratch.z / scale.z])
     }
     const faces: number[][] = []
@@ -771,7 +770,7 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
       vertices,
       faces,
       offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-      scaleNormalized: true,
+      applyScale: true,
     }
   }
 
