@@ -93,7 +93,6 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
-import { getAssetTypeFromCategoryIdSuffix, inferAssetTypeOrNull } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
@@ -412,32 +411,6 @@ let pendingSuppressedScenePatchRequiresFullSync = false
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
-
-const PREFAB_DEPENDENCY_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
-  model: '#455A64',
-  image: '#5E35B1',
-  texture: '#00897B',
-  material: '#6D4C41',
-  behavior: '#546E7A',
-  prefab: '#7B1FA2',
-  file: '#37474F',
-  video: '#1E88E5',
-  mesh: '#8D6E63',
-  hdri: '#0097A7',
-}
-
-
-function inferPrefabDependencyAssetType(options: { nameOrUrl?: string | null; categoryId?: string | null }): ProjectAsset['type'] {
-  const inferred = inferAssetTypeOrNull({ nameOrUrl: options?.nameOrUrl ?? null, mimeType: null })
-  if (inferred) {
-    return inferred
-  }
-  return getAssetTypeFromCategoryIdSuffix(options?.categoryId ?? null) ?? 'file'
-}
-
-function resolvePreviewColorForAssetType(type: ProjectAsset['type']): string {
-  return PREFAB_DEPENDENCY_PREVIEW_COLORS[type] ?? PREFAB_DEPENDENCY_PREVIEW_COLORS.file
-}
 
 function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
   if (!asset) {
@@ -12933,7 +12906,9 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = nextTree
       this.setSelection([id], { primaryId: id })
-      this.queueSceneStructurePatch('addSceneNode')
+      // New nodes can be handled incrementally by SceneViewport via ensureNodeSubtreeExists.
+      // Avoid full syncs on every add when scenes get large.
+      this.queueSceneNodePatch(id, ['transform'])
       commitSceneSnapshot(this)
 
       return node
