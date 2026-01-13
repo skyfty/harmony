@@ -3919,21 +3919,26 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 	lastFirstPersonState.position.copy(protagonistPosePosition)
 	lastFirstPersonState.direction.copy(protagonistPoseDirection)
 	protagonistPoseSynced = true
-	if (
-		options.applyToCamera &&
-		controlMode.value === 'first-person' &&
-		!vehicleDriveState.active &&
-		camera &&
-		firstPersonControls
-	) {
-		camera.position.copy(lastFirstPersonState.position)
-		camera.position.y = CAMERA_HEIGHT
-		protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
-		firstPersonControls.lookAt(protagonistPoseTarget.x, protagonistPoseTarget.y, protagonistPoseTarget.z)
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		resetFirstPersonPointerDelta()
-		syncLastFirstPersonStateFromCamera()
+	if (options.applyToCamera && !vehicleDriveState.active && camera) {
+		if (controlMode.value === 'first-person' && firstPersonControls) {
+			camera.position.copy(lastFirstPersonState.position)
+			camera.position.y = CAMERA_HEIGHT
+			protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
+			firstPersonControls.lookAt(protagonistPoseTarget.x, protagonistPoseTarget.y, protagonistPoseTarget.z)
+			clampFirstPersonPitch(true)
+			syncFirstPersonOrientation()
+			resetFirstPersonPointerDelta()
+			syncLastFirstPersonStateFromCamera()
+		} else if (mapControls) {
+			// Align orbit/map controls to protagonist pose: position the camera at the protagonist
+			// and set the controls' target to look in the protagonist's forward direction.
+			camera.position.copy(protagonistPosePosition)
+			camera.position.y = CAMERA_HEIGHT
+			protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE)
+			camera.lookAt(protagonistPoseTarget)
+			mapControls.target.copy(protagonistPoseTarget)
+			mapControls.update()
+		}
 	}
 	return true
 }
@@ -6686,9 +6691,10 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				syncInstancedTransform(child)
 			}
 				if (child.userData?.protagonist) {
+					const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || cameraViewState.mode === 'level')
 					syncProtagonistCameraPose({
 						object: child,
-						applyToCamera: controlMode.value === 'first-person' && !vehicleDriveState.active,
+						applyToCamera: protagonistCameraActive,
 					})
 				}
 		}
@@ -8903,7 +8909,7 @@ async function applyInitialDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	syncPhysicsBodiesForDocument(document)
-	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
@@ -8933,7 +8939,7 @@ async function applyIncrementalDocumentGraph(
 	})
 	syncPhysicsBodiesForDocument(document)
 	await syncTerrainScatterInstances(document, resourceCache)
-	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
