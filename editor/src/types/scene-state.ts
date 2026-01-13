@@ -12,6 +12,8 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 
 export interface SceneState {
   currentSceneId: string | null
+  /** Incremented whenever a scene load/switch begins; used to invalidate in-flight async work. */
+  sceneSwitchToken: number
   currentSceneMeta: {
     name: string
     createdAt: string

@@ -7575,6 +7575,7 @@ export const useSceneStore = defineStore('scene', {
     componentManager.syncScene(clonedNodes)
     return {
       currentSceneId: initialSceneDocument.id,
+      sceneSwitchToken: 0,
       currentSceneMeta: {
         name: initialSceneDocument.name,
         createdAt: initialSceneDocument.createdAt,
@@ -15008,6 +15009,7 @@ export const useSceneStore = defineStore('scene', {
 
       await scenesStore.saveSceneDocument(sceneDocument)
 
+      this.sceneSwitchToken += 1
       this.applySceneDocumentToState(sceneDocument)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
@@ -15016,6 +15018,8 @@ export const useSceneStore = defineStore('scene', {
       return sceneDocument.id
     },
     async selectScene(sceneId: string) {
+      // Invalidate any in-flight scene-bound async work as early as possible.
+      this.sceneSwitchToken += 1
       if (sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {

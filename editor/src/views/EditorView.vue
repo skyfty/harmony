@@ -75,6 +75,7 @@ const {
   camera,
   panelVisibility,
   currentSceneId,
+  sceneSwitchToken,
   cameraFocusNodeId,
   cameraFocusRequestId,
   nodeHighlightTargetId,
@@ -1991,6 +1992,7 @@ onBeforeUnmount(() => {
       <section class="scene-panel">
         <SceneViewport
           ref="viewportRef"
+          :key="`${currentSceneId ?? 'none'}:${sceneSwitchToken}`"
           :scene-nodes="sceneNodes"
           :active-tool="activeTool"
           :selected-node-id="selectedNodeId"

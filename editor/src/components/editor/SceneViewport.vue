@@ -436,11 +436,23 @@ async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
   try {
     if (!node || !container) return
 
+    const tokenSnapshot = sceneStore.sceneSwitchToken
+
     const nodeId = node.id
     const existing = buildingLabelMeshes.get(nodeId)
     const labelText = (node.name && String(node.name).trim()) || 'Building'
 
     const font = await loadLabelFont()
+
+    // Scene switched / viewport remounted while awaiting resources.
+    if (tokenSnapshot !== sceneStore.sceneSwitchToken || !sceneStore.isSceneReady) {
+      return
+    }
+
+    // Node container replaced while awaiting resources (nodeId can be reused).
+    if ((objectMap.get(nodeId) ?? null) !== container) {
+      return
+    }
 
     // If existing label and text unchanged, just update position later
     if (existing && existing.userData?.labelText === labelText) {
@@ -498,6 +510,8 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
   try {
     if (!node || !container) return
 
+    const tokenSnapshot = sceneStore.sceneSwitchToken
+
     const componentState = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
       | SceneNodeComponentState<GuideRouteComponentProps>
       | undefined
@@ -537,6 +551,16 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
     }
 
     const font = await loadLabelFont()
+
+    // Scene switched / viewport remounted while awaiting resources.
+    if (tokenSnapshot !== sceneStore.sceneSwitchToken || !sceneStore.isSceneReady) {
+      return
+    }
+
+    // Node container replaced while awaiting resources (nodeId can be reused).
+    if ((objectMap.get(node.id) ?? null) !== container) {
+      return
+    }
     const size = 0.6
     const height = 0.06
     const yOffset = 0.22
@@ -3329,6 +3353,15 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
   }
 }
 
+async function restoreGroupdScatterGuarded(): Promise<void> {
+  const tokenSnapshot = sceneStore.sceneSwitchToken
+  await restoreGroupdScatter()
+  // If a scene switch happened during restore, don't continue with any follow-up.
+  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
+    return
+  }
+}
+
 let initialGridVisibilityApplied = false
 
 watch(isSceneReady, (ready) => {
@@ -3344,7 +3377,7 @@ watch(isSceneReady, (ready) => {
   }
 
   syncSceneGraph()
-  restoreGroupdScatter()
+  void restoreGroupdScatterGuarded()
 })
 
 // Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
@@ -3360,7 +3393,7 @@ watch(
     if (prevReady && prevUpdatedAt === updatedAt) {
       return
     }
-    void restoreGroupdScatter()
+    void restoreGroupdScatterGuarded()
   },
 )
 
