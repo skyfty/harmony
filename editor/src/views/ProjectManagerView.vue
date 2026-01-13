@@ -1,25 +1,59 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import LoginDialog from '@/components/layout/LoginDialog.vue'
 import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
-import OpenProjectDialog from '@/components/layout/OpenProjectDialog.vue'
+// OpenProjectDialog removed — opening projects is handled on the Project Manager page
+
+import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
 const router = useRouter()
 const projectsStore = useProjectsStore()
 const scenesStore = useScenesStore()
 const authStore = useAuthStore()
+const route = useRoute()
 
 const loginOpen = ref(false)
 const newProjectOpen = ref(false)
-const openProjectOpen = ref(false)
+// OpenProjectDialog removed — opening projects is handled on the Project Manager page
 const deletingId = ref<string | null>(null)
 
 const isLoggedIn = computed(() => !!authStore.user)
 const projects = computed(() => projectsStore.sortedMetadata)
+
+const overlayClose = inject(PROJECT_MANAGER_OVERLAY_CLOSE_KEY, null)
+const isOverlay = computed(() => overlayClose !== null)
+
+const returnTo = computed(() => {
+  const q = route.query?.returnTo
+  return typeof q === 'string' && q.length ? q : null
+})
+
+function handleClose() {
+  // Prefer using history.back to avoid a full navigation/refresh.
+  if (window.history.length > 1) {
+    router.back()
+    return
+  }
+  // No history entry to go back to — fallback to explicit returnTo or home.
+  if (returnTo.value) {
+    router.push(returnTo.value)
+  } else {
+    router.push('/')
+  }
+}
+
+function handleCloseButton() {
+  if (overlayClose) {
+    overlayClose()
+    return
+  }
+  handleClose()
+}
 
 async function refreshAll() {
   await Promise.all([projectsStore.initialize(), scenesStore.initialize()])
@@ -38,10 +72,12 @@ async function handleCreateProject(payload: { name: string }) {
   const project = await projectsStore.createProject(payload.name)
   // Opening the project will create default scene if missing.
   await router.push({ path: '/editor', query: { projectId: project.id } })
+  overlayClose?.()
 }
 
 async function handleOpenProject(payload: { projectId: string }) {
   await router.push({ path: '/editor', query: { projectId: payload.projectId } })
+  overlayClose?.()
 }
 
 async function handleDeleteProject(projectId: string) {
@@ -73,7 +109,7 @@ async function handleSync() {
         <v-btn variant="text" @click="openLogin">Sign In</v-btn>
         <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
         <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
-        <v-btn variant="outlined" @click="openProjectOpen = true">Open Project…</v-btn>
+        <v-btn v-if="returnTo || isOverlay" variant="text" @click="handleCloseButton">Close</v-btn>
       </div>
     </div>
 
@@ -115,7 +151,7 @@ async function handleSync() {
 
     <LoginDialog v-model="loginOpen" />
     <NewProjectDialog v-model="newProjectOpen" @confirm="handleCreateProject" />
-    <OpenProjectDialog v-model="openProjectOpen" :projects="projects" @open="handleOpenProject" />
+    <!-- OpenProjectDialog removed; project opening is done inline via the list -->
   </div>
 </template>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick } from 'vue'
+import { computed, onMounted, onBeforeUnmount, provide, reactive, ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
@@ -12,11 +12,12 @@ import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vu
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
+import ProjectManagerView from './ProjectManagerView.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
-import OpenProjectDialog from '@/components/layout/OpenProjectDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
+import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 import { publishScene } from '@/api/scenes'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
@@ -130,7 +131,9 @@ let pendingExportSummary: Promise<SceneResourceSummary | null> | null = null
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isNewProjectDialogOpen = ref(false)
-const isOpenProjectDialogOpen = ref(false)
+// OpenProjectDialog removed; use Project Manager page for opening projects
+const isProjectManagerOverlayOpen = ref(false)
+const projectManagerOverlayRef = ref<HTMLElement | null>(null)
 const showStatsPanel = ref(true)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
@@ -138,13 +141,23 @@ const isSceneBundleExporting = ref(false)
 const externalSceneInputRef = ref<HTMLInputElement | null>(null)
 const isImportingExternalScene = ref(false)
 
+function closeProjectManagerOverlay() {
+  isProjectManagerOverlayOpen.value = false
+}
+
+provide(PROJECT_MANAGER_OVERLAY_CLOSE_KEY, closeProjectManagerOverlay)
+
+watch(isProjectManagerOverlayOpen, (open) => {
+  if (open) {
+    nextTick(() => {
+      projectManagerOverlayRef.value?.focus()
+    })
+  }
+})
+
 async function handleCreateProject(payload: { name: string }) {
   const project = await projectsStore.createProject(payload.name)
   await router.push({ path: '/editor', query: { projectId: project.id } })
-}
-
-async function handleOpenProject(payload: { projectId: string }) {
-  await router.push({ path: '/editor', query: { projectId: payload.projectId } })
 }
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
@@ -1331,7 +1344,8 @@ async function handleAction(action: string) {
         if (!proceed) break
       }
       await projectsStore.initialize()
-      isOpenProjectDialogOpen.value = true
+      // Open Project Manager as a floating overlay (no route navigation).
+      isProjectManagerOverlayOpen.value = true
       break
     case 'New':
       handleNewAction()
@@ -2181,11 +2195,7 @@ onBeforeUnmount(() => {
       v-model="isNewProjectDialogOpen"
       @confirm="handleCreateProject"
     />
-    <OpenProjectDialog
-      v-model="isOpenProjectDialogOpen"
-      :projects="projectsStore.sortedMetadata"
-      @open="handleOpenProject"
-    />
+    <!-- OpenProjectDialog removed; use Project Manager page to select/open projects -->
     <SceneExportDialog
       v-model="isExportDialogOpen"
       :default-file-name="exportDialogFileName"
@@ -2200,6 +2210,16 @@ onBeforeUnmount(() => {
       @publish="handleExportDialogPublish"
       @cancel="handleExportDialogCancel"
     />
+
+    <div
+      v-if="isProjectManagerOverlayOpen"
+      ref="projectManagerOverlayRef"
+      class="project-manager-overlay"
+      tabindex="-1"
+      @keydown.esc.stop.prevent="closeProjectManagerOverlay"
+    >
+      <ProjectManagerView />
+    </div>
   </div>
 </template>
 
@@ -2208,6 +2228,13 @@ onBeforeUnmount(() => {
   height: 100vh;
   width: 100%;
   background: radial-gradient(circle at top left, #21262d, #11141a 60%);
+}
+
+.project-manager-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  overflow: auto;
 }
 
 .preview-overlay-container {
