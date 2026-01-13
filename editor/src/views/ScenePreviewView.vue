@@ -3909,9 +3909,12 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 		return false
 	}
 	protagonistObject.getWorldPosition(protagonistPosePosition)
-	protagonistObject.getWorldDirection(protagonistPoseDirection)
+	// Use protagonist's local +X as the forward direction so the initial camera
+	// orientation matches the protagonist's +X axis for better scene viewing.
+	protagonistObject.getWorldQuaternion(tempQuaternion)
+	protagonistPoseDirection.set(1, 0, 0).applyQuaternion(tempQuaternion)
 	if (protagonistPoseDirection.lengthSq() < 1e-8) {
-		protagonistPoseDirection.set(0, 0, -1)
+		protagonistPoseDirection.set(1, 0, 0)
 	} else {
 		protagonistPoseDirection.normalize()
 	}
