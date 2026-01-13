@@ -13,6 +13,15 @@ import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
 const router = useRouter()
 const projectsStore = useProjectsStore()
+
+  async function handleSignOut() {
+    try {
+      await authStore.logout()
+    } finally {
+      // Ensure page state is fully refreshed after logout
+      window.location.reload()
+    }
+  }
 const scenesStore = useScenesStore()
 const authStore = useAuthStore()
 const route = useRoute()
@@ -115,7 +124,8 @@ async function handleSync() {
         <div class="pm-subtitle">Local-first · Sign in to sync to cloud</div>
       </div>
       <div class="pm-actions">
-        <v-btn variant="text" @click="openLogin">Sign In</v-btn>
+        <v-btn v-if="!isLoggedIn" variant="text" @click="openLogin">Sign In</v-btn>
+        <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
         <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
         <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
         <v-btn v-if="returnTo || isOverlay" variant="text" @click="handleCloseButton">Close</v-btn>

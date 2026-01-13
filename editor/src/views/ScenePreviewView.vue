@@ -100,6 +100,7 @@ import {
 	lodComponentDefinition,
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
+	purePursuitComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -447,6 +448,7 @@ previewComponentManager.registerDefinition(protagonistComponentDefinition)
 previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
+previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
