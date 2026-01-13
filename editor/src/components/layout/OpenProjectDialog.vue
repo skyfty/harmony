@@ -48,17 +48,17 @@ function handleOpen(id: string) {
               {{ p.sceneCount }} scenes · {{ p.id }}
             </v-list-item-subtitle>
             <template #append>
-              <v-btn size="small" variant="text" @click.stop="handleOpen(p.id)">打开</v-btn>
+              <v-btn size="small" variant="text" @click.stop="handleOpen(p.id)">Open</v-btn>
             </template>
           </v-list-item>
           <v-list-item v-if="!filtered.length">
-            <v-list-item-title>没有找到工程</v-list-item-title>
+            <v-list-item-title>No projects found</v-list-item-title>
           </v-list-item>
         </v-list>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="dialogOpen = false">关闭</v-btn>
+        <v-btn variant="text" @click="dialogOpen = false">Close</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

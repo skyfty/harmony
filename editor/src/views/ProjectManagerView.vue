@@ -67,13 +67,13 @@ async function handleSync() {
     <div class="pm-header">
       <div>
         <div class="pm-title">Harmony Projects</div>
-        <div class="pm-subtitle">本地优先 · 登录后可同步到云端</div>
+        <div class="pm-subtitle">Local-first · Sign in to sync to cloud</div>
       </div>
       <div class="pm-actions">
-        <v-btn variant="text" @click="openLogin">登录</v-btn>
-        <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">同步</v-btn>
-        <v-btn color="primary" variant="flat" @click="newProjectOpen = true">新建工程</v-btn>
-        <v-btn variant="outlined" @click="openProjectOpen = true">打开工程…</v-btn>
+        <v-btn variant="text" @click="openLogin">Sign In</v-btn>
+        <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
+        <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
+        <v-btn variant="outlined" @click="openProjectOpen = true">Open Project…</v-btn>
       </div>
     </div>
 
@@ -84,8 +84,8 @@ async function handleSync() {
 
       <v-card v-if="!projects.length" class="pm-empty" variant="tonal">
         <v-card-text>
-          还没有工程。
-          <v-btn class="ml-2" size="small" color="primary" variant="flat" @click="newProjectOpen = true">创建一个</v-btn>
+          No projects yet.
+          <v-btn class="ml-2" size="small" color="primary" variant="flat" @click="newProjectOpen = true">Create one</v-btn>
         </v-card-text>
       </v-card>
 
@@ -96,7 +96,7 @@ async function handleSync() {
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
             <v-card-text class="pm-project__meta">{{ p.id }}</v-card-text>
             <v-card-actions>
-              <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id })">打开</v-btn>
+              <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id })">Open</v-btn>
               <v-spacer />
               <v-btn
                 color="error"
@@ -105,7 +105,7 @@ async function handleSync() {
                 :disabled="deletingId !== null"
                 @click="handleDeleteProject(p.id)"
               >
-                删除(级联)
+                Delete (cascade)
               </v-btn>
             </v-card-actions>
           </v-card>

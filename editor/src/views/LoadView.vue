@@ -13,7 +13,7 @@ const LoadingScreen = defineComponent({
   name: 'EditorLoadingScreen',
   props: {
     progress: { type: Number, default: 0 },
-    status: { type: String, default: '正在初始化…' },
+    status: { type: String, default: 'Initializing…' },
     error: { type: String, default: null },
     retrying: { type: Boolean, default: false },
   },
@@ -36,7 +36,7 @@ const LoadingScreen = defineComponent({
       h('div', { class: 'load-root' }, [
         h('div', { class: 'load-card' }, [
           h('header', { class: 'load-header' }, [
-            h('h1', { class: 'load-title' }, 'Harmony 场景编辑器'),
+            h('h1', { class: 'load-title' }, 'Harmony Scene Editor'),
             h('p', { class: 'load-subtitle' }, props.status),
           ]),
           h('section', { class: 'load-body' }, [
@@ -63,7 +63,7 @@ const LoadingScreen = defineComponent({
                       disabled: props.retrying,
                       onClick: handleRetry,
                     },
-                    props.retrying ? '重试中…' : '重试',
+                    props.retrying ? 'Retrying…' : 'Retry',
                   ),
                 ])
               : null,
@@ -80,7 +80,7 @@ const router = useRouter()
 
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)
 const progress = ref(5)
-const statusMessage = ref('正在初始化场景编辑器…')
+const statusMessage = ref('Initializing scene editor…')
 const errorMessage = ref<string | null>(null)
 const isBooting = ref(false)
 const isRetrying = ref(false)
@@ -91,7 +91,7 @@ async function bootstrap() {
   }
   isBooting.value = true
   errorMessage.value = null
-  statusMessage.value = '初始化场景目录…'
+  statusMessage.value = 'Initializing scene directory…'
   progress.value = 12
 
   try {
@@ -108,28 +108,28 @@ async function bootstrap() {
 
     const project = await projectsStore.loadProjectDocument(projectId)
     if (!project) {
-      errorMessage.value = '工程不存在或已删除'
-      statusMessage.value = '加载失败'
+      errorMessage.value = 'Project does not exist or has been deleted'
+      statusMessage.value = 'Load failed'
       progress.value = 100
       return
     }
 
-    statusMessage.value = '同步本地存档…'
+    statusMessage.value = 'Syncing local save…'
     progress.value = 28
     const sceneStore = useSceneStore()
     await waitForPiniaHydration()
 
-    statusMessage.value = '检查场景数据…'
+    statusMessage.value = 'Checking scene data…'
     progress.value = 46
 
     // Ensure a default scene exists for newly created projects.
     if (!project.scenes.length) {
-      statusMessage.value = '创建默认场景…'
+      statusMessage.value = 'Creating default scene…'
       progress.value = 60
       const newSceneId = await sceneStore.createScene('New Scene')
       const doc = await scenesStore.loadSceneDocument(newSceneId)
       if (!doc) {
-        throw new Error('默认场景创建失败')
+        throw new Error('Failed to create default scene')
       }
       const sceneJsonUrl = buildServerApiUrl(`/api/user-scenes/${encodeURIComponent(doc.id)}`)
       await projectsStore.saveProjectDocument({
@@ -153,27 +153,27 @@ async function bootstrap() {
       : latestProject.scenes[0]?.id
 
     if (!preferred) {
-      throw new Error('工程缺少默认场景')
+      throw new Error('Project missing default scene')
     }
 
     statusMessage.value = '打开工程…'
     progress.value = 78
     const opened = await sceneStore.selectScene(preferred)
     if (!opened) {
-      throw new Error('打开场景失败')
+      throw new Error('Failed to open scene')
     }
     await projectsStore.setLastEditedScene(projectId, preferred)
 
     await nextTick()
 
-    statusMessage.value = '加载完成'
+    statusMessage.value = 'Loading complete'
     progress.value = 100
     currentComponent.value = EditorView
   } catch (error) {
-    const message = error instanceof Error ? error.message : '加载失败'
+    const message = error instanceof Error ? error.message : 'Load failed'
     console.error('[LoadView] Failed to initialize editor', error)
     errorMessage.value = message
-    statusMessage.value = '加载失败'
+    statusMessage.value = 'Load failed'
     progress.value = 100
   } finally {
     isBooting.value = false
@@ -187,7 +187,7 @@ function handleRetry() {
   }
   isRetrying.value = true
   progress.value = 12
-  statusMessage.value = '重新尝试加载…'
+  statusMessage.value = 'Retrying load…'
   bootstrap()
 }
 
