@@ -146,7 +146,7 @@ async function handleSync() {
 
       <v-row v-else>
         <v-col v-for="p in projects" :key="p.id" cols="12" md="6" lg="4">
-          <v-card class="pm-project" variant="elevated">
+          <v-card :class="['pm-project', { 'pm-project--active': projectsStore.activeProjectId === p.id }]" variant="elevated">
             <v-card-title class="pm-project__title">{{ p.name }}</v-card-title>
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
             <v-card-text class="pm-project__meta">{{ p.id }}</v-card-text>
@@ -222,6 +222,7 @@ async function handleSync() {
 .pm-project {
   background: rgba(20, 26, 34, 0.92);
   color: rgba(255, 255, 255, 0.88);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
 .pm-project__title {
@@ -240,5 +241,27 @@ async function handleSync() {
   right: 18px;
   z-index: 1920;
   color: rgba(255, 255, 255, 0.9);
+}
+
+/* Hover effect for project cards */
+.pm-project:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  background: rgba(30, 36, 44, 0.98);
+  cursor: pointer;
+}
+
+/* Active project highlight */
+.pm-project--active {
+  outline: 3px solid rgba(38, 198, 218, 0.18);
+  box-shadow: 0 20px 64px rgba(2, 120, 130, 0.18);
+  background: linear-gradient(180deg, rgba(24,30,36,0.98), rgba(14,20,26,0.98));
+  border-left: 4px solid #00acc1;
+}
+
+/* Slightly stronger visual on active + hover */
+.pm-project--active:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 26px 78px rgba(2, 120, 130, 0.22);
 }
 </style>
