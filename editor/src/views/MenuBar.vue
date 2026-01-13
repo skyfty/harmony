@@ -74,6 +74,13 @@ function openPlanningDialog() {
                 </v-btn>
               </template>
               <v-list class="menu-dropdown">
+                  <v-list-item @click="handleMenuAction('NewProject')" class="menu-list-item">
+                    New Project
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('OpenProject')" class="menu-list-item">
+                    Open Project
+                  </v-list-item>
+                  <v-divider />
                   <v-list-item @click="handleMenuAction('New')" class="menu-list-item">
                     New Scene
                     <template  #append>

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useProjectsStore } from '@/stores/projectsStore'
+import { buildServerApiUrl } from '@/api/serverApiConfig'
 
 
 const LoadingScreen = defineComponent({
@@ -71,6 +74,9 @@ const LoadingScreen = defineComponent({
 })
 
 const scenesStore = useScenesStore()
+const projectsStore = useProjectsStore()
+const route = useRoute()
+const router = useRouter()
 
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)
 const progress = ref(5)
@@ -89,15 +95,74 @@ async function bootstrap() {
   progress.value = 12
 
   try {
-    await scenesStore.initialize()
+    const projectIdRaw = route.query.projectId
+    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : ''
+    if (!projectId) {
+      await router.replace({ path: '/' })
+      return
+    }
+
+    projectsStore.setActiveProject(projectId)
+
+    await Promise.all([scenesStore.initialize(), projectsStore.initialize()])
+
+    const project = await projectsStore.loadProjectDocument(projectId)
+    if (!project) {
+      errorMessage.value = '工程不存在或已删除'
+      statusMessage.value = '加载失败'
+      progress.value = 100
+      return
+    }
 
     statusMessage.value = '同步本地存档…'
     progress.value = 28
-    useSceneStore()
+    const sceneStore = useSceneStore()
     await waitForPiniaHydration()
 
     statusMessage.value = '检查场景数据…'
     progress.value = 46
+
+    // Ensure a default scene exists for newly created projects.
+    if (!project.scenes.length) {
+      statusMessage.value = '创建默认场景…'
+      progress.value = 60
+      const newSceneId = await sceneStore.createScene('New Scene')
+      const doc = await scenesStore.loadSceneDocument(newSceneId)
+      if (!doc) {
+        throw new Error('默认场景创建失败')
+      }
+      const sceneJsonUrl = buildServerApiUrl(`/api/user-scenes/${encodeURIComponent(doc.id)}`)
+      await projectsStore.saveProjectDocument({
+        ...project,
+        scenes: [
+          {
+            id: doc.id,
+            name: doc.name,
+            sceneJsonUrl,
+            projectId: project.id,
+          },
+        ],
+        lastEditedSceneId: doc.id,
+      })
+    }
+
+    const latestProject = (await projectsStore.loadProjectDocument(projectId)) ?? project
+    const sceneIds = new Set(latestProject.scenes.map((s) => s.id))
+    const preferred = latestProject.lastEditedSceneId && sceneIds.has(latestProject.lastEditedSceneId)
+      ? latestProject.lastEditedSceneId
+      : latestProject.scenes[0]?.id
+
+    if (!preferred) {
+      throw new Error('工程缺少默认场景')
+    }
+
+    statusMessage.value = '打开工程…'
+    progress.value = 78
+    const opened = await sceneStore.selectScene(preferred)
+    if (!opened) {
+      throw new Error('打开场景失败')
+    }
+    await projectsStore.setLastEditedScene(projectId, preferred)
 
     await nextTick()
 

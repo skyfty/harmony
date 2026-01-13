@@ -189,6 +189,16 @@ export interface OrderDocument extends Document<Types.ObjectId> {
 export interface UserSceneDocument extends Document<Types.ObjectId> {
   userId: string
   sceneId: string
+  projectId: string
+  document: Record<string, unknown>
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface UserProjectDocument extends Document<Types.ObjectId> {
+  userId: string
+  projectId: string
+  sceneIds: string[]
   document: Record<string, unknown>
   createdAt: Date
   updatedAt: Date

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
@@ -13,6 +14,8 @@ import SceneViewport, { type SceneViewportHandle } from '@/components/editor/Sce
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
+import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
+import OpenProjectDialog from '@/components/layout/OpenProjectDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import { publishScene } from '@/api/scenes'
 import type { SceneExportOptions } from '@/types/scene-export'
@@ -32,6 +35,7 @@ import {
   SCENE_BUNDLE_FORMAT_VERSION,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useProjectsStore } from '@/stores/projectsStore'
 import type { EditorTool } from '@/types/editor-tool'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -59,6 +63,8 @@ import type {
 
 const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
+const projectsStore = useProjectsStore()
+const router = useRouter()
 const uiStore = useUiStore()
 const {
   nodes: sceneNodes,
@@ -75,7 +81,14 @@ const {
   groundSettings,
 } = storeToRefs(sceneStore)
 
-const { sortedMetadata: sceneSummaries } = storeToRefs(scenesStore)
+const { sortedMetadata: allSceneSummaries } = storeToRefs(scenesStore)
+const sceneSummaries = computed(() => {
+  const activeProjectId = projectsStore.activeProjectId
+  if (!activeProjectId) {
+    return allSceneSummaries.value
+  }
+  return allSceneSummaries.value.filter((entry) => entry.projectId === activeProjectId)
+})
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -116,12 +129,23 @@ const exportResourceSummary = ref<SceneResourceSummary | null>(null)
 let pendingExportSummary: Promise<SceneResourceSummary | null> | null = null
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
+const isNewProjectDialogOpen = ref(false)
+const isOpenProjectDialogOpen = ref(false)
 const showStatsPanel = ref(true)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
 const externalSceneInputRef = ref<HTMLInputElement | null>(null)
 const isImportingExternalScene = ref(false)
+
+async function handleCreateProject(payload: { name: string }) {
+  const project = await projectsStore.createProject(payload.name)
+  await router.push({ path: '/editor', query: { projectId: project.id } })
+}
+
+async function handleOpenProject(payload: { projectId: string }) {
+  await router.push({ path: '/editor', query: { projectId: payload.projectId } })
+}
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
@@ -1293,6 +1317,22 @@ async function exportCurrentScene() {
 
 async function handleAction(action: string) {
   switch (action) {
+    case 'NewProject':
+      if (sceneStore.hasUnsavedChanges) {
+        const proceed = typeof window !== 'undefined' ? window.confirm('当前场景有未保存的修改，仍然要新建工程吗？') : true
+        if (!proceed) break
+      }
+      await projectsStore.initialize()
+      isNewProjectDialogOpen.value = true
+      break
+    case 'OpenProject':
+      if (sceneStore.hasUnsavedChanges) {
+        const proceed = typeof window !== 'undefined' ? window.confirm('当前场景有未保存的修改，仍然要打开其他工程吗？') : true
+        if (!proceed) break
+      }
+      await projectsStore.initialize()
+      isOpenProjectDialogOpen.value = true
+      break
     case 'New':
       handleNewAction()
       break
@@ -2136,6 +2176,15 @@ onBeforeUnmount(() => {
       :initial-ground-width="groundSettings.width"
       :initial-ground-depth="groundSettings.depth"
       @confirm="handleCreateScene"
+    />
+    <NewProjectDialog
+      v-model="isNewProjectDialogOpen"
+      @confirm="handleCreateProject"
+    />
+    <OpenProjectDialog
+      v-model="isOpenProjectDialogOpen"
+      :projects="projectsStore.sortedMetadata"
+      @open="handleOpenProject"
     />
     <SceneExportDialog
       v-model="isExportDialogOpen"

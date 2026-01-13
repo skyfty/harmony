@@ -5,6 +5,7 @@ const userSceneSchema = new Schema<UserSceneDocument>(
   {
     userId: { type: String, required: true, index: true },
     sceneId: { type: String, required: true },
+    projectId: { type: String, required: true, index: true },
     document: { type: Schema.Types.Mixed, required: true },
   },
   {

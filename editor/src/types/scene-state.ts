@@ -16,6 +16,7 @@ export interface SceneState {
     name: string
     createdAt: string
     updatedAt: string
+    projectId: string
   } | null
   nodes: SceneNode[]
   materials: SceneMaterial[]

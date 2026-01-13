@@ -17,6 +17,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 export interface StoredSceneDocument {
   id: string
   name: string
+  projectId: string
   thumbnail?: string | null
   nodes: SceneNode[]
   materials: SceneMaterial[]

@@ -299,6 +299,7 @@ async function readAllMetadata(workspaceId: string): Promise<SceneSummary[]> {
       records.push({
         id: doc.id,
         name: doc.name,
+        projectId: doc.projectId,
         thumbnail: doc.thumbnail ?? null,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
@@ -328,6 +329,7 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
   return {
     id: document.id,
     name: document.name,
+    projectId: document.projectId,
     thumbnail: document.thumbnail ?? null,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
@@ -583,6 +585,18 @@ export const useScenesStore = defineStore('scenes', {
       this.removeMetadata(id)
       if (this.workspaceType === 'user') {
         await this.deleteSceneOnServer(id)
+      }
+      if (!this.initialized && this.metadata.length === 0) {
+        this.initialized = true
+      }
+    },
+    async deleteScenesLocalOnly(ids: string[]) {
+      const uniqueIds = Array.from(
+        new Set((ids ?? []).filter((id): id is string => typeof id === 'string' && id.trim().length > 0)),
+      )
+      for (const id of uniqueIds) {
+        await removeSceneDocument(this.workspaceId, id)
+        this.removeMetadata(id)
       }
       if (!this.initialized && this.metadata.length === 0) {
         this.initialized = true

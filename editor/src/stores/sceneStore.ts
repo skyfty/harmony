@@ -81,6 +81,7 @@ import type {
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
+import { useProjectsStore } from '@/stores/projectsStore'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
@@ -7109,6 +7110,7 @@ function createSceneDocument(
   name: string,
   options: {
     id?: string
+    projectId?: string
     nodes?: SceneNode[]
     materials?: SceneMaterial[]
     selectedNodeId?: string | null
@@ -7175,6 +7177,7 @@ function createSceneDocument(
   return {
     id,
     name,
+    projectId: options.projectId ?? '',
     nodes,
     materials,
     selectedNodeId,
@@ -7204,6 +7207,7 @@ function normalizeCurrentSceneMeta(store: SceneState) {
       name: 'Untitled Scene',
       createdAt: now,
       updatedAt: now,
+      projectId: '',
     }
     return
   }
@@ -7214,10 +7218,13 @@ function normalizeCurrentSceneMeta(store: SceneState) {
   const createdAt = typeof createdAtRaw === 'string' && createdAtRaw ? createdAtRaw : now
   const updatedAt = typeof updatedAtRaw === 'string' && updatedAtRaw ? updatedAtRaw : createdAt
 
+  const projectId = typeof store.currentSceneMeta.projectId === 'string' ? store.currentSceneMeta.projectId : ''
+
   store.currentSceneMeta = {
     name: name || 'Untitled Scene',
     createdAt,
     updatedAt,
+    projectId,
   }
 }
 
@@ -7229,6 +7236,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   normalizeCurrentSceneMeta(store)
   const now = new Date().toISOString()
   const meta = store.currentSceneMeta!
+  const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
   const environment = cloneEnvironmentSettings(store.environment)
   const nodes = ensureEnvironmentNode(ensureSkyNode(cloneSceneNodes(store.nodes)),environment)
 
@@ -7238,6 +7246,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   return {
     id: store.currentSceneId,
     name: meta.name,
+    projectId,
     nodes,
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
@@ -7298,6 +7307,7 @@ function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument)
     name: document.name,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
+    projectId: document.projectId,
   }
 }
 
@@ -7569,6 +7579,7 @@ export const useSceneStore = defineStore('scene', {
         name: initialSceneDocument.name,
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
+        projectId: initialSceneDocument.projectId ?? '',
       },
       nodes: clonedNodes,
       materials: cloneSceneMaterials(initialSceneDocument.materials),
@@ -14848,9 +14859,21 @@ export const useSceneStore = defineStore('scene', {
 
       const scenesStore = useScenesStore()
       const document = buildSceneDocumentFromState(this)
+
+      const existing = await scenesStore.loadSceneDocument(document.id)
+      const projectsStore = useProjectsStore()
+      const projectId = existing?.projectId ?? projectsStore.activeProjectId
+      if (!projectId) {
+        throw new Error('必须先打开工程才能保存场景')
+      }
+      document.projectId = projectId
       await scenesStore.saveSceneDocument(document)
       applyCurrentSceneMeta(this, document)
       this.hasUnsavedChanges = false
+
+      if (projectsStore.activeProjectId === projectId) {
+        await projectsStore.setLastEditedScene(projectId, document.id)
+      }
       return document
     },
     async createScene(
@@ -14859,6 +14882,11 @@ export const useSceneStore = defineStore('scene', {
     ) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
+      const projectsStore = useProjectsStore()
+      const projectId = projectsStore.activeProjectId
+      if (!projectId) {
+        throw new Error('必须先打开工程才能创建场景')
+      }
       const displayName = name.trim() || 'Untitled Scene'
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
       if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
@@ -14871,6 +14899,7 @@ export const useSceneStore = defineStore('scene', {
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
 
       const sceneDocument = createSceneDocument(displayName, {
+        projectId,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         skybox: this.skybox,
@@ -14890,6 +14919,8 @@ export const useSceneStore = defineStore('scene', {
       await scenesStore.saveSceneDocument(sceneDocument)
       this.applySceneDocumentToState(sceneDocument)
       this.isSceneReady = true
+
+      await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
       return sceneDocument.id
     },
     async createSceneFromTemplate(
@@ -14898,6 +14929,11 @@ export const useSceneStore = defineStore('scene', {
       options: { groundWidth?: number; groundDepth?: number } = {},
     ) {
       const scenesStore = useScenesStore()
+      const projectsStore = useProjectsStore()
+      const projectId = projectsStore.activeProjectId
+      if (!projectId) {
+        throw new Error('必须先打开工程才能创建场景')
+      }
       const displayName = name.trim() || template.name?.trim() || 'Untitled Scene'
 
       const fallbackWidth = this.groundSettings.width
@@ -14939,6 +14975,7 @@ export const useSceneStore = defineStore('scene', {
       const cameraState = normalizeCameraStateInput(template.camera) ?? this.camera
 
       const sceneDocument = createSceneDocument(displayName, {
+        projectId,
         nodes,
         materials,
         selectedNodeId,
@@ -14974,6 +15011,8 @@ export const useSceneStore = defineStore('scene', {
       this.applySceneDocumentToState(sceneDocument)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
+
+      await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
       return sceneDocument.id
     },
     async selectScene(sceneId: string) {
@@ -15008,29 +15047,42 @@ export const useSceneStore = defineStore('scene', {
       } finally {
         this.isSceneReady = true
       }
+
+      const projectsStore = useProjectsStore()
+      if (projectsStore.activeProjectId && projectsStore.activeProjectId === scene.projectId) {
+        await projectsStore.setLastEditedScene(scene.projectId, scene.id)
+      }
       return true
     },
     async deleteScene(sceneId: string) {
       const scenesStore = useScenesStore()
+      const projectsStore = useProjectsStore()
       const target = await scenesStore.loadSceneDocument(sceneId)
       if (!target) {
         return false
       }
+
+      const projectId = target.projectId
 
       target.nodes.forEach((node) => releaseRuntimeTree(node))
 
       await scenesStore.deleteScene(sceneId)
       await scenesStore.refreshMetadata()
 
+      if (projectId) {
+        await projectsStore.removeSceneFromProject(projectId, sceneId)
+      }
+
       if (!scenesStore.metadata.length) {
-        const fallback = createSceneDocument('Untitled Scene', {
-          resourceProviderId: 'builtin',
+        if (projectId) {
+          projectsStore.setActiveProject(projectId)
+        }
+        const fallbackId = await this.createScene('Untitled Scene', {
           groundSettings: this.groundSettings,
-          environment: this.environment,
         })
-        await scenesStore.saveSceneDocument(fallback)
-        this.applySceneDocumentToState(fallback)
-        this.isSceneReady = true
+        if (this.currentSceneId !== fallbackId) {
+          await this.selectScene(fallbackId)
+        }
         return true
       }
 
@@ -15062,6 +15114,11 @@ export const useSceneStore = defineStore('scene', {
         updatedAt: new Date().toISOString(),
       }
       await scenesStore.saveSceneDocument(updated)
+
+      const projectsStore = useProjectsStore()
+      if (projectsStore.activeProjectId && projectsStore.activeProjectId === updated.projectId) {
+        await projectsStore.renameSceneInProject(updated.projectId, sceneId, trimmed)
+      }
       if (this.currentSceneId === sceneId) {
         applyCurrentSceneMeta(this, updated)
       }
@@ -15112,6 +15169,11 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const scenesStore = useScenesStore()
+      const projectsStore = useProjectsStore()
+      const projectId = projectsStore.activeProjectId
+      if (!projectId) {
+        throw new Error('必须先打开工程才能导入场景')
+      }
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
@@ -15135,6 +15197,7 @@ export const useSceneStore = defineStore('scene', {
 
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
+          projectId,
           selectedNodeId: typeof entry.selectedNodeId === 'string' ? entry.selectedNodeId : null,
           selectedNodeIds: Array.isArray(entry.selectedNodeIds)
             ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
@@ -15163,6 +15226,7 @@ export const useSceneStore = defineStore('scene', {
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
 
+        await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
         imported.push(sceneDocument)
       }
 

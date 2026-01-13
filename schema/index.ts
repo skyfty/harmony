@@ -69,6 +69,34 @@ export * from './assetTypeConversion'
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 
+export interface ProjectSceneMeta {
+  id: string
+  name: string
+  /**
+   * Authenticated API URL (login required) for downloading the stored scene JSON.
+   * Example: /api/user-scenes/:id
+   */
+  sceneJsonUrl: string
+  /**
+   * Enforced by server: one scene belongs to exactly one project.
+   */
+  projectId: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  /**
+   * Container only: does not embed the full scene JSON.
+   * The first element is treated as the default scene.
+   */
+  scenes: ProjectSceneMeta[]
+  /**
+   * When opening a project, open this scene first; fallback to scenes[0].
+   */
+  lastEditedSceneId: string | null
+}
+
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export type GeometryType =
   | 'Box'
