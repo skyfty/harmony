@@ -59,29 +59,36 @@ const LoadingScreen = defineComponent({
             hasError.value
               ? h('div', { class: 'load-error' }, [
                   h('span', { class: 'load-error__text' }, props.error),
-                  // Retry button
+                  // Action buttons (Retry + optional Return)
                   h(
-                    'button',
-                    {
-                      class: 'load-retry-button',
-                      type: 'button',
-                      disabled: props.retrying,
-                      onClick: handleRetry,
-                    },
-                    props.retrying ? 'Retrying…' : 'Retry',
+                    'div',
+                    { class: 'load-error__actions' },
+                    [
+                          h(
+                            'button',
+                            {
+                              class: 'load-retry-button',
+                              type: 'button',
+                              disabled: props.retrying,
+                              onClick: handleRetry,
+                              'aria-label': 'Retry loading project',
+                            },
+                            props.retrying ? '🔁 Retrying…' : '🔁 Retry',
+                          ),
+                      typeof props.error === 'string' && props.error.includes('Project does not exist')
+                        ? h(
+                            'button',
+                            {
+                              class: 'load-back-button',
+                              type: 'button',
+                              onClick: handleBackToProjects,
+                              'aria-label': 'Return to Projects',
+                            },
+                            '↩ Return to Projects',
+                          )
+                        : null,
+                    ],
                   ),
-                  // If project missing error, offer a return-to-projects button
-                  typeof props.error === 'string' && props.error.includes('Project does not exist')
-                    ? h(
-                        'button',
-                        {
-                          class: 'load-back-button',
-                          type: 'button',
-                          onClick: handleBackToProjects,
-                        },
-                        'Return to Projects',
-                      )
-                    : null,
                 ])
               : null,
           ]),
@@ -319,15 +326,16 @@ onMounted(() => {
 }
 
 .load-retry-button {
-  align-self: flex-end;
-  padding: 8px 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  background: transparent;
+  padding: 10px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.03);
   color: #f5f7fa;
   cursor: pointer;
-  font-size: 0.9rem;
-  transition: background-color 120ms ease, color 120ms ease;
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(2, 18, 22, 0.22);
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease, opacity 120ms ease;
 }
 
 .load-retry-button:disabled {
@@ -336,7 +344,52 @@ onMounted(() => {
 }
 
 .load-retry-button:not(:disabled):hover {
-  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 26px rgba(2, 18, 22, 0.28);
+}
+
+.load-error__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.load-back-button {
+  padding: 10px 20px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(90deg, #00acc1 0%, #26c6da 60%, #80deea 100%);
+  color: rgba(2, 18, 22, 0.98);
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(2, 18, 22, 0.35);
+  transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+  order: -1; /* place before Retry visually */
+}
+
+.load-back-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(2, 18, 22, 0.42);
+  opacity: 0.98;
+}
+
+.load-back-button:active {
+  transform: translateY(0);
+}
+
+/* Responsive: stack actions on small screens */
+@media (max-width: 480px) {
+  .load-error__actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .load-back-button,
+  .load-retry-button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 480px) {
