@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -113,6 +113,10 @@ async function bootstrap() {
   if (isBooting.value) {
     return
   }
+  // Ensure the loading UI is visible when (re)bootstrapping
+  currentComponent.value = LoadingScreen
+  progress.value = 5
+  statusMessage.value = 'Initializing scene editor…'
   isBooting.value = true
   errorMessage.value = null
   statusMessage.value = 'Initializing scene directory…'
@@ -233,6 +237,24 @@ const componentProps = computed(() =>
 onMounted(() => {
   bootstrap()
 })
+
+// Re-run the loader when the projectId query changes (navigating to the same
+// `/editor` route with a different project should re-run the full boot flow).
+watch(
+  () => route.query.projectId,
+  (newVal, oldVal) => {
+    // Only re-bootstrap if the value actually changed.
+    if (newVal !== oldVal) {
+      // Reset retry state and show loading UI again.
+      isRetrying.value = false
+      errorMessage.value = null
+      currentComponent.value = LoadingScreen
+      progress.value = 5
+      statusMessage.value = 'Initializing scene editor…'
+      bootstrap()
+    }
+  },
+)
 </script>
 
 <template>
