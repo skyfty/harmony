@@ -324,6 +324,8 @@ export type BehaviorScriptType =
   | 'hide'
   | 'lantern'
   | 'look'
+  | 'loadScene'
+  | 'exitScene'
   | 'trigger'
   | 'animation'
   | 'showCockpit'
@@ -421,6 +423,15 @@ export interface DebusBehaviorParams {
   // no configuration required
 }
 
+export interface LoadSceneBehaviorParams {
+  /** Target scene id that should be opened by the runtime. */
+  scene: string
+}
+
+export interface ExitSceneBehaviorParams {
+  // no configuration required
+}
+
 export type LanternSlideLayout = 'imageTop' | 'imageLeft' | 'imageRight'
 
 export interface LanternSlideDefinition {
@@ -480,6 +491,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'look'
       params: LookBehaviorParams
+    }
+  | {
+      type: 'loadScene'
+      params: LoadSceneBehaviorParams
+    }
+  | {
+      type: 'exitScene'
+      params: ExitSceneBehaviorParams
     }
   | {
       type: 'trigger'

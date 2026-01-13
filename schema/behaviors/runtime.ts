@@ -4,6 +4,7 @@ import type {
   DelayBehaviorParams,
   HideBehaviorParams,
   LanternBehaviorParams,
+  LoadSceneBehaviorParams,
   MoveToBehaviorParams,
   SceneBehavior,
   SceneBehaviorMap,
@@ -122,6 +123,23 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       token: string
+    }
+  | {
+      type: 'load-scene'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      sceneId: string
+    }
+  | {
+      type: 'exit-scene'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
     }
   | {
       type: 'trigger-behavior'
@@ -546,6 +564,30 @@ function createLookEvent(state: BehaviorSequenceState, behavior: SceneBehavior):
   }
 }
 
+function createLoadSceneEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const params = behavior.script.params as LoadSceneBehaviorParams
+  return {
+    type: 'load-scene',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    sceneId: params?.scene?.trim() ?? '',
+  }
+}
+
+function createExitSceneEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  return {
+    type: 'exit-scene',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function createVisibilityEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -745,6 +787,14 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       }
       case 'look':
         events.push(createLookEvent(state, behavior))
+        return events
+      case 'loadScene':
+        events.push(createLoadSceneEvent(state, behavior))
+        events.push(finalizeSequence(state, 'success', behavior.id))
+        return events
+      case 'exitScene':
+        events.push(createExitSceneEvent(state, behavior))
+        events.push(finalizeSequence(state, 'success', behavior.id))
         return events
       case 'trigger':
         events.push(createTriggerEvent(state, behavior))

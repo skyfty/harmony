@@ -23,6 +23,8 @@ import type {
   HideCockpitBehaviorParams,
   DriveBehaviorParams,
   DebusBehaviorParams,
+  LoadSceneBehaviorParams,
+  ExitSceneBehaviorParams,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -124,6 +126,13 @@ function normalizeTargetNodeId(value: string | null | undefined): string | null 
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function normalizeSceneId(value: string | null | undefined): string {
+  if (typeof value !== 'string') {
+    return ''
+  }
+  return value.trim()
 }
 
 const scriptDefinitions: BehaviorScriptDefinition[] = [
@@ -246,6 +255,26 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Level the camera to a horizontal view while keeping position.',
     icon: 'mdi-compass-outline',
     createDefaultParams(): LookBehaviorParams {
+      return {}
+    },
+  },
+  {
+    id: 'loadScene',
+    label: 'Load Scene',
+    description: 'Load another scene by scene id.',
+    icon: 'mdi-folder-open-outline',
+    createDefaultParams(): LoadSceneBehaviorParams {
+      return {
+        scene: '',
+      }
+    },
+  },
+  {
+    id: 'exitScene',
+    label: 'Exit Scene',
+    description: 'Exit the current scene and return to the previous one.',
+    icon: 'mdi-exit-to-app',
+    createDefaultParams(): ExitSceneBehaviorParams {
       return {}
     },
   },
@@ -631,6 +660,20 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'look',
         params: {},
       }
+    case 'loadScene': {
+      const params = binding.params as LoadSceneBehaviorParams | undefined
+      return {
+        type: 'loadScene',
+        params: {
+          scene: normalizeSceneId(params?.scene),
+        },
+      }
+    }
+    case 'exitScene':
+      return {
+        type: 'exitScene',
+        params: {},
+      }
     case 'drive': {
       const params = binding.params as DriveBehaviorParams | undefined
       return {
@@ -878,6 +921,20 @@ export function ensureBehaviorParams(
       case 'look':
         return {
           type: 'look',
+          params: {},
+        }
+      case 'loadScene': {
+        const params = script.params as Partial<LoadSceneBehaviorParams> | undefined
+        return {
+          type: 'loadScene',
+          params: {
+            scene: normalizeSceneId(params?.scene),
+          },
+        }
+      }
+      case 'exitScene':
+        return {
+          type: 'exitScene',
           params: {},
         }
       case 'showCockpit':

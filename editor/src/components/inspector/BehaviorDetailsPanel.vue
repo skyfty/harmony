@@ -29,6 +29,8 @@ import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
 import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
 import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
+import LoadSceneParams from '@/components/inspector/behavior/LoadSceneParams.vue'
+import ExitSceneParams from '@/components/inspector/behavior/ExitSceneParams.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 type PanelMode = 'create' | 'edit'
@@ -92,6 +94,8 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   lantern: LanternParams,
   trigger: TriggerParams,
   animation: AnimationParams,
+  loadScene: LoadSceneParams,
+  exitScene: ExitSceneParams,
   showCockpit: ShowCockpitParams,
   hideCockpit: HideCockpitParams,
   drive: DriveParams,

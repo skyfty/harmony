@@ -7176,6 +7176,18 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'look-level':
       handleLookLevelEvent(event);
       break;
+    case 'load-scene': {
+      const sceneId = (event.sceneId ?? '').trim();
+      if (!sceneId) {
+        console.warn('Load Scene behavior missing sceneId', event);
+        break;
+      }
+      uni.navigateTo({ url: `/pages/scene-viewer/index?id=${encodeURIComponent(sceneId)}` });
+      break;
+    }
+    case 'exit-scene':
+      uni.navigateBack();
+      break;
     case 'vehicle-drive':
       handleVehicleDriveEvent(event);
       break;
