@@ -13,6 +13,7 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
+
 const lodComponent = computed(() => {
   const component = selectedNode.value?.components?.[LOD_COMPONENT_TYPE]
   if (!component) {
@@ -20,6 +21,25 @@ const lodComponent = computed(() => {
   }
   return component as SceneNodeComponentState<LodComponentProps>
 })
+
+const componentEnabled = computed(() => lodComponent.value?.enabled !== false)
+function handleToggleComponent() {
+  const component = lodComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = lodComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 
 const isSyncingFromScene = ref(false)
 const localEnableCulling = ref(true)
@@ -298,17 +318,46 @@ const levelSummaries = computed(() => {
           title="Save"
           @click.stop="handleSavePreset"
         />
+        <v-menu
+          v-if="lodComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
 
     <v-expansion-panel-text>
-      <div class="lod-section">
+      <div class="lod-section" :class="{ 'is-disabled': !componentEnabled }">
         <div class="lod-row">
           <v-switch
             class="lod-frustum-switch"
             density="compact"
             hide-details
             :model-value="localEnableCulling"
+            :disabled="!componentEnabled"
             @update:modelValue="(v) => updateEnableCulling(Boolean(v))"
           />
           <span class="lod-label">Frustum Culling</span>
@@ -326,6 +375,7 @@ const levelSummaries = computed(() => {
                 type="button"
                 class="lod-model-button"
                 :title="summary.modelLabel"
+                :disabled="!componentEnabled"
                 @click="openModelAssetDialog(summary.index, $event)"
                 @keydown.enter.prevent="openModelAssetDialog(summary.index)"
                 @keydown.space.prevent="openModelAssetDialog(summary.index)"
@@ -344,6 +394,7 @@ const levelSummaries = computed(() => {
                 size="x-small"
                 variant="text"
                 title="Clear model override"
+                :disabled="!componentEnabled"
                 @click.stop="assignModelAsset(summary.index, null)"
               />
             </div>
@@ -359,6 +410,7 @@ const levelSummaries = computed(() => {
                 suffix="m"
                 :min="0"
                 :model-value="summary.distance"
+                :disabled="!componentEnabled"
                 @keydown="handleDistanceKeydown"
                 @update:modelValue="(v) => updateLevelDistance(summary.index, v)"
               />
@@ -373,6 +425,7 @@ const levelSummaries = computed(() => {
         assetType="model,mesh"
         title="Select Model Asset"
         :anchor="modelAssetDialogAnchor"
+        :disabled="!componentEnabled"
         @update:asset="handleModelAssetDialogUpdate"
         @cancel="handleModelAssetDialogCancel"
       />
