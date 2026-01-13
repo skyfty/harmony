@@ -17,7 +17,7 @@ const LoadingScreen = defineComponent({
     error: { type: String, default: null },
     retrying: { type: Boolean, default: false },
   },
-  emits: ['retry'],
+  emits: ['retry', 'backToProjects'],
   setup(props, { emit }) {
     const percent = computed(() => {
       const value = Number.isFinite(props.progress) ? Math.round(props.progress) : 0
@@ -30,6 +30,10 @@ const LoadingScreen = defineComponent({
       if (!props.retrying) {
         emit('retry')
       }
+    }
+
+    const handleBackToProjects = () => {
+      emit('backToProjects')
     }
 
     return () =>
@@ -55,6 +59,7 @@ const LoadingScreen = defineComponent({
             hasError.value
               ? h('div', { class: 'load-error' }, [
                   h('span', { class: 'load-error__text' }, props.error),
+                  // Retry button
                   h(
                     'button',
                     {
@@ -65,6 +70,18 @@ const LoadingScreen = defineComponent({
                     },
                     props.retrying ? 'Retrying…' : 'Retry',
                   ),
+                  // If project missing error, offer a return-to-projects button
+                  typeof props.error === 'string' && props.error.includes('Project does not exist')
+                    ? h(
+                        'button',
+                        {
+                          class: 'load-back-button',
+                          type: 'button',
+                          onClick: handleBackToProjects,
+                        },
+                        'Return to Projects',
+                      )
+                    : null,
                 ])
               : null,
           ]),
@@ -199,6 +216,9 @@ const componentProps = computed(() =>
         error: errorMessage.value,
         retrying: isRetrying.value,
         onRetry: handleRetry,
+        onBackToProjects: typeof errorMessage.value === 'string' && errorMessage.value.includes('Project does not exist')
+          ? () => router.replace({ path: '/' })
+          : undefined,
       }
     : {},
 )

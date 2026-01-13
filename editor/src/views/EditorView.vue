@@ -2233,7 +2233,10 @@ onBeforeUnmount(() => {
 .project-manager-overlay {
   position: fixed;
   inset: 0;
-  z-index: 5000;
+  /* Keep below Vuetify overlays (v-dialog, v-menu, etc.) so dialogs opened
+   * inside ProjectManagerView can appear above this full-screen layer.
+   */
+  z-index: 1900;
   overflow: auto;
 }
 

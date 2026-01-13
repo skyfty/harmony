@@ -100,6 +100,15 @@ async function handleSync() {
 
 <template>
   <div class="pm-root">
+    <v-btn
+      v-if="returnTo || isOverlay"
+      class="pm-close-btn"
+      variant="text"
+      density="comfortable"
+      @click="handleCloseButton"
+    >
+      <v-icon size="20">mdi-close</v-icon>
+    </v-btn>
     <div class="pm-header">
       <div>
         <div class="pm-title">Harmony Projects</div>
@@ -213,5 +222,13 @@ async function handleSync() {
   opacity: 0.75;
   font-size: 0.85rem;
   word-break: break-all;
+}
+
+.pm-close-btn {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 1920;
+  color: rgba(255, 255, 255, 0.9);
 }
 </style>
