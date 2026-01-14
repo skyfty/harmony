@@ -294,7 +294,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 				? String(metadata.duration)
 				: '--',
 		fileUrl: summary.fileUrl,
-		thumbnailUrl: summary.thumbnailUrl,
+		thumbnailUrl: summary.thumbnailUrl ?? '',
 		userRatingScore: summary.userRating?.score ?? 0,
 	};
 }
@@ -350,8 +350,8 @@ function mapExhibitionSummary(summary: ExhibitionSummary, index: number): Exhibi
 		ownerId: summary.ownerId,
 		name: summary.name,
 		status: summary.status,
-		cover: ensureBackground(primaryCover, index),
-		primaryCover,
+		cover: ensureBackground(primaryCover ?? undefined, index),
+		primaryCover: primaryCover ?? '',
 		coverImages,
 		scene: summary.scene ?? undefined,
 		dateRange: formatDateRange(summary.startDate, summary.endDate),
@@ -383,7 +383,7 @@ function mapProductSummary(summary: ProductSummary, index: number): ProductItem 
 		image: ensureBackground(summary.imageUrl, index),
 		description: summary.description ?? '',
 		purchased: Boolean(summary.purchased),
-		purchasedAt: summary.purchasedAt,
+		purchasedAt: summary.purchasedAt ?? '',
 	};
 }
 
@@ -393,8 +393,8 @@ function mapOrderSummary(summary: OrderSummary, index: number): OrderItem {
 		orderNumber: summary.orderNumber,
 		status: summary.status,
 		totalAmount: summary.totalAmount,
-		paymentMethod: summary.paymentMethod,
-		shippingAddress: summary.shippingAddress,
+		paymentMethod: summary.paymentMethod ?? '',
+		shippingAddress: summary.shippingAddress ?? '',
 		createdAt: summary.createdAt,
 		updatedAt: summary.updatedAt,
 		items: summary.items,

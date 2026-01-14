@@ -315,7 +315,7 @@ const rawDisplayItems = computed<DisplayItem[]>(() => {
       name: work.name,
       description: work.description ?? '',
       gradient: work.gradient,
-      preview: work.thumbnailUrl || (work.type === 'image' ? work.fileUrl : undefined),
+      preview: work.thumbnailUrl ?? (work.type === 'image' ? work.fileUrl : ''),
       rating: work.rating,
       likes: work.likes,
       sizeLabel: work.size,
@@ -817,20 +817,6 @@ async function loadExistingCollections(options: { force?: boolean } = {}) {
     existingCollections.value = [];
     uni.showToast({ title: collectionsError.value, icon: 'none' });
   } finally {
-  function updatePreviewModalFromItem(item: DisplayItem, index: number) {
-    previewModal.itemId = item.id;
-    previewModal.index = index;
-    previewModal.kind = item.kind;
-    previewModal.preview = item.preview || '';
-    previewModal.gradient = item.gradient;
-    previewModal.sizeLabel = item.sizeLabel;
-    previewModal.likes = item.likes;
-    previewModal.rating = item.rating;
-    const entry = editableEntries[item.id];
-    previewModal.name = entry ? entry.name : item.name;
-    previewModal.description = entry ? entry.description : item.description;
-  }
-
     collectionsLoading.value = false;
   }
 }

@@ -141,7 +141,7 @@ const selectedCollectionId = ref<string>('');
 const selectedWorkIds = ref<string[]>([]);
 const coverWorkIds = ref<string[]>([]);
 const manualCoverUrls = ref<string[]>([]);
-const manualCoverInput = ref('');
+// removed manualCoverInput (unused)
 
 const availableCollections = ref<CollectionSummary[]>([]);
 const availableWorks = ref<WorkSummary[]>([]);
@@ -330,13 +330,7 @@ function handleCollectionChange(event: any): void {
   syncSelectedWorksForCollection(selectedCollectionId.value);
 }
 
-function clearCollectionSelection(): void {
-  if (!selectedCollectionId.value) {
-    return;
-  }
-  selectedCollectionId.value = '';
-  syncSelectedWorksForCollection('');
-}
+// removed unused: clearCollectionSelection
 
 function toggleWorkSelection(id: string): void {
   const set = new Set(selectedWorkIds.value);
@@ -394,33 +388,7 @@ function syncSelectedWorksForCollection(collectionId: string): void {
   coverWorkIds.value = coverWorkIds.value.filter((id) => allowedIds.has(id));
 }
 
-function onManualCoverInput(event: any): void {
-  manualCoverInput.value = event?.detail?.value ?? '';
-}
-
-function addManualCover(): void {
-  const url = manualCoverInput.value.trim();
-  if (!url) {
-    uni.showToast({ title: '请输入链接', icon: 'none' });
-    return;
-  }
-  if (!/^https?:\/\//i.test(url)) {
-    uni.showToast({ title: '请输入有效的 http(s) 链接', icon: 'none' });
-    return;
-  }
-  const set = new Set(manualCoverUrls.value);
-  set.add(url);
-  manualCoverUrls.value = Array.from(set);
-  manualCoverInput.value = '';
-}
-
-function removeCover(item: { url: string; source: 'work' | 'manual'; id?: string }): void {
-  if (item.source === 'work' && item.id) {
-    coverWorkIds.value = coverWorkIds.value.filter((id) => id !== item.id);
-  } else {
-    manualCoverUrls.value = manualCoverUrls.value.filter((url) => url !== item.url);
-  }
-}
+// removed unused manual cover helpers
 
 function validateForm(): boolean {
   if (!form.name.trim()) {
@@ -451,7 +419,7 @@ async function submit(): Promise<void> {
   const workIds = getCombinedWorkIds();
   const payload = {
     name: form.name.trim(),
-    description: form.description.trim() || undefined,
+    description: form.description.trim() || '',
     workIds,
     collectionIds: selectedCollectionId.value ? [selectedCollectionId.value] : [],
     coverUrls,

@@ -442,9 +442,9 @@ function prepareWorkCreation(type: WorkType, files: WorkCandidate[]) {
     .map((file, index) => ({
       id: createPendingId(index),
       name: file.name || `${typeLabels[type]} ${index + 1}`,
-      size: file.size,
+      size: file.size ?? 0,
       filePath: file.path,
-      mimeType: file.mimeType,
+      mimeType: file.mimeType ?? '',
     }))
     .filter((file) => typeof file.filePath === 'string' && file.filePath.length > 0);
   if (!valid.length) {
@@ -455,9 +455,9 @@ function prepareWorkCreation(type: WorkType, files: WorkCandidate[]) {
     valid.map((file) => ({
       id: file.id,
       name: file.name,
-      size: file.size,
+      size: file.size ?? 0,
       filePath: file.filePath!,
-      mimeType: file.mimeType,
+      mimeType: file.mimeType ?? '',
       type,
       description: '',
     })),
@@ -500,7 +500,7 @@ function handleImageSelection() {
             name: record?.name || extractNameFromPath(filePath),
             size: record?.size,
             path: filePath,
-            mimeType: record?.type || record?.fileType,
+            mimeType: record?.type || record?.fileType || '',
           });
         });
       } else {

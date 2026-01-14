@@ -141,7 +141,7 @@ interface WorkDisplay {
   likes: number;
   gradient: string;
   type: WorkMediaType;
-  thumbnailUrl?: string;
+  thumbnailUrl: string;
   fileUrl: string;
   previewHeight: number;
 }
@@ -225,7 +225,7 @@ const worksInCollection = computed<WorkDisplay[]>(() => {
     likes: Number(work.likesCount ?? 0),
     gradient: ensureBackground(work.thumbnailUrl, index),
     type: (work.mediaType ?? 'image') as WorkMediaType,
-    thumbnailUrl: work.thumbnailUrl ?? undefined,
+    thumbnailUrl: work.thumbnailUrl ?? '',
     fileUrl: work.fileUrl,
     previewHeight: computePreviewHeight(index),
   }));
