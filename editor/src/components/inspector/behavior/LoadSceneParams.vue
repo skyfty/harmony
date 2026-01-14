@@ -19,6 +19,7 @@ const loading = ref(false)
 
 const params = computed<LoadSceneBehaviorParams>(() => ({
   scene: props.modelValue?.scene ?? '',
+  pushToStack: props.modelValue?.pushToStack ?? true,
 }))
 
 const scenes = computed<ProjectSceneMeta[]>(() => project.value?.scenes ?? [])
@@ -58,6 +59,14 @@ async function refreshProject() {
 function updateScene(sceneId: string) {
   emit('update:modelValue', {
     scene: sceneId,
+    pushToStack: params.value.pushToStack,
+  })
+}
+
+function updatePushToStack(pushToStack: boolean) {
+  emit('update:modelValue', {
+    scene: params.value.scene,
+    pushToStack,
   })
 }
 
@@ -126,6 +135,15 @@ onMounted(() => {
       :selected-scene-id="params.scene"
       title="选择场景"
       @select="handleSceneSelect"
+    />
+
+    <v-switch
+      :model-value="params.pushToStack"
+      label="入栈"
+      density="compact"
+      hide-details
+      color="primary"
+      @update:model-value="updatePushToStack(Boolean($event))"
     />
 
     <div v-if="!projectsStore.activeProjectId" class="load-scene-params__hint">

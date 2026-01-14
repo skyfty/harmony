@@ -475,6 +475,12 @@ export interface DebusBehaviorParams {
 export interface LoadSceneBehaviorParams {
   /** Target scene id that should be opened by the runtime. */
   scene: string
+
+  /**
+   * When enabled, scene preview will push the current scene to the scene stack
+   * before loading the next scene (so `exit-scene` can return).
+   */
+  pushToStack: boolean
 }
 
 export interface ExitSceneBehaviorParams {

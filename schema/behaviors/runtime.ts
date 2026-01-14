@@ -132,6 +132,7 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       sceneId: string
+      pushToStack: boolean
     }
   | {
       type: 'exit-scene'
@@ -574,6 +575,7 @@ function createLoadSceneEvent(state: BehaviorSequenceState, behavior: SceneBehav
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     sceneId: params?.scene?.trim() ?? '',
+    pushToStack: typeof params?.pushToStack === 'boolean' ? params.pushToStack : true,
   }
 }
 

@@ -4751,16 +4751,21 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		return
 	}
 
-	pushCurrentSceneToStack(sceneId)
+	const shouldPushToStack = event.pushToStack === true
+	if (shouldPushToStack) {
+		pushCurrentSceneToStack(sceneId)
+	}
 
 	if (projectBundle.value) {
 		await switchToProjectScene(sceneId)
 		return
 	}
 
-	// Manual navigation should disable live preview snapshots; otherwise BroadcastChannel
-	// updates can overwrite the newly loaded scene.
-	ensureManualSceneNavigationMode()
+	if (shouldPushToStack) {
+		// Manual navigation should disable live preview snapshots; otherwise BroadcastChannel
+		// updates can overwrite the newly loaded scene.
+		ensureManualSceneNavigationMode()
+	}
 
 	const token = beginSceneSwitch()
 	try {

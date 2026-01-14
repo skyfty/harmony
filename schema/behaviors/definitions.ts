@@ -266,6 +266,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): LoadSceneBehaviorParams {
       return {
         scene: '',
+        pushToStack: true,
       }
     },
   },
@@ -666,6 +667,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'loadScene',
         params: {
           scene: normalizeSceneId(params?.scene),
+          pushToStack: typeof params?.pushToStack === 'boolean' ? params.pushToStack : true,
         },
       }
     }
@@ -929,6 +931,7 @@ export function ensureBehaviorParams(
           type: 'loadScene',
           params: {
             scene: normalizeSceneId(params?.scene),
+            pushToStack: typeof params?.pushToStack === 'boolean' ? params.pushToStack : true,
           },
         }
       }
