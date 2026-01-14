@@ -205,6 +205,24 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
 
+const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
+const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
+
+function switchToLivePreviewMode(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	try {
+		const url = new URL(window.location.href)
+		url.searchParams.delete('projectUrl')
+		url.searchParams.delete('bundleUrl')
+		url.hash = '#/preview'
+		window.location.href = url.toString()
+	} catch {
+		// ignore
+	}
+}
+
 const projectBundle = ref<ProjectExportBundle | null>(null)
 const projectSceneIndex = new Map<string, ProjectExportSceneEntry>()
 const isPlaying = ref(true)
@@ -9322,6 +9340,7 @@ onMounted(() => {
 			const url = new URL(window.location.href)
 			const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
 			if (projectUrl) {
+				liveUpdatesDisabledSourceUrl.value = projectUrl
 				handledInitialPayload = true
 				void loadProjectBundleFromUrl(projectUrl)
 			}
@@ -9409,6 +9428,27 @@ onBeforeUnmount(() => {
 
 <template>
 	<div class="scene-preview">
+		<v-alert
+			v-if="isLiveUpdatesDisabled"
+			type="info"
+			variant="tonal"
+			density="compact"
+			class="scene-preview__live-disabled"
+		>
+			<div class="scene-preview__live-disabled-content">
+				<div class="scene-preview__live-disabled-text">
+					Live updates disabled (bundle mode).
+				</div>
+				<v-btn
+					size="small"
+					variant="text"
+					color="primary"
+					@click="switchToLivePreviewMode"
+				>
+					Switch to live preview
+				</v-btn>
+			</div>
+		</v-alert>
 		<div ref="containerRef" class="scene-preview__canvas"></div>
 		<div class="scene-preview__stats">
 			<div
@@ -10117,6 +10157,26 @@ onBeforeUnmount(() => {
 	min-height: 100vh;
 	overflow: hidden;
 	background: linear-gradient(135deg, #0a0a10, #121220);
+}
+
+.scene-preview__live-disabled {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	z-index: 2300;
+	max-width: min(560px, calc(100% - 32px));
+	pointer-events: auto;
+}
+
+.scene-preview__live-disabled-content {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.scene-preview__live-disabled-text {
+	font-size: 0.85rem;
 }
 
 .scene-preview__canvas,

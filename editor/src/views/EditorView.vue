@@ -1339,8 +1339,12 @@ async function handlePreview() {
   }
 
   const currentUrl = new URL(window.location.href)
+  // Ensure preview opens in live-update mode (bundle/project URL disables BroadcastChannel updates).
+  currentUrl.searchParams.delete('projectUrl')
+  currentUrl.searchParams.delete('bundleUrl')
   currentUrl.hash = '#/preview'
-  window.open(currentUrl.toString(), '_blank', 'noopener')
+  const previewWindow = window.open(currentUrl.toString(), 'harmony-scene-preview', 'noopener')
+  previewWindow?.focus?.()
 }
 
 let pendingSceneSave: Promise<boolean> | null = null
