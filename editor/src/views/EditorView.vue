@@ -1365,6 +1365,11 @@ let lastPreviewBroadcastRevision = 0
 async function broadcastScenePreview(document:StoredSceneDocument) {
   try {
     
+    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
+    document.packageAssetMap = packageAssetMap
+    document.assetIndex = assetIndex
+    document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
+
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 
     let revision = Date.now()
@@ -1381,6 +1386,7 @@ async function broadcastScenePreview(document:StoredSceneDocument) {
     console.warn('[SceneStore] Failed to broadcast preview update', error)
   }
 }
+ 
 
 async function saveCurrentScene(): Promise<boolean> {
   if (pendingSceneSave) {
@@ -1397,10 +1403,6 @@ async function saveCurrentScene(): Promise<boolean> {
     try {
       const document = await sceneStore.saveActiveScene({force: true})
       if (document) {
-        const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
-        document.packageAssetMap = packageAssetMap
-        document.assetIndex = assetIndex
-        document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
         broadcastScenePreview(document)
       }
       return true
