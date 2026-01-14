@@ -27,12 +27,13 @@ const defaultWarnHandler = (message: string): void => {
 
 export default class ResourceCache {
   private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
+  private resourceSummaryDownloadUrls: Map<string, string> | null = null;
   private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
   private document: SceneJsonExportDocument;
   private options: SceneGraphBuildOptions;
   private warn: (message: string) => void;
   private readonly assetLoader: AssetLoader;
-  private reportDownloadProgress?: AssetDownloadReporter;
+  private reportDownloadProgress: AssetDownloadReporter | undefined;
 
   constructor(
     document: SceneJsonExportDocument,
@@ -52,6 +53,7 @@ export default class ResourceCache {
     this.document = document;
     this.options = options;
     this.packageEntries.clear();
+    this.resourceSummaryDownloadUrls = null;
     if (overridesChanged) {
       this.assetEntryCache.clear();
     }
@@ -181,6 +183,11 @@ export default class ResourceCache {
       return indexSource;
     }
 
+    const summaryUrl = this.getResourceSummaryDownloadUrl(assetId);
+    if (summaryUrl) {
+      return { kind: 'remote-url', url: summaryUrl };
+    }
+
     if (typeof this.options.resolveAssetUrl === 'function') {
       const external = await this.options.resolveAssetUrl(assetId);
       if (external) {
@@ -193,6 +200,32 @@ export default class ResourceCache {
 
     this.warn(`未找到资源 ${assetId}`);
     return null;
+  }
+
+  private getResourceSummaryDownloadUrl(assetId: string): string | null {
+    if (!assetId) {
+      return null;
+    }
+
+    if (!this.resourceSummaryDownloadUrls) {
+      this.resourceSummaryDownloadUrls = new Map();
+      const assets = (this.document as any)?.resourceSummary?.assets;
+      if (Array.isArray(assets)) {
+        for (const item of assets) {
+          if (!item || typeof item !== 'object') {
+            continue;
+          }
+          const id = typeof (item as any).assetId === 'string' ? (item as any).assetId.trim() : '';
+          const downloadUrl =
+            typeof (item as any).downloadUrl === 'string' ? (item as any).downloadUrl.trim() : '';
+          if (id.length && downloadUrl.length) {
+            this.resourceSummaryDownloadUrls.set(id, downloadUrl);
+          }
+        }
+      }
+    }
+
+    return this.resourceSummaryDownloadUrls.get(assetId) ?? null;
   }
 
   private resolveOverride(assetId: string): AssetSource | null {
@@ -275,6 +308,12 @@ export default class ResourceCache {
       }
       const provider = key.slice(0, separator);
       const id = key.slice(separator + 2);
+
+      // Reserved providers are handled elsewhere (embedded/url override).
+      if (provider === 'local' || provider === 'url') {
+        continue;
+      }
+
       if (id === assetId && typeof value === 'string') {
         const result = { provider, value };
         this.packageEntries.set(assetId, result);
@@ -305,6 +344,21 @@ export default class ResourceCache {
     if (typeof candidate === 'string') {
       return { kind: 'remote-url', url: candidate };
     }
+
+    // Fallback: some package providers store an indirection id here.
+    // Try to resolve real download url from exported resourceSummary.
+    const directSummaryUrl = this.getResourceSummaryDownloadUrl(assetId);
+    if (directSummaryUrl) {
+      return { kind: 'remote-url', url: directSummaryUrl };
+    }
+    const indirectKey = typeof value === 'string' ? value.trim() : '';
+    if (indirectKey.length) {
+      const indirectSummaryUrl = this.getResourceSummaryDownloadUrl(indirectKey);
+      if (indirectSummaryUrl) {
+        return { kind: 'remote-url', url: indirectSummaryUrl };
+      }
+    }
+
     if (value) {
       const buffer = this.base64ToArrayBuffer(value);
       if (buffer) {
@@ -368,6 +422,19 @@ export default class ResourceCache {
           ? source.originalAssetId.trim()
           : assetId;
       const providerValue = typeof source.value === 'string' ? source.value.trim() : '';
+
+      // If we have an original id, try to resolve from resourceSummary first.
+      // This covers "assetId != originalAssetId" cases where only summary carries the real url.
+      if (originalAssetId !== assetId) {
+        const originalSummaryUrl = this.getResourceSummaryDownloadUrl(originalAssetId);
+        if (originalSummaryUrl) {
+          return { kind: 'remote-url', url: originalSummaryUrl };
+        }
+      }
+      const selfSummaryUrl = this.getResourceSummaryDownloadUrl(assetId);
+      if (selfSummaryUrl) {
+        return { kind: 'remote-url', url: selfSummaryUrl };
+      }
 
       if (providerId) {
         const map = this.document.packageAssetMap ?? {};

@@ -7567,10 +7567,7 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
   }
   ambient.color.set(settings.ambientLightColor);
   ambient.intensity = resolveAmbientLightIntensity(settings.ambientLightIntensity);
-  console.log('[Environment] Applied ambient light settings', {
-    color: ambient.color.getHexString(),
-    intensity: ambient.intensity,
-  });
+
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
