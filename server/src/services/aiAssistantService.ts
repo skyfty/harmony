@@ -7,6 +7,7 @@ type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageP
 type ChatCompletionUserMessageParam = OpenAI.Chat.Completions.ChatCompletionUserMessageParam
 import { appConfig } from '@/config/env'
 import { getOpenAiClient } from '@/services/openAiClient'
+import { getExtensionFromMimeType } from '@schema/assetTypeConversion'
 import type {
   AssistantMessagePayload,
   AssistantResponse,
@@ -133,11 +134,7 @@ function ensureBase64Payload(raw: string): string {
 }
 
 function resolveExtension(mime: string): string {
-  const normalized = mime.toLowerCase()
-  if (normalized === 'image/png') return 'png'
-  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return 'jpg'
-  if (normalized === 'image/webp') return 'webp'
-  return 'bin'
+  return getExtensionFromMimeType(mime) ?? 'bin'
 }
 
 async function ensureUploadDirectory(): Promise<void> {

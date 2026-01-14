@@ -80,6 +80,58 @@ const KNOWN_ASSET_EXTENSIONS_DESC = Object.keys(ASSET_TYPE_BY_EXTENSION)
   .slice()
   .sort((a, b) => b.length - a.length)
 
+// Centralized mapping: extension -> mime type. Use this as the single source
+// for simple extension-based inference. More complex inference still falls
+// back to regex-based parsing below.
+const MIME_BY_EXTENSION: Record<string, string> = {
+  // images
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+
+  // textures / hdri
+  hdr: 'image/vnd.radiance',
+  exr: 'image/exr',
+
+  // videos
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+  ogv: 'video/ogg',
+  ogg: 'video/ogg',
+  m4v: 'video/x-m4v',
+  mkv: 'video/x-matroska',
+  avi: 'video/x-msvideo',
+
+  // models
+  gltf: 'model/gltf+json',
+  glb: 'model/gltf-binary',
+  fbx: 'model/fbx',
+  obj: 'model/obj',
+  stl: 'model/stl',
+
+  // misc
+  json: 'application/json',
+  txt: 'text/plain',
+}
+
+// Derived reverse map: mime -> preferred extension
+const EXTENSION_BY_MIME: Record<string, string> = {}
+Object.keys(MIME_BY_EXTENSION).forEach((ext) => {
+  const mime = MIME_BY_EXTENSION[ext]
+  if (mime && !EXTENSION_BY_MIME[mime]) {
+    EXTENSION_BY_MIME[mime] = ext
+  }
+})
+
 export function normalizeExtension(input: string | null | undefined): string | null {
   if (!input) {
     return null
@@ -204,25 +256,11 @@ export function getExtensionFromMimeType(mimeType: string | null | undefined): s
     return null
   }
   const normalized = mimeType.toLowerCase()
-  const mapping: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-    'image/bmp': 'bmp',
-    'image/svg+xml': 'svg',
-    'image/tiff': 'tiff',
-    'image/x-icon': 'ico',
-    'model/gltf+json': 'gltf',
-    'model/gltf-binary': 'glb',
-    'model/obj': 'obj',
-    'model/stl': 'stl',
-    'application/octet-stream': 'bin',
-  }
-  const direct = mapping[normalized]
-  if (direct) {
-    return direct
-  }
+  // Exact mapping preferred
+  const direct = EXTENSION_BY_MIME[normalized]
+  if (direct) return direct
+
+  // Fallback: parse subtype from common top-level types and return subtype
   const imageMatch = /^image\/([a-z0-9.+-]+)$/i.exec(normalized)
   if (imageMatch) {
     return imageMatch[1]!.toLowerCase()
@@ -236,6 +274,17 @@ export function getExtensionFromMimeType(mimeType: string | null | undefined): s
     return videoMatch[1]!.toLowerCase()
   }
   return null
+}
+
+/**
+ * Infer a MIME type from a filename, URL or asset id.
+ * Exported so other packages can reuse the same mapping logic.
+ */
+export function inferMimeTypeFromAssetId(assetId: string | null | undefined): string | null {
+  const ext = getLastExtensionFromFilenameOrUrl(assetId)
+  if (!ext) return null
+  const lower = ext.toLowerCase()
+  return MIME_BY_EXTENSION[lower] ?? null
 }
 
 export function isImageLikeExtension(extension: string | null | undefined): boolean {

@@ -401,6 +401,8 @@ import {
   type RigidbodyOrientationAdjustment,
 } from '@schema/physicsEngine';
 import { loadNodeObject } from '@schema/modelAssetLoader';
+
+import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -2508,31 +2510,7 @@ async function acquireViewerAssetEntry(assetId: string): Promise<AssetCacheEntry
   }
 }
 
-function inferMimeTypeFromAssetId(assetId: string): string | null {
-	const lower = assetId.toLowerCase()
-	if (lower.endsWith('.png')) {
-		return 'image/png'
-	}
-	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-		return 'image/jpeg'
-	}
-	if (lower.endsWith('.gif')) {
-		return 'image/gif'
-	}
-	if (lower.endsWith('.webp')) {
-		return 'image/webp'
-	}
-	if (lower.endsWith('.svg')) {
-		return 'image/svg+xml'
-	}
-	if (lower.endsWith('.json')) {
-		return 'application/json'
-	}
-	if (lower.endsWith('.txt')) {
-		return 'text/plain'
-	}
-	return null
-}
+// use shared `inferMimeTypeFromAssetId` from schema
 function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer | Blob, mimeHint?: string): string {
 	const cached = assetObjectUrlCache.get(assetId)
 	if (cached) {

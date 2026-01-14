@@ -45,6 +45,7 @@ import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCull
 
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader } from '@schema/assetCache'
+import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 import {
@@ -2778,31 +2779,7 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
 	return await resolveAssetUrlFromCache(assetId)
 }
 
-function inferMimeTypeFromAssetId(assetId: string): string | null {
-	const lower = assetId.toLowerCase()
-	if (lower.endsWith('.png')) {
-		return 'image/png'
-	}
-	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-		return 'image/jpeg'
-	}
-	if (lower.endsWith('.gif')) {
-		return 'image/gif'
-	}
-	if (lower.endsWith('.webp')) {
-		return 'image/webp'
-	}
-	if (lower.endsWith('.svg')) {
-		return 'image/svg+xml'
-	}
-	if (lower.endsWith('.json')) {
-		return 'application/json'
-	}
-	if (lower.endsWith('.txt')) {
-		return 'text/plain'
-	}
-	return null
-}
+
 
 function inferMimeTypeFromUrl(url: string): string | null {
 	const cleaned = url.split('?')[0]?.split('#')[0] ?? url

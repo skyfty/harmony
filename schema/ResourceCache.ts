@@ -1,4 +1,5 @@
 import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
+import { inferMimeTypeFromAssetId } from './assetTypeConversion';
 import type { SceneGraphBuildOptions } from './sceneGraph';
 import type { SceneJsonExportDocument } from '@harmony/schema';
 
@@ -314,7 +315,7 @@ export default class ResourceCache {
         return {
           kind: 'arraybuffer',
           data: encoded,
-          mimeType: this.inferMimeTypeFromAssetId(assetId),
+          mimeType: inferMimeTypeFromAssetId(assetId),
         };
       }
     }
@@ -395,21 +396,21 @@ export default class ResourceCache {
       return { kind: 'remote-url', url: value };
     }
     const buffer = this.base64ToArrayBuffer(value);
-    if (buffer) {
-      return {
-        kind: 'arraybuffer',
-        data: buffer,
-        mimeType: this.inferMimeTypeFromAssetId(assetId),
-      };
-    }
-    const encoded = this.encodeInlineText(value);
-    if (encoded) {
-      return {
-        kind: 'arraybuffer',
-        data: encoded,
-        mimeType: this.inferMimeTypeFromAssetId(assetId) ?? 'text/plain',
-      };
-    }
+      if (buffer) {
+        return {
+          kind: 'arraybuffer',
+          data: buffer,
+          mimeType: inferMimeTypeFromAssetId(assetId),
+        };
+      }
+      const encoded = this.encodeInlineText(value);
+      if (encoded) {
+        return {
+          kind: 'arraybuffer',
+          data: encoded,
+          mimeType: inferMimeTypeFromAssetId(assetId) ?? 'text/plain',
+        };
+      }
     return null;
   }
 
@@ -431,34 +432,7 @@ export default class ResourceCache {
     return null;
   }
 
-  private inferMimeTypeFromAssetId(assetId: string | undefined): string | null {
-    if (!assetId) {
-      return null;
-    }
-    const lower = assetId.toLowerCase();
-    if (lower.endsWith('.png')) {
-      return 'image/png';
-    }
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-      return 'image/jpeg';
-    }
-    if (lower.endsWith('.webp')) {
-      return 'image/webp';
-    }
-    if (lower.endsWith('.gif')) {
-      return 'image/gif';
-    }
-    if (lower.endsWith('.svg')) {
-      return 'image/svg+xml';
-    }
-    if (lower.endsWith('.json')) {
-      return 'application/json';
-    }
-    if (lower.endsWith('.txt')) {
-      return 'text/plain';
-    }
-    return null;
-  }
+  // use shared `inferMimeTypeFromAssetId` from assetTypeConversion
 
   private pickUrlCandidate(...candidates: Array<unknown>): string | null {
     for (const candidate of candidates) {
