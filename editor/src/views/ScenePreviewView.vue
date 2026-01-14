@@ -320,6 +320,168 @@ const resourceProgress = reactive({
 	label: '',
 })
 
+const sceneSwitching = ref(false)
+const sceneSwitchOverlayVisible = ref(false)
+const sceneSwitchFlashActive = ref(false)
+
+const SCENE_SWITCH_OVERLAY_DELAY_MS = 110
+const SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS = 160
+const SCENE_SWITCH_FLASH_FADE_OUT_MS = 180
+
+let sceneSwitchToken = 0
+let sceneSwitchShowHandle = 0
+let sceneSwitchHideHandle = 0
+let sceneSwitchShownAt = 0
+
+const isPreloadOverlayVisible = computed(() => resourceProgress.active || sceneSwitchOverlayVisible.value)
+const isPreloadFlashVisible = computed(() => sceneSwitchOverlayVisible.value)
+
+let forceInitialDocumentGraphOnNextSnapshot = false
+
+function clearSceneSwitchTimers(): void {
+	if (sceneSwitchShowHandle) {
+		window.clearTimeout(sceneSwitchShowHandle)
+		sceneSwitchShowHandle = 0
+	}
+	if (sceneSwitchHideHandle) {
+		window.clearTimeout(sceneSwitchHideHandle)
+		sceneSwitchHideHandle = 0
+	}
+}
+
+function beginSceneSwitch(): number {
+	const token = (sceneSwitchToken += 1)
+	clearSceneSwitchTimers()
+	sceneSwitching.value = true
+	updateCameraControlActivation()
+	updateCanvasCursor()
+
+	sceneSwitchOverlayVisible.value = false
+	sceneSwitchFlashActive.value = false
+	sceneSwitchShownAt = 0
+
+	sceneSwitchShowHandle = window.setTimeout(() => {
+		if (sceneSwitchToken !== token) {
+			return
+		}
+		sceneSwitchOverlayVisible.value = true
+		sceneSwitchShownAt = performance.now()
+		requestAnimationFrame(() => {
+			if (sceneSwitchToken !== token) {
+				return
+			}
+			sceneSwitchFlashActive.value = true
+		})
+	}, SCENE_SWITCH_OVERLAY_DELAY_MS)
+
+	return token
+}
+
+async function endSceneSwitch(token: number): Promise<void> {
+	if (sceneSwitchToken !== token) {
+		return
+	}
+	clearSceneSwitchTimers()
+
+	const finalize = () => {
+		if (sceneSwitchToken !== token) {
+			return
+		}
+		sceneSwitchFlashActive.value = false
+		sceneSwitchHideHandle = window.setTimeout(() => {
+			if (sceneSwitchToken !== token) {
+				return
+			}
+			sceneSwitchOverlayVisible.value = false
+			sceneSwitching.value = false
+			updateCameraControlActivation()
+			updateCanvasCursor()
+		}, SCENE_SWITCH_FLASH_FADE_OUT_MS)
+	}
+
+	if (!sceneSwitchOverlayVisible.value) {
+		sceneSwitching.value = false
+		updateCameraControlActivation()
+		updateCanvasCursor()
+		return
+	}
+
+	const elapsed = sceneSwitchShownAt ? performance.now() - sceneSwitchShownAt : 0
+	const remaining = Math.max(0, SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS - elapsed)
+	if (remaining > 0) {
+		sceneSwitchHideHandle = window.setTimeout(finalize, remaining)
+		return
+	}
+	finalize()
+}
+
+function clearBehaviorDelayTimers(): void {
+	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
+	activeBehaviorDelayTimers.clear()
+}
+
+function cleanupForUnrelatedSceneSwitch(): void {
+	clearBehaviorDelayTimers()
+	resetAnimationControllers()
+	forceInitialDocumentGraphOnNextSnapshot = true
+}
+
+function nextSnapshotRevision(): number {
+	return Math.max(Date.now(), lastSnapshotRevision + 1)
+}
+
+function waitForSnapshotApplied(expectedTimestamp: string, token: number, timeoutMs = 15000): Promise<void> {
+	return new Promise((resolve) => {
+		if (sceneSwitchToken !== token) {
+			resolve()
+			return
+		}
+		if (lastUpdateTime.value === expectedTimestamp) {
+			resolve()
+			return
+		}
+		let resolved = false
+		let stopUpdateWatch: (() => void) | null = null
+		let stopStatusWatch: (() => void) | null = null
+		const resolveOnce = () => {
+			if (resolved) {
+				return
+			}
+			resolved = true
+			stopUpdateWatch?.()
+			stopStatusWatch?.()
+			resolve()
+		}
+		stopStatusWatch = watch(statusMessage, (value) => {
+			if (sceneSwitchToken !== token) {
+				resolveOnce()
+				return
+			}
+			if (typeof value === 'string' && value.startsWith('Failed to load scene')) {
+				resolveOnce()
+			}
+		})
+		stopUpdateWatch = watch(
+			lastUpdateTime,
+			(value) => {
+				if (resolved) {
+					return
+				}
+				if (sceneSwitchToken !== token) {
+					resolveOnce()
+					return
+				}
+				if (value === expectedTimestamp) {
+					resolveOnce()
+				}
+			},
+		)
+		window.setTimeout(() => {
+			resolveOnce()
+		}, timeoutMs)
+	})
+}
+
 type SceneGraphResourceProgressInfo = Parameters<NonNullable<SceneGraphBuildOptions['onProgress']>>[0]
 
 type ResourceProgressItem = {
@@ -3210,14 +3372,15 @@ function isInputLikeElement(target: EventTarget | null): boolean {
 }
 
 function updateCameraControlActivation(): void {
+	const frozen = sceneSwitching.value
 	const caged = isCameraCaged.value
 	if (firstPersonControls) {
-		const enableFirstPerson = controlMode.value === 'first-person' && !caged
+		const enableFirstPerson = !frozen && controlMode.value === 'first-person' && !caged
 		firstPersonControls.enabled = enableFirstPerson
 		firstPersonControls.activeLook = false // enforce keyboard-only control in first-person mode
 	}
 	if (mapControls) {
-		mapControls.enabled = controlMode.value === 'third-person' && !caged
+		mapControls.enabled = !frozen && controlMode.value === 'third-person' && !caged
 	}
 	updateCanvasCursor()
 }
@@ -3263,6 +3426,10 @@ function syncAutoTourCameraInputPolicyForFrame(delta: number): void {
 function updateCanvasCursor() {
 	const canvas = renderer?.domElement
 	if (!canvas) {
+		return
+	}
+	if (sceneSwitching.value) {
+		canvas.style.cursor = 'default'
 		return
 	}
 	if (controlMode.value !== 'first-person') {
@@ -4500,14 +4667,19 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 		appendWarningMessage('Failed to locate scene in project bundle.')
 		return
 	}
+	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
+		const timestamp = new Date().toISOString()
 		if (entry.kind === 'embedded') {
+			cleanupForUnrelatedSceneSwitch()
+			const waitApplied = waitForSnapshotApplied(timestamp, token)
 			applySnapshot({
-				revision: Date.now(),
+				revision: nextSnapshotRevision(),
 				document: entry.document,
-				timestamp: new Date().toISOString(),
+				timestamp,
 			})
+			await waitApplied
 			statusMessage.value = ''
 			return
 		}
@@ -4517,11 +4689,17 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			if (!isSceneJsonExportDocument(parsed)) {
 				throw new Error('Invalid scene document')
 			}
+			if (sceneSwitchToken !== token) {
+				return
+			}
+			cleanupForUnrelatedSceneSwitch()
+			const waitApplied = waitForSnapshotApplied(timestamp, token)
 			applySnapshot({
-				revision: Date.now(),
+				revision: nextSnapshotRevision(),
 				document: parsed,
-				timestamp: new Date().toISOString(),
+				timestamp,
 			})
+			await waitApplied
 			statusMessage.value = ''
 			return
 		}
@@ -4529,6 +4707,8 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 		console.error('[ScenePreview] Failed to switch scene', error)
 		appendWarningMessage('Failed to load scene. Please try again later.')
 		statusMessage.value = 'Failed to load scene. Please try again later.'
+	} finally {
+		await endSceneSwitch(token)
 	}
 }
 
@@ -4544,6 +4724,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		return
 	}
 
+	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
 		const scenesStore = useScenesStore()
@@ -4554,15 +4735,24 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
+		if (sceneSwitchToken !== token) {
+			return
+		}
+		cleanupForUnrelatedSceneSwitch()
+		const timestamp = new Date().toISOString()
+		const waitApplied = waitForSnapshotApplied(timestamp, token)
 		applySnapshot({
-			revision: Date.now(),
+			revision: nextSnapshotRevision(),
 			document: exportDocument,
-			timestamp: new Date().toISOString(),
+			timestamp,
 		})
+		await waitApplied
 	} catch (error) {
 		console.error('[ScenePreview] Failed to load scene', error)
 		appendWarningMessage('Failed to load scene. Please try again later.')
 		statusMessage.value = 'Failed to load scene. Please try again later.'
+	} finally {
+		await endSceneSwitch(token)
 	}
 }
 
@@ -5339,6 +5529,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 }
 
 function handleCanvasClick(event: MouseEvent) {
+	if (sceneSwitching.value) {
+		return
+	}
 	const currentRenderer = renderer
 	const activeCamera = camera
 	const currentScene = scene
@@ -5828,6 +6021,9 @@ function handleFullscreenChange() {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
+	if (sceneSwitching.value) {
+		return
+	}
 	if (isInputLikeElement(event.target)) {
 		return
 	}
@@ -5862,6 +6058,9 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 
 function handleKeyUp(event: KeyboardEvent) {
+	if (sceneSwitching.value) {
+		return
+	}
 	if (isInputLikeElement(event.target)) {
 		return
 	}
@@ -6188,6 +6387,7 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	clearBehaviorDelayTimers()
 	syncGroundCache(null)
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -9221,7 +9421,10 @@ async function updateScene(document: SceneJsonExportDocument) {
 		})
 	}
 
-	if (currentDocument) {
+	const applyIncremental = Boolean(currentDocument) && !forceInitialDocumentGraphOnNextSnapshot
+	forceInitialDocumentGraphOnNextSnapshot = false
+
+	if (applyIncremental) {
 		await applyIncrementalDocumentGraph(
 			document, 
 			previewRoot,
@@ -9606,23 +9809,32 @@ onBeforeUnmount(() => {
 			</v-menu>
 		</div>
 		<div
-			v-if="resourceProgress.active"
+			v-if="isPreloadOverlayVisible"
 			class="scene-preview__preload-overlay"
 		>
-			<v-card class="scene-preview__preload-card" elevation="12">
-				<div class="scene-preview__preload-title">Loading resources...</div>
-				<div class="scene-preview__progress">
-					<div class="scene-preview__progress-bar">
-						<div
-							class="scene-preview__progress-bar-fill"
-							:style="{ '--progress': `${resourceProgressPercent}%` }"
-						/>
+			<div
+				v-if="isPreloadFlashVisible"
+				class="scene-preview__transition-flash"
+				:class="{ 'scene-preview__transition-flash--active': sceneSwitchFlashActive }"
+			></div>
+			<div
+				v-if="resourceProgress.active"
+				class="scene-preview__preload-card-wrap"
+			>
+				<v-card class="scene-preview__preload-card" elevation="12">
+					<div class="scene-preview__preload-title">Loading resources...</div>
+					<div class="scene-preview__progress">
+						<div class="scene-preview__progress-bar">
+							<div
+								class="scene-preview__progress-bar-fill"
+								:style="{ '--progress': `${resourceProgressPercent}%` }"
+							/>
+						</div>
+						<div class="scene-preview__progress-stats">
+							<span class="scene-preview__progress-percent">{{ resourceProgressPercent }}%</span>
+							<span class="scene-preview__progress-bytes">{{ resourceProgressBytesLabel }}</span>
+						</div>
 					</div>
-					<div class="scene-preview__progress-stats">
-						<span class="scene-preview__progress-percent">{{ resourceProgressPercent }}%</span>
-						<span class="scene-preview__progress-bytes">{{ resourceProgressBytesLabel }}</span>
-					</div>
-				</div>
 				<div
 					v-if="resourceProgressItems.length"
 					class="scene-preview__resource-list"
@@ -9651,7 +9863,8 @@ onBeforeUnmount(() => {
 						</div>
 					</div>
 				</div>
-			</v-card>
+				</v-card>
+			</div>
 		</div>
 		<div
 			v-if="statusMessage || formattedLastUpdate"
@@ -10233,11 +10446,33 @@ onBeforeUnmount(() => {
 
 .scene-preview__preload-overlay {
 	position: absolute;
+	inset: 0;
+	z-index: 2350;
+	pointer-events: none;
+}
+
+.scene-preview__transition-flash {
+	position: absolute;
+	inset: 0;
+	background: rgba(255, 255, 255, 0.28);
+	opacity: 0;
+	transition: opacity 160ms ease;
+	pointer-events: none;
+	z-index: 0;
+}
+
+.scene-preview__transition-flash--active {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.scene-preview__preload-card-wrap {
+	position: absolute;
 	top: 80px;
 	left: 50%;
 	transform: translateX(-50%);
-	z-index: 30;
 	pointer-events: none;
+	z-index: 1;
 }
 
 .scene-preview__preload-card {

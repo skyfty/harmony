@@ -133,7 +133,12 @@
         </view>
       </view>
       <view v-if="overlayActive" class="viewer-overlay">
-        <view class="viewer-overlay__content viewer-overlay__card">
+        <view
+          v-if="sceneSwitchOverlayVisible"
+          class="viewer-overlay__flash"
+          :class="{ 'is-active': sceneSwitchFlashActive }"
+        ></view>
+        <view v-if="overlayCardActive" class="viewer-overlay__content viewer-overlay__card">
           <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
           <view class="viewer-progress">
             <view class="viewer-progress__bar">
@@ -912,7 +917,91 @@ function ensureResourceCache(
   return sharedResourceCache;
 }
 
-const overlayActive = computed(() => loading.value || sceneDownload.active || resourcePreload.active);
+const overlayCardActive = computed(() => loading.value || sceneDownload.active || resourcePreload.active);
+
+const overlayActive = computed(() => overlayCardActive.value || sceneSwitchOverlayVisible.value);
+
+// ---------------------------------
+// Scene switch transition (flash UI)
+// ---------------------------------
+
+const sceneSwitching = ref(false);
+const sceneSwitchOverlayVisible = ref(false);
+const sceneSwitchFlashActive = ref(false);
+let hasRenderedSceneOnce = false;
+
+let initializeToken = 0;
+let pendingRestartAfterCurrentInit = false;
+
+let sceneSwitchShowTimer: ReturnType<typeof setTimeout> | null = null;
+let sceneSwitchHideTimer: ReturnType<typeof setTimeout> | null = null;
+let sceneSwitchMinVisibleUntil = 0;
+
+const SCENE_SWITCH_OVERLAY_DELAY_MS = 110;
+const SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS = 160;
+const SCENE_SWITCH_OVERLAY_FADE_OUT_MS = 180;
+
+function cancelSceneSwitchTimers(): void {
+  if (sceneSwitchShowTimer) {
+    clearTimeout(sceneSwitchShowTimer);
+    sceneSwitchShowTimer = null;
+  }
+  if (sceneSwitchHideTimer) {
+    clearTimeout(sceneSwitchHideTimer);
+    sceneSwitchHideTimer = null;
+  }
+}
+
+function beginSceneSwitchTransition(token: number): void {
+  if (!hasRenderedSceneOnce) {
+    return;
+  }
+
+  cancelSceneSwitchTimers();
+  sceneSwitching.value = true;
+  sceneSwitchFlashActive.value = false;
+  sceneSwitchOverlayVisible.value = false;
+
+  sceneSwitchShowTimer = setTimeout(() => {
+    if (token !== initializeToken) {
+      return;
+    }
+    sceneSwitchOverlayVisible.value = true;
+    sceneSwitchMinVisibleUntil = Date.now() + SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS;
+    const schedule = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (callback: () => void) => setTimeout(callback, 16);
+    schedule(() => {
+      if (token !== initializeToken) {
+        return;
+      }
+      sceneSwitchFlashActive.value = true;
+    });
+  }, SCENE_SWITCH_OVERLAY_DELAY_MS);
+}
+
+function endSceneSwitchTransition(token: number): void {
+  if (token !== initializeToken) {
+    return;
+  }
+
+  cancelSceneSwitchTimers();
+  const now = Date.now();
+  const delay = sceneSwitchOverlayVisible.value ? Math.max(0, sceneSwitchMinVisibleUntil - now) : 0;
+  sceneSwitchHideTimer = setTimeout(() => {
+    if (token !== initializeToken) {
+      return;
+    }
+    sceneSwitchFlashActive.value = false;
+    setTimeout(() => {
+      if (token !== initializeToken) {
+        return;
+      }
+      sceneSwitchOverlayVisible.value = false;
+      sceneSwitching.value = false;
+    }, SCENE_SWITCH_OVERLAY_FADE_OUT_MS);
+  }, delay);
+}
 
 const overlayTitle = computed(() => {
   if (sceneDownload.active) {
@@ -7696,7 +7785,12 @@ function parseProjectExportBundle(payload: string): ProjectExportBundle {
   return parsed;
 }
 
+let projectSceneSwitchToken = 0;
+
 async function switchToProjectScene(sceneId: string): Promise<void> {
+  projectSceneSwitchToken += 1;
+  const token = projectSceneSwitchToken;
+
   const trimmed = (sceneId ?? '').trim();
   if (!trimmed) {
     return;
@@ -7710,6 +7804,9 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
   error.value = null;
   try {
     if (entry.kind === 'embedded') {
+      if (token !== projectSceneSwitchToken) {
+        return;
+      }
       previewPayload.value = {
         document: entry.document,
         title: entry.document.name || entry.name || '场景预览',
@@ -7722,6 +7819,9 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
     }
     if (entry.kind === 'external') {
       const document = await requestSceneDocument(entry.sceneJsonUrl);
+      if (token !== projectSceneSwitchToken) {
+        return;
+      }
       previewPayload.value = {
         document,
         title: document.name || entry.name || '场景预览',
@@ -7733,7 +7833,9 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       return;
     }
   } finally {
-    loading.value = false;
+    if (token === projectSceneSwitchToken) {
+      loading.value = false;
+    }
   }
 }
 
@@ -8009,22 +8111,48 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
 }
 
 async function startRenderIfReady() {
-  if (!previewPayload.value || !canvasResult || initializing) {
+  if (!previewPayload.value || !canvasResult) {
     return;
   }
+
+  if (initializing) {
+    // A newer payload arrived while we're initializing. Cancel the current init and restart after it settles.
+    pendingRestartAfterCurrentInit = true;
+    initializeToken += 1;
+    return;
+  }
+
   initializing = true;
   loading.value = true;
   error.value = null;
   warnings.value = [];
+
+  initializeToken += 1;
+  const token = initializeToken;
+  beginSceneSwitchTransition(token);
+
   try {
     await ensureRendererContext(canvasResult);
-    await initializeRenderer(previewPayload.value, canvasResult);
+    await initializeRenderer(previewPayload.value, canvasResult, token);
+    if (token === initializeToken && !error.value) {
+      hasRenderedSceneOnce = true;
+    }
   } catch (initializationError) {
     console.error(initializationError);
-    error.value = '初始化渲染器失败';
+    if (token === initializeToken) {
+      error.value = '初始化渲染器失败';
+    }
   } finally {
-    loading.value = false;
+    if (token === initializeToken) {
+      loading.value = false;
+    }
     initializing = false;
+    endSceneSwitchTransition(token);
+
+    if (pendingRestartAfterCurrentInit) {
+      pendingRestartAfterCurrentInit = false;
+      void startRenderIfReady();
+    }
   }
 }
 
@@ -8216,10 +8344,18 @@ function handleUseCanvas(result: UseCanvasResult) {
 }
 
 async function ensureRendererContext(result: UseCanvasResult) {
-  if (renderContext) {
-    teardownRenderer();
-  }
   await result.recomputeSize?.();
+
+  if (renderContext) {
+    const { canvas } = result;
+    const width = canvas.width || canvas.clientWidth || 1;
+    const height = canvas.height || canvas.clientHeight || 1;
+    renderContext.renderer.setSize(width, height, false);
+    renderContext.camera.aspect = width / height;
+    renderContext.camera.updateProjectionMatrix();
+    return;
+  }
+
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   const { canvas } = result;
@@ -8635,13 +8771,104 @@ function startRenderLoop(
   });
 }
 
-async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
+function cleanupForUnrelatedSceneSwitch(): void {
+  if (!renderContext) {
+    return;
+  }
+
+  // Stop the old frame loop to avoid stacking multiple useFrame() tickers.
+  renderScope?.stop();
+  renderScope = null;
+
+  resetProtagonistPoseState();
+  releaseTerrainScatterInstances();
+
+  if (behaviorAlertToken.value) {
+    resolveBehaviorToken(behaviorAlertToken.value, {
+      type: 'abort',
+      message: '场景切换',
+    });
+  }
+  if (lanternEventToken.value) {
+    closeLanternOverlay({ type: 'abort', message: '场景切换' });
+  } else {
+    resetLanternOverlay();
+  }
+
+  hidePurposeControls();
+  setCameraCaging(false);
+  previewComponentManager.reset();
+
+  resetBehaviorRuntime();
+  resetBehaviorProximity();
+  activeBehaviorDelayTimers.forEach((handle) => clearTimeout(handle));
+  activeBehaviorDelayTimers.clear();
+  resetAnimationControllers();
+
+  previewNodeMap.clear();
+  autoTourRuntime.reset();
+  activeAutoTourNodeIds.clear();
+  autoTourRotationOnlyHold.value = false;
+  autoTourFollowNodeId.value = null;
+  resetAutoTourCameraFollowState();
+
+  nodeObjectMap.forEach((_object, nodeId) => {
+    releaseModelInstance(nodeId);
+  });
+  nodeObjectMap.clear();
+  multiuserNodeIds.clear();
+  multiuserNodeObjects.clear();
+
+  resetPhysicsWorld();
+  lazyPlaceholderStates.clear();
+  deferredInstancingNodeIds.clear();
+  activeLazyLoadCount = 0;
+  activeCameraWatchTween = null;
+  frameDeltaMode = null;
+
+  disposeEnvironmentResources();
+  disposeSkyResources();
+  cloudRenderer?.dispose();
+  cloudRenderer = null;
+  pendingSkyboxSettings = null;
+
+  lanternTextPromises.clear();
+  Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
+
+  stopInstancedMeshSubscription?.();
+  stopInstancedMeshSubscription = null;
+  clearInstancedMeshes();
+
+  if (sceneGraphRoot) {
+    renderContext.scene.remove(sceneGraphRoot);
+    disposeObject(sceneGraphRoot);
+  }
+  sceneGraphRoot = null;
+  dynamicGroundCache = null;
+  setActiveMultiuserSceneId(null);
+  viewerResourceCache = null;
+}
+
+async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult, token: number) {
   if (!renderContext) {
     throw new Error('Render context missing');
   }
   const { scene, renderer, camera, controls } = renderContext;
   activeCameraWatchTween = null;
   const { canvas } = result;
+
+  if (token !== initializeToken) {
+    return;
+  }
+
+  // Always treat payload switches as unrelated: clear previous graph + behavior runtime.
+  if (sceneGraphRoot || currentDocument) {
+    cleanupForUnrelatedSceneSwitch();
+  }
+
+  if (token !== initializeToken) {
+    return;
+  }
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
@@ -8661,6 +8888,12 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 3: build the scene graph (loads assets) with UI progress updates.
   resetResourcePreloadState();
   const buildResult = await buildSceneGraphWithProgress(payload);
+  if (token !== initializeToken) {
+    if (buildResult?.graph?.root) {
+      disposeObject(buildResult.graph.root);
+    }
+    return;
+  }
   if (!buildResult) {
     return;
   }
@@ -8672,6 +8905,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 4: instancing preparation (skip lazy placeholders).
   const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
   await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
+
+  if (token !== initializeToken) {
+    disposeObject(graph.root);
+    return;
+  }
 
   // Phase 5: mount graph and sync subsystems that depend on it.
   mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
@@ -8993,11 +9231,28 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   background-color: rgba(29, 30, 34, 0.4);
   color: #ffffff;
   font-size: 14px;
   text-align: center;
   padding: 12px;
+}
+
+.viewer-overlay__flash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.28);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+}
+
+.viewer-overlay__flash.is-active {
+  opacity: 1;
 }
 
 .viewer-overlay__content {
