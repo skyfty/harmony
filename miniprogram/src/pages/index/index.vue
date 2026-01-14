@@ -2,78 +2,53 @@
     <view class="page">
         <view class="toolbar">
             <button class="action primary" @tap="handleLocalImport" :disabled="importing">
-                本地导入
-            </button>
-            <button class="action" @tap="openUrlDialog" :disabled="importing">
-                URL 导入
+                本地导入项目
             </button>
         </view>
 
         <view class="stats">
-            <text class="title">我的场景</text>
-            <text class="count">{{ orderedScenes.length }} 个</text>
+            <text class="title">我的项目</text>
+            <text class="count">{{ orderedProjects.length }} 个</text>
         </view>
 
         <scroll-view scroll-y class="scene-list">
-            <view v-if="!orderedScenes.length && !importing" class="empty">
-                <text class="empty-title">暂无场景</text>
-                <text class="empty-desc">通过本地文件或远程 URL 导入 JSON 场景文件</text>
+            <view v-if="!orderedProjects.length && !importing" class="empty">
+                <text class="empty-title">暂无项目</text>
+                <text class="empty-desc">通过本地文件导入工程（Project）导出文件</text>
             </view>
 
             <view
-                v-for="scene in orderedScenes"
-                :key="scene.id"
+                v-for="project in orderedProjects"
+                :key="project.id"
                 class="scene-card"
-                @tap="openScene(scene.id)"
+                @tap="openProject(project.id)"
             >
                 <view class="card-header">
-                    <text class="scene-name">{{ scene.scene.name }}</text>
+                    <text class="scene-name">{{ project.bundle.project.name || '未命名项目' }}</text>
                 </view>
                 <view class="card-meta">
-                    <text>创建于 {{ formatDate(scene.scene.createdAt) }}</text>
-                    <text>更新于 {{ formatDate(scene.scene.updatedAt) }}</text>
+                    <text>导入于 {{ formatDate(project.savedAt) }}</text>
+                    <text>场景数 {{ project.bundle.scenes.length }} 个</text>
                 </view>
                 <view class="card-footer">
-                    <text class="card-origin" v-if="scene.origin">来源：{{ scene.origin }}</text>
-                    <button class="delete-button" @tap.stop="confirmDelete(scene.id)">删除</button>
+                    <text class="card-origin" v-if="project.origin">来源：{{ project.origin }}</text>
                 </view>
             </view>
         </scroll-view>
-
-        <view v-if="showUrlDialog" class="dialog-mask" @tap.self="closeUrlDialog">
-            <view class="dialog">
-                <text class="dialog-title">通过 URL 导入</text>
-                <input
-                    v-model="urlInput"
-                    class="dialog-input"
-                    type="text"
-                    placeholder="输入 JSON 场景文件地址"
-                />
-                <view class="dialog-actions">
-                    <button class="dialog-button" @tap="closeUrlDialog">取消</button>
-                    <button class="dialog-button primary" @tap="handleUrlImport" :disabled="importing || !urlInput.trim()">
-                        {{ importing ? '导入中…' : '导入' }}
-                    </button>
-                </view>
-            </view>
-        </view>
     </view>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import type { SceneJsonExportDocument } from '@harmony/schema';
-import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
+import { parseProjectBundle, useProjectStore } from '@/stores/projectStore';
 
-const sceneStore = useSceneStore();
-const { orderedScenes } = storeToRefs(sceneStore);
+const projectStore = useProjectStore();
+const { orderedProjects } = storeToRefs(projectStore);
 const importing = ref(false);
-const showUrlDialog = ref(false);
-const urlInput = ref('');
 
 onMounted(() => {
-    sceneStore.bootstrap();
+    projectStore.bootstrap();
 });
 
 const formatDate = (value?: string) => {
@@ -91,21 +66,8 @@ const formatDate = (value?: string) => {
     return `${date.getFullYear()}-${month}-${day} ${hour}:${minute}`;
 };
 
-function openScene(sceneId: string) {
-    uni.navigateTo({ url: `/pages/scene-viewer/index?id=${sceneId}` });
-}
-
-function openUrlDialog() {
-    urlInput.value = '';
-    showUrlDialog.value = true;
-}
-
-function closeUrlDialog() {
-    if (importing.value) {
-        return;
-    }
-    showUrlDialog.value = false;
-    urlInput.value = '';
+function openProject(projectId: string) {
+    uni.navigateTo({ url: `/pages/scene-viewer/index?projectId=${encodeURIComponent(projectId)}` });
 }
 
 async function readFileContent(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<string> {
@@ -193,9 +155,10 @@ async function readFileContent(file: UniApp.ChooseFileSuccessCallbackResultFile)
     throw new Error('当前平台暂不支持直接读取所选文件，请在 H5/App 端或使用支持的端导入');
 }
 
-async function importScene(scene: SceneJsonExportDocument, origin?: string) {
-    sceneStore.importScene(scene, origin);
-    uni.showToast({ title: '导入成功', icon: 'success' });
+async function importProject(bundle: unknown, origin?: string) {
+    const projectBundle = parseProjectBundle(bundle);
+    projectStore.importProject(projectBundle, origin);
+    uni.showToast({ title: '项目导入成功', icon: 'success' });
 }
 
 async function handleLocalImport() {
@@ -220,9 +183,8 @@ async function handleLocalImport() {
                         }
                         try {
                             const content = await readFileContent(file);
-                            const document = parseSceneDocument(content);
                             const originName = (file as any).name || '本地文件';
-                            await importScene(document, originName);
+                            await importProject(content, originName);
                             resolve();
                         } catch (error) {
                             reject(error);
@@ -251,9 +213,8 @@ async function handleLocalImport() {
                                 return;
                             }
                             const content = await readFileContent(file as any);
-                            const document = parseSceneDocument(content);
                             const originName = (file && (file.name || file.path)) || '本地文件';
-                            await importScene(document, originName);
+                            await importProject(content, originName);
                             resolve();
                         } catch (error) {
                             reject(error);
@@ -269,44 +230,10 @@ async function handleLocalImport() {
         });
     } catch (error) {
         console.error(error);
-        uni.showToast({ title: '导入失败', icon: 'none' });
+        uni.showToast({ title: '项目导入失败', icon: 'none' });
     } finally {
         importing.value = false;
     }
-}
-
-async function handleUrlImport() {
-    if (importing.value || !urlInput.value.trim()) {
-        return;
-    }
-    importing.value = true;
-    try {
-        const url = urlInput.value.trim();
-        const response = await uni.request({ url, method: 'GET', timeout: 15000 });
-        const data = response.data;
-        const document = parseSceneDocument(data);
-        await importScene(document, 'remote');
-        closeUrlDialog();
-    } catch (error) {
-        console.error(error);
-        uni.showToast({ title: '拉取失败，请检查地址', icon: 'none' });
-    } finally {
-        importing.value = false;
-    }
-}
-
-function confirmDelete(sceneId: string) {
-    uni.showModal({
-        title: '删除场景',
-        content: '确定删除该场景吗？',
-        confirmColor: '#d93025',
-        success: (res) => {
-            if (res.confirm) {
-                sceneStore.removeScene(sceneId);
-                uni.showToast({ title: '已删除', icon: 'none' });
-            }
-        },
-    });
 }
 
 </script>

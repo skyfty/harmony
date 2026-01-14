@@ -67,10 +67,9 @@ export async function request<TResponse = any, TData = any>(
   }
 
   return new Promise<TResponse>((resolve, reject) => {
-    uni.request({
+    const req: UniApp.RequestOptions = {
       url: fullUrl,
       method: method as UniApp.RequestOptions['method'],
-      data: options.data === undefined ? undefined : (options.data as UniApp.RequestOptions['data']),
       header: headers,
       timeout: options.timeout ?? 20000,
       success: (res) => {
@@ -87,7 +86,11 @@ export async function request<TResponse = any, TData = any>(
       fail: (err) => {
         reject(new Error(err.errMsg || '网络请求失败'));
       },
-    });
+    };
+    if (options.data !== undefined) {
+      (req as any).data = options.data as UniApp.RequestOptions['data'];
+    }
+    uni.request(req);
   });
 }
 

@@ -55,12 +55,15 @@ export function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
 }
 
 export function createSceneEntry(scene: SceneJsonExportDocument, origin?: string): StoredSceneEntry {
-    return {
+    const entry: StoredSceneEntry = {
         id: generateId('scene'),
         savedAt: new Date().toISOString(),
-        origin,
         scene,
     };
+    if (typeof origin === 'string' && origin.trim().length) {
+        (entry as any).origin = origin;
+    }
+    return entry;
 }
 
 
@@ -112,7 +115,11 @@ export const useSceneStore = defineStore('sceneStore', (): SceneStoreSetup => {
                 }
                 try {
                     const parsedScene = parseSceneDocument(scene);
-                    sanitized.push({ id, savedAt, origin, scene: parsedScene });
+                    const sanitizedEntry: StoredSceneEntry = { id, savedAt, scene: parsedScene };
+                    if (typeof origin === 'string' && origin.trim().length) {
+                        (sanitizedEntry as any).origin = origin;
+                    }
+                    sanitized.push(sanitizedEntry);
                 } catch (_error) {
                     // ignore invalid entries
                 }
@@ -124,8 +131,11 @@ export const useSceneStore = defineStore('sceneStore', (): SceneStoreSetup => {
     }
 
     function persistScenes(entries: StoredSceneEntry[]): void {
-        const payload = JSON.stringify(entries);
-        // uni.setStorageSync(STORAGE_KEY, payload);
+        try {
+            uni.setStorageSync(STORAGE_KEY, JSON.stringify(entries));
+        } catch (_error) {
+            // ignore storage errors
+        }
     }
     function setScenes(entries: StoredSceneEntry[]) {
         scenes.value = entries;

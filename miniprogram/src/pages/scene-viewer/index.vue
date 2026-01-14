@@ -376,8 +376,7 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
-import type { StoredSceneEntry } from '@/stores/sceneStore';
-import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
+import { useProjectStore } from '@/stores/projectStore';
 import {
   buildSceneGraph,
   createTerrainScatterLodRuntime,
@@ -436,8 +435,6 @@ import {
   type SceneNodeComponentState,
   type SceneSkyboxSettings,
   type SceneJsonExportDocument,
-  PROJECT_EXPORT_BUNDLE_FORMAT,
-  PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
   type ProjectExportBundle,
   type ProjectExportSceneEntry,
   type LanternSlideDefinition,
@@ -553,7 +550,7 @@ interface ScenePreviewPayload {
   enableGround?: boolean;
 }
 
-type RequestedMode = 'store' | 'document' | 'model' | 'project' | null;
+type RequestedMode = 'project' | null;
 
 interface SceneDownloadProgress extends UniApp.OnProgressUpdateResult {
   totalBytesWritten?: number;
@@ -571,24 +568,16 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
-const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/a.json';
 const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
-const sceneStore = useSceneStore();
+const projectStore = useProjectStore();
 const canvasId = `scene-viewer-${Date.now()}`;
 const currentSceneId = ref<string | null>(null);
+const currentProjectId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
 
 const projectBundle = ref<ProjectExportBundle | null>(null);
 const projectSceneIndex = new Map<string, ProjectExportSceneEntry>();
-
-const sceneEntry = computed<StoredSceneEntry | null>(() => {
-  const sceneId = currentSceneId.value;
-  if (!sceneId) {
-    return null;
-  }
-  return sceneStore.getScene(sceneId) ?? null;
-});
 
 const previewPayload = ref<ScenePreviewPayload | null>(null);
 const loading = ref(true);
@@ -7658,131 +7647,38 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   pendingSkyboxSettings = null;
 }
 
-function decodeBase64(value: string): string | null {
-  const normalized = value.replace(/^data:[^,]+,/, '');
-  try {
-    if (typeof atob === 'function') {
-      return atob(normalized);
-    }
-    const globalBuffer = typeof globalThis !== 'undefined' ? (globalThis as any).Buffer : undefined;
-    if (globalBuffer && typeof globalBuffer.from === 'function') {
-      return globalBuffer.from(normalized, 'base64').toString('utf-8');
-    }
-  } catch (_error) {
-    return null;
-  }
-  return null;
-}
-
-function parseInlineSceneDocument(raw: string): SceneJsonExportDocument {
-  const candidates = new Set<string>();
-  const pushCandidate = (candidate: string | null | undefined) => {
-    if (!candidate) {
-      return;
-    }
-    const trimmed = candidate.trim();
-    if (!trimmed.length) {
-      return;
-    }
-    candidates.add(trimmed);
-  };
-  pushCandidate(raw);
-  try {
-    pushCandidate(decodeURIComponent(raw));
-  } catch (_error) {
-    // ignore
-  }
-  const base64 = decodeBase64(raw);
-  pushCandidate(base64);
-  if (base64) {
-    try {
-      pushCandidate(decodeURIComponent(base64));
-    } catch (_error) {
-      // ignore
-    }
-  }
-  for (const candidate of candidates) {
-    try {
-      return parseSceneDocument(candidate);
-    } catch (_error) {
-      continue;
-    }
-  }
-  throw new Error('无法解析场景数据');
-}
-
-function normalizeSceneUrl(raw: string): string {
-  if (!raw) {
-    return '';
-  }
-  const trimmed = raw.trim();
-  if (!trimmed.length) {
-    return '';
-  }
-  try {
-    return decodeURIComponent(trimmed);
-  } catch (_error) {
-    return trimmed;
-  }
-}
-
-async function loadSceneFromUrl(url: string): Promise<void> {
-  const normalizedUrl = url.trim();
-  if (!normalizedUrl) {
-    error.value = '场景地址不能为空';
-    loading.value = false;
-    return;
-  }
-  error.value = null;
-  resetSceneDownloadState();
-  sceneDownload.active = true;
-  sceneDownload.label = '正在下载场景数据…';
-  try {
-    const document = await requestSceneDocument(normalizedUrl);
-    previewPayload.value = {
-      document,
-      title: document.name || '场景预览',
-      origin: normalizedUrl,
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-    };
-  } catch (downloadError) {
-    console.error(downloadError);
-    const message = downloadError instanceof Error ? downloadError.message : '场景下载失败';
-    error.value = message;
-    previewPayload.value = null;
-    loading.value = false;
-  } finally {
-    resetSceneDownloadState();
-  }
-}
-
-function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
-  if (!raw || typeof raw !== 'object') {
+function isValidSceneDocument(document: unknown): document is SceneJsonExportDocument {
+  if (!document || typeof document !== 'object') {
     return false;
   }
-  const candidate = raw as Partial<ProjectExportBundle>;
-  if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
+  const candidate = document as SceneJsonExportDocument;
+  if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') {
     return false;
   }
-  if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
-    return false;
-  }
-  if (!candidate.project || typeof candidate.project !== 'object') {
-    return false;
-  }
-  if (!Array.isArray(candidate.scenes)) {
+  if (!Array.isArray(candidate.nodes) || !Array.isArray(candidate.materials)) {
     return false;
   }
   return true;
 }
 
-function parseProjectExportBundle(payload: string): ProjectExportBundle {
-  const parsed = JSON.parse(payload) as unknown;
-  if (!isProjectExportBundle(parsed)) {
-    throw new Error('无法识别工程导出文件格式');
+function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
+  if (typeof payload === 'string') {
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+      if (isValidSceneDocument(parsed)) {
+        return parsed;
+      }
+    } catch (_error) {
+      throw new Error('JSON 解析失败');
+    }
+    throw new Error('场景数据格式不正确');
   }
-  return parsed;
+
+  if (isValidSceneDocument(payload)) {
+    return payload;
+  }
+
+  throw new Error('场景数据格式不正确');
 }
 
 let projectSceneSwitchToken = 0;
@@ -7839,95 +7735,26 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
   }
 }
 
-function requestProjectBundle(url: string): Promise<ProjectExportBundle> {
-  return new Promise((resolve, reject) => {
-    if (sceneDownloadTask) {
-      sceneDownloadTask.abort();
-      sceneDownloadTask = null;
+async function loadProjectFromBundle(bundle: ProjectExportBundle): Promise<void> {
+  error.value = null;
+  projectBundle.value = bundle;
+  projectSceneIndex.clear();
+  bundle.scenes.forEach((scene: ProjectExportSceneEntry) => {
+    if (scene && typeof scene.id === 'string') {
+      projectSceneIndex.set(scene.id, scene);
     }
-    const task = uni.request({
-      url,
-      method: 'GET',
-      responseType: 'text',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`工程下载失败（${statusCode}）`));
-          return;
-        }
-        try {
-          const payload = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? {});
-          const bundle = parseProjectExportBundle(payload);
-          resolve(bundle);
-        } catch (parseError) {
-          const message = parseError instanceof Error ? parseError.message : '工程数据解析失败';
-          reject(new Error(message));
-        }
-      },
-      fail: (requestError) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '工程下载失败';
-        reject(new Error(message));
-      },
-      complete: () => {
-        sceneDownloadTask = null;
-      },
-    }) as SceneRequestTask;
-    sceneDownloadTask = task;
-    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
-      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = info.progress;
-        sceneDownload.label = `正在下载工程数据… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
-      }
-      if (typeof info.totalBytesWritten === 'number') {
-        sceneDownload.loaded = info.totalBytesWritten;
-      }
-      if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = info.totalBytesExpectedToWrite;
-      }
-    });
   });
-}
 
-async function loadProjectFromUrl(url: string): Promise<void> {
-  const normalizedUrl = url.trim();
-  if (!normalizedUrl) {
-    error.value = '工程地址不能为空';
+  const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || null;
+  if (!initialId) {
+    error.value = '工程未设置默认场景';
+    previewPayload.value = null;
     loading.value = false;
     return;
   }
-  error.value = null;
-  resetSceneDownloadState();
-  sceneDownload.active = true;
-  sceneDownload.label = '正在下载工程数据…';
-  try {
-    const bundle = await requestProjectBundle(normalizedUrl);
-    projectBundle.value = bundle;
-    projectSceneIndex.clear();
-    bundle.scenes.forEach((scene: ProjectExportSceneEntry) => {
-      if (scene && typeof scene.id === 'string') {
-        projectSceneIndex.set(scene.id, scene);
-      }
-    });
 
-    const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || bundle.scenes[0]?.id || null;
-    if (!initialId) {
-      throw new Error('工程导出文件不包含任何场景');
-    }
-    requestedMode.value = 'project';
-    await switchToProjectScene(initialId);
-  } catch (downloadError) {
-    console.error(downloadError);
-    const message = downloadError instanceof Error ? downloadError.message : '工程下载失败';
-    error.value = message;
-    previewPayload.value = null;
-    loading.value = false;
-  } finally {
-    resetSceneDownloadState();
-  }
+  requestedMode.value = 'project';
+  await switchToProjectScene(initialId);
 }
 
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
@@ -8005,73 +7832,6 @@ function formatByteSize(value: number): string {
   const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
   return `${size.toFixed(digits)}${units[index]}`;
 }
-
-function createModelPreviewPayload(args: { url: string; name?: string; assetId?: string }): ScenePreviewPayload {
-  const assetUrl = args.url?.trim();
-  if (!assetUrl) {
-    throw new Error('模型地址不能为空');
-  }
-  const normalizedAssetId = args.assetId && args.assetId.trim().length ? args.assetId.trim() : assetUrl;
-  const now = new Date().toISOString();
-  const title = args.name && args.name.trim().length ? args.name.trim() : '模型预览';
-  const nodeId = `model-${Math.random().toString(36).slice(2, 10)}`;
-  const document: SceneJsonExportDocument = {
-    id: `model-preview-${Date.now().toString(36)}`,
-    name: title,
-    createdAt: now,
-    updatedAt: now,
-    skybox: sanitizeSkyboxSettings(DEFAULT_SKYBOX_SETTINGS),
-    nodes: [
-      {
-        id: nodeId,
-        name: title,
-        nodeType: 'Mesh',
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-        sourceAssetId: normalizedAssetId,
-        visible: true,
-        children: [],
-      },
-    ],
-    materials: [],
-    packageAssetMap: {},
-  };
-  return {
-    document,
-    title,
-    assetOverrides: { [normalizedAssetId]: assetUrl },
-    enableGround: false,
-  };
-}
-
-function createPayloadFromEntry(entry: StoredSceneEntry): ScenePreviewPayload {
-  const document = entry.scene;
-  const origin = entry.origin;
-  return {
-    document,
-    title: document.name || '场景预览',
-    ...(origin ? { origin } : {}),
-    createdAt: document.createdAt,
-    updatedAt: document.updatedAt,
-  };
-}
-
-watch(sceneEntry, (entry) => {
-  if (requestedMode.value !== 'store') {
-    return;
-  }
-  if (!entry) {
-    previewPayload.value = null;
-    if (bootstrapFinished.value) {
-      error.value = '未找到对应的场景数据';
-      loading.value = false;
-    }
-    return;
-  }
-  loading.value = true;
-  previewPayload.value = createPayloadFromEntry(entry);
-});
 
 watch(
   previewPayload,
@@ -8945,87 +8705,34 @@ onLoad((query) => {
     DISPLAY_BOARD_RESOLVER_KEY
   ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
-  const sceneIdParam = typeof query?.id === 'string' ? query.id : '';
-  const documentParam = typeof query?.document === 'string' ? query.document : '';
-  const projectUrlRaw = typeof query?.projectUrl === 'string'
-    ? query.projectUrl
-    : typeof query?.bundleUrl === 'string'
-      ? query.bundleUrl
-      : '';
-  const projectUrlParam = normalizeSceneUrl(projectUrlRaw);
-  const modelParam =
-    typeof query?.asset === 'string'
-      ? query.asset
-      : typeof query?.model === 'string'
-        ? query.model
-        : '';
-  const sceneUrlParamRaw = typeof query?.sceneUrl === 'string' ? query.sceneUrl : '';
-  const sceneUrlParam = normalizeSceneUrl(sceneUrlParamRaw);
+  const projectIdParam = typeof query?.projectId === 'string' ? query.projectId : '';
 
   error.value = null;
 
-  if (projectUrlParam) {
+  projectStore.bootstrap();
+
+  if (projectIdParam) {
     requestedMode.value = 'project';
-    loading.value = true;
-    void loadProjectFromUrl(projectUrlParam);
-  } else if (sceneIdParam) {
-    requestedMode.value = 'store';
-    currentSceneId.value = sceneIdParam;
-    sceneStore.bootstrap();
-    loading.value = true;
-  } else if (documentParam) {
-    requestedMode.value = 'document';
-    try {
-      const document = parseInlineSceneDocument(documentParam);
-      const titleParam = typeof query?.title === 'string' ? query.title : '';
-      const originParam = typeof query?.origin === 'string' ? query.origin : '';
-      const origin = originParam && originParam.trim().length ? originParam.trim() : '';
-      previewPayload.value = {
-        document,
-        title: titleParam && titleParam.trim().length ? titleParam.trim() : document.name || '场景预览',
-        ...(origin ? { origin } : {}),
-        createdAt: document.createdAt,
-        updatedAt: document.updatedAt,
-      };
-      loading.value = true;
-    } catch (parseError) {
-      console.error(parseError);
-      error.value = parseError instanceof Error ? parseError.message : '场景数据解析失败';
+    currentProjectId.value = projectIdParam;
+    const entry = projectStore.getProject(projectIdParam);
+    if (!entry) {
+      requestedMode.value = null;
+      error.value = '未找到对应的项目，请返回首页重新导入';
       loading.value = false;
-    }
-  } else if (modelParam) {
-    requestedMode.value = 'model';
-    try {
-      const nameParam = typeof query?.name === 'string' ? query.name : '';
-      const assetIdParam = typeof query?.assetId === 'string' ? query.assetId : '';
-      previewPayload.value = createModelPreviewPayload({
-        url: modelParam,
-        name: nameParam,
-        assetId: assetIdParam,
-      });
+    } else {
       loading.value = true;
-    } catch (modelError) {
-      console.error(modelError);
-      error.value = modelError instanceof Error ? modelError.message : '模型数据解析失败';
-      loading.value = false;
+      void loadProjectFromBundle(entry.bundle);
     }
   } else {
-    const targetUrl = sceneUrlParam || DEFAULT_SCENE_URL;
-    if (targetUrl) {
-      requestedMode.value = 'document';
-      loading.value = true;
-      void loadSceneFromUrl(targetUrl);
-    } else {
-      requestedMode.value = null;
-      error.value = '缺少场景数据';
-      loading.value = false;
-    }
+    requestedMode.value = null;
+    error.value = '缺少工程数据';
+    loading.value = false;
   }
 
   bootstrapFinished.value = true;
   if (previewPayload.value) {
     handlePreviewPayload(previewPayload.value);
-  } else if (requestedMode.value !== 'store') {
+  } else {
     teardownRenderer();
     applySkyboxSettings(null);
   }
