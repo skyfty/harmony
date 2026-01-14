@@ -252,14 +252,13 @@ function formatDateTime(value: string) {
         <span>Manage Scenes</span>
         <v-spacer />
         <v-btn
+          icon="mdi-close"
+          variant="text"
           color="primary"
-          variant="flat"
           density="comfortable"
-          prepend-icon="mdi-plus"
-          @click.stop="openCreateDialog"
-        >
-          New Scene
-        </v-btn>
+          @click="dialogOpen = false"
+          aria-label="Close"
+        />
       </v-card-title>
       <v-divider />
       <v-card-text class="scene-manager-body">
@@ -298,13 +297,14 @@ function formatDateTime(value: string) {
                   </div>
                 </div>
                 <template #append>
-                  <v-btn
-                    icon="mdi-delete-outline"
-                    color="error"
-                    variant="text"
-                    density="comfortable"
-                    @click.stop="requestDelete(scene)"
-                  />
+                    <v-btn
+                      class="delete-button"
+                      icon="mdi-delete-outline"
+                      color="error"
+                      variant="text"
+                      density="comfortable"
+                      @click.stop="requestDelete(scene)"
+                    />
                 </template>
               </v-list-item>
               </v-list>
@@ -322,27 +322,16 @@ function formatDateTime(value: string) {
       <v-card-actions class="scene-manager-actions">
         <div class="actions-left">
           <v-btn
-            variant="tonal"
             color="primary"
+            variant="flat"
             density="comfortable"
-            prepend-icon="mdi-upload"
-            @click="requestImportScenes"
+            prepend-icon="mdi-plus"
+            @click.stop="openCreateDialog"
           >
-            Import
-          </v-btn>
-          <v-btn
-            variant="tonal"
-            color="primary"
-            density="comfortable"
-            prepend-icon="mdi-download"
-            :disabled="!canExportScenes"
-            @click="requestExportScenes"
-          >
-            Export
+            New Scene
           </v-btn>
         </div>
         <v-spacer />
-        <v-btn variant="text" color="primary" @click="dialogOpen = false">Close</v-btn>
         <v-btn color="primary" variant="flat" :disabled="!previewScene" @click="confirmSelection">
           Open
         </v-btn>
@@ -438,6 +427,8 @@ function formatDateTime(value: string) {
   border: 1px solid transparent;
   margin-bottom: 6px;
   display: flex;
+  position: relative;
+  padding-right: 64px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -546,6 +537,13 @@ function formatDateTime(value: string) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.delete-button {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .empty-state {

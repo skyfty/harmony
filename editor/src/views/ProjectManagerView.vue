@@ -128,7 +128,6 @@ async function handleSync() {
         <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
         <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Sync</v-btn>
         <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
-        <v-btn v-if="returnTo || isOverlay" variant="text" @click="handleCloseButton">Close</v-btn>
       </div>
     </div>
 
