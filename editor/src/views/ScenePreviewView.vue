@@ -35,6 +35,11 @@ import {
 import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
+import type { SceneExportOptions } from '@/types/scene-export'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { useScenesStore } from '@/stores/scenesStore'
+import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
@@ -165,6 +170,18 @@ import {
 } from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
+
+
+const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
+	format: 'json',
+	fileName: 'preview',
+	includeLights: true,
+	includeHiddenNodes: true,
+	includeSkeletons: true,
+	includeExtras: true,
+	rotateCoordinateSystem: false,
+	lazyLoadMeshes: true,
+}
 
 
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
@@ -4401,6 +4418,60 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
+async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
+	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
+	document.packageAssetMap = packageAssetMap
+	document.assetIndex = assetIndex
+	document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
+	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+}
+
+async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type: 'load-scene' }>) {
+	const sceneId = typeof event.sceneId === 'string' ? event.sceneId.trim() : ''
+	if (!sceneId) {
+		appendWarningMessage('No scene provided to load.')
+		return
+	}
+
+	try {
+		statusMessage.value = 'Loading scene...'
+		const scenesStore = useScenesStore()
+		const document = await scenesStore.loadSceneDocument(sceneId)
+		if (!document) {
+			appendWarningMessage('Failed to load scene document.')
+			statusMessage.value = ''
+			return
+		}
+		const exportDocument = await ensureScenePreviewExportDocument(document)
+		applySnapshot({
+			revision: Date.now(),
+			document: exportDocument,
+			timestamp: new Date().toISOString(),
+		})
+	} catch (error) {
+		console.error('[ScenePreview] Failed to load scene', error)
+		appendWarningMessage('Failed to load scene. Please try again later.')
+		statusMessage.value = 'Failed to load scene. Please try again later.'
+	}
+}
+
+function handleExitSceneEvent(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	try {
+		window.close()
+	} catch {
+		// ignore
+	}
+	// Fallback in case window.close() is blocked.
+	try {
+		window.history.back()
+	} catch {
+		// ignore
+	}
+}
+
 type DriveControlAction = keyof VehicleDriveControlFlags
 
 const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
@@ -5135,6 +5206,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'vehicle-hide-cockpit':
 			handleHideVehicleCockpitEvent()
+			break
+		case 'load-scene':
+			void handleLoadSceneEvent(event)
+			break
+		case 'exit-scene':
+			handleExitSceneEvent()
 			break
 		case 'sequence-complete':
 			clearBehaviorAlert()
