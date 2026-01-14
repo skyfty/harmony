@@ -576,6 +576,25 @@ const currentSceneId = ref<string | null>(null);
 const currentProjectId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
 
+type SceneStackVec3Tuple = [number, number, number];
+type SceneStackQuatTuple = [number, number, number, number];
+
+type SceneViewControlSnapshot = {
+  cameraViewState: { mode: CameraViewMode; targetNodeId: string | null };
+  isCameraCaged: boolean;
+  purposeMode: 'watch' | 'level';
+  camera: { position: SceneStackVec3Tuple; quaternion: SceneStackQuatTuple; up: SceneStackVec3Tuple };
+  orbitTarget: SceneStackVec3Tuple;
+};
+
+type SceneStackEntry = {
+  sceneId: string;
+  view: SceneViewControlSnapshot;
+};
+
+const SCENE_STACK_MAX_DEPTH = 20;
+const sceneStack = ref<SceneStackEntry[]>([]);
+
 const projectBundle = ref<ProjectExportBundle | null>(null);
 const projectSceneIndex = new Map<string, ProjectExportSceneEntry>();
 
@@ -7012,6 +7031,153 @@ function handleHideVehicleCockpitEvent(): void {
   setVehicleDriveUiOverride('hide');
 }
 
+const sceneStackVec3ToTuple = (value: THREE.Vector3): SceneStackVec3Tuple => [value.x, value.y, value.z];
+
+const sceneStackApplyVec3Tuple = (target: THREE.Vector3, value: SceneStackVec3Tuple): void => {
+  target.set(value[0], value[1], value[2]);
+};
+
+const sceneStackQuatToTuple = (value: THREE.Quaternion): SceneStackQuatTuple => [value.x, value.y, value.z, value.w];
+
+const sceneStackApplyQuatTuple = (target: THREE.Quaternion, value: SceneStackQuatTuple): void => {
+  target.set(value[0], value[1], value[2], value[3]);
+};
+
+function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
+  const context = renderContext;
+  if (!context) {
+    return null;
+  }
+  const { camera, controls } = context;
+  return {
+    cameraViewState: {
+      mode: cameraViewState.mode,
+      targetNodeId: cameraViewState.targetNodeId,
+    },
+    isCameraCaged: isCameraCaged.value,
+    purposeMode: purposeActiveMode.value,
+    camera: {
+      position: sceneStackVec3ToTuple(camera.position),
+      quaternion: sceneStackQuatToTuple(camera.quaternion),
+      up: sceneStackVec3ToTuple(camera.up),
+    },
+    orbitTarget: sceneStackVec3ToTuple(controls.target),
+  };
+}
+
+function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const { camera, controls } = context;
+  activeCameraWatchTween = null;
+
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    withControlsVerticalFreedom(controls, () => {
+      sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position);
+      sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion);
+      sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up);
+      sceneStackApplyVec3Tuple(controls.target, snapshot.orbitTarget);
+      camera.lookAt(controls.target);
+      controls.update();
+    });
+  });
+
+  setCameraViewState(snapshot.cameraViewState.mode, snapshot.cameraViewState.targetNodeId);
+  purposeActiveMode.value = snapshot.purposeMode;
+  setCameraCaging(snapshot.isCameraCaged);
+}
+
+function pushCurrentSceneToStack(nextSceneId: string | null = null): void {
+  const currentId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+  if (!currentId) {
+    return;
+  }
+  if (nextSceneId && currentId === nextSceneId.trim()) {
+    return;
+  }
+  const view = captureViewControlSnapshot();
+  if (!view) {
+    return;
+  }
+  sceneStack.value.push({ sceneId: currentId, view });
+  if (sceneStack.value.length > SCENE_STACK_MAX_DEPTH) {
+    sceneStack.value.splice(0, sceneStack.value.length - SCENE_STACK_MAX_DEPTH);
+  }
+}
+
+async function waitForSceneReady(expectedSceneId: string, timeoutMs = 30000): Promise<void> {
+  const expected = (expectedSceneId ?? '').trim();
+  if (!expected) {
+    return;
+  }
+
+  if (!loading.value && !sceneSwitching.value && currentSceneId.value === expected) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      stop();
+      reject(new Error('等待场景初始化超时'));
+    }, timeoutMs);
+
+    const stop = watch(
+      () => [loading.value, sceneSwitching.value, currentSceneId.value] as const,
+      ([isLoading, isSwitching, sceneId]) => {
+        if (!isLoading && !isSwitching && sceneId === expected) {
+          clearTimeout(timeout);
+          stop();
+          resolve();
+        }
+      },
+      { immediate: true },
+    );
+  });
+}
+
+async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type: 'load-scene' }>): Promise<void> {
+  const sceneId = (event.sceneId ?? '').trim();
+  if (!sceneId) {
+    console.warn('Load Scene behavior missing sceneId', event);
+    return;
+  }
+  if (sceneSwitching.value) {
+    return;
+  }
+  if (event.pushToStack === true) {
+    pushCurrentSceneToStack(sceneId);
+  }
+
+  if (projectBundle.value) {
+    await switchToProjectScene(sceneId);
+    return;
+  }
+
+  // Fallback: keep old navigation behavior for non-project mode.
+  uni.navigateTo({ url: `/pages/scene-viewer/index?id=${encodeURIComponent(sceneId)}` });
+}
+
+async function handleExitSceneEvent(): Promise<void> {
+  if (sceneSwitching.value) {
+    return;
+  }
+  const entry = sceneStack.value.pop() ?? null;
+  if (!entry) {
+    return;
+  }
+
+  await switchToProjectScene(entry.sceneId);
+  try {
+    await waitForSceneReady(entry.sceneId);
+  } catch (error) {
+    console.warn('恢复场景失败：场景初始化未完成', error);
+    return;
+  }
+  applyViewControlSnapshot(entry.view);
+}
+
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
@@ -7048,21 +7214,11 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'look-level':
       handleLookLevelEvent(event);
       break;
-    case 'load-scene': {
-      const sceneId = (event.sceneId ?? '').trim();
-      if (!sceneId) {
-        console.warn('Load Scene behavior missing sceneId', event);
-        break;
-      }
-      if (projectBundle.value) {
-        void switchToProjectScene(sceneId);
-        break;
-      }
-      uni.navigateTo({ url: `/pages/scene-viewer/index?id=${encodeURIComponent(sceneId)}` });
+    case 'load-scene':
+      void handleLoadSceneEvent(event);
       break;
-    }
     case 'exit-scene':
-      uni.navigateBack();
+      void handleExitSceneEvent();
       break;
     case 'vehicle-drive':
       handleVehicleDriveEvent(event);
