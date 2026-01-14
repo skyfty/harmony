@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import type { SceneExportFormat, SceneExportOptions } from '@/types/scene-export'
+import type { SceneExportOptions } from '@/types/scene-export'
 import type { SceneResourceSummary } from '@harmony/schema'
 
 
@@ -20,16 +20,10 @@ const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
   (event: 'confirm', payload: SceneExportOptions): void
   (event: 'cancel'): void
-  (event: 'publish', payload: SceneExportOptions): void
 }>()
 
 const form = reactive<SceneExportOptions>(getInitialFormState())
 const fileNameError = ref<string | null>(null)
-
-const formatOptions = [
-  { label: '.json', value: 'json' as SceneExportFormat },
-  { label: '.glb', value: 'glb' as SceneExportFormat },
-]
 
 function getInitialFormState(): SceneExportOptions {
   const sanitizedName = sanitizeInputName(props.defaultFileName || 'scene')
@@ -41,7 +35,8 @@ function getInitialFormState(): SceneExportOptions {
     includeExtras: props.initialOptions.includeExtras,
     rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
     lazyLoadMeshes: props.initialOptions.lazyLoadMeshes ?? true,
-    format: props.initialOptions.format ?? 'json',
+    // Project export bundles are JSON-only.
+    format: 'json',
   }
 }
 
@@ -154,17 +149,10 @@ function handleCancel() {
 
 function normalFileizeInputName(input: string): string {
   const trimmed = input.trim()
-  if (props.initialOptions.format === 'glb') {
-    if (/\.(glb)$/i.test(trimmed)) {
-      return trimmed
-    }
-    return `${trimmed}.glb`
-  } else {
-    if (/\.(json)$/i.test(trimmed)) {
-      return trimmed
-    }
-    return `${trimmed}.json`
+  if (/\.(json)$/i.test(trimmed)) {
+    return trimmed
   }
+  return `${trimmed}.json`
 }
 
 function handleConfirm() {
@@ -177,22 +165,9 @@ function handleConfirm() {
   const payload: SceneExportOptions = {
     ...form,
     fileName:  normalFileizeInputName(form.fileName),
+    format: 'json',
   }
   emit('confirm', payload)
-}
-
-function handlePublish() {
-  if (props.exporting) {
-    return
-  }
-  if (!validate()) {
-    return
-  }
-  const payload: SceneExportOptions = {
-    ...form,
-    fileName: normalFileizeInputName(form.fileName),
-  }
-  emit('publish', payload)
 }
 
 </script>
@@ -207,7 +182,7 @@ function handlePublish() {
     <v-card>
       <v-toolbar density="compact" class="panel-toolbar" height="40px">
         <div class="toolbar-text">
-          <div class="material-title">Scene Export</div>
+          <div class="material-title">Project Export</div>
         </div>
         <v-spacer />
         <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleCancel" />
@@ -223,18 +198,6 @@ function handlePublish() {
             density="comfortable"
             variant="outlined"
             @keydown.enter.prevent="handleConfirm"
-          />
-          <v-select
-            v-model="form.format"
-            class="format-select"
-            :disabled="exporting"
-            :items="formatOptions"
-            item-title="label"
-            item-value="value"
-            label="Format"
-            density="comfortable"
-            variant="outlined"
-            hide-details
           />
         </div>
 
@@ -336,16 +299,6 @@ function handlePublish() {
       <v-card-actions class="dialog-actions">
         <v-spacer />
         <v-btn
-          color="secondary"
-          variant="tonal"
-          :loading="exporting"
-          :disabled="exporting"
-          style="margin-right: 8px"
-          @click="handlePublish"
-        >
-          Publish
-        </v-btn>
-        <v-btn
           color="primary"
           variant="flat"
           :loading="exporting"
@@ -418,13 +371,9 @@ function handlePublish() {
 
 .file-input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-}
-
-.format-select {
-  min-width: 108px;
 }
 
 .options-grid {

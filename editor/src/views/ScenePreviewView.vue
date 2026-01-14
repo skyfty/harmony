@@ -20,6 +20,10 @@ import {
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
+	PROJECT_EXPORT_BUNDLE_FORMAT,
+	PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
+	type ProjectExportBundle,
+	type ProjectExportSceneEntry,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -200,6 +204,9 @@ type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
+
+const projectBundle = ref<ProjectExportBundle | null>(null)
+const projectSceneIndex = new Map<string, ProjectExportSceneEntry>()
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
@@ -4403,10 +4410,119 @@ async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
 	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 }
 
+function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
+	if (!raw || typeof raw !== 'object') {
+		return false
+	}
+	const candidate = raw as Partial<ProjectExportBundle>
+	if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
+		return false
+	}
+	if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
+		return false
+	}
+	if (!candidate.project || typeof candidate.project !== 'object') {
+		return false
+	}
+	if (!Array.isArray(candidate.scenes)) {
+		return false
+	}
+	return true
+}
+
+function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument {
+	if (!raw || typeof raw !== 'object') {
+		return false
+	}
+	const candidate = raw as Partial<SceneJsonExportDocument>
+	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
+}
+
+async function loadProjectBundleFromUrl(sourceUrl: string): Promise<void> {
+	const trimmed = sourceUrl.trim()
+	if (!trimmed) {
+		appendWarningMessage('Missing projectUrl')
+		return
+	}
+	statusMessage.value = 'Loading project...'
+	try {
+		const text = await fetchTextFromUrl(trimmed)
+		const parsed = JSON.parse(text) as unknown
+		if (!isProjectExportBundle(parsed)) {
+			throw new Error('Invalid project export bundle')
+		}
+		projectBundle.value = parsed
+		projectSceneIndex.clear()
+		parsed.scenes.forEach((scene) => {
+			if (scene && typeof scene.id === 'string') {
+				projectSceneIndex.set(scene.id, scene)
+			}
+		})
+
+		const initialId = parsed.project.defaultSceneId || parsed.project.sceneOrder?.[0] || parsed.scenes[0]?.id || ''
+		if (initialId) {
+			await switchToProjectScene(initialId)
+		}
+		statusMessage.value = ''
+	} catch (error) {
+		console.error('[ScenePreview] Failed to load project bundle', error)
+		appendWarningMessage('Failed to load project bundle.')
+		statusMessage.value = 'Failed to load project bundle.'
+	}
+}
+
+async function switchToProjectScene(sceneId: string): Promise<void> {
+	const trimmed = sceneId.trim()
+	if (!trimmed) {
+		appendWarningMessage('No scene provided to load.')
+		return
+	}
+	const entry = projectSceneIndex.get(trimmed) ?? null
+	if (!entry) {
+		appendWarningMessage('Failed to locate scene in project bundle.')
+		return
+	}
+	try {
+		statusMessage.value = 'Loading scene...'
+		if (entry.kind === 'embedded') {
+			applySnapshot({
+				revision: Date.now(),
+				document: entry.document,
+				timestamp: new Date().toISOString(),
+			})
+			statusMessage.value = ''
+			return
+		}
+		if (entry.kind === 'external') {
+			const text = await fetchTextFromUrl(entry.sceneJsonUrl)
+			const parsed = JSON.parse(text) as unknown
+			if (!isSceneJsonExportDocument(parsed)) {
+				throw new Error('Invalid scene document')
+			}
+			applySnapshot({
+				revision: Date.now(),
+				document: parsed,
+				timestamp: new Date().toISOString(),
+			})
+			statusMessage.value = ''
+			return
+		}
+	} catch (error) {
+		console.error('[ScenePreview] Failed to switch scene', error)
+		appendWarningMessage('Failed to load scene. Please try again later.')
+		statusMessage.value = 'Failed to load scene. Please try again later.'
+	}
+}
+
 async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type: 'load-scene' }>) {
 	const sceneId = typeof event.sceneId === 'string' ? event.sceneId.trim() : ''
 	if (!sceneId) {
 		appendWarningMessage('No scene provided to load.')
+		return
+	}
+
+	if (projectBundle.value) {
+		await switchToProjectScene(sceneId)
 		return
 	}
 
@@ -9200,9 +9316,24 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
-	unsubscribe = subscribeToScenePreview((snapshot) => {
-		applySnapshot(snapshot)
-	})
+	let handledInitialPayload = false
+	if (typeof window !== 'undefined') {
+		try {
+			const url = new URL(window.location.href)
+			const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
+			if (projectUrl) {
+				handledInitialPayload = true
+				void loadProjectBundleFromUrl(projectUrl)
+			}
+		} catch {
+			// ignore
+		}
+	}
+	if (!handledInitialPayload) {
+		unsubscribe = subscribeToScenePreview((snapshot) => {
+			applySnapshot(snapshot)
+		})
+	}
 	updateLanternViewportSize()
 	if (typeof window !== 'undefined') {
 		window.addEventListener('resize', handleLanternViewportResize)

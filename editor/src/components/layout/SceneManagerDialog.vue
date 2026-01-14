@@ -40,9 +40,22 @@ const availableSceneIdSet = computed(() => new Set(props.scenes.map((scene) => s
 const sortedScenes = computed(() => {
   // Sort by creation time ascending (earliest created first)
   return [...props.scenes].sort((a, b) => {
-    const ta = Number(new Date(a.createdAt)) || 0
-    const tb = Number(new Date(b.createdAt)) || 0
-    return ta - tb
+    const ta = Number(new Date(a.createdAt))
+    const tb = Number(new Date(b.createdAt))
+
+    const hasA = Number.isFinite(ta) && ta > 0
+    const hasB = Number.isFinite(tb) && tb > 0
+
+    if (hasA && hasB) {
+      return ta - tb
+    }
+    if (hasA && !hasB) {
+      return -1
+    }
+    if (!hasA && hasB) {
+      return 1
+    }
+    return 0
   })
 })
 

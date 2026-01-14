@@ -378,7 +378,7 @@ import {
   createTerrainScatterLodRuntime,
   type SceneGraphBuildOptions,
 } from '@schema/sceneGraph';
-import { createInstancedBvhFrustumCuller, type InstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@schema/assetDownloadMirrors';
@@ -431,12 +431,15 @@ import {
   type SceneNodeComponentState,
   type SceneSkyboxSettings,
   type SceneJsonExportDocument,
+  PROJECT_EXPORT_BUNDLE_FORMAT,
+  PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
+  type ProjectExportBundle,
+  type ProjectExportSceneEntry,
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
   type Vector3Like,
 } from '@harmony/schema';
-import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter';
 import { ComponentManager } from '@schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@schema/multiuserContext';
 import {
@@ -462,21 +465,15 @@ import {
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
-  DISPLAY_BOARD_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
   VEHICLE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
-  GUIDE_ROUTE_COMPONENT_TYPE,
-  PURE_PURSUIT_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   clampVehicleComponentProps,
-  clampGuideRouteComponentProps,
-  clampAutoTourComponentProps,
-  clampPurePursuitComponentProps,
   clampLodComponentProps,
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
@@ -511,7 +508,6 @@ import type {
   RigidbodyComponentProps,
   RigidbodyComponentMetadata,
   RigidbodyPhysicsShape,
-  GuideRouteComponentProps,
   AutoTourComponentProps,
   VehicleComponentProps,
   VehicleWheelProps,
@@ -519,7 +515,6 @@ import type {
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
-  listInteractableObjects,
   listRegisteredBehaviorActions,
   updateBehaviorVisibility,
   removeBehaviorRuntimeListener,
@@ -553,7 +548,7 @@ interface ScenePreviewPayload {
   enableGround?: boolean;
 }
 
-type RequestedMode = 'store' | 'document' | 'model' | null;
+type RequestedMode = 'store' | 'document' | 'model' | 'project' | null;
 
 interface SceneDownloadProgress extends UniApp.OnProgressUpdateResult {
   totalBytesWritten?: number;
@@ -578,6 +573,9 @@ const sceneStore = useSceneStore();
 const canvasId = `scene-viewer-${Date.now()}`;
 const currentSceneId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
+
+const projectBundle = ref<ProjectExportBundle | null>(null);
+const projectSceneIndex = new Map<string, ProjectExportSceneEntry>();
 
 const sceneEntry = computed<StoredSceneEntry | null>(() => {
   const sceneId = currentSceneId.value;
@@ -958,24 +956,10 @@ const overlayBytesLabel = computed(() => {
   return '';
 });
 
-const overlayLabel = computed(() => {
-  if (sceneDownload.active) {
-    return sceneDownload.label || '正在下载场景数据…';
-  }
-  if (resourcePreload.label) {
-    return resourcePreload.label;
-  }
-  if (loading.value) {
-    return '正在加载场景…';
-  }
-  return '';
-});
-
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
-const CAMERA_HORIZONTAL_POLAR_ANGLE = Math.PI / 2;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
@@ -1268,12 +1252,6 @@ const instancedCullingLastVisibleAt = new Map<string, number>();
 const INSTANCED_CULL_GRACE_MS = 250;
 const INSTANCED_CULL_RADIUS_MULTIPLIER = 1.15;
 const nodeObjectMap = new Map<string, THREE.Object3D>();
-const scatterLocalPositionHelper = new THREE.Vector3();
-const scatterLocalRotationHelper = new THREE.Euler();
-const scatterLocalScaleHelper = new THREE.Vector3();
-const scatterQuaternionHelper = new THREE.Quaternion();
-const scatterInstanceMatrixHelper = new THREE.Matrix4();
-const scatterMatrixHelper = new THREE.Matrix4();
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 const airWallBodies = new Map<string, CANNON.Body>();
@@ -1309,15 +1287,14 @@ const wheelChassisPositionHelper = new THREE.Vector3();
 const wheelChassisDisplacementHelper = new THREE.Vector3();
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize();
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
-const VEHICLE_SPEED_EPSILON = 1e-3;
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
+const VEHICLE_BRAKE_FORCE = 1e6;
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let handleBehaviorClick: ((event: MouseEvent | TouchEvent) => void) | null = null;
 const LAYER_BEHAVIOR_INTERACTIVE = 1;
-const LAYER_VEHICLE_INTERACTIVE = 2;
 
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -1854,12 +1831,6 @@ type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
 type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string };
 
-type AssetSourceResolution =
-  | { kind: 'data-url'; dataUrl: string }
-  | { kind: 'remote-url'; url: string }
-  | { kind: 'inline-text'; text: string }
-  | { kind: 'raw'; data: ArrayBuffer };
-
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>();
@@ -1891,7 +1862,6 @@ const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempObserverVector = new THREE.Vector3();
-const tempVehicleSize = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
@@ -1968,14 +1938,6 @@ function getLanternImageState(assetId: string): LanternImageState {
   return lanternImageState[assetId];
 }
 
-const lanternCurrentSlideTextState = computed(() => {
-  const slide = lanternCurrentSlide.value;
-  if (!slide || !slide.descriptionAssetId) {
-    return null;
-  }
-  return getLanternTextState(slide.descriptionAssetId.trim());
-});
-
 const lanternCurrentSlideImage = computed(() => {
   const slide = lanternCurrentSlide.value;
   if (!slide?.imageAssetId) {
@@ -1987,22 +1949,6 @@ const lanternCurrentSlideImage = computed(() => {
   }
   return lanternImageState[assetId]?.url ?? null;
 });
-
-const lanternCurrentSlideDescription = computed(() => {
-  const slide = lanternCurrentSlide.value;
-  if (!slide) {
-    return '';
-  }
-  if (slide.descriptionAssetId) {
-    const state = lanternCurrentSlideTextState.value;
-    if (state && !state.loading && !state.error) {
-      return state.text;
-    }
-    return '';
-  }
-  return slide.description ?? '';
-});
-
 
 function normalizeHexColor(value: unknown, fallback: string): string {
   if (typeof value === 'string') {
@@ -3390,71 +3336,6 @@ function clearInstancedMeshes(): void {
   clearInstancedBounds();
 }
 
-function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
-  const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer';
-  return `scatter:${normalizedLayer}:${instanceId}`;
-}
-
-function composeScatterMatrix(
-  instance: TerrainScatterInstance,
-  groundMesh: THREE.Mesh,
-  target?: THREE.Matrix4,
-): THREE.Matrix4 {
-  groundMesh.updateMatrixWorld(true);
-  scatterLocalPositionHelper.set(
-    instance.localPosition?.x ?? 0,
-    instance.localPosition?.y ?? 0,
-    instance.localPosition?.z ?? 0,
-  );
-  scatterLocalRotationHelper.set(
-    instance.localRotation?.x ?? 0,
-    instance.localRotation?.y ?? 0,
-    instance.localRotation?.z ?? 0,
-    'XYZ',
-  );
-  scatterQuaternionHelper.setFromEuler(scatterLocalRotationHelper);
-  scatterLocalScaleHelper.set(
-    instance.localScale?.x ?? 1,
-    instance.localScale?.y ?? 1,
-    instance.localScale?.z ?? 1,
-  );
-  scatterInstanceMatrixHelper.compose(scatterLocalPositionHelper, scatterQuaternionHelper, scatterLocalScaleHelper);
-  const output = target ?? new THREE.Matrix4();
-  return output.copy(groundMesh.matrixWorld).multiply(scatterInstanceMatrixHelper);
-}
-
-type GroundScatterEntry = {
-  nodeId: string;
-  snapshot: TerrainScatterStoreSnapshot;
-};
-
-function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
-  if (!Array.isArray(nodes) || !nodes.length) {
-    return [];
-  }
-  const stack: SceneNode[] = [...nodes];
-  const entries: GroundScatterEntry[] = [];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (node.dynamicMesh?.type === 'Ground') {
-      const definition = node.dynamicMesh as GroundDynamicMesh & {
-        terrainScatter?: TerrainScatterStoreSnapshot | null;
-      };
-      const snapshot = definition.terrainScatter;
-      if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
-        entries.push({ nodeId: node.id, snapshot });
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return entries;
-}
-
 function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
   const container = nodeObjectMap.get(nodeId);
   if (!container) {
@@ -4324,12 +4205,6 @@ function stepPhysicsWorld(delta: number): void {
     const wx = chassisBody.angularVelocity?.x ?? 0;
     const wy = chassisBody.angularVelocity?.y ?? 0;
     const wz = chassisBody.angularVelocity?.z ?? 0;
-    const fx = (chassisBody as any).force?.x ?? 0;
-    const fy = (chassisBody as any).force?.y ?? 0;
-    const fz = (chassisBody as any).force?.z ?? 0;
-    const tx = (chassisBody as any).torque?.x ?? 0;
-    const ty = (chassisBody as any).torque?.y ?? 0;
-    const tz = (chassisBody as any).torque?.z ?? 0;
     const speedSq = vx * vx + vy * vy + vz * vz;
     const angSq = wx * wx + wy * wy + wz * wz;
     const sleepState = (chassisBody as any).sleepState as number | undefined;
@@ -5123,18 +4998,6 @@ function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeE
 }
 
 const uiBehaviorTokenResolvers = new Map<string, (resolution: BehaviorEventResolution) => void>();
-let uiBehaviorTokenCounter = 0;
-
-function waitForBehaviorToken(token: string): Promise<BehaviorEventResolution> {
-  return new Promise((resolve) => {
-    uiBehaviorTokenResolvers.set(token, resolve);
-  });
-}
-
-function createUiBehaviorToken(): string {
-  uiBehaviorTokenCounter += 1;
-  return `ui-token-${Date.now().toString(16)}-${uiBehaviorTokenCounter.toString(16)}`;
-}
 
 function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution): void {
   clearDelayTimer(token);
@@ -5960,7 +5823,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
   const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null, event.caging);
   if (!result.success) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
+    resolveBehaviorToken(event.token, result.message ? { type: 'fail', message: result.message } : { type: 'fail' });
     return;
   }
   resolveBehaviorToken(event.token, { type: 'continue' });
@@ -6056,7 +5919,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
   const result = resetCameraToLevelView();
   if (!result.success) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
+    resolveBehaviorToken(event.token, result.message ? { type: 'fail', message: result.message } : { type: 'fail' });
     return;
   }
   resolveBehaviorToken(event.token, { type: 'continue' });
@@ -6072,53 +5935,6 @@ function clampAxisScalar(value: number): number {
     return 0;
   }
   return Math.max(-1, Math.min(1, value));
-}
-
-function updateSteeringKeyboardValue(): void {
-  let target = 0;
-  if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
-    target = vehicleDriveInputFlags.left ? -1 : 1;
-  }
-  steeringKeyboardTarget.value = target;
-  if (target !== 0) {
-    steeringKeyboardValue.value = target;
-  }
-  recomputeVehicleDriveInputs();
-}
-
-function setVehicleDriveBrake(active: boolean): void {
-  if (vehicleDriveInputFlags.brake === active) {
-    return;
-  }
-  vehicleDriveController.setControlFlag('brake', active);
-  recomputeVehicleDriveInputs();
-}
-
-function handleBrakeButtonPress(event?: Event): void {
-  if (event) {
-    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
-      event.preventDefault();
-    }
-    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
-      event.stopPropagation();
-    }
-  }
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  setVehicleDriveBrake(true);
-}
-
-function handleBrakeButtonRelease(event?: Event): void {
-  if (event) {
-    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
-      event.preventDefault();
-    }
-    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
-      event.stopPropagation();
-    }
-  }
-  setVehicleDriveBrake(false);
 }
 
 function refreshJoystickMetrics(): void {
@@ -7160,6 +6976,10 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
         console.warn('Load Scene behavior missing sceneId', event);
         break;
       }
+      if (projectBundle.value) {
+        void switchToProjectScene(sceneId);
+        break;
+      }
       uni.navigateTo({ url: `/pages/scene-viewer/index?id=${encodeURIComponent(sceneId)}` });
       break;
     }
@@ -7848,6 +7668,166 @@ async function loadSceneFromUrl(url: string): Promise<void> {
   }
 }
 
+function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
+  if (!raw || typeof raw !== 'object') {
+    return false;
+  }
+  const candidate = raw as Partial<ProjectExportBundle>;
+  if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
+    return false;
+  }
+  if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
+    return false;
+  }
+  if (!candidate.project || typeof candidate.project !== 'object') {
+    return false;
+  }
+  if (!Array.isArray(candidate.scenes)) {
+    return false;
+  }
+  return true;
+}
+
+function parseProjectExportBundle(payload: string): ProjectExportBundle {
+  const parsed = JSON.parse(payload) as unknown;
+  if (!isProjectExportBundle(parsed)) {
+    throw new Error('无法识别工程导出文件格式');
+  }
+  return parsed;
+}
+
+async function switchToProjectScene(sceneId: string): Promise<void> {
+  const trimmed = (sceneId ?? '').trim();
+  if (!trimmed) {
+    return;
+  }
+  const entry = projectSceneIndex.get(trimmed) ?? null;
+  if (!entry) {
+    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
+    return;
+  }
+  loading.value = true;
+  error.value = null;
+  try {
+    if (entry.kind === 'embedded') {
+      previewPayload.value = {
+        document: entry.document,
+        title: entry.document.name || entry.name || '场景预览',
+        origin: 'project-bundle',
+        createdAt: entry.document.createdAt,
+        updatedAt: entry.document.updatedAt,
+      };
+      currentSceneId.value = entry.id;
+      return;
+    }
+    if (entry.kind === 'external') {
+      const document = await requestSceneDocument(entry.sceneJsonUrl);
+      previewPayload.value = {
+        document,
+        title: document.name || entry.name || '场景预览',
+        origin: entry.sceneJsonUrl,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt,
+      };
+      currentSceneId.value = entry.id;
+      return;
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
+function requestProjectBundle(url: string): Promise<ProjectExportBundle> {
+  return new Promise((resolve, reject) => {
+    if (sceneDownloadTask) {
+      sceneDownloadTask.abort();
+      sceneDownloadTask = null;
+    }
+    const task = uni.request({
+      url,
+      method: 'GET',
+      responseType: 'text',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`工程下载失败（${statusCode}）`));
+          return;
+        }
+        try {
+          const payload = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? {});
+          const bundle = parseProjectExportBundle(payload);
+          resolve(bundle);
+        } catch (parseError) {
+          const message = parseError instanceof Error ? parseError.message : '工程数据解析失败';
+          reject(new Error(message));
+        }
+      },
+      fail: (requestError) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '工程下载失败';
+        reject(new Error(message));
+      },
+      complete: () => {
+        sceneDownloadTask = null;
+      },
+    }) as SceneRequestTask;
+    sceneDownloadTask = task;
+    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
+      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+        sceneDownload.percent = info.progress;
+        sceneDownload.label = `正在下载工程数据… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
+      }
+      if (typeof info.totalBytesWritten === 'number') {
+        sceneDownload.loaded = info.totalBytesWritten;
+      }
+      if (typeof info.totalBytesExpectedToWrite === 'number') {
+        sceneDownload.total = info.totalBytesExpectedToWrite;
+      }
+    });
+  });
+}
+
+async function loadProjectFromUrl(url: string): Promise<void> {
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) {
+    error.value = '工程地址不能为空';
+    loading.value = false;
+    return;
+  }
+  error.value = null;
+  resetSceneDownloadState();
+  sceneDownload.active = true;
+  sceneDownload.label = '正在下载工程数据…';
+  try {
+    const bundle = await requestProjectBundle(normalizedUrl);
+    projectBundle.value = bundle;
+    projectSceneIndex.clear();
+    bundle.scenes.forEach((scene: ProjectExportSceneEntry) => {
+      if (scene && typeof scene.id === 'string') {
+        projectSceneIndex.set(scene.id, scene);
+      }
+    });
+
+    const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || bundle.scenes[0]?.id || null;
+    if (!initialId) {
+      throw new Error('工程导出文件不包含任何场景');
+    }
+    requestedMode.value = 'project';
+    await switchToProjectScene(initialId);
+  } catch (downloadError) {
+    console.error(downloadError);
+    const message = downloadError instanceof Error ? downloadError.message : '工程下载失败';
+    error.value = message;
+    previewPayload.value = null;
+    loading.value = false;
+  } finally {
+    resetSceneDownloadState();
+  }
+}
+
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
   return new Promise((resolve, reject) => {
     if (sceneDownloadTask) {
@@ -7965,10 +7945,11 @@ function createModelPreviewPayload(args: { url: string; name?: string; assetId?:
 
 function createPayloadFromEntry(entry: StoredSceneEntry): ScenePreviewPayload {
   const document = entry.scene;
+  const origin = entry.origin;
   return {
     document,
     title: document.name || '场景预览',
-    origin: entry.origin,
+    ...(origin ? { origin } : {}),
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
   };
@@ -8325,10 +8306,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
       if (!resolved) {
         return null;
       }
-      return {
-        url: resolved.url,
-        dispose: resolved.dispose,
-      };
+      return resolved.dispose ? { url: resolved.url, dispose: resolved.dispose } : { url: resolved.url };
     },
     sunPosition: skySunPosition,
   });
@@ -8342,6 +8320,10 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+
+  if (pendingEnvironmentSettings) {
+    void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
+  }
 
   renderScope?.stop();
   renderScope = effectScope();
@@ -8489,7 +8471,7 @@ async function prepareInstancedNodesIfPossible(
 
   try {
     await prepareInstancedNodesForGraph(root, payload.document, resourceCache, {
-      skipNodeIds: skipNodeIds ?? undefined,
+      ...(skipNodeIds?.size ? { skipNodeIds } : {}),
     });
   } catch (error) {
     console.warn('[SceneViewer] Failed to prepare instanced nodes', error);
@@ -8720,10 +8702,6 @@ const handleResize: WindowResizeCallback = (_result) => {
   });
 };
 
-function handleBack() {
-  uni.navigateBack({ delta: 1 });
-}
-
 onLoad((query) => {
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
@@ -8731,6 +8709,12 @@ onLoad((query) => {
   addBehaviorRuntimeListener(behaviorRuntimeListener);
   const sceneIdParam = typeof query?.id === 'string' ? query.id : '';
   const documentParam = typeof query?.document === 'string' ? query.document : '';
+  const projectUrlRaw = typeof query?.projectUrl === 'string'
+    ? query.projectUrl
+    : typeof query?.bundleUrl === 'string'
+      ? query.bundleUrl
+      : '';
+  const projectUrlParam = normalizeSceneUrl(projectUrlRaw);
   const modelParam =
     typeof query?.asset === 'string'
       ? query.asset
@@ -8742,7 +8726,11 @@ onLoad((query) => {
 
   error.value = null;
 
-  if (sceneIdParam) {
+  if (projectUrlParam) {
+    requestedMode.value = 'project';
+    loading.value = true;
+    void loadProjectFromUrl(projectUrlParam);
+  } else if (sceneIdParam) {
     requestedMode.value = 'store';
     currentSceneId.value = sceneIdParam;
     sceneStore.bootstrap();
@@ -8753,10 +8741,11 @@ onLoad((query) => {
       const document = parseInlineSceneDocument(documentParam);
       const titleParam = typeof query?.title === 'string' ? query.title : '';
       const originParam = typeof query?.origin === 'string' ? query.origin : '';
+      const origin = originParam && originParam.trim().length ? originParam.trim() : '';
       previewPayload.value = {
         document,
         title: titleParam && titleParam.trim().length ? titleParam.trim() : document.name || '场景预览',
-        origin: originParam && originParam.trim().length ? originParam.trim() : undefined,
+        ...(origin ? { origin } : {}),
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
       };
@@ -8827,9 +8816,7 @@ onUnload(() => {
   resetSceneDownloadState();
   sharedResourceCache = null;
   lanternViewerInstance = null;
-  (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
-    DISPLAY_BOARD_RESOLVER_KEY
-  ] = undefined;
+  delete (globalThis as any)[DISPLAY_BOARD_RESOLVER_KEY];
 });
 
 onUnmounted(() => {
@@ -8846,9 +8833,7 @@ onUnmounted(() => {
   }
   resetSceneDownloadState();
   sharedResourceCache = null;
-  (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
-    DISPLAY_BOARD_RESOLVER_KEY
-  ] = undefined;
+  delete (globalThis as any)[DISPLAY_BOARD_RESOLVER_KEY];
 });
 
 </script>

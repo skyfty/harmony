@@ -97,6 +97,55 @@ export interface Project {
   lastEditedSceneId: string | null
 }
 
+export const PROJECT_EXPORT_BUNDLE_FORMAT = 'harmony-project-bundle' as const
+export const PROJECT_EXPORT_BUNDLE_FORMAT_VERSION = 1 as const
+
+export type ProjectExportSceneKind = 'embedded' | 'external'
+
+export interface ProjectExportBundleProjectConfig {
+  id: string
+  name: string
+  /**
+   * Default scene to open first (export-time resolved).
+   */
+  defaultSceneId: string | null
+  /**
+   * Editor config carried through export.
+   */
+  lastEditedSceneId: string | null
+  /**
+   * Scene ids in export order (matches Scene Manager UI creation-time order).
+   */
+  sceneOrder: string[]
+}
+
+export interface ProjectExportSceneEntryBase {
+  id: string
+  name: string
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface ProjectExportEmbeddedSceneEntry extends ProjectExportSceneEntryBase {
+  kind: 'embedded'
+  document: SceneJsonExportDocument
+}
+
+export interface ProjectExportExternalSceneEntry extends ProjectExportSceneEntryBase {
+  kind: 'external'
+  sceneJsonUrl: string
+}
+
+export type ProjectExportSceneEntry = ProjectExportEmbeddedSceneEntry | ProjectExportExternalSceneEntry
+
+export interface ProjectExportBundle {
+  format: typeof PROJECT_EXPORT_BUNDLE_FORMAT
+  formatVersion: typeof PROJECT_EXPORT_BUNDLE_FORMAT_VERSION
+  exportedAt: string
+  project: ProjectExportBundleProjectConfig
+  scenes: ProjectExportSceneEntry[]
+}
+
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export type GeometryType =
   | 'Box'
