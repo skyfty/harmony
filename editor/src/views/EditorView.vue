@@ -1362,15 +1362,32 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
 
 let lastPreviewBroadcastRevision = 0
 
-async function broadcastScenePreview(document:StoredSceneDocument) {
+let latestScenePreviewBroadcastTaskId = 0
+
+async function broadcastScenePreview(document: StoredSceneDocument, isStale?: () => boolean) {
   try {
-    
+    if (isStale?.()) {
+      return
+    }
+
     const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
+    if (isStale?.()) {
+      return
+    }
+
     document.packageAssetMap = packageAssetMap
     document.assetIndex = assetIndex
     document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
 
+    if (isStale?.()) {
+      return
+    }
+
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+
+    if (isStale?.()) {
+      return
+    }
 
     let revision = Date.now()
     if (revision <= lastPreviewBroadcastRevision) {
@@ -1388,10 +1405,21 @@ async function broadcastScenePreview(document:StoredSceneDocument) {
 }
  
 
+
+type SaveCurrentSceneOptions = {
+  broadcastPreview?: boolean
+}
+
 async function saveCurrentScene(): Promise<boolean> {
+  return saveCurrentSceneWithOptions()
+}
+
+async function saveCurrentSceneWithOptions(options: SaveCurrentSceneOptions = {}): Promise<boolean> {
   if (pendingSceneSave) {
     return pendingSceneSave
   }
+
+  const broadcastPreview = options.broadcastPreview !== false
 
   const sceneId = sceneStore.currentSceneId
   if (!sceneId) {
@@ -1402,8 +1430,8 @@ async function saveCurrentScene(): Promise<boolean> {
   pendingSceneSave = (async () => {
     try {
       const document = await sceneStore.saveActiveScene({force: true})
-      if (document) {
-        broadcastScenePreview(document)
+      if (document && broadcastPreview) {
+        void broadcastScenePreview(document)
       }
       return true
     } catch (error) {
@@ -1416,6 +1444,52 @@ async function saveCurrentScene(): Promise<boolean> {
 
   return pendingSceneSave
 }
+
+let hasSeenInitialSceneForPreviewBroadcast = false
+watch(
+  currentSceneId,
+  async (sceneId) => {
+    if (!sceneId) {
+      return
+    }
+
+    if (!hasSeenInitialSceneForPreviewBroadcast) {
+      hasSeenInitialSceneForPreviewBroadcast = true
+      return
+    }
+
+    const taskId = ++latestScenePreviewBroadcastTaskId
+    const expectedSceneId = sceneId
+    const isStale = () => taskId !== latestScenePreviewBroadcastTaskId || sceneStore.currentSceneId !== expectedSceneId
+
+    const ready = await new Promise<boolean>((resolve) => {
+      let innerStop: (() => void) | null = null
+      innerStop = watch(
+        [() => sceneStore.isSceneReady, currentSceneId],
+        ([isReady, currentId]) => {
+          if (isStale()) {
+            innerStop?.()
+            resolve(false)
+            return
+          }
+          if (isReady && currentId === expectedSceneId) {
+            innerStop?.()
+            resolve(true)
+          }
+        },
+        { immediate: true },
+      )
+    })
+
+    if (!ready || isStale()) {
+      return
+    }
+
+    const snapshot = sceneStore.createSceneDocumentSnapshot()
+    void broadcastScenePreview(snapshot, isStale)
+  },
+  { flush: 'post' },
+)
 
 async function exportCurrentScene() {
   const currentSceneId = sceneStore.currentSceneId
@@ -1576,7 +1650,7 @@ async function handleCreateScene(payload: {
   presetSceneId?: string | null
   presetSceneDocument?: PresetSceneDocument | null
 }) {
-  const saved = await saveCurrentScene()
+  const saved = await saveCurrentSceneWithOptions({ broadcastPreview: false })
   if (!saved) {
     return
   }
@@ -1609,7 +1683,7 @@ function handleSceneManagerCreateRequest() {
 
 async function handleSelectScene(sceneId: string) {
   if (sceneId !== sceneStore.currentSceneId) {
-    const saved = await saveCurrentScene()
+    const saved = await saveCurrentSceneWithOptions({ broadcastPreview: false })
     if (!saved) {
       return
     }
