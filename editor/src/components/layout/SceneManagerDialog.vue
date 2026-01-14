@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { useProjectsStore } from '@/stores/projectsStore'
 import type { SceneSummary } from '@/types/scene-summary'
 
 const props = defineProps<{
@@ -28,10 +29,22 @@ const pendingDeleteId = ref<string | null>(null)
 const pendingDeleteName = ref('')
 const editingSceneId = ref<string | null>(null)
 const editingSceneName = ref('')
+const renameErrorMessage = ref('')
+const renameFieldRef = ref<any>(null)
 const selectedSceneId = ref<string | null>(null)
 const selectedSceneIds = ref<string[]>([])
+const projectsStore = useProjectsStore()
+const projectDefaultSceneId = ref<string | null>(null)
 
 const availableSceneIdSet = computed(() => new Set(props.scenes.map((scene) => scene.id)))
+const sortedScenes = computed(() => {
+  // Sort by creation time ascending (earliest created first)
+  return [...props.scenes].sort((a, b) => {
+    const ta = Number(new Date(a.createdAt)) || 0
+    const tb = Number(new Date(b.createdAt)) || 0
+    return ta - tb
+  })
+})
 
 function normalizeSelection(ids: string[]): string[] {
   if (!ids.length) {
@@ -69,7 +82,7 @@ function applySelection(ids: string[]) {
 watch(dialogOpen, (open) => {
   if (!open) {
     deleteDialogOpen.value = false
-    editingSceneId.value = null
+    cancelRename()
     selectedSceneId.value = null
     selectedSceneIds.value = []
   }
@@ -79,8 +92,17 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      const initial = props.currentSceneId ?? props.scenes[0]?.id ?? null
+      const initial = props.currentSceneId ?? sortedScenes.value[0]?.id ?? null
       applySelection(initial ? [initial] : [])
+      // load current project's default scene id
+      const activeProjectId = projectsStore.activeProjectId
+      if (activeProjectId) {
+        void projectsStore.loadProjectDocument(activeProjectId).then((doc) => {
+          projectDefaultSceneId.value = doc?.lastEditedSceneId ?? null
+        })
+      } else {
+        projectDefaultSceneId.value = null
+      }
     }
   },
   { immediate: true },
@@ -96,7 +118,7 @@ watch(
     }
     const nextSelection = normalizeSelection(selectedSceneIds.value)
     if (!nextSelection.length) {
-      const fallback = props.currentSceneId ?? scenes[0]?.id ?? null
+      const fallback = props.currentSceneId ?? sortedScenes.value[0]?.id ?? null
       applySelection(fallback ? [fallback] : [])
       return
     }
@@ -139,61 +161,12 @@ function confirmSelection() {
   emit('update:modelValue', false)
 }
 
-function startRename(scene: SceneSummary) {
-  editingSceneId.value = scene.id
-  editingSceneName.value = scene.name
-  nextTick(() => {
-    const input = document.getElementById(`scene-rename-${scene.id}`) as HTMLInputElement | null
-    input?.focus()
-    input?.select()
-  })
-}
-
-function resetRenameState() {
-  editingSceneId.value = null
-  editingSceneName.value = ''
-}
-
-function commitRename() {
-  if (!editingSceneId.value) return
-  const target = props.scenes.find((scene) => scene.id === editingSceneId.value)
-  if (!target) {
-    resetRenameState()
-    return
-  }
-  const trimmed = editingSceneName.value.trim()
-  if (!trimmed.length) {
-    editingSceneName.value = target.name
-    resetRenameState()
-    return
-  }
-  if (trimmed !== target.name) {
-    emit('rename', { id: target.id, name: trimmed })
-  }
-  resetRenameState()
-}
-
-function handleRenameKeydown(event: KeyboardEvent) {
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    commitRename()
-  } else if (event.key === 'Escape') {
-    const target = props.scenes.find((scene) => scene.id === editingSceneId.value)
-    if (target) {
-      editingSceneName.value = target.name
-    }
-    resetRenameState()
-  }
-}
-
 const hasScenes = computed(() => props.scenes.length > 0)
 
 const selectedSceneIdsSet = computed(() => new Set(selectedSceneIds.value))
 
-const canExportScenes = computed(() => selectedSceneIds.value.length > 0)
-
 function handleListClick(sceneId: string, event: MouseEvent | KeyboardEvent) {
-  editingSceneId.value = null
+  cancelRename()
   const multi = event.ctrlKey || event.metaKey
   if (!multi) {
     applySelection([sceneId])
@@ -213,13 +186,101 @@ function handleListClick(sceneId: string, event: MouseEvent | KeyboardEvent) {
   applySelection(next)
 }
 
-function requestImportScenes() {
-  emit('import-scenes')
+function startRename(scene: SceneSummary) {
+  // Multi-select: only allow renaming the current highlighted item.
+  if (scene.id !== selectedSceneId.value) return
+  editingSceneId.value = scene.id
+  editingSceneName.value = scene.name
+  renameErrorMessage.value = ''
+  void nextTick(() => {
+    try {
+      const refVal: any = renameFieldRef.value
+      if (refVal) {
+        if (typeof refVal.focus === 'function') {
+          refVal.focus()
+        }
+        // Try to find the native input element inside the Vuetify component
+        const inputEl: HTMLInputElement | null =
+          (refVal.$el && refVal.$el.querySelector && refVal.$el.querySelector('input')) ||
+          (refVal.$refs && (refVal.$refs.input as HTMLInputElement)) ||
+          null
+        if (inputEl) {
+          const len = inputEl.value ? inputEl.value.length : 0
+          inputEl.setSelectionRange(len, len)
+          inputEl.focus()
+        }
+      }
+    } catch {
+      // ignore focus failures
+    }
+  })
 }
 
-function requestExportScenes() {
-  if (!canExportScenes.value) return
-  emit('export-scenes', [...selectedSceneIds.value])
+function cancelRename() {
+  editingSceneId.value = null
+  editingSceneName.value = ''
+  renameErrorMessage.value = ''
+}
+
+function resolveUniqueSceneName(rawName: string, sceneId: string): string | null {
+  const base = rawName.trim()
+  if (!base) return null
+
+  const existingNames = new Set(
+    props.scenes
+      .filter((scene) => scene.id !== sceneId)
+      .map((scene) => scene.name.trim())
+      .filter(Boolean),
+  )
+
+  if (!existingNames.has(base)) {
+    return base
+  }
+
+  let suffix = 2
+  while (existingNames.has(`${base} (${suffix})`)) {
+    suffix += 1
+  }
+  return `${base} (${suffix})`
+}
+
+function commitRename(scene: SceneSummary) {
+  if (editingSceneId.value !== scene.id) return
+
+  const resolved = resolveUniqueSceneName(editingSceneName.value, scene.id)
+  if (!resolved) {
+    renameErrorMessage.value = 'Scene name is required.'
+    void nextTick(() => {
+      try {
+        renameFieldRef.value?.focus?.()
+      } catch {
+        // ignore focus failures
+      }
+    })
+    return
+  }
+
+  renameErrorMessage.value = ''
+
+  // No-op rename: just exit edit mode.
+  if (resolved === scene.name) {
+    cancelRename()
+    return
+  }
+
+  emit('rename', { id: scene.id, name: resolved })
+  cancelRename()
+}
+
+async function setProjectDefaultScene(sceneId: string) {
+  const projectId = projectsStore.activeProjectId
+  if (!projectId) return
+  try {
+    await projectsStore.setLastEditedScene(projectId, sceneId)
+    projectDefaultSceneId.value = sceneId
+  } catch (err) {
+    console.warn('[SceneManagerDialog] Failed to set default scene', err)
+  }
 }
 
 const previewScene = computed(() => {
@@ -267,7 +328,7 @@ function formatDateTime(value: string) {
             <div class="scene-list-scroll">
               <v-list class="scene-list" lines="one" density="comfortable">
               <v-list-item
-                v-for="scene in scenes"
+                v-for="scene in sortedScenes"
                 :key="scene.id"
                 class="scene-list-item"
                 :class="{
@@ -277,26 +338,51 @@ function formatDateTime(value: string) {
                 }"
                 @click="handleListClick(scene.id, $event)"
               >
-                <div class="scene-info" @dblclick.stop="startRename(scene)">
-                  <div v-if="editingSceneId === scene.id" class="scene-name-edit">
-                    <v-text-field
-                      :id="`scene-rename-${scene.id}`"
-                      v-model="editingSceneName"
-                      variant="solo"
-                      density="comfortable"
-                      hide-details
-                      single-line
-                      autofocus
-                      @keydown="handleRenameKeydown"
-                      @blur="commitRename"
-                    />
-                  </div>
-                  <div v-else class="scene-text">
-                    <div class="scene-name">{{ scene.name }}</div>
-                    <div class="scene-meta">Updated {{ formatDateTime(scene.updatedAt) }}</div>
+                <div class="scene-info">
+
+                  <div class="scene-text">
+                    <div style="display:flex;align-items:center;width:100%;gap:8px;">
+                      <v-icon
+                        class="default-toggle"
+                        color="primary"
+                        size="20"
+                        @click.stop="setProjectDefaultScene(scene.id)"
+                        :title="projectDefaultSceneId === scene.id ? '默认启动场景' : '设为默认启动场景'"
+                      >
+                        {{ projectDefaultSceneId === scene.id ? 'mdi-star' : 'mdi-star-outline' }}
+                      </v-icon>
+                      <div style="flex:1;min-width:0;">
+                        <div v-if="editingSceneId !== scene.id" class="scene-name">{{ scene.name }}</div>
+                        <v-text-field
+                          v-else
+                          ref="renameFieldRef"
+                          v-model="editingSceneName"
+                          class="scene-rename-field"
+                          density="compact"
+                          variant="underlined"
+                          hide-details="auto"
+                          :error-messages="renameErrorMessage"
+                          @click.stop
+                          @keydown.enter.prevent="commitRename(scene)"
+                          @keydown.esc.prevent="cancelRename"
+                          @blur="commitRename(scene)"
+                        />
+                        <div class="scene-meta">Updated {{ formatDateTime(scene.updatedAt) }}</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <template #append>
+                    <v-btn
+                      class="rename-button"
+                      icon="mdi-pencil-outline"
+                      color="primary"
+                      variant="text"
+                      density="comfortable"
+                      :disabled="scene.id !== selectedSceneId || editingSceneId === scene.id"
+                      :title="scene.id === selectedSceneId ? 'Rename scene' : 'Select this scene to rename'"
+                      @click.stop="startRename(scene)"
+                    />
                     <v-btn
                       class="delete-button"
                       icon="mdi-delete-outline"
@@ -428,7 +514,7 @@ function formatDateTime(value: string) {
   margin-bottom: 6px;
   display: flex;
   position: relative;
-  padding-right: 64px;
+  padding-right: 104px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -491,14 +577,6 @@ function formatDateTime(value: string) {
   letter-spacing: 0.01em;
 }
 
-.scene-name-edit {
-  width: 100%;
-}
-
-.scene-name-edit :deep(.v-field__input) {
-  padding-block: 6px;
-  font-weight: 500;
-}
 .scene-thumb-placeholder {
   width: 100%;
   height: 100%;
@@ -520,12 +598,6 @@ function formatDateTime(value: string) {
   color: rgba(233, 236, 241, 0.94);
 }
 
-.scene-name-edit :deep(.v-field__input) {
-  padding-block: 6px;
-  font-weight: 500;
-}
-
-.scene-preview-removed {}
 
 .scene-manager-actions {
   padding-inline: 16px;
@@ -544,6 +616,26 @@ function formatDateTime(value: string) {
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+}
+
+.rename-button {
+  position: absolute;
+  right: 52px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.scene-rename-field {
+  max-width: 420px;
+}
+
+.default-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
 }
 
 .empty-state {

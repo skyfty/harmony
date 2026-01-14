@@ -667,9 +667,8 @@ export const useProjectsStore = defineStore('projects', {
               ? { ...entry, name: scene.name, sceneJsonUrl: buildSceneJsonUrl(scene.id), projectId }
               : entry,
           )
-          await this.saveProjectDocument({ ...project, scenes: nextScenes, lastEditedSceneId: scene.id })
-        } else if (project.lastEditedSceneId !== scene.id) {
-          await this.saveProjectDocument({ ...project, lastEditedSceneId: scene.id })
+          // Do not change lastEditedSceneId when updating an existing scene
+          await this.saveProjectDocument({ ...project, scenes: nextScenes })
         }
         return
       }
@@ -680,10 +679,12 @@ export const useProjectsStore = defineStore('projects', {
         sceneJsonUrl: buildSceneJsonUrl(scene.id),
         projectId,
       }
+      // Only set lastEditedSceneId automatically when adding the FIRST scene to the project.
+      const shouldSetLastEdited = project.scenes.length === 0
       const next: Project = {
         ...project,
         scenes: [...project.scenes, meta],
-        lastEditedSceneId: scene.id,
+        lastEditedSceneId: shouldSetLastEdited ? scene.id : project.lastEditedSceneId,
       }
       await this.saveProjectDocument(next)
     },
