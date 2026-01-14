@@ -8260,12 +8260,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   await result.recomputeSize?.();
 
   if (renderContext) {
-    const { canvas } = result;
-    const width = canvas.width || canvas.clientWidth || 1;
-    const height = canvas.height || canvas.clientHeight || 1;
-    renderContext.renderer.setSize(width, height, false);
-    renderContext.camera.aspect = width / height;
-    renderContext.camera.updateProjectionMatrix();
     return;
   }
 
