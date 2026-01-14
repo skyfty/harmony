@@ -15017,7 +15017,7 @@ export const useSceneStore = defineStore('scene', {
       await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
       return sceneDocument.id
     },
-    async selectScene(sceneId: string) {
+    async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
       if (sceneId === this.currentSceneId) {
@@ -15053,7 +15053,8 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const projectsStore = useProjectsStore()
-      if (projectsStore.activeProjectId && projectsStore.activeProjectId === scene.projectId) {
+      const setLastEdited = options.setLastEdited !== false
+      if (setLastEdited && projectsStore.activeProjectId && projectsStore.activeProjectId === scene.projectId) {
         await projectsStore.setLastEditedScene(scene.projectId, scene.id)
       }
       return true

@@ -225,6 +225,15 @@ function switchToLivePreviewMode(): void {
 
 const projectBundle = ref<ProjectExportBundle | null>(null)
 const projectSceneIndex = new Map<string, ProjectExportSceneEntry>()
+const liveUpdatesDisabledLabel = computed(() => {
+	if (projectBundle.value) {
+		return 'Live updates disabled (bundle mode).'
+	}
+	if (liveUpdatesDisabledSourceUrl.value === 'manual-scene-navigation') {
+		return 'Live updates disabled (manual navigation).'
+	}
+	return 'Live updates disabled.'
+})
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
@@ -233,6 +242,28 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
+
+type Vec3Tuple = [number, number, number]
+type QuatTuple = [number, number, number, number]
+
+type SceneViewControlSnapshot = {
+	controlMode: ControlMode
+	cameraViewState: { mode: CameraViewMode; watchTargetId: string | null }
+	isCameraCaged: boolean
+	camera: { position: Vec3Tuple; quaternion: QuatTuple; up: Vec3Tuple }
+	mapTarget: Vec3Tuple | null
+	lastOrbit: { position: Vec3Tuple; target: Vec3Tuple }
+	lastFirstPerson: { position: Vec3Tuple; direction: Vec3Tuple }
+}
+
+type SceneStackEntry = {
+	sceneId: string
+	view: SceneViewControlSnapshot
+}
+
+const SCENE_STACK_MAX_DEPTH = 20
+const sceneStack = ref<SceneStackEntry[]>([])
+
 const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(true)
 const isGroundChunkStreamingDebugVisible = ref(false)
@@ -1017,6 +1048,7 @@ let currentDocument: SceneJsonExportDocument | null = null
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let unsubscribe: (() => void) | null = null
+let livePreviewEnabled = true
 let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
@@ -4719,10 +4751,16 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		return
 	}
 
+	pushCurrentSceneToStack(sceneId)
+
 	if (projectBundle.value) {
 		await switchToProjectScene(sceneId)
 		return
 	}
+
+	// Manual navigation should disable live preview snapshots; otherwise BroadcastChannel
+	// updates can overwrite the newly loaded scene.
+	ensureManualSceneNavigationMode()
 
 	const token = beginSceneSwitch()
 	try {
@@ -4756,21 +4794,176 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 	}
 }
 
-function handleExitSceneEvent(): void {
-	if (typeof window === 'undefined') {
+const sceneStackVec3ToTuple = (value: THREE.Vector3): Vec3Tuple => [value.x, value.y, value.z]
+
+const sceneStackApplyVec3Tuple = (target: THREE.Vector3, value: Vec3Tuple): void => {
+	target.set(value[0], value[1], value[2])
+}
+
+const sceneStackQuatToTuple = (value: THREE.Quaternion): QuatTuple => [value.x, value.y, value.z, value.w]
+
+const sceneStackApplyQuatTuple = (target: THREE.Quaternion, value: QuatTuple): void => {
+	target.set(value[0], value[1], value[2], value[3])
+}
+
+function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
+	if (!camera) {
+		return null
+	}
+	const mapTarget = mapControls ? sceneStackVec3ToTuple(mapControls.target) : null
+	return {
+		controlMode: controlMode.value,
+		cameraViewState: {
+			mode: cameraViewState.mode,
+			watchTargetId: cameraViewState.watchTargetId,
+		},
+		isCameraCaged: isCameraCaged.value,
+		camera: {
+			position: sceneStackVec3ToTuple(camera.position),
+			quaternion: sceneStackQuatToTuple(camera.quaternion),
+			up: sceneStackVec3ToTuple(camera.up),
+		},
+		mapTarget,
+		lastOrbit: {
+			position: sceneStackVec3ToTuple(lastOrbitState.position),
+			target: sceneStackVec3ToTuple(lastOrbitState.target),
+		},
+		lastFirstPerson: {
+			position: sceneStackVec3ToTuple(lastFirstPersonState.position),
+			direction: sceneStackVec3ToTuple(lastFirstPersonState.direction),
+		},
+	}
+}
+
+function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
+	if (!camera) {
 		return
 	}
+	activeCameraLookTween = null
+
+	// Avoid the controlMode watcher calling applyControlMode() which would overwrite
+	// our restored camera pose.
+	suppressControlModeApply = true
 	try {
-		window.close()
-	} catch {
-		// ignore
+		controlMode.value = snapshot.controlMode
+		cameraViewState.mode = snapshot.cameraViewState.mode
+		cameraViewState.watchTargetId = snapshot.cameraViewState.watchTargetId
+	} finally {
+		suppressControlModeApply = false
 	}
-	// Fallback in case window.close() is blocked.
+
+	setCameraCaging(snapshot.isCameraCaged, { force: true })
+
+	sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position)
+	sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion)
+	sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up)
+	camera.updateMatrixWorld(true)
+
+	// Restore view caches used by applyControlMode().
+	sceneStackApplyVec3Tuple(lastOrbitState.position, snapshot.lastOrbit.position)
+	sceneStackApplyVec3Tuple(lastOrbitState.target, snapshot.lastOrbit.target)
+	sceneStackApplyVec3Tuple(lastFirstPersonState.position, snapshot.lastFirstPerson.position)
+	sceneStackApplyVec3Tuple(lastFirstPersonState.direction, snapshot.lastFirstPerson.direction)
+
+	if (mapControls && snapshot.mapTarget) {
+		sceneStackApplyVec3Tuple(mapControls.target, snapshot.mapTarget)
+		mapControls.update()
+	}
+
+	if (snapshot.controlMode === 'first-person') {
+		syncFirstPersonOrientation()
+	}
+
+	updateCameraControlActivation()
+	updateCanvasCursor()
+}
+
+function pushCurrentSceneToStack(nextSceneId: string | null = null): void {
+	const currentId = currentDocument?.id?.trim() ?? ''
+	if (!currentId) {
+		return
+	}
+	if (nextSceneId && currentId === nextSceneId) {
+		return
+	}
+	const view = captureViewControlSnapshot()
+	if (!view) {
+		return
+	}
+	sceneStack.value.push({ sceneId: currentId, view })
+	if (sceneStack.value.length > SCENE_STACK_MAX_DEPTH) {
+		sceneStack.value.splice(0, sceneStack.value.length - SCENE_STACK_MAX_DEPTH)
+	}
+}
+
+function ensureManualSceneNavigationMode(): void {
+	if (!unsubscribe) {
+		return
+	}
+	// Stop applying incoming live preview snapshots immediately.
+	livePreviewEnabled = false
 	try {
-		window.history.back()
-	} catch {
-		// ignore
+		unsubscribe?.()
+	} finally {
+		unsubscribe = null
 	}
+	if (!liveUpdatesDisabledSourceUrl.value) {
+		liveUpdatesDisabledSourceUrl.value = 'manual-scene-navigation'
+	}
+}
+
+async function restoreSceneFromStackEntry(entry: SceneStackEntry): Promise<void> {
+	if (projectBundle.value) {
+		await switchToProjectScene(entry.sceneId)
+		applyViewControlSnapshot(entry.view)
+		return
+	}
+	const token = beginSceneSwitch()
+	try {
+		statusMessage.value = 'Loading scene...'
+		const scenesStore = useScenesStore()
+		const document = await scenesStore.loadSceneDocument(entry.sceneId)
+		if (!document) {
+			appendWarningMessage('Failed to load scene document.')
+			statusMessage.value = ''
+			return
+		}
+		const exportDocument = await ensureScenePreviewExportDocument(document)
+		if (sceneSwitchToken !== token) {
+			return
+		}
+		cleanupForUnrelatedSceneSwitch()
+		const timestamp = new Date().toISOString()
+		const waitApplied = waitForSnapshotApplied(timestamp, token)
+		applySnapshot({
+			revision: nextSnapshotRevision(),
+			document: exportDocument,
+			timestamp,
+		})
+		await waitApplied
+		if (sceneSwitchToken !== token) {
+			return
+		}
+		applyViewControlSnapshot(entry.view)
+	} catch (error) {
+		console.error('[ScenePreview] Failed to restore scene', error)
+		appendWarningMessage('Failed to restore scene. Please try again later.')
+		statusMessage.value = 'Failed to load scene. Please try again later.'
+	} finally {
+		await endSceneSwitch(token)
+	}
+}
+
+async function handleExitSceneEvent(): Promise<void> {
+	if (sceneSwitching.value) {
+		return
+	}
+	const entry = sceneStack.value.pop() ?? null
+	if (!entry) {
+		return
+	}
+	ensureManualSceneNavigationMode()
+	await restoreSceneFromStackEntry(entry)
 }
 
 type DriveControlAction = keyof VehicleDriveControlFlags
@@ -5512,7 +5705,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			void handleLoadSceneEvent(event)
 			break
 		case 'exit-scene':
-			handleExitSceneEvent()
+			void handleExitSceneEvent()
 			break
 		case 'sequence-complete':
 			clearBehaviorAlert()
@@ -9552,7 +9745,11 @@ onMounted(() => {
 		}
 	}
 	if (!handledInitialPayload) {
+		livePreviewEnabled = true
 		unsubscribe = subscribeToScenePreview((snapshot) => {
+			if (!livePreviewEnabled) {
+				return
+			}
 			applySnapshot(snapshot)
 		})
 	}
@@ -9640,7 +9837,7 @@ onBeforeUnmount(() => {
 		>
 			<div class="scene-preview__live-disabled-content">
 				<div class="scene-preview__live-disabled-text">
-					Live updates disabled (bundle mode).
+					{{ liveUpdatesDisabledLabel }}
 				</div>
 				<v-btn
 					size="small"
