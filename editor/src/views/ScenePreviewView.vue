@@ -111,6 +111,7 @@ import {
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
+	sceneStateAnchorComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -128,6 +129,7 @@ import {
 	clampLodComponentProps,
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
+	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
 import {
@@ -246,6 +248,12 @@ const warningMessages = ref<string[]>([])
 type Vec3Tuple = [number, number, number]
 type QuatTuple = [number, number, number, number]
 
+type SceneNodeTransformSnapshot = {
+	position: Vec3Tuple
+	quaternion: QuatTuple
+	scale: Vec3Tuple
+}
+
 type SceneViewControlSnapshot = {
 	controlMode: ControlMode
 	cameraViewState: { mode: CameraViewMode; watchTargetId: string | null }
@@ -254,6 +262,7 @@ type SceneViewControlSnapshot = {
 	mapTarget: Vec3Tuple | null
 	lastOrbit: { position: Vec3Tuple; target: Vec3Tuple }
 	lastFirstPerson: { position: Vec3Tuple; direction: Vec3Tuple }
+	nodeTransforms: Record<string, SceneNodeTransformSnapshot>
 }
 
 const sceneStateById = new Map<string, SceneViewControlSnapshot>()
@@ -680,6 +689,7 @@ previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
+previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -4806,6 +4816,39 @@ const sceneStackApplyQuatTuple = (target: THREE.Quaternion, value: QuatTuple): v
 	target.set(value[0], value[1], value[2], value[3])
 }
 
+function captureSceneNodeTransformSnapshot(): Record<string, SceneNodeTransformSnapshot> {
+	const snapshot: Record<string, SceneNodeTransformSnapshot> = {}
+	for (const [nodeId, node] of previewNodeMap.entries()) {
+		const component = resolveEnabledComponentState(node, SCENE_STATE_ANCHOR_COMPONENT_TYPE)
+		if (!component) {
+			continue
+		}
+		const object = nodeObjectMap.get(nodeId)
+		if (!object) {
+			continue
+		}
+		snapshot[nodeId] = {
+			position: sceneStackVec3ToTuple(object.position),
+			quaternion: sceneStackQuatToTuple(object.quaternion),
+			scale: sceneStackVec3ToTuple(object.scale),
+		}
+	}
+	return snapshot
+}
+
+function applySceneNodeTransformSnapshot(snapshot: Record<string, SceneNodeTransformSnapshot>): void {
+	Object.entries(snapshot).forEach(([nodeId, transform]) => {
+		const object = nodeObjectMap.get(nodeId)
+		if (!object) {
+			return
+		}
+		sceneStackApplyVec3Tuple(object.position, transform.position)
+		sceneStackApplyQuatTuple(object.quaternion, transform.quaternion)
+		sceneStackApplyVec3Tuple(object.scale, transform.scale)
+		object.updateMatrixWorld(true)
+	})
+}
+
 function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 	if (!camera) {
 		return null
@@ -4832,6 +4875,7 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 			position: sceneStackVec3ToTuple(lastFirstPersonState.position),
 			direction: sceneStackVec3ToTuple(lastFirstPersonState.direction),
 		},
+		nodeTransforms: captureSceneNodeTransformSnapshot(),
 	}
 }
 
@@ -4917,6 +4961,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 	if (projectBundle.value) {
 		await switchToProjectScene(sceneId)
 		applyViewControlSnapshot(view)
+		applySceneNodeTransformSnapshot(view.nodeTransforms)
 		return
 	}
 	const token = beginSceneSwitch()
@@ -4946,6 +4991,7 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 			return
 		}
 		applyViewControlSnapshot(view)
+		applySceneNodeTransformSnapshot(view.nodeTransforms)
 	} catch (error) {
 		console.error('[ScenePreview] Failed to restore scene', error)
 		appendWarningMessage('Failed to restore scene. Please try again later.')

@@ -462,6 +462,7 @@ import {
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
+  sceneStateAnchorComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -480,6 +481,7 @@ import {
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
   LOD_COMPONENT_TYPE,
+  SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components';
 import {
   VehicleDriveController,
@@ -579,12 +581,19 @@ const requestedMode = ref<RequestedMode>(null);
 type SceneStackVec3Tuple = [number, number, number];
 type SceneStackQuatTuple = [number, number, number, number];
 
+type SceneNodeTransformSnapshot = {
+  position: SceneStackVec3Tuple;
+  quaternion: SceneStackQuatTuple;
+  scale: SceneStackVec3Tuple;
+};
+
 type SceneViewControlSnapshot = {
   cameraViewState: { mode: CameraViewMode; targetNodeId: string | null };
   isCameraCaged: boolean;
   purposeMode: 'watch' | 'level';
   camera: { position: SceneStackVec3Tuple; quaternion: SceneStackQuatTuple; up: SceneStackVec3Tuple };
   orbitTarget: SceneStackVec3Tuple;
+  nodeTransforms: Record<string, SceneNodeTransformSnapshot>;
 };
 
 const sceneStateById = new Map<string, SceneViewControlSnapshot>();
@@ -1312,6 +1321,7 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
+previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
@@ -7038,6 +7048,39 @@ const sceneStackApplyQuatTuple = (target: THREE.Quaternion, value: SceneStackQua
   target.set(value[0], value[1], value[2], value[3]);
 };
 
+function captureSceneNodeTransformSnapshot(): Record<string, SceneNodeTransformSnapshot> {
+  const snapshot: Record<string, SceneNodeTransformSnapshot> = {};
+  for (const [nodeId, node] of previewNodeMap.entries()) {
+    const component = resolveEnabledComponentState(node, SCENE_STATE_ANCHOR_COMPONENT_TYPE);
+    if (!component) {
+      continue;
+    }
+    const object = nodeObjectMap.get(nodeId);
+    if (!object) {
+      continue;
+    }
+    snapshot[nodeId] = {
+      position: sceneStackVec3ToTuple(object.position),
+      quaternion: sceneStackQuatToTuple(object.quaternion),
+      scale: sceneStackVec3ToTuple(object.scale),
+    };
+  }
+  return snapshot;
+}
+
+function applySceneNodeTransformSnapshot(snapshot: Record<string, SceneNodeTransformSnapshot>): void {
+  Object.entries(snapshot).forEach(([nodeId, transform]) => {
+    const object = nodeObjectMap.get(nodeId);
+    if (!object) {
+      return;
+    }
+    sceneStackApplyVec3Tuple(object.position, transform.position);
+    sceneStackApplyQuatTuple(object.quaternion, transform.quaternion);
+    sceneStackApplyVec3Tuple(object.scale, transform.scale);
+    object.updateMatrixWorld(true);
+  });
+}
+
 function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
   const context = renderContext;
   if (!context) {
@@ -7057,6 +7100,7 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
       up: sceneStackVec3ToTuple(camera.up),
     },
     orbitTarget: sceneStackVec3ToTuple(controls.target),
+    nodeTransforms: captureSceneNodeTransformSnapshot(),
   };
 }
 
@@ -7180,6 +7224,7 @@ async function handleExitSceneEvent(): Promise<void> {
     return;
   }
   applyViewControlSnapshot(snapshot);
+  applySceneNodeTransformSnapshot(snapshot.nodeTransforms);
 }
 
 
