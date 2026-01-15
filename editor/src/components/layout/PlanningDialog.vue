@@ -6425,6 +6425,7 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
+          <div class="property-panel__body">
           <div v-if="propertyPanelDisabled" class="property-panel__placeholder">
             <v-icon icon="mdi-shape-outline" size="28" />
             <span>{{ propertyPanelDisabledReason }}</span>
@@ -6721,6 +6722,7 @@ onBeforeUnmount(() => {
               <!-- terrain/building/wall: empty for now -->
             </template>
           </template>
+          </div>
         </aside>
 
       </section>
@@ -6925,6 +6927,14 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.property-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
 }
 
 .property-panel__title {
