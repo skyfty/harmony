@@ -333,7 +333,12 @@ function cancel() {
 <template>
   <v-dialog v-model="dialogOpen" max-width="880">
     <v-card>
-      <v-card-title>新建场景</v-card-title>
+      <v-card-title class="dialog-title">
+        <div class="title-text">新建场景</div>
+        <v-btn size="small" variant="text" icon aria-label="关闭" @click="cancel" class="dialog-close-btn">
+          <v-icon>mdi-close</v-icon>
+        </v-btn>
+      </v-card-title>
       <v-card-text>
         <div class="preset-section">
           <div class="preset-header">
@@ -484,9 +489,9 @@ function cancel() {
 
 .preset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 12px;
-  max-height: 360px;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+  max-height: 300px;
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 6px;
@@ -518,8 +523,8 @@ function cancel() {
 
 .preset-thumbnail {
   position: relative;
-  aspect-ratio: 4 / 3;
-  border-radius: 10px 10px 0 0;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px 8px 0 0;
   overflow: hidden;
   background: #212733;
 }
@@ -530,7 +535,7 @@ function cancel() {
 }
 
 .preset-card-body {
-  padding: 10px 12px 12px;
+  padding: 8px 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -538,14 +543,14 @@ function cancel() {
 
 .preset-name {
   font-weight: 600;
-  font-size: 0.95rem;
-  line-height: 1.3;
+  font-size: 0.88rem;
+  line-height: 1.2;
 }
 
 .preset-description {
-  font-size: 0.78rem;
-  line-height: 1.35;
-  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.66);
 }
 
 .preset-spinner {
@@ -573,10 +578,29 @@ function cancel() {
   opacity: 0.85;
 }
 
+.dialog-title {
+  position: relative;
+  padding-right: 44px; /* room for close button */
+  display: block;
+}
+
+.dialog-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 0;
+  padding: 6px;
+}
+
+.title-text {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
 @media (max-width: 600px) {
   .preset-grid {
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    max-height: 260px;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    max-height: 240px;
   }
 }
 </style>
