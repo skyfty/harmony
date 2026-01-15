@@ -28,6 +28,9 @@ interface UiState {
   autoCloseTimer: number | null
 }
 
+type ActiveSelectionContext = string | null
+
+
 const defaultOverlayState: LoadingOverlayState = {
   visible: false,
   mode: 'indeterminate',
@@ -40,11 +43,22 @@ const defaultOverlayState: LoadingOverlayState = {
 }
 
 export const useUiStore = defineStore('ui', {
-  state: (): UiState => ({
+  state: (): UiState & { activeSelectionContext: ActiveSelectionContext } => ({
     loadingOverlay: { ...defaultOverlayState },
     autoCloseTimer: null,
+    activeSelectionContext: null,
   }),
   actions: {
+    // Active selection context is a lightweight UI-level signal indicating which
+    // module currently holds the user's "selection/activation" intent. Examples:
+    // 'asset-panel', 'scatter', 'terrain-sculpt', 'build-tool:wall', etc.
+    setActiveSelectionContext(context: ActiveSelectionContext) {
+      if (this.activeSelectionContext === context) return
+      // simply set the context; other stores/components should watch this
+      // value and clear their own selections when appropriate to avoid
+      // circular imports here.
+      ;(this as any).activeSelectionContext = context
+    },
     showLoadingOverlay(options: LoadingOverlayOptions = {}) {
       this.clearAutoCloseTimer()
       const progress = options.mode === 'determinate' ? options.progress ?? 0 : 0
@@ -141,3 +155,4 @@ export const useUiStore = defineStore('ui', {
     },
   },
 })
+

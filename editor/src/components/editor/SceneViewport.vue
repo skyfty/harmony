@@ -68,6 +68,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useUiStore } from '@/stores/uiStore'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1055,6 +1056,34 @@ const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
+
+// Watch UI selection context and cancel/clear active build tool when another
+// module becomes active. This enforces mutual exclusion between build tools and
+// other selection contexts.
+const uiStore = useUiStore()
+watch(
+  () => uiStore.activeSelectionContext,
+  (ctx) => {
+    if (!ctx || !ctx.startsWith('build-tool')) {
+      if (activeBuildTool.value) {
+        // Cancel any active build operation which will also clear activeBuildTool
+        cancelActiveBuildOperation()
+      }
+    }
+
+    // Enforce mutual exclusion: clear selections in other modules when context
+    // indicates a different active area.
+    if (ctx !== 'asset-panel' && sceneStore.selectedAssetId) {
+      sceneStore.selectAsset(null)
+    }
+    if (ctx !== 'scatter' && (terrainStore.scatterSelectedAsset ?? null)) {
+      terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+    }
+    if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
+      terrainStore.setBrushOperation(null)
+    }
+  },
+)
 
 const instancedMeshRevision = ref(0)
 const hasInstancedMeshes = computed(() => {
@@ -3300,6 +3329,59 @@ watch(
       }
     } catch (err) {
       console.warn('selection preview watch failed', err)
+    }
+  },
+)
+
+// Also show selection preview when a scatter asset is selected from terrain store.
+watch(
+  () => terrainStore.scatterSelectedAsset,
+  (next) => {
+    try {
+      if (!next) {
+        // if no scatter selection, dispose preview only if it was the scatter preview
+        if (selectionPreviewActive && selectionPreviewAssetId) {
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+          dragPreview.dispose()
+        }
+        return
+      }
+
+      // do not show selection preview while dragging assets
+      if (sceneStore.draggingAssetId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      const asset = next
+      if (!asset) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+        selectionPreviewActive = true
+        selectionPreviewAssetId = asset.id
+        try {
+          dragPreview.prepare(asset.id)
+        } catch (e) {
+          console.warn('Failed to prepare scatter selection preview', e)
+          dragPreview.dispose()
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+        }
+      } else {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+      }
+    } catch (err) {
+      console.warn('scatter selection preview watch failed', err)
     }
   },
 )
@@ -5654,8 +5736,9 @@ function handlePointerMove(event: PointerEvent) {
             point = snapVectorToGrid(planeHit.clone())
           } else {
             const intersections = collectSceneIntersections()
-            if (intersections.length > 0) {
-              point = intersections[0].point.clone()
+            const first = intersections && intersections.length ? intersections[0] : null
+            if (first && first.point) {
+              point = first.point.clone()
             }
           }
           dragPreview.setPosition(point)
@@ -6018,6 +6101,11 @@ function handleBuildToolChange(tool: BuildTool | null) {
     terrainStore.setGroundPanelTab('terrain')
   }
   activeBuildTool.value = tool
+  if (tool) {
+    uiStore.setActiveSelectionContext(`build-tool:${tool}`)
+  } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
+    uiStore.setActiveSelectionContext(null)
+  }
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {

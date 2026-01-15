@@ -10,6 +10,7 @@ import {
   SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useUiStore } from '@/stores/uiStore'
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ResourceCategory } from '@/types/resource-category'
 import { fetchResourceCategories } from '@/api/resourceAssets'
@@ -326,6 +327,8 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
 
 function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
+  const uiStore = useUiStore()
+  uiStore.setActiveSelectionContext('asset-panel')
 }
 
 function prefabAggregateProgressState(asset: ProjectAsset) {
