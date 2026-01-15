@@ -3249,6 +3249,61 @@ const dragPreview = useDragPreview({
 })
 const dragPreviewGroup = dragPreview.group
 
+// Selection-based asset preview state: when a mesh/model/prefab is selected
+let selectionPreviewActive = false
+let selectionPreviewAssetId: string | null = null
+let lastSelectionPreviewUpdate = 0
+
+watch(
+  () => sceneStore.selectedAssetId,
+  (nextId) => {
+    try {
+      if (!nextId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      // do not show selection preview while dragging assets
+      if (sceneStore.draggingAssetId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      const asset = sceneStore.getAsset(nextId)
+      if (!asset) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+        selectionPreviewActive = true
+        selectionPreviewAssetId = asset.id
+        // prepare preview object (use existing drag preview loader)
+        try {
+          dragPreview.prepare(asset.id)
+        } catch (e) {
+          console.warn('Failed to prepare selection preview', e)
+          dragPreview.dispose()
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+        }
+      } else {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+      }
+    } catch (err) {
+      console.warn('selection preview watch failed', err)
+    }
+  },
+)
+
 
 function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   if (mapControls) {
@@ -5579,6 +5634,38 @@ function handlePointerMove(event: PointerEvent) {
     sceneStoreBeginTransformInteraction: (nodeId) => sceneStore.beginTransformInteraction(nodeId),
     updateSelectDragPosition,
   })
+
+  // If selection-based preview is active, update preview position to follow the mouse.
+  try {
+    if (selectionPreviewActive && dragPreview && canvasRef.value && camera && !isDragHovering.value) {
+      const now = Date.now()
+      // throttle updates to ~60Hz
+      if (now - lastSelectionPreviewUpdate > 8) {
+        lastSelectionPreviewUpdate = now
+        const rect = canvasRef.value.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+          const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+          pointer.set(ndcX, ndcY)
+          raycaster.setFromCamera(pointer, camera)
+          const planeHit = new THREE.Vector3()
+          let point: THREE.Vector3 | null = null
+          if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+            point = snapVectorToGrid(planeHit.clone())
+          } else {
+            const intersections = collectSceneIntersections()
+            if (intersections.length > 0) {
+              point = intersections[0].point.clone()
+            }
+          }
+          dragPreview.setPosition(point)
+        }
+      }
+    }
+  } catch (err) {
+    // non-fatal: ensure we don't break pointer handling
+    console.warn('Failed to update selection preview position', err)
+  }
 }
 
 function handlePointerUp(event: PointerEvent) {
