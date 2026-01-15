@@ -1726,6 +1726,8 @@ const activeAutoTourNodeIds = reactive(new Set<string>());
 // Auto-tour pause only affects auto-tour playback and vehicles driven by auto-tour.
 // It does NOT change manual driving (`vehicleDriveActive`) behavior or global playback.
 const autoTourPaused = ref(false);
+const autoTourPausedIsTerminal = ref(false);
+const autoTourPausedNodeId = ref<string | null>(null);
 
 const autoTourFollowNodeId = ref<string | null>(null);
 const autoTourCameraFollowState = createCameraFollowState();
@@ -3525,16 +3527,21 @@ const autoTourRuntime = createAutoTourRuntime({
     syncInstancedTransform(object);
   },
   requiresExplicitStart: true,
-  onTerminalStop: () => {
+  onTerminalStop: (nodeId) => {
+    autoTourPausedIsTerminal.value = true;
+    autoTourPausedNodeId.value = nodeId ?? null;
     autoTourPaused.value = true;
+    applyAutoTourPauseForActiveNodes();
   },
-  onDockRequestedPause: () => {
-		if (autoTourPaused.value) {
-			return
-		}
-		autoTourPaused.value = true
-		applyAutoTourPauseForActiveNodes()
-	},
+  onDockRequestedPause: (nodeId, payload) => {
+    autoTourPausedIsTerminal.value = payload.terminal === true;
+    autoTourPausedNodeId.value = nodeId ?? null;
+    if (autoTourPaused.value) {
+      return
+    }
+    autoTourPaused.value = true
+    applyAutoTourPauseForActiveNodes()
+  },
   stopNodeMotion: (nodeId) => {
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (!entry) {
@@ -6849,6 +6856,8 @@ function handleVehicleAutoTourStartTap(): void {
   vehicleDrivePromptBusy.value = true;
   try {
     autoTourPaused.value = false;
+    autoTourPausedIsTerminal.value = false;
+    autoTourPausedNodeId.value = null;
     // Ensure manual drive is stopped.
     if (vehicleDriveActive.value) {
       handleHideVehicleCockpitEvent();
@@ -6911,6 +6920,8 @@ function handleVehicleAutoTourStopTap(): void {
   vehicleDrivePromptBusy.value = true;
   try {
     autoTourPaused.value = false;
+    autoTourPausedIsTerminal.value = false;
+    autoTourPausedNodeId.value = null;
     autoTourRotationOnlyHold.value = true;
     stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
       activeAutoTourNodeIds.delete(n);
@@ -6938,8 +6949,17 @@ function handleVehicleAutoTourPauseToggleTap(): void {
     return;
   }
   const nextPaused = !autoTourPaused.value;
-  autoTourPaused.value = nextPaused;
-  if (nextPaused) {
+  if (!nextPaused) {
+    if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
+      autoTourRuntime.continueFromEnd(targetNodeId);
+    }
+    autoTourPausedIsTerminal.value = false;
+    autoTourPausedNodeId.value = null;
+    autoTourPaused.value = false;
+  } else {
+    autoTourPausedIsTerminal.value = false;
+    autoTourPausedNodeId.value = null;
+    autoTourPaused.value = true;
     applyAutoTourPauseForActiveNodes();
   }
   // Do not mutate camera when pausing; only stop vehicle motion.
