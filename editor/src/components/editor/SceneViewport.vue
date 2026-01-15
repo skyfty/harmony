@@ -468,8 +468,8 @@ async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
     }
 
     const size = 1.0
-    const height = 0.08
-    const geom = new TextGeometry(labelText, { font, size, height, curveSegments: 6, bevelEnabled: false })
+    const depth = 0.08
+    const geom = new TextGeometry(labelText, { font, size, depth, curveSegments: 6, bevelEnabled: false })
     geom.computeBoundingBox()
     const bbox = geom.boundingBox
     if (bbox) {
@@ -562,7 +562,7 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
       return
     }
     const size = 0.6
-    const height = 0.06
+    const depth = 0.06
     const yOffset = 0.22
 
     for (let index = 0; index < waypoints.length; index += 1) {
@@ -588,7 +588,7 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
         guideRouteWaypointLabelMeshes.delete(key)
       }
 
-      const geom = new TextGeometry(labelText, { font, size, height, curveSegments: 6, bevelEnabled: false })
+      const geom = new TextGeometry(labelText, { font, size, depth, curveSegments: 6, bevelEnabled: false })
       geom.computeBoundingBox()
       const bbox = geom.boundingBox
       if (bbox) {
