@@ -164,7 +164,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const activeTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
   // Nodes that reached a terminal (loop=false) stop and must remain "parked" via continuous braking.
-  // This is intentionally independent of autoTourPlaybackState, since terminal stop clears playback state.
+  // This is intentionally independent of autoTourPlaybackState to allow flexible resume behavior.
   const terminalBrakeHoldNodes = new Set<string>()
   // Nodes that reached a terminal (loop=false) stop and should not re-initialize movement until restarted.
   const terminalStoppedNodes = new Set<string>()
