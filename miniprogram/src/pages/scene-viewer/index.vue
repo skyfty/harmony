@@ -587,13 +587,8 @@ type SceneViewControlSnapshot = {
   orbitTarget: SceneStackVec3Tuple;
 };
 
-type SceneStackEntry = {
-  sceneId: string;
-  view: SceneViewControlSnapshot;
-};
-
-const SCENE_STACK_MAX_DEPTH = 20;
-const sceneStack = ref<SceneStackEntry[]>([]);
+const sceneStateById = new Map<string, SceneViewControlSnapshot>();
+const previousSceneById = new Map<string, string>();
 
 const projectBundle = ref<ProjectExportBundle | null>(null);
 const projectSceneIndex = new Map<string, ProjectExportSceneEntry>();
@@ -7089,21 +7084,22 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
   setCameraCaging(snapshot.isCameraCaged);
 }
 
-function pushCurrentSceneToStack(nextSceneId: string | null = null): void {
+function saveCurrentSceneStateForMap(nextSceneId: string | null = null): void {
   const currentId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
   if (!currentId) {
     return;
   }
-  if (nextSceneId && currentId === nextSceneId.trim()) {
+  const trimmedNextId = nextSceneId?.trim() ?? '';
+  if (trimmedNextId && currentId === trimmedNextId) {
     return;
   }
   const view = captureViewControlSnapshot();
   if (!view) {
     return;
   }
-  sceneStack.value.push({ sceneId: currentId, view });
-  if (sceneStack.value.length > SCENE_STACK_MAX_DEPTH) {
-    sceneStack.value.splice(0, sceneStack.value.length - SCENE_STACK_MAX_DEPTH);
+  sceneStateById.set(currentId, view);
+  if (trimmedNextId) {
+    previousSceneById.set(trimmedNextId, currentId);
   }
 }
 
@@ -7147,7 +7143,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
     return;
   }
   if (event.pushToStack === true) {
-    pushCurrentSceneToStack(sceneId);
+    saveCurrentSceneStateForMap(sceneId);
   }
 
   if (projectBundle.value) {
@@ -7163,19 +7159,27 @@ async function handleExitSceneEvent(): Promise<void> {
   if (sceneSwitching.value) {
     return;
   }
-  const entry = sceneStack.value.pop() ?? null;
-  if (!entry) {
+  const currentId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+  if (!currentId) {
+    return;
+  }
+  const previousId = previousSceneById.get(currentId) ?? '';
+  if (!previousId) {
+    return;
+  }
+  const snapshot = sceneStateById.get(previousId);
+  if (!snapshot) {
     return;
   }
 
-  await switchToProjectScene(entry.sceneId);
+  await switchToProjectScene(previousId);
   try {
-    await waitForSceneReady(entry.sceneId);
+    await waitForSceneReady(previousId);
   } catch (error) {
     console.warn('恢复场景失败：场景初始化未完成', error);
     return;
   }
-  applyViewControlSnapshot(entry.view);
+  applyViewControlSnapshot(snapshot);
 }
 
 

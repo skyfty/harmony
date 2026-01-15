@@ -256,13 +256,8 @@ type SceneViewControlSnapshot = {
 	lastFirstPerson: { position: Vec3Tuple; direction: Vec3Tuple }
 }
 
-type SceneStackEntry = {
-	sceneId: string
-	view: SceneViewControlSnapshot
-}
-
-const SCENE_STACK_MAX_DEPTH = 20
-const sceneStack = ref<SceneStackEntry[]>([])
+const sceneStateById = new Map<string, SceneViewControlSnapshot>()
+const previousSceneById = new Map<string, string>()
 
 const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(true)
@@ -4753,7 +4748,7 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 
 	const shouldPushToStack = event.pushToStack === true
 	if (shouldPushToStack) {
-		pushCurrentSceneToStack(sceneId)
+		saveCurrentSceneStateForMap(sceneId)
 	}
 
 	if (projectBundle.value) {
@@ -4883,21 +4878,22 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
 	updateCanvasCursor()
 }
 
-function pushCurrentSceneToStack(nextSceneId: string | null = null): void {
+function saveCurrentSceneStateForMap(nextSceneId: string | null = null): void {
 	const currentId = currentDocument?.id?.trim() ?? ''
 	if (!currentId) {
 		return
 	}
-	if (nextSceneId && currentId === nextSceneId) {
+	const trimmedNextId = nextSceneId?.trim() ?? ''
+	if (trimmedNextId && currentId === trimmedNextId) {
 		return
 	}
 	const view = captureViewControlSnapshot()
 	if (!view) {
 		return
 	}
-	sceneStack.value.push({ sceneId: currentId, view })
-	if (sceneStack.value.length > SCENE_STACK_MAX_DEPTH) {
-		sceneStack.value.splice(0, sceneStack.value.length - SCENE_STACK_MAX_DEPTH)
+	sceneStateById.set(currentId, view)
+	if (trimmedNextId) {
+		previousSceneById.set(trimmedNextId, currentId)
 	}
 }
 
@@ -4917,17 +4913,17 @@ function ensureManualSceneNavigationMode(): void {
 	}
 }
 
-async function restoreSceneFromStackEntry(entry: SceneStackEntry): Promise<void> {
+async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlSnapshot): Promise<void> {
 	if (projectBundle.value) {
-		await switchToProjectScene(entry.sceneId)
-		applyViewControlSnapshot(entry.view)
+		await switchToProjectScene(sceneId)
+		applyViewControlSnapshot(view)
 		return
 	}
 	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
 		const scenesStore = useScenesStore()
-		const document = await scenesStore.loadSceneDocument(entry.sceneId)
+		const document = await scenesStore.loadSceneDocument(sceneId)
 		if (!document) {
 			appendWarningMessage('Failed to load scene document.')
 			statusMessage.value = ''
@@ -4949,7 +4945,7 @@ async function restoreSceneFromStackEntry(entry: SceneStackEntry): Promise<void>
 		if (sceneSwitchToken !== token) {
 			return
 		}
-		applyViewControlSnapshot(entry.view)
+		applyViewControlSnapshot(view)
 	} catch (error) {
 		console.error('[ScenePreview] Failed to restore scene', error)
 		appendWarningMessage('Failed to restore scene. Please try again later.')
@@ -4963,12 +4959,20 @@ async function handleExitSceneEvent(): Promise<void> {
 	if (sceneSwitching.value) {
 		return
 	}
-	const entry = sceneStack.value.pop() ?? null
-	if (!entry) {
+	const currentId = currentDocument?.id?.trim() ?? ''
+	if (!currentId) {
+		return
+	}
+	const previousId = previousSceneById.get(currentId) ?? ''
+	if (!previousId) {
+		return
+	}
+	const snapshot = sceneStateById.get(previousId)
+	if (!snapshot) {
 		return
 	}
 	ensureManualSceneNavigationMode()
-	await restoreSceneFromStackEntry(entry)
+	await restoreSceneFromSnapshot(previousId, snapshot)
 }
 
 type DriveControlAction = keyof VehicleDriveControlFlags
