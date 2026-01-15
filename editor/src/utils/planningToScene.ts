@@ -739,6 +739,18 @@ function resolveRoadJunctionSmoothingFromPlanningData(planningData: PlanningScen
   return ROAD_DEFAULT_JUNCTION_SMOOTHING
 }
 
+function resolveRoadLaneLinesFromPlanningData(planningData: PlanningSceneData, layerId: string): boolean {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const val = found?.roadLaneLines
+    if (typeof val === 'boolean') {
+      return Boolean(val)
+    }
+  }
+  return false
+}
+
 function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers
   if (Array.isArray(raw)) {
@@ -1243,7 +1255,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         const roadComponent = roadNode.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
         if (roadComponent?.id) {
-          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing })
+          const laneLines = resolveRoadLaneLinesFromPlanningData(planningData, layerId)
+          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing, laneLines })
         }
 
         sceneStore.setNodeLocked(roadNode.id, true)

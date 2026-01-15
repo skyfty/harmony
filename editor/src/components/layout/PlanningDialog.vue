@@ -99,6 +99,8 @@ interface PlanningLayer {
   locked: boolean
   /** Road layer width in meters (only used when kind === 'road'). */
   roadWidthMeters?: number
+  /** Whether to show lane lines for road layer (only used when kind === 'road'). */
+  roadLaneLines?: boolean
   /** Road layer smoothing (0-1) controlling the roundedness of junctions. */
   roadSmoothing?: number
   /** Water layer smoothing (0-1) controlling the edge rounding. */
@@ -265,7 +267,7 @@ interface LineDraft {
 
 const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.09 },
+  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadLaneLines: false, roadSmoothing: 0.09 },
   { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
@@ -1351,8 +1353,9 @@ function buildPlanningSnapshot() {
       color: layer.color,
       visible: layer.visible,
       locked: layer.locked,
-      roadWidthMeters: layer.roadWidthMeters,
-      roadSmoothing: layer.roadSmoothing,
+        roadWidthMeters: layer.roadWidthMeters,
+        roadLaneLines: layer.roadLaneLines,
+        roadSmoothing: layer.roadSmoothing,
       waterSmoothing: layer.waterSmoothing,
       floorSmooth: layer.floorSmooth,
       wallHeightMeters: layer.wallHeightMeters,
@@ -1687,6 +1690,10 @@ function loadPlanningFromScene() {
               typeof (raw as any).roadWidthMeters === 'number'
                 ? Number((raw as any).roadWidthMeters)
                 : ((kind ?? preset?.kind) === 'road' ? 2 : undefined),
+            roadLaneLines:
+              typeof (raw as any).roadLaneLines === 'boolean'
+                ? Boolean((raw as any).roadLaneLines)
+                : ((kind ?? preset?.kind) === 'road' ? false : undefined),
             roadSmoothing:
               typeof (raw as any).roadSmoothing === 'number'
                 ? Number((raw as any).roadSmoothing)
@@ -2125,6 +2132,21 @@ const roadWidthMetersModel = computed({
     const next = Number(value)
     if (!Number.isFinite(next)) return
     layer.roadWidthMeters = Math.min(10, Math.max(0.1, next))
+    markPlanningDirty()
+  },
+})
+
+const roadLaneLinesModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return false
+    return Boolean(layer.roadLaneLines)
+  },
+  set: (value: boolean) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return
+    layer.roadLaneLines = Boolean(value)
     markPlanningDirty()
   },
 })
@@ -2768,6 +2790,7 @@ function addPlanningLayer(kind: LayerKind) {
     color: getDefaultLayerColor(kind),
     locked: false,
     roadWidthMeters: kind === 'road' ? 2 : undefined,
+    roadLaneLines: kind === 'road' ? false : undefined,
     roadSmoothing: kind === 'road' ? 0.09 : undefined,
     waterSmoothing: kind === 'water' ? 0.5 : undefined,
     wallHeightMeters: kind === 'wall' ? 3 : undefined,
@@ -6594,6 +6617,19 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+
+              <div class="property-panel__block">
+                <div class="property-panel__density-title">Lane Lines</div>
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="roadLaneLinesModel"
+                    density="compact"
+                    hide-details
+                    label="Show Lane Lines"
+                  />
+                </div>
+              </div>
+            
             </template>
 
             <template v-else-if="propertyPanelLayerKind === 'water'">
