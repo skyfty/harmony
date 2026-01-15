@@ -392,6 +392,13 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
           @update:modelValue="onLaneLinesModelUpdate"
         />
 
+        <v-switch
+          :model-value="localShoulders"
+          density="compact"
+          label="Show Shoulders"
+          @update:modelValue="onShouldersModelUpdate"
+        />
+
         <v-divider class="my-2" />
 
         <div class="road-section-header">Terrain Adaptation</div>
