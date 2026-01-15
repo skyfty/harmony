@@ -5562,6 +5562,34 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // Middle mouse (button === 1) cancels any active tool and restores transform select.
+  if (event.button === 1) {
+    try {
+      // Cancel build tools / actions
+      if (activeBuildTool.value) {
+        cancelActiveBuildOperation()
+        activeBuildTool.value = null
+      }
+
+      // Clear terrain and scatter selections
+      terrainStore.setBrushOperation(null)
+      terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+
+      // Clear asset selection
+      sceneStore.selectAsset(null)
+
+      // Clear UI context
+      uiStore.setActiveSelectionContext(null)
+
+      // Restore transform toolbar select tool
+      sceneStore.setActiveTool('select')
+    } catch (e) {
+      console.warn('Failed to cancel tools on middle-click', e)
+    }
+    applyPointerDownResult({ handled: true, clearPointerTrackingState: true, preventDefault: true })
+    return
+  }
+
   const scatter = handlePointerDownScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
@@ -5608,7 +5636,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const selection = await handlePointerDownSelection(event, {
-    activeTool: props.activeTool,
+    activeTool: uiStore.activeSelectionContext ? 'blocked' : props.activeTool,
     selectedNodeIdProp: props.selectedNodeId ?? null,
     sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
     selectedNodeIds: sceneStore.selectedNodeIds,

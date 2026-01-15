@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import type { EditorTool } from '@/types/editor-tool'
 import { TRANSFORM_TOOLS, type TransformToolDefinition } from '../../types/scene-transform-tools'
+import { useUiStore } from '@/stores/uiStore'
+import { computed } from 'vue'
 
 const props = defineProps<{
   activeTool: EditorTool
 }>()
+
+const uiStore = useUiStore()
+const transformDisabled = computed(() => Boolean(uiStore.activeSelectionContext))
 
 const emit = defineEmits<{
   (event: 'change-tool', tool: EditorTool): void
 }>()
 
 function handleToolSelect(tool: TransformToolDefinition) {
+  if (transformDisabled.value) return
   emit('change-tool', tool.value)
 }
 </script>
@@ -23,11 +29,12 @@ function handleToolSelect(tool: TransformToolDefinition) {
         :key="tool.value"
         :icon="tool.icon"
         :title="`${tool.label} (${tool.key.replace('Key', '')})`"
-        :color="props.activeTool === tool.value ? 'primary' : undefined"
-        :variant="props.activeTool === tool.value ? 'flat' : 'text'"
+        :color="(!transformDisabled && props.activeTool === tool.value) ? 'primary' : undefined"
+        :variant="(!transformDisabled && props.activeTool === tool.value) ? 'flat' : 'text'"
         density="comfortable"
         class="tool-button"
         @click="handleToolSelect(tool)"
+        :disabled="transformDisabled"
       />
     </v-card>
   </div>
