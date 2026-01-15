@@ -1946,11 +1946,12 @@ function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProp
   // Component props control rendering parameters (lane lines, shoulders, smoothing, etc).
   // Do NOT overwrite geometry from component props; otherwise toggles/rebuilds can revert user edits.
   const existing = node.dynamicMesh
+  const existingWidth = existing && typeof (existing as any).width === 'number' ? Number((existing as any).width) : NaN
   node.dynamicMesh = {
     type: 'Road',
     vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
     segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
-    width: normalized.width,
+    width: Number.isFinite(existingWidth) ? existingWidth : normalized.width,
   }
 
   const runtime = getRuntimeObject(node.id)

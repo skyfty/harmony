@@ -269,7 +269,7 @@ const sceneStateById = new Map<string, SceneViewControlSnapshot>()
 const previousSceneById = new Map<string, string>()
 
 const isGroundWireframeVisible = ref(false)
-const isOtherRigidbodyWireframeVisible = ref(true)
+const isOtherRigidbodyWireframeVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
