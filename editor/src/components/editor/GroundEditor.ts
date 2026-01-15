@@ -217,6 +217,39 @@ function addScatterInstanceToNeighborIndex(session: ScatterSessionState, instanc
 	}
 }
 
+/**
+ * 判断在给定本地坐标处是否可以放置散布实例（基于索引检查邻近已有实例和预算限制）。
+ *
+ * 核心逻辑：
+ * - 通过 getScatterChunkKeyFromLocal 使用 session.definition 和 session.chunkCells 将候选位置映射到格子（chunk）行列键。
+ * - 在候选格子及其八个邻居（3x3 区域）中查找已存在的实例桶（session.neighborIndex 存储按 "row:col" 键的实例数组）。
+ * - 对每个候选已存在实例：
+ *   - 增加本次候选的 candidateChecks 计数器和全局 stampBudget.totalChecks（对外可见且被修改）。
+ *   - 若 candidateChecks 超过常量 SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX，或 stampBudget.totalChecks 超过常量 SCATTER_EXISTING_CHECKS_PER_STAMP_MAX，则视为超出检测预算，函数返回 false（表示不可放置或需跳过以节省计算）。
+ *   - 计算实例与候选位置在本地坐标系下的平方距离（dx*dx + dz*dz），若小于 spacingSq（最小允许平方距离），则返回 false（与已有实例冲突）。
+ * - 若遍历完 3x3 区域且未触发预算或距离冲突，则返回 true（表示可放置）。
+ *
+ * 注意和副作用：
+ * - stampBudget.totalChecks 是一个传入的可变对象字段，函数会对其进行累加；调用者需传入并在外部跟踪此预算。
+ * - 函数通过常量 SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX 和 SCATTER_EXISTING_CHECKS_PER_STAMP_MAX 强制单候选和单次印章（stamp）级别的检查上限。
+ * - 对 instance.localPosition 的访问使用了可选链和默认值（local?.x ?? 0 / local?.z ?? 0），因此若实例缺少位置数据会以 0 作为退化坐标。
+ *
+ * 参数说明：
+ * @param session - 当前散布会话状态（ScatterSessionState）。包含：
+ *   - definition / chunkCells：用于将本地坐标映射到格子键的必需数据（通过 getScatterChunkKeyFromLocal 使用）。
+ *   - neighborIndex：Map 或类似结构，键为 "row:col"，值为对应格子内已存在实例的数组。
+ * @param localX - 候选放置位置在本地坐标系的 X 分量（与实例 localPosition.x 采用相同坐标系）。
+ * @param localZ - 候选放置位置在本地坐标系的 Z 分量（与实例 localPosition.z 采用相同坐标系）。
+ * @param spacingSq - 最小允许距离的平方（squared spacing）。用于避免与已有实例过近的碰撞检测（使用平方距离以避免开方）。
+ * @param stampBudget - 一个包含 totalChecks 字段的对象，用于跨多次放置调用累加检查次数并在达到阈值时停止进一步检查。函数会在每次考察已有实例时递增 stampBudget.totalChecks。
+ *
+ * 返回值：
+ * @returns {boolean} - 若在预算限制内且不存在与候选位置冲突的已存在实例，则返回 true（可放置）；否则返回 false（不可放置或因超出检查预算而中止）。
+ *
+ * 相关常量：
+ * - SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX：单个候选位置允许检查的最大已存在实例数，超过则放弃该候选。
+ * - SCATTER_EXISTING_CHECKS_PER_STAMP_MAX：单次印章/操作允许的总检查数上限，超过则停止进一步检查（通过 stampBudget.totalChecks 判定）。
+ */
 function isScatterPlacementAvailableByIndex(
 	session: ScatterSessionState,
 	localX: number,
@@ -225,7 +258,6 @@ function isScatterPlacementAvailableByIndex(
 	stampBudget: { totalChecks: number },
 ): boolean {
 	const { chunkRow, chunkColumn } = getScatterChunkKeyFromLocal(session.definition, session.chunkCells, localX, localZ)
-	let candidateChecks = 0
 	for (let dr = -1; dr <= 1; dr += 1) {
 		for (let dc = -1; dc <= 1; dc += 1) {
 			const key = `${chunkRow + dr}:${chunkColumn + dc}`
@@ -234,12 +266,8 @@ function isScatterPlacementAvailableByIndex(
 				continue
 			}
 			for (const instance of bucket) {
-				candidateChecks += 1
 				stampBudget.totalChecks += 1
-				if (
-					candidateChecks > SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX ||
-					stampBudget.totalChecks > SCATTER_EXISTING_CHECKS_PER_STAMP_MAX
-				) {
+				if (stampBudget.totalChecks > SCATTER_EXISTING_CHECKS_PER_STAMP_MAX ) {
 					return false
 				}
 				const local = instance.localPosition
