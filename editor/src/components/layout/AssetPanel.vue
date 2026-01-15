@@ -3004,8 +3004,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .asset-card.is-selected {
-  border-color: rgba(0, 172, 193, 0.9);
-  box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);
+  border-color: rgba(255, 183, 77, 1); /* amber */
+  box-shadow: 0 10px 30px rgba(255, 183, 77, 0.32), 0 0 0 4px rgba(255, 183, 77, 0.08);
+  transform: translateY(-4px) scale(1.02);
 }
 
 .asset-card.is-dragging {
@@ -3024,6 +3025,22 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   height: 96px;
   position: relative;
   overflow: hidden;
+}
+
+.asset-selected-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: rgba(255, 183, 77, 0.12);
+  border-radius: 50%;
+  backdrop-filter: blur(2px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
 
 .asset-select-control {
