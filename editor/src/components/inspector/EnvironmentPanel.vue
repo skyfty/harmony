@@ -729,6 +729,22 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     return
   }
   if (!asset) {
+    if (assetDialogTarget.value === 'background') {
+      sceneStore.patchEnvironmentSettings({
+        background: {
+          mode: environmentSettings.value.background.mode,
+          solidColor: environmentSettings.value.background.solidColor,
+          hdriAssetId: '',
+        },
+      })
+    } else {
+      sceneStore.patchEnvironmentSettings({
+        environmentMap: {
+          mode: environmentSettings.value.environmentMap.mode,
+          hdriAssetId: '',
+        },
+      })
+    }
     assetDialogVisible.value = false
     return
   }

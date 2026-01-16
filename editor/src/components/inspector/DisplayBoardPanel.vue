@@ -299,7 +299,12 @@ function handleOpenAssetDialog(event: MouseEvent) {
 }
 
 async function handleAssetDialogUpdate(asset: ProjectAsset | null) {
-  if (!asset || !componentEnabled.value) {
+  if (!componentEnabled.value) {
+    return
+  }
+  if (!asset) {
+    await handleClearAsset()
+    assetDialogVisible.value = false
     return
   }
   if (!isSupportedAsset(asset)) {

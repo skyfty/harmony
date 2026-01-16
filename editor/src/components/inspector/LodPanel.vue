@@ -223,6 +223,7 @@ async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise
     return
   }
   if (!asset) {
+    assignModelAsset(index, null)
     modelAssetDialogVisible.value = false
     return
   }

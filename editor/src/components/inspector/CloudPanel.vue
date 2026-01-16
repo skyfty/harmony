@@ -475,6 +475,11 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     return
   }
   if (!asset) {
+    if (target === 'sphericalTexture') {
+      applySphericalTexture('')
+    } else {
+      applyCubeFaceSource(target, '')
+    }
     assetDialogVisible.value = false
     return
   }

@@ -173,6 +173,13 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     return
   }
   if (!asset) {
+    if (target === 'body') {
+      bodyFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: null })
+    } else {
+      jointFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: null })
+    }
     assetDialogVisible.value = false
     return
   }
@@ -555,7 +562,6 @@ function applyAirWallUpdate(rawValue: unknown) {
             />
             <div class="asset-text">
               <div class="asset-name">No wall body model assigned</div>
-              <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
             </div>
           </div>
           <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
@@ -588,7 +594,6 @@ function applyAirWallUpdate(rawValue: unknown) {
             />
             <div class="asset-text">
               <div class="asset-name">No wall joint model assigned</div>
-              <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
             </div>
           </div>
           <p v-if="jointFeedbackMessage" class="asset-feedback">{{ jointFeedbackMessage }}</p>

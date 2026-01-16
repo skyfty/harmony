@@ -415,6 +415,11 @@ async function handleAssetClick(asset: ProjectAsset) {
   }
 }
 
+function handleClearSelection() {
+  selectedAssetId.value = ''
+  emit('update:asset', null)
+}
+
 function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
   if (!asset || !asset.id) {
     return asset
@@ -501,6 +506,18 @@ function resolveInitials(asset: ProjectAsset): string {
             </div>
 
             <div v-else ref="gridRef" class="asset-dialog__grid">
+              <div
+                class="asset-dialog__tile asset-dialog__tile--none"
+                :class="{ 'asset-dialog__tile--selected': !selectedAssetId }"
+                data-asset-id="__none__"
+                @click="handleClearSelection"
+              >
+                <div class="asset-dialog__thumbnail">
+                  <div class="asset-dialog__thumbnail-placeholder asset-dialog__thumbnail-placeholder--none">
+                    <v-icon size="28">mdi-close-circle-outline</v-icon>
+                  </div>
+                </div>
+              </div>
               <div
                 v-for="asset in filteredAssets"
                 :key="asset.id"
@@ -677,6 +694,18 @@ function resolveInitials(asset: ProjectAsset): string {
   font-size: 1.1rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.8);
+}
+
+.asset-dialog__thumbnail-placeholder--none {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  color: rgba(233, 236, 241, 0.9);
+}
+
+.asset-dialog__tile--none .asset-dialog__thumbnail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
 }
 
 .asset-dialog__name {

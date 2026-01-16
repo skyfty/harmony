@@ -769,9 +769,14 @@ function handleTextureUpdate(asset: ProjectAsset | null) {
   const slot = assetDialogSlot.value
   assetDialogSelectedId.value = asset?.id ?? ''
   if (!asset || !slot) {
+    if (slot) {
+      assignTexture(slot, null)
+    }
+    assetDialogVisible.value = false
     return
   }
   applyTextureAsset(slot, asset)
+  assetDialogVisible.value = false
 }
 
 function handleTextureAssetCancel() {
