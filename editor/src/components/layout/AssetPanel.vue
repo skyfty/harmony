@@ -599,7 +599,6 @@ function refreshGallery() {
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
   sceneStore.setDraggingAssetId(asset.id)
-  selectAsset(asset)
   assetCacheStore.touch(preparedAsset.id)
 
   let preview: HTMLDivElement | null = null

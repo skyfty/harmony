@@ -164,8 +164,7 @@ type ScatterSessionState = {
 
 let scatterSession: ScatterSessionState | null = null
 
-// (removed unused scatter constants)
-const SCATTER_EXISTING_CHECKS_PER_CANDIDATE_MAX = 256
+// Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
 
