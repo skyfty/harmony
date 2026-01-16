@@ -4,6 +4,8 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import AssetDialog from '@/components/common/AssetDialog.vue'
+import type { ProjectAsset } from '@/types/project-asset'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -28,6 +30,17 @@ const localIsAirWall = ref<boolean>(false)
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
+
+const assetDialogVisible = ref(false)
+const assetDialogSelectedId = ref('')
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const assetDialogTarget = ref<'body' | 'joint' | null>(null)
+const assetDialogTitle = computed(() => {
+  if (assetDialogTarget.value === 'joint') {
+    return 'Select Wall Joint Asset'
+  }
+  return 'Select Wall Body Asset'
+})
 
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
@@ -89,6 +102,15 @@ watch(selectedNode, () => {
   jointFeedbackMessage.value = null
 })
 
+watch(assetDialogVisible, (open) => {
+  if (open) {
+    return
+  }
+  assetDialogAnchor.value = null
+  assetDialogSelectedId.value = ''
+  assetDialogTarget.value = null
+})
+
 const smoothingDisplay = computed(() => `${Math.round(localSmoothing.value * 100)}%`)
 
 function serializeAssetDragPayload(raw: string | null): string | null {
@@ -130,6 +152,47 @@ function validateWallAssetId(assetId: string): string | null {
     return 'Only model assets can be assigned here.'
   }
   return null
+}
+
+function openWallAssetDialog(target: 'body' | 'joint', event?: MouseEvent): void {
+  assetDialogTarget.value = target
+  assetDialogSelectedId.value =
+    target === 'body'
+      ? wallComponent.value?.props?.bodyAssetId ?? ''
+      : wallComponent.value?.props?.jointAssetId ?? ''
+  assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  assetDialogVisible.value = true
+}
+
+function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  const target = assetDialogTarget.value
+  if (!nodeId || !component || !target) {
+    assetDialogVisible.value = false
+    return
+  }
+  if (!asset) {
+    assetDialogVisible.value = false
+    return
+  }
+  if (asset.type !== 'model' && asset.type !== 'mesh') {
+    console.warn('Selected asset is not a model/mesh')
+    return
+  }
+
+  if (target === 'body') {
+    bodyFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: asset.id })
+  } else {
+    jointFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: asset.id })
+  }
+  assetDialogVisible.value = false
+}
+
+function handleWallAssetDialogCancel(): void {
+  assetDialogVisible.value = false
 }
 
 async function assignWallBodyAsset(event: DragEvent) {
@@ -478,6 +541,7 @@ function applyAirWallUpdate(rawValue: unknown) {
             <div
               class="asset-thumbnail"
               :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
+              @click.stop="openWallAssetDialog('body', $event)"
             />
             <div class="asset-text">
               <div class="asset-name">{{ bodyAsset.name }}</div>
@@ -485,7 +549,10 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
           </div>
           <div v-else class="asset-summary empty">
-            <div class="asset-thumbnail placeholder" />
+            <div
+              class="asset-thumbnail placeholder"
+              @click.stop="openWallAssetDialog('body', $event)"
+            />
             <div class="asset-text">
               <div class="asset-name">No wall body model assigned</div>
               <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
@@ -507,6 +574,7 @@ function applyAirWallUpdate(rawValue: unknown) {
             <div
               class="asset-thumbnail"
               :style="jointAsset.thumbnail?.trim() ? { backgroundImage: `url(${jointAsset.thumbnail})` } : (jointAsset.previewColor ? { backgroundColor: jointAsset.previewColor } : undefined)"
+              @click.stop="openWallAssetDialog('joint', $event)"
             />
             <div class="asset-text">
               <div class="asset-name">{{ jointAsset.name }}</div>
@@ -514,7 +582,10 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
           </div>
           <div v-else class="asset-summary empty">
-            <div class="asset-thumbnail placeholder" />
+            <div
+              class="asset-thumbnail placeholder"
+              @click.stop="openWallAssetDialog('joint', $event)"
+            />
             <div class="asset-text">
               <div class="asset-name">No wall joint model assigned</div>
               <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
@@ -523,6 +594,16 @@ function applyAirWallUpdate(rawValue: unknown) {
           <p v-if="jointFeedbackMessage" class="asset-feedback">{{ jointFeedbackMessage }}</p>
         </div>
       </div>
+
+      <AssetDialog
+        v-model="assetDialogVisible"
+        v-model:assetId="assetDialogSelectedId"
+        assetType="model,mesh"
+        :title="assetDialogTitle"
+        :anchor="assetDialogAnchor"
+        @update:asset="handleWallAssetDialogUpdate"
+        @cancel="handleWallAssetDialogCancel"
+      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -624,6 +705,7 @@ function applyAirWallUpdate(rawValue: unknown) {
   border-radius: 6px;
   background-size: cover;
   background-position: center;
+  cursor: pointer;
 }
 
 .asset-thumbnail.placeholder {
