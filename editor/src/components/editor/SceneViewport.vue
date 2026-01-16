@@ -5744,8 +5744,13 @@ async function handlePointerDown(event: PointerEvent) {
   if (selection) {
     applyPointerDownResult(selection)
 
-    // Block MapControls left-pan when selection handling is active.
-    if (event.button === 0 && effectiveSelectionTool === 'select') {
+    // Only block MapControls left-pan when we are starting a selection drag
+    // (i.e. dragging the currently selected object). Otherwise allow pan.
+    if (
+      event.button === 0 &&
+      effectiveSelectionTool === 'select' &&
+      Boolean(pointerTrackingState?.selectionDrag)
+    ) {
       event.stopPropagation()
       event.stopImmediatePropagation()
     }
