@@ -1076,10 +1076,10 @@ watch(
     if (ctx !== 'asset-panel' && sceneStore.selectedAssetId) {
       sceneStore.selectAsset(null)
     }
-    if (ctx !== 'scatter' && (terrainStore.scatterSelectedAsset ?? null)) {
+    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && (terrainStore.scatterSelectedAsset ?? null)) {
       terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
     }
-    if (ctx !== 'scatter' && scatterEraseModeActive.value) {
+    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && scatterEraseModeActive.value) {
       exitScatterEraseMode()
     }
     if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
@@ -1171,6 +1171,9 @@ function exitScatterEraseMode() {
     return
   }
   scatterEraseModeActive.value = false
+  if (uiStore.activeSelectionContext === 'scatter-erase') {
+    uiStore.setActiveSelectionContext(null)
+  }
   pointerInteraction.clearIfKind('repairClick')
   instancedEraseDragState = null
   clearRepairHoverHighlight(true)
@@ -1197,6 +1200,7 @@ function toggleScatterEraseMode() {
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
+  uiStore.setActiveSelectionContext('scatter-erase')
   if (props.activeTool !== 'select') {
     emit('changeTool', 'select')
   }
@@ -8698,7 +8702,14 @@ defineExpose<SceneViewportHandle>({
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
-      <canvas ref="canvasRef" :class="['viewport-canvas', buildToolCursorClass]" />
+      <canvas
+        ref="canvasRef"
+        :class="[
+          'viewport-canvas',
+          buildToolCursorClass,
+          { 'cursor-scatter-erase': scatterEraseModeActive },
+        ]"
+      />
     </div>
     <input
       ref="groundTextureInputRef"
@@ -8825,6 +8836,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-floor,
 .viewport-canvas.cursor-floor:active {
   cursor: copy !important;
+}
+
+.viewport-canvas.cursor-scatter-erase,
+.viewport-canvas.cursor-scatter-erase:active {
+  cursor: url('/cursors/scatter-erase.svg') 4 20, crosshair !important;
 }
 
 .protagonist-preview {
