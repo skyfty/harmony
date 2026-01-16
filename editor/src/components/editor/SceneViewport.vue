@@ -1079,6 +1079,9 @@ watch(
     if (ctx !== 'scatter' && (terrainStore.scatterSelectedAsset ?? null)) {
       terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
     }
+    if (ctx !== 'scatter' && scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
     if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
       terrainStore.setBrushOperation(null)
     }
@@ -1187,6 +1190,9 @@ function toggleScatterEraseMode() {
   }
   // Scatter erase and scatter painting are mutually exclusive; clear any scatter asset selection when enabling erase mode.
   terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+  if (sceneStore.selectedAssetId) {
+    sceneStore.selectAsset(null)
+  }
   terrainStore.setBrushOperation(null)
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
@@ -1202,6 +1208,17 @@ watch(scatterSelectedAsset, (asset) => {
     exitScatterEraseMode()
   }
 })
+
+// If a model/mesh/prefab asset is selected from the asset panel, cancel
+// scatter-erase mode so painting/erasing cannot run while placing assets.
+watch(
+  () => sceneStore.selectedAssetId,
+  (assetId) => {
+    if (assetId && scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
+  },
+)
 
 watch(brushOperation, (operation) => {
   if (operation && scatterEraseModeActive.value) {

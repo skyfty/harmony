@@ -90,7 +90,8 @@ export function handlePointerDownScatter(
 
   // Scatter erase mode: if continuous instanced models exist, allow camera controls.
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0) {
+  // If Ground is selected, let ground-scatter erase handle the click instead.
+  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0 && !ctx.selectedNodeIsGround) {
     ctx.beginRepairClick(event)
     return { handled: true, clearPointerTrackingState: true }
   }
