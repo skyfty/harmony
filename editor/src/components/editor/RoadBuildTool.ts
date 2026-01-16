@@ -507,7 +507,7 @@ export function createRoadBuildTool(options: {
         return false
       }
 
-      if (event.button === 1) {
+      if (event.button === 0) {
         if (options.isAltOverrideActive()) {
           return false
         }

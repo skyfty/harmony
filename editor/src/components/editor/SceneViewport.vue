@@ -1624,6 +1624,37 @@ let viewportToolbarResizeObserver: ResizeObserver | null = null
 
 let pointerTrackingState: PointerTrackingState | null = null
 
+type MiddleClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+let middleClickSessionState: MiddleClickSessionState | null = null
+
+type LeftEmptyClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey: boolean
+}
+
+let leftEmptyClickSessionState: LeftEmptyClickSessionState | null = null
+
+type AssetPlacementClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  assetId: string
+}
+
+let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
+
 type ContinuousInstancedCreateState = {
   pointerId: number
   nodeId: string
@@ -1653,7 +1684,10 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
   if (!canvasRef.value || !camera || !scene) {
     return false
   }
-  if (event.button !== 1) {
+  if (event.button !== 0) {
+    return false
+  }
+  if (!event.shiftKey) {
     return false
   }
   if (props.activeTool !== 'select') {
@@ -3776,7 +3810,7 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = new MapControls(camera, domElement) 
+  mapControls = new MapControls(camera, domElement)
   if (previousTarget) {
     mapControls.target.copy(previousTarget)
   } else {
@@ -3785,6 +3819,12 @@ function applyCameraControlMode() {
   mapControls.enabled = previousEnabled
   mapControls.minDistance = 2;
   mapControls.maxDistance = 200;
+
+  // Explicitly map middle-button drag to pan (same as left-button pan).
+  // Tool modes will capture/stopPropagation on left; middle remains the primary camera-pan input.
+  mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN
+  mapControls.mouseButtons.MIDDLE = THREE.MOUSE.PAN
+
   mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
   if (gizmoControls && mapControls) {
@@ -5562,33 +5602,37 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  // Middle mouse (button === 1) cancels any active tool and restores transform select.
+  // Track middle click vs drag so we can preserve "middle click cancels tool" while
+  // ensuring "middle drag pans camera" does not cancel tools on release.
   if (event.button === 1) {
-    try {
-      // Cancel build tools / actions
-      if (activeBuildTool.value) {
-        cancelActiveBuildOperation()
-        activeBuildTool.value = null
-      }
-
-      // Clear terrain and scatter selections
-      terrainStore.setBrushOperation(null)
-      terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
-
-      // Clear asset selection
-      sceneStore.selectAsset(null)
-
-      // Clear UI context
-      uiStore.setActiveSelectionContext(null)
-
-      // Restore transform toolbar select tool
-      sceneStore.setActiveTool('select')
-    } catch (e) {
-      console.warn('Failed to cancel tools on middle-click', e)
+    middleClickSessionState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
     }
-    applyPointerDownResult({ handled: true, clearPointerTrackingState: true, preventDefault: true })
+  }
+
+  const selectedAssetId = sceneStore.selectedAssetId
+  const selectedAsset = selectedAssetId ? sceneStore.getAsset(selectedAssetId) : null
+  const canPlaceSelectedAsset =
+    Boolean(selectedAssetId) &&
+    Boolean(selectedAsset) &&
+    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab') &&
+    !sceneStore.draggingAssetId
+
+  if (event.button === 0 && canPlaceSelectedAsset) {
+    assetPlacementClickSessionState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      assetId: selectedAssetId as string,
+    }
     return
   }
+
+  
 
   const scatter = handlePointerDownScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
@@ -5635,8 +5679,28 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
+
+  // Select mode: left click on empty space should clear selection (if it's a click) or pan the camera (if it's a drag).
+  // We detect empty-space on pointerdown and decide on pointerup using a drag threshold.
+  if (event.button === 0 && effectiveSelectionTool === 'select') {
+    const hit = pickNodeAtPointer(event) ?? pickActiveSelectionBoundingBoxHit(event)
+    if (!hit) {
+      leftEmptyClickSessionState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      }
+      return
+    }
+  }
+
   const selection = await handlePointerDownSelection(event, {
-    activeTool: uiStore.activeSelectionContext ? 'blocked' : props.activeTool,
+    activeTool: effectiveSelectionTool,
     selectedNodeIdProp: props.selectedNodeId ?? null,
     sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
     selectedNodeIds: sceneStore.selectedNodeIds,
@@ -5658,11 +5722,41 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (selection) {
     applyPointerDownResult(selection)
+
+    // Block MapControls left-pan when selection handling is active.
+    if (event.button === 0 && effectiveSelectionTool === 'select') {
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
     return
   }
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
+    const dx = event.clientX - middleClickSessionState.startX
+    const dy = event.clientY - middleClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      middleClickSessionState.moved = true
+    }
+  }
+
+  if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId && !leftEmptyClickSessionState.moved) {
+    const dx = event.clientX - leftEmptyClickSessionState.startX
+    const dy = event.clientY - leftEmptyClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      leftEmptyClickSessionState.moved = true
+    }
+  }
+
+  if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId && !assetPlacementClickSessionState.moved) {
+    const dx = event.clientX - assetPlacementClickSessionState.startX
+    const dy = event.clientY - assetPlacementClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      assetPlacementClickSessionState.moved = true
+    }
+  }
+
   const applyPointerMoveResult = (result: PointerMoveResult) => {
     if (result.preventDefault) {
       event.preventDefault()
@@ -5779,7 +5873,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 }
 
-function handlePointerUp(event: PointerEvent) {
+async function handlePointerUp(event: PointerEvent) {
   try {
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
@@ -5804,7 +5898,9 @@ function handlePointerUp(event: PointerEvent) {
         event.stopImmediatePropagation()
       }
     }
-
+    // NOTE: middle-button cancellation moved later so other tools (drag/erase/build)
+    // which may use middle-button can handle the event first. If no handler
+    // processed the pointerup, we'll cancel active tools below.
     const drag = handlePointerUpDrag(event, {
       roadDefaultWidth: ROAD_DEFAULT_WIDTH,
       roadVertexDragState,
@@ -5883,14 +5979,116 @@ function handlePointerUp(event: PointerEvent) {
       applyPointerUpResult(selection)
       return
     }
+
+    // Asset panel selection: left click places the selected model/mesh/prefab at cursor.
+    // Dragging should pan the camera and must not place assets.
+    if (event.button === 0 && assetPlacementClickSessionState?.pointerId === event.pointerId) {
+      const session = assetPlacementClickSessionState
+      assetPlacementClickSessionState = null
+
+      if (!session.moved) {
+        const asset = sceneStore.getAsset(session.assetId)
+        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
+          const point = computePointerDropPoint(event)
+          const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
+          snapVectorToGrid(spawnPoint)
+          const parentGroupId = resolveSelectedGroupDropParent()
+          try {
+            const selectedId = props.selectedNodeId
+            const isEmptySelectedGroup = (() => {
+              if (!selectedId || parentGroupId !== selectedId) return false
+              const { nodeMap } = buildHierarchyMaps()
+              const selectedNode = nodeMap.get(selectedId)
+              if (!selectedNode || selectedNode.nodeType !== 'Group') return false
+              return !selectedNode.children || selectedNode.children.length === 0
+            })()
+
+            if (isEmptySelectedGroup && parentGroupId) {
+              await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint)
+            } else {
+              await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
+                parentId: parentGroupId,
+                preserveWorldPosition: Boolean(parentGroupId),
+              })
+            }
+          } catch (error) {
+            console.warn('Failed to spawn asset from selection click', session.assetId, error)
+          }
+        }
+      }
+      return
+    }
+
+    // Select mode: left click on empty space clears selection (only if it was a click, not a drag-pan).
+    if (event.button === 0 && leftEmptyClickSessionState?.pointerId === event.pointerId) {
+      const session = leftEmptyClickSessionState
+      // Clear session first to avoid re-entrancy issues.
+      leftEmptyClickSessionState = null
+
+      if (!session.moved) {
+        const isToggle = session.ctrlKey || session.metaKey
+        const isRange = session.shiftKey
+        sceneStore.clearSelectedRoadSegment()
+        if (!isToggle && !isRange) {
+          emitSelectionChange([])
+        }
+      }
+      return
+    }
+
+    // If middle mouse was released and no other handler processed the event,
+    // cancel active tools and restore select, but only if this was a click (no drag).
+    // Middle drag is reserved for camera panning.
+    if (event.button === 1) {
+      const wasDrag = Boolean(middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState?.moved)
+      if (wasDrag) {
+        return
+      }
+      try {
+        if (activeBuildTool.value) {
+          cancelActiveBuildOperation()
+          activeBuildTool.value = null
+        }
+        terrainStore.setBrushOperation(null)
+        terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+        sceneStore.selectAsset(null)
+        uiStore.setActiveSelectionContext(null)
+        sceneStore.setActiveTool('select')
+      } catch (e) {
+        console.warn('Failed to cancel tools on middle-click up', e)
+      }
+      applyPointerUpResult({ handled: true, clearPointerTrackingState: true, preventDefault: true })
+      return
+    }
   } finally {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
+
+    if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+      middleClickSessionState = null
+    }
+
+    if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+      leftEmptyClickSessionState = null
+    }
+
+    if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
+      assetPlacementClickSessionState = null
+    }
   }
 }
 
 function handlePointerCancel(event: PointerEvent) {
   pointerInteraction.clearIfPointer(event.pointerId)
+  if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+    middleClickSessionState = null
+  }
+  if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+    leftEmptyClickSessionState = null
+  }
+  if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
+    assetPlacementClickSessionState = null
+  }
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
     roadVertexDragState = null
@@ -6162,6 +6360,27 @@ function isAssetDrag(event: DragEvent): boolean {
 }
 
 function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
+  if (!camera || !canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  pointer.set(ndcX, ndcY)
+  raycaster.setFromCamera(pointer, camera)
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return snapVectorToGrid(planeHit.clone())
+  }
+  const intersections = collectSceneIntersections()
+  if (intersections.length > 0) {
+    const first = intersections[0]
+    const point = first?.point.clone() ?? null
+    return point ? snapVectorToGrid(point) : null
+  }
+  return null
+}
+
+function computePointerDropPoint(event: PointerEvent): THREE.Vector3 | null {
   if (!camera || !canvasRef.value) return null
   const rect = canvasRef.value.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return null

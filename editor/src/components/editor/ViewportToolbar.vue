@@ -410,9 +410,9 @@ const alignButtons = [
   { mode: 'axis-z', icon: 'mdi-axis-z-arrow', title: 'Align Z Axis' },
 ] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
 const buildToolButtons = [
-  { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Middle Mouse)' },
-  { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Middle Mouse)' },
-  { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Middle Mouse)' },
+  { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
+  { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
+  { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 

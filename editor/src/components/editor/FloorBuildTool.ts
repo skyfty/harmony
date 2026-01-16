@@ -150,14 +150,6 @@ export function createFloorBuildTool(options: {
         return false
       }
 
-      // Block middle-button camera panning while in floor build mode.
-      if (event.button === 1 && !options.isAltOverrideActive()) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return true
-      }
-
       // Right click ends the build only if it's a click (not a drag used for rotating the camera).
       if (event.button === 2 && session) {
         rightClickState = {
@@ -200,7 +192,7 @@ export function createFloorBuildTool(options: {
         return false
       }
 
-      if (event.button === 1) {
+      if (event.button === 0) {
         if (options.isAltOverrideActive()) {
           return false
         }
