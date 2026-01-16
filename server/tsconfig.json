@@ -8,7 +8,9 @@
     "rootDir": "src",
     "baseUrl": "./src",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@schema/*": ["../schema/*"],
+      "@schema": ["../schema"]
     },
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
