@@ -1011,6 +1011,12 @@ export function applyMaterialOverrides(
       return;
     }
 
+    // Never apply material overrides to the invisible instanced pick proxy.
+    // It is an editor interaction helper and should remain non-rendered.
+    if (mesh.userData?.instancedPickProxy) {
+      return;
+    }
+
     const overrideMaterial = Boolean(mesh.userData?.overrideMaterial)
     if (overrideMaterial) {
       if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
@@ -1093,6 +1099,11 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
   target.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
+      return;
+    }
+
+    // Never apply material overrides to the invisible instanced pick proxy.
+    if (mesh.userData?.instancedPickProxy) {
       return;
     }
 

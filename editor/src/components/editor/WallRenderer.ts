@@ -167,6 +167,52 @@ function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z'
 
 export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
+  const wallAssetWaiters = new Map<string, Set<string>>()
+  const resyncSignatureKeyByNodeId = new Map<string, string>()
+
+  const pendingResyncNodeIds = new Set<string>()
+  let wallResyncRafHandle: number | null = null
+
+  const FALLBACK_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+
+  function scheduleWallResync(nodeId: string): void {
+    pendingResyncNodeIds.add(nodeId)
+
+    if (wallResyncRafHandle !== null) {
+      return
+    }
+
+    const raf =
+      typeof globalThis !== 'undefined' && typeof globalThis.requestAnimationFrame === 'function'
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : null
+
+    const schedule = (callback: () => void) => {
+      if (raf) {
+        wallResyncRafHandle = raf(callback)
+        return
+      }
+      // Fallback: microtask flush (shouldn't happen in the editor runtime).
+      wallResyncRafHandle = 1
+      void Promise.resolve().then(callback)
+    }
+
+    schedule(() => {
+      wallResyncRafHandle = null
+      const nodeIds = Array.from(pendingResyncNodeIds)
+      pendingResyncNodeIds.clear()
+
+      nodeIds.forEach((id) => {
+        const node = options.getNodeById(id)
+        const object = options.getObjectById(id)
+        if (!node || !object) {
+          return
+        }
+        const signatureKey = resyncSignatureKeyByNodeId.get(id) ?? FALLBACK_SIGNATURE_KEY
+        syncWallContainer(object, node, signatureKey)
+      })
+    })
+  }
 
   function computeWallBodyLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
@@ -354,7 +400,13 @@ export function createWallRenderer(options: WallRendererOptions) {
     return matrices
   }
 
-  function scheduleWallAssetLoad(assetId: string, nodeId: string) {
+  function scheduleWallAssetLoad(assetId: string, nodeId: string, signatureKey: string) {
+    // Track all wall nodes waiting on this asset so we can resync them once.
+    resyncSignatureKeyByNodeId.set(nodeId, signatureKey)
+    const waiters = wallAssetWaiters.get(assetId) ?? new Set<string>()
+    waiters.add(nodeId)
+    wallAssetWaiters.set(assetId, waiters)
+
     if (wallModelRequestCache.has(assetId)) {
       return
     }
@@ -375,13 +427,18 @@ export function createWallRenderer(options: WallRendererOptions) {
           options.assetCacheStore.releaseInMemoryBlob(assetId)
         }
 
-        const node = options.getNodeById(nodeId)
-        const object = options.getObjectById(nodeId)
-        if (node && object) {
-          syncWallContainer(object, node, '__harmonyDynamicMeshSignature')
+        // Resync all nodes that were waiting on this asset in a single frame.
+        const waitingIds = wallAssetWaiters.get(assetId)
+        if (waitingIds && waitingIds.size) {
+          waitingIds.forEach((id) => scheduleWallResync(id))
+          wallAssetWaiters.delete(assetId)
+        } else {
+          scheduleWallResync(nodeId)
         }
       } catch (error) {
         console.warn('Failed to load wall model asset', assetId, error)
+      } finally {
+        wallModelRequestCache.delete(assetId)
       }
     })()
 
@@ -491,13 +548,13 @@ export function createWallRenderer(options: WallRendererOptions) {
     const needsJointLoad = jointAssetId && !getCachedModelObject(jointAssetId)
     const needsCapLoad = endCapAssetId && !getCachedModelObject(endCapAssetId)
     if (bodyAssetId && needsBodyLoad) {
-      scheduleWallAssetLoad(bodyAssetId, node.id)
+      scheduleWallAssetLoad(bodyAssetId, node.id, signatureKey)
     }
     if (jointAssetId && needsJointLoad) {
-      scheduleWallAssetLoad(jointAssetId, node.id)
+      scheduleWallAssetLoad(jointAssetId, node.id, signatureKey)
     }
     if (endCapAssetId && needsCapLoad) {
-      scheduleWallAssetLoad(endCapAssetId, node.id)
+      scheduleWallAssetLoad(endCapAssetId, node.id, signatureKey)
     }
     if (needsBodyLoad || needsJointLoad || needsCapLoad) {
       // While loading, keep the default wall mesh visible (avoid disappearing walls).
