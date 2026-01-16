@@ -24,6 +24,7 @@ export interface WallComponentProps {
   isAirWall: boolean
   bodyAssetId?: string | null
   jointAssetId?: string | null
+  endCapAssetId?: string | null
 }
 
 export function clampWallProps(props: Partial<WallComponentProps> | null | undefined): WallComponentProps {
@@ -57,6 +58,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     isAirWall: normalizedIsAirWall,
     bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
     jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
+    endCapAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.endCapAssetId),
   }
 }
 
@@ -70,6 +72,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       isAirWall: false,
       bodyAssetId: null,
       jointAssetId: null,
+      endCapAssetId: null,
     }
   }
   const base = mesh.segments[0]
@@ -91,6 +94,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
     jointAssetId: props.jointAssetId ?? null,
+    endCapAssetId: props.endCapAssetId ?? null,
   }
 }
 
@@ -158,6 +162,7 @@ export function createWallComponentState(
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
+    endCapAssetId: overrides?.endCapAssetId ?? defaults.endCapAssetId,
   })
   return {
     id: options.id ?? '',

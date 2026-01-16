@@ -34,10 +34,13 @@ const isApplyingDimensions = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogTarget = ref<'body' | 'joint' | null>(null)
+const assetDialogTarget = ref<'body' | 'joint' | 'cap' | null>(null)
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'joint') {
     return 'Select Wall Joint Asset'
+  }
+  if (assetDialogTarget.value === 'cap') {
+    return 'Select Wall End Cap Asset'
   }
   return 'Select Wall Body Asset'
 })
@@ -49,12 +52,16 @@ const wallComponent = computed(
 
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
 const jointDropAreaRef = ref<HTMLElement | null>(null)
+const capDropAreaRef = ref<HTMLElement | null>(null)
 const bodyDropActive = ref(false)
 const jointDropActive = ref(false)
+const capDropActive = ref(false)
 const bodyDropProcessing = ref(false)
 const jointDropProcessing = ref(false)
+const capDropProcessing = ref(false)
 const bodyFeedbackMessage = ref<string | null>(null)
 const jointFeedbackMessage = ref<string | null>(null)
+const capFeedbackMessage = ref<string | null>(null)
 
 const bodyAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyAssetId
@@ -66,6 +73,14 @@ const bodyAsset = computed(() => {
 
 const jointAsset = computed(() => {
   const assetId = wallComponent.value?.props?.jointAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const capAsset = computed(() => {
+  const assetId = (wallComponent.value?.props as any)?.endCapAssetId as string | null | undefined
   if (!assetId) {
     return null
   }
@@ -96,10 +111,13 @@ watch(
 watch(selectedNode, () => {
   bodyDropActive.value = false
   jointDropActive.value = false
+  capDropActive.value = false
   bodyDropProcessing.value = false
   jointDropProcessing.value = false
+  capDropProcessing.value = false
   bodyFeedbackMessage.value = null
   jointFeedbackMessage.value = null
+  capFeedbackMessage.value = null
 })
 
 watch(assetDialogVisible, (open) => {
@@ -154,12 +172,14 @@ function validateWallAssetId(assetId: string): string | null {
   return null
 }
 
-function openWallAssetDialog(target: 'body' | 'joint', event?: MouseEvent): void {
+function openWallAssetDialog(target: 'body' | 'joint' | 'cap', event?: MouseEvent): void {
   assetDialogTarget.value = target
   assetDialogSelectedId.value =
     target === 'body'
       ? wallComponent.value?.props?.bodyAssetId ?? ''
-      : wallComponent.value?.props?.jointAssetId ?? ''
+      : target === 'joint'
+        ? wallComponent.value?.props?.jointAssetId ?? ''
+        : ((wallComponent.value?.props as any)?.endCapAssetId ?? '')
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
@@ -176,9 +196,12 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     if (target === 'body') {
       bodyFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: null })
-    } else {
+    } else if (target === 'joint') {
       jointFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: null })
+    } else {
+      capFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: null } as any)
     }
     assetDialogVisible.value = false
     return
@@ -191,9 +214,12 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   if (target === 'body') {
     bodyFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: asset.id })
-  } else {
+  } else if (target === 'joint') {
     jointFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: asset.id })
+  } else {
+    capFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: asset.id } as any)
   }
   assetDialogVisible.value = false
 }
@@ -283,6 +309,48 @@ async function assignWallJointAsset(event: DragEvent) {
     jointFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
   } finally {
     jointDropProcessing.value = false
+  }
+}
+
+async function assignWallCapAsset(event: DragEvent) {
+  event.preventDefault()
+  capDropActive.value = false
+  capFeedbackMessage.value = null
+
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  if (capDropProcessing.value) {
+    return
+  }
+
+  const assetId = resolveDragAssetId(event)
+  if (!assetId) {
+    capFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
+    return
+  }
+
+  const invalid = validateWallAssetId(assetId)
+  if (invalid) {
+    capFeedbackMessage.value = invalid
+    return
+  }
+
+  if (assetId === (wallComponent.value?.props as any)?.endCapAssetId) {
+    capFeedbackMessage.value = 'This model is already assigned.'
+    return
+  }
+
+  capDropProcessing.value = true
+  try {
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: assetId } as any)
+  } catch (error) {
+    console.error('Failed to assign wall end cap asset model', error)
+    capFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
+  } finally {
+    capDropProcessing.value = false
   }
 }
 
@@ -565,6 +633,39 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
           </div>
           <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
+        </div>
+
+        <div
+          class="asset-model-panel"
+          ref="capDropAreaRef"
+          :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
+          @dragenter.prevent="capDropActive = true"
+          @dragover.prevent="capDropActive = true"
+          @dragleave="(e) => { if (shouldDeactivateDropArea(capDropAreaRef, e)) capDropActive = false }"
+          @drop="assignWallCapAsset"
+        >
+          <div v-if="capAsset" class="asset-summary">
+            <div
+              class="asset-thumbnail"
+              :style="capAsset.thumbnail?.trim() ? { backgroundImage: `url(${capAsset.thumbnail})` } : (capAsset.previewColor ? { backgroundColor: capAsset.previewColor } : undefined)"
+              @click.stop="openWallAssetDialog('cap', $event)"
+            />
+            <div class="asset-text">
+              <div class="asset-name">{{ capAsset.name }}</div>
+              <div class="asset-subtitle">Wall end cap model · {{ capAsset.id.slice(0, 8) }}</div>
+            </div>
+          </div>
+          <div v-else class="asset-summary empty">
+            <div
+              class="asset-thumbnail placeholder"
+              @click.stop="openWallAssetDialog('cap', $event)"
+            />
+            <div class="asset-text">
+              <div class="asset-name">Select End Cap Asset</div>
+              <div class="asset-subtitle">Drag model/mesh here</div>
+            </div>
+          </div>
+          <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
         </div>
 
         <div

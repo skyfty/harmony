@@ -128,8 +128,10 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
 function computeWallBodyInstanceMatrices(definition: WallDynamicMesh, template: InstancedAssetTemplate): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
 
-  const tileLengthLocal = Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, Math.abs(template.baseSize.x))
-  const minAlongAxis = template.bounds.min.x
+  // Convention: model local +Z is the along-wall axis.
+  const tileLengthLocal = Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, Math.abs(template.baseSize.z))
+  const minAlongAxis = template.bounds.min.z
+  const maxAlongAxis = template.bounds.max.z
 
   const start = new THREE.Vector3()
   const end = new THREE.Vector3()
@@ -153,24 +155,37 @@ function computeWallBodyInstanceMatrices(definition: WallDynamicMesh, template: 
       continue
     }
 
+    if (tileLengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
+      continue
+    }
+
     unitDir.copy(dir).multiplyScalar(1 / lengthLocal)
 
-    const instanceCount = lengthLocal <= tileLengthLocal + WALL_INSTANCING_DIR_EPSILON
-      ? 1
-      : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
-    const totalCoveredLocal = instanceCount * tileLengthLocal
-    const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
+    // Do not place tiles for segments shorter than a single tile (avoids overshoot).
+    if (lengthLocal < tileLengthLocal - WALL_INSTANCING_DIR_EPSILON) {
+      continue
+    }
 
-    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), unitDir)
+    // Strict endpoint coverage without scaling: last tile aligns its max-face to the segment end.
+    const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
+
+    quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), unitDir)
 
     for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
-      const along = startOffsetLocal + instanceIndex * tileLengthLocal
-      minPoint.copy(start).addScaledVector(unitDir, along)
+      if (instanceIndex === instanceCount - 1) {
+        // Last tile: align max face to segment end.
+        offset.set(0, 0, maxAlongAxis)
+        offset.applyQuaternion(quat)
+        pos.copy(end).sub(offset)
+      } else {
+        const along = instanceIndex * tileLengthLocal
+        minPoint.copy(start).addScaledVector(unitDir, along)
 
-      // Align the template's local min face (bounds.min.x) to the desired min point.
-      offset.set(minAlongAxis, 0, 0)
-      offset.applyQuaternion(quat)
-      pos.copy(minPoint).sub(offset)
+        // Align the template's local min face (bounds.min.z) to the desired min point.
+        offset.set(0, 0, minAlongAxis)
+        offset.applyQuaternion(quat)
+        pos.copy(minPoint).sub(offset)
+      }
 
       localMatrix.compose(pos, quat, scale)
       localMatrix.multiply(template.meshToRoot)
@@ -198,10 +213,7 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
   const scale = new THREE.Vector3(1, 1, 1)
   const localMatrix = new THREE.Matrix4()
 
-  for (let i = 0; i < segments.length - 1; i += 1) {
-    const current = segments[i]!
-    const next = segments[i + 1]!
-
+  const buildCorner = (current: (typeof segments)[number], next: (typeof segments)[number], cornerX: number, cornerY: number, cornerZ: number) => {
     start.set(current.start.x, current.start.y, current.start.z)
     end.set(current.end.x, current.end.y, current.end.z)
     incoming.subVectors(end, start)
@@ -213,7 +225,7 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
     outgoing.y = 0
 
     if (incoming.lengthSq() < WALL_INSTANCING_DIR_EPSILON || outgoing.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
-      continue
+      return
     }
     incoming.normalize()
     outgoing.normalize()
@@ -221,7 +233,7 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
     const dot = THREE.MathUtils.clamp(incoming.dot(outgoing), -1, 1)
     const angle = Math.acos(dot)
     if (!Number.isFinite(angle) || angle < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
-      continue
+      return
     }
 
     bisector.copy(incoming).add(outgoing)
@@ -229,11 +241,26 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
       bisector.copy(outgoing)
     }
 
-    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), bisector.normalize())
-    pos.set(current.end.x, current.end.y, current.end.z)
+    quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), bisector.normalize())
+    pos.set(cornerX, cornerY, cornerZ)
     localMatrix.compose(pos, quat, scale)
     localMatrix.multiply(template.meshToRoot)
     matrices.push(new THREE.Matrix4().copy(localMatrix))
+  }
+
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const current = segments[i]!
+    const next = segments[i + 1]!
+    buildCorner(current, next, current.end.x, current.end.y, current.end.z)
+  }
+
+  // Closed loop: add corner for last -> first.
+  const first = segments[0]!
+  const last = segments[segments.length - 1]!
+  const dx = first.start.x - last.end.x
+  const dz = first.start.z - last.end.z
+  if (dx * dx + dz * dz <= WALL_EPSILON) {
+    buildCorner(last, first, last.end.x, last.end.y, last.end.z)
   }
 
   return matrices
@@ -670,9 +697,6 @@ function rebuildWallGroup(
       }
       instanced.instanceMatrix.needsUpdate = true
       group.add(instanced)
-
-      // Keep procedural wall mesh for physics generation, but hide it visually.
-      mesh.visible = false
     }
   }
 

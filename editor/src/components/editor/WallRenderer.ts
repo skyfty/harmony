@@ -131,6 +131,7 @@ function resolveWallSmoothingFromNode(node: SceneNode): number {
 
 const wallSyncPosHelper = new THREE.Vector3()
 const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
+const wallSyncBaseSizeHelper = new THREE.Vector3()
 const wallSyncStartHelper = new THREE.Vector3()
 const wallSyncEndHelper = new THREE.Vector3()
 const wallSyncLocalStartHelper = new THREE.Vector3()
@@ -143,6 +144,15 @@ const wallSyncLocalMatrixHelper = new THREE.Matrix4()
 const wallSyncIncomingHelper = new THREE.Vector3()
 const wallSyncOutgoingHelper = new THREE.Vector3()
 const wallSyncBisectorHelper = new THREE.Vector3()
+
+const WALL_SYNC_EPSILON = 1e-6
+const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
+
+function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
+  const dx = a.x - b.x
+  const dz = a.z - b.z
+  return dx * dx + dz * dz
+}
 
 function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z' = 'x'): THREE.Quaternion {
   const base = baseAxis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
@@ -160,7 +170,7 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function computeWallBodyLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
-    const baseSize = bounds.getSize(wallSyncScaleHelper)
+    const baseSize = bounds.getSize(wallSyncBaseSizeHelper)
 
     definition.segments.forEach((segment) => {
       wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
@@ -169,38 +179,49 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallSyncLocalDirHelper.y = 0
 
       const lengthLocal = wallSyncLocalDirHelper.length()
-      if (lengthLocal <= 1e-6) {
+      if (lengthLocal <= WALL_SYNC_EPSILON) {
         return
       }
 
-      // Convention: model local +X is the "along-wall" axis.
-      // Keep editor behavior aligned with schema-side wall instancing.
-      const baseAxisForQuaternion: 'x' = 'x'
-      const tileLengthLocal = Math.max(1e-4, Math.abs(baseSize.x))
-      const minAlongAxis = bounds.min.x
+      // Convention: model local +Z is the "along-wall" axis.
+      const baseAxisForQuaternion: 'z' = 'z'
+      const tileLengthLocal = Math.max(WALL_SYNC_MIN_TILE_LENGTH, Math.abs(baseSize.z))
+      if (tileLengthLocal <= WALL_SYNC_EPSILON) {
+        return
+      }
+
+      const minAlongAxis = bounds.min.z
+      const maxAlongAxis = bounds.max.z
 
       wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
 
-      const instanceCount = lengthLocal <= tileLengthLocal + 1e-6
-        ? 1
-        : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
-      const totalCoveredLocal = instanceCount * tileLengthLocal
-      const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
+      // Strict endpoint coverage without scaling tiles:
+      // - Place tiles starting from the segment start.
+      // - Place the last tile so its max-face aligns exactly with the segment end.
+      // This may create overlap near the end, but never overshoots.
+      if (lengthLocal < tileLengthLocal - WALL_SYNC_EPSILON) {
+        return
+      }
+
+      const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
 
       const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, baseAxisForQuaternion)
 
       for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
-        const along = startOffsetLocal + instanceIndex * tileLengthLocal
-        wallSyncLocalMinPointHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
+        if (instanceIndex === instanceCount - 1) {
+          // Last tile: align max face to segment end.
+          wallSyncLocalOffsetHelper.set(0, 0, maxAlongAxis)
+          wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
+          wallSyncPosHelper.copy(wallSyncLocalEndHelper).sub(wallSyncLocalOffsetHelper)
+        } else {
+          const along = instanceIndex * tileLengthLocal
+          wallSyncLocalMinPointHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
 
-        // Place the model so that its local min face along the length axis matches the desired min point.
-        wallSyncLocalOffsetHelper.set(
-          minAlongAxis,
-          0,
-          0,
-        )
-        wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-        wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
+          // Place the model so that its local min face along the length axis matches the desired min point.
+          wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
+          wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
+          wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
+        }
 
         wallSyncScaleHelper.set(1, 1, 1)
         wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
@@ -217,10 +238,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       return matrices
     }
 
-    for (let i = 0; i < definition.segments.length - 1; i += 1) {
-      const current = definition.segments[i]!
-      const next = definition.segments[i + 1]!
-
+    const buildCorner = (current: WallDynamicMesh['segments'][number], next: WallDynamicMesh['segments'][number], corner: THREE.Vector3) => {
       wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z)
       wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z)
       wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
@@ -231,8 +249,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallSyncOutgoingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
       wallSyncOutgoingHelper.y = 0
 
-      if (wallSyncIncomingHelper.lengthSq() < 1e-6 || wallSyncOutgoingHelper.lengthSq() < 1e-6) {
-        continue
+      if (wallSyncIncomingHelper.lengthSq() < WALL_SYNC_EPSILON || wallSyncOutgoingHelper.lengthSq() < WALL_SYNC_EPSILON) {
+        return
       }
       wallSyncIncomingHelper.normalize()
       wallSyncOutgoingHelper.normalize()
@@ -240,17 +258,95 @@ export function createWallRenderer(options: WallRendererOptions) {
       const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
       const angle = Math.acos(dot)
       if (!Number.isFinite(angle) || angle < 1e-3) {
-        continue
+        return
       }
 
       wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
-      if (wallSyncBisectorHelper.lengthSq() < 1e-6) {
+      if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
         wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
       }
 
-      const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'x')
+      const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'z')
       wallSyncScaleHelper.set(1, 1, 1)
+      wallSyncPosHelper.copy(corner)
+      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+      matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+    }
+
+    for (let i = 0; i < definition.segments.length - 1; i += 1) {
+      const current = definition.segments[i]!
+      const next = definition.segments[i + 1]!
+
       wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
+      buildCorner(current, next, wallSyncPosHelper)
+    }
+
+    // Closed loop: add corner for last -> first.
+    const first = definition.segments[0]!
+    const last = definition.segments[definition.segments.length - 1]!
+    wallSyncStartHelper.set(first.start.x, first.start.y, first.start.z)
+    wallSyncEndHelper.set(last.end.x, last.end.y, last.end.z)
+    if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
+      wallSyncPosHelper.copy(wallSyncEndHelper)
+      buildCorner(last, first, wallSyncPosHelper)
+    }
+
+    return matrices
+  }
+
+  function computeWallEndCapLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
+    const matrices: THREE.Matrix4[] = []
+    if (!definition.segments.length) {
+      return matrices
+    }
+
+    // Determine if the path is closed: first.start == last.end (XZ plane).
+    const firstSeg = definition.segments[0]!
+    const lastSeg = definition.segments[definition.segments.length - 1]!
+    wallSyncStartHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
+    wallSyncEndHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
+    const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8
+    if (closed) {
+      return matrices
+    }
+
+    const minAlongAxis = bounds.min.z
+
+    const findDirectionForSegment = (segment: WallDynamicMesh['segments'][number] | null, fallback: THREE.Vector3): THREE.Vector3 => {
+      if (!segment) {
+        return fallback
+      }
+      fallback.set(segment.end.x - segment.start.x, 0, segment.end.z - segment.start.z)
+      if (fallback.lengthSq() <= WALL_SYNC_EPSILON) {
+        return fallback
+      }
+      return fallback.normalize()
+    }
+
+    // Start cap points outward: opposite of the first segment direction.
+    const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
+    if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
+      wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
+      const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
+      wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
+      wallSyncLocalOffsetHelper.applyQuaternion(quat)
+      wallSyncPosHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
+      wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+      wallSyncScaleHelper.set(1, 1, 1)
+      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+      matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+    }
+
+    // End cap points outward: along the last segment direction.
+    const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
+    if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
+      wallSyncLocalDirHelper.copy(lastDir)
+      const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
+      wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
+      wallSyncLocalOffsetHelper.applyQuaternion(quat)
+      wallSyncPosHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
+      wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+      wallSyncScaleHelper.set(1, 1, 1)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
       matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
@@ -348,9 +444,28 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const jointAssetId = wallComponent?.props?.jointAssetId ?? null
-    const wantsInstancing = Boolean(bodyAssetId || jointAssetId)
+    const endCapAssetId = (wallComponent?.props as any)?.endCapAssetId ?? null
+    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId)
 
     const userData = container.userData ?? (container.userData = {})
+
+    // Air walls should not render instanced assets. Keep procedural wall visible for editor feedback.
+    if (isAirWall) {
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      options.removeInstancedPickProxy(container)
+
+      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        node.dynamicMesh as WallDynamicMesh,
+        signatureKey,
+        { smoothing: resolveWallSmoothingFromNode(node) },
+      )
+      applyAirWallVisualToWallGroup(wallGroup, true)
+      return
+    }
 
     if (!wantsInstancing) {
       releaseModelInstancesForNode(node.id)
@@ -374,13 +489,17 @@ export function createWallRenderer(options: WallRendererOptions) {
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = bodyAssetId && !getCachedModelObject(bodyAssetId)
     const needsJointLoad = jointAssetId && !getCachedModelObject(jointAssetId)
+    const needsCapLoad = endCapAssetId && !getCachedModelObject(endCapAssetId)
     if (bodyAssetId && needsBodyLoad) {
       scheduleWallAssetLoad(bodyAssetId, node.id)
     }
     if (jointAssetId && needsJointLoad) {
       scheduleWallAssetLoad(jointAssetId, node.id)
     }
-    if (needsBodyLoad || needsJointLoad) {
+    if (endCapAssetId && needsCapLoad) {
+      scheduleWallAssetLoad(endCapAssetId, node.id)
+    }
+    if (needsBodyLoad || needsJointLoad || needsCapLoad) {
       // While loading, keep the default wall mesh visible (avoid disappearing walls).
       // Also release any stale instanced bindings from previous assets.
       releaseModelInstancesForNode(node.id)
@@ -403,7 +522,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     removeWallGroup(container)
 
     const definition = node.dynamicMesh as WallDynamicMesh
-    const primaryAssetId = bodyAssetId ?? jointAssetId
+    const primaryAssetId = bodyAssetId ?? jointAssetId ?? endCapAssetId
     userData.instancedAssetId = primaryAssetId
 
     let hasBindings = false
@@ -418,7 +537,7 @@ export function createWallRenderer(options: WallRendererOptions) {
             assetId: bodyAssetId,
             object: container,
             localMatrices,
-            bindingIdPrefix: `inst:${node.id}:`,
+            bindingIdPrefix: `wall-body:${node.id}:`,
             useNodeIdForIndex0: true,
           })
           hasBindings = true
@@ -440,6 +559,25 @@ export function createWallRenderer(options: WallRendererOptions) {
           useNodeIdForIndex0,
         })
         hasBindings = hasBindings || localMatrices.length > 0
+      }
+    }
+
+    if (endCapAssetId) {
+      const useNodeIdForIndex0 = !bodyAssetId && !jointAssetId
+      const group = getCachedModelObject(endCapAssetId)
+      if (group) {
+        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+        if (localMatrices.length > 0) {
+          syncInstancedModelCommittedLocalMatrices({
+            nodeId: node.id,
+            assetId: endCapAssetId,
+            object: container,
+            localMatrices,
+            bindingIdPrefix: `wall-cap:${node.id}:`,
+            useNodeIdForIndex0,
+          })
+          hasBindings = hasBindings || localMatrices.length > 0
+        }
       }
     }
 
