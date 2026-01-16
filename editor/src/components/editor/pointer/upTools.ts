@@ -39,7 +39,14 @@ export function handlePointerUpTools(
         stopImmediatePropagation: true,
       }
     }
-    return { handled: true }
+
+    // Floor build tool interactions are on left click; swallow left-button releases so
+    // they don't fall through to selection. Do not swallow middle-button releases so
+    // the viewport can apply its "middle click cancels tool / middle drag pans" logic.
+    if (event.button === 0) {
+      return { handled: true }
+    }
+    return null
   }
 
   return null

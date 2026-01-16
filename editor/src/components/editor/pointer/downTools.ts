@@ -59,28 +59,8 @@ export function handlePointerDownTools(
       return { handled: true, clearPointerTrackingState: true }
     }
 
-    // Wall build uses middle click for placement; keep left/right available for camera controls.
-    if (button === 0) {
-      return { handled: true, clearPointerTrackingState: true }
-    }
-
-    if (button === 2) {
-      ctx.beginBuildToolRightClick(event, { roadCancelEligible: false })
-      return { handled: true, clearPointerTrackingState: true }
-    }
-  }
-
-  if (ctx.activeBuildTool === 'floor') {
-    if (button === 1 && !ctx.isAltOverrideActive) {
-      if (ctx.tryBeginFloorEdgeDrag(event)) {
-        // `tryBeginFloorEdgeDrag` owns its own state/capture; preserve original behavior.
-        return { handled: true }
-      }
-    }
-
-    ctx.floorBuildToolHandlePointerDown(event)
-
-    if (button === 1 && !ctx.isAltOverrideActive) {
+    // Wall build uses left click for placement; block camera controls unless Alt override is active.
+    if (button === 0 && !ctx.isAltOverrideActive) {
       return {
         handled: true,
         clearPointerTrackingState: true,
@@ -90,9 +70,30 @@ export function handlePointerDownTools(
       }
     }
 
-    // Floor build uses middle click for placement; keep left/right available for camera controls.
-    if (button === 0) {
+    if (button === 2) {
+      ctx.beginBuildToolRightClick(event, { roadCancelEligible: false })
       return { handled: true, clearPointerTrackingState: true }
+    }
+  }
+
+  if (ctx.activeBuildTool === 'floor') {
+    if (button === 0 && !ctx.isAltOverrideActive) {
+      if (ctx.tryBeginFloorEdgeDrag(event)) {
+        // `tryBeginFloorEdgeDrag` owns its own state/capture; preserve original behavior.
+        return { handled: true }
+      }
+    }
+
+    ctx.floorBuildToolHandlePointerDown(event)
+
+    if (button === 0 && !ctx.isAltOverrideActive) {
+      return {
+        handled: true,
+        clearPointerTrackingState: true,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
     }
 
     if (button === 2) {
@@ -102,7 +103,7 @@ export function handlePointerDownTools(
   }
 
   if (ctx.activeBuildTool === 'road') {
-    if (button === 1 && !ctx.isAltOverrideActive) {
+    if (button === 0 && !ctx.isAltOverrideActive) {
       // If a road vertex handle is under the cursor, begin vertex interaction (click to branch / drag to move).
       ctx.ensureRoadVertexHandlesForSelectedNode()
       const handleHit = ctx.pickRoadVertexHandleAtPointer(event)
@@ -175,12 +176,17 @@ export function handlePointerDownTools(
         stopImmediatePropagation: true,
       }
     }
-
-    // Road build uses middle click for placement; keep left/right available for camera controls.
     const roadCancelEligible = button === 2 && Boolean(ctx.roadBuildToolGetSession())
 
-    if (button === 0) {
-      return { handled: true, clearPointerTrackingState: true }
+    // Road build uses left click for placement; block camera controls unless Alt override is active.
+    if (button === 0 && !ctx.isAltOverrideActive) {
+      return {
+        handled: true,
+        clearPointerTrackingState: true,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
     }
 
     if (button === 2) {

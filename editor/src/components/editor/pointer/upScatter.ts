@@ -30,7 +30,7 @@ export function handlePointerUpScatter(
     }
   }
 
-  if (ctx.instancedEraseDragState && event.pointerId === ctx.instancedEraseDragState.pointerId && event.button === 1) {
+  if (ctx.instancedEraseDragState && event.pointerId === ctx.instancedEraseDragState.pointerId && event.button === 0) {
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
     return {
       handled: true,

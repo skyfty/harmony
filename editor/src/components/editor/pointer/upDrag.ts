@@ -42,7 +42,7 @@ export function handlePointerUpDrag(
     }) => void
   },
 ): PointerUpResult | null {
-  if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId && event.button === 1) {
+  if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId && event.button === 0) {
     const state = ctx.roadVertexDragState
 
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
@@ -112,7 +112,7 @@ export function handlePointerUpDrag(
     }
   }
 
-  if (ctx.floorEdgeDragState && event.pointerId === ctx.floorEdgeDragState.pointerId && event.button === 1) {
+  if (ctx.floorEdgeDragState && event.pointerId === ctx.floorEdgeDragState.pointerId && event.button === 0) {
     const state = ctx.floorEdgeDragState
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
 

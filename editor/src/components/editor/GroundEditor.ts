@@ -1831,7 +1831,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
-		if (!scatterModeEnabled() || event.button !== 1 || event.shiftKey) {
+		if (!scatterModeEnabled() || event.button !== 0 || event.shiftKey) {
 			return false
 		}
 		const asset = options.scatterAsset.value
@@ -2159,8 +2159,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!eraseModeActive && !scatterModeEnabled()) {
 			return false
 		}
-		// Only allow middle mouse for scatter erase so left/right remain available for pan/rotate.
-		const allowedButton = event.button === 1
+		// Use left click for scatter erase; middle click is reserved for camera pan.
+		const allowedButton = event.button === 0
 		if (!allowedButton) {
 			return false
 		}
@@ -2603,7 +2603,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const groundNode = options.sceneStore.selectedNode
-		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
+		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
 			return false
 		}
 

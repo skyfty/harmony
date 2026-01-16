@@ -68,6 +68,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useUiStore } from '@/stores/uiStore'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1056,6 +1057,37 @@ const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
 
+// Watch UI selection context and cancel/clear active build tool when another
+// module becomes active. This enforces mutual exclusion between build tools and
+// other selection contexts.
+const uiStore = useUiStore()
+watch(
+  () => uiStore.activeSelectionContext,
+  (ctx) => {
+    if (!ctx || !ctx.startsWith('build-tool')) {
+      if (activeBuildTool.value) {
+        // Cancel any active build operation which will also clear activeBuildTool
+        cancelActiveBuildOperation()
+      }
+    }
+
+    // Enforce mutual exclusion: clear selections in other modules when context
+    // indicates a different active area.
+    if (ctx !== 'asset-panel' && sceneStore.selectedAssetId) {
+      sceneStore.selectAsset(null)
+    }
+    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && (terrainStore.scatterSelectedAsset ?? null)) {
+      terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+    }
+    if (ctx !== 'scatter' && ctx !== 'scatter-erase' && scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
+    if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
+      terrainStore.setBrushOperation(null)
+    }
+  },
+)
+
 const instancedMeshRevision = ref(0)
 const hasInstancedMeshes = computed(() => {
   void instancedMeshRevision.value
@@ -1139,6 +1171,9 @@ function exitScatterEraseMode() {
     return
   }
   scatterEraseModeActive.value = false
+  if (uiStore.activeSelectionContext === 'scatter-erase') {
+    uiStore.setActiveSelectionContext(null)
+  }
   pointerInteraction.clearIfKind('repairClick')
   instancedEraseDragState = null
   clearRepairHoverHighlight(true)
@@ -1158,10 +1193,14 @@ function toggleScatterEraseMode() {
   }
   // Scatter erase and scatter painting are mutually exclusive; clear any scatter asset selection when enabling erase mode.
   terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+  if (sceneStore.selectedAssetId) {
+    sceneStore.selectAsset(null)
+  }
   terrainStore.setBrushOperation(null)
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
+  uiStore.setActiveSelectionContext('scatter-erase')
   if (props.activeTool !== 'select') {
     emit('changeTool', 'select')
   }
@@ -1173,6 +1212,17 @@ watch(scatterSelectedAsset, (asset) => {
     exitScatterEraseMode()
   }
 })
+
+// If a model/mesh/prefab asset is selected from the asset panel, cancel
+// scatter-erase mode so painting/erasing cannot run while placing assets.
+watch(
+  () => sceneStore.selectedAssetId,
+  (assetId) => {
+    if (assetId && scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
+  },
+)
 
 watch(brushOperation, (operation) => {
   if (operation && scatterEraseModeActive.value) {
@@ -1595,6 +1645,37 @@ let viewportToolbarResizeObserver: ResizeObserver | null = null
 
 let pointerTrackingState: PointerTrackingState | null = null
 
+type MiddleClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+let middleClickSessionState: MiddleClickSessionState | null = null
+
+type LeftEmptyClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey: boolean
+}
+
+let leftEmptyClickSessionState: LeftEmptyClickSessionState | null = null
+
+type AssetPlacementClickSessionState = {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  assetId: string
+}
+
+let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
+
 type ContinuousInstancedCreateState = {
   pointerId: number
   nodeId: string
@@ -1624,7 +1705,10 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
   if (!canvasRef.value || !camera || !scene) {
     return false
   }
-  if (event.button !== 1) {
+  if (event.button !== 0) {
+    return false
+  }
+  if (!event.shiftKey) {
     return false
   }
   if (props.activeTool !== 'select') {
@@ -3249,6 +3333,114 @@ const dragPreview = useDragPreview({
 })
 const dragPreviewGroup = dragPreview.group
 
+// Selection-based asset preview state: when a mesh/model/prefab is selected
+let selectionPreviewActive = false
+let selectionPreviewAssetId: string | null = null
+let lastSelectionPreviewUpdate = 0
+
+watch(
+  () => sceneStore.selectedAssetId,
+  (nextId) => {
+    try {
+      if (!nextId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      // do not show selection preview while dragging assets
+      if (sceneStore.draggingAssetId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      const asset = sceneStore.getAsset(nextId)
+      if (!asset) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+        selectionPreviewActive = true
+        selectionPreviewAssetId = asset.id
+        // prepare preview object (use existing drag preview loader)
+        try {
+          dragPreview.prepare(asset.id)
+        } catch (e) {
+          console.warn('Failed to prepare selection preview', e)
+          dragPreview.dispose()
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+        }
+      } else {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+      }
+    } catch (err) {
+      console.warn('selection preview watch failed', err)
+    }
+  },
+)
+
+// Also show selection preview when a scatter asset is selected from terrain store.
+watch(
+  () => terrainStore.scatterSelectedAsset,
+  (next) => {
+    try {
+      if (!next) {
+        // if no scatter selection, dispose preview only if it was the scatter preview
+        if (selectionPreviewActive && selectionPreviewAssetId) {
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+          dragPreview.dispose()
+        }
+        return
+      }
+
+      // do not show selection preview while dragging assets
+      if (sceneStore.draggingAssetId) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      const asset = next
+      if (!asset) {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+        return
+      }
+
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
+        selectionPreviewActive = true
+        selectionPreviewAssetId = asset.id
+        try {
+          dragPreview.prepare(asset.id)
+        } catch (e) {
+          console.warn('Failed to prepare scatter selection preview', e)
+          dragPreview.dispose()
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+        }
+      } else {
+        selectionPreviewActive = false
+        selectionPreviewAssetId = null
+        dragPreview.dispose()
+      }
+    } catch (err) {
+      console.warn('scatter selection preview watch failed', err)
+    }
+  },
+)
+
 
 function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   if (mapControls) {
@@ -3639,7 +3831,7 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = new MapControls(camera, domElement) 
+  mapControls = new MapControls(camera, domElement)
   if (previousTarget) {
     mapControls.target.copy(previousTarget)
   } else {
@@ -3648,6 +3840,12 @@ function applyCameraControlMode() {
   mapControls.enabled = previousEnabled
   mapControls.minDistance = 2;
   mapControls.maxDistance = 200;
+
+  // Explicitly map middle-button drag to pan (same as left-button pan).
+  // Tool modes will capture/stopPropagation on left; middle remains the primary camera-pan input.
+  mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN
+  mapControls.mouseButtons.MIDDLE = THREE.MOUSE.PAN
+
   mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
   if (gizmoControls && mapControls) {
@@ -5425,6 +5623,38 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // Track middle click vs drag so we can preserve "middle click cancels tool" while
+  // ensuring "middle drag pans camera" does not cancel tools on release.
+  if (event.button === 1) {
+    middleClickSessionState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    }
+  }
+
+  const selectedAssetId = sceneStore.selectedAssetId
+  const selectedAsset = selectedAssetId ? sceneStore.getAsset(selectedAssetId) : null
+  const canPlaceSelectedAsset =
+    Boolean(selectedAssetId) &&
+    Boolean(selectedAsset) &&
+    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab') &&
+    !sceneStore.draggingAssetId
+
+  if (event.button === 0 && canPlaceSelectedAsset) {
+    assetPlacementClickSessionState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      assetId: selectedAssetId as string,
+    }
+    return
+  }
+
+  
+
   const scatter = handlePointerDownScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
@@ -5470,8 +5700,28 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
+
+  // Select mode: left click on empty space should clear selection (if it's a click) or pan the camera (if it's a drag).
+  // We detect empty-space on pointerdown and decide on pointerup using a drag threshold.
+  if (event.button === 0 && effectiveSelectionTool === 'select') {
+    const hit = pickNodeAtPointer(event) ?? pickActiveSelectionBoundingBoxHit(event)
+    if (!hit) {
+      leftEmptyClickSessionState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      }
+      return
+    }
+  }
+
   const selection = await handlePointerDownSelection(event, {
-    activeTool: props.activeTool,
+    activeTool: effectiveSelectionTool,
     selectedNodeIdProp: props.selectedNodeId ?? null,
     sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
     selectedNodeIds: sceneStore.selectedNodeIds,
@@ -5493,11 +5743,46 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (selection) {
     applyPointerDownResult(selection)
+
+    // Only block MapControls left-pan when we are starting a selection drag
+    // (i.e. dragging the currently selected object). Otherwise allow pan.
+    if (
+      event.button === 0 &&
+      effectiveSelectionTool === 'select' &&
+      Boolean(pointerTrackingState?.selectionDrag)
+    ) {
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
     return
   }
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
+    const dx = event.clientX - middleClickSessionState.startX
+    const dy = event.clientY - middleClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      middleClickSessionState.moved = true
+    }
+  }
+
+  if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId && !leftEmptyClickSessionState.moved) {
+    const dx = event.clientX - leftEmptyClickSessionState.startX
+    const dy = event.clientY - leftEmptyClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      leftEmptyClickSessionState.moved = true
+    }
+  }
+
+  if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId && !assetPlacementClickSessionState.moved) {
+    const dx = event.clientX - assetPlacementClickSessionState.startX
+    const dy = event.clientY - assetPlacementClickSessionState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      assetPlacementClickSessionState.moved = true
+    }
+  }
+
   const applyPointerMoveResult = (result: PointerMoveResult) => {
     if (result.preventDefault) {
       event.preventDefault()
@@ -5579,9 +5864,42 @@ function handlePointerMove(event: PointerEvent) {
     sceneStoreBeginTransformInteraction: (nodeId) => sceneStore.beginTransformInteraction(nodeId),
     updateSelectDragPosition,
   })
+
+  // If selection-based preview is active, update preview position to follow the mouse.
+  try {
+    if (selectionPreviewActive && dragPreview && canvasRef.value && camera && !isDragHovering.value) {
+      const now = Date.now()
+      // throttle updates to ~60Hz
+      if (now - lastSelectionPreviewUpdate > 8) {
+        lastSelectionPreviewUpdate = now
+        const rect = canvasRef.value.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+          const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+          pointer.set(ndcX, ndcY)
+          raycaster.setFromCamera(pointer, camera)
+          const planeHit = new THREE.Vector3()
+          let point: THREE.Vector3 | null = null
+          if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+            point = snapVectorToGrid(planeHit.clone())
+          } else {
+            const intersections = collectSceneIntersections()
+            const first = intersections && intersections.length ? intersections[0] : null
+            if (first && first.point) {
+              point = first.point.clone()
+            }
+          }
+          dragPreview.setPosition(point)
+        }
+      }
+    }
+  } catch (err) {
+    // non-fatal: ensure we don't break pointer handling
+    console.warn('Failed to update selection preview position', err)
+  }
 }
 
-function handlePointerUp(event: PointerEvent) {
+async function handlePointerUp(event: PointerEvent) {
   try {
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
@@ -5606,7 +5924,9 @@ function handlePointerUp(event: PointerEvent) {
         event.stopImmediatePropagation()
       }
     }
-
+    // NOTE: middle-button cancellation moved later so other tools (drag/erase/build)
+    // which may use middle-button can handle the event first. If no handler
+    // processed the pointerup, we'll cancel active tools below.
     const drag = handlePointerUpDrag(event, {
       roadDefaultWidth: ROAD_DEFAULT_WIDTH,
       roadVertexDragState,
@@ -5685,14 +6005,116 @@ function handlePointerUp(event: PointerEvent) {
       applyPointerUpResult(selection)
       return
     }
+
+    // Asset panel selection: left click places the selected model/mesh/prefab at cursor.
+    // Dragging should pan the camera and must not place assets.
+    if (event.button === 0 && assetPlacementClickSessionState?.pointerId === event.pointerId) {
+      const session = assetPlacementClickSessionState
+      assetPlacementClickSessionState = null
+
+      if (!session.moved) {
+        const asset = sceneStore.getAsset(session.assetId)
+        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
+          const point = computePointerDropPoint(event)
+          const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
+          snapVectorToGrid(spawnPoint)
+          const parentGroupId = resolveSelectedGroupDropParent()
+          try {
+            const selectedId = props.selectedNodeId
+            const isEmptySelectedGroup = (() => {
+              if (!selectedId || parentGroupId !== selectedId) return false
+              const { nodeMap } = buildHierarchyMaps()
+              const selectedNode = nodeMap.get(selectedId)
+              if (!selectedNode || selectedNode.nodeType !== 'Group') return false
+              return !selectedNode.children || selectedNode.children.length === 0
+            })()
+
+            if (isEmptySelectedGroup && parentGroupId) {
+              await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint)
+            } else {
+              await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
+                parentId: parentGroupId,
+                preserveWorldPosition: Boolean(parentGroupId),
+              })
+            }
+          } catch (error) {
+            console.warn('Failed to spawn asset from selection click', session.assetId, error)
+          }
+        }
+      }
+      return
+    }
+
+    // Select mode: left click on empty space clears selection (only if it was a click, not a drag-pan).
+    if (event.button === 0 && leftEmptyClickSessionState?.pointerId === event.pointerId) {
+      const session = leftEmptyClickSessionState
+      // Clear session first to avoid re-entrancy issues.
+      leftEmptyClickSessionState = null
+
+      if (!session.moved) {
+        const isToggle = session.ctrlKey || session.metaKey
+        const isRange = session.shiftKey
+        sceneStore.clearSelectedRoadSegment()
+        if (!isToggle && !isRange) {
+          emitSelectionChange([])
+        }
+      }
+      return
+    }
+
+    // If middle mouse was released and no other handler processed the event,
+    // cancel active tools and restore select, but only if this was a click (no drag).
+    // Middle drag is reserved for camera panning.
+    if (event.button === 1) {
+      const wasDrag = Boolean(middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState?.moved)
+      if (wasDrag) {
+        return
+      }
+      try {
+        if (activeBuildTool.value) {
+          cancelActiveBuildOperation()
+          activeBuildTool.value = null
+        }
+        terrainStore.setBrushOperation(null)
+        terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+        sceneStore.selectAsset(null)
+        uiStore.setActiveSelectionContext(null)
+        sceneStore.setActiveTool('select')
+      } catch (e) {
+        console.warn('Failed to cancel tools on middle-click up', e)
+      }
+      applyPointerUpResult({ handled: true, clearPointerTrackingState: true, preventDefault: true })
+      return
+    }
   } finally {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
+
+    if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+      middleClickSessionState = null
+    }
+
+    if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+      leftEmptyClickSessionState = null
+    }
+
+    if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
+      assetPlacementClickSessionState = null
+    }
   }
 }
 
 function handlePointerCancel(event: PointerEvent) {
   pointerInteraction.clearIfPointer(event.pointerId)
+  if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
+    middleClickSessionState = null
+  }
+  if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
+    leftEmptyClickSessionState = null
+  }
+  if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId) {
+    assetPlacementClickSessionState = null
+  }
   if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
     const state = roadVertexDragState
     roadVertexDragState = null
@@ -5931,6 +6353,11 @@ function handleBuildToolChange(tool: BuildTool | null) {
     terrainStore.setGroundPanelTab('terrain')
   }
   activeBuildTool.value = tool
+  if (tool) {
+    uiStore.setActiveSelectionContext(`build-tool:${tool}`)
+  } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
+    uiStore.setActiveSelectionContext(null)
+  }
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
@@ -5959,6 +6386,27 @@ function isAssetDrag(event: DragEvent): boolean {
 }
 
 function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
+  if (!camera || !canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  pointer.set(ndcX, ndcY)
+  raycaster.setFromCamera(pointer, camera)
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return snapVectorToGrid(planeHit.clone())
+  }
+  const intersections = collectSceneIntersections()
+  if (intersections.length > 0) {
+    const first = intersections[0]
+    const point = first?.point.clone() ?? null
+    return point ? snapVectorToGrid(point) : null
+  }
+  return null
+}
+
+function computePointerDropPoint(event: PointerEvent): THREE.Vector3 | null {
   if (!camera || !canvasRef.value) return null
   const rect = canvasRef.value.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return null
@@ -8259,7 +8707,14 @@ defineExpose<SceneViewportHandle>({
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
-      <canvas ref="canvasRef" :class="['viewport-canvas', buildToolCursorClass]" />
+      <canvas
+        ref="canvasRef"
+        :class="[
+          'viewport-canvas',
+          buildToolCursorClass,
+          { 'cursor-scatter-erase': scatterEraseModeActive },
+        ]"
+      />
     </div>
     <input
       ref="groundTextureInputRef"
@@ -8386,6 +8841,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-floor,
 .viewport-canvas.cursor-floor:active {
   cursor: copy !important;
+}
+
+.viewport-canvas.cursor-scatter-erase,
+.viewport-canvas.cursor-scatter-erase:active {
+  cursor: url('/cursors/scatter-erase.svg') 4 20, crosshair !important;
 }
 
 .protagonist-preview {

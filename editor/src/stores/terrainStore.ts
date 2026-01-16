@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useUiStore } from './uiStore'
 import type { GroundSculptOperation } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -47,6 +48,28 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterSelectedAsset.value = payload.asset
     scatterProviderAssetId.value = payload.providerAssetId ?? null
   }
+
+  // Keep UI activeSelectionContext in sync: when the user activates terrain sculpt
+  // or selects a scatter asset, set the global UI context so other modules can
+  // clear themselves. We avoid importing/clearing other stores here to prevent
+  // circular dependencies — other stores/components should watch `ui.activeSelectionContext`.
+  watch(brushOperation, (next) => {
+    const ui = useUiStore()
+    if (next) {
+      ui.setActiveSelectionContext('terrain-sculpt')
+    } else if (ui.activeSelectionContext === 'terrain-sculpt') {
+      ui.setActiveSelectionContext(null)
+    }
+  })
+
+  watch(scatterSelectedAsset, (next) => {
+    const ui = useUiStore()
+    if (next) {
+      ui.setActiveSelectionContext('scatter')
+    } else if (ui.activeSelectionContext === 'scatter') {
+      ui.setActiveSelectionContext(null)
+    }
+  })
 
   function setScatterBrushRadius(value: number) {
     scatterBrushRadius.value = Math.min(SCATTER_BRUSH_RADIUS_MAX, Math.max(0.1, value))

@@ -4,6 +4,7 @@ import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useTerrainStore } from '@/stores/terrainStore'
+import { useUiStore } from '@/stores/uiStore'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { useScatterAssetSelection } from '@/stores/useScatterAssetSelection'
@@ -132,6 +133,8 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<voi
 
 async function handleAssetClick(asset: ProjectAsset): Promise<void> {
   await selectScatterAsset(asset)
+  const uiStore = useUiStore()
+  uiStore.setActiveSelectionContext('scatter')
 }
 
 function assetThumbnail(asset: ProjectAsset): string | null {

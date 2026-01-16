@@ -29,8 +29,8 @@ export function handlePointerMoveScatter(
     ctx.updateRepairHoverHighlight(event)
 
     if (ctx.instancedEraseDragState && ctx.instancedEraseDragState.pointerId === event.pointerId) {
-      const isMiddleDown = (event.buttons & 4) !== 0
-      if (isMiddleDown) {
+      const isLeftDown = (event.buttons & 1) !== 0
+      if (isLeftDown) {
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
         // Throttle erase attempts slightly to avoid excessive updates.
         if (now - ctx.instancedEraseDragState.lastAtMs >= 24) {

@@ -336,19 +336,10 @@ export function createWallBuildTool(options: {
       previewRenderer.flush(scene, session)
     },
 
-    handlePointerDown: (event: PointerEvent) => {
+    handlePointerDown: (_event: PointerEvent) => {
       if (options.activeBuildTool.value !== 'wall') {
         return false
       }
-
-      // Block middle-button camera panning while in wall build mode.
-      if (event.button === 1 && !options.isAltOverrideActive()) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return true
-      }
-
       return false
     },
 
@@ -373,7 +364,7 @@ export function createWallBuildTool(options: {
         return false
       }
 
-      if (event.button === 1) {
+      if (event.button === 0) {
         if (options.isAltOverrideActive()) {
           return false
         }

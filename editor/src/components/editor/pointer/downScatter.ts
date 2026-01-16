@@ -34,9 +34,9 @@ export function handlePointerDownScatter(
     handleGroundEditorPointerDown: (event: PointerEvent) => boolean
   },
 ): PointerDownResult | null {
-  // Scatter erase mode: middle click (and drag) erases continuous instanced instances.
-  // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle middle click.
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 1) {
+  // Scatter erase mode: left click (and drag) erases continuous instanced instances.
+  // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle left click.
+  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0) {
     const hit = ctx.pickSceneInstancedTargetAtPointer(event)
     if (hit || !ctx.selectedNodeIsGround) {
       const dragState: InstancedEraseDragState = {
@@ -62,13 +62,14 @@ export function handlePointerDownScatter(
       }
     }
     // If Ground is selected and no instanced target is under the cursor, fall through
-    // so the ground-scatter erase can handle middle click.
+    // so the ground-scatter erase can handle left click.
   }
 
-  // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
+  // Shift + left mouse triggers continuous instanced creation.
   if (
     !ctx.scatterEraseModeActive &&
-    event.button === 1 &&
+    event.button === 0 &&
+    event.shiftKey &&
     ctx.activeTool === 'select' &&
     ctx.activeBuildTool !== 'wall' &&
     ctx.activeBuildTool !== 'road' &&
@@ -89,7 +90,8 @@ export function handlePointerDownScatter(
 
   // Scatter erase mode: if continuous instanced models exist, allow camera controls.
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0) {
+  // If Ground is selected, let ground-scatter erase handle the click instead.
+  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes && event.button === 0 && !ctx.selectedNodeIsGround) {
     ctx.beginRepairClick(event)
     return { handled: true, clearPointerTrackingState: true }
   }

@@ -40,8 +40,8 @@ export function handlePointerMoveDrag(
       state.moved = true
     }
 
-    const isMiddleDown = (event.buttons & 4) !== 0
-    if (!isMiddleDown) {
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
       return { handled: true }
     }
     if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
@@ -114,8 +114,8 @@ export function handlePointerMoveFloorEdgeDrag(
       state.moved = true
     }
 
-    const isMiddleDown = (event.buttons & 4) !== 0
-    if (!isMiddleDown) {
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
       return { handled: true }
     }
     if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
