@@ -778,6 +778,8 @@ const activeAutoTourNodeIds = reactive(new Set<string>())
 
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
 const autoTourPaused = ref(false)
+const autoTourPausedIsTerminal = ref(false)
+const autoTourPausedNodeId = ref<string | null>(null)
 
 const autoTourFollowNodeId = ref<string | null>(null)
 const autoTourCameraFollowState = createCameraFollowState()
@@ -2044,7 +2046,9 @@ const autoTourRuntime = createAutoTourRuntime({
 	vehicleInstances,
 	isManualDriveActive: () => vehicleDriveState.active,
 	requiresExplicitStart: true,
-	onDockRequestedPause: () => {
+	onDockRequestedPause: (nodeId, payload) => {
+		autoTourPausedIsTerminal.value = payload.terminal === true
+		autoTourPausedNodeId.value = nodeId
 		if (autoTourPaused.value) {
 			return
 		}
@@ -5519,6 +5523,8 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 	try {
 		// Capture camera settings before auto-tour mutates controls/caging/view.
 		autoTourPaused.value = false
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
 		// Auto tour and manual drive must be mutually exclusive.
 		if (vehicleDriveState.active) {
 			handleHideVehicleCockpitEvent()
@@ -5564,8 +5570,19 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 		return
 	}
 	const nextPaused = !autoTourPaused.value
-	autoTourPaused.value = nextPaused
-	if (nextPaused) {
+	if (!nextPaused) {
+		// Resuming: if we paused due to terminal end, first request return-to-start.
+		if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
+			autoTourRuntime.continueFromEnd(targetNodeId)
+		}
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
+		autoTourPaused.value = false
+	} else {
+		// Manual pause: not a terminal condition.
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
+		autoTourPaused.value = true
 		applyAutoTourPauseForActiveNodes()
 	}
 	applyAutoTourCameraInputPolicy()
@@ -5591,6 +5608,8 @@ function handleVehicleAutoTourStopClick(): void {
 	vehicleDrivePromptBusy.value = true
 	try {
 		autoTourPaused.value = false
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
