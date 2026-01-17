@@ -17,6 +17,7 @@ export function handlePointerUpSelection(
     commitSelectionDragTransforms: (drag: any) => void
     sceneStoreEndTransformInteraction: () => void
     updateSelectionHighlights: () => void
+    onSelectionDragEnd?: (nodeId: string) => void
 
     activeTool: string
     rotateActiveSelection: (primaryId: string) => void
@@ -58,6 +59,7 @@ export function handlePointerUpSelection(
       ctx.commitSelectionDragTransforms(drag)
       ctx.sceneStoreEndTransformInteraction()
       ctx.updateSelectionHighlights()
+      ctx.onSelectionDragEnd?.(drag.nodeId)
       return { handled: true }
     }
   }

@@ -4,6 +4,11 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
+  allocateModelInstance,
+  allocateModelInstanceBinding,
+  ensureInstancedMeshesRegistered,
+  updateModelInstanceBindingMatrix,
+  updateModelInstanceMatrix,
   releaseModelInstancesForNode,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -170,10 +175,168 @@ export function createWallRenderer(options: WallRendererOptions) {
   const wallAssetWaiters = new Map<string, Set<string>>()
   const resyncSignatureKeyByNodeId = new Map<string, string>()
 
+  type WallDragBindingEntry = {
+    assetId: string
+    localMatrices: THREE.Matrix4[]
+    bindingIdPrefix: string
+    useNodeIdForIndex0: boolean
+  }
+
+  type WallDragCacheEntry = {
+    nodeId: string
+    bindings: WallDragBindingEntry[]
+  }
+
+  const wallDragCacheByNodeId = new Map<string, WallDragCacheEntry>()
+  let activeWallDragNodeId: string | null = null
+
+  const wallDragInstanceHelper = new THREE.Matrix4()
+
   const pendingResyncNodeIds = new Set<string>()
   let wallResyncRafHandle: number | null = null
 
   const FALLBACK_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+
+  function isWallDragActive(nodeId: string): boolean {
+    return activeWallDragNodeId === nodeId && wallDragCacheByNodeId.has(nodeId)
+  }
+
+  function buildWallDragCache(nodeId: string): WallDragCacheEntry | null {
+    const node = options.getNodeById(nodeId)
+    if (!node || node.dynamicMesh?.type !== 'Wall') {
+      return null
+    }
+
+    const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined
+
+    const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
+    const jointAssetId = wallComponent?.props?.jointAssetId ?? null
+    const endCapAssetId = (wallComponent?.props as any)?.endCapAssetId ?? null
+    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId)
+    if (!wantsInstancing) {
+      return null
+    }
+
+    const definition = node.dynamicMesh as WallDynamicMesh
+    const bindings: WallDragBindingEntry[] = []
+
+    if (bodyAssetId) {
+      const group = getCachedModelObject(bodyAssetId)
+      if (group) {
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox)
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: bodyAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-body:${nodeId}:`,
+            useNodeIdForIndex0: true,
+          })
+        }
+      }
+    }
+
+    if (jointAssetId) {
+      const localMatrices = computeWallJointLocalMatrices(definition)
+      if (localMatrices.length > 0) {
+        bindings.push({
+          assetId: jointAssetId,
+          localMatrices,
+          bindingIdPrefix: `wall-joint:${nodeId}:`,
+          useNodeIdForIndex0: !bodyAssetId,
+        })
+      }
+    }
+
+    if (endCapAssetId) {
+      const group = getCachedModelObject(endCapAssetId)
+      if (group) {
+        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: endCapAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-cap:${nodeId}:`,
+            useNodeIdForIndex0: !bodyAssetId && !jointAssetId,
+          })
+        }
+      }
+    }
+
+    if (!bindings.length) {
+      return null
+    }
+
+    return { nodeId, bindings }
+  }
+
+  function beginWallDrag(nodeId: string): boolean {
+    const cache = buildWallDragCache(nodeId)
+    if (!cache) {
+      if (activeWallDragNodeId === nodeId) {
+        wallDragCacheByNodeId.delete(nodeId)
+        activeWallDragNodeId = null
+      }
+      return false
+    }
+    wallDragCacheByNodeId.set(nodeId, cache)
+    activeWallDragNodeId = nodeId
+    return true
+  }
+
+  function endWallDrag(nodeId: string | null | undefined): void {
+    if (!nodeId) {
+      return
+    }
+    if (activeWallDragNodeId === nodeId) {
+      activeWallDragNodeId = null
+    }
+    wallDragCacheByNodeId.delete(nodeId)
+
+    const node = options.getNodeById(nodeId)
+    const object = options.getObjectById(nodeId)
+    if (!node || !object) {
+      return
+    }
+    const signatureKey = resyncSignatureKeyByNodeId.get(nodeId) ?? FALLBACK_SIGNATURE_KEY
+    syncWallContainer(object, node, signatureKey)
+  }
+
+  function syncWallDragInstancedMatrices(nodeId: string, baseMatrix: THREE.Matrix4): boolean {
+    if (!isWallDragActive(nodeId)) {
+      return false
+    }
+    const cache = wallDragCacheByNodeId.get(nodeId)
+    if (!cache) {
+      return false
+    }
+
+    for (const binding of cache.bindings) {
+      ensureInstancedMeshesRegistered(binding.assetId)
+      const count = binding.localMatrices.length
+      for (let i = 0; i < count; i += 1) {
+        const local = binding.localMatrices[i]
+        if (!local) {
+          continue
+        }
+
+        if (binding.useNodeIdForIndex0 && i === 0) {
+          allocateModelInstance(binding.assetId, nodeId)
+          wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
+          updateModelInstanceMatrix(nodeId, wallDragInstanceHelper)
+          continue
+        }
+
+        const bindingId = `${binding.bindingIdPrefix}${i}`
+        allocateModelInstanceBinding(binding.assetId, bindingId, nodeId)
+        wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
+        updateModelInstanceBindingMatrix(bindingId, wallDragInstanceHelper)
+      }
+    }
+
+    return true
+  }
 
   function scheduleWallResync(nodeId: string): void {
     pendingResyncNodeIds.add(nodeId)
@@ -493,6 +656,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    if (isWallDragActive(node.id)) {
+      return
+    }
+
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
       | SceneNodeComponentState<WallComponentProps>
       | undefined
@@ -641,5 +808,9 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   return {
     syncWallContainer,
+    beginWallDrag,
+    endWallDrag,
+    syncWallDragInstancedMatrices,
+    isWallDragActive,
   }
 }

@@ -2290,6 +2290,7 @@ function handleViewportOverlayResize() {
 
 const {
   syncInstancedTransform,
+  primeInstancedTransform,
   attachInstancedMesh,
   clearInstancedMeshes
 } = useInstancedMeshes(
@@ -2297,7 +2298,8 @@ const {
   instancedMeshes,
   {
     syncInstancedOutlineEntryTransform,
-    resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId)
+    resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
+    syncInstancedTransformOverride: ({ nodeId, baseMatrix }) => wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix),
   }
 )
 
@@ -2582,6 +2584,7 @@ const {
   emit,
   {
     syncInstancedTransform,
+    primeInstancedTransform,
     updateGridHighlightFromObject,
     updateSelectionHighlights,
     updatePlaceholderOverlayPositions,
@@ -2977,6 +2980,12 @@ const draggingChangedHandler = (event: unknown) => {
       commitTransformControlUpdates()
     }
     sceneStore.endTransformInteraction()
+    if (targetObject) {
+      const nodeId = (targetObject as THREE.Object3D | null)?.userData?.nodeId as string | undefined
+      if (nodeId) {
+        wallRenderer.endWallDrag(nodeId)
+      }
+    }
     transformGroupState = null
     updateGridHighlightFromObject(targetObject)
     updateSelectionHighlights()
@@ -2993,7 +3002,17 @@ const draggingChangedHandler = (event: unknown) => {
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
+    if (nodeId) {
+      wallRenderer.beginWallDrag(nodeId)
+    }
     transformGroupState = buildTransformGroupState(nodeId ?? null)
+    // Prime multi-binding caches before the first transform delta is applied.
+    if (targetObject) {
+      primeInstancedTransform(targetObject)
+    }
+    if (transformGroupState?.entries?.size) {
+      transformGroupState.entries.forEach((entry) => primeInstancedTransform(entry.object))
+    }
     if (targetObject) {
       updateGridHighlightFromObject(targetObject)
     }
@@ -5871,6 +5890,7 @@ function handlePointerMove(event: PointerEvent) {
     pointerTrackingState,
     transformControlsDragging: Boolean(transformControls?.dragging),
     sceneStoreBeginTransformInteraction: (nodeId) => sceneStore.beginTransformInteraction(nodeId),
+    onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
     updateSelectDragPosition,
   })
 
@@ -5997,6 +6017,7 @@ async function handlePointerUp(event: PointerEvent) {
       commitSelectionDragTransforms,
       sceneStoreEndTransformInteraction: () => sceneStore.endTransformInteraction(),
       updateSelectionHighlights,
+      onSelectionDragEnd: (nodeId) => wallRenderer.endWallDrag(nodeId),
       activeTool: props.activeTool,
       rotateActiveSelection,
       sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
@@ -6207,6 +6228,7 @@ function handlePointerCancel(event: PointerEvent) {
     if (dragState.hasDragged) {
       commitSelectionDragTransforms(dragState)
       sceneStore.endTransformInteraction()
+      wallRenderer.endWallDrag(dragState.nodeId)
     }
   }
 

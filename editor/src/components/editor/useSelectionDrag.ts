@@ -25,6 +25,7 @@ export function useSelectionDrag(
   emit: (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]) => void,
   callbacks: {
     syncInstancedTransform: (object: THREE.Object3D | null, includeChildren?: boolean) => void
+    primeInstancedTransform?: (object: THREE.Object3D | null) => void
     updateGridHighlightFromObject: (object: THREE.Object3D | null) => void
     updateSelectionHighlights: () => void
     updatePlaceholderOverlayPositions: () => void
@@ -103,6 +104,8 @@ export function useSelectionDrag(
   }
 
   function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
+    callbacks.primeInstancedTransform?.(object)
+
     const worldPosition = new THREE.Vector3()
     object.getWorldPosition(worldPosition)
     const planeAnchor = worldPosition.clone()
@@ -119,6 +122,7 @@ export function useSelectionDrag(
       if (!companionObject) {
         return
       }
+      callbacks.primeInstancedTransform?.(companionObject)
       companionObject.updateMatrixWorld(true)
       const companionWorldPosition = new THREE.Vector3()
       companionObject.getWorldPosition(companionWorldPosition)

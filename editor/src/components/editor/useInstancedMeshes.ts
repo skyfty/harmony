@@ -1,7 +1,14 @@
 import * as THREE from 'three'
-import { getModelInstanceBinding, updateModelInstanceMatrix, type ModelInstanceBinding } from '@schema/modelObjectCache'
+import {
+  getModelInstanceBinding,
+  getModelInstanceBindingById,
+  getModelInstanceBindingsForNode,
+  updateModelInstanceBindingMatrix,
+  updateModelInstanceMatrix,
+  type ModelInstanceBinding,
+} from '@schema/modelObjectCache'
 import type { SceneNode } from '@harmony/schema'
-import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
+import { getContinuousInstancedModelUserData, syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
 export function useInstancedMeshes(
   instancedMeshGroup: THREE.Group,
@@ -9,6 +16,14 @@ export function useInstancedMeshes(
   callbacks: {
     syncInstancedOutlineEntryTransform: (nodeId: string) => void
     resolveSceneNodeById?: (nodeId: string) => SceneNode | null
+    syncInstancedTransformOverride?: (params: {
+      nodeId: string
+      object: THREE.Object3D
+      baseMatrix: THREE.Matrix4
+      assetId?: string
+      isVisible: boolean
+      isCulled: boolean
+    }) => boolean
   }
 ) {
   const instancedMatrixHelper = new THREE.Matrix4()
@@ -22,6 +37,15 @@ export function useInstancedMeshes(
   }
 
   const instancedMatrixCache = new Map<string, InstancedMatrixCacheEntry>()
+
+  type MultiBindingLocalCacheEntry = {
+    bindingKey: string
+    base: THREE.Matrix4
+    baseInverse: THREE.Matrix4
+    locals: Map<string, THREE.Matrix4>
+  }
+
+  const multiBindingLocalCache = new Map<string, MultiBindingLocalCacheEntry>()
 
   function buildModelInstanceBindingKey(binding: ModelInstanceBinding): string {
     return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
@@ -60,6 +84,156 @@ export function useInstancedMeshes(
     updateModelInstanceMatrix(nodeId, matrix)
   }
 
+  function updateModelInstanceBindingMatrixIfChanged(bindingId: string, matrix: THREE.Matrix4): void {
+    const binding = getModelInstanceBindingById(bindingId)
+    if (!binding) {
+      instancedMatrixCache.delete(bindingId)
+      return
+    }
+    const bindingKey = buildModelInstanceBindingKey(binding)
+    const cached = instancedMatrixCache.get(bindingId)
+    if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, matrix.elements)) {
+      return
+    }
+    const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
+    nextEntry.bindingKey = bindingKey
+    copyMatrixElements(nextEntry.elements, matrix.elements)
+    instancedMatrixCache.set(bindingId, nextEntry)
+    updateModelInstanceBindingMatrix(bindingId, matrix)
+  }
+
+  function buildMultiBindingKey(bindings: ModelInstanceBinding[]): string {
+    return bindings
+      .map((binding) => `${binding.bindingId}:${buildModelInstanceBindingKey(binding)}`)
+      .sort()
+      .join('\n')
+  }
+
+  function syncMultiBindingTransform(nodeId: string, baseMatrix: THREE.Matrix4): void {
+    const bindings = getModelInstanceBindingsForNode(nodeId)
+    if (!bindings.length) {
+      multiBindingLocalCache.delete(nodeId)
+      return
+    }
+
+    // Single-binding nodes are handled by the existing fast path.
+    if (bindings.length === 1 && bindings[0]?.bindingId === nodeId) {
+      multiBindingLocalCache.delete(nodeId)
+      updateModelInstanceMatrixIfChanged(nodeId, baseMatrix)
+      return
+    }
+
+    const nextBindingKey = buildMultiBindingKey(bindings)
+    const cached = multiBindingLocalCache.get(nodeId)
+    const needsRebuild = !cached || cached.bindingKey !== nextBindingKey
+    const entry: MultiBindingLocalCacheEntry = cached ?? {
+      bindingKey: nextBindingKey,
+      base: new THREE.Matrix4(),
+      baseInverse: new THREE.Matrix4(),
+      locals: new Map<string, THREE.Matrix4>(),
+    }
+
+    if (needsRebuild) {
+      entry.bindingKey = nextBindingKey
+      entry.locals.clear()
+      // Best-effort: derive locals from the currently committed instance matrices.
+      // At steady state, those matrices were authored as: instance = base * local.
+      // IMPORTANT: use the *current* baseMatrix as the reference to avoid drift.
+      entry.base.copy(baseMatrix)
+      entry.baseInverse.copy(baseMatrix).invert()
+
+      for (const binding of bindings) {
+        const slot = binding.slots[0]
+        if (!slot) {
+          continue
+        }
+        slot.mesh.getMatrixAt(slot.index, instancedMatrixHelper)
+        const local = entry.locals.get(binding.bindingId) ?? new THREE.Matrix4()
+        local.multiplyMatrices(entry.baseInverse, instancedMatrixHelper)
+        entry.locals.set(binding.bindingId, local)
+      }
+    }
+
+    // Apply new base to all locals.
+    for (const binding of bindings) {
+      const local = entry.locals.get(binding.bindingId)
+      if (!local) {
+        continue
+      }
+      instancedMatrixHelper.multiplyMatrices(baseMatrix, local)
+      if (binding.bindingId === nodeId) {
+        updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
+      } else {
+        updateModelInstanceBindingMatrixIfChanged(binding.bindingId, instancedMatrixHelper)
+      }
+    }
+
+    entry.base.copy(baseMatrix)
+    entry.baseInverse.copy(baseMatrix).invert()
+    multiBindingLocalCache.set(nodeId, entry)
+  }
+
+  function primeMultiBindingLocalCache(nodeId: string, baseMatrix: THREE.Matrix4): void {
+    const bindings = getModelInstanceBindingsForNode(nodeId)
+    if (bindings.length <= 1) {
+      return
+    }
+
+    const nextBindingKey = buildMultiBindingKey(bindings)
+    const cached = multiBindingLocalCache.get(nodeId)
+    if (cached && cached.bindingKey === nextBindingKey) {
+      cached.base.copy(baseMatrix)
+      cached.baseInverse.copy(baseMatrix).invert()
+      return
+    }
+
+    const entry: MultiBindingLocalCacheEntry = {
+      bindingKey: nextBindingKey,
+      base: baseMatrix.clone(),
+      baseInverse: baseMatrix.clone().invert(),
+      locals: new Map<string, THREE.Matrix4>(),
+    }
+
+    for (const binding of bindings) {
+      const slot = binding.slots[0]
+      if (!slot) {
+        continue
+      }
+      slot.mesh.getMatrixAt(slot.index, instancedMatrixHelper)
+      const local = new THREE.Matrix4().multiplyMatrices(entry.baseInverse, instancedMatrixHelper)
+      entry.locals.set(binding.bindingId, local)
+    }
+
+    multiBindingLocalCache.set(nodeId, entry)
+  }
+
+  function primeInstancedTransform(object: THREE.Object3D | null): void {
+    if (!object?.userData?.instancedAssetId) {
+      return
+    }
+    const nodeId = object.userData.nodeId as string | undefined
+    if (!nodeId) {
+      return
+    }
+    object.updateMatrixWorld(true)
+
+    const isCulled = object.userData?.__harmonyCulled === true
+    const isVisible = object.visible !== false
+
+    // Preserve shear for visible objects by using matrixWorld directly.
+    if (!isCulled && isVisible) {
+      instancedMatrixHelper.copy(object.matrixWorld)
+      primeMultiBindingLocalCache(nodeId, instancedMatrixHelper)
+      return
+    }
+
+    // When culled/hidden, collapse scale to 0 but keep position/orientation.
+    object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+    instancedScaleHelper.setScalar(0)
+    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+    primeMultiBindingLocalCache(nodeId, instancedMatrixHelper)
+  }
+
   function syncInstancedTransform(object: THREE.Object3D | null, includeChildren = false) {
     if (!object) {
       return
@@ -73,21 +247,32 @@ export function useInstancedMeshes(
         const assetId = object.userData.instancedAssetId as string | undefined
         const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
         const isCulled = object.userData?.__harmonyCulled === true
-        if (isCulled) {
+        const isVisible = object.visible !== false
+        if (isCulled || !isVisible) {
           object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
           instancedScaleHelper.setScalar(0)
           instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
-        } else if (assetId && node) {
+        } else {
+          instancedMatrixHelper.copy(object.matrixWorld)
+        }
+
+        const handled = callbacks.syncInstancedTransformOverride?.({
+          nodeId,
+          object,
+          baseMatrix: instancedMatrixHelper,
+          assetId,
+          isVisible,
+          isCulled,
+        })
+
+        if (handled) {
+          // handled by override
+        } else if (isCulled || !isVisible) {
+          syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+        } else if (assetId && node && getContinuousInstancedModelUserData(node)) {
           syncContinuousInstancedModelCommitted({ node, object, assetId })
         } else {
-          object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-          const isVisible = object.visible !== false
-          if (!isVisible) {
-            instancedScaleHelper.setScalar(0)
-          }
-          instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
+          syncMultiBindingTransform(nodeId, instancedMatrixHelper)
         }
         callbacks.syncInstancedOutlineEntryTransform(nodeId)
       }
@@ -110,21 +295,32 @@ export function useInstancedMeshes(
           const assetId = current.userData.instancedAssetId as string | undefined
           const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
           const isCulled = current.userData?.__harmonyCulled === true
-          if (isCulled) {
+          const isVisible = current.visible !== false
+          if (isCulled || !isVisible) {
             current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
             instancedScaleHelper.setScalar(0)
             instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
-          } else if (assetId && node) {
+          } else {
+            instancedMatrixHelper.copy(current.matrixWorld)
+          }
+
+          const handled = callbacks.syncInstancedTransformOverride?.({
+            nodeId,
+            object: current,
+            baseMatrix: instancedMatrixHelper,
+            assetId,
+            isVisible,
+            isCulled,
+          })
+
+          if (handled) {
+            // handled by override
+          } else if (isCulled || !isVisible) {
+            syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+          } else if (assetId && node && getContinuousInstancedModelUserData(node)) {
             syncContinuousInstancedModelCommitted({ node, object: current, assetId })
           } else {
-            current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            const isVisible = current.visible !== false
-            if (!isVisible) {
-              instancedScaleHelper.setScalar(0)
-            }
-            instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-            updateModelInstanceMatrixIfChanged(nodeId, instancedMatrixHelper)
+            syncMultiBindingTransform(nodeId, instancedMatrixHelper)
           }
           callbacks.syncInstancedOutlineEntryTransform(nodeId)
         }
@@ -158,10 +354,12 @@ export function useInstancedMeshes(
       instancedMeshGroup.remove(mesh)
     })
     instancedMatrixCache.clear()
+    multiBindingLocalCache.clear()
   }
 
   return {
     syncInstancedTransform,
+    primeInstancedTransform,
     attachInstancedMesh,
     clearInstancedMeshes
   }

@@ -18,6 +18,7 @@ export function handlePointerMoveSelection(
     transformControlsDragging: boolean
 
     sceneStoreBeginTransformInteraction: (nodeId: string) => void
+    onSelectionDragStart?: (nodeId: string) => void
 
     updateSelectDragPosition: (drag: any, event: PointerEvent) => boolean
   },
@@ -62,6 +63,7 @@ export function handlePointerMoveSelection(
       drag.hasDragged = true
       ctx.pointerTrackingState.moved = true
       ctx.sceneStoreBeginTransformInteraction(drag.nodeId)
+      ctx.onSelectionDragStart?.(drag.nodeId)
     }
 
     if (ctx.updateSelectDragPosition(drag as any, event)) {
