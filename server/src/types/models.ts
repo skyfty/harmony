@@ -256,6 +256,7 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   mimeType?: string | null
   metadata?: Record<string, unknown>
   terrainScatterPreset?: TerrainScatterCategory | null
+  mixtureType?: string | null
   createdAt: Date
   updatedAt: Date
 }

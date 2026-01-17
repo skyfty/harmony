@@ -52,6 +52,7 @@ export interface AssetSummary {
   seriesName?: string | null
   series?: AssetSeries | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  mixtureType?: string | null
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null
@@ -85,6 +86,7 @@ export interface AssetManifestEntry {
   seriesName?: string | null
   series?: AssetSeries | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  mixtureType?: string | null
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null

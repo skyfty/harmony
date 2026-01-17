@@ -25,6 +25,7 @@ interface AssetManifestEntry {
   updatedAt?: string
   size?: number
   terrainScatterPreset?: TerrainScatterCategory | null
+  mixtureType?: string | null
 }
 
 interface AssetManifest {
@@ -108,6 +109,7 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
     tags: entry.tags,
     tagIds: entry.tagIds,
     terrainScatterPreset: entry.terrainScatterPreset ?? null,
+    mixtureType: entry.mixtureType ?? null,
   })
 }
 
@@ -165,8 +167,39 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
     icon: 'mdi-pine-tree',
     minScale: 0.8,
     maxScale: 1.35,
-  }
+  },
+  water: {
+    label: 'Water',
+    icon: 'mdi-waves',
+    minScale: 0.9,
+    maxScale: 1.1,
+  },
+  ground: {
+    label: 'Ground',
+    icon: 'mdi-grass',
+    minScale: 0.9,
+    maxScale: 1.1,
+  },
 }
+
+export const mixtureTypePresets = {
+  WallBody: {
+    label: 'Wall Body',
+  },
+  WaterNormalMap: {
+    label: 'Water Normal Map',
+  },
+} as const
+
+export type MixtureType = keyof typeof mixtureTypePresets
+
+export const mixtureTypeOptions: Array<{ value: MixtureType | null; label: string }> = [
+  { value: null, label: 'None' },
+  ...Object.entries(mixtureTypePresets).map(([value, preset]) => ({
+    value: value as MixtureType,
+    label: preset.label,
+  })),
+]
 
 export function invalidateAssetManifestCache(): void {
   manifestCache = null
