@@ -1038,6 +1038,7 @@ const canDropSelection = computed(() =>
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
+let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'wall') {
     return 'cursor-wall'
@@ -2181,7 +2182,9 @@ function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
     if (Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
       buildToolRightClickCandidate = null
       pointerInteraction.clearIfKind('buildToolRightClick')
-      const handled = cancelActiveBuildOperation()
+      const previousTransformTool = transformToolBeforeBuild
+      const handled = cancelActiveBuildOperation({ restoreTransformTool: previousTransformTool })
+      transformToolBeforeBuild = null
       if (handled) {
         event.preventDefault()
         event.stopPropagation()
@@ -6277,48 +6280,51 @@ function snapRoadPointToVertices(
   return { position: point, nodeId: null, vertexIndex: null }
 }
 
-function cancelActiveBuildOperation(): boolean {
+function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorTool | null }): boolean {
   exitScatterEraseMode()
   const tool = activeBuildTool.value
   if (!tool) {
     return false
   }
+
+  const restoreTransformTool = options?.restoreTransformTool ?? null
+
   let handled = false
   switch (tool) {
     case 'ground':
       if (groundEditorHasActiveSelection()) {
         cancelGroundSelection()
       } else {
-        activeBuildTool.value = null
+        handleBuildToolChange(null)
       }
       handled = true
       break
     case 'wall':
       if (wallBuildTool.getSession()) {
         wallBuildTool.cancel()
-      } else {
-        activeBuildTool.value = null
       }
+      // Exit tool after cancel (match floor/road) so TransformToolbar becomes usable again.
+      handleBuildToolChange(null)
       handled = true
       break
     case 'floor':
       if (floorBuildTool.cancel()) {
         // keep tool active? match road behavior: exit tool after cancel
       }
-      activeBuildTool.value = null
+      handleBuildToolChange(null)
       handled = true
       break
     case 'road':
       roadBuildTool.cancel()
-      activeBuildTool.value = null
+      handleBuildToolChange(null)
       handled = true
       break
     default:
       return false
   }
 
-  if (handled && activeBuildTool.value === null && props.activeTool !== 'select') {
-    emit('changeTool', 'select')
+  if (handled && restoreTransformTool && restoreTransformTool !== props.activeTool) {
+    emit('changeTool', restoreTransformTool)
   }
 
   return handled
@@ -6327,6 +6333,12 @@ function cancelActiveBuildOperation(): boolean {
 function handleBuildToolChange(tool: BuildTool | null) {
   if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool) && isGroundSculptConfigMode.value) {
     return
+  }
+  if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool)) {
+    // Preserve the last selected transform tool so we can restore it when exiting build via right double click.
+    if (props.activeTool !== 'select') {
+      transformToolBeforeBuild = props.activeTool
+    }
   }
   if (activeBuildTool.value === 'floor' && tool !== 'floor') {
     floorBuildTool.cancel()
