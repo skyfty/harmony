@@ -52,6 +52,8 @@ export function createPickProxyManager(): PickProxyManager {
   const instancedPickProxyInstanceMatrixHelper = new THREE.Matrix4()
   const instancedPickProxyWorldMatrixHelper = new THREE.Matrix4()
   const instancedPickProxyLocalMatrixHelper = new THREE.Matrix4()
+  const instancedPickProxyAssetBoxMatrixHelper = new THREE.Matrix4()
+  const instancedPickProxyIdentityQuaternionHelper = new THREE.Quaternion()
   const instancedPickProxyAssetBoundsHelper = new THREE.Box3()
   const instancedPickProxyPointsBoundsHelper = new THREE.Box3()
   const instancedPickProxyCornerHelpers = Array.from({ length: 8 }, () => new THREE.Vector3())
@@ -60,7 +62,7 @@ export function createPickProxyManager(): PickProxyManager {
   const instancedPickProxyMeanHelper = new THREE.Vector3()
 
   function removeInstancedPickProxy(object: THREE.Object3D) {
-    const proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
+    const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
     if (!proxy) {
       return
     }
@@ -69,43 +71,86 @@ export function createPickProxyManager(): PickProxyManager {
   }
 
   function ensureInstancedPickProxy(object: THREE.Object3D, node: SceneNode) {
-    let proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
-    if (!proxy) {
-      proxy = new THREE.Mesh(instancedPickProxyGeometry, instancedPickProxyMaterial)
-      proxy.name = `${object.name ?? node.name ?? 'Instanced'}:PickProxy`
-      proxy.userData = {
-        ...(proxy.userData ?? {}),
+    const isWall = node.dynamicMesh?.type === 'Wall'
+
+    const ensureProxyObject = (): THREE.Mesh | THREE.InstancedMesh => {
+      const existing = object.userData?.instancedPickProxy as THREE.Object3D | undefined
+      const shouldBeInstanced = isWall
+      const isExistingInstanced = Boolean((existing as THREE.InstancedMesh | undefined)?.isInstancedMesh)
+
+      if (existing && isExistingInstanced === shouldBeInstanced) {
+        existing.userData = existing.userData ?? {}
+        existing.userData.nodeId = node.id
+        return existing as THREE.Mesh | THREE.InstancedMesh
+      }
+
+      if (existing) {
+        existing.removeFromParent()
+      }
+
+      const created = shouldBeInstanced
+        ? new THREE.InstancedMesh(instancedPickProxyGeometry, instancedPickProxyMaterial, 1)
+        : new THREE.Mesh(instancedPickProxyGeometry, instancedPickProxyMaterial)
+
+      created.name = `${object.name ?? node.name ?? 'Instanced'}:PickProxy`
+      created.userData = {
+        ...(created.userData ?? {}),
         nodeId: node.id,
         instancedPickProxy: true,
         excludeFromOutline: true,
       }
-      proxy.renderOrder = -9999
-      proxy.frustumCulled = false
-      object.add(proxy)
+      created.renderOrder = -9999
+      created.frustumCulled = false
+      object.add(created)
+
       const userData = object.userData ?? (object.userData = {})
-      userData.instancedPickProxy = proxy
-    } else {
-      proxy.userData.nodeId = node.id
+      userData.instancedPickProxy = created
+      return created
     }
+
+    const proxy = ensureProxyObject()
 
     // Build a pick volume that covers *all* instanced bindings of this node.
     // This makes clicking/dragging any instance select & transform around the correct center.
     const bindings = getModelInstanceBindingsForNode(node.id)
 
     const restoreProxyToUnitBox = (center: THREE.Vector3, size: THREE.Vector3) => {
-      if (proxy!.geometry !== instancedPickProxyGeometry) {
-        proxy!.geometry.dispose()
-        proxy!.geometry = instancedPickProxyGeometry
-      }
       const eps = 1e-4
-      proxy!.position.copy(center)
-      proxy!.scale.set(
+      const safeSize = instancedPickBoundsSizeHelper.set(
         Math.max(size.x, eps),
         Math.max(size.y, eps),
         Math.max(size.z, eps),
       )
-      proxy!.visible = true
-      proxy!.updateMatrixWorld(true)
+
+      // Persist for pivot calculations (SceneViewport reads this, regardless of proxy type).
+      proxy.userData = proxy.userData ?? {}
+      proxy.userData.instancedPickProxyBounds = {
+        min: [center.x - safeSize.x * 0.5, center.y - safeSize.y * 0.5, center.z - safeSize.z * 0.5],
+        max: [center.x + safeSize.x * 0.5, center.y + safeSize.y * 0.5, center.z + safeSize.z * 0.5],
+      } satisfies InstancedBoundsPayload
+
+      if ((proxy as THREE.InstancedMesh).isInstancedMesh) {
+        const instanced = proxy as THREE.InstancedMesh
+        instanced.position.set(0, 0, 0)
+        instanced.scale.set(1, 1, 1)
+        instancedPickProxyAssetBoxMatrixHelper.compose(center, instancedPickProxyIdentityQuaternionHelper, safeSize)
+        instanced.setMatrixAt(0, instancedPickProxyAssetBoxMatrixHelper)
+        ;(instanced as unknown as { count?: number }).count = 1
+        instanced.instanceMatrix.needsUpdate = true
+        instanced.visible = true
+        instanced.updateMatrixWorld(true)
+        return
+      }
+
+      const mesh = proxy as THREE.Mesh
+      if (mesh.geometry !== instancedPickProxyGeometry) {
+        mesh.geometry.dispose()
+        mesh.geometry = instancedPickProxyGeometry
+      }
+      mesh.position.copy(center)
+      mesh.scale.copy(safeSize)
+      mesh.visible = true
+      mesh.updateMatrixWorld(true)
     }
 
     // If we can't see any bindings, fall back to serialized bounds if available.
@@ -150,6 +195,109 @@ export function createPickProxyManager(): PickProxyManager {
 
     if (instancedPickProxyAssetBoundsHelper.isEmpty()) {
       removeInstancedPickProxy(object)
+      return
+    }
+
+    // Walls can be concave (polyline with corners). A convex hull proxy incorrectly covers the inner corner area.
+    // For wall nodes, build an InstancedMesh proxy: one oriented box per binding instance.
+    if (isWall && (proxy as THREE.InstancedMesh).isInstancedMesh) {
+      object.updateMatrixWorld(true)
+      instancedPickProxyWorldInverseHelper.copy(object.matrixWorld).invert()
+
+      // Asset-local box transform (unit box -> asset bounds).
+      instancedPickProxyAssetBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
+      instancedPickProxyAssetBoundsHelper.getSize(instancedPickBoundsSizeHelper)
+      const eps = 1e-4
+      instancedPickBoundsSizeHelper.set(
+        Math.max(instancedPickBoundsSizeHelper.x, eps),
+        Math.max(instancedPickBoundsSizeHelper.y, eps),
+        Math.max(instancedPickBoundsSizeHelper.z, eps),
+      )
+      instancedPickProxyAssetBoxMatrixHelper.compose(
+        instancedPickBoundsCenterHelper,
+        instancedPickProxyIdentityQuaternionHelper,
+        instancedPickBoundsSizeHelper,
+      )
+
+      const instanced = proxy as THREE.InstancedMesh
+      const MAX_PROXY_INSTANCES = 2048
+      const bindingStep = Math.max(1, Math.ceil(bindings.length / MAX_PROXY_INSTANCES))
+      const instanceCount = Math.min(MAX_PROXY_INSTANCES, Math.ceil(bindings.length / bindingStep))
+      ;(instanced as unknown as { count?: number }).count = instanceCount
+
+      // Aggregate bounds in object-local space for pivot calculations.
+      instancedPickProxyPointsBoundsHelper.makeEmpty()
+
+      let instanceWriteIndex = 0
+      for (let bindingIndex = 0; bindingIndex < bindings.length; bindingIndex += bindingStep) {
+        const binding = bindings[bindingIndex]
+        if (!binding) {
+          continue
+        }
+        const slot = binding.slots[0]
+        if (!slot) {
+          continue
+        }
+
+        const mesh = slot.mesh
+        mesh.updateMatrixWorld(true)
+        mesh.getMatrixAt(slot.index, instancedPickProxyInstanceMatrixHelper)
+        instancedPickProxyWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedPickProxyInstanceMatrixHelper)
+        instancedPickProxyLocalMatrixHelper.multiplyMatrices(
+          instancedPickProxyWorldInverseHelper,
+          instancedPickProxyWorldMatrixHelper,
+        )
+
+        // Instance matrix = (assetLocal -> objectLocal) * (unitBox -> assetBounds)
+        instancedPickProxyInstanceMatrixHelper.multiplyMatrices(
+          instancedPickProxyLocalMatrixHelper,
+          instancedPickProxyAssetBoxMatrixHelper,
+        )
+        instanced.setMatrixAt(instanceWriteIndex, instancedPickProxyInstanceMatrixHelper)
+
+        // Expand aggregate bounds using the transformed asset bounds corners.
+        for (let i = 0; i < 8; i += 1) {
+          const corner = instancedPickProxyCornerHelpers[i]
+          if (!corner) {
+            continue
+          }
+          instancedPickProxyPointsBoundsHelper.expandByPoint(
+            instancedPickProxyPointHelper.copy(corner).applyMatrix4(instancedPickProxyLocalMatrixHelper),
+          )
+        }
+
+        instanceWriteIndex += 1
+        if (instanceWriteIndex >= instanceCount) {
+          break
+        }
+      }
+
+      instanced.instanceMatrix.needsUpdate = true
+      instanced.position.set(0, 0, 0)
+      instanced.scale.set(1, 1, 1)
+      instanced.visible = true
+      instanced.updateMatrixWorld(true)
+
+      if (instancedPickProxyPointsBoundsHelper.isEmpty()) {
+        removeInstancedPickProxy(object)
+        return
+      }
+
+      // Persist bounds for pivot use.
+      proxy.userData = proxy.userData ?? {}
+      proxy.userData.instancedPickProxyBounds = {
+        min: [
+          instancedPickProxyPointsBoundsHelper.min.x,
+          instancedPickProxyPointsBoundsHelper.min.y,
+          instancedPickProxyPointsBoundsHelper.min.z,
+        ],
+        max: [
+          instancedPickProxyPointsBoundsHelper.max.x,
+          instancedPickProxyPointsBoundsHelper.max.y,
+          instancedPickProxyPointsBoundsHelper.max.z,
+        ],
+      } satisfies InstancedBoundsPayload
+
       return
     }
 
@@ -366,14 +514,15 @@ export function createPickProxyManager(): PickProxyManager {
       geometry.computeBoundingBox()
       geometry.computeBoundingSphere()
 
-      if (proxy.geometry !== instancedPickProxyGeometry) {
-        proxy.geometry.dispose()
+      const mesh = proxy as THREE.Mesh
+      if (mesh.geometry !== instancedPickProxyGeometry) {
+        mesh.geometry.dispose()
       }
-      proxy.geometry = geometry
-      proxy.position.set(0, 0, 0)
-      proxy.scale.set(1, 1, 1)
-      proxy.visible = true
-      proxy.updateMatrixWorld(true)
+      mesh.geometry = geometry
+      mesh.position.set(0, 0, 0)
+      mesh.scale.set(1, 1, 1)
+      mesh.visible = true
+      mesh.updateMatrixWorld(true)
     } catch {
       instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
       if (instancedPickProxyPointsBoundsHelper.isEmpty()) {

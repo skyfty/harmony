@@ -543,8 +543,20 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    container.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+        return
+      }
+      if (child.name === 'WallMesh') {
+        mesh.visible = false
+      }
+    })
+
+
+
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
-    const needsBodyLoad = bodyAssetId && !getCachedModelObject(bodyAssetId)
+    const needsBodyLoad = bodyAssetId 
     const needsJointLoad = jointAssetId && !getCachedModelObject(jointAssetId)
     const needsCapLoad = endCapAssetId && !getCachedModelObject(endCapAssetId)
     if (bodyAssetId && needsBodyLoad) {
@@ -555,24 +567,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
     if (endCapAssetId && needsCapLoad) {
       scheduleWallAssetLoad(endCapAssetId, node.id, signatureKey)
-    }
-    if (needsBodyLoad || needsJointLoad || needsCapLoad) {
-      // While loading, keep the default wall mesh visible (avoid disappearing walls).
-      // Also release any stale instanced bindings from previous assets.
-      releaseModelInstancesForNode(node.id)
-      delete userData.instancedAssetId
-      options.removeInstancedPickProxy(container)
-
-      const wallGroup = ensureWallGroup(container, node, signatureKey)
-      wallGroup.visible = true
-      updateWallGroupIfNeeded(
-        wallGroup,
-        node.dynamicMesh as WallDynamicMesh,
-        signatureKey,
-        { smoothing: resolveWallSmoothingFromNode(node) },
-      )
-      applyAirWallVisualToWallGroup(wallGroup, isAirWall)
-      return
     }
 
     // Assets are ready: switch to instanced rendering and remove the procedural wall group.

@@ -47,6 +47,21 @@ export async function buildWallMesh(
     });
   }
 
+  // When a body asset is configured, the wall should be rendered only via the specified model asset.
+  // Keep the procedural mesh in the hierarchy for downstream systems, but hide it from rendering.
+  if (wallProps.bodyAssetId) {
+    group.traverse((child: THREE.Object3D) => {
+      const mesh = child as THREE.Mesh;
+      if (!(mesh as any)?.isMesh) {
+        return;
+      }
+      const tag = (mesh.userData as any)?.dynamicMeshType;
+      if (tag === 'Wall') {
+        mesh.visible = false;
+      }
+    });
+  }
+
   deps.applyTransform(group, node);
   deps.applyVisibility(group, node);
 

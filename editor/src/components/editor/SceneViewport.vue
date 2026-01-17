@@ -2870,6 +2870,16 @@ const viewPointNodeScaleHelper = new THREE.Vector3()
 const cameraTransitionCurrentPosition = new THREE.Vector3()
 const cameraTransitionCurrentTarget = new THREE.Vector3()
 
+type InstancedPickProxyBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
+
+function isInstancedPickProxyBoundsPayload(value: unknown): value is InstancedPickProxyBoundsPayload {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const payload = value as Partial<InstancedPickProxyBoundsPayload>
+  return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
+}
+
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
   const relevantIds = new Set(selectedIds)
@@ -2888,19 +2898,31 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
     }
     object.updateMatrixWorld(true)
 
-    const proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
-    if (proxy?.geometry) {
-      if (!proxy.geometry.boundingBox) {
-        proxy.geometry.computeBoundingBox()
-      }
-    }
-
+    const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
     const pivotWorld = new THREE.Vector3()
-    if (proxy?.geometry?.boundingBox) {
-      instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+
+    const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
+    if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
+      instancedPivotCenterLocalHelper
+        .fromArray(proxyBoundsCandidate.min)
+        .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
+        .multiplyScalar(0.5)
       proxy.updateMatrixWorld(true)
       pivotWorld.copy(instancedPivotCenterLocalHelper)
       proxy.localToWorld(pivotWorld)
+    } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
+      const meshProxy = proxy as unknown as THREE.Mesh
+      if (!meshProxy.geometry.boundingBox) {
+        meshProxy.geometry.computeBoundingBox()
+      }
+      if (meshProxy.geometry.boundingBox) {
+        instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+        meshProxy.updateMatrixWorld(true)
+        pivotWorld.copy(instancedPivotCenterLocalHelper)
+        meshProxy.localToWorld(pivotWorld)
+      } else {
+        object.getWorldPosition(pivotWorld)
+      }
     } else {
       object.getWorldPosition(pivotWorld)
     }
@@ -7043,16 +7065,38 @@ function handleTransformChange() {
         })
 
         // For instanced nodes, rotate around the pick-proxy center (not the node origin).
-        const proxy = target.userData?.instancedPickProxy as THREE.Mesh | undefined
-        if (proxy?.geometry) {
-          if (!proxy.geometry.boundingBox) {
-            proxy.geometry.computeBoundingBox()
+        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
+        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
+        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
+          instancedPivotCenterLocalHelper
+            .fromArray(proxyBoundsCandidate.min)
+            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
+            .multiplyScalar(0.5)
+          proxy.updateMatrixWorld(true)
+          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
+          proxy.localToWorld(instancedPivotWorldHelper)
+
+          transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+          if (transformDeltaPosition.lengthSq() > 1e-12) {
+            target.getWorldPosition(transformWorldPositionBuffer)
+            transformWorldPositionBuffer.add(transformDeltaPosition)
+            if (target.parent) {
+              target.parent.worldToLocal(transformWorldPositionBuffer)
+            }
+            target.position.copy(transformWorldPositionBuffer)
+            target.updateMatrixWorld(true)
+            syncInstancedTransform(target, true)
           }
-          if (proxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            proxy.updateMatrixWorld(true)
+        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
+          const meshProxy = proxy as unknown as THREE.Mesh
+          if (!meshProxy.geometry.boundingBox) {
+            meshProxy.geometry.computeBoundingBox()
+          }
+          if (meshProxy.geometry.boundingBox) {
+            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+            meshProxy.updateMatrixWorld(true)
             instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            proxy.localToWorld(instancedPivotWorldHelper)
+            meshProxy.localToWorld(instancedPivotWorldHelper)
 
             transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
             if (transformDeltaPosition.lengthSq() > 1e-12) {
@@ -7096,16 +7140,38 @@ function handleTransformChange() {
         })
 
         // For instanced nodes, keep the pick-proxy center fixed while scaling.
-        const proxy = target.userData?.instancedPickProxy as THREE.Mesh | undefined
-        if (proxy?.geometry) {
-          if (!proxy.geometry.boundingBox) {
-            proxy.geometry.computeBoundingBox()
+        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
+        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
+        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
+          instancedPivotCenterLocalHelper
+            .fromArray(proxyBoundsCandidate.min)
+            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
+            .multiplyScalar(0.5)
+          proxy.updateMatrixWorld(true)
+          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
+          proxy.localToWorld(instancedPivotWorldHelper)
+
+          transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+          if (transformDeltaPosition.lengthSq() > 1e-12) {
+            target.getWorldPosition(transformWorldPositionBuffer)
+            transformWorldPositionBuffer.add(transformDeltaPosition)
+            if (target.parent) {
+              target.parent.worldToLocal(transformWorldPositionBuffer)
+            }
+            target.position.copy(transformWorldPositionBuffer)
+            target.updateMatrixWorld(true)
+            syncInstancedTransform(target, true)
           }
-          if (proxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            proxy.updateMatrixWorld(true)
+        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
+          const meshProxy = proxy as unknown as THREE.Mesh
+          if (!meshProxy.geometry.boundingBox) {
+            meshProxy.geometry.computeBoundingBox()
+          }
+          if (meshProxy.geometry.boundingBox) {
+            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+            meshProxy.updateMatrixWorld(true)
             instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            proxy.localToWorld(instancedPivotWorldHelper)
+            meshProxy.localToWorld(instancedPivotWorldHelper)
 
             transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
             if (transformDeltaPosition.lengthSq() > 1e-12) {
