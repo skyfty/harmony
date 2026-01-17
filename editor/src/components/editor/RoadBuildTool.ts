@@ -492,8 +492,8 @@ export function createRoadBuildTool(options: {
       }
 
       if (session?.points.length) {
-        const isRightButtonActive = (event.buttons & 2) !== 0
-        if (!isRightButtonActive) {
+        const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+        if (!isCameraNavActive) {
           updateCursorPreview(event)
           return true
         }

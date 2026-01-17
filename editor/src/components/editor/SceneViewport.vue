@@ -2204,12 +2204,11 @@ const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
   sceneStore,
+  pointerInteraction,
   rootGroup,
   raycastGroundPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point),
   isAltOverrideActive: () => isAltOverrideActive,
-  disableOrbitForWallBuild,
-  restoreOrbitAfterWallBuild,
   normalizeWallDimensionsForViewport,
 })
 
@@ -2752,20 +2751,6 @@ function restoreOrbitAfterGroundSelection() {
   }
 }
 
-function disableOrbitForWallBuild() {
-  if (!isWallBuildOrbitDisabled) {
-    isWallBuildOrbitDisabled = true
-    requestMapControlDisable()
-  }
-}
-
-function restoreOrbitAfterWallBuild() {
-  if (isWallBuildOrbitDisabled) {
-    isWallBuildOrbitDisabled = false
-    releaseOrbitControlDisable()
-  }
-}
-
 function setOrbitControlOverride(active: boolean) {
   if (isOrbitControlOverrideActive === active) {
     return
@@ -3283,7 +3268,6 @@ const terrainGridController = useTerrainGridController({
 let fallbackLightGroup: THREE.Group | null = null
 let isSelectDragOrbitDisabled = false
 let isGroundSelectionOrbitDisabled = false
-let isWallBuildOrbitDisabled = false
 let orbitDisableCount = 0
 let isOrbitControlOverrideActive = false
 let isAltOverrideActive = false

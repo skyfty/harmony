@@ -1,12 +1,18 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
+import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { SceneNodeComponentState, SceneNode } from '@harmony/schema'
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
 import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSegment } from './WallPreviewRenderer'
 import { GRID_MAJOR_SPACING, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
 import { findSceneNode } from './sceneUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
+
+type PointerInteractionApi = {
+  get: () => PointerInteractionSession | null
+  ensureMoved: (event: PointerEvent) => boolean
+}
 
 export type WallBuildToolHandle = {
   getSession: () => WallBuildToolSession | null
@@ -28,12 +34,11 @@ export type WallBuildToolSession = WallPreviewSession & {
 export function createWallBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   sceneStore: ReturnType<typeof useSceneStore>
+  pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   isAltOverrideActive: () => boolean
-  disableOrbitForWallBuild: () => void
-  restoreOrbitAfterWallBuild: () => void
   normalizeWallDimensionsForViewport: (values: {
     height?: number
     width?: number
@@ -180,7 +185,6 @@ export function createWallBuildTool(options: {
   }
 
   const beginSegmentDrag = (startPoint: THREE.Vector3) => {
-    options.disableOrbitForWallBuild()
     const current = ensureSession()
     hydrateFromSelection(current)
     current.dragStart = startPoint.clone()
@@ -194,7 +198,6 @@ export function createWallBuildTool(options: {
     }
     session.dragStart = null
     session.dragEnd = null
-    options.restoreOrbitAfterWallBuild()
     previewRenderer.markDirty()
   }
 
@@ -322,7 +325,6 @@ export function createWallBuildTool(options: {
     }
     cancelDrag()
     clearSession(true)
-    options.restoreOrbitAfterWallBuild()
   }
 
   return {
@@ -349,8 +351,8 @@ export function createWallBuildTool(options: {
       }
 
       if (session?.dragStart) {
-        const isRightButtonActive = (event.buttons & 2) !== 0
-        if (!isRightButtonActive) {
+        const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+        if (!isCameraNavActive) {
           updateSegmentDrag(event)
           return true
         }
@@ -381,11 +383,17 @@ export function createWallBuildTool(options: {
         if (options.isAltOverrideActive()) {
           return false
         }
-        if (session) {
-          finalize()
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
+        const active = options.pointerInteraction.get()
+        if (active?.kind === 'buildToolRightClick' && active.pointerId === event.pointerId) {
+          const clickWasDrag = active.moved || options.pointerInteraction.ensureMoved(event)
+          if (!clickWasDrag && session) {
+            finalize()
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
+          }
+          // Treat both click and drag as handled so the right-button release does not
+          // fall through to selection tools.
           return true
         }
         return false
@@ -414,7 +422,6 @@ export function createWallBuildTool(options: {
       }
       cancelDrag()
       clearSession(true)
-      options.restoreOrbitAfterWallBuild()
       return true
     },
 
