@@ -165,19 +165,7 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
     icon: 'mdi-pine-tree',
     minScale: 0.8,
     maxScale: 1.35,
-  },
-  water: {
-    label: 'Water',
-    icon: 'mdi-water',
-    minScale: 0.95,
-    maxScale: 1.05,
-  },
-  ground: {
-    label: 'Ground',
-    icon: 'mdi-grass',
-    minScale: 0.9,
-    maxScale: 1.1,
-  },
+  }
 }
 
 export function invalidateAssetManifestCache(): void {
