@@ -150,6 +150,28 @@ const wallSyncIncomingHelper = new THREE.Vector3()
 const wallSyncOutgoingHelper = new THREE.Vector3()
 const wallSyncBisectorHelper = new THREE.Vector3()
 
+const wallInstancedBoundsBox = new THREE.Box3()
+const wallInstancedBoundsTmpPoint = new THREE.Vector3()
+const wallInstancedBoundsCorners = [
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+] as [
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+  THREE.Vector3,
+]
+
 const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 
@@ -168,6 +190,29 @@ function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z'
   }
   target.normalize()
   return new THREE.Quaternion().setFromUnitVectors(base, target)
+}
+
+function expandBoxByTransformedBoundingBox(target: THREE.Box3, bbox: THREE.Box3, matrix: THREE.Matrix4): void {
+  if (!bbox || bbox.isEmpty()) {
+    return
+  }
+
+  const min = bbox.min
+  const max = bbox.max
+
+  wallInstancedBoundsCorners[0].set(min.x, min.y, min.z)
+  wallInstancedBoundsCorners[1].set(min.x, min.y, max.z)
+  wallInstancedBoundsCorners[2].set(min.x, max.y, min.z)
+  wallInstancedBoundsCorners[3].set(min.x, max.y, max.z)
+  wallInstancedBoundsCorners[4].set(max.x, min.y, min.z)
+  wallInstancedBoundsCorners[5].set(max.x, min.y, max.z)
+  wallInstancedBoundsCorners[6].set(max.x, max.y, min.z)
+  wallInstancedBoundsCorners[7].set(max.x, max.y, max.z)
+
+  for (const corner of wallInstancedBoundsCorners) {
+    wallInstancedBoundsTmpPoint.copy(corner).applyMatrix4(matrix)
+    target.expandByPoint(wallInstancedBoundsTmpPoint)
+  }
 }
 
 export function createWallRenderer(options: WallRendererOptions) {
@@ -677,6 +722,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (isAirWall) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
+      delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
       const wallGroup = ensureWallGroup(container, node, signatureKey)
@@ -694,6 +740,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (!wantsInstancing) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
+      delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
       const wallGroup = ensureWallGroup(container, node, signatureKey)
@@ -742,6 +789,10 @@ export function createWallRenderer(options: WallRendererOptions) {
     const definition = node.dynamicMesh as WallDynamicMesh
     const primaryAssetId = bodyAssetId ?? jointAssetId ?? endCapAssetId
     userData.instancedAssetId = primaryAssetId
+    userData.dynamicMeshType = 'Wall'
+
+    wallInstancedBoundsBox.makeEmpty()
+    let hasWallBounds = false
 
     let hasBindings = false
 
@@ -750,6 +801,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox)
         if (localMatrices.length > 0) {
+          for (const localMatrix of localMatrices) {
+            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+            hasWallBounds = true
+          }
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
             assetId: bodyAssetId,
@@ -768,6 +823,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       const useNodeIdForIndex0 = !bodyAssetId
       const localMatrices = computeWallJointLocalMatrices(definition)
       if (localMatrices.length > 0) {
+        const group = getCachedModelObject(jointAssetId)
+        if (group) {
+          for (const localMatrix of localMatrices) {
+            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+            hasWallBounds = true
+          }
+        }
         syncInstancedModelCommittedLocalMatrices({
           nodeId: node.id,
           assetId: jointAssetId,
@@ -786,6 +848,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
         if (localMatrices.length > 0) {
+          for (const localMatrix of localMatrices) {
+            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+            hasWallBounds = true
+          }
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
             assetId: endCapAssetId,
@@ -797,6 +863,15 @@ export function createWallRenderer(options: WallRendererOptions) {
           hasBindings = hasBindings || localMatrices.length > 0
         }
       }
+    }
+
+    if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
+      userData.instancedBounds = {
+        min: [wallInstancedBoundsBox.min.x, wallInstancedBoundsBox.min.y, wallInstancedBoundsBox.min.z],
+        max: [wallInstancedBoundsBox.max.x, wallInstancedBoundsBox.max.y, wallInstancedBoundsBox.max.z],
+      }
+    } else {
+      delete userData.instancedBounds
     }
 
     if (hasBindings) {

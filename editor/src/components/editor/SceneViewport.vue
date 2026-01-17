@@ -194,6 +194,7 @@ import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
+  computeOrientedGroundRectFromObject,
   setBoundingBoxFromObject,
   toEulerLike,
   findSceneNode
@@ -2858,6 +2859,9 @@ const gridHighlightSizeHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
+const selectionHighlightQuaternionHelper = new THREE.Quaternion()
+const selectionHighlightDirectionHelper = new THREE.Vector3()
+const selectionHighlightEulerHelper = new THREE.Euler(0, 0, 0, 'YXZ')
 const selectionHighlights = new Map<string, THREE.Group>()
 const outlineSelectionTargets: THREE.Object3D[] = []
 let nodePickerHighlight: THREE.Group | null = null
@@ -5128,18 +5132,46 @@ function ensureSelectionIndicator(nodeId: string): THREE.Group | null {
 
 function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Object3D) {
   object.updateMatrixWorld(true)
-  object.getWorldPosition(selectionHighlightPositionHelper)
-  setBoundingBoxFromObject(object, selectionHighlightBoundingBox)
-  if (selectionHighlightBoundingBox.isEmpty()) {
-    selectionHighlightSizeHelper.setScalar(0)
-  } else {
-    selectionHighlightBoundingBox.getSize(selectionHighlightSizeHelper)
+  const isWall = (object.userData?.dynamicMeshType as string | null | undefined) === 'Wall'
+
+  let yaw = 0
+  if (isWall) {
+    // Derive yaw by projecting the object's forward vector onto XZ, explicitly ignoring pitch/roll.
+    object.getWorldQuaternion(selectionHighlightQuaternionHelper)
+    selectionHighlightDirectionHelper.set(0, 0, 1).applyQuaternion(selectionHighlightQuaternionHelper)
+    selectionHighlightDirectionHelper.y = 0
+    if (selectionHighlightDirectionHelper.lengthSq() > 1e-10) {
+      selectionHighlightDirectionHelper.normalize()
+      yaw = Math.atan2(selectionHighlightDirectionHelper.x, selectionHighlightDirectionHelper.z)
+    } else {
+      // Fallback for degenerate forward vectors.
+      selectionHighlightEulerHelper.setFromQuaternion(selectionHighlightQuaternionHelper, 'YXZ')
+      yaw = Number.isFinite(selectionHighlightEulerHelper.y) ? selectionHighlightEulerHelper.y : 0
+    }
+  }
+
+  let useOriented = false
+  if (isWall) {
+    useOriented = computeOrientedGroundRectFromObject(object, yaw, selectionHighlightPositionHelper, selectionHighlightSizeHelper)
+  }
+
+  if (!useOriented) {
+    setBoundingBoxFromObject(object, selectionHighlightBoundingBox)
+    if (!selectionHighlightBoundingBox.isEmpty()) {
+      selectionHighlightBoundingBox.getCenter(selectionHighlightPositionHelper)
+      selectionHighlightBoundingBox.getSize(selectionHighlightSizeHelper)
+    } else {
+      object.getWorldPosition(selectionHighlightPositionHelper)
+      selectionHighlightSizeHelper.setScalar(0)
+    }
+    yaw = 0
   }
 
   const width = Math.max(selectionHighlightSizeHelper.x + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
   const depth = Math.max(selectionHighlightSizeHelper.z + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
 
   group.position.set(selectionHighlightPositionHelper.x, GRID_HIGHLIGHT_HEIGHT, selectionHighlightPositionHelper.z)
+  group.rotation.set(0, yaw, 0)
 
   const plane = group.userData.plane as THREE.Mesh | undefined
   const outline = group.userData.outline as THREE.LineSegments | undefined
@@ -7040,6 +7072,9 @@ function handleTransformChange() {
   }
 
   syncInstancedTransform(target, true)
+  // Instanced outline proxies cache per-instance world matrices.
+  // Keep them in sync during TransformControls dragging (e.g. instanced wall assets).
+  syncInstancedOutlineEntryTransform(nodeId)
 
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -7064,6 +7099,7 @@ function handleTransformChange() {
           entry.object.position.copy(transformLocalPositionHelper)
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
+          syncInstancedOutlineEntryTransform(entry.nodeId)
         })
         if (isActiveTranslateTool) {
           transformLastWorldPosition.copy(transformCurrentWorldPosition)
@@ -7084,6 +7120,7 @@ function handleTransformChange() {
           entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
+          syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
         // For instanced nodes, rotate around the pick-proxy center (not the node origin).
@@ -7108,6 +7145,7 @@ function handleTransformChange() {
             target.position.copy(transformWorldPositionBuffer)
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
+            syncInstancedOutlineEntryTransform(nodeId)
           }
         } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
           const meshProxy = proxy as unknown as THREE.Mesh
@@ -7130,6 +7168,7 @@ function handleTransformChange() {
               target.position.copy(transformWorldPositionBuffer)
               target.updateMatrixWorld(true)
               syncInstancedTransform(target, true)
+              syncInstancedOutlineEntryTransform(nodeId)
             }
           }
         }
@@ -7159,6 +7198,7 @@ function handleTransformChange() {
           )
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
+          syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
         // For instanced nodes, keep the pick-proxy center fixed while scaling.
@@ -7183,6 +7223,7 @@ function handleTransformChange() {
             target.position.copy(transformWorldPositionBuffer)
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
+            syncInstancedOutlineEntryTransform(nodeId)
           }
         } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
           const meshProxy = proxy as unknown as THREE.Mesh
@@ -7205,6 +7246,7 @@ function handleTransformChange() {
               target.position.copy(transformWorldPositionBuffer)
               target.updateMatrixWorld(true)
               syncInstancedTransform(target, true)
+              syncInstancedOutlineEntryTransform(nodeId)
             }
           }
         }
