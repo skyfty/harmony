@@ -6816,7 +6816,7 @@ onBeforeUnmount(() => {
                     :asset-id="wallPresetAssetIdModel"
                     asset-type="prefab"
                     :extensions="['wall']"
-                    :thumbnail-size="28"
+                    :thumbnail-size="78"
                     :show-search="false"
                     @update:asset="handleWallPresetAssetChange"
                   />
