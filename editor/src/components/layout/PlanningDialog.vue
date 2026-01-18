@@ -16,6 +16,8 @@ import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, get
 import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
 import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import { isWallPresetFilename } from '@/utils/wallPreset'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
@@ -111,6 +113,8 @@ interface PlanningLayer {
   wallHeightMeters?: number
   /** Wall layer thickness in meters (only used when kind === 'wall'). */
   wallThicknessMeters?: number
+  /** Wall preset prefab asset id (.wall). Only used when kind === 'wall'. */
+  wallPresetAssetId?: string | null
 }
 
 interface PlanningPoint {
@@ -272,7 +276,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
-  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15 },
+  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15, wallPresetAssetId: null },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -1360,6 +1364,7 @@ function buildPlanningSnapshot() {
       floorSmooth: layer.floorSmooth,
       wallHeightMeters: layer.wallHeightMeters,
       wallThicknessMeters: layer.wallThicknessMeters,
+      wallPresetAssetId: layer.wallPresetAssetId ?? null,
     })),
     viewTransform: {
       scale: viewTransform.scale,
@@ -1710,6 +1715,10 @@ function loadPlanningFromScene() {
               typeof (raw as any).wallThicknessMeters === 'number'
                 ? Number((raw as any).wallThicknessMeters)
                 : ((kind ?? preset?.kind) === 'wall' ? 0.15 : undefined),
+            wallPresetAssetId:
+              typeof (raw as any).wallPresetAssetId === 'string'
+                ? (String((raw as any).wallPresetAssetId).trim() || null)
+                : null,
             floorSmooth:
               typeof (raw as any).floorSmooth === 'number'
                 ? Number((raw as any).floorSmooth)
@@ -2280,6 +2289,49 @@ const wallThicknessMetersModel = computed({
     markPlanningDirty()
   },
 })
+
+const wallPresetAssetIdModel = computed<string>({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return ''
+    return typeof layer.wallPresetAssetId === 'string' ? layer.wallPresetAssetId.trim() : ''
+  },
+  set: (value: string) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return
+    const next = typeof value === 'string' ? value.trim() : ''
+    layer.wallPresetAssetId = next.length ? next : null
+    markPlanningDirty()
+  },
+})
+
+function handleWallPresetAssetChange(asset: ProjectAsset | null) {
+  if (propertyPanelDisabled.value) return
+  const layer = selectedScatterTarget.value?.layer
+  if (!layer || layer.kind !== 'wall') return
+
+  if (!asset) {
+    layer.wallPresetAssetId = null
+    markPlanningDirty()
+    return
+  }
+
+  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
+  if (!id) {
+    layer.wallPresetAssetId = null
+    markPlanningDirty()
+    return
+  }
+
+  const filename = asset.description ?? asset.name ?? null
+  if (!isWallPresetFilename(filename)) {
+    return
+  }
+
+  layer.wallPresetAssetId = id
+  markPlanningDirty()
+}
 
 const wallCornerSmoothnessModel = computed({
   get: () => {
@@ -6737,6 +6789,21 @@ onBeforeUnmount(() => {
                   />
                 </div>
 
+                <div class="property-panel__spacing-title">Wall preset</div>
+                <div
+                  class="property-panel__wall-preset"
+                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
+                >
+                  <AssetPickerList
+                    :active="dialogOpen && propertyPanelLayerKind === 'wall'"
+                    :asset-id="wallPresetAssetIdModel"
+                    asset-type="prefab"
+                    :extensions="['wall']"
+                    :show-search="true"
+                    @update:asset="handleWallPresetAssetChange"
+                  />
+                </div>
+
                 <template v-if="selectedScatterTarget && selectedScatterTarget.type === 'polyline'">
                   <div class="property-panel__spacing-title">Corner Smoothness</div>
                   <div class="property-panel__density-row">
@@ -7610,5 +7677,19 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.property-panel__wall-preset {
+  width: 100%;
+}
+
+.property-panel__wall-preset :deep(.asset-picker-list__body) {
+  min-height: 170px;
+  max-height: 260px;
+  padding: 8px 10px;
+}
+
+.property-panel__wall-preset :deep(.asset-picker-list__grid) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 </style>

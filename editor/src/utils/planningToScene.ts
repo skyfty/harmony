@@ -803,6 +803,16 @@ function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, l
   return 0.15
 }
 
+function resolveWallPresetAssetIdFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const value = typeof found?.wallPresetAssetId === 'string' ? String(found.wallPresetAssetId).trim() : ''
+    return value.length ? value : null
+  }
+  return null
+}
+
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   const visit = (list: SceneNode[]): SceneNode | null => {
     for (const node of list) {
@@ -1841,6 +1851,50 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
+
+      const storeAny = sceneStore as any
+      const presetAssetId = resolveWallPresetAssetIdFromPlanningData(planningData, layerId)
+      const presetWallProps = presetAssetId
+        ? await (async () => {
+          try {
+            const loaded = await storeAny.loadWallPreset?.(presetAssetId)
+            const wallProps = loaded?.wallProps ?? null
+            if (!wallProps) {
+              return null
+            }
+
+            const dependencyAssetIds = Array.from(
+              new Set(
+                [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
+                  .map((value: any) => (typeof value === 'string' ? value.trim() : ''))
+                  .filter((value: string) => value.length > 0),
+              ),
+            )
+            if (dependencyAssetIds.length && typeof storeAny.ensurePrefabDependencies === 'function') {
+              await storeAny.ensurePrefabDependencies(dependencyAssetIds, {
+                prefabAssetIdForDownloadProgress: presetAssetId,
+              })
+            }
+
+            return wallProps
+          } catch (error) {
+            console.warn('Failed to load wall preset during planning conversion', presetAssetId, error)
+            return null
+          }
+        })()
+        : null
+
+      const presetPatch: Record<string, unknown> = presetWallProps
+        ? {
+          width: (presetWallProps as any).width,
+          smoothing: (presetWallProps as any).smoothing,
+          isAirWall: Boolean((presetWallProps as any).isAirWall),
+          bodyAssetId: (presetWallProps as any).bodyAssetId ?? null,
+          jointAssetId: (presetWallProps as any).jointAssetId ?? null,
+          endCapAssetId: (presetWallProps as any).endCapAssetId ?? null,
+        }
+        : {}
+
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
         for (let i = 0; i < line.points.length - 1; i += 1) {
@@ -1871,8 +1925,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
             if (component?.id) {
               sceneStore.updateNodeComponentProps(wall.id, component.id, {
+                ...presetPatch,
+                // Planning layer dimensions override preset values.
+                height: wallHeight,
+                thickness: wallThickness,
+                // Per-feature smoothing overrides preset.
                 smoothing,
-                isAirWall: Boolean((line as any).airWallEnabled) || undefined,
+                // Planning decides air wall state.
+                isAirWall: Boolean((line as any).airWallEnabled),
               })
             }
           }
@@ -1904,6 +1964,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             })
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
+
+            const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
+            if (component?.id) {
+              sceneStore.updateNodeComponentProps(wall.id, component.id, {
+                ...presetPatch,
+                // Planning layer dimensions override preset values.
+                height: wallHeight,
+                thickness: wallThickness,
+                // Planning decides air wall state.
+                isAirWall: Boolean((poly as any).airWallEnabled),
+              })
+            }
 
             if (Boolean((poly as any).airWallEnabled)) {
               ensureAirWall(sceneStore, wall)

@@ -14,6 +14,8 @@ const props = withDefaults(
     assetId?: string
     assetType?: string
     seriesId?: string
+    /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
+    extensions?: string[]
     assets?: ProjectAsset[]
     showSearch?: boolean
   }>(),
@@ -22,6 +24,7 @@ const props = withDefaults(
     assetId: '',
     assetType: '',
     seriesId: '',
+    extensions: () => [],
     showSearch: true,
   },
 )
@@ -98,6 +101,23 @@ const filteredAssets = computed(() => {
     : []
   const seriesFilter = props.seriesId?.trim() ?? ''
 
+  const normalizedExtensions = (Array.isArray(props.extensions) ? props.extensions : [])
+    .map((ext) => (typeof ext === 'string' ? ext.trim().toLowerCase().replace(/^\./, '') : ''))
+    .filter((ext) => ext.length > 0)
+
+  const matchesExtension = (asset: ProjectAsset): boolean => {
+    if (!normalizedExtensions.length) {
+      return true
+    }
+    const source = (asset.description ?? asset.name ?? '').trim().toLowerCase()
+    const dotIndex = source.lastIndexOf('.')
+    if (dotIndex < 0 || dotIndex === source.length - 1) {
+      return false
+    }
+    const ext = source.slice(dotIndex + 1)
+    return normalizedExtensions.includes(ext)
+  }
+
   const term = searchTerm.value.trim().toLowerCase()
   return allAssets.value.filter((asset) => {
     if (typeFilters.length && !typeFilters.includes(asset.type)) {
@@ -109,6 +129,11 @@ const filteredAssets = computed(() => {
         return false
       }
     }
+
+    if (!matchesExtension(asset)) {
+      return false
+    }
+
     if (!term) {
       return true
     }

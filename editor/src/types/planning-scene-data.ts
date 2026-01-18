@@ -67,6 +67,8 @@ export interface PlanningLayerState {
   wallHeightMeters?: number
   /** Optional; currently used by wall layers. */
   wallThicknessMeters?: number
+  /** Optional; wall preset prefab asset id (expects .wall). */
+  wallPresetAssetId?: string | null
   /** Optional; controls water edge rounding when converting water layers. */
   waterSmoothing?: number
 }
