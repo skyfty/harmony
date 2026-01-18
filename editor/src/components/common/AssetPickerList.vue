@@ -489,8 +489,12 @@ onMounted(() => {
   inset: 0;
   width: 100%;
   height: 100%;
-  background: rgba(33, 150, 243, 0.08);
+  background: radial-gradient(circle at 30% 20%, rgba(77, 208, 225, 0.18), rgba(33, 150, 243, 0.06) 55%, rgba(0, 0, 0, 0.08));
   overflow: hidden;
+}
+
+.asset-picker-list__img {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
 }
 
 .asset-picker-list__thumbnail :deep(.v-img) {
@@ -502,7 +506,7 @@ onMounted(() => {
 .asset-picker-list__thumbnail :deep(img) {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center;
 }
 
