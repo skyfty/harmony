@@ -16,6 +16,7 @@ const props = withDefaults(
     seriesId?: string
     /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
     extensions?: string[]
+    thumbnailSize?: number
     assets?: ProjectAsset[]
     showSearch?: boolean
   }>(),
@@ -24,7 +25,8 @@ const props = withDefaults(
     assetId: '',
     assetType: '',
     seriesId: '',
-    extensions: () => [],
+      extensions: undefined,
+      thumbnailSize: 78,
     showSearch: true,
   },
 )
@@ -129,10 +131,9 @@ const filteredAssets = computed(() => {
         return false
       }
     }
-
-    if (!matchesExtension(asset)) {
-      return false
-    }
+      if (!matchesExtension(asset)) {
+        return false
+      }
 
     if (!term) {
       return true
@@ -379,12 +380,12 @@ onMounted(() => {
           :data-asset-id="asset.id"
           @click="handleAssetClick(asset)"
         >
-          <div class="asset-picker-list__thumbnail">
+          <div class="asset-picker-list__thumbnail" :style="{ height: (props.thumbnailSize ?? 78) + 'px' }">
             <v-img
               v-if="assetThumbnailUrl(asset)"
               :src="assetThumbnailUrl(asset) || undefined"
               :alt="asset.name"
-              height="68"
+              :height="props.thumbnailSize"
               cover
             />
             <div

@@ -166,6 +166,19 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
     minScale: 0.8,
     maxScale: 1.35,
   }
+  ,
+  water: {
+    label: 'Water Scatter',
+    icon: 'mdi-water',
+    minScale: 0.9,
+    maxScale: 1.1,
+  },
+  ground: {
+    label: 'Ground Scatter',
+    icon: 'mdi-image-filter-hdr',
+    minScale: 0.9,
+    maxScale: 1.1,
+  }
 }
 
 export function invalidateAssetManifestCache(): void {

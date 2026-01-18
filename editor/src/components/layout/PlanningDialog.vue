@@ -6,6 +6,7 @@ import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
+import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import PlanningRulers from '@/components/layout/PlanningRulers.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
@@ -16,7 +17,6 @@ import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, get
 import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
 import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -2289,6 +2289,23 @@ const wallThicknessMetersModel = computed({
     markPlanningDirty()
   },
 })
+
+// Wall preset selection (layer-scoped)
+const selectedWallPreset = ref<string | null>(null)
+watch(
+  () => selectedScatterTarget.value,
+  (target) => {
+    if (!target || target.layer?.kind !== 'wall') {
+      selectedWallPreset.value = null
+      return
+    }
+    const raw = (target.layer as any)?.wallPresetAssetId
+    selectedWallPreset.value = raw ?? null
+  },
+  { immediate: true },
+)
+
+
 
 const wallPresetAssetIdModel = computed<string>({
   get: () => {
@@ -6799,7 +6816,8 @@ onBeforeUnmount(() => {
                     :asset-id="wallPresetAssetIdModel"
                     asset-type="prefab"
                     :extensions="['wall']"
-                    :show-search="true"
+                    :thumbnail-size="28"
+                    :show-search="false"
                     @update:asset="handleWallPresetAssetChange"
                   />
                 </div>

@@ -684,13 +684,13 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
     if (typeof kind === 'string') {
       const normalized = kind.toLowerCase()
       if (
-        normalized === 'road'
-        || normalized === 'guide-route'
-        || normalized === 'floor'
-        || normalized === 'green'
-        || normalized === 'water'
-        || normalized === 'wall'
-        || normalized === 'building'
+        normalized === 'road' ||
+        normalized === 'guide-route' ||
+        normalized === 'floor' ||
+        normalized === 'building' ||
+        normalized === 'water' ||
+        normalized === 'green' ||
+        normalized === 'wall'
       ) {
         return normalized as LayerKind
       }
@@ -747,6 +747,11 @@ function resolveRoadLaneLinesFromPlanningData(planningData: PlanningSceneData, l
     if (typeof val === 'boolean') {
       return Boolean(val)
     }
+    // allow string-like truthy values
+    if (typeof val === 'string') {
+      const s = val.trim().toLowerCase()
+      return s === 'true' || s === '1' || s === 'yes'
+    }
   }
   return false
 }
@@ -801,16 +806,6 @@ function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, l
     }
   }
   return 0.15
-}
-
-function resolveWallPresetAssetIdFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const value = typeof found?.wallPresetAssetId === 'string' ? String(found.wallPresetAssetId).trim() : ''
-    return value.length ? value : null
-  }
-  return null
 }
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
@@ -1851,49 +1846,39 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
-
-      const storeAny = sceneStore as any
-      const presetAssetId = resolveWallPresetAssetIdFromPlanningData(planningData, layerId)
-      const presetWallProps = presetAssetId
-        ? await (async () => {
-          try {
-            const loaded = await storeAny.loadWallPreset?.(presetAssetId)
-            const wallProps = loaded?.wallProps ?? null
-            if (!wallProps) {
-              return null
+      // Attempt to load a layer-scoped wall preset (only once per layer)
+      let layerWallPreset: { prefab?: any; wallProps?: any } | null = null
+      try {
+        const rawLayers = (planningData as any)?.layers
+        if (Array.isArray(rawLayers)) {
+          const found = rawLayers.find((item: any) => item && item.id === layerId)
+          const presetId = found?.wallPresetAssetId
+          if (typeof presetId === 'string' && presetId.trim().length) {
+            try {
+              layerWallPreset = await (sceneStore as any).loadWallPreset(presetId.trim())
+              // Ensure any dependency assets are available (download placeholders)
+              const deps = [] as string[]
+              if (layerWallPreset?.wallProps) {
+                const p = layerWallPreset.wallProps
+                ;[p.bodyAssetId, p.jointAssetId, p.endCapAssetId].forEach((v: any) => {
+                  if (typeof v === 'string' && v.trim()) deps.push(v.trim())
+                })
+              }
+              if (deps.length && (sceneStore as any).ensurePrefabDependencies) {
+                // request downloads/placeholders; ignore result
+                await (sceneStore as any).ensurePrefabDependencies(deps, { prefabAssetIdForDownloadProgress: presetId })
+              }
+            } catch (err) {
+              console.warn('Failed to load wall preset for planning layer', layerId, presetId, err)
+              layerWallPreset = null
             }
-
-            const dependencyAssetIds = Array.from(
-              new Set(
-                [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
-                  .map((value: any) => (typeof value === 'string' ? value.trim() : ''))
-                  .filter((value: string) => value.length > 0),
-              ),
-            )
-            if (dependencyAssetIds.length && typeof storeAny.ensurePrefabDependencies === 'function') {
-              await storeAny.ensurePrefabDependencies(dependencyAssetIds, {
-                prefabAssetIdForDownloadProgress: presetAssetId,
-              })
-            }
-
-            return wallProps
-          } catch (error) {
-            console.warn('Failed to load wall preset during planning conversion', presetAssetId, error)
-            return null
           }
-        })()
-        : null
-
-      const presetPatch: Record<string, unknown> = presetWallProps
-        ? {
-          width: (presetWallProps as any).width,
-          smoothing: (presetWallProps as any).smoothing,
-          isAirWall: Boolean((presetWallProps as any).isAirWall),
-          bodyAssetId: (presetWallProps as any).bodyAssetId ?? null,
-          jointAssetId: (presetWallProps as any).jointAssetId ?? null,
-          endCapAssetId: (presetWallProps as any).endCapAssetId ?? null,
         }
-        : {}
+      } catch (err) {
+        layerWallPreset = null
+      }
+
+      const presetPatch: Record<string, unknown> = {}
 
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
