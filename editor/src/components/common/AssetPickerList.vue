@@ -143,6 +143,17 @@ const filteredAssets = computed(() => {
   })
 })
 
+const gridStyle = computed(() => {
+  const size = Number(props.thumbnailSize ?? 78)
+  const minThumb = Math.max(40, isFinite(size) ? size : 78)
+  // add padding/label space so items have breathing room
+  const colWidth = Math.round(minThumb + 24)
+  return {
+    gridTemplateColumns: `repeat(auto-fit, minmax(${colWidth}px, 1fr))`,
+    ['--thumb-size']: `${minThumb}px`,
+  } as Record<string, string>
+})
+
 function cssEscape(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
     return CSS.escape(value)
@@ -358,7 +369,7 @@ onMounted(() => {
         <v-progress-circular indeterminate color="primary" />
       </div>
 
-      <div v-else ref="gridRef" class="asset-picker-list__grid">
+      <div v-else ref="gridRef" class="asset-picker-list__grid" :style="gridStyle">
         <div
           class="asset-picker-list__tile asset-picker-list__tile--none"
           :class="{ 'asset-picker-list__tile--selected': !selectedAssetId }"
@@ -380,12 +391,11 @@ onMounted(() => {
           :data-asset-id="asset.id"
           @click="handleAssetClick(asset)"
         >
-          <div class="asset-picker-list__thumbnail" :style="{ height: (props.thumbnailSize ?? 78) + 'px' }">
+          <div class="asset-picker-list__thumbnail">
             <v-img
               v-if="assetThumbnailUrl(asset)"
               :src="assetThumbnailUrl(asset) || undefined"
               :alt="asset.name"
-              :height="props.thumbnailSize"
               cover
             />
             <div
@@ -395,7 +405,6 @@ onMounted(() => {
             >
               {{ resolveInitials(asset) }}
             </div>
-            <div class="asset-picker-list__name" :title="asset.name">{{ asset.name }}</div>
           </div>
         </div>
       </div>
@@ -412,6 +421,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 .asset-picker-list__header {
@@ -430,10 +441,11 @@ onMounted(() => {
   flex: 1;
   padding: 8px 14px 8px;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 300px;
+  min-height: 0;
 }
 
 .asset-picker-list__loading {
@@ -451,8 +463,8 @@ onMounted(() => {
 }
 
 .asset-picker-list__tile {
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  aspect-ratio: 1 / 1;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   background: rgba(20, 24, 30, 0.8);
@@ -472,16 +484,18 @@ onMounted(() => {
 }
 
 .asset-picker-list__thumbnail {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 78px;
-  background: rgba(33, 150, 243, 0.18);
+  height: 100%;
+  background: rgba(33, 150, 243, 0.08);
   overflow: hidden;
 }
 
 .asset-picker-list__thumbnail :deep(img) {
   height: 100%;
   width: 100%;
+  object-fit: cover;
 }
 
 .asset-picker-list__thumbnail-placeholder {
@@ -506,24 +520,6 @@ onMounted(() => {
   background: transparent;
 }
 
-.asset-picker-list__name {
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: 6px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(4px);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: rgba(233, 236, 241, 0.95);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  z-index: 1;
-  pointer-events: none;
-}
 
 .asset-picker-list__empty {
   padding: 12px 0 18px;

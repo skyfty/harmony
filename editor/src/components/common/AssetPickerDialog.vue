@@ -227,6 +227,7 @@ watch(
             :series-id="seriesId"
             :assets="assets"
             :show-search="showSearch"
+            :thumbnail-size="50"
             @update:asset="(asset) => emit('update:asset', asset)"
             @layout="handleListLayout"
           />
