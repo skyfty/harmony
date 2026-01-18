@@ -394,6 +394,7 @@ onMounted(() => {
           <div class="asset-picker-list__thumbnail">
             <v-img
               v-if="assetThumbnailUrl(asset)"
+              class="asset-picker-list__img"
               :src="assetThumbnailUrl(asset) || undefined"
               :alt="asset.name"
               cover
@@ -492,10 +493,17 @@ onMounted(() => {
   overflow: hidden;
 }
 
-.asset-picker-list__thumbnail :deep(img) {
-  height: 100%;
+.asset-picker-list__thumbnail :deep(.v-img) {
   width: 100%;
+  height: 100%;
+}
+
+.asset-picker-list__thumbnail :deep(.v-img__img),
+.asset-picker-list__thumbnail :deep(img) {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
+  object-position: center;
 }
 
 .asset-picker-list__thumbnail-placeholder {
