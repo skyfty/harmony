@@ -12,7 +12,7 @@ import { getLastExtensionFromFilenameOrUrl, isImageLikeExtension } from '@harmon
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   cloneCloudSettings,
@@ -938,9 +938,9 @@ function handleSphericalTextureClear() {
           Select a cloud implementation to configure sky cloud parameters.
         </p>
       </div>
-      <AssetDialog
+      <AssetPickerDialog
         v-model="assetDialogVisible"
-        v-model:assetId="assetDialogSelectedId"
+        :asset-id="assetDialogSelectedId"
         :asset-type="ASSET_DIALOG_TYPES"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"

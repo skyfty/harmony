@@ -13,7 +13,7 @@ import {
   createTextureSettings,
 } from '@/types/material'
 import TexturePanel from './TexturePanel.vue'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -1221,9 +1221,9 @@ async function handleImportFileChange(event: Event) {
                 </v-card-actions>
               </v-card>
             </v-dialog>
-            <AssetDialog
+            <AssetPickerDialog
               v-model="assetDialogVisible"
-              v-model:assetId="assetDialogSelectedId"
+              :asset-id="assetDialogSelectedId"
               :asset-type="TEXTURE_ASSET_TYPE"
               :title="assetDialogTitle"
               :anchor="assetDialogAnchor"

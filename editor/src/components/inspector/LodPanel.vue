@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -420,9 +420,9 @@ const levelSummaries = computed(() => {
         </div>
       </div>
 
-      <AssetDialog
+      <AssetPickerDialog
         v-model="modelAssetDialogVisible"
-        v-model:assetId="modelAssetDialogSelectedId"
+        :asset-id="modelAssetDialogSelectedId"
         assetType="model,mesh"
         title="Select Model Asset"
         :anchor="modelAssetDialogAnchor"

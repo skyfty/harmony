@@ -9,7 +9,7 @@ import {
   type DisplayBoardComponentProps,
 } from '@schema/components'
 import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@harmony/schema'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 
@@ -418,9 +418,9 @@ function handleAssetDialogCancel() {
             Clear
           </v-btn>
         </div>
-        <AssetDialog
+        <AssetPickerDialog
           v-model="assetDialogVisible"
-          v-model:assetId="assetDialogSelectedId"
+          :asset-id="assetDialogSelectedId"
           :asset-type="ASSET_DIALOG_TYPES"
           title="选择图片资源"
           confirm-text="选择"

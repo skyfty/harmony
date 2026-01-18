@@ -10,7 +10,7 @@ import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension } from '@harmony
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 
@@ -1187,9 +1187,9 @@ function handleEnvironmentDrop(event: DragEvent) {
 
         
       </div>
-      <AssetDialog
+      <AssetPickerDialog
         v-model="assetDialogVisible"
-        v-model:assetId="assetDialogSelectedId"
+        :asset-id="assetDialogSelectedId"
         :asset-type="HDRI_ASSET_TYPE"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"

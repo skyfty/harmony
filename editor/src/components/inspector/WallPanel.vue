@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import AssetDialog from '@/components/common/AssetDialog.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 
@@ -854,9 +854,9 @@ function applyAirWallUpdate(rawValue: unknown) {
         </div>
       </div>
 
-      <AssetDialog
+      <AssetPickerDialog
         v-model="assetDialogVisible"
-        v-model:assetId="assetDialogSelectedId"
+        :asset-id="assetDialogSelectedId"
         assetType="model,mesh"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"
