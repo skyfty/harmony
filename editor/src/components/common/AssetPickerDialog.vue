@@ -9,6 +9,8 @@ const props = withDefaults(
     assetId?: string
     assetType?: string
     seriesId?: string
+    /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
+    extensions?: string[]
     assets?: ProjectAsset[]
     anchor?: { x: number; y: number } | null
     title?: string
@@ -225,6 +227,7 @@ watch(
             :asset-id="assetId"
             :asset-type="assetType"
             :series-id="seriesId"
+            :extensions="extensions"
             :assets="assets"
             :show-search="showSearch"
             :thumbnail-size="50"

@@ -104,6 +104,7 @@ import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
@@ -172,6 +173,8 @@ import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   clampGuideRouteComponentProps,
 } from '@schema/components'
+
+import type { NodePrefabData } from '@/types/node-prefab'
 import type {
   ViewPointComponentProps,
   DisplayBoardComponentProps,
@@ -2215,6 +2218,61 @@ const wallBuildTool = createWallBuildTool({
   snapPoint: (point) => snapVectorToMajorGrid(point),
   isAltOverrideActive: () => isAltOverrideActive,
   normalizeWallDimensionsForViewport,
+  getWallBrush: () => ({
+    presetAssetId: wallBrushPresetAssetId.value,
+    presetData: wallBrushPresetData.value,
+  }),
+})
+
+type WallPresetData = { prefab: NodePrefabData; wallProps: WallComponentProps }
+
+const wallPresetDialogOpen = ref(false)
+const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const wallBrushPresetAssetId = ref<string | null>(null)
+const wallBrushPresetData = ref<WallPresetData | null>(null)
+let wallBrushPresetLoadToken = 0
+
+function handleOpenWallPresetPicker(anchor: { x: number; y: number }) {
+  wallPresetDialogAnchor.value = anchor
+  wallPresetDialogOpen.value = true
+}
+
+function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
+  wallPresetDialogOpen.value = false
+  wallPresetDialogAnchor.value = null
+  wallBrushPresetAssetId.value = asset?.id ?? null
+}
+
+function handleWallPresetDialogCancel(): void {
+  wallPresetDialogOpen.value = false
+  wallPresetDialogAnchor.value = null
+}
+
+watch(wallBrushPresetAssetId, (assetId) => {
+  const id = typeof assetId === 'string' ? assetId.trim() : ''
+  wallBrushPresetLoadToken += 1
+  const token = wallBrushPresetLoadToken
+
+  if (!id) {
+    wallBrushPresetData.value = null
+    return
+  }
+
+  void sceneStore
+    .loadWallPreset(id)
+    .then((data) => {
+      if (token !== wallBrushPresetLoadToken) {
+        return
+      }
+      wallBrushPresetData.value = data as WallPresetData
+    })
+    .catch((error) => {
+      if (token !== wallBrushPresetLoadToken) {
+        return
+      }
+      console.warn('Failed to load wall preset for brush', id, error)
+      wallBrushPresetData.value = null
+    })
 })
 
 const roadBuildTool = createRoadBuildTool({
@@ -8824,6 +8882,7 @@ defineExpose<SceneViewportHandle>({
         @rotate-selection="handleRotateSelection"
         @capture-screenshot="handleCaptureScreenshot"
         @change-build-tool="handleBuildToolChange"
+        @open-wall-preset-picker="handleOpenWallPresetPicker"
         @toggle-scatter-erase="toggleScatterEraseMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
@@ -8868,6 +8927,17 @@ defineExpose<SceneViewportHandle>({
       accept="image/*"
       @change="handleGroundTextureFileChange"
     >
+
+    <AssetPickerDialog
+      v-model="wallPresetDialogOpen"
+      :asset-id="wallBrushPresetAssetId ?? ''"
+      assetType="prefab"
+      :extensions="['wall']"
+      title="Select Wall Preset"
+      :anchor="wallPresetDialogAnchor"
+      @update:asset="handleWallPresetDialogUpdate"
+      @cancel="handleWallPresetDialogCancel"
+    />
   </div>
 </template>
 

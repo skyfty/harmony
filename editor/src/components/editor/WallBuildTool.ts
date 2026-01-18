@@ -8,6 +8,9 @@ import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSeg
 import { GRID_MAJOR_SPACING, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
 import { findSceneNode } from './sceneUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
+import type { NodePrefabData } from '@/types/node-prefab'
+
+type WallPresetData = { prefab: NodePrefabData; wallProps: WallComponentProps }
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -29,6 +32,8 @@ export type WallBuildToolHandle = {
 export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
   jointAssetId: string | null
+  brushPresetAssetId: string | null
+  brushPresetData: WallPresetData | null
 }
 
 export function createWallBuildTool(options: {
@@ -39,6 +44,7 @@ export function createWallBuildTool(options: {
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   isAltOverrideActive: () => boolean
+  getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
   normalizeWallDimensionsForViewport: (values: {
     height?: number
     width?: number
@@ -67,6 +73,8 @@ export function createWallBuildTool(options: {
       dimensions: options.normalizeWallDimensionsForViewport({}),
       bodyAssetId: null,
       jointAssetId: null,
+      brushPresetAssetId: null,
+      brushPresetData: null,
     }
     return session
   }
@@ -147,6 +155,7 @@ export function createWallBuildTool(options: {
   const hydrateFromSelection = (target: WallBuildToolSession) => {
     const isFreshSession = !target.nodeId && target.segments.length === 0
     if (isFreshSession) {
+      let hydrated = false
       const selectedId = options.sceneStore.selectedNodeId
       if (selectedId) {
         const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
@@ -157,8 +166,32 @@ export function createWallBuildTool(options: {
             | undefined
           target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
           target.jointAssetId = wallComponent?.props?.jointAssetId ?? null
+          target.brushPresetAssetId = null
+          target.brushPresetData = null
+          hydrated = true
         }
       }
+
+      if (!hydrated) {
+        const brush = options.getWallBrush()
+        const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
+          ? brush.presetAssetId.trim()
+          : null
+        target.brushPresetAssetId = presetAssetId
+        target.brushPresetData = brush?.presetData ?? null
+
+        const wallProps = brush?.presetData?.wallProps ?? null
+        if (wallProps) {
+          target.dimensions = options.normalizeWallDimensionsForViewport({
+            height: wallProps.height,
+            width: wallProps.width,
+            thickness: wallProps.thickness,
+          })
+          target.bodyAssetId = wallProps.bodyAssetId ?? null
+          target.jointAssetId = wallProps.jointAssetId ?? null
+        }
+      }
+
       target.dimensions = options.normalizeWallDimensionsForViewport(target.dimensions)
       return
     }
@@ -222,6 +255,7 @@ export function createWallBuildTool(options: {
     }))
 
     let nodeId = session.nodeId
+    const shouldApplyBrushPreset = !nodeId && !!session.brushPresetAssetId
     if (!nodeId) {
       const created = options.sceneStore.createWallNode({
         segments: segmentPayload,
@@ -237,6 +271,14 @@ export function createWallBuildTool(options: {
       session.nodeId = nodeId
       session.segments = pendingSegments
       session.dimensions = getWallNodeDimensions(created)
+
+      if (shouldApplyBrushPreset && session.brushPresetAssetId) {
+        void options.sceneStore
+          .applyWallPresetToNode(nodeId, session.brushPresetAssetId, session.brushPresetData)
+          .catch((error: unknown) => {
+            console.warn('Failed to apply wall preset brush', session?.brushPresetAssetId, error)
+          })
+      }
     } else {
       const updated = options.sceneStore.updateWallNodeGeometry(nodeId, {
         segments: segmentPayload,

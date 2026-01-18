@@ -15,6 +15,7 @@
         :title="tool.label"
         :disabled="buildToolsDisabled"
         @click="handleBuildToolToggle(tool.id)"
+        @contextmenu.prevent.stop="handleBuildToolContextMenu(tool.id, $event)"
       />
       <v-divider vertical />
       <v-btn
@@ -250,6 +251,7 @@ const emit = defineEmits<{
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
+  (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
@@ -426,6 +428,16 @@ function handleBuildToolToggle(tool: BuildTool) {
   }
   const next = activeBuildTool.value === tool ? null : tool
   emit('change-build-tool', next)
+}
+
+function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
+  if (buildToolsDisabled.value) {
+    return
+  }
+  if (tool !== 'wall') {
+    return
+  }
+  emit('open-wall-preset-picker', { x: event.clientX, y: event.clientY })
 }
 
 function handleScatterEraseButtonClick() {
