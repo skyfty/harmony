@@ -11333,17 +11333,17 @@ export const useSceneStore = defineStore('scene', {
       return { prefab, wallProps }
     },
 
-    async applyWallPresetToSelectedWall(assetId: string): Promise<void> {
-      const nodeId = (this.selectedNodeId ?? '').trim()
-      if (!nodeId) {
-        throw new Error('未选择墙体节点')
-      }
+    async applyWallPresetToNode(
+      nodeId: string,
+      assetId: string,
+      presetData?: { prefab: NodePrefabData; wallProps: WallComponentProps } | null,
+    ): Promise<WallComponentProps> {
       const node = findNodeById(this.nodes, nodeId)
       if (!node) {
         throw new Error('墙体节点不存在或已被移除')
       }
 
-      const { prefab, wallProps } = await this.loadWallPreset(assetId)
+      const { prefab, wallProps } = presetData ?? (await this.loadWallPreset(assetId))
 
       if (!node.components?.[WALL_COMPONENT_TYPE]) {
         const result = this.addNodeComponent<typeof WALL_COMPONENT_TYPE>(nodeId, WALL_COMPONENT_TYPE)
@@ -11410,6 +11410,16 @@ export const useSceneStore = defineStore('scene', {
         jointAssetId: wallProps.jointAssetId ?? null,
         endCapAssetId: wallProps.endCapAssetId ?? null,
       } as unknown as Partial<Record<string, unknown>>)
+
+      return wallProps
+    },
+
+    async applyWallPresetToSelectedWall(assetId: string): Promise<void> {
+      const nodeId = (this.selectedNodeId ?? '').trim()
+      if (!nodeId) {
+        throw new Error('未选择墙体节点')
+      }
+      await this.applyWallPresetToNode(nodeId, assetId)
     },
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {

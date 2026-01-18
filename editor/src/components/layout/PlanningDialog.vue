@@ -6816,8 +6816,6 @@ onBeforeUnmount(() => {
                     :asset-id="wallPresetAssetIdModel"
                     asset-type="prefab"
                     :extensions="['wall']"
-                    :thumbnail-size="78"
-                    :show-search="false"
                     @update:asset="handleWallPresetAssetChange"
                   />
                 </div>
@@ -7708,6 +7706,6 @@ onBeforeUnmount(() => {
 }
 
 .property-panel__wall-preset :deep(.asset-picker-list__grid) {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
 }
 </style>

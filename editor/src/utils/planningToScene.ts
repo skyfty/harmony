@@ -119,6 +119,11 @@ export type ConvertPlanningToSceneOptions = {
     setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; }) => Promise<void>
     registerAsset: (asset: ProjectAsset) => Promise<void>
+    applyWallPresetToNode?: (
+      nodeId: string,
+      assetId: string,
+      presetData?: { prefab: unknown; wallProps: Record<string, unknown> }
+    ) => Promise<Record<string, unknown>>
   }
   planningData: PlanningSceneData
   overwriteExisting: boolean
@@ -1847,38 +1852,28 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
       // Attempt to load a layer-scoped wall preset (only once per layer)
-      let layerWallPreset: { prefab?: any; wallProps?: any } | null = null
+      let layerWallPreset: { prefab: unknown; wallProps: Record<string, unknown> } | null = null
+      let layerWallPresetId: string | null = null
       try {
         const rawLayers = (planningData as any)?.layers
         if (Array.isArray(rawLayers)) {
           const found = rawLayers.find((item: any) => item && item.id === layerId)
           const presetId = found?.wallPresetAssetId
           if (typeof presetId === 'string' && presetId.trim().length) {
+            layerWallPresetId = presetId.trim()
             try {
-              layerWallPreset = await (sceneStore as any).loadWallPreset(presetId.trim())
-              // Ensure any dependency assets are available (download placeholders)
-              const deps = [] as string[]
-              if (layerWallPreset?.wallProps) {
-                const p = layerWallPreset.wallProps
-                ;[p.bodyAssetId, p.jointAssetId, p.endCapAssetId].forEach((v: any) => {
-                  if (typeof v === 'string' && v.trim()) deps.push(v.trim())
-                })
-              }
-              if (deps.length && (sceneStore as any).ensurePrefabDependencies) {
-                // request downloads/placeholders; ignore result
-                await (sceneStore as any).ensurePrefabDependencies(deps, { prefabAssetIdForDownloadProgress: presetId })
-              }
+              layerWallPreset = await (sceneStore as any).loadWallPreset(layerWallPresetId)
             } catch (err) {
               console.warn('Failed to load wall preset for planning layer', layerId, presetId, err)
               layerWallPreset = null
+              layerWallPresetId = null
             }
           }
         }
       } catch (err) {
         layerWallPreset = null
+        layerWallPresetId = null
       }
-
-      const presetPatch: Record<string, unknown> = {}
 
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
@@ -1907,10 +1902,21 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
+            if (layerWallPresetId && sceneStore.applyWallPresetToNode) {
+              try {
+                await sceneStore.applyWallPresetToNode(
+                  wall.id,
+                  layerWallPresetId,
+                  layerWallPreset ? layerWallPreset : undefined,
+                )
+              } catch (err) {
+                console.warn('Failed to apply wall preset during planning conversion', wall.id, err)
+              }
+            }
+
             const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
             if (component?.id) {
               sceneStore.updateNodeComponentProps(wall.id, component.id, {
-                ...presetPatch,
                 // Planning layer dimensions override preset values.
                 height: wallHeight,
                 thickness: wallThickness,
@@ -1950,10 +1956,21 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
+            if (layerWallPresetId && sceneStore.applyWallPresetToNode) {
+              try {
+                await sceneStore.applyWallPresetToNode(
+                  wall.id,
+                  layerWallPresetId,
+                  layerWallPreset ? layerWallPreset : undefined,
+                )
+              } catch (err) {
+                console.warn('Failed to apply wall preset during planning conversion', wall.id, err)
+              }
+            }
+
             const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
             if (component?.id) {
               sceneStore.updateNodeComponentProps(wall.id, component.id, {
-                ...presetPatch,
                 // Planning layer dimensions override preset values.
                 height: wallHeight,
                 thickness: wallThickness,
