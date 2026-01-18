@@ -397,7 +397,6 @@ export interface UploadAssetOptions {
   imageHeight?: number | null
   seriesId?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
 }
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
@@ -439,9 +438,6 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   }
   if (typeof options.terrainScatterPreset === 'string' && options.terrainScatterPreset.trim().length) {
     formData.append('terrainScatterPreset', options.terrainScatterPreset.trim())
-  }
-  if (typeof options.mixtureType === 'string' && options.mixtureType.trim().length) {
-    formData.append('mixtureType', options.mixtureType.trim())
   }
   if (Array.isArray(options.categoryPathSegments)) {
     options.categoryPathSegments

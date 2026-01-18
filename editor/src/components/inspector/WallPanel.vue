@@ -705,7 +705,6 @@ function applyAirWallUpdate(rawValue: unknown) {
         v-model="assetDialogVisible"
         v-model:assetId="assetDialogSelectedId"
         assetType="model,mesh"
-        :allowedMixtureTypes="assetDialogTarget === 'body' ? ['WallBody'] : undefined"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"
         @update:asset="handleWallAssetDialogUpdate"

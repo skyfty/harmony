@@ -100,7 +100,6 @@ type AssetData = {
   mimeType?: string | null
   metadata?: Record<string, unknown>
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
   createdAt: Date
   updatedAt: Date
 }
@@ -134,7 +133,6 @@ type AssetMutationPayload = {
   imageWidth?: number | null
   imageHeight?: number | null
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
 }
 
 type ProjectDirectoryAsset = {
@@ -154,7 +152,6 @@ type ProjectDirectoryAsset = {
   imageWidth?: number | null
   imageHeight?: number | null
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
 }
 
 type ProjectDirectory = AssetDirectory<ProjectDirectoryAsset> & {
@@ -632,7 +629,6 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
   const imageWidth = typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null
   const imageHeight = typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null
   const terrainScatterPreset = sanitizeTerrainScatterPreset((asset as AssetDocument).terrainScatterPreset)
-  const mixtureType = sanitizeString((asset as AssetDocument).mixtureType) ?? null
 
   const description = sanitizeString(asset.description) ?? null
   const originalFilename = sanitizeString(asset.originalFilename)
@@ -656,7 +652,6 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
   seriesName,
   series: seriesPayload,
   terrainScatterPreset: terrainScatterPreset ?? null,
-  mixtureType,
     color,
     dimensionLength,
     dimensionWidth,
@@ -708,7 +703,6 @@ function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, Categ
     seriesName: response.seriesName ?? null,
     series: response.series ?? null,
     terrainScatterPreset: response.terrainScatterPreset ?? null,
-    mixtureType: response.mixtureType ?? null,
     color: response.color ?? null,
     dimensionLength: response.dimensionLength ?? null,
     dimensionWidth: response.dimensionWidth ?? null,
@@ -957,28 +951,6 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     }
   }
 
-  if (hasOwn('mixtureType')) {
-    const raw = rawBody.mixtureType
-    if (raw === null) {
-      payload.mixtureType = null
-    } else if (typeof raw === 'string') {
-      const trimmed = sanitizeString(raw)
-      if (!trimmed || ['none', 'null', 'unset'].includes(trimmed.toLowerCase())) {
-        payload.mixtureType = null
-      } else {
-        payload.mixtureType = trimmed
-      }
-    } else if (Array.isArray(raw)) {
-      const first = sanitizeString(raw[0])
-      if (!first || ['none', 'null', 'unset'].includes(first.toLowerCase())) {
-        payload.mixtureType = null
-      } else {
-        payload.mixtureType = first
-      }
-    } else {
-      payload.mixtureType = null
-    }
-  }
 
   return payload
 }
@@ -1054,7 +1026,6 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
           imageWidth: typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null,
           imageHeight: typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null,
           terrainScatterPreset: sanitizeTerrainScatterPreset(asset.terrainScatterPreset) ?? null,
-          mixtureType: sanitizeString(asset.mixtureType) ?? null,
         }
       })
 
@@ -1400,7 +1371,6 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const imageHeight = payload.imageHeight ?? null
   const color = payload.color ?? null
   const terrainScatterPreset = payload.terrainScatterPreset ?? null
-  const mixtureType = payload.mixtureType ?? null
 
   const asset = await AssetModel.create({
     name: payload.name ?? fileInfo.originalFilename ?? fileInfo.fileKey,
@@ -1424,7 +1394,6 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     originalFilename: fileInfo.originalFilename,
     mimeType: fileInfo.mimeType,
     terrainScatterPreset,
-    mixtureType,
   })
 
   const populated = (await asset.populate([
@@ -1467,9 +1436,6 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
   if (payload.terrainScatterPreset !== undefined) {
     updates.terrainScatterPreset = payload.terrainScatterPreset ?? null
-  }
-  if (payload.mixtureType !== undefined) {
-    updates.mixtureType = payload.mixtureType ?? null
   }
   if (payload.tagIds) {
     const tagIds = payload.tagIds.filter((tagId) => Types.ObjectId.isValid(tagId))

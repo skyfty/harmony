@@ -27,7 +27,7 @@ import {
   ASSET_THUMBNAIL_WIDTH,
   createThumbnailFromCanvas,
 } from '@/utils/assetThumbnail'
-import { terrainScatterPresets, mixtureTypeOptions, type MixtureType } from '@/resources/projectProviders/asset'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   model: '#26c6da',
@@ -104,7 +104,6 @@ type UploadAssetEntry = {
   aiLoading: boolean
   hasPendingChanges: boolean
   terrainScatterPreset: TerrainScatterCategory | null
-  mixtureType: MixtureType | null
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -261,12 +260,6 @@ function handleEntryScatterPresetChange(
 ): void {
   const normalized = typeof value === 'string' && value.trim().length ? (value as TerrainScatterCategory) : null
   entry.terrainScatterPreset = normalized
-  markEntryDirty(entry)
-}
-
-function handleEntryMixtureTypeChange(entry: UploadAssetEntry, value: MixtureType | string | null): void {
-  const normalized = typeof value === 'string' && value.trim().length ? (value as MixtureType) : null
-  entry.mixtureType = normalized
   markEntryDirty(entry)
 }
 
@@ -465,7 +458,6 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     aiLoading: false,
     hasPendingChanges: false,
     terrainScatterPreset: asset.terrainScatterPreset ?? null,
-    mixtureType: (asset.mixtureType as MixtureType | null | undefined) ?? null,
   }
 }
 
@@ -1003,7 +995,6 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
           imageWidth,
           imageHeight,
           terrainScatterPreset: entry.terrainScatterPreset ?? null,
-          mixtureType: entry.mixtureType ?? null,
         })
         const mapped = mapServerAssetToProjectAsset(serverAsset)
         const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
@@ -1166,22 +1157,6 @@ function handleUploadAll(): void {
                           </div>
                         </template>
                       </v-select>
-                    </div>
-
-                    <div class="upload-entry__mixture-row">
-                      <v-select
-                        :model-value="entry.mixtureType"
-                        :items="mixtureTypeOptions"
-                        item-title="label"
-                        item-value="value"
-                        label="Mixture Type"
-                        density="compact"
-                        variant="underlined"
-                        clearable
-                        hide-details
-                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                        @update:model-value="(value) => handleEntryMixtureTypeChange(entry, value as MixtureType | null)"
-                      />
                     </div>
 
                     <div class="upload-entry__color-row">

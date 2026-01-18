@@ -32,7 +32,6 @@ export interface ServerAssetDto {
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
 }
 
 export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
@@ -106,10 +105,6 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     terrainScatterPreset:
       'terrainScatterPreset' in asset
         ? ((asset.terrainScatterPreset as TerrainScatterCategory | null | undefined) ?? null)
-        : undefined,
-    mixtureType:
-      'mixtureType' in asset
-        ? (typeof asset.mixtureType === 'string' && asset.mixtureType.trim().length ? asset.mixtureType.trim() : null)
         : undefined,
     gleaned: false,
   }

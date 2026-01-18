@@ -14,7 +14,6 @@ const props = withDefaults(
     assetId?: string
     assetType?: string
     seriesId?: string
-    allowedMixtureTypes?: string[]
     assets?: ProjectAsset[]
     anchor?: { x: number; y: number } | null
     title?: string
@@ -316,9 +315,7 @@ const filteredAssets = computed(() => {
     ? typeFilterRaw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
     : []
   const seriesFilter = props.seriesId?.trim() ?? ''
-  const allowedMixtureTypes = Array.isArray(props.allowedMixtureTypes)
-    ? props.allowedMixtureTypes.map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0)
-    : []
+
   const term = searchTerm.value.trim().toLowerCase()
   return allAssets.value.filter((asset) => {
     if (typeFilters.length && !typeFilters.includes(asset.type)) {
@@ -327,12 +324,6 @@ const filteredAssets = computed(() => {
     if (seriesFilter) {
       const assetSeries = asset.seriesId?.trim() ?? ''
       if (assetSeries !== seriesFilter) {
-        return false
-      }
-    }
-    if (allowedMixtureTypes.length) {
-      const mixtureType = typeof asset.mixtureType === 'string' ? asset.mixtureType.trim() : ''
-      if (!mixtureType || !allowedMixtureTypes.includes(mixtureType)) {
         return false
       }
     }

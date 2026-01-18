@@ -35,7 +35,6 @@ const assetSchema = new Schema<AssetDocument>(
     metadata: { type: Schema.Types.Mixed },
     // Allow clearing the preset back to null while keeping valid enum values enforced
     terrainScatterPreset: { type: String, enum: [...TerrainScatterCategories, null], default: null },
-    mixtureType: { type: String, default: null, trim: true },
   },
   {
     timestamps: true,
@@ -48,6 +47,5 @@ assetSchema.index({ type: 1, createdAt: -1 })
 assetSchema.index({ tags: 1 })
 assetSchema.index({ seriesId: 1 })
 assetSchema.index({ terrainScatterPreset: 1 })
-assetSchema.index({ mixtureType: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)

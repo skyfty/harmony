@@ -26,6 +26,5 @@ export interface ProjectAsset {
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
-  mixtureType?: string | null
   gleaned: boolean
 }
