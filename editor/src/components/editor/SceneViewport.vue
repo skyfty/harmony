@@ -99,6 +99,7 @@ import {createPrimitiveMesh}  from '@harmony/schema'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
+import { isWallPresetFilename } from '@/utils/wallPreset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
@@ -5700,6 +5701,7 @@ async function handlePointerDown(event: PointerEvent) {
     Boolean(selectedAssetId) &&
     Boolean(selectedAsset) &&
     (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab') &&
+    !isWallPresetAsset(selectedAsset) &&
     !sceneStore.draggingAssetId
 
   if (event.button === 0 && canPlaceSelectedAsset) {
@@ -6583,6 +6585,16 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
   return getLastExtensionFromFilenameOrUrl(source)
 }
 
+function isWallPresetAsset(asset: ProjectAsset | null): boolean {
+  if (!asset) {
+    return false
+  }
+  if (typeof asset.description === 'string' && asset.description.length > 0 && isWallPresetFilename(asset.description)) {
+    return true
+  }
+  return inferAssetExtension(asset) === '.wall'
+}
+
 function isDisplayBoardCompatibleAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (!asset) {
     return false
@@ -6818,6 +6830,18 @@ function handleViewportDragOver(event: DragEvent) {
     return
   }
 
+  // Wall presets (.wall) are not placeable in the viewport.
+  if (asset && isWallPresetAsset(asset)) {
+    event.preventDefault()
+    isDragHovering.value = true
+    updateGridHighlight(null)
+    dragPreview.dispose()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'none'
+    }
+    return
+  }
+
   const point = computeDropPoint(event)
   event.preventDefault()
   if (event.dataTransfer) {
@@ -6864,6 +6888,13 @@ async function handleViewportDrop(event: DragEvent) {
   const asset = info.asset ?? sceneStore.getAsset(assetId) ?? null
   const assetType = asset?.type ?? null
   const isTexture = assetType === 'texture' || assetType === 'image'
+
+  if (asset && isWallPresetAsset(asset)) {
+    sceneStore.setDraggingAssetObject(null)
+    updateGridHighlight(null)
+    restoreGridHighlightForSelection()
+    return
+  }
 
   if (asset && isDisplayBoardCompatibleAsset(asset)) {
     const target = resolveDisplayBoardDropTarget(event)

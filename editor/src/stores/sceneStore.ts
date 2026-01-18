@@ -162,6 +162,7 @@ import {
   type LodPresetData,
   type LodPresetAssetReference,
 } from '@/utils/lodPreset'
+import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
@@ -494,6 +495,7 @@ const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
+const WALL_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
@@ -819,9 +821,11 @@ function normalizeNodeComponents(
         height: (existing?.props as { height?: number })?.height ?? baseProps.height,
         width: (existing?.props as { width?: number })?.width ?? baseProps.width,
         thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+        smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         jointAssetId: (existingProps as { jointAssetId?: string | null }).jointAssetId ?? baseProps.jointAssetId,
+        endCapAssetId: (existingProps as { endCapAssetId?: string | null }).endCapAssetId ?? baseProps.endCapAssetId,
       }),
     )
 
@@ -11136,6 +11140,276 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return registered
+    },
+
+    findWallPresetAssetByFilename(filename: string): ProjectAsset | null {
+      const normalized = typeof filename === 'string' ? filename.trim().toLowerCase() : ''
+      if (!normalized || !isWallPresetFilename(normalized)) {
+        return null
+      }
+      const categories = Object.values(this.assetCatalog ?? {})
+      for (const list of categories) {
+        if (!Array.isArray(list)) {
+          continue
+        }
+        for (const asset of list) {
+          if (!asset || asset.type !== 'prefab') {
+            continue
+          }
+          const description = typeof asset.description === 'string' ? asset.description.trim().toLowerCase() : ''
+          if (description && description === normalized && isWallPresetFilename(description)) {
+            return asset
+          }
+        }
+      }
+      return null
+    },
+
+    async saveWallPreset(payload: {
+      name: string
+      nodeId?: string | null
+      assetId?: string | null
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      const nodeId = (payload.nodeId ?? this.selectedNodeId ?? '').trim()
+      if (!nodeId) {
+        throw new Error('未选择墙体节点')
+      }
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        throw new Error('墙体节点不存在或已被移除')
+      }
+      const component = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      if (!component) {
+        throw new Error('墙体节点缺少 Wall 组件')
+      }
+
+      const name = typeof payload.name === 'string' ? payload.name : ''
+      const sanitizedName = normalizePrefabName(name) || 'Wall Preset'
+      const wallProps = clampWallProps(component.props ?? null)
+      const dependencyAssetIds = Array.from(
+        new Set(
+          [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter((value) => value.length > 0),
+        ),
+      )
+
+      const root: SceneNode = {
+        id: generateUuid(),
+        name: sanitizedName,
+        nodeType: 'Group',
+        position: createVector(0, 0, 0),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        visible: true,
+        locked: false,
+        groupExpanded: false,
+        components: {
+          [WALL_COMPONENT_TYPE]: {
+            id: generateUuid(),
+            type: WALL_COMPONENT_TYPE,
+            enabled: true,
+            props: wallProps,
+          },
+        },
+      }
+
+      const prefabData: NodePrefabData = {
+        formatVersion: NODE_PREFAB_FORMAT_VERSION,
+        name: sanitizedName,
+        root: prepareNodePrefabRoot(root, { regenerateIds: false }),
+      }
+
+      if (dependencyAssetIds.length) {
+        const assetIndexSubset = buildAssetIndexSubsetForPrefab(this.assetIndex, dependencyAssetIds)
+        if (assetIndexSubset) {
+          prefabData.assetIndex = assetIndexSubset
+        }
+        const packageAssetMapSubset = buildPackageAssetMapSubsetForPrefab(this.packageAssetMap, dependencyAssetIds)
+        if (packageAssetMapSubset) {
+          prefabData.packageAssetMap = packageAssetMapSubset
+        }
+      }
+
+      const serialized = JSON.stringify(prefabData, null, 2)
+      const fileName = buildWallPresetFilename(sanitizedName)
+      const assetId = typeof payload.assetId === 'string' && payload.assetId.trim().length
+        ? payload.assetId.trim()
+        : generateUuid()
+
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      if (payload.assetId) {
+        const existing = this.getAsset(assetId)
+        if (!existing) {
+          throw new Error('墙体预设资源不存在')
+        }
+        if (existing.type !== 'prefab') {
+          throw new Error('指定资源并非墙体预设')
+        }
+        const updated: ProjectAsset = {
+          ...existing,
+          name: sanitizedName,
+          description: fileName,
+          previewColor: WALL_PRESET_PREVIEW_COLOR,
+        }
+        const categoryId = determineAssetCategoryId(updated)
+        const sourceMeta = this.assetIndex[assetId]?.source
+        return this.registerAsset(updated, {
+          categoryId,
+          source: sourceMeta,
+          commitOptions: { updateNodes: false },
+        })
+      }
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: sanitizedName,
+        type: 'prefab',
+        downloadUrl: assetId,
+        previewColor: WALL_PRESET_PREVIEW_COLOR,
+        thumbnail: null,
+        description: fileName,
+        gleaned: true,
+      }
+      const categoryId = determineAssetCategoryId(projectAsset)
+      const registered = this.registerAsset(projectAsset, {
+        categoryId,
+        source: { type: 'local' },
+        commitOptions: { updateNodes: false },
+      })
+
+      if (payload.select !== false) {
+        this.setActiveDirectory(categoryId)
+        this.selectAsset(registered.id)
+      }
+
+      return registered
+    },
+
+    async loadWallPreset(assetId: string): Promise<{ prefab: NodePrefabData; wallProps: WallComponentProps }> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('墙体预设资源不存在')
+      }
+      if (asset.type !== 'prefab') {
+        throw new Error('指定资源并非墙体预设')
+      }
+      if (!isWallPresetFilename(asset.description ?? null)) {
+        throw new Error('指定资源并非 .wall 墙体预设')
+      }
+
+      const assetCache = useAssetCacheStore()
+      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
+        await assetCache.downloaProjectAsset(asset)
+        entry = assetCache.getEntry(assetId)
+      }
+      if (!entry || !entry.blob) {
+        throw new Error('无法加载墙体预设数据')
+      }
+
+      assetCache.touch(assetId)
+      const text = await entry.blob.text()
+      const prefab = parseNodePrefab(text)
+
+      const component = prefab.root.components?.[WALL_COMPONENT_TYPE] as
+        | SceneNodeComponentState<WallComponentProps>
+        | undefined
+      if (!component) {
+        throw new Error('墙体预设缺少 Wall 组件数据')
+      }
+      const wallProps = clampWallProps(component.props ?? null)
+      return { prefab, wallProps }
+    },
+
+    async applyWallPresetToSelectedWall(assetId: string): Promise<void> {
+      const nodeId = (this.selectedNodeId ?? '').trim()
+      if (!nodeId) {
+        throw new Error('未选择墙体节点')
+      }
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        throw new Error('墙体节点不存在或已被移除')
+      }
+
+      const { prefab, wallProps } = await this.loadWallPreset(assetId)
+
+      if (!node.components?.[WALL_COMPONENT_TYPE]) {
+        const result = this.addNodeComponent<typeof WALL_COMPONENT_TYPE>(nodeId, WALL_COMPONENT_TYPE)
+        if (!result) {
+          throw new Error('无法为节点添加 Wall 组件')
+        }
+      }
+
+      const refreshed = findNodeById(this.nodes, nodeId)
+      const wallComponent = refreshed?.components?.[WALL_COMPONENT_TYPE] as
+        | SceneNodeComponentState<WallComponentProps>
+        | undefined
+      if (!wallComponent) {
+        throw new Error('Wall 组件不可用')
+      }
+
+      const dependencyAssetIds = Array.from(
+        new Set(
+          [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter((value) => value.length > 0),
+        ),
+      )
+      const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
+      const prefabAssetIndex = prefab.assetIndex && isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
+      const prefabPackageAssetMap = prefab.packageAssetMap && isPackageAssetMap(prefab.packageAssetMap)
+        ? prefab.packageAssetMap
+        : undefined
+
+      if (prefabAssetIndex || prefabPackageAssetMap) {
+        const { next: mergedIndex, changed: assetIndexChanged } = mergeAssetIndexEntries(
+          this.assetIndex,
+          prefabAssetIndex,
+          dependencyFilter,
+        )
+        if (assetIndexChanged) {
+          this.assetIndex = mergedIndex
+        }
+        const { next: mergedPackageMap, changed: packageMapChanged } = mergePackageAssetMapEntries(
+          this.packageAssetMap,
+          prefabPackageAssetMap,
+          dependencyFilter,
+        )
+        if (packageMapChanged) {
+          this.packageAssetMap = mergedPackageMap
+        }
+      }
+
+      if (dependencyAssetIds.length) {
+        await this.ensurePrefabDependencies(dependencyAssetIds, {
+          prefabAssetIdForDownloadProgress: assetId,
+          prefabAssetIndex: prefabAssetIndex ?? null,
+          prefabPackageAssetMap: prefabPackageAssetMap ?? null,
+        })
+      }
+
+      this.updateNodeComponentProps(nodeId, wallComponent.id, {
+        height: wallProps.height,
+        width: wallProps.width,
+        thickness: wallProps.thickness,
+        smoothing: wallProps.smoothing,
+        isAirWall: wallProps.isAirWall,
+        bodyAssetId: wallProps.bodyAssetId ?? null,
+        jointAssetId: wallProps.jointAssetId ?? null,
+        endCapAssetId: wallProps.endCapAssetId ?? null,
+      } as unknown as Partial<Record<string, unknown>>)
     },
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {

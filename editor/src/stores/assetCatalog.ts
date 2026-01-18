@@ -4,7 +4,18 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@harmony/schema'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'hdri'| 'others'
+  key:
+    | 'models'
+    | 'meshes'
+    | 'images'
+    | 'textures'
+    | 'materials'
+    | 'behaviors'
+    | 'prefabs'
+    | 'wallPresets'
+    | 'videos'
+    | 'hdri'
+    | 'others'
   assetType?: AssetType
   id: string
   label: string
@@ -64,6 +75,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
     label: 'Prefabs',
     extensions: ['.prefab', '.lod'],
+  },
+  {
+    key: 'wallPresets',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`,
+    label: 'Wall Presets',
+    extensions: ['.wall'],
   },
   {
     key: 'videos',

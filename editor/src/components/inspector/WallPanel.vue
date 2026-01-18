@@ -6,6 +6,7 @@ import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import AssetDialog from '@/components/common/AssetDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
+import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -48,6 +49,16 @@ const assetDialogTitle = computed(() => {
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
+
+const panelDropAreaRef = ref<HTMLElement | null>(null)
+const wallPresetDropActive = ref(false)
+const wallPresetFeedbackMessage = ref<string | null>(null)
+
+const savePresetDialogVisible = ref(false)
+const savePresetName = ref('')
+const overwriteConfirmDialogVisible = ref(false)
+const overwriteTargetAssetId = ref<string | null>(null)
+const overwriteTargetFilename = ref<string | null>(null)
 
 
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
@@ -112,9 +123,11 @@ watch(selectedNode, () => {
   bodyDropActive.value = false
   jointDropActive.value = false
   capDropActive.value = false
+  wallPresetDropActive.value = false
   bodyDropProcessing.value = false
   jointDropProcessing.value = false
   capDropProcessing.value = false
+  wallPresetFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
   jointFeedbackMessage.value = null
   capFeedbackMessage.value = null
@@ -170,6 +183,125 @@ function validateWallAssetId(assetId: string): string | null {
     return 'Only model assets can be assigned here.'
   }
   return null
+}
+
+function isWallPresetAsset(asset: ProjectAsset | null): boolean {
+  if (!asset) {
+    return false
+  }
+  return isWallPresetFilename(asset.description ?? asset.name ?? null)
+}
+
+function resolveWallPresetAssetId(event: DragEvent): string | null {
+  const assetId = resolveDragAssetId(event)
+  if (!assetId) {
+    return null
+  }
+  const asset = sceneStore.getAsset(assetId)
+  if (!isWallPresetAsset(asset)) {
+    return null
+  }
+  return assetId
+}
+
+function handleWallPresetDragEnterCapture(event: DragEvent): void {
+  const presetId = resolveWallPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+  wallPresetDropActive.value = true
+  wallPresetFeedbackMessage.value = null
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handleWallPresetDragOverCapture(event: DragEvent): void {
+  const presetId = resolveWallPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+  wallPresetDropActive.value = true
+  wallPresetFeedbackMessage.value = null
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handleWallPresetDragLeaveCapture(event: DragEvent): void {
+  if (shouldDeactivateDropArea(panelDropAreaRef.value, event)) {
+    wallPresetDropActive.value = false
+  }
+}
+
+async function handleWallPresetDropCapture(event: DragEvent): Promise<void> {
+  const presetId = resolveWallPresetAssetId(event)
+  if (!presetId) {
+    return
+  }
+
+  wallPresetDropActive.value = false
+  wallPresetFeedbackMessage.value = null
+  event.preventDefault()
+  event.stopPropagation()
+
+  try {
+    await sceneStore.applyWallPresetToSelectedWall(presetId)
+  } catch (error) {
+    console.error('Failed to apply wall preset', error)
+    wallPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to apply wall preset.'
+  }
+}
+
+function openSaveWallPresetDialog(): void {
+  if (!wallComponent.value) {
+    return
+  }
+  wallPresetFeedbackMessage.value = null
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
+  savePresetName.value = (selectedNode.value?.name?.trim() ? selectedNode.value!.name!.trim() : 'Wall Preset')
+  savePresetDialogVisible.value = true
+}
+
+async function confirmSaveWallPreset(): Promise<void> {
+  const name = savePresetName.value?.trim() ?? ''
+  const filename = buildWallPresetFilename(name)
+  const existing = sceneStore.findWallPresetAssetByFilename(filename)
+  if (existing) {
+    overwriteTargetAssetId.value = existing.id
+    overwriteTargetFilename.value = filename
+    overwriteConfirmDialogVisible.value = true
+    return
+  }
+  await performSaveWallPreset(null)
+}
+
+async function performSaveWallPreset(overwriteAssetId: string | null): Promise<void> {
+  const name = savePresetName.value?.trim() ?? ''
+  try {
+    await sceneStore.saveWallPreset({
+      name,
+      nodeId: selectedNodeId.value ?? null,
+      assetId: overwriteAssetId,
+      select: true,
+    })
+    savePresetDialogVisible.value = false
+    overwriteConfirmDialogVisible.value = false
+    overwriteTargetAssetId.value = null
+    overwriteTargetFilename.value = null
+  } catch (error) {
+    console.error('Failed to save wall preset', error)
+    wallPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to save wall preset.'
+  }
+}
+
+function cancelOverwriteWallPreset(): void {
+  overwriteConfirmDialogVisible.value = false
+  overwriteTargetAssetId.value = null
+  overwriteTargetFilename.value = null
 }
 
 function openWallAssetDialog(target: 'body' | 'joint' | 'cap', event?: MouseEvent): void {
@@ -502,6 +634,16 @@ function applyAirWallUpdate(rawValue: unknown) {
       <div class="wall-panel-header">
         <span class="wall-panel-title">Wall</span>
         <v-spacer />
+        <v-btn
+          v-if="wallComponent"
+          icon
+          variant="text"
+          size="small"
+          class="component-menu-btn"
+          @click.stop="openSaveWallPresetDialog"
+        >
+          <v-icon size="18">mdi-content-save</v-icon>
+        </v-btn>
         <v-menu
           v-if="wallComponent"
           location="bottom end"
@@ -539,70 +681,81 @@ function applyAirWallUpdate(rawValue: unknown) {
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="wall-field-grid">
-        <div class="wall-field-labels">
-          <span>Corner Smoothness</span>
-          <span>{{ smoothingDisplay }}</span>
-        </div>
-        <v-slider
-          :model-value="localSmoothing"
-          :min="0"
-          :max="1"
-          :step="0.01"
-          density="compact"
-          track-color="rgba(77, 208, 225, 0.4)"
-          color="primary"
-          @update:modelValue="(value) => { localSmoothing = Number(value); applySmoothingUpdate(value) }"
-        />
-        <v-text-field
-          v-model.number="localHeight"
-          label="Height (m)"
-          type="number"
-          density="compact"
-          variant="underlined"
-          class="slider-input"
-          step="0.1"
-          min="0.5"
-          @blur="applyDimensions"
-          inputmode="decimal"
-          @keydown.enter.prevent="applyDimensions"
-        />
-        <v-text-field
-          v-model.number="localWidth"
-          label="Width (m)"
-          type="number"
-          density="compact"
-          variant="underlined"
-          class="slider-input"
-          step="0.05"
-          min="0.1"
-          @blur="applyDimensions"
-          inputmode="decimal"
-          @keydown.enter.prevent="applyDimensions"
-        />
-        <v-text-field
-          v-model.number="localThickness"
-          label="Thickness (m)"
-          type="number"
-          class="slider-input"
-          density="compact"
-                inputmode="decimal"
-          variant="underlined"
-          step="0.05"
-          min="0.05"
-          @blur="applyDimensions"
-          @keydown.enter.prevent="applyDimensions"
-        />
-        <v-switch
-          :model-value="localIsAirWall"
-          label="Air Wall"
-          density="compact"
-          hide-details
-          @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
-        />
-      </div>
+      <div
+        class="wall-panel-drop-surface"
+        ref="panelDropAreaRef"
+        :class="{ 'is-wall-preset-active': wallPresetDropActive }"
+        @dragenter.capture="handleWallPresetDragEnterCapture"
+        @dragover.capture="handleWallPresetDragOverCapture"
+        @dragleave.capture="handleWallPresetDragLeaveCapture"
+        @drop.capture="handleWallPresetDropCapture"
+      >
+        <p v-if="wallPresetFeedbackMessage" class="asset-feedback wall-preset-feedback">{{ wallPresetFeedbackMessage }}</p>
 
-      <div class="wall-asset-section">
+        <div class="wall-field-grid">
+          <div class="wall-field-labels">
+            <span>Corner Smoothness</span>
+            <span>{{ smoothingDisplay }}</span>
+          </div>
+          <v-slider
+            :model-value="localSmoothing"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            density="compact"
+            track-color="rgba(77, 208, 225, 0.4)"
+            color="primary"
+            @update:modelValue="(value) => { localSmoothing = Number(value); applySmoothingUpdate(value) }"
+          />
+          <v-text-field
+            v-model.number="localHeight"
+            label="Height (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.1"
+            min="0.5"
+            @blur="applyDimensions"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyDimensions"
+          />
+          <v-text-field
+            v-model.number="localWidth"
+            label="Width (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.05"
+            min="0.1"
+            @blur="applyDimensions"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyDimensions"
+          />
+          <v-text-field
+            v-model.number="localThickness"
+            label="Thickness (m)"
+            type="number"
+            class="slider-input"
+            density="compact"
+            inputmode="decimal"
+            variant="underlined"
+            step="0.05"
+            min="0.05"
+            @blur="applyDimensions"
+            @keydown.enter.prevent="applyDimensions"
+          />
+          <v-switch
+            :model-value="localIsAirWall"
+            label="Air Wall"
+            density="compact"
+            hide-details
+            @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
+          />
+        </div>
+
+        <div class="wall-asset-section">
         <div
           class="asset-model-panel"
           ref="bodyDropAreaRef"
@@ -710,6 +863,47 @@ function applyAirWallUpdate(rawValue: unknown) {
         @update:asset="handleWallAssetDialogUpdate"
         @cancel="handleWallAssetDialogCancel"
       />
+
+      <v-dialog v-model="savePresetDialogVisible" max-width="420">
+        <v-card>
+          <v-card-title>Save Wall Preset</v-card-title>
+          <v-card-text>
+            <v-text-field
+              v-model="savePresetName"
+              label="Preset Name"
+              density="compact"
+              variant="underlined"
+              autofocus
+              @keydown.enter.prevent="confirmSaveWallPreset"
+            />
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" @click="savePresetDialogVisible = false">Cancel</v-btn>
+            <v-btn color="primary" @click="confirmSaveWallPreset">Save</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <v-dialog v-model="overwriteConfirmDialogVisible" max-width="420">
+        <v-card>
+          <v-card-title>Overwrite preset?</v-card-title>
+          <v-card-text>
+            This preset already exists: <strong>{{ overwriteTargetFilename }}</strong>. Overwrite it?
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" @click="cancelOverwriteWallPreset">Cancel</v-btn>
+            <v-btn
+              color="primary"
+              @click="performSaveWallPreset(overwriteTargetAssetId)"
+            >
+              Overwrite
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -837,5 +1031,14 @@ function applyAirWallUpdate(rawValue: unknown) {
 .asset-feedback {
   font-size: 0.75rem;
   color: #f97316;
+}
+
+.wall-panel-drop-surface.is-wall-preset-active {
+  outline: 2px dashed rgba(110, 231, 183, 0.75);
+  outline-offset: 6px;
+}
+
+.wall-preset-feedback {
+  margin: 0 5px 0.5rem;
 }
 </style>
