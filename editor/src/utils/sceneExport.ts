@@ -35,6 +35,8 @@ import {
   type RigidbodyColliderType,
   PROTAGONIST_COMPONENT_TYPE,
   type ProtagonistComponentProps,
+  PRELOADABLE_COMPONENT_TYPE,
+  type PreloadableComponentProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
   WALL_COMPONENT_TYPE,
@@ -991,6 +993,7 @@ function buildSceneAssetPreloadInfo(
   // but apply export-consistent filtering here to avoid preloading meaningless assets.
   const nodeLookup = new Map<string, SceneNode>()
   const protagonistInitialVisibleNodeIds = new Set<string>()
+  const preloadableRootNodeIds = new Set<string>()
   {
     const stack: SceneNode[] = [...nodeList]
     while (stack.length) {
@@ -1013,6 +1016,13 @@ function buildSceneAssetPreloadInfo(
             }
           }
         })
+      }
+
+      const preloadable = node.components?.[PRELOADABLE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<PreloadableComponentProps>
+        | undefined
+      if (preloadable?.enabled) {
+        preloadableRootNodeIds.add(node.id)
       }
 
       if (Array.isArray(node.children) && node.children.length) {
@@ -1053,6 +1063,44 @@ function buildSceneAssetPreloadInfo(
 
   protagonistEssentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
 
+  // Preloadable (node + subtree) assets should be eagerly available on scene entry.
+  const preloadableEssentialAssetIds = new Set<string>()
+  if (preloadableRootNodeIds.size) {
+    const preloadableNodeIds = new Set<string>()
+    preloadableRootNodeIds.forEach((nodeId) => {
+      const root = nodeLookup.get(nodeId) ?? null
+      if (!root) {
+        return
+      }
+      collectNodeTreeIds(root, preloadableNodeIds)
+    })
+
+    preloadableNodeIds.forEach((nodeId) => {
+      const node = nodeLookup.get(nodeId) ?? null
+      if (!node) {
+        return
+      }
+      if (node.visible === false) {
+        return
+      }
+      if (node.editorFlags?.editorOnly) {
+        return
+      }
+      if (node.nodeType === 'Light' || Boolean(node.light)) {
+        return
+      }
+      if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+        return
+      }
+      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+      if (assetId) {
+        preloadableEssentialAssetIds.add(assetId)
+      }
+    })
+  }
+
+  preloadableEssentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
+
   if (!meshAssetIds.size) {
     return undefined
   }
@@ -1066,6 +1114,9 @@ function buildSceneAssetPreloadInfo(
 
   // Protagonist initial-visible nodes should be eagerly available on scene entry.
   protagonistEssentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
+
+  // Preloadable subtree assets should be eagerly available on scene entry.
+  preloadableEssentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
 
   const meshInfo: SceneAssetPreloadInfo['mesh'] = {
     all: Array.from(meshAssetIds).sort(),
