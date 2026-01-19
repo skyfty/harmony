@@ -7,7 +7,7 @@ type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageP
 type ChatCompletionUserMessageParam = OpenAI.Chat.Completions.ChatCompletionUserMessageParam
 import { appConfig } from '@/config/env'
 import { getOpenAiClient } from '@/services/openAiClient'
-import { getExtensionFromMimeType } from '@schema/assetTypeConversion'
+import { getExtensionFromMimeType, inferAssetType } from '@harmony/schema'
 import type {
   AssistantMessagePayload,
   AssistantResponse,
