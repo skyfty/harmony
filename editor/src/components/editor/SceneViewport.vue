@@ -3570,6 +3570,7 @@ const dragPreviewGroup = dragPreview.group
 let selectionPreviewActive = false
 let selectionPreviewAssetId: string | null = null
 let lastSelectionPreviewUpdate = 0
+let placementPreviewYaw = 0
 
 watch(
   () => sceneStore.selectedAssetId,
@@ -3578,6 +3579,8 @@ watch(
       if (!nextId) {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
       }
@@ -3586,6 +3589,8 @@ watch(
       if (sceneStore.draggingAssetId) {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
       }
@@ -3594,6 +3599,8 @@ watch(
       if (!asset) {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
       }
@@ -3601,6 +3608,8 @@ watch(
       if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         // prepare preview object (use existing drag preview loader)
         try {
           dragPreview.prepare(asset.id)
@@ -3609,10 +3618,14 @@ watch(
           dragPreview.dispose()
           selectionPreviewActive = false
           selectionPreviewAssetId = null
+          placementPreviewYaw = 0
+          dragPreviewGroup.rotation.set(0, 0, 0)
         }
       } else {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
       }
     } catch (err) {
@@ -3631,6 +3644,8 @@ watch(
         if (selectionPreviewActive && selectionPreviewAssetId) {
           selectionPreviewActive = false
           selectionPreviewAssetId = null
+          placementPreviewYaw = 0
+          dragPreviewGroup.rotation.set(0, 0, 0)
           dragPreview.dispose()
         }
         return
@@ -3640,6 +3655,8 @@ watch(
       if (sceneStore.draggingAssetId) {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
       }
@@ -3648,6 +3665,8 @@ watch(
       if (!asset) {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
         return
       }
@@ -3655,6 +3674,8 @@ watch(
       if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab') {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         try {
           dragPreview.prepare(asset.id)
         } catch (e) {
@@ -3662,10 +3683,14 @@ watch(
           dragPreview.dispose()
           selectionPreviewActive = false
           selectionPreviewAssetId = null
+          placementPreviewYaw = 0
+          dragPreviewGroup.rotation.set(0, 0, 0)
         }
       } else {
         selectionPreviewActive = false
         selectionPreviewAssetId = null
+        placementPreviewYaw = 0
+        dragPreviewGroup.rotation.set(0, 0, 0)
         dragPreview.dispose()
       }
     } catch (err) {
@@ -6137,6 +6162,7 @@ function handlePointerMove(event: PointerEvent) {
         lastSelectionPreviewUpdate = now
         const point = computePointerDropPoint(event)
         dragPreview.setPosition(point)
+        dragPreviewGroup.rotation.y = placementPreviewYaw
       }
     }
   } catch (err) {
@@ -6222,6 +6248,28 @@ async function handlePointerUp(event: PointerEvent) {
       return
     }
 
+    // Selection-based asset preview: right click (without moving) rotates the preview.
+    // Keep right-drag behavior for orbit controls by only reacting when `moved` is false.
+    if (
+      selectionPreviewActive &&
+      pointerTrackingState &&
+      pointerTrackingState.pointerId === event.pointerId &&
+      pointerTrackingState.button === 2 &&
+      !pointerTrackingState.moved
+    ) {
+      placementPreviewYaw += RIGHT_CLICK_ROTATION_STEP
+      dragPreviewGroup.rotation.y = placementPreviewYaw
+      dragPreviewGroup.updateMatrixWorld(true)
+
+      pointerTrackingState = null
+      pointerInteraction.releaseIfCaptured(event.pointerId)
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
     const selection = handlePointerUpSelection(event, {
       pointerTrackingState,
       clearPointerTrackingState: () => {
@@ -6266,6 +6314,7 @@ async function handlePointerUp(event: PointerEvent) {
           const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
           snapVectorToGrid(spawnPoint)
           const parentGroupId = resolveSelectedGroupDropParent()
+          const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
             const selectedId = props.selectedNodeId
             const isEmptySelectedGroup = (() => {
@@ -6277,11 +6326,14 @@ async function handlePointerUp(event: PointerEvent) {
             })()
 
             if (isEmptySelectedGroup && parentGroupId) {
-              await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint)
+              await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint, {
+                rotation,
+              })
             } else {
               await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
                 parentId: parentGroupId,
                 preserveWorldPosition: Boolean(parentGroupId),
+                rotation,
               })
             }
           } catch (error) {

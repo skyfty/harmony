@@ -4327,9 +4327,13 @@ function cloneVector(vector: Vector3Like): Vector3Like {
   return { x: vector.x, y: vector.y, z: vector.z } as Vector3Like
 }
 
-function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like) {
+function computeAssetSpawnTransform(
+  asset: ProjectAsset,
+  position?: Vector3Like,
+  options: { rotation?: Vector3Like | null } = {},
+) {
   const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
-  const rotation: Vector3Like = { x: 0, y: 0, z: 0 }
+  const rotation: Vector3Like = options.rotation ? cloneVector(options.rotation) : { x: 0, y: 0, z: 0 }
   const scale: Vector3Like = { x: 1, y: 1, z: 1 }
 
   if (!position && asset.type !== 'model' && asset.type !== 'mesh') {
@@ -9847,6 +9851,7 @@ export const useSceneStore = defineStore('scene', {
       assetId: string,
       groupId: string,
       worldPosition: THREE.Vector3,
+      options: { rotation?: THREE.Vector3 } = {},
     ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const groupNode = groupId ? findNodeById(this.nodes, groupId) : null
       const isEmptyGroup = Boolean(
@@ -9862,6 +9867,7 @@ export const useSceneStore = defineStore('scene', {
       const result = await this.spawnAssetAtPosition(assetId, worldPosition, {
         parentId: groupId,
         preserveWorldPosition: Boolean(groupId),
+        rotation: options.rotation,
       })
 
       if (isEmptyGroup) {
@@ -9877,7 +9883,7 @@ export const useSceneStore = defineStore('scene', {
     async spawnAssetAtPosition(
       assetId: string,
       position: THREE.Vector3,
-      options: { parentId?: string | null; preserveWorldPosition?: boolean } = {},
+      options: { parentId?: string | null; preserveWorldPosition?: boolean; rotation?: THREE.Vector3 } = {},
     ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
@@ -9938,6 +9944,7 @@ export const useSceneStore = defineStore('scene', {
       if (asset.type === 'prefab') {
         const node = await this.spawnPrefabWithPlaceholder(asset.id, position ?? null, {
           parentId: targetParentId,
+          rotation: options.rotation ?? null,
         })
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node?.id ?? null, position))
@@ -9948,6 +9955,7 @@ export const useSceneStore = defineStore('scene', {
       const node = await this.addModelNode({
         asset,
         position,
+        rotation: options.rotation,
         parentId: targetParentId ?? undefined,
       })
       if (node) {
@@ -9958,7 +9966,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
-      const transform = computeAssetSpawnTransform(asset, position)
+      const transform = computeAssetSpawnTransform(asset, position, {
+        rotation: options.rotation ? toPlainVector(options.rotation) : null,
+      })
       const placeholder = this.addPlaceholderNode(asset, transform, {
         parentId: targetParentId,
       })
@@ -10760,7 +10770,7 @@ export const useSceneStore = defineStore('scene', {
     async instantiateNodePrefabAsset(
       assetId: string,
       position?: THREE.Vector3,
-      options: { parentId?: string | null } = {},
+      options: { parentId?: string | null; rotation?: THREE.Vector3 | null } = {},
     ): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
@@ -10779,6 +10789,15 @@ export const useSceneStore = defineStore('scene', {
         providerId: dependencyProviderId,
         prefabAssetIdForDownloadProgress: assetId,
       })
+
+      if (options.rotation) {
+        const existing = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
+        duplicate.rotation = {
+          x: (existing.x ?? 0) + options.rotation.x,
+          y: (existing.y ?? 0) + options.rotation.y,
+          z: (existing.z ?? 0) + options.rotation.z,
+        } as Vector3Like
+      }
 
       const spawnPositionVector = new Vector3(
         duplicate.position?.x ?? 0,
@@ -10948,7 +10967,7 @@ export const useSceneStore = defineStore('scene', {
     async spawnPrefabWithPlaceholder(
       assetId: string,
       position: THREE.Vector3 | null,
-      options: { parentId?: string | null; placeAtParentOrigin?: boolean } = {},
+      options: { parentId?: string | null; placeAtParentOrigin?: boolean; rotation?: THREE.Vector3 | null } = {},
     ): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
@@ -10998,7 +11017,7 @@ export const useSceneStore = defineStore('scene', {
         asset,
         {
           position: toPlainVector(spawnPosition),
-          rotation: { x: 0, y: 0, z: 0 } as Vector3Like,
+          rotation: options.rotation ? toPlainVector(options.rotation) : ({ x: 0, y: 0, z: 0 } as Vector3Like),
           scale: { x: 1, y: 1, z: 1 } as Vector3Like,
         },
         { parentId },
@@ -11016,7 +11035,10 @@ export const useSceneStore = defineStore('scene', {
 
       void (async () => {
         try {
-          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, { parentId })
+          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, {
+            parentId,
+            rotation: options.rotation ?? null,
+          })
           stopPrefabPlaceholderWatcher(placeholder.id)
           this.removeSceneNodes([placeholder.id])
           this.setSelection([instantiated.id], { primaryId: instantiated.id })
