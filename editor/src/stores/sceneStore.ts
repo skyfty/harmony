@@ -94,7 +94,11 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
-import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
+import {
+  deleteTerrainScatterStore,
+  getTerrainScatterStore,
+  type TerrainScatterStoreSnapshot,
+} from '@harmony/schema/terrain-scatter'
 
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
@@ -183,6 +187,7 @@ import {
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
+import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -7321,6 +7326,16 @@ function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument)
 }
 
 function releaseRuntimeTree(node: SceneNode) {
+  if (isGroundNode(node)) {
+    const store = getTerrainScatterStore(node.id)
+    if (store) {
+      for (const layer of store.layers.values()) {
+        for (const instance of layer.instances) {
+          resetScatterInstanceBinding(instance)
+        }
+      }
+    }
+  }
   componentManager.removeNode(node.id)
   unregisterRuntimeObject(node.id)
   node.children?.forEach(releaseRuntimeTree)
@@ -7332,6 +7347,9 @@ function pruneNodes(nodes: SceneNode[], idSet: Set<string>, removed: string[]): 
     if (idSet.has(node.id)) {
       removed.push(node.id)
       releaseRuntimeTree(node)
+      if (isGroundNode(node)) {
+        deleteTerrainScatterStore(node.id)
+      }
       continue
     }
     const cloned = cloneNode(node)

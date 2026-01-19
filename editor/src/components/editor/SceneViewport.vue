@@ -309,6 +309,19 @@ const {
 } =
   storeToRefs(terrainStore)
 
+const hasGroundNode = computed(() => {
+  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  return Boolean(ground && ground.dynamicMesh?.type === 'Ground')
+})
+
+watch(hasGroundNode, (hasGround, prevHasGround) => {
+  if (prevHasGround && !hasGround) {
+    terrainStore.setBrushOperation(null)
+    terrainStore.setGroundPanelTab('terrain')
+    terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+  }
+}, { flush: 'sync' })
+
 const groundTerrainScatterUpdatedAt = computed(() => {
   const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
