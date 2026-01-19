@@ -6323,9 +6323,19 @@ async function handlePointerUp(event: PointerEvent) {
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
-          const point = computePointerDropPoint(event)
-          const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
+          const placement = computePointerDropPlacement(event)
+          const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
           snapVectorToGrid(spawnPoint)
+          const groundNodeId = resolveGroundNodeIdForPlacement()
+          const shouldSnapToHeightfield =
+            placement?.kind === 'planeFallback'
+            || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+          if (shouldSnapToHeightfield) {
+            const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
+            if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
+              spawnPoint.y = heightfieldY
+            }
+          }
           const parentGroupId = resolveSelectedGroupDropParent()
           const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
@@ -6707,7 +6717,14 @@ function isAssetDrag(event: DragEvent): boolean {
   return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
 }
 
-function computePlacementSurfacePoint(): THREE.Vector3 | null {
+type PlacementHitKind = 'surfaceHit' | 'planeFallback'
+type PlacementHitResult = {
+  point: THREE.Vector3
+  kind: PlacementHitKind
+  hitNodeId: string | null
+}
+
+function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } | null {
   const targets = ensurePlacementSurfaceTargetsUpToDate()
   if (!targets.length) {
     return null
@@ -6745,60 +6762,98 @@ function computePlacementSurfacePoint(): THREE.Vector3 | null {
       continue
     }
 
-    return intersection.point.clone()
+    return { point: intersection.point.clone(), nodeId }
   }
 
+  return null
+}
+
+function resolveGroundNodeIdForPlacement(): string | null {
+  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  return groundNode?.id ?? null
+}
+
+function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null {
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  if (!groundDefinition || !groundNodeId) {
+    return null
+  }
+  const groundObject = objectMap.get(groundNodeId) ?? getRuntimeObject(groundNodeId)
+  if (!groundObject) {
+    return null
+  }
+  const localPoint = groundObject.worldToLocal(worldPosition.clone())
+  const height = sampleGroundHeight(groundDefinition, localPoint.x, localPoint.z)
+  localPoint.y = height
+  groundObject.localToWorld(localPoint)
+  return localPoint.y
+}
+
+function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
+  if (!camera || !canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  pointer.set(ndcX, ndcY)
+  raycaster.setFromCamera(pointer, camera)
+
+  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
+  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
+  if (!event.altKey && !isAltOverrideActive) {
+    const surfaceHit = computePlacementSurfaceHit()
+    if (surfaceHit) {
+      return {
+        point: snapVectorToGrid(surfaceHit.point),
+        kind: 'surfaceHit',
+        hitNodeId: surfaceHit.nodeId,
+      }
+    }
+  }
+
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return { point: snapVectorToGrid(planeHit.clone()), kind: 'planeFallback', hitNodeId: null }
+  }
+  return null
+}
+
+function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | null {
+  if (!camera || !canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  pointer.set(ndcX, ndcY)
+  raycaster.setFromCamera(pointer, camera)
+
+  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
+  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
+  if (!event.altKey && !isAltOverrideActive) {
+    const surfaceHit = computePlacementSurfaceHit()
+    if (surfaceHit) {
+      return {
+        point: snapVectorToGrid(surfaceHit.point),
+        kind: 'surfaceHit',
+        hitNodeId: surfaceHit.nodeId,
+      }
+    }
+  }
+
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return { point: snapVectorToGrid(planeHit.clone()), kind: 'planeFallback', hitNodeId: null }
+  }
   return null
 }
 
 function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
-  if (!camera || !canvasRef.value) return null
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) return null
-  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  pointer.set(ndcX, ndcY)
-  raycaster.setFromCamera(pointer, camera)
-
-  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
-  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
-    const surfacePoint = computePlacementSurfacePoint()
-    if (surfacePoint) {
-      return snapVectorToGrid(surfacePoint)
-    }
-  }
-
-  const planeHit = new THREE.Vector3()
-  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return snapVectorToGrid(planeHit.clone())
-  }
-  return null
+  return computeDropPlacement(event)?.point ?? null
 }
 
 function computePointerDropPoint(event: PointerEvent): THREE.Vector3 | null {
-  if (!camera || !canvasRef.value) return null
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) return null
-  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  pointer.set(ndcX, ndcY)
-  raycaster.setFromCamera(pointer, camera)
-
-  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
-  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isAltOverrideActive) {
-    const surfacePoint = computePlacementSurfacePoint()
-    if (surfacePoint) {
-      return snapVectorToGrid(surfacePoint)
-    }
-  }
-
-  const planeHit = new THREE.Vector3()
-  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return snapVectorToGrid(planeHit.clone())
-  }
-  return null
+  return computePointerDropPlacement(event)?.point ?? null
 }
 
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
@@ -7262,9 +7317,19 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  const point = computeDropPoint(event)
-  const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
+  const placement = computeDropPlacement(event)
+  const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  const shouldSnapToHeightfield =
+    placement?.kind === 'planeFallback'
+    || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+  if (shouldSnapToHeightfield) {
+    const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
+    if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
+      spawnPoint.y = heightfieldY
+    }
+  }
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId

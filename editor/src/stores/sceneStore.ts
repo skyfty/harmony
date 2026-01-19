@@ -10822,22 +10822,7 @@ export const useSceneStore = defineStore('scene', {
         duplicate.position?.y ?? 0,
         duplicate.position?.z ?? 0,
       )
-      const boundingInfo = collectNodeBoundingInfo([duplicate])
-      const duplicateBounds = boundingInfo.get(duplicate.id)?.bounds ?? null
-      if (duplicateBounds) {
-        const currentMinY = duplicateBounds.min.y
-        const desiredMinY = spawnPositionVector.y
-        const offsetY = desiredMinY - currentMinY
-        if (Math.abs(offsetY) > PREFAB_PLACEMENT_EPSILON) {
-          const currentPosition = duplicate.position ?? { x: 0, y: 0, z: 0 }
-          duplicate.position = {
-            x: currentPosition.x,
-            y: currentPosition.y + offsetY,
-            z: currentPosition.z,
-          }
-          componentManager.syncNode(duplicate)
-        }
-      }
+      const desiredPrefabMinY = spawnPositionVector.y
 
       let parentId = options.parentId ?? null
       if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
@@ -10899,6 +10884,35 @@ export const useSceneStore = defineStore('scene', {
         showOverlay: false,
         prefabAssetIdForDownloadProgress: assetId,
         refreshViewport: true,
+      })
+
+      // Prefabs often have no accurate bounds until their runtime objects exist.
+      // Do a one-time bottom alignment using the runtime world bounds.
+      await this.withHistorySuppressed(() => {
+        const runtimeRoot = getRuntimeObject(duplicate.id)
+        if (!runtimeRoot) {
+          return
+        }
+        runtimeRoot.updateMatrixWorld(true)
+        const bounds = new Box3().setFromObject(runtimeRoot)
+        if (bounds.isEmpty()) {
+          return
+        }
+        const offsetY = desiredPrefabMinY - bounds.min.y
+        if (Math.abs(offsetY) <= PREFAB_PLACEMENT_EPSILON) {
+          return
+        }
+
+        const currentWorldMatrix = computeWorldMatrixForNode(this.nodes, duplicate.id)
+        if (!currentWorldMatrix) {
+          return
+        }
+        const currentWorldPosition = new Vector3()
+        const currentWorldQuaternion = new Quaternion()
+        const currentWorldScale = new Vector3()
+        currentWorldMatrix.decompose(currentWorldPosition, currentWorldQuaternion, currentWorldScale)
+        currentWorldPosition.y += offsetY
+        this.setNodeWorldPositionPositionOnly(duplicate.id, currentWorldPosition)
       })
 
       // Ensure all nodes in the prefab subtree are correctly synced to the runtime scene graph.
