@@ -7,19 +7,26 @@ export const PROTAGONIST_COMPONENT_TYPE = 'protagonist'
 
 export interface ProtagonistComponentProps {
   name: string
+  initialVisibleNodeIds: string[]
 }
 
 export function clampProtagonistComponentProps(
   props: Partial<ProtagonistComponentProps> | null | undefined,
 ): ProtagonistComponentProps {
+  const rawIds = (props as any)?.initialVisibleNodeIds
+  const initialVisibleNodeIds = Array.isArray(rawIds)
+    ? rawIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+    : []
   return {
     name: typeof props?.name === 'string' ? props.name : '',
+    initialVisibleNodeIds,
   }
 }
 
 export function cloneProtagonistComponentProps(props: ProtagonistComponentProps): ProtagonistComponentProps {
   return {
     name: props.name,
+    initialVisibleNodeIds: Array.isArray(props.initialVisibleNodeIds) ? [...props.initialVisibleNodeIds] : [],
   }
 }
 
@@ -83,6 +90,7 @@ const protagonistComponentDefinition: ComponentDefinition<ProtagonistComponentPr
   createDefaultProps(_node: SceneNode) {
     return {
       name: 'Protagonist',
+      initialVisibleNodeIds: [],
     }
   },
   createInstance(context) {
@@ -100,6 +108,7 @@ export function createProtagonistComponentState(
   const defaults = protagonistComponentDefinition.createDefaultProps(node)
   const merged = clampProtagonistComponentProps({
     name: overrides?.name ?? defaults.name,
+    initialVisibleNodeIds: overrides?.initialVisibleNodeIds ?? defaults.initialVisibleNodeIds,
   })
   return {
     id: options.id ?? '',

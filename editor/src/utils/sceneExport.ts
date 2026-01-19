@@ -33,6 +33,8 @@ import {
   type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
   type RigidbodyColliderType,
+  PROTAGONIST_COMPONENT_TYPE,
+  type ProtagonistComponentProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
   WALL_COMPONENT_TYPE,
@@ -984,9 +986,73 @@ function buildSceneAssetPreloadInfo(
   options: SceneExportOptions,
 ): SceneAssetPreloadInfo | undefined {
   const nodeList: SceneNode[] = Array.isArray(nodes) ? [...nodes] : []
+
+  // Collect protagonist initial-visible-node ids (already expected to include subtree),
+  // but apply export-consistent filtering here to avoid preloading meaningless assets.
+  const nodeLookup = new Map<string, SceneNode>()
+  const protagonistInitialVisibleNodeIds = new Set<string>()
+  {
+    const stack: SceneNode[] = [...nodeList]
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) {
+        continue
+      }
+      nodeLookup.set(node.id, node)
+
+      const protagonist = node.components?.[PROTAGONIST_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProtagonistComponentProps>
+        | undefined
+      const ids = protagonist?.enabled ? (protagonist.props as any)?.initialVisibleNodeIds : null
+      if (Array.isArray(ids)) {
+        ids.forEach((id) => {
+          if (typeof id === 'string') {
+            const trimmed = id.trim()
+            if (trimmed) {
+              protagonistInitialVisibleNodeIds.add(trimmed)
+            }
+          }
+        })
+      }
+
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...node.children)
+      }
+    }
+  }
+
   const meshAssetIds = collectSourceAssetIds(nodeList)
   const scatterAssetIds = collectScatterAssetIds(nodeList)
   scatterAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
+
+  const protagonistEssentialAssetIds = new Set<string>()
+  if (protagonistInitialVisibleNodeIds.size) {
+    protagonistInitialVisibleNodeIds.forEach((nodeId) => {
+      const node = nodeLookup.get(nodeId) ?? null
+      if (!node) {
+        return
+      }
+      if (node.visible === false) {
+        return
+      }
+      if (node.editorFlags?.editorOnly) {
+        return
+      }
+      if (node.nodeType === 'Light' || Boolean(node.light)) {
+        return
+      }
+      if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+        return
+      }
+      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+      if (assetId) {
+        protagonistEssentialAssetIds.add(assetId)
+      }
+    })
+  }
+
+  protagonistEssentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
+
   if (!meshAssetIds.size) {
     return undefined
   }
@@ -997,6 +1063,9 @@ function buildSceneAssetPreloadInfo(
   } else {
     meshAssetIds.forEach((assetId) => essentialSet.add(assetId))
   }
+
+  // Protagonist initial-visible nodes should be eagerly available on scene entry.
+  protagonistEssentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
 
   const meshInfo: SceneAssetPreloadInfo['mesh'] = {
     all: Array.from(meshAssetIds).sort(),

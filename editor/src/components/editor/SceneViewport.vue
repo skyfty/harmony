@@ -237,6 +237,10 @@ import {
 } from './constants'
 import { createFaceSnapManager } from './useFaceSnapping'
 import { SceneCloudRenderer } from '@schema/cloudRenderer'
+import {
+  createProtagonistInitialVisibilityCapture,
+  type ProtagonistInitialVisibilityCapture,
+} from './protagonistInitialVisibilityCapture'
 
 type SceneViewportProps = {
   sceneNodes: SceneNode[]
@@ -332,6 +336,7 @@ const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
+let protagonistInitialVisibilityCapture: ProtagonistInitialVisibilityCapture | null = null
 
 const instancedOutlineManager = createInstancedOutlineManager({ outlineGroup: instancedOutlineGroup })
 const createInstancedOutlineProxy = instancedOutlineManager.createInstancedProxy
@@ -999,6 +1004,18 @@ const {
   instancedMeshGroup,
   objectMap
 )
+
+protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
+  getNodes: () => sceneStore.nodes,
+  isSceneReady: () => sceneStore.isSceneReady,
+  updateNodeComponentProps: (nodeId, componentId, propsPatch) =>
+    sceneStore.updateNodeComponentProps(nodeId, componentId, propsPatch),
+  objectMap,
+  rootGroup,
+  instancedMeshGroup,
+  getRenderer: () => renderer,
+  isObjectWorldVisible,
+})
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
@@ -2711,13 +2728,14 @@ function buildTransformControlUpdates(): TransformUpdatePayload[] {
   return updates
 }
 
-function commitTransformControlUpdates() {
+function commitTransformControlUpdates(): TransformUpdatePayload[] {
   const updates = buildTransformControlUpdates()
   transformControlsDirty = false
   if (!updates.length) {
-    return
+    return []
   }
   emitTransformUpdates(updates)
+  return updates
 }
 
 function rotateActiveSelection(nodeId: string) {
@@ -3040,7 +3058,10 @@ const draggingChangedHandler = (event: unknown) => {
     faceSnapManager.hideEffect()
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
-      commitTransformControlUpdates()
+      const updates = commitTransformControlUpdates()
+      if (updates.length) {
+        protagonistInitialVisibilityCapture?.queueTransformUpdateIds(updates.map((update) => update.id))
+      }
     }
     sceneStore.endTransformInteraction()
     if (targetObject) {
@@ -3314,6 +3335,8 @@ function applyPendingScenePatches(): boolean {
       return true
     }
   }
+
+  protagonistInitialVisibilityCapture?.flushAfterPatches(nodePatches)
 
   if (needsPlaceholderOverlayRefresh) {
     refreshPlaceholderOverlays()
