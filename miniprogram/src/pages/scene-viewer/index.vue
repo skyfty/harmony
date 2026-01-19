@@ -463,6 +463,7 @@ import {
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
   sceneStateAnchorComponentDefinition,
+  preloadableComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -1322,6 +1323,7 @@ previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
+previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
