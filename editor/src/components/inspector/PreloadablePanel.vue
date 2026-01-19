@@ -87,7 +87,7 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="preloadable-panel__content">
         <div class="preloadable-panel__hint">
-          Export 时会将“本节点 + 子树”涉及的模型资产加入场景预加载列表，进入场景后可立即显示。
+        Export will add the model assets referenced by "this node + its subtree" to the scene's preload list so they can be displayed immediately when the scene is entered.
         </div>
         <v-switch
           label="Enable preload on entry"

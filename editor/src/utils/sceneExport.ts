@@ -983,6 +983,40 @@ function sanitizeSceneNodeMaterial(material: SceneNodeMaterial): SceneNodeMateri
   }
 }
 
+function shouldIncludeNodeForAssetPreload(node: SceneNode): boolean {
+  if (node.visible === false) {
+    return false
+  }
+  if (node.editorFlags?.editorOnly) {
+    return false
+  }
+  if (node.nodeType === 'Light' || Boolean(node.light)) {
+    return false
+  }
+  if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+    return false
+  }
+  return true
+}
+
+function collectEssentialAssetIdsFromNodeIds(
+  nodeIds: Set<string>,
+  nodeLookup: Map<string, SceneNode>,
+): Set<string> {
+  const assetIds = new Set<string>()
+  nodeIds.forEach((nodeId) => {
+    const node = nodeLookup.get(nodeId) ?? null
+    if (!node) {
+      return
+    }
+    if (!shouldIncludeNodeForAssetPreload(node)) {
+      return
+    }
+    addAssetIdToSet(assetIds, node.sourceAssetId ?? null)
+  })
+  return assetIds
+}
+
 function buildSceneAssetPreloadInfo(
   nodes: SceneNode[] | null | undefined,
   options: SceneExportOptions,
@@ -1035,71 +1069,22 @@ function buildSceneAssetPreloadInfo(
   const scatterAssetIds = collectScatterAssetIds(nodeList)
   scatterAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
 
-  const protagonistEssentialAssetIds = new Set<string>()
-  if (protagonistInitialVisibleNodeIds.size) {
-    protagonistInitialVisibleNodeIds.forEach((nodeId) => {
-      const node = nodeLookup.get(nodeId) ?? null
-      if (!node) {
-        return
-      }
-      if (node.visible === false) {
-        return
-      }
-      if (node.editorFlags?.editorOnly) {
-        return
-      }
-      if (node.nodeType === 'Light' || Boolean(node.light)) {
-        return
-      }
-      if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
-        return
-      }
-      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
-      if (assetId) {
-        protagonistEssentialAssetIds.add(assetId)
-      }
-    })
-  }
-
-  protagonistEssentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
-
-  // Preloadable (node + subtree) assets should be eagerly available on scene entry.
-  const preloadableEssentialAssetIds = new Set<string>()
+  // Build essential node ids from multiple sources, then resolve to asset ids in one place.
+  // - Protagonist initial-visible nodes (already expected to include subtree)
+  // - Preloadable nodes and their subtrees
+  const essentialNodeIds = new Set<string>()
+  protagonistInitialVisibleNodeIds.forEach((nodeId) => essentialNodeIds.add(nodeId))
   if (preloadableRootNodeIds.size) {
-    const preloadableNodeIds = new Set<string>()
     preloadableRootNodeIds.forEach((nodeId) => {
       const root = nodeLookup.get(nodeId) ?? null
       if (!root) {
         return
       }
-      collectNodeTreeIds(root, preloadableNodeIds)
-    })
-
-    preloadableNodeIds.forEach((nodeId) => {
-      const node = nodeLookup.get(nodeId) ?? null
-      if (!node) {
-        return
-      }
-      if (node.visible === false) {
-        return
-      }
-      if (node.editorFlags?.editorOnly) {
-        return
-      }
-      if (node.nodeType === 'Light' || Boolean(node.light)) {
-        return
-      }
-      if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
-        return
-      }
-      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
-      if (assetId) {
-        preloadableEssentialAssetIds.add(assetId)
-      }
+      collectNodeTreeIds(root, essentialNodeIds)
     })
   }
-
-  preloadableEssentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
+  const essentialAssetIds = collectEssentialAssetIdsFromNodeIds(essentialNodeIds, nodeLookup)
+  essentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
 
   if (!meshAssetIds.size) {
     return undefined
@@ -1112,11 +1097,8 @@ function buildSceneAssetPreloadInfo(
     meshAssetIds.forEach((assetId) => essentialSet.add(assetId))
   }
 
-  // Protagonist initial-visible nodes should be eagerly available on scene entry.
-  protagonistEssentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
-
-  // Preloadable subtree assets should be eagerly available on scene entry.
-  preloadableEssentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
+  // Essential assets (protagonist initial-visible + preloadable subtrees) should be eagerly available on scene entry.
+  essentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
 
   const meshInfo: SceneAssetPreloadInfo['mesh'] = {
     all: Array.from(meshAssetIds).sort(),
