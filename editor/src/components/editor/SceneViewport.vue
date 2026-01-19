@@ -6173,7 +6173,8 @@ function handlePointerMove(event: PointerEvent) {
       // throttle updates to ~60Hz
       if (now - lastSelectionPreviewUpdate > 8) {
         lastSelectionPreviewUpdate = now
-        const point = computePointerDropPoint(event)
+        const placement = computePointerDropPlacement(event)
+        const point = computePreviewPointForPlacement(placement)
         dragPreview.setPosition(point)
         dragPreviewGroup.rotation.y = placementPreviewYaw
       }
@@ -6790,6 +6791,29 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   return localPoint.y
 }
 
+function computePreviewPointForPlacement(placement: PlacementHitResult | null): THREE.Vector3 | null {
+  if (!placement?.point) {
+    return null
+  }
+
+  const spawnPoint = placement.point.clone()
+  snapVectorToGrid(spawnPoint)
+
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  const shouldSnapToHeightfield =
+    placement.kind === 'planeFallback'
+    || (placement.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+
+  if (shouldSnapToHeightfield) {
+    const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
+    if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
+      spawnPoint.y = heightfieldY
+    }
+  }
+
+  return spawnPoint
+}
+
 function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
   if (!camera || !canvasRef.value) return null
   const rect = canvasRef.value.getBoundingClientRect()
@@ -6846,14 +6870,6 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
     return { point: snapVectorToGrid(planeHit.clone()), kind: 'planeFallback', hitNodeId: null }
   }
   return null
-}
-
-function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
-  return computeDropPlacement(event)?.point ?? null
-}
-
-function computePointerDropPoint(event: PointerEvent): THREE.Vector3 | null {
-  return computePointerDropPlacement(event)?.point ?? null
 }
 
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
@@ -7197,7 +7213,8 @@ function handleViewportDragOver(event: DragEvent) {
     return
   }
 
-  const point = computeDropPoint(event)
+  const placement = computeDropPlacement(event)
+  const point = computePreviewPointForPlacement(placement)
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
