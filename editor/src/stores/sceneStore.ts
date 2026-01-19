@@ -4377,7 +4377,14 @@ type ObjectMetrics = {
   radius: number
 }
 
+// Global toggle: completely disable grid snapping in editor logic.
+// Keep snapping implementation for potential future re-enable.
+const GRID_SNAPPING_ENABLED = false
+
 function snapAxisToGrid(value: number): number {
+  if (!GRID_SNAPPING_ENABLED) {
+    return value
+  }
   return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
 }
 

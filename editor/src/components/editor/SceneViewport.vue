@@ -199,6 +199,8 @@ import {
   type VectorCoordinates,
   cloneVectorCoordinates,
   computeOrientedGroundRectFromObject,
+  snapVectorToGrid,
+  snapVectorToMajorGrid,
   setBoundingBoxFromObject,
   toEulerLike,
   findSceneNode
@@ -222,7 +224,6 @@ import {
   MIN_CAMERA_HEIGHT,
   MIN_TARGET_HEIGHT,
   GRID_MAJOR_SPACING,
-  GRID_SNAP_SPACING,
   GRID_HIGHLIGHT_HEIGHT,
   GRID_HIGHLIGHT_PADDING,
   GRID_HIGHLIGHT_MIN_SIZE,
@@ -3957,18 +3958,6 @@ function resetCameraView() {
 
 }
 
-function snapVectorToGrid(vec: THREE.Vector3) {
-  vec.x = Math.round(vec.x / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
-  vec.z = Math.round(vec.z / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
-  return vec
-}
-
-function snapVectorToMajorGrid(vec: THREE.Vector3) {
-  vec.x = Math.round(vec.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
-  vec.z = Math.round(vec.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
-  return vec
-}
-
 function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -6326,9 +6315,7 @@ async function handlePointerUp(event: PointerEvent) {
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
           const placement = computePointerDropPlacement(event)
           const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-          if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-            snapVectorToGrid(spawnPoint)
-          }
+          snapVectorToGrid(spawnPoint)
           const groundNodeId = resolveGroundNodeIdForPlacement()
           const shouldSnapToHeightfield =
             placement?.kind === 'planeFallback'
@@ -6926,19 +6913,13 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   return localPoint.y
 }
 
-// Temporary: disable grid snapping for asset placement preview/drop to validate cursor alignment.
-// Keep build tools / transform snapping unchanged.
-const ASSET_PLACEMENT_GRID_SNAP_ENABLED = false
-
 function computePreviewPointForPlacement(placement: PlacementHitResult | null): THREE.Vector3 | null {
   if (!placement?.point) {
     return null
   }
 
   const spawnPoint = placement.point.clone()
-  if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-    snapVectorToGrid(spawnPoint)
-  }
+  snapVectorToGrid(spawnPoint)
 
   const groundNodeId = resolveGroundNodeIdForPlacement()
   const shouldSnapToHeightfield =
@@ -6970,9 +6951,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
-      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-        snapVectorToGrid(point)
-      }
+      snapVectorToGrid(point)
       return {
         point,
         kind: 'surfaceHit',
@@ -6984,9 +6963,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
     const heightfieldHit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
     if (heightfieldHit) {
       const point = heightfieldHit.clone()
-      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-        snapVectorToGrid(point)
-      }
+      snapVectorToGrid(point)
       return { point, kind: 'planeFallback', hitNodeId: null }
     }
   }
@@ -6994,9 +6971,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
     const point = planeHit.clone()
-    if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-      snapVectorToGrid(point)
-    }
+    snapVectorToGrid(point)
     return { point, kind: 'planeFallback', hitNodeId: null }
   }
   return null
@@ -7017,9 +6992,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       const point = surfaceHit.point.clone()
-      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-        snapVectorToGrid(point)
-      }
+      snapVectorToGrid(point)
       return {
         point,
         kind: 'surfaceHit',
@@ -7030,9 +7003,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
     const heightfieldHit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
     if (heightfieldHit) {
       const point = heightfieldHit.clone()
-      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-        snapVectorToGrid(point)
-      }
+      snapVectorToGrid(point)
       return { point, kind: 'planeFallback', hitNodeId: null }
     }
   }
@@ -7040,9 +7011,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
     const point = planeHit.clone()
-    if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-      snapVectorToGrid(point)
-    }
+    snapVectorToGrid(point)
     return { point, kind: 'planeFallback', hitNodeId: null }
   }
   return null
@@ -7512,9 +7481,7 @@ async function handleViewportDrop(event: DragEvent) {
 
   const placement = computeDropPlacement(event)
   const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-  if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
-    snapVectorToGrid(spawnPoint)
-  }
+  snapVectorToGrid(spawnPoint)
   const groundNodeId = resolveGroundNodeIdForPlacement()
   const shouldSnapToHeightfield =
     placement?.kind === 'planeFallback'

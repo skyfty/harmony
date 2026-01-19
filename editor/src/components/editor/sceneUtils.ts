@@ -1,6 +1,6 @@
 import type { SceneNode } from '@harmony/schema'
 import * as THREE from 'three'
-import { GRID_SNAP_SPACING } from './constants'
+import { GRID_MAJOR_SPACING, GRID_SNAP_SPACING } from './constants'
 
 const instancedBoundsBox = new THREE.Box3()
 const instancedBoundsMin = new THREE.Vector3()
@@ -210,7 +210,14 @@ export function cloneVectorCoordinates(vector: VectorCoordinates): THREE.Vector3
   return new THREE.Vector3(safeX, safeY, safeZ)
 }
 
+// Global toggle: completely disable grid snapping helpers.
+// Keep implementations for potential future re-enable.
+const GRID_SNAPPING_ENABLED = false
+
 export function snapVectorToGrid(vec: THREE.Vector3) {
+  if (!GRID_SNAPPING_ENABLED) {
+    return vec
+  }
   vec.x = Math.round(vec.x / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
   vec.y = Math.round(vec.y / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
   vec.z = Math.round(vec.z / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
@@ -218,5 +225,18 @@ export function snapVectorToGrid(vec: THREE.Vector3) {
 }
 
 export function snapValueToGrid(value: number): number {
+  if (!GRID_SNAPPING_ENABLED) {
+    return value
+  }
   return Math.round(value / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
+}
+
+export function snapVectorToMajorGrid(vec: THREE.Vector3) {
+  if (!GRID_SNAPPING_ENABLED) {
+    return vec
+  }
+  vec.x = Math.round(vec.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  vec.y = Math.round(vec.y / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  vec.z = Math.round(vec.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  return vec
 }
