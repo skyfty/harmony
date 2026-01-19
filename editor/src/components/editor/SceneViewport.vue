@@ -6325,18 +6325,7 @@ async function handlePointerUp(event: PointerEvent) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
           const placement = computePointerDropPlacement(event)
-          const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-          snapVectorToGrid(spawnPoint)
-          const groundNodeId = resolveGroundNodeIdForPlacement()
-          const shouldSnapToHeightfield =
-            placement?.kind === 'planeFallback'
-            || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
-          if (shouldSnapToHeightfield) {
-            const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
-            if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
-              spawnPoint.y = heightfieldY
-            }
-          }
+          const spawnPoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
           const parentGroupId = resolveSelectedGroupDropParent()
           const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
@@ -6797,13 +6786,15 @@ function computePreviewPointForPlacement(placement: PlacementHitResult | null): 
   }
 
   const spawnPoint = placement.point.clone()
-  snapVectorToGrid(spawnPoint)
-
   const groundNodeId = resolveGroundNodeIdForPlacement()
-  const shouldSnapToHeightfield =
-    placement.kind === 'planeFallback'
-    || (placement.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+  const isGroundHit =
+    placement.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId
 
+  if (!isGroundHit) {
+    snapVectorToGrid(spawnPoint)
+  }
+
+  const shouldSnapToHeightfield = placement.kind === 'planeFallback' || isGroundHit
   if (shouldSnapToHeightfield) {
     const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
     if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
@@ -6829,7 +6820,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       return {
-        point: snapVectorToGrid(surfaceHit.point),
+        point: surfaceHit.point,
         kind: 'surfaceHit',
         hitNodeId: surfaceHit.nodeId,
       }
@@ -6838,7 +6829,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
 
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return { point: snapVectorToGrid(planeHit.clone()), kind: 'planeFallback', hitNodeId: null }
+    return { point: planeHit.clone(), kind: 'planeFallback', hitNodeId: null }
   }
   return null
 }
@@ -6858,7 +6849,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
       return {
-        point: snapVectorToGrid(surfaceHit.point),
+        point: surfaceHit.point,
         kind: 'surfaceHit',
         hitNodeId: surfaceHit.nodeId,
       }
@@ -6867,7 +6858,7 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
 
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return { point: snapVectorToGrid(planeHit.clone()), kind: 'planeFallback', hitNodeId: null }
+    return { point: planeHit.clone(), kind: 'planeFallback', hitNodeId: null }
   }
   return null
 }
@@ -7335,18 +7326,7 @@ async function handleViewportDrop(event: DragEvent) {
   }
 
   const placement = computeDropPlacement(event)
-  const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-  snapVectorToGrid(spawnPoint)
-  const groundNodeId = resolveGroundNodeIdForPlacement()
-  const shouldSnapToHeightfield =
-    placement?.kind === 'planeFallback'
-    || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
-  if (shouldSnapToHeightfield) {
-    const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
-    if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
-      spawnPoint.y = heightfieldY
-    }
-  }
+  const spawnPoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
