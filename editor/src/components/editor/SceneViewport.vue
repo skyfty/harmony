@@ -8790,6 +8790,14 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
+        if (sceneStore.selectedAssetId) {
+          sceneStore.selectAsset(null)
+          if (uiStore.activeSelectionContext === 'asset-panel') {
+            uiStore.setActiveSelectionContext(null)
+          }
+          assetPlacementClickSessionState = null
+          handled = true
+        }
         if (scatterEraseModeActive.value) {
           exitScatterEraseMode()
           handled = true

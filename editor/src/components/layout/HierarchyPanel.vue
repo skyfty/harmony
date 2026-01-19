@@ -11,6 +11,7 @@ import {
 } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useUiStore } from '@/stores/uiStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
+const uiStore = useUiStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
 const NODE_DRAG_LIST_MIME = 'application/x-harmony-node-list'
@@ -74,10 +76,25 @@ const active = computed({
   set: (ids: string[]) => {
     const nextId = ids[0] ?? null
     if (nextId !== selectedNodeId.value) {
+      if (sceneStore.selectedAssetId) {
+        if (uiStore.activeSelectionContext === 'asset-panel') {
+          uiStore.setActiveSelectionContext(null)
+        }
+        sceneStore.selectAsset(null)
+      }
       sceneStore.selectNode(nextId)
     }
   },
 })
+
+function areSameSelection(a: string[], b: string[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
 
 watch(draggingAssetId, (value) => {
   if (!value) {
@@ -720,12 +737,24 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
   }
 
   if (!nextSelection.length) {
+    if (sceneStore.selectedAssetId && selectedNodeIds.value.length) {
+      if (uiStore.activeSelectionContext === 'asset-panel') {
+        uiStore.setActiveSelectionContext(null)
+      }
+      sceneStore.selectAsset(null)
+    }
     suppressSelectionSync.value = true
     sceneStore.clearSelection()
     selectionAnchorId.value = null
     return
   }
 
+  if (sceneStore.selectedAssetId && !areSameSelection(nextSelection, selectedNodeIds.value)) {
+    if (uiStore.activeSelectionContext === 'asset-panel') {
+      uiStore.setActiveSelectionContext(null)
+    }
+    sceneStore.selectAsset(null)
+  }
   suppressSelectionSync.value = true
   sceneStore.setSelection(nextSelection)
   selectionAnchorId.value = nextSelection[nextSelection.length - 1] ?? null
@@ -757,6 +786,13 @@ function handleTreeBackgroundMouseDown(event: MouseEvent) {
   }
   if (!selectedNodeIds.value.length) {
     return
+  }
+
+  if (sceneStore.selectedAssetId) {
+    if (uiStore.activeSelectionContext === 'asset-panel') {
+      uiStore.setActiveSelectionContext(null)
+    }
+    sceneStore.selectAsset(null)
   }
   sceneStore.clearSelection()
   selectionAnchorId.value = null
