@@ -6325,7 +6325,20 @@ async function handlePointerUp(event: PointerEvent) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
           const placement = computePointerDropPlacement(event)
-          const spawnPoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+          const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
+          if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+            snapVectorToGrid(spawnPoint)
+          }
+          const groundNodeId = resolveGroundNodeIdForPlacement()
+          const shouldSnapToHeightfield =
+            placement?.kind === 'planeFallback'
+            || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+          if (shouldSnapToHeightfield) {
+            const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
+            if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
+              spawnPoint.y = heightfieldY
+            }
+          }
           const parentGroupId = resolveSelectedGroupDropParent()
           const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
@@ -6763,6 +6776,139 @@ function resolveGroundNodeIdForPlacement(): string | null {
   return groundNode?.id ?? null
 }
 
+const heightfieldRayMatrixHelper = new THREE.Matrix4()
+const heightfieldRayHelper = new THREE.Ray()
+const heightfieldRayPointHelper = new THREE.Vector3()
+
+function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 | null {
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  if (!groundDefinition || !groundNodeId) {
+    return null
+  }
+
+  const groundObject = objectMap.get(groundNodeId) ?? getRuntimeObject(groundNodeId)
+  if (!groundObject) {
+    return null
+  }
+
+  // Convert ray into ground-local space.
+  groundObject.updateMatrixWorld(true)
+  heightfieldRayMatrixHelper.copy(groundObject.matrixWorld).invert()
+  heightfieldRayHelper.copy(ray).applyMatrix4(heightfieldRayMatrixHelper)
+
+  const halfWidth = Number(groundDefinition.width) * 0.5
+  const halfDepth = Number(groundDefinition.depth) * 0.5
+  if (!Number.isFinite(halfWidth) || !Number.isFinite(halfDepth) || halfWidth <= 0 || halfDepth <= 0) {
+    return null
+  }
+
+  const origin = heightfieldRayHelper.origin
+  const dir = heightfieldRayHelper.direction
+
+  // Intersect the ray with the ground's XZ bounds first (2D slab in X/Z).
+  const EPS = 1e-8
+  let tMin = 0
+  let tMax = Number.POSITIVE_INFINITY
+
+  const updateSlab = (o: number, d: number, min: number, max: number): boolean => {
+    if (Math.abs(d) < EPS) {
+      return o >= min && o <= max
+    }
+    const inv = 1 / d
+    let t1 = (min - o) * inv
+    let t2 = (max - o) * inv
+    if (t1 > t2) {
+      const tmp = t1
+      t1 = t2
+      t2 = tmp
+    }
+    tMin = Math.max(tMin, t1)
+    tMax = Math.min(tMax, t2)
+    return tMax >= tMin
+  }
+
+  if (!updateSlab(origin.x, dir.x, -halfWidth, halfWidth)) {
+    return null
+  }
+  if (!updateSlab(origin.z, dir.z, -halfDepth, halfDepth)) {
+    return null
+  }
+  if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMax < 0) {
+    return null
+  }
+  if (tMin < 0) {
+    tMin = 0
+  }
+
+  const cellSize = Number.isFinite(groundDefinition.cellSize) && groundDefinition.cellSize > 0
+    ? groundDefinition.cellSize
+    : 1
+  const step = Math.max(0.25, cellSize * 0.5)
+  const maxSteps = 800
+
+  const evalF = (t: number): number => {
+    const x = origin.x + dir.x * t
+    const z = origin.z + dir.z * t
+    const y = origin.y + dir.y * t
+    const h = sampleGroundHeight(groundDefinition, x, z)
+    return y - h
+  }
+
+  let prevT = tMin
+  let prevF = evalF(prevT)
+  if (!Number.isFinite(prevF)) {
+    return null
+  }
+  if (prevF <= 0) {
+    // Ray starts below/inside terrain; snap to heightfield at entry.
+    const x = origin.x + dir.x * prevT
+    const z = origin.z + dir.z * prevT
+    const h = sampleGroundHeight(groundDefinition, x, z)
+    heightfieldRayPointHelper.set(x, h, z)
+    groundObject.localToWorld(heightfieldRayPointHelper)
+    return heightfieldRayPointHelper.clone()
+  }
+
+  for (let i = 0; i < maxSteps && prevT <= tMax; i += 1) {
+    const nextT = Math.min(tMax, prevT + step)
+    const nextF = evalF(nextT)
+    if (!Number.isFinite(nextF)) {
+      return null
+    }
+    if (nextF <= 0) {
+      // Root between prevT and nextT; refine with bisection.
+      let a = prevT
+      let b = nextT
+      for (let j = 0; j < 18; j += 1) {
+        const m = (a + b) * 0.5
+        const fm = evalF(m)
+        if (!Number.isFinite(fm)) {
+          break
+        }
+        if (fm > 0) {
+          a = m
+        } else {
+          b = m
+        }
+      }
+      const x = origin.x + dir.x * b
+      const z = origin.z + dir.z * b
+      const h = sampleGroundHeight(groundDefinition, x, z)
+      heightfieldRayPointHelper.set(x, h, z)
+      groundObject.localToWorld(heightfieldRayPointHelper)
+      return heightfieldRayPointHelper.clone()
+    }
+    prevT = nextT
+    prevF = nextF
+    if (prevT >= tMax) {
+      break
+    }
+  }
+
+  return null
+}
+
 function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null {
   const groundDefinition = resolveGroundDynamicMeshDefinition()
   const groundNodeId = resolveGroundNodeIdForPlacement()
@@ -6780,21 +6926,25 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   return localPoint.y
 }
 
+// Temporary: disable grid snapping for asset placement preview/drop to validate cursor alignment.
+// Keep build tools / transform snapping unchanged.
+const ASSET_PLACEMENT_GRID_SNAP_ENABLED = false
+
 function computePreviewPointForPlacement(placement: PlacementHitResult | null): THREE.Vector3 | null {
   if (!placement?.point) {
     return null
   }
 
   const spawnPoint = placement.point.clone()
-  const groundNodeId = resolveGroundNodeIdForPlacement()
-  const isGroundHit =
-    placement.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId
-
-  if (!isGroundHit) {
+  if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
     snapVectorToGrid(spawnPoint)
   }
 
-  const shouldSnapToHeightfield = placement.kind === 'planeFallback' || isGroundHit
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  const shouldSnapToHeightfield =
+    placement.kind === 'planeFallback'
+    || (placement.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+
   if (shouldSnapToHeightfield) {
     const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
     if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
@@ -6819,17 +6969,35 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
   if (!event.altKey && !isAltOverrideActive) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
+      const point = surfaceHit.point.clone()
+      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+        snapVectorToGrid(point)
+      }
       return {
-        point: surfaceHit.point,
+        point,
         kind: 'surfaceHit',
         hitNodeId: surfaceHit.nodeId,
       }
+    }
+
+    // If we have a ground heightfield, prefer intersecting the ray with it rather than the y=0 plane.
+    const heightfieldHit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
+    if (heightfieldHit) {
+      const point = heightfieldHit.clone()
+      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+        snapVectorToGrid(point)
+      }
+      return { point, kind: 'planeFallback', hitNodeId: null }
     }
   }
 
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return { point: planeHit.clone(), kind: 'planeFallback', hitNodeId: null }
+    const point = planeHit.clone()
+    if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+      snapVectorToGrid(point)
+    }
+    return { point, kind: 'planeFallback', hitNodeId: null }
   }
   return null
 }
@@ -6848,17 +7016,34 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
   if (!event.altKey && !isAltOverrideActive) {
     const surfaceHit = computePlacementSurfaceHit()
     if (surfaceHit) {
+      const point = surfaceHit.point.clone()
+      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+        snapVectorToGrid(point)
+      }
       return {
-        point: surfaceHit.point,
+        point,
         kind: 'surfaceHit',
         hitNodeId: surfaceHit.nodeId,
       }
+    }
+
+    const heightfieldHit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
+    if (heightfieldHit) {
+      const point = heightfieldHit.clone()
+      if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+        snapVectorToGrid(point)
+      }
+      return { point, kind: 'planeFallback', hitNodeId: null }
     }
   }
 
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return { point: planeHit.clone(), kind: 'planeFallback', hitNodeId: null }
+    const point = planeHit.clone()
+    if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+      snapVectorToGrid(point)
+    }
+    return { point, kind: 'planeFallback', hitNodeId: null }
   }
   return null
 }
@@ -7326,7 +7511,20 @@ async function handleViewportDrop(event: DragEvent) {
   }
 
   const placement = computeDropPlacement(event)
-  const spawnPoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+  const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
+  if (ASSET_PLACEMENT_GRID_SNAP_ENABLED) {
+    snapVectorToGrid(spawnPoint)
+  }
+  const groundNodeId = resolveGroundNodeIdForPlacement()
+  const shouldSnapToHeightfield =
+    placement?.kind === 'planeFallback'
+    || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
+  if (shouldSnapToHeightfield) {
+    const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
+    if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
+      spawnPoint.y = heightfieldY
+    }
+  }
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
@@ -7950,6 +8148,26 @@ function updateWallObjectProperties(object: THREE.Object3D, node: SceneNode) {
     }
 }
 
+let lastGroundChunkSetSignatureForPlacement: string | null = null
+let lastGroundChunkSetSignatureCheckAt = 0
+
+function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D): string {
+  let count = 0
+  let hash = 0
+  for (const child of groundObject.children) {
+    const chunk = (child as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
+    const row = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null
+    const col = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null
+    if (row == null || col == null) {
+      continue
+    }
+    count += 1
+    // Order-independent, cheap rolling signature.
+    hash = (hash + (((row * 73856093) ^ (col * 19349663)) | 0)) | 0
+  }
+  return `${count}:${hash}`
+}
+
 function updateGroundChunkStreaming() {
   if (!camera) {
     return
@@ -7967,6 +8185,22 @@ function updateGroundChunkStreaming() {
   }
 
   updateGroundChunks(groundObject, node.dynamicMesh, camera)
+
+  // Ground chunk meshes are streamed in/out without emitting scene patches.
+  // Refresh placement raycast targets when the chunk set changes; otherwise asset placement
+  // may miss the visible ground and fall back to the y=0 plane, causing cursor/placement drift.
+  const now = Date.now()
+  if (now - lastGroundChunkSetSignatureCheckAt < 140) {
+    return
+  }
+  lastGroundChunkSetSignatureCheckAt = now
+
+  const signature = computeGroundChunkSetSignatureForPlacement(groundObject)
+  if (signature !== lastGroundChunkSetSignatureForPlacement) {
+    lastGroundChunkSetSignatureForPlacement = signature
+    refreshPlacementSurfaceTargetsForNode(node.id)
+    placementSurfaceTargetsDirty = true
+  }
 }
 
 function disposeGroundObjectGeometries(object: THREE.Object3D) {
