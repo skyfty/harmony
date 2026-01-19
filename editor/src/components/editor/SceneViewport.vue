@@ -2941,6 +2941,118 @@ const selectionHighlightDirectionHelper = new THREE.Vector3()
 const selectionHighlightEulerHelper = new THREE.Euler(0, 0, 0, 'YXZ')
 const selectionHighlights = new Map<string, THREE.Group>()
 const outlineSelectionTargets: THREE.Object3D[] = []
+// Cached raycast targets for asset placement (mesh/model/prefab).
+// Built from scene node Object3Ds (excluding editor helpers/pick proxies) and refreshed on scene patches.
+const placementSurfaceTargets: THREE.Object3D[] = []
+const placementSurfaceTargetsByNodeId = new Map<string, THREE.Object3D[]>()
+let placementSurfaceTargetsDirty = true
+let placementSurfaceTargetsInstancedRevision = -1
+
+function shouldIncludePlacementSurfaceCandidate(object: THREE.Object3D): boolean {
+  const userData = object.userData as Record<string, unknown> | undefined
+  if (userData?.editorOnly) {
+    return false
+  }
+  if (userData?.instancedPickProxy) {
+    return false
+  }
+
+  const candidate = object as unknown as {
+    isMesh?: boolean
+    isSkinnedMesh?: boolean
+    isInstancedMesh?: boolean
+    count?: number
+  }
+  if (candidate.isInstancedMesh) {
+    const count = typeof candidate.count === 'number' ? candidate.count : 0
+    return count > 0
+  }
+  return Boolean(candidate.isMesh || candidate.isSkinnedMesh)
+}
+
+function collectPlacementSurfaceTargetsFromObject(object: THREE.Object3D, out: THREE.Object3D[], parentVisible = true) {
+  const currentVisible = parentVisible && object.visible
+  if (!currentVisible) {
+    return
+  }
+
+  if (shouldIncludePlacementSurfaceCandidate(object)) {
+    out.push(object)
+  }
+
+  const childCount = object.children.length
+  for (let i = 0; i < childCount; i += 1) {
+    const child = object.children[i]
+    if (!child) {
+      continue
+    }
+    collectPlacementSurfaceTargetsFromObject(child, out, currentVisible)
+  }
+}
+
+function refreshPlacementSurfaceTargetsForNode(nodeId: string): void {
+  const object = objectMap.get(nodeId) ?? null
+  if (!object) {
+    if (placementSurfaceTargetsByNodeId.has(nodeId)) {
+      placementSurfaceTargetsByNodeId.delete(nodeId)
+      placementSurfaceTargetsDirty = true
+    }
+    return
+  }
+
+  const targets: THREE.Object3D[] = []
+  collectPlacementSurfaceTargetsFromObject(object, targets, true)
+
+  if (targets.length) {
+    placementSurfaceTargetsByNodeId.set(nodeId, targets)
+  } else {
+    placementSurfaceTargetsByNodeId.delete(nodeId)
+  }
+  placementSurfaceTargetsDirty = true
+}
+
+function rebuildPlacementSurfaceTargetsFull(): void {
+  placementSurfaceTargetsByNodeId.clear()
+  objectMap.forEach((_object, nodeId) => {
+    refreshPlacementSurfaceTargetsForNode(nodeId)
+  })
+  placementSurfaceTargetsDirty = true
+}
+
+function ensurePlacementSurfaceTargetsUpToDate(): THREE.Object3D[] {
+  const instancedRevision = instancedMeshRevision.value
+  if (!placementSurfaceTargetsDirty && placementSurfaceTargetsInstancedRevision === instancedRevision) {
+    return placementSurfaceTargets
+  }
+
+  placementSurfaceTargets.length = 0
+  const seen = new Set<THREE.Object3D>()
+
+  placementSurfaceTargetsByNodeId.forEach((targets) => {
+    for (const target of targets) {
+      if (!target || seen.has(target)) {
+        continue
+      }
+      placementSurfaceTargets.push(target)
+      seen.add(target)
+    }
+  })
+
+  // Include instanced meshes that are managed outside the node object hierarchy.
+  const instancedTargets = collectInstancedPickTargets()
+  for (const mesh of instancedTargets) {
+    if (!mesh || seen.has(mesh)) {
+      continue
+    }
+    placementSurfaceTargets.push(mesh)
+    seen.add(mesh)
+  }
+
+  placementSurfaceTargetsDirty = false
+  placementSurfaceTargetsInstancedRevision = instancedRevision
+  return placementSurfaceTargets
+}
+
 let nodePickerHighlight: THREE.Group | null = null
 let nodeFlashHighlight: THREE.Group | null = null
 let nodeFlashIntervalHandle: number | null = null
@@ -3109,6 +3221,9 @@ const draggingChangedHandler = (event: unknown) => {
 function removeNodeObjects(removedIds: Set<string>): void {
   removedIds.forEach((id) => disposeNodeSubtree(id))
 
+  // Node removals may implicitly remove descendants; rebuild cached placement targets.
+  rebuildPlacementSurfaceTargetsFull()
+
   // Keep selection/effects/lighting consistent with the full-sync path.
   attachSelection(props.selectedNodeId, props.activeTool)
   updateOutlineSelectionTargets()
@@ -3207,6 +3322,7 @@ function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<s
       continue
     }
     updateNodeObject(object, node)
+    refreshPlacementSurfaceTargetsForNode(nodeId)
   }
 }
 
@@ -3257,6 +3373,7 @@ function applyNodePatchesWithTopology(
         syncSceneGraph()
         return true
       }
+      refreshPlacementSurfaceTargetsForNode(nodeId)
       continue
     }
     if (shouldRecreateNode(object, node)) {
@@ -3264,9 +3381,11 @@ function applyNodePatchesWithTopology(
         syncSceneGraph()
         return true
       }
+      refreshPlacementSurfaceTargetsForNode(nodeId)
       continue
     }
     updateNodeObject(object, node)
+    refreshPlacementSurfaceTargetsForNode(nodeId)
   }
   return false
 }
@@ -6016,25 +6135,8 @@ function handlePointerMove(event: PointerEvent) {
       // throttle updates to ~60Hz
       if (now - lastSelectionPreviewUpdate > 8) {
         lastSelectionPreviewUpdate = now
-        const rect = canvasRef.value.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
-          const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
-          pointer.set(ndcX, ndcY)
-          raycaster.setFromCamera(pointer, camera)
-          const planeHit = new THREE.Vector3()
-          let point: THREE.Vector3 | null = null
-          if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-            point = snapVectorToGrid(planeHit.clone())
-          } else {
-            const intersections = collectSceneIntersections()
-            const first = intersections && intersections.length ? intersections[0] : null
-            if (first && first.point) {
-              point = first.point.clone()
-            }
-          }
-          dragPreview.setPosition(point)
-        }
+        const point = computePointerDropPoint(event)
+        dragPreview.setPosition(point)
       }
     }
   } catch (err) {
@@ -6540,6 +6642,50 @@ function isAssetDrag(event: DragEvent): boolean {
   return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
 }
 
+function computePlacementSurfacePoint(): THREE.Vector3 | null {
+  const targets = ensurePlacementSurfaceTargetsUpToDate()
+  if (!targets.length) {
+    return null
+  }
+
+  const intersections = raycaster.intersectObjects(targets, false)
+  intersections.sort((a, b) => a.distance - b.distance)
+
+  for (const intersection of intersections) {
+    if (!intersection?.point) {
+      continue
+    }
+
+    const objectUserData = (intersection.object as THREE.Object3D | null)?.userData as Record<string, unknown> | undefined
+    if (objectUserData?.editorOnly || objectUserData?.instancedPickProxy) {
+      continue
+    }
+
+    const nodeId = resolveNodeIdFromIntersection(intersection)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+
+    const baseObject = objectMap.get(nodeId) ?? null
+    if (!baseObject) {
+      continue
+    }
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    if (!isObjectWorldVisible(baseObject)) {
+      continue
+    }
+
+    return intersection.point.clone()
+  }
+
+  return null
+}
+
 function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
   if (!camera || !canvasRef.value) return null
   const rect = canvasRef.value.getBoundingClientRect()
@@ -6548,15 +6694,19 @@ function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
   const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
   pointer.set(ndcX, ndcY)
   raycaster.setFromCamera(pointer, camera)
+
+  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
+  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
+  if (!event.altKey && !isAltOverrideActive) {
+    const surfacePoint = computePlacementSurfacePoint()
+    if (surfacePoint) {
+      return snapVectorToGrid(surfacePoint)
+    }
+  }
+
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
     return snapVectorToGrid(planeHit.clone())
-  }
-  const intersections = collectSceneIntersections()
-  if (intersections.length > 0) {
-    const first = intersections[0]
-    const point = first?.point.clone() ?? null
-    return point ? snapVectorToGrid(point) : null
   }
   return null
 }
@@ -6569,15 +6719,19 @@ function computePointerDropPoint(event: PointerEvent): THREE.Vector3 | null {
   const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
   pointer.set(ndcX, ndcY)
   raycaster.setFromCamera(pointer, camera)
+
+  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
+  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
+  if (!event.altKey && !isAltOverrideActive) {
+    const surfacePoint = computePlacementSurfacePoint()
+    if (surfacePoint) {
+      return snapVectorToGrid(surfacePoint)
+    }
+  }
+
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
     return snapVectorToGrid(planeHit.clone())
-  }
-  const intersections = collectSceneIntersections()
-  if (intersections.length > 0) {
-    const first = intersections[0]
-    const point = first?.point.clone() ?? null
-    return point ? snapVectorToGrid(point) : null
   }
   return null
 }
@@ -7906,6 +8060,7 @@ function syncSceneGraph() {
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
   updateOutlineSelectionTargets()
+  rebuildPlacementSurfaceTargetsFull()
 
   refreshPlaceholderOverlays()
   terrainGridController.refresh()
@@ -7917,6 +8072,10 @@ function syncSceneGraph() {
 function disposeSceneNodes() {
   clearOutlineSelectionTargets()
   clearLightHelpers()
+  placementSurfaceTargetsByNodeId.clear()
+  placementSurfaceTargets.length = 0
+  placementSurfaceTargetsDirty = true
+  placementSurfaceTargetsInstancedRevision = -1
   const nodeIds = Array.from(objectMap.keys())
   nodeIds.forEach((id) => {
     if (objectMap.has(id)) {
