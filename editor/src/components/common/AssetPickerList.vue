@@ -26,7 +26,7 @@ const props = withDefaults(
     assetType: '',
     seriesId: '',
       extensions: undefined,
-      thumbnailSize: 78,
+      thumbnailSize: 56,
     showSearch: true,
   },
 )
@@ -147,7 +147,7 @@ const gridStyle = computed(() => {
   const size = Number(props.thumbnailSize ?? 78)
   const minThumb = Math.max(40, isFinite(size) ? size : 78)
   // add padding/label space so items have breathing room
-  const colWidth = Math.round(minThumb + 24)
+  const colWidth = Math.round(minThumb + 16)
   return {
     gridTemplateColumns: `repeat(auto-fit, minmax(${colWidth}px, 1fr))`,
     ['--thumb-size']: `${minThumb}px`,
@@ -440,12 +440,12 @@ onMounted(() => {
 
 .asset-picker-list__body {
   flex: 1;
-  padding: 8px 14px 8px;
+  padding: 6px 10px 6px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
 }
 
@@ -460,7 +460,7 @@ onMounted(() => {
 .asset-picker-list__grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.45rem;
+  gap: 0.25rem;
 }
 
 .asset-picker-list__tile {

@@ -2272,6 +2272,12 @@ function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false
   wallPresetDialogAnchor.value = null
   wallBrushPresetAssetId.value = asset?.id ?? null
+  // If a wall preset was selected, clear any current selection and
+  // immediately activate the wall build tool so the user can begin building.
+  if (asset && asset.id) {
+    sceneStore.setSelection([])
+    handleBuildToolChange('wall')
+  }
 }
 
 function handleWallPresetDialogCancel(): void {
