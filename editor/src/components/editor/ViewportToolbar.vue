@@ -28,13 +28,26 @@
             />
           </template>
           <v-list density="compact" class="floor-shape-menu">
-            <v-list-item
-              v-for="shape in floorShapeOptions"
-              :key="shape.id"
-              :title="shape.label"
-              :prepend-icon="shape.id === floorBuildShape ? 'mdi-check' : undefined"
-              @click="() => handleFloorShapeSelect(shape.id)"
-            />
+            <div class="floor-shape-menu__card">
+              <div class="floor-shape-grid">
+                <v-list-item
+                  v-for="shape in floorShapeOptions"
+                  :key="shape.id"
+                  class="floor-shape-item"
+                  @click="() => handleFloorShapeSelect(shape.id)"
+                >
+                  <v-btn
+                    density="compact"
+                    size="small"
+                    variant="text"
+                    :title="shape.label"
+                    :class="shape.id === floorBuildShape ? 'floor-shape-selected' : ''"
+                  >
+                    <span v-html="shape.svg" />
+                  </v-btn>
+                </v-list-item>
+              </div>
+            </div>
           </v-list>
         </v-menu>
 
@@ -469,6 +482,12 @@ const buildToolButtons = [
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
   id,
   label: FLOOR_BUILD_SHAPE_LABELS[id],
+  svg:
+    id === 'polygon'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
+      : id === 'rectangle'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
 }))
 
 
@@ -581,6 +600,33 @@ function handleClearScatterMenuAction() {
 .floor-shape-menu {
   min-width: 220px;
   padding: 6px;
+}
+
+.floor-shape-grid {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+}
+.floor-shape-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.floor-shape-selected {
+  color: #4dd0e1;
+}
+.floor-shape-item span svg {
+  display: block;
+}
+
+.floor-shape-menu__card {
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(20, 24, 32, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
 }
 
 .scatter-erase-menu__card {
