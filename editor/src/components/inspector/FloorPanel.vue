@@ -189,6 +189,7 @@ function applySideUvUpdate() {
           :min="FLOOR_MIN_THICKNESS"
           :max="FLOOR_MAX_THICKNESS"
           step="0.05"
+          @update:modelValue="(value) => { localThickness = Number(value); applyThicknessUpdate() }"
           @blur="applyThicknessUpdate"
           @keydown.enter.prevent="applyThicknessUpdate"
         />
