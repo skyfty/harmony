@@ -6240,6 +6240,23 @@ function handlePointerMove(event: PointerEvent) {
 
 async function handlePointerUp(event: PointerEvent) {
   try {
+    const isPointerUpOnCanvas = (() => {
+      const canvas = canvasRef.value
+      if (!canvas || typeof document === 'undefined') {
+        return false
+      }
+      const x = event.clientX
+      const y = event.clientY
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return false
+      }
+      try {
+        return document.elementFromPoint(x, y) === canvas
+      } catch {
+        return false
+      }
+    })()
+
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
         pointerTrackingState = null
@@ -6263,56 +6280,84 @@ async function handlePointerUp(event: PointerEvent) {
         event.stopImmediatePropagation()
       }
     }
+
+    // Canvas-only safety: only allow scene-modifying interactions (build/road/floor/scatter)
+    // to commit when the pointer is released over the viewport canvas.
+    //
+    // We intentionally do NOT rely on `event.target === canvas` because pointer-capture can
+    // retarget the event to the captured element even if the pointer is released elsewhere.
+    if (!isPointerUpOnCanvas) {
+      const hasViewportSession =
+        pointerCaptureGuard.hasCaptured(event.pointerId) ||
+        pointerTrackingState?.pointerId === event.pointerId ||
+        roadVertexDragState?.pointerId === event.pointerId ||
+        floorEdgeDragState?.pointerId === event.pointerId ||
+        instancedEraseDragState?.pointerId === event.pointerId ||
+        pointerInteraction.get()?.pointerId === event.pointerId ||
+        middleClickSessionState?.pointerId === event.pointerId ||
+        leftEmptyClickSessionState?.pointerId === event.pointerId ||
+        assetPlacementClickSessionState?.pointerId === event.pointerId
+
+      // If the interaction started in the viewport, treat releasing outside as a cancellation.
+      // This avoids accidental commits and also prevents a "drop" onto UI panels.
+      if (hasViewportSession) {
+        handlePointerCancel(event)
+        return
+      }
+    }
+
     // NOTE: middle-button cancellation moved later so other tools (drag/erase/build)
     // which may use middle-button can handle the event first. If no handler
     // processed the pointerup, we'll cancel active tools below.
-    const drag = handlePointerUpDrag(event, {
-      roadDefaultWidth: ROAD_DEFAULT_WIDTH,
-      roadVertexDragState,
-      floorEdgeDragState,
-      findSceneNode,
-      nodes: sceneStore.nodes,
-      objectMap,
-      sceneStoreUpdateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
-      pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
-      ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
-      nextTick,
-      resolveRoadRenderOptionsForNodeId,
-      updateRoadGroup,
-      updateFloorGroup,
-      roadBuildToolBeginBranchFromVertex: (options) => roadBuildTool.beginBranchFromVertex(options),
-    })
-    if (drag) {
-      applyPointerUpResult(drag)
-      return
-    }
+    if (isPointerUpOnCanvas) {
+      const drag = handlePointerUpDrag(event, {
+        roadDefaultWidth: ROAD_DEFAULT_WIDTH,
+        roadVertexDragState,
+        floorEdgeDragState,
+        findSceneNode,
+        nodes: sceneStore.nodes,
+        objectMap,
+        sceneStoreUpdateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
+        pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+        ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
+        nextTick,
+        resolveRoadRenderOptionsForNodeId,
+        updateRoadGroup,
+        updateFloorGroup,
+        roadBuildToolBeginBranchFromVertex: (options) => roadBuildTool.beginBranchFromVertex(options),
+      })
+      if (drag) {
+        applyPointerUpResult(drag)
+        return
+      }
 
-    const scatter = handlePointerUpScatter(event, {
-      finalizeContinuousInstancedCreate,
-      instancedEraseDragState,
-      pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
-      scatterEraseModeActive: scatterEraseModeActive.value,
-      pointerInteractionGet: () => pointerInteraction.get(),
-      pointerInteractionEnsureMoved: (e) => pointerInteraction.ensureMoved(e),
-      pointerInteractionClearIfPointer: (pointerId) => pointerInteraction.clearIfPointer(pointerId),
-      tryEraseRepairTargetAtPointer,
-    })
-    if (scatter) {
-      applyPointerUpResult(scatter)
-      return
-    }
+      const scatter = handlePointerUpScatter(event, {
+        finalizeContinuousInstancedCreate,
+        instancedEraseDragState,
+        pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
+        scatterEraseModeActive: scatterEraseModeActive.value,
+        pointerInteractionGet: () => pointerInteraction.get(),
+        pointerInteractionEnsureMoved: (e) => pointerInteraction.ensureMoved(e),
+        pointerInteractionClearIfPointer: (pointerId) => pointerInteraction.clearIfPointer(pointerId),
+        tryEraseRepairTargetAtPointer,
+      })
+      if (scatter) {
+        applyPointerUpResult(scatter)
+        return
+      }
 
-    const tools = handlePointerUpTools(event, {
-      maybeCancelBuildToolOnRightDoubleClick,
-      handleGroundEditorPointerUp,
-      wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
-      roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
-      activeBuildTool: activeBuildTool.value,
-      floorBuildToolHandlePointerUp: (e) => floorBuildTool.handlePointerUp(e),
-    })
-    if (tools) {
-      applyPointerUpResult(tools)
-      return
+      const tools = handlePointerUpTools(event, {
+        maybeCancelBuildToolOnRightDoubleClick,
+        handleGroundEditorPointerUp,
+        wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
+        roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
+        activeBuildTool: activeBuildTool.value,
+        floorBuildToolHandlePointerUp: (e) => floorBuildTool.handlePointerUp(e),
+      })
+      if (tools) {
+        applyPointerUpResult(tools)
+        return
+      }
     }
 
     // Selection-based asset preview: right click (without moving) rotates the preview.
