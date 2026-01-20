@@ -9466,7 +9466,7 @@ defineExpose<SceneViewportHandle>({
         @rotate-selection="handleRotateSelection"
         @capture-screenshot="handleCaptureScreenshot"
         @change-build-tool="handleBuildToolChange"
-        @open-wall-preset-picker="handleOpenWallPresetPicker"
+        @select-wall-preset="handleWallPresetDialogUpdate"
         @toggle-scatter-erase="toggleScatterEraseMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"

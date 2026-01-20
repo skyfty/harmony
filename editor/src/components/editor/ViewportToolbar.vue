@@ -50,6 +50,43 @@
             </div>
           </v-list>
         </v-menu>
+        <v-menu
+          v-else-if="tool.id === 'wall'"
+          :model-value="wallPresetMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="(value) => (wallPresetMenuOpen = value)"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="activeBuildTool === tool.id ? 'primary' : undefined"
+              :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleWallPresetContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="wall-preset-menu">
+            <div class="wall-preset-menu__card">
+              <AssetPickerList
+                :active="true"
+                assetType="prefab"
+                :extensions="['wall']"
+                :thumbnailSize="30"
+                :showSearch="true"
+                @update:asset="handleWallPresetSelect"
+              />
+            </div>
+          </v-list>
+        </v-menu>
 
         <v-btn
           v-else
@@ -151,6 +188,7 @@
         location="bottom"
         :offset="6"
         :open-on-click="false"
+        :close-on-content-click="false"
         @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
       >
         <template #activator="{ props: menuProps }">
@@ -267,6 +305,7 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
+import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
@@ -304,12 +343,14 @@ const emit = defineEmits<{
   (event: 'capture-screenshot'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
+  (event: 'select-wall-preset', asset: any): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
+  (event: 'update:wall-preset-menu-open', value: boolean): void
 }>()
 
 const {
@@ -334,6 +375,7 @@ const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.s
 const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
+const wallPresetMenuOpen = ref(false)
 
 const scatterEraseRadiusModel = computed({
   get: () => scatterEraseRadius.value,
@@ -387,6 +429,9 @@ watch(canEraseScatter, (enabled) => {
 watch(buildToolsDisabled, (disabled) => {
   if (disabled && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
+  }
+  if (disabled && wallPresetMenuOpen.value) {
+    wallPresetMenuOpen.value = false
   }
 })
 
@@ -512,10 +557,24 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
   if (buildToolsDisabled.value) {
     return
   }
-  if (tool !== 'wall') {
+  // default: do nothing here; wall uses its own contextmenu handler to open the embedded menu
+  return
+}
+
+function handleWallPresetContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value) {
     return
   }
-  emit('open-wall-preset-picker', { x: event.clientX, y: event.clientY })
+  // Open the in-toolbar wall preset menu
+  wallPresetMenuOpen.value = true
+}
+
+function handleWallPresetSelect(asset: any) {
+  // propagate selection to parent; parent will handle activating the wall tool
+  emit('select-wall-preset', asset)
+  wallPresetMenuOpen.value = false
 }
 
 function handleFloorShapeContextMenu(event: MouseEvent) {
@@ -595,11 +654,45 @@ function handleClearScatterMenuAction() {
 .scatter-erase-menu {
   min-width: 220px;
   padding: 6px;
+  /* Frosted glass shell */
+  background: rgba(18, 22, 28, 0.4);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 .floor-shape-menu {
   min-width: 220px;
   padding: 6px;
+  /* Frosted glass shell */
+  background: rgba(18, 22, 28, 0.4);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.wall-preset-menu {
+  min-width: 280px;
+  padding: 6px;
+  /* Frosted glass shell */
+  background: rgba(18, 22, 28, 0.4);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.wall-preset-menu__card {
+  border-radius: 12px;
+  padding: 8px;
+  /* Frosted glass */
+  background: rgba(18, 22, 28, 0.44);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
 }
 
 .floor-shape-grid {
@@ -622,20 +715,23 @@ function handleClearScatterMenuAction() {
 .floor-shape-menu__card {
   border-radius: 12px;
   padding: 8px;
-  background: rgba(20, 24, 32, 0.6);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  /* Frosted glass */
+  background: rgba(20, 24, 32, 0.42);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
 }
 
 .scatter-erase-menu__card {
   border-radius: 14px;
   padding: 10px;
-  background: rgba(20, 24, 32, 0.75);
-  backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.25);
+  /* Frosted glass */
+  background: rgba(16, 20, 26, 0.5);
+  backdrop-filter: blur(16px) saturate(115%);
+  -webkit-backdrop-filter: blur(16px) saturate(115%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.36);
 }
 
 .scatter-erase-menu__slider {
