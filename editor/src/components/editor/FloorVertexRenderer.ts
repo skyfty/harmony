@@ -192,7 +192,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
       }
       const mesh = new THREE.Mesh(baseGeometry.clone(), baseMaterial.clone())
       mesh.name = `FloorVertexHandle_${index + 1}`
-      mesh.position.set(x, FLOOR_VERTEX_HANDLE_Y_OFFSET, -z)
+      mesh.position.set(x, FLOOR_VERTEX_HANDLE_Y_OFFSET, z)
       mesh.renderOrder = FLOOR_VERTEX_HANDLE_RENDER_ORDER
       mesh.layers.enableAll()
       mesh.userData.isFloorVertexHandle = true

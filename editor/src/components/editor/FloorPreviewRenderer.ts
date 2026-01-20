@@ -266,7 +266,8 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
     return null
   }
 
-  const normalizedVertices = vertices.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
+  // Local Z should preserve world Z (we no longer rotate/flip floor geometry).
+  const normalizedVertices = vertices.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
 
   const definition: FloorDynamicMesh = {
     type: 'Floor',
