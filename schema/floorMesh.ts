@@ -198,17 +198,74 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
   // THREE.Shape expects a non-self-intersecting contour.
   const points = vertices.map(([x, z]) => new THREE.Vector2(x, z))
 
-  // Ensure consistent winding (CCW) so normals face +Y after rotation.
+  // Ensure consistent winding (CCW) for a stable contour; triangles are flipped later to face +Y.
   if (!isPolygonAreaPositive(vertices)) {
     points.reverse()
   }
 
   const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
-  const geometry = new THREE.ShapeGeometry(shape)
-  geometry.rotateX(-Math.PI / 2)
+
+  // Sample the rounded shape into a polyline and triangulate it manually for stable UVs.
+  const curveSegments = 12
+  const { shape: contour, holes } = shape.extractPoints(curveSegments)
+  const triangulated = THREE.ShapeUtils.triangulateShape(contour, holes)
+  const allPoints = contour.concat(...holes)
+
+  if (allPoints.length < 3 || triangulated.length === 0) {
+    return null
+  }
+
+  const positionArray = new Float32Array(allPoints.length * 3)
+  const uvArray = new Float32Array(allPoints.length * 2)
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  for (let i = 0; i < allPoints.length; i += 1) {
+    const p = allPoints[i]!
+    const x = p.x
+    const z = p.y
+    positionArray[i * 3 + 0] = x
+    positionArray[i * 3 + 1] = 0
+    positionArray[i * 3 + 2] = z
+
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minZ = Math.min(minZ, z)
+    maxZ = Math.max(maxZ, z)
+  }
+
+  const spanX = Math.max(1e-6, maxX - minX)
+  const spanZ = Math.max(1e-6, maxZ - minZ)
+
+  for (let i = 0; i < allPoints.length; i += 1) {
+    const x = positionArray[i * 3 + 0]
+    const z = positionArray[i * 3 + 2]
+    uvArray[i * 2 + 0] = (x - minX) / spanX
+    uvArray[i * 2 + 1] = (z - minZ) / spanZ
+  }
+
+  const indexCount = triangulated.length * 3
+  const useUint32 = allPoints.length > 65535
+  const indexArray = useUint32 ? new Uint32Array(indexCount) : new Uint16Array(indexCount)
+
+  for (let i = 0; i < triangulated.length; i += 1) {
+    const tri = triangulated[i]!
+    // Flip winding so the flat polygon on XZ has normals facing +Y.
+    indexArray[i * 3 + 0] = tri[0]!
+    indexArray[i * 3 + 1] = tri[2]!
+    indexArray[i * 3 + 2] = tri[1]!
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2))
+  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
+  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
-
 
   return geometry
 }
