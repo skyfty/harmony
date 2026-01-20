@@ -1043,8 +1043,8 @@ export function updateGroundChunks(
   camera: THREE.Camera | null,
   options: { radius?: number } = {},
 ): void {  
-  const root = (target as THREE.Group)
-  if (!root || !(root as any).isGroup) {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
     return
   }
   const state = ensureGroundRuntimeState(root, definition)
@@ -1161,8 +1161,8 @@ export function updateGroundChunks(
 }
 
 export function ensureAllGroundChunks(target: THREE.Object3D, definition: GroundDynamicMesh): void {
-  const root = (target as THREE.Group)
-  if (!root || !(root as any).isGroup) {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
     return
   }
   const state = ensureGroundRuntimeState(root, definition)
@@ -1195,8 +1195,8 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
     return
   }
 
-  const group = target as THREE.Group
-  if (!(group as any)?.isGroup) {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
     return
   }
   ensureGroundRuntimeState(group, definition)
@@ -1217,14 +1217,67 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
   applyGroundTextureToObject(group, definition)
 }
 
+function resolveGroundRuntimeGroup(target: THREE.Object3D): THREE.Group | null {
+  if (!target) {
+    return null
+  }
+
+  const userData = (target as any).userData as Record<string, unknown> | undefined
+
+  const fromUserData = (userData as any)?.groundMesh as THREE.Object3D | undefined
+  if (fromUserData && (fromUserData as any).isGroup && groundRuntimeStateMap.get(fromUserData)) {
+    // If a caller mistakenly created chunk runtime state on the container (instead of the
+    // canonical groundMesh group), purge it to avoid duplicate overlapping meshes.
+    if (fromUserData !== target) {
+      const orphanState = groundRuntimeStateMap.get(target)
+      if (orphanState) {
+        orphanState.chunks.forEach((entry) => disposeChunk(entry))
+        orphanState.chunks.clear()
+        groundRuntimeStateMap.delete(target)
+      }
+    }
+    if (userData) {
+      ;(userData as any).__harmonyGroundRuntimeGroup = fromUserData
+    }
+    return fromUserData as THREE.Group
+  }
+
+  const cached = userData?.__harmonyGroundRuntimeGroup as THREE.Object3D | undefined
+  if (cached && (cached as any).isGroup && groundRuntimeStateMap.get(cached)) {
+    return cached as THREE.Group
+  }
+
+  if ((target as any).isGroup && groundRuntimeStateMap.get(target)) {
+    if (userData) {
+      ;(userData as any).__harmonyGroundRuntimeGroup = target
+    }
+    return target as THREE.Group
+  }
+
+  let found: THREE.Group | null = null
+  target.traverse((child) => {
+    if (found) {
+      return
+    }
+    if ((child as any).isGroup && groundRuntimeStateMap.get(child)) {
+      found = child as THREE.Group
+    }
+  })
+
+  if (found && userData) {
+    ;(userData as any).__harmonyGroundRuntimeGroup = found
+  }
+  return found
+}
+
 export function updateGroundMeshRegion(
   target: THREE.Object3D,
   definition: GroundDynamicMesh,
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean } = {},
 ): boolean {
-  const group = target as THREE.Group
-  if (!(group as any)?.isGroup) {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
     return false
   }
   const state = groundRuntimeStateMap.get(group)
@@ -1369,8 +1422,8 @@ export function stitchGroundChunkNormals(
   definition: GroundDynamicMesh,
   region: GroundGeometryUpdateRegion | null = null,
 ): boolean {
-  const group = target as THREE.Group
-  if (!(group as any)?.isGroup) {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
     return false
   }
   const state = groundRuntimeStateMap.get(group)
