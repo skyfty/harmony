@@ -1620,7 +1620,8 @@ function buildFloorDynamicMeshFromWorldPoints(
   }
 
   const center = computeFloorCenter(worldPoints)
-  const vertices = worldPoints.map((p) => [p.x - center.x, center.z - p.z] as [number, number])
+  // Preserve world Z in local space; geometry no longer flips Z.
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
 
   const definition: FloorDynamicMesh = {
     type: 'Floor',
