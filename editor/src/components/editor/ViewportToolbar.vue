@@ -3,20 +3,55 @@
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
 
-      <v-btn
-        v-for="tool in buildToolButtons"
-        :key="tool.id"
-        :icon="tool.icon"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        :color="activeBuildTool === tool.id ? 'primary' : undefined"
-        :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
-        :title="tool.label"
-        :disabled="buildToolsDisabled"
-        @click="handleBuildToolToggle(tool.id)"
-        @contextmenu.prevent.stop="handleBuildToolContextMenu(tool.id, $event)"
-      />
+      <template v-for="tool in buildToolButtons" :key="tool.id">
+        <v-menu
+          v-if="tool.id === 'floor'"
+          :model-value="floorShapeMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          @update:modelValue="(value) => emit('update:floor-shape-menu-open', value)"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="activeBuildTool === tool.id ? 'primary' : undefined"
+              :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleFloorShapeContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="floor-shape-menu">
+            <v-list-item
+              v-for="shape in floorShapeOptions"
+              :key="shape.id"
+              :title="shape.label"
+              :prepend-icon="shape.id === floorBuildShape ? 'mdi-check' : undefined"
+              @click="() => handleFloorShapeSelect(shape.id)"
+            />
+          </v-list>
+        </v-menu>
+
+        <v-btn
+          v-else
+          :icon="tool.icon"
+          density="compact"
+          size="small"
+          class="toolbar-button"
+          :color="activeBuildTool === tool.id ? 'primary' : undefined"
+          :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+          :title="tool.label"
+          :disabled="buildToolsDisabled"
+          @click="handleBuildToolToggle(tool.id)"
+          @contextmenu.prevent.stop="handleBuildToolContextMenu(tool.id, $event)"
+        />
+      </template>
       <v-divider vertical />
       <v-btn
         icon="mdi-camera-outline"
@@ -222,6 +257,8 @@ import { computed, ref, toRefs, watch } from 'vue'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
+import type { FloorBuildShape } from '@/types/floor-build-shape'
+import { FLOOR_BUILD_SHAPE_LABELS } from '@/types/floor-build-shape'
 import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 const props = withDefaults(
@@ -238,6 +275,8 @@ const props = withDefaults(
   scatterEraseModeActive: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
+  floorShapeMenuOpen: boolean
+  floorBuildShape: FloorBuildShape
   }>(),
   {
     buildToolsDisabled: false,
@@ -256,6 +295,8 @@ const emit = defineEmits<{
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
+  (event: 'update:floor-shape-menu-open', value: boolean): void
+  (event: 'select-floor-build-shape', shape: FloorBuildShape): void
 }>()
 
 const {
@@ -271,6 +312,8 @@ const {
   buildToolsDisabled,
   scatterEraseRadius,
   scatterEraseMenuOpen,
+  floorShapeMenuOpen,
+  floorBuildShape,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -325,6 +368,12 @@ watch(canRotateSelection, (enabled) => {
 watch(canEraseScatter, (enabled) => {
   if (!enabled) {
     emit('update:scatter-erase-menu-open', false)
+  }
+})
+
+watch(buildToolsDisabled, (disabled) => {
+  if (disabled && floorShapeMenuOpen.value) {
+    emit('update:floor-shape-menu-open', false)
   }
 })
 
@@ -417,6 +466,11 @@ const buildToolButtons = [
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
+const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
+  id,
+  label: FLOOR_BUILD_SHAPE_LABELS[id],
+}))
+
 
 function emitAlign(mode: AlignMode) {
   emit('align-selection', mode)
@@ -443,6 +497,25 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
     return
   }
   emit('open-wall-preset-picker', { x: event.clientX, y: event.clientY })
+}
+
+function handleFloorShapeContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value) {
+    return
+  }
+  // Right-click on floor tool only opens the shape menu; it does not auto-switch tools.
+  emit('update:floor-shape-menu-open', true)
+}
+
+function handleFloorShapeSelect(shape: FloorBuildShape) {
+  if (buildToolsDisabled.value) {
+    emit('update:floor-shape-menu-open', false)
+    return
+  }
+  emit('select-floor-build-shape', shape)
+  emit('update:floor-shape-menu-open', false)
 }
 
 function handleScatterEraseButtonClick() {
@@ -501,6 +574,11 @@ function handleClearScatterMenuAction() {
 }
 
 .scatter-erase-menu {
+  min-width: 220px;
+  padding: 6px;
+}
+
+.floor-shape-menu {
   min-width: 220px;
   padding: 6px;
 }

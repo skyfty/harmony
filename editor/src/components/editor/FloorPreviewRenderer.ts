@@ -2,8 +2,10 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh } from '@harmony/schema'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { FLOOR_DEFAULT_SMOOTH } from '@schema/components'
+import type { FloorBuildShape } from '@/types/floor-build-shape'
 
 export type FloorPreviewSession = {
+  shape: FloorBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
@@ -20,6 +22,7 @@ export type FloorPreviewRenderer = {
 
 const FLOOR_PREVIEW_SIGNATURE_PRECISION = 1000
 const FLOOR_PREVIEW_Y_OFFSET = 0.01
+const FLOOR_CIRCLE_PREVIEW_SEGMENTS = 32
 
 function encodePreviewNumber(value: number): string {
   return `${Math.round(value * FLOOR_PREVIEW_SIGNATURE_PRECISION)}`
@@ -41,6 +44,23 @@ function buildRectanglePreviewPoints(first: THREE.Vector3, second: THREE.Vector3
     new THREE.Vector3(maxX, 0, maxZ),
     new THREE.Vector3(maxX, 0, minZ),
   ]
+}
+
+function buildCirclePreviewPoints(center: THREE.Vector3, previewEnd: THREE.Vector3): THREE.Vector3[] {
+  const dx = previewEnd.x - center.x
+  const dz = previewEnd.z - center.z
+  const radius = Math.hypot(dx, dz)
+  if (!Number.isFinite(radius) || radius <= 1e-6) {
+    return []
+  }
+
+  const out: THREE.Vector3[] = []
+  const segments = Math.max(8, Math.floor(FLOOR_CIRCLE_PREVIEW_SEGMENTS))
+  for (let i = 0; i < segments; i += 1) {
+    const t = (i / segments) * Math.PI * 2
+    out.push(new THREE.Vector3(center.x + Math.cos(t) * radius, 0, center.z + Math.sin(t) * radius))
+  }
+  return out
 }
 
 function computePolygonArea2D(vertices: THREE.Vector3[]): number {
@@ -73,9 +93,27 @@ function buildTwoPointPreviewPoints(first: THREE.Vector3, previewEnd: THREE.Vect
   return triangle
 }
 
-function getPreviewVertices(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null): THREE.Vector3[] {
+function getPreviewVertices(
+  shape: FloorBuildShape,
+  points: THREE.Vector3[],
+  previewEnd: THREE.Vector3 | null,
+): THREE.Vector3[] {
   if (!points.length) {
     return []
+  }
+
+  if (shape === 'rectangle' && previewEnd) {
+    const start = points[0]
+    if (start) {
+      return buildRectanglePreviewPoints(start, previewEnd)
+    }
+  }
+
+  if (shape === 'circle' && previewEnd) {
+    const center = points[0]
+    if (center) {
+      return buildCirclePreviewPoints(center, previewEnd)
+    }
   }
 
   if (points.length === 1 && previewEnd) {
@@ -265,7 +303,7 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       return
     }
 
-    const previewVertices = getPreviewVertices(session.points, session.previewEnd)
+    const previewVertices = getPreviewVertices(session.shape, session.points, session.previewEnd)
     if (previewVertices.length < 3) {
       if (session.previewGroup) {
         clear(session)
@@ -279,7 +317,8 @@ export function createFloorPreviewRenderer(options: { rootGroup: THREE.Group }):
       return
     }
 
-    const center = computePreviewCenter(session.points)
+    const centerSource = session.shape === 'polygon' ? session.points : previewVertices
+    const center = computePreviewCenter(centerSource)
     if (!center) {
       if (session.previewGroup) {
         clear(session)

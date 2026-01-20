@@ -115,6 +115,7 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
+import type { FloorBuildShape } from '@/types/floor-build-shape'
 import {
   createGroundMesh,
   updateGroundChunks,
@@ -1074,6 +1075,8 @@ const canDropSelection = computed(() =>
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
+const floorBuildShape = ref<FloorBuildShape>('polygon')
+const floorShapeMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'wall') {
@@ -2341,6 +2344,8 @@ const roadBuildTool = createRoadBuildTool({
 
 const floorBuildTool = createFloorBuildTool({
   activeBuildTool,
+  floorBuildShape,
+  getDefaultCircleRadius: () => GRID_MAJOR_SPACING,
   sceneStore,
   rootGroup,
   raycastGroundPoint,
@@ -2348,6 +2353,22 @@ const floorBuildTool = createFloorBuildTool({
   isAltOverrideActive: () => isAltOverrideActive,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
+
+function handleFloorShapeMenuOpen(value: boolean) {
+  floorShapeMenuOpen.value = Boolean(value)
+}
+
+function handleSelectFloorBuildShape(shape: FloorBuildShape) {
+  // Switching shapes should start from a clean slate.
+  floorBuildTool.cancel()
+  floorBuildShape.value = shape
+  floorShapeMenuOpen.value = false
+
+  // Selecting a shape explicitly activates the floor build tool.
+  // Match toolbar behavior: entering a build tool clears selection.
+  sceneStore.setSelection([])
+  handleBuildToolChange('floor')
+}
 
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
@@ -9398,6 +9419,8 @@ defineExpose<SceneViewportHandle>({
         :scatter-erase-mode-active="scatterEraseModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
+        :floor-shape-menu-open="floorShapeMenuOpen"
+        :floor-build-shape="floorBuildShape"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
@@ -9411,6 +9434,8 @@ defineExpose<SceneViewportHandle>({
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
+          @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
+          @select-floor-build-shape="handleSelectFloorBuildShape"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>
