@@ -178,17 +178,6 @@ function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): T
   return shape
 }
 
-function isPolygonAreaPositive(vertices: Array<[number, number]>): boolean {
-  // Signed area (shoelace). Positive => CCW.
-  let sum = 0
-  for (let i = 0; i < vertices.length; i += 1) {
-    const a = vertices[i]!
-    const b = vertices[(i + 1) % vertices.length]!
-    sum += a[0] * b[1] - b[0] * a[1]
-  }
-  return sum >= 0
-}
-
 function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry | null {
   const vertices = sanitizeVertices(definition.vertices)
   if (vertices.length < 3) {
@@ -196,74 +185,61 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
   }
 
   // THREE.Shape expects a non-self-intersecting contour.
-  const points = vertices.map(([x, z]) => new THREE.Vector2(x, z))
-
-  // Ensure consistent winding (CCW) for a stable contour; triangles are flipped later to face +Y.
-  if (!isPolygonAreaPositive(vertices)) {
-    points.reverse()
-  }
+  // Build the shape in XY, but map world (x,z) -> shape (x,-z) so that after
+  // rotateX(-PI/2) the geometry ends up on XZ with the original +Z direction.
+  const points = vertices.map(([x, z]) => new THREE.Vector2(x, -z))
 
   const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
 
-  // Sample the rounded shape into a polyline and triangulate it manually for stable UVs.
-  const curveSegments = 12
-  const { shape: contour, holes } = shape.extractPoints(curveSegments)
-  const triangulated = THREE.ShapeUtils.triangulateShape(contour, holes)
-  const allPoints = contour.concat(...holes)
+  // Build in XY first (like PlaneGeometry), then rotate to XZ.
+  const geometry = new THREE.ShapeGeometry(shape)
 
-  if (allPoints.length < 3 || triangulated.length === 0) {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  if (!position || position.count <= 0) {
+    geometry.dispose()
     return null
   }
 
-  const positionArray = new Float32Array(allPoints.length * 3)
-  const uvArray = new Float32Array(allPoints.length * 2)
-
+  // PlaneGeometry-style UVs: normalized across the geometry extents, with V flipped.
   let minX = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-
-  for (let i = 0; i < allPoints.length; i += 1) {
-    const p = allPoints[i]!
-    const x = p.x
-    const z = p.y
-    positionArray[i * 3 + 0] = x
-    positionArray[i * 3 + 1] = 0
-    positionArray[i * 3 + 2] = z
-
-    minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
-    minZ = Math.min(minZ, z)
-    maxZ = Math.max(maxZ, z)
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i)
+    const y = position.getY(i)
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
   }
 
-  const spanX = Math.max(1e-6, maxX - minX)
-  const spanZ = Math.max(1e-6, maxZ - minZ)
+  const sizeX = Math.max(maxX - minX, FLOOR_EPSILON)
+  const sizeY = Math.max(maxY - minY, FLOOR_EPSILON)
 
-  for (let i = 0; i < allPoints.length; i += 1) {
-    const x = positionArray[i * 3 + 0]
-    const z = positionArray[i * 3 + 2]
-    uvArray[i * 2 + 0] = (x - minX) / spanX
-    uvArray[i * 2 + 1] = (z - minZ) / spanZ
+  const normals = new Float32Array(position.count * 3)
+  const uvs = new Float32Array(position.count * 2)
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i)
+    const y = position.getY(i)
+
+    const u = (x - minX) / sizeX
+    const v = 1 - (y - minY) / sizeY
+
+    uvs[i * 2] = u
+    uvs[i * 2 + 1] = v
+
+    normals[i * 3] = 0
+    normals[i * 3 + 1] = 0
+    normals[i * 3 + 2] = 1
   }
 
-  const indexCount = triangulated.length * 3
-  const useUint32 = allPoints.length > 65535
-  const indexArray = useUint32 ? new Uint32Array(indexCount) : new Uint16Array(indexCount)
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 
-  for (let i = 0; i < triangulated.length; i += 1) {
-    const tri = triangulated[i]!
-    // Flip winding so the flat polygon on XZ has normals facing +Y.
-    indexArray[i * 3 + 0] = tri[0]!
-    indexArray[i * 3 + 1] = tri[2]!
-    indexArray[i * 3 + 2] = tri[1]!
-  }
+  // Rotate so the floor lies on the XZ plane with +Y normal.
+  geometry.rotateX(-Math.PI / 2)
 
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3))
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2))
-  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
-  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
 
