@@ -1000,6 +1000,15 @@ export interface FloorDynamicMesh {
   materialId?: string | null
   /** Controls how rounded the floor corners are. */
   smooth?: number
+  /** Extrusion thickness in meters. 0 generates a flat floor. */
+  thickness?: number
+
+  /**
+   * Side-wall UV repeats per meter.
+   * - x: repeats per meter along the perimeter direction (U)
+   * - y: repeats per meter along height (V)
+   */
+  sideUvScale?: Vector2Like | null
 }
 
 export interface GuideRouteDynamicMesh {

@@ -263,6 +263,10 @@ import {
   cloneFloorComponentProps,
   resolveFloorComponentPropsFromMesh,
   FLOOR_DEFAULT_SMOOTH,
+  FLOOR_DEFAULT_THICKNESS,
+  FLOOR_DEFAULT_SIDE_UV_SCALE,
+  FLOOR_MAX_THICKNESS,
+  FLOOR_MIN_THICKNESS,
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
   cloneWaterComponentProps,
@@ -854,6 +858,8 @@ function normalizeNodeComponents(
     const nextProps = cloneFloorComponentProps(
       clampFloorComponentProps({
         smooth: existingProps?.smooth ?? baseProps.smooth,
+        thickness: existingProps?.thickness ?? baseProps.thickness,
+        sideUvScale: existingProps?.sideUvScale ?? baseProps.sideUvScale,
       }),
     )
 
@@ -1628,6 +1634,8 @@ function buildFloorDynamicMeshFromWorldPoints(
     vertices,
     materialId: null,
     smooth: FLOOR_DEFAULT_SMOOTH,
+    thickness: FLOOR_DEFAULT_THICKNESS,
+    sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },
   }
 
   return { center, definition }
@@ -1697,13 +1705,30 @@ function applyFloorComponentPropsToNode(node: SceneNode, props: FloorComponentPr
   const currentSmooth = Number.isFinite(node.dynamicMesh.smooth ?? Number.NaN)
     ? (node.dynamicMesh.smooth as number)
     : FLOOR_DEFAULT_SMOOTH
-  if (Math.abs(currentSmooth - normalized.smooth) <= 1e-6) {
+  const currentThickness = Number.isFinite((node.dynamicMesh as any).thickness)
+    ? Number((node.dynamicMesh as any).thickness)
+    : FLOOR_DEFAULT_THICKNESS
+  const currentSideU = Number.isFinite((node.dynamicMesh as any).sideUvScale?.x)
+    ? Number((node.dynamicMesh as any).sideUvScale.x)
+    : FLOOR_DEFAULT_SIDE_UV_SCALE.x
+  const currentSideV = Number.isFinite((node.dynamicMesh as any).sideUvScale?.y)
+    ? Number((node.dynamicMesh as any).sideUvScale.y)
+    : FLOOR_DEFAULT_SIDE_UV_SCALE.y
+
+  const unchanged =
+    Math.abs(currentSmooth - normalized.smooth) <= 1e-6 &&
+    Math.abs(currentThickness - normalized.thickness) <= 1e-6 &&
+    Math.abs(currentSideU - normalized.sideUvScale.x) <= 1e-6 &&
+    Math.abs(currentSideV - normalized.sideUvScale.y) <= 1e-6
+  if (unchanged) {
     return false
   }
 
   const nextMesh: FloorDynamicMesh = {
     ...node.dynamicMesh,
     smooth: normalized.smooth,
+    thickness: normalized.thickness,
+    sideUvScale: { x: normalized.sideUvScale.x, y: normalized.sideUvScale.y },
   }
   node.dynamicMesh = nextMesh
 
@@ -2081,6 +2106,14 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         .map(normalizeVertex2D)
         .filter((value): value is [number, number] => !!value)
 
+      const thicknessRaw = (floorMesh as any).thickness
+      const thicknessValue = typeof thicknessRaw === 'number' && Number.isFinite(thicknessRaw) ? thicknessRaw : FLOOR_DEFAULT_THICKNESS
+      const thickness = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, thicknessValue))
+
+      const sideRaw = (floorMesh as any).sideUvScale
+      const sideU = typeof sideRaw?.x === 'number' && Number.isFinite(sideRaw.x) ? Number(sideRaw.x) : FLOOR_DEFAULT_SIDE_UV_SCALE.x
+      const sideV = typeof sideRaw?.y === 'number' && Number.isFinite(sideRaw.y) ? Number(sideRaw.y) : FLOOR_DEFAULT_SIDE_UV_SCALE.y
+
       return {
         type: 'Floor',
         vertices,
@@ -2088,6 +2121,8 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           ? floorMesh.materialId
           : null,
         smooth: Number.isFinite(floorMesh.smooth) ? floorMesh.smooth : FLOOR_DEFAULT_SMOOTH,
+        thickness,
+        sideUvScale: { x: Math.max(0, sideU), y: Math.max(0, sideV) },
       }
     }
     case 'GuideRoute': {
@@ -13731,7 +13766,11 @@ export const useSceneStore = defineStore('scene', {
           const component = (updated?.components?.[FLOOR_COMPONENT_TYPE] as { id?: string } | undefined)
           if (component?.id) {
             const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
-            this.updateNodeComponentProps(desiredId, component.id, { smooth: nextProps.smooth })
+            this.updateNodeComponentProps(desiredId, component.id, {
+              smooth: nextProps.smooth,
+              thickness: nextProps.thickness,
+              sideUvScale: nextProps.sideUvScale,
+            })
           }
           return updated
         }
@@ -13753,7 +13792,11 @@ export const useSceneStore = defineStore('scene', {
           const component = result?.component
           if (component?.id) {
             const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
-            this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
+            this.updateNodeComponentProps(node.id, component.id, {
+              smooth: nextProps.smooth,
+              thickness: nextProps.thickness,
+              sideUvScale: nextProps.sideUvScale,
+            })
           }
         }
 
@@ -14217,15 +14260,42 @@ export const useSceneStore = defineStore('scene', {
       } else if (type === FLOOR_COMPONENT_TYPE) {
         const currentProps = component.props as FloorComponentProps
         const typedPatch = patch as Partial<FloorComponentProps>
-        const hasPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'smooth')
-        const targetSmooth = hasPatch
+        const hasSmoothPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'smooth')
+        const hasThicknessPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'thickness')
+        const hasSideUvScalePatch = Object.prototype.hasOwnProperty.call(typedPatch, 'sideUvScale')
+
+        const targetSmooth = hasSmoothPatch
           ? (typedPatch.smooth ?? FLOOR_DEFAULT_SMOOTH)
           : (Number.isFinite(currentProps.smooth) ? currentProps.smooth : FLOOR_DEFAULT_SMOOTH)
-        const merged = clampFloorComponentProps({ smooth: targetSmooth })
+
+        const targetThickness = hasThicknessPatch
+          ? (typedPatch.thickness ?? FLOOR_DEFAULT_THICKNESS)
+          : (Number.isFinite(currentProps.thickness) ? currentProps.thickness : FLOOR_DEFAULT_THICKNESS)
+
+        const targetSideUvScale = hasSideUvScalePatch
+          ? (typedPatch.sideUvScale ?? FLOOR_DEFAULT_SIDE_UV_SCALE)
+          : (currentProps.sideUvScale ?? FLOOR_DEFAULT_SIDE_UV_SCALE)
+
+        const merged = clampFloorComponentProps({
+          smooth: targetSmooth,
+          thickness: targetThickness,
+          sideUvScale: targetSideUvScale,
+        })
+
         const currentSmooth = Number.isFinite(currentProps.smooth) ? currentProps.smooth : FLOOR_DEFAULT_SMOOTH
-        if (Math.abs(currentSmooth - merged.smooth) <= 1e-6) {
+        const currentThickness = Number.isFinite(currentProps.thickness) ? currentProps.thickness : FLOOR_DEFAULT_THICKNESS
+        const currentSideU = Number.isFinite(currentProps.sideUvScale?.x) ? Number(currentProps.sideUvScale.x) : FLOOR_DEFAULT_SIDE_UV_SCALE.x
+        const currentSideV = Number.isFinite(currentProps.sideUvScale?.y) ? Number(currentProps.sideUvScale.y) : FLOOR_DEFAULT_SIDE_UV_SCALE.y
+
+        const unchanged =
+          Math.abs(currentSmooth - merged.smooth) <= 1e-6 &&
+          Math.abs(currentThickness - merged.thickness) <= 1e-6 &&
+          Math.abs(currentSideU - merged.sideUvScale.x) <= 1e-6 &&
+          Math.abs(currentSideV - merged.sideUvScale.y) <= 1e-6
+        if (unchanged) {
           return false
         }
+
         nextProps = cloneFloorComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
         const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)

@@ -3,7 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@harmony/schema'
-import { FLOOR_COMPONENT_TYPE, FLOOR_DEFAULT_SMOOTH } from '@schema/components'
+import {
+  FLOOR_COMPONENT_TYPE,
+  FLOOR_DEFAULT_SMOOTH,
+  FLOOR_DEFAULT_THICKNESS,
+  FLOOR_MAX_THICKNESS,
+  FLOOR_MIN_THICKNESS,
+  FLOOR_DEFAULT_SIDE_UV_SCALE,
+} from '@schema/components'
 import type { FloorComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
@@ -18,6 +25,9 @@ const floorComponent = computed(() => {
 })
 
 const localSmooth = ref(FLOOR_DEFAULT_SMOOTH)
+const localThickness = ref(FLOOR_DEFAULT_THICKNESS)
+const localSideUvU = ref(FLOOR_DEFAULT_SIDE_UV_SCALE.x)
+const localSideUvV = ref(FLOOR_DEFAULT_SIDE_UV_SCALE.y)
 const isSyncingFromScene = ref(false)
 
 watch(
@@ -26,6 +36,9 @@ watch(
     isSyncingFromScene.value = true
     if (!component) {
       localSmooth.value = FLOOR_DEFAULT_SMOOTH
+      localThickness.value = FLOOR_DEFAULT_THICKNESS
+      localSideUvU.value = FLOOR_DEFAULT_SIDE_UV_SCALE.x
+      localSideUvV.value = FLOOR_DEFAULT_SIDE_UV_SCALE.y
       nextTick(() => {
         isSyncingFromScene.value = false
       })
@@ -34,6 +47,18 @@ watch(
 
     const smooth = Number.isFinite(component.props.smooth) ? component.props.smooth : FLOOR_DEFAULT_SMOOTH
     localSmooth.value = smooth
+
+    const thickness = Number.isFinite(component.props.thickness) ? component.props.thickness : FLOOR_DEFAULT_THICKNESS
+    localThickness.value = thickness
+
+    const sideU = Number.isFinite(component.props.sideUvScale?.x)
+      ? Number(component.props.sideUvScale.x)
+      : FLOOR_DEFAULT_SIDE_UV_SCALE.x
+    const sideV = Number.isFinite(component.props.sideUvScale?.y)
+      ? Number(component.props.sideUvScale.y)
+      : FLOOR_DEFAULT_SIDE_UV_SCALE.y
+    localSideUvU.value = sideU
+    localSideUvV.value = sideV
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -65,6 +90,66 @@ function applySmoothUpdate(rawValue: unknown) {
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { smooth: clamped })
 }
+
+function applyThicknessUpdate() {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = floorComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const value = Number(localThickness.value)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const clamped = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, value))
+  if (localThickness.value !== clamped) {
+    localThickness.value = clamped
+  }
+  const current = Number.isFinite(component.props.thickness) ? component.props.thickness : FLOOR_DEFAULT_THICKNESS
+  if (Math.abs(current - clamped) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { thickness: clamped })
+}
+
+function applySideUvUpdate() {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = floorComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const u = Number(localSideUvU.value)
+  const v = Number(localSideUvV.value)
+  if (!Number.isFinite(u) || !Number.isFinite(v)) {
+    return
+  }
+  const nextU = Math.max(0, u)
+  const nextV = Math.max(0, v)
+  if (localSideUvU.value !== nextU) {
+    localSideUvU.value = nextU
+  }
+  if (localSideUvV.value !== nextV) {
+    localSideUvV.value = nextV
+  }
+
+  const currentU = Number.isFinite(component.props.sideUvScale?.x)
+    ? Number(component.props.sideUvScale.x)
+    : FLOOR_DEFAULT_SIDE_UV_SCALE.x
+  const currentV = Number.isFinite(component.props.sideUvScale?.y)
+    ? Number(component.props.sideUvScale.y)
+    : FLOOR_DEFAULT_SIDE_UV_SCALE.y
+
+  if (Math.abs(currentU - nextU) <= 1e-6 && Math.abs(currentV - nextV) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { sideUvScale: { x: nextU, y: nextV } })
+}
 </script>
 
 <template>
@@ -92,6 +177,50 @@ function applySmoothUpdate(rawValue: unknown) {
           color="primary"
           @update:modelValue="(value) => { localSmooth = Number(value); applySmoothUpdate(value) }"
         />
+
+        <v-text-field
+          v-model.number="localThickness"
+          label="Thickness (m)"
+          type="number"
+          density="compact"
+          variant="underlined"
+          class="slider-input"
+          inputmode="decimal"
+          :min="FLOOR_MIN_THICKNESS"
+          :max="FLOOR_MAX_THICKNESS"
+          step="0.05"
+          @blur="applyThicknessUpdate"
+          @keydown.enter.prevent="applyThicknessUpdate"
+        />
+
+        <div class="floor-uv-grid">
+          <v-text-field
+            v-model.number="localSideUvU"
+            label="Side UV Repeat U (/m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            inputmode="decimal"
+            min="0"
+            step="0.1"
+            @blur="applySideUvUpdate"
+            @keydown.enter.prevent="applySideUvUpdate"
+          />
+          <v-text-field
+            v-model.number="localSideUvV"
+            label="Side UV Repeat V (/m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            inputmode="decimal"
+            min="0"
+            step="0.1"
+            @blur="applySideUvUpdate"
+            @keydown.enter.prevent="applySideUvUpdate"
+          />
+        </div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -119,6 +248,12 @@ function applySmoothUpdate(rawValue: unknown) {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+}
+
+.floor-uv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
 }
 
 .floor-field-labels {

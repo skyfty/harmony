@@ -56,6 +56,7 @@ function computeFloorVertexHandleSignature(definition: FloorDynamicMesh): string
   const serialized = stableSerialize([
     vertices,
     Number.isFinite(definition.smooth) ? definition.smooth : null,
+    Number.isFinite(definition.thickness) ? definition.thickness : null,
   ])
   return hashString(serialized)
 }
@@ -180,6 +181,10 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
 
     const baseMaterial = createFloorVertexHandleMaterial()
 
+    const thickness = Number.isFinite(definition.thickness)
+      ? Math.min(10, Math.max(0, Number(definition.thickness)))
+      : 0
+
     const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
     vertices.forEach((v, index) => {
       if (!Array.isArray(v) || v.length < 2) {
@@ -192,7 +197,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
       }
       const mesh = new THREE.Mesh(baseGeometry.clone(), baseMaterial.clone())
       mesh.name = `FloorVertexHandle_${index + 1}`
-      mesh.position.set(x, FLOOR_VERTEX_HANDLE_Y_OFFSET, z)
+      mesh.position.set(x, FLOOR_VERTEX_HANDLE_Y_OFFSET + thickness, z)
       mesh.renderOrder = FLOOR_VERTEX_HANDLE_RENDER_ORDER
       mesh.layers.enableAll()
       mesh.userData.isFloorVertexHandle = true

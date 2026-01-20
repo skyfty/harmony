@@ -106,6 +106,118 @@ function clampFloorSmooth(value: unknown): number {
   return raw
 }
 
+function clampFloorThickness(value: unknown): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  if (raw <= 0) {
+    return 0
+  }
+  // Keep parity with editor-side constraints (0–10m).
+  return Math.min(10, raw)
+}
+
+function resolveSideUvScale(value: unknown): { u: number; v: number } {
+  const source = value as { x?: unknown; y?: unknown } | null | undefined
+  const rawU = typeof source?.x === 'number' && Number.isFinite(source.x) ? Number(source.x) : 1
+  const rawV = typeof source?.y === 'number' && Number.isFinite(source.y) ? Number(source.y) : 1
+  return {
+    u: Math.max(0, rawU),
+    v: Math.max(0, rawV),
+  }
+}
+
+type PerimeterSegment = {
+  a: THREE.Vector2
+  b: THREE.Vector2
+  len: number
+  prefix: number
+}
+
+function buildPerimeterSegments(shape: THREE.Shape, fallback: THREE.Vector2[]): PerimeterSegment[] {
+  const extracted = shape.extractPoints(64)
+  const raw = Array.isArray(extracted?.shape) && extracted.shape.length ? extracted.shape : fallback
+
+  const points: THREE.Vector2[] = []
+  raw.forEach((p) => {
+    if (!p) {
+      return
+    }
+    const x = Number(p.x)
+    const y = Number(p.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return
+    }
+    const prev = points[points.length - 1]
+    if (prev && prev.distanceToSquared(p) <= FLOOR_EPSILON) {
+      return
+    }
+    points.push(new THREE.Vector2(x, y))
+  })
+
+  if (points.length >= 2) {
+    const first = points[0]!
+    const last = points[points.length - 1]!
+    if (first.distanceToSquared(last) <= FLOOR_EPSILON) {
+      points.pop()
+    }
+  }
+
+  if (points.length < 2) {
+    return []
+  }
+
+  const segments: PerimeterSegment[] = []
+  let prefix = 0
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % points.length]!
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len <= FLOOR_EPSILON) {
+      continue
+    }
+    segments.push({ a: a.clone(), b: b.clone(), len, prefix })
+    prefix += len
+  }
+  return segments
+}
+
+function computePerimeterDistanceAlongSegments(segments: PerimeterSegment[], point: THREE.Vector2): number {
+  if (!segments.length) {
+    return 0
+  }
+
+  let bestDistanceSq = Number.POSITIVE_INFINITY
+  let bestS = 0
+  for (const seg of segments) {
+    const ax = seg.a.x
+    const ay = seg.a.y
+    const bx = seg.b.x
+    const by = seg.b.y
+    const dx = bx - ax
+    const dy = by - ay
+    const lenSq = dx * dx + dy * dy
+    if (lenSq <= FLOOR_EPSILON) {
+      continue
+    }
+    const px = point.x - ax
+    const py = point.y - ay
+    let t = (px * dx + py * dy) / lenSq
+    t = Math.min(1, Math.max(0, t))
+    const cx = ax + dx * t
+    const cy = ay + dy * t
+    const ddx = point.x - cx
+    const ddy = point.y - cy
+    const distSq = ddx * ddx + ddy * ddy
+    if (distSq < bestDistanceSq) {
+      bestDistanceSq = distSq
+      bestS = seg.prefix + seg.len * t
+    }
+  }
+
+  return bestS
+}
+
 function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): THREE.Shape {
   const shape = new THREE.Shape()
   if (!points.length) {
@@ -191,8 +303,24 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
 
   const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
 
+  const thickness = clampFloorThickness((definition as any).thickness)
+  const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
+
   // Build in XY first (like PlaneGeometry), then rotate to XZ.
-  const geometry = new THREE.ShapeGeometry(shape)
+  let geometry: THREE.BufferGeometry
+  if (thickness <= FLOOR_EPSILON) {
+    geometry = new THREE.ShapeGeometry(shape)
+  } else {
+    const extruded = new THREE.ExtrudeGeometry(shape, {
+      depth: thickness,
+      steps: 1,
+      bevelEnabled: false,
+    })
+    // Use non-indexed geometry so we can assign per-face UVs without
+    // vertex-normal averaging causing top/side misclassification.
+    geometry = extruded.toNonIndexed()
+    extruded.dispose()
+  }
 
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!position || position.count <= 0) {
@@ -200,45 +328,105 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
     return null
   }
 
-  // PlaneGeometry-style UVs: normalized across the geometry extents, with V flipped.
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i)
-    const y = position.getY(i)
-    if (x < minX) minX = x
-    if (x > maxX) maxX = x
-    if (y < minY) minY = y
-    if (y > maxY) maxY = y
+  // Ensure normals exist for UV classification.
+  if (!geometry.getAttribute('normal')) {
+    geometry.computeVertexNormals()
   }
-
-  const sizeX = Math.max(maxX - minX, FLOOR_EPSILON)
-  const sizeY = Math.max(maxY - minY, FLOOR_EPSILON)
-
-  const normals = new Float32Array(position.count * 3)
-  const uvs = new Float32Array(position.count * 2)
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i)
-    const y = position.getY(i)
-
-    const u = (x - minX) / sizeX
-    const v = 1 - (y - minY) / sizeY
-
-    uvs[i * 2] = u
-    uvs[i * 2 + 1] = v
-
-    normals[i * 3] = 0
-    normals[i * 3 + 1] = 0
-    normals[i * 3 + 2] = 1
-  }
-
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
-  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 
   // Rotate so the floor lies on the XZ plane with +Y normal.
   geometry.rotateX(-Math.PI / 2)
+
+  const normal = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
+  if (!normal || normal.count !== position.count) {
+    geometry.computeVertexNormals()
+  }
+
+  // Planar UVs for top/bottom: normalized across XZ extents with V flipped.
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i)
+    const z = position.getZ(i)
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (z < minZ) minZ = z
+    if (z > maxZ) maxZ = z
+  }
+
+  const sizeX = Math.max(maxX - minX, FLOOR_EPSILON)
+  const sizeZ = Math.max(maxZ - minZ, FLOOR_EPSILON)
+
+  const perimeterSegments = thickness > FLOOR_EPSILON ? buildPerimeterSegments(shape, points) : []
+
+  const uvs = new Float32Array(position.count * 2)
+  const tmp2 = new THREE.Vector2()
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  const c = new THREE.Vector3()
+  const ab = new THREE.Vector3()
+  const ac = new THREE.Vector3()
+  const faceNormal = new THREE.Vector3()
+
+  if (thickness <= FLOOR_EPSILON) {
+    for (let i = 0; i < position.count; i += 1) {
+      const x = position.getX(i)
+      const z = position.getZ(i)
+      const u = (x - minX) / sizeX
+      const v = (z - minZ) / sizeZ
+      uvs[i * 2] = u
+      uvs[i * 2 + 1] = v
+    }
+  } else {
+    for (let i = 0; i < position.count; i += 3) {
+      a.set(position.getX(i), position.getY(i), position.getZ(i))
+      b.set(position.getX(i + 1), position.getY(i + 1), position.getZ(i + 1))
+      c.set(position.getX(i + 2), position.getY(i + 2), position.getZ(i + 2))
+
+      ab.copy(b).sub(a)
+      ac.copy(c).sub(a)
+      faceNormal.copy(ab).cross(ac)
+      const len = faceNormal.length()
+      const ny = len > FLOOR_EPSILON ? faceNormal.y / len : 1
+      const isTopOrBottom = Math.abs(ny) > 0.5
+
+      for (let k = 0; k < 3; k += 1) {
+        const idx = i + k
+        const x = position.getX(idx)
+        const y = position.getY(idx)
+        const z = position.getZ(idx)
+
+        if (isTopOrBottom) {
+          const u = (x - minX) / sizeX
+          const v = (z - minZ) / sizeZ
+          uvs[idx * 2] = u
+          uvs[idx * 2 + 1] = v
+        } else {
+          // Side-wall UVs: U along perimeter distance, V along height.
+          tmp2.set(x, -z)
+          const s = computePerimeterDistanceAlongSegments(perimeterSegments, tmp2)
+          uvs[idx * 2] = s * sideUvScale.u
+          uvs[idx * 2 + 1] = y * sideUvScale.v
+        }
+      }
+    }
+  }
+
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+
+  if (thickness <= FLOOR_EPSILON) {
+    // Flat floors: ensure stable +Y normal after rotation.
+    const flatNormals = new Float32Array(position.count * 3)
+    for (let i = 0; i < position.count; i += 1) {
+      flatNormals[i * 3] = 0
+      flatNormals[i * 3 + 1] = 1
+      flatNormals[i * 3 + 2] = 0
+    }
+    geometry.setAttribute('normal', new THREE.BufferAttribute(flatNormals, 3))
+  } else {
+    geometry.computeVertexNormals()
+  }
 
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()

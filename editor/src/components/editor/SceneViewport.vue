@@ -140,6 +140,7 @@ import {
   ROAD_VERTEX_HANDLE_Y,
   type RoadVertexHandlePickResult,
 } from './RoadVertexRenderer'
+import { createFloorVertexRenderer } from './FloorVertexRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -989,10 +990,16 @@ function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
 }
 
 function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
+  const thickness = Number.isFinite(definition.thickness) ? definition.thickness : null
+  const sideX = Number.isFinite((definition.sideUvScale as any)?.x) ? Number((definition.sideUvScale as any).x) : null
+  const sideY = Number.isFinite((definition.sideUvScale as any)?.y) ? Number((definition.sideUvScale as any).y) : null
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
     typeof definition.materialId === 'string' ? definition.materialId : null,
     Number.isFinite(definition.smooth) ? definition.smooth : null,
+    thickness,
+    sideX,
+    sideY,
   ])
   return hashString(serialized)
 }
@@ -1999,6 +2006,7 @@ type FloorEdgeDragState = {
 let floorEdgeDragState: FloorEdgeDragState | null = null
 
 const roadVertexRenderer = createRoadVertexRenderer()
+const floorVertexRenderer = createFloorVertexRenderer()
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -2028,6 +2036,26 @@ function pickRoadVertexHandleAtPointer(event: PointerEvent): RoadVertexHandlePic
     pointer,
     raycaster,
   })
+}
+
+function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'floor'
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveFloorDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    floorVertexRenderer.forceRebuild(common)
+  } else {
+    floorVertexRenderer.ensure(common)
+  }
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -2141,7 +2169,14 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
   const workingDefinition: FloorDynamicMesh = {
     type: 'Floor',
     vertices: startVertices.map(([x, z]) => [x, z] as [number, number]),
-    ...(base ? { materialId: base.materialId ?? null, smooth: base.smooth } : {}),
+    ...(base
+      ? {
+          materialId: base.materialId ?? null,
+          smooth: base.smooth,
+          thickness: (base as any).thickness,
+          sideUvScale: (base as any).sideUvScale,
+        }
+      : {}),
   }
   floorEdgeDragState = {
     pointerId: event.pointerId,
@@ -3963,6 +3998,7 @@ watch(
   ],
   () => {
     ensureRoadVertexHandlesForSelectedNode()
+    ensureFloorVertexHandlesForSelectedNode()
   },
   { deep: false, immediate: true },
 )
@@ -5022,6 +5058,7 @@ function animate() {
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
+  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)

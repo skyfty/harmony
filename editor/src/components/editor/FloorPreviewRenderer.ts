@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { FloorDynamicMesh } from '@harmony/schema'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
-import { FLOOR_DEFAULT_SMOOTH } from '@schema/components'
+import { FLOOR_DEFAULT_SIDE_UV_SCALE, FLOOR_DEFAULT_SMOOTH, FLOOR_DEFAULT_THICKNESS } from '@schema/components'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 
 export type FloorPreviewSession = {
@@ -274,6 +274,8 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
     vertices: normalizedVertices,
     materialId: null,
     smooth: FLOOR_DEFAULT_SMOOTH,
+    thickness: FLOOR_DEFAULT_THICKNESS,
+    sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },
   }
 
   return { center, definition }
