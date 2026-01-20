@@ -427,6 +427,11 @@ function handleBuildToolToggle(tool: BuildTool) {
     return
   }
   const next = activeBuildTool.value === tool ? null : tool
+  // If we're enabling a build tool, immediately clear selection
+  // to avoid accidental operations on the previously selected node.
+  if (next) {
+    sceneStore.setSelection([])
+  }
   emit('change-build-tool', next)
 }
 
