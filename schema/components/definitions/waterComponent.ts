@@ -20,6 +20,7 @@ import {
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
+import { isGeometryType } from '@harmony/schema'
 
 export const WATER_COMPONENT_TYPE = 'water'
 export const WATER_DEFAULT_TEXTURE_WIDTH = 512
@@ -484,8 +485,8 @@ const waterComponentDefinition: ComponentDefinition<WaterComponentProps> = {
   inspector: [],
   recreateOnPropsChange: true,
   canAttach(node: SceneNode) {
-    const type = typeof node.nodeType === 'string' ? node.nodeType.trim().toLowerCase() : ''
-    return type === 'mesh' || Boolean(node.dynamicMesh) || Boolean(node.sourceAssetId)
+    const type = typeof node.nodeType === 'string' ? node.nodeType.trim() : ''
+    return type === 'Mesh' || isGeometryType(type) || Boolean(node.dynamicMesh) || Boolean(node.sourceAssetId)
   },
   createDefaultProps(_node: SceneNode) {
     return clampWaterComponentProps(null)

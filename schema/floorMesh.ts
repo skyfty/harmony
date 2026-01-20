@@ -208,6 +208,8 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
   geometry.rotateX(-Math.PI / 2)
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
+
+
   return geometry
 }
 
