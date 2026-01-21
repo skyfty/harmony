@@ -262,81 +262,12 @@ function formatByteSize(value: number | null | undefined): string {
 }
 
 async function refreshExportSummary(force = false): Promise<SceneResourceSummary | null> {
-  if (!force && exportResourceSummary.value && !pendingExportSummary) {
-    return exportResourceSummary.value
-  }
-
-  if (pendingExportSummary) {
-    return pendingExportSummary
-  }
-
+  // Resource summary calculation removed — keep a no-op that clears loading state
   if (force) {
     exportResourceSummary.value = null
   }
-  exportSummaryLoading.value = true
-
-  pendingExportSummary = (async () => {
-    try {
-      const activeProjectId = projectsStore.activeProjectId
-      if (!activeProjectId) {
-        exportResourceSummary.value = null
-        return null
-      }
-
-      const localSummaries = sortSceneSummariesBySceneManagerOrder(sceneSummaries.value)
-      if (!localSummaries.length) {
-        exportResourceSummary.value = null
-        return null
-      }
-
-      let textureBytes = 0
-      const aggregatedAssets: SceneResourceSummary['assets'] = []
-      const unknown = new Set<string>()
-      const aggregated: SceneResourceSummary = {
-        totalBytes: 0,
-        embeddedBytes: 0,
-        externalBytes: 0,
-        computedAt: new Date().toISOString(),
-        assets: aggregatedAssets,
-        textureBytes: 0,
-        unknownAssetIds: [],
-      }
-
-      for (const summary of localSummaries) {
-        const document = await ensureExportableSceneDocument(summary.id)
-        if (!document) {
-          continue
-        }
-        const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
-        document.packageAssetMap = packageAssetMap
-        document.assetIndex = assetIndex
-        const resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-        aggregated.totalBytes += resourceSummary.totalBytes ?? 0
-        aggregated.embeddedBytes += resourceSummary.embeddedBytes ?? 0
-        aggregated.externalBytes += resourceSummary.externalBytes ?? 0
-        textureBytes += resourceSummary.textureBytes ?? 0
-        ;(resourceSummary.assets ?? []).forEach((entry) => aggregatedAssets.push(entry))
-        ;(resourceSummary.unknownAssetIds ?? []).forEach((id) => unknown.add(id))
-      }
-
-      aggregated.textureBytes = textureBytes
-      aggregated.unknownAssetIds = Array.from(unknown)
-      exportResourceSummary.value = aggregated
-      return aggregated
-    } catch (error) {
-      console.warn('Failed to calculate resource summary', error)
-      exportResourceSummary.value = null
-      return null
-    } finally {
-      exportSummaryLoading.value = false
-    }
-  })()
-
-  try {
-    return await pendingExportSummary
-  } finally {
-    pendingExportSummary = null
-  }
+  exportSummaryLoading.value = false
+  return null
 }
 
 const behaviorDetailsState = reactive({
@@ -1068,8 +999,7 @@ function openExportDialog() {
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
-  exportResourceSummary.value = null
-  void refreshExportSummary(true)
+  // Resource summary UI removed — skip summary calculation
   isExportDialogOpen.value = true
 }
 
@@ -1236,12 +1166,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  const summary = await refreshExportSummary(true)
-  const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-  const confirmMessage = summary
-    ? `导出该工程需要打包约 ${sizeLabel} 的资源，是否继续？`
-    : '暂时无法计算工程资源总大小，仍要继续导出吗？'
-  const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+  const proceed = typeof window !== 'undefined' ? window.confirm('仍要继续导出该工程吗？') : true
   if (!proceed) {
     exportProgress.value = 0
     exportProgressMessage.value = ''
@@ -2399,8 +2324,6 @@ onBeforeUnmount(() => {
       :progress="exportProgress"
       :progress-message="exportProgressMessage"
       :error-message="exportErrorMessage"
-      :resource-summary="exportResourceSummary"
-      :resource-summary-loading="exportSummaryLoading"
       @confirm="handleExportDialogConfirm"
       @cancel="handleExportDialogCancel"
     />

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type { SceneExportOptions } from '@/types/scene-export'
-import type { SceneResourceSummary } from '@harmony/schema'
 
 
 const props = defineProps<{
@@ -12,8 +11,7 @@ const props = defineProps<{
   progress: number
   progressMessage: string
   errorMessage?: string | null
-  resourceSummary?: SceneResourceSummary | null
-  resourceSummaryLoading?: boolean
+  // resource summary removed
 }>()
 
 const emit = defineEmits<{
@@ -55,28 +53,6 @@ const progressLabel = computed(() => {
     return ''
   }
   return props.progressMessage || `Export progress ${Math.round(progressValue.value)}%`
-})
-
-const hasResourceSummary = computed(() => Boolean(props.resourceSummary))
-
-const summaryDisplay = computed(() => {
-  const summary = props.resourceSummary
-  if (!summary) {
-    return {
-      total: '0 B',
-      embedded: '0 B',
-      external: '0 B',
-      unknownCount: 0,
-      textures: '0 B',
-    }
-  }
-  return {
-    total: formatByteSize(summary.totalBytes),
-    embedded: formatByteSize(summary.embeddedBytes),
-    external: formatByteSize(summary.externalBytes),
-    unknownCount: summary.unknownAssetIds?.length ?? 0,
-    textures: formatByteSize(summary.textureBytes ?? 0),
-  }
 })
 
 watch(
@@ -246,29 +222,7 @@ function handleConfirm() {
           />
         </div>
 
-        <div class="summary-section">
-          <div v-if="resourceSummaryLoading" class="summary-item summary-item--loading">
-            正在分析资源大小…
-          </div>
-          <div v-else-if="hasResourceSummary" class="summary-item">
-            <div class="summary-row">
-              <span class="summary-label">资源总大小</span>
-              <span class="summary-value">{{ summaryDisplay.total }}</span>
-            </div>
-            <div class="summary-sub">
-              嵌入资源：{{ summaryDisplay.embedded }} · 外部资源：{{ summaryDisplay.external }}
-            </div>
-            <div class="summary-sub">
-              纹理资源：{{ summaryDisplay.textures }}
-            </div>
-            <div v-if="summaryDisplay.unknownCount" class="summary-warning">
-              有 {{ summaryDisplay.unknownCount }} 个资源大小未知
-            </div>
-          </div>
-          <div v-else class="summary-item summary-item--empty">
-            资源大小暂不可用
-          </div>
-        </div>
+        <!-- Resource summary removed -->
 
         <transition name="fade">
           <div v-if="exporting || progressValue > 0" class="progress-section">
