@@ -1,4 +1,4 @@
-export const TerrainScatterCategories = ['flora', 'rocks', 'trees', 'water', 'ground']
+export const TerrainScatterCategories = ['flora', 'rocks', 'trees']
 
 export const TERRAIN_SCATTER_STORE_VERSION = 1
 

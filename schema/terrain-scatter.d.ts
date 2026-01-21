@@ -1,4 +1,4 @@
-export const TerrainScatterCategories: readonly ['flora', 'rocks', 'trees', 'water', 'ground']
+export const TerrainScatterCategories: readonly ['flora', 'rocks', 'trees']
 
 export type TerrainScatterCategory = (typeof TerrainScatterCategories)[number]
 
