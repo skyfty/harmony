@@ -24,6 +24,9 @@ import {
 	PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
 	type ProjectExportBundle,
 	type ProjectExportSceneEntry,
+	unzipScenePackage,
+	buildAssetOverridesFromScenePackage,
+	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -543,6 +546,8 @@ const editorAssetCache = new StoreBackedAssetCache(assetCacheStore)
 const editorAssetLoader = new AssetLoader(editorAssetCache)
 let editorResourceCache: ResourceCache | null = null
 
+let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null
+
 const resourceProgressPercent = computed(() => {
 	if (resourceProgress.totalBytes > 0) {
 		if (!resourceProgress.totalBytes) {
@@ -928,7 +933,7 @@ async function loadTerrainPaintTextureFromAssetId(
 function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'): string | null {
 	const layers = Array.isArray(settings?.layers) ? settings.layers : []
 	const match = layers.find((layer: any) => layer?.channel === channel)
-	const candidate = typeof match?.assetId === 'string' ? match.assetId.trim() : ''
+	const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
 	return candidate.length ? candidate : null
 }
 
@@ -1015,21 +1020,20 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 
 	for (const chunkKey of visibleChunkKeys) {
 		const ref = (chunks as any)[chunkKey]
-		const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
-		if (!assetId.length) {
+		const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+		if (!logicalId.length) {
 			terrainPaintChunkRefKeys.delete(chunkKey)
 			setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null)
 			continue
 		}
-		const updatedAt = typeof ref?.updatedAt === 'string' ? ref.updatedAt : ''
-		const refKey = `${assetId}@${updatedAt}`
+		const refKey = logicalId
 		if (terrainPaintChunkRefKeys.get(chunkKey) === refKey) {
 			continue
 		}
 		terrainPaintChunkRefKeys.set(chunkKey, refKey)
 		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
 		if (!pending) {
-			pending = loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'none' })
+			pending = loadTerrainPaintTextureFromAssetId(logicalId, { colorSpace: 'none' })
 			terrainPaintChunkWeightmapRequests.set(refKey, pending)
 		}
 		pending.then((texture) => {
@@ -3829,6 +3833,14 @@ async function fetchTextFromUrl(source: string): Promise<string> {
 	return await response.text()
 }
 
+async function fetchArrayBufferFromUrl(source: string): Promise<ArrayBuffer> {
+	const response = await fetch(source)
+	if (!response.ok) {
+		throw new Error(`Failed to fetch binary asset (${response.status})`)
+	}
+	return await response.arrayBuffer()
+}
+
 async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
@@ -4823,6 +4835,7 @@ async function loadProjectBundleFromUrl(sourceUrl: string): Promise<void> {
 		appendWarningMessage('Missing projectUrl')
 		return
 	}
+	activeScenePackageAssetOverrides = null
 	statusMessage.value = 'Loading project...'
 	try {
 		const text = await fetchTextFromUrl(trimmed)
@@ -4847,6 +4860,70 @@ async function loadProjectBundleFromUrl(sourceUrl: string): Promise<void> {
 		console.error('[ScenePreview] Failed to load project bundle', error)
 		appendWarningMessage('Failed to load project bundle.')
 		statusMessage.value = 'Failed to load project bundle.'
+	}
+}
+
+async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
+	const trimmed = sourceUrl.trim()
+	if (!trimmed) {
+		appendWarningMessage('Missing packageUrl')
+		return
+	}
+	statusMessage.value = 'Loading scene package...'
+	try {
+		const buffer = await fetchArrayBufferFromUrl(trimmed)
+		const pkg = unzipScenePackage(buffer)
+		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any
+
+		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
+		const projectConfig = JSON.parse(projectText) as any
+
+		const scenes: ProjectExportSceneEntry[] = []
+		projectSceneIndex.clear()
+		pkg.manifest.scenes.forEach((sceneEntry) => {
+			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
+			const sceneRaw = JSON.parse(sceneText) as unknown
+			if (!isSceneJsonExportDocument(sceneRaw)) {
+				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
+			}
+			const document = sceneRaw as SceneJsonExportDocument
+			const id = sceneEntry.sceneId
+			const entry: ProjectExportSceneEntry = {
+				kind: 'embedded',
+				id,
+				name: document.name || id,
+				createdAt: (document as any).createdAt ?? null,
+				updatedAt: (document as any).updatedAt ?? null,
+				document,
+			}
+			scenes.push(entry)
+			projectSceneIndex.set(id, entry)
+		})
+
+		projectBundle.value = {
+			format: PROJECT_EXPORT_BUNDLE_FORMAT,
+			formatVersion: PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
+			exportedAt: new Date().toISOString(),
+			project: {
+				id: String(projectConfig?.id ?? ''),
+				name: String(projectConfig?.name ?? ''),
+				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+			},
+			scenes,
+		}
+
+		const initialId =
+			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
+		if (initialId) {
+			await switchToProjectScene(initialId)
+		}
+		statusMessage.value = ''
+	} catch (error) {
+		console.error('[ScenePreview] Failed to load scene package', error)
+		appendWarningMessage('Failed to load scene package.')
+		statusMessage.value = 'Failed to load scene package.'
 	}
 }
 
@@ -9809,6 +9886,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 				hdrLoader: rgbeLoader,
 			},
 		}
+		if (activeScenePackageAssetOverrides) {
+			buildOptions.assetOverrides = activeScenePackageAssetOverrides
+		}
 		resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
 	} finally {
@@ -9962,11 +10042,19 @@ onMounted(() => {
 	if (typeof window !== 'undefined') {
 		try {
 			const url = new URL(window.location.href)
-			const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
-			if (projectUrl) {
-				liveUpdatesDisabledSourceUrl.value = projectUrl
+			const packageUrl = url.searchParams.get('packageUrl') || url.searchParams.get('zipUrl')
+			if (packageUrl) {
+				liveUpdatesDisabledSourceUrl.value = packageUrl
 				handledInitialPayload = true
-				void loadProjectBundleFromUrl(projectUrl)
+				void loadScenePackageFromUrl(packageUrl)
+			}
+			if (!handledInitialPayload) {
+				const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
+				if (projectUrl) {
+					liveUpdatesDisabledSourceUrl.value = projectUrl
+					handledInitialPayload = true
+					void loadProjectBundleFromUrl(projectUrl)
+				}
 			}
 		} catch {
 			// ignore

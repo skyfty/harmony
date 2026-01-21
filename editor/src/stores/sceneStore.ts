@@ -168,8 +168,6 @@ import {
 } from '@/utils/lodPreset'
 import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
-import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
-import { fetchResourceAsset } from '@/api/resourceAssets'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -9851,12 +9849,12 @@ export const useSceneStore = defineStore('scene', {
           const terrainPaint = groundMesh.terrainPaint ?? null
           if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks) {
             Object.values(terrainPaint.chunks).forEach((ref) => {
-              if (!ref || typeof ref.assetId !== 'string' || !ref.assetId.trim().length) {
+              if (!ref || typeof (ref as any).logicalId !== 'string' || !String((ref as any).logicalId).trim().length) {
                 return
               }
-              const expected = typeof ref.assetUpdatedAt === 'string' ? ref.assetUpdatedAt : null
-              if (!terrainPaintRefs.has(ref.assetId)) {
-                terrainPaintRefs.set(ref.assetId, expected)
+              const logicalId = String((ref as any).logicalId).trim()
+              if (!terrainPaintRefs.has(logicalId)) {
+                terrainPaintRefs.set(logicalId, null)
               }
             })
           }
@@ -9870,15 +9868,8 @@ export const useSceneStore = defineStore('scene', {
 
       if (terrainPaintRefs.size > 0) {
         await Promise.allSettled(
-          Array.from(terrainPaintRefs.entries()).map(async ([assetId, expectedUpdatedAt]) => {
-            let asset = this.getAsset(assetId)
-            if (!asset) {
-              const dto = await fetchResourceAsset(assetId)
-              asset = mapServerAssetToProjectAsset(dto)
-            }
-            await assetCache.downloaProjectAsset(asset, {
-              expectedServerUpdatedAt: expectedUpdatedAt ?? asset.updatedAt ?? null,
-            })
+          Array.from(terrainPaintRefs.keys()).map(async (logicalId) => {
+            await assetCache.loadFromIndexedDb(logicalId)
           }),
         )
       }

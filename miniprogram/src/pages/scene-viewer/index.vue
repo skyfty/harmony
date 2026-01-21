@@ -435,6 +435,11 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  PROJECT_EXPORT_BUNDLE_FORMAT,
+  PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
+  unzipScenePackage,
+  buildAssetOverridesFromScenePackage,
+  readTextFileFromScenePackage,
   type EnvironmentSettings,
   type SceneNode,
   type SceneNodeComponentState,
@@ -553,8 +558,8 @@ interface ScenePreviewPayload {
   origin?: string;
   createdAt?: string;
   updatedAt?: string;
-  assetOverrides?: Record<string, string | ArrayBuffer>;
-  resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null;
+  assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
+  resolveAssetUrl?: SceneGraphBuildOptions['resolveAssetUrl'];
   enableGround?: boolean;
 }
 
@@ -663,6 +668,7 @@ const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
+let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
@@ -953,7 +959,7 @@ async function loadTerrainPaintTextureFromAssetId(
 function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'): string | null {
   const layers = Array.isArray(settings?.layers) ? settings.layers : [];
   const match = layers.find((layer: any) => layer?.channel === channel);
-  const candidate = typeof match?.assetId === 'string' ? match.assetId.trim() : '';
+  const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : '';
   return candidate.length ? candidate : null;
 }
 
@@ -1040,21 +1046,20 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 
   for (const chunkKey of visibleChunkKeys) {
     const ref = (chunks as any)[chunkKey];
-    const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : '';
-    if (!assetId.length) {
+    const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : '';
+    if (!logicalId.length) {
       terrainPaintChunkRefKeys.delete(chunkKey);
       setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null);
       continue;
     }
-    const updatedAt = typeof ref?.updatedAt === 'string' ? ref.updatedAt : '';
-    const refKey = `${assetId}@${updatedAt}`;
+    const refKey = logicalId;
     if (terrainPaintChunkRefKeys.get(chunkKey) === refKey) {
       continue;
     }
     terrainPaintChunkRefKeys.set(chunkKey, refKey);
     let pending = terrainPaintChunkWeightmapRequests.get(refKey);
     if (!pending) {
-      pending = loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'none' });
+      pending = loadTerrainPaintTextureFromAssetId(logicalId, { colorSpace: 'none' });
       terrainPaintChunkWeightmapRequests.set(refKey, pending);
     }
     pending.then((texture) => {
@@ -8084,6 +8089,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
         document: entry.document,
         title: entry.document.name || entry.name || '场景预览',
         origin: 'project-bundle',
+        assetOverrides: activeScenePackageAssetOverrides ?? undefined,
         createdAt: entry.document.createdAt,
         updatedAt: entry.document.updatedAt,
       };
@@ -8099,6 +8105,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
         document,
         title: document.name || entry.name || '场景预览',
         origin: entry.sceneJsonUrl,
+        assetOverrides: activeScenePackageAssetOverrides ?? undefined,
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
       };
@@ -8132,6 +8139,102 @@ async function loadProjectFromBundle(bundle: ProjectExportBundle): Promise<void>
 
   requestedMode.value = 'project';
   await switchToProjectScene(initialId);
+}
+
+function requestBinary(url: string): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    if (sceneDownloadTask) {
+      sceneDownloadTask.abort();
+      sceneDownloadTask = null;
+    }
+    const task = uni.request({
+      url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`场景包下载失败（${statusCode}）`));
+          return;
+        }
+        const buffer = res.data as ArrayBuffer;
+        if (!buffer || typeof buffer.byteLength !== 'number') {
+          reject(new Error('场景包下载失败（响应不是二进制数据）'));
+          return;
+        }
+        resolve(buffer);
+      },
+      fail: (requestError) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '场景包下载失败';
+        reject(new Error(message));
+      },
+      complete: () => {
+        sceneDownloadTask = null;
+      },
+    }) as SceneRequestTask;
+    sceneDownloadTask = task;
+  });
+}
+
+async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
+  error.value = null;
+  activeScenePackageAssetOverrides = null;
+  loading.value = true;
+  try {
+    resetSceneDownloadState();
+    sceneDownload.active = true;
+    sceneDownload.label = '正在下载场景包…';
+    const buffer = await requestBinary(url);
+
+    sceneDownload.label = '正在解析场景包…';
+    const pkg = unzipScenePackage(buffer);
+    activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any;
+
+    const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
+    const projectConfig = JSON.parse(projectText) as any;
+
+    const scenes: ProjectExportSceneEntry[] = [];
+    pkg.manifest.scenes.forEach((sceneEntry) => {
+      const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path);
+      const sceneRaw = JSON.parse(sceneText) as unknown;
+      if (!sceneRaw || typeof sceneRaw !== 'object') {
+        throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
+      }
+      const document = sceneRaw as SceneJsonExportDocument;
+      const id = sceneEntry.sceneId;
+      scenes.push({
+        kind: 'embedded',
+        id,
+        name: document.name || id,
+        createdAt: (document as any).createdAt ?? null,
+        updatedAt: (document as any).updatedAt ?? null,
+        document,
+      });
+    });
+
+    const bundle: ProjectExportBundle = {
+      format: PROJECT_EXPORT_BUNDLE_FORMAT,
+      formatVersion: PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
+      exportedAt: new Date().toISOString(),
+      project: {
+        id: String(projectConfig?.id ?? ''),
+        name: String(projectConfig?.name ?? ''),
+        defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+        lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+        sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+      },
+      scenes,
+    };
+
+    await loadProjectFromBundle(bundle);
+  } finally {
+    sceneDownload.active = false;
+    loading.value = false;
+  }
 }
 
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
@@ -9078,12 +9181,20 @@ onLoad((query) => {
   ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
   const projectIdParam = typeof query?.projectId === 'string' ? query.projectId : '';
+  const packageUrlParam = typeof (query as any)?.packageUrl === 'string'
+    ? String((query as any).packageUrl)
+    : (typeof (query as any)?.zipUrl === 'string' ? String((query as any).zipUrl) : '');
 
   error.value = null;
 
   projectStore.bootstrap();
 
-  if (projectIdParam) {
+  if (packageUrlParam) {
+    requestedMode.value = 'project';
+    currentProjectId.value = null;
+    loading.value = true;
+    void loadProjectFromScenePackageUrl(packageUrlParam);
+  } else if (projectIdParam) {
     requestedMode.value = 'project';
     currentProjectId.value = projectIdParam;
     const entry = projectStore.getProject(projectIdParam);

@@ -252,6 +252,37 @@ export default class ResourceCache {
     if (entry instanceof ArrayBuffer) {
       return { kind: 'arraybuffer', data: entry };
     }
+
+    if (typeof entry === 'object') {
+      const bytes = (entry as any).bytes as ArrayBuffer | Uint8Array | undefined;
+      if (bytes) {
+        const filename = typeof (entry as any).filename === 'string' ? (entry as any).filename : null;
+        const hintedMime = typeof (entry as any).mimeType === 'string' ? (entry as any).mimeType : null;
+        const fallbackMime = filename ? inferMimeTypeFromAssetId(filename) : inferMimeTypeFromAssetId(assetId);
+        const mimeType = hintedMime ?? fallbackMime ?? 'application/octet-stream';
+        const buffer = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        // Ensure we always end up with an ArrayBuffer-backed view (BlobPart typing rejects SharedArrayBuffer).
+        const safeArrayBuffer = new ArrayBuffer(buffer.byteLength);
+        new Uint8Array(safeArrayBuffer).set(buffer);
+        const safeBuffer = new Uint8Array(safeArrayBuffer);
+        try {
+          const blob = new Blob([safeBuffer], { type: mimeType });
+          return {
+            kind: 'blob',
+            blob,
+            mimeType,
+            filename: filename ?? null,
+          };
+        } catch (_error) {
+          // Fallback for environments without Blob: provide raw bytes.
+          return {
+            kind: 'arraybuffer',
+            data: safeArrayBuffer,
+            mimeType,
+          };
+        }
+      }
+    }
     return null;
   }
 

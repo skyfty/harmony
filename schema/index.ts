@@ -29,6 +29,27 @@ export type {
   PagedResponse,
 } from './asset-api'
 
+export {
+  SCENE_PACKAGE_FORMAT,
+  SCENE_PACKAGE_VERSION,
+  isScenePackageManifest,
+} from './scenePackage'
+export type {
+  ScenePackageManifest,
+  ScenePackageManifestV1,
+  ScenePackageProjectEntry,
+  ScenePackageResourceEntry,
+  ScenePackageResourceType,
+  ScenePackageSceneEntry,
+} from './scenePackage'
+
+export {
+  unzipScenePackage,
+  buildAssetOverridesFromScenePackage,
+  readTextFileFromScenePackage,
+} from './scenePackageZip'
+export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } from './scenePackageZip'
+
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 
 export { createAutoTourRuntime } from './autoTourRuntime'
@@ -939,10 +960,8 @@ export interface TerrainPaintLayerDefinition {
 }
 
 export interface TerrainPaintChunkWeightmapRef {
-  /** Server asset id containing the chunk RGBA weightmap (typically an image). */
-  assetId: string
-  /** Server `updatedAt` (ISO string) at last sync. Used for cache validation. */
-  assetUpdatedAt?: string | null
+  /** Stable content id (recommended: `sha256-...`) of the chunk RGBA weightmap PNG stored as a private resource. */
+  logicalId: string
 }
 
 export interface TerrainPaintSettings {

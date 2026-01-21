@@ -47,7 +47,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { fetchResourceAsset, updateAssetOnServer, uploadAssetToServer } from '@/api/resourceAssets'
+import { computeBlobHash } from '@/utils/blob'
 import {
 	ensureTerrainPaintPreviewInstalled,
 	updateTerrainPaintPreviewLayerTexture,
@@ -528,7 +528,7 @@ type PaintSessionState = {
 	chunkCells: number
 	settings: TerrainPaintSettings
 	chunkStates: Map<string, PaintChunkState>
-	hasPendingUploads: boolean
+	hasPendingChanges: boolean
 }
 
 let paintSessionState: PaintSessionState | null = null
@@ -1091,7 +1091,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 								chunkCells: resolveGroundChunkCells(definition),
 								settings,
 								chunkStates: new Map(),
-								hasPendingUploads: false,
+												hasPendingChanges: false,
 							},
 							layer.channel,
 							asset,
@@ -1941,7 +1941,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkCells,
 			settings: cloneOrCreateTerrainPaintSettings(definition),
 			chunkStates: new Map(),
-			hasPendingUploads: false,
+			hasPendingChanges: false,
 		}
 		const groundObject = getGroundObject()
 		if (groundObject) {
@@ -2023,26 +2023,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.chunkStates.set(payload.key, state)
 
 		const ref = session.settings.chunks?.[payload.key] ?? null
-		if (ref?.assetId) {
+		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
+		if (logicalId) {
 			state.status = 'loading'
 			state.loadPromise = (async () => {
 				try {
 					const cache = useAssetCacheStore()
-					const expectedUpdatedAt = typeof ref.assetUpdatedAt === 'string' ? ref.assetUpdatedAt : null
-					let entry = cache.getEntry(ref.assetId)
+					let entry = cache.getEntry(logicalId)
 					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
-					if (!blob || (expectedUpdatedAt && entry.serverUpdatedAt && expectedUpdatedAt !== entry.serverUpdatedAt)) {
-						let downloadUrl = entry.downloadUrl
-						if (!downloadUrl) {
-							const dto = await fetchResourceAsset(ref.assetId)
-							downloadUrl = dto.downloadUrl ?? dto.url ?? null
-						}
-						if (downloadUrl) {
-							entry = await cache.downloadAsset(ref.assetId, downloadUrl, `terrain-weightmap-${ref.assetId}.png`, {
-								expectedServerUpdatedAt: expectedUpdatedAt,
-							})
-							blob = entry.status === 'cached' ? (entry.blob ?? null) : null
-						}
+					if (!blob) {
+						entry = (await cache.loadFromIndexedDb(logicalId)) ?? entry
+						blob = entry.status === 'cached' ? (entry.blob ?? null) : null
 					}
 					if (blob) {
 						state.data = await decodeWeightmapToData(blob, state.resolution)
@@ -2118,8 +2109,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const becameDirty = !chunk.dirty
 			chunk.dirty = true
 			pushTerrainPaintPreviewWeightmap(session, chunk)
-			if (becameDirty && !session.hasPendingUploads) {
-				session.hasPendingUploads = true
+			if (becameDirty && !session.hasPendingChanges) {
+				session.hasPendingChanges = true
 				options.sceneStore.updateNodeDynamicMesh(session.nodeId, { hasManualEdits: true })
 			}
 		}
@@ -2137,7 +2128,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return false
 	}
 
-	async function flushTerrainPaintUploads(): Promise<boolean> {
+	async function flushTerrainPaintChanges(): Promise<boolean> {
 		for (let attempts = 0; attempts < 16; attempts += 1) {
 			if (!hasDirtyPaintChunks(paintSessionState)) {
 				return true
@@ -2203,41 +2194,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				const pngBlob = await encodeWeightmapToPng(chunk.data, chunk.resolution)
 				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.png`
-				const file = new File([pngBlob], filename, { type: 'image/png' })
-
-				const existingRef = session.settings.chunks?.[chunk.key] ?? null
-				const dto = existingRef?.assetId
-					? await updateAssetOnServer({
-						assetId: existingRef.assetId,
-						file,
-						name: filename,
-						type: 'image',
-						imageWidth: chunk.resolution,
-						imageHeight: chunk.resolution,
-					})
-					: await uploadAssetToServer({
-						file,
-						name: filename,
-						type: 'image',
-						description: 'Terrain paint weightmap chunk',
-						imageWidth: chunk.resolution,
-						imageHeight: chunk.resolution,
-					})
-
-				const updatedAt = typeof dto.updatedAt === 'string' ? dto.updatedAt : null
+				const logicalId = await computeBlobHash(pngBlob)
+				await cache.storeAssetBlob(logicalId, {
+					blob: pngBlob,
+					mimeType: 'image/png',
+					filename,
+				})
 				session.settings.chunks[chunk.key] = {
-					assetId: dto.id,
-					assetUpdatedAt: updatedAt,
-				}
-				const downloadUrl = dto.downloadUrl ?? dto.url ?? null
-				if (downloadUrl) {
-					await cache.storeAssetBlob(dto.id, {
-						blob: pngBlob,
-						mimeType: 'image/png',
-						filename,
-						downloadUrl,
-						serverUpdatedAt: updatedAt,
-					})
+					logicalId,
 				}
 				chunk.dirty = false
 			}
@@ -3948,7 +3912,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		handleGroundTextureFileChange,
 		handleGroundCancel,
 		refreshGroundMesh,
-		flushTerrainPaintUploads,
+		flushTerrainPaintChanges,
 		hasActiveSelection,
 		handleActiveBuildToolChange,
 		dispose,

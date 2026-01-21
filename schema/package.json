@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "cannon-es": "^0.20.0",
+    "fflate": "^0.8.2",
     "polygon-clipping": "^0.15.7",
     "three-mesh-bvh": "^0.9.1",
     "three": "^0.172.0"

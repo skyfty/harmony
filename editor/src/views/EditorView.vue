@@ -23,16 +23,17 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
-  buildPackageAssetMapForExport,
-  calculateSceneResourceSummary,
   type EditorPanel,
   type SceneBundleImportPayload,
   type SceneBundleImportScene,
   SCENE_BUNDLE_FORMAT_VERSION,
+  buildPackageAssetMapForExport,
+  calculateSceneResourceSummary,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -60,13 +61,8 @@ import type {
   SceneNodeComponentState,
   SceneResourceSummary,
 } from '@harmony/schema'
-import {
-  PROJECT_EXPORT_BUNDLE_FORMAT,
-  PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-  type Project,
-  type ProjectExportBundle,
-  type ProjectExportSceneEntry,
-} from '@harmony/schema'
+import type { Project } from '@harmony/schema'
+
 
 const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
@@ -1145,11 +1141,23 @@ async function ensureExportableSceneDocument(sceneId: string): Promise<StoredSce
   return await scenesStore.loadSceneDocument(trimmed)
 }
 
-async function exportProjectBundle(options: SceneExportOptions, updateProgress?: (value: number, message?: string) => void): Promise<Blob> {
+function isSceneJsonExportDocument(raw: unknown): raw is any {
+	return !!raw && typeof raw === 'object' && typeof (raw as any).id === 'string' && Array.isArray((raw as any).nodes)
+}
+
+async function exportProjectPackageZip(options: SceneExportOptions, updateProgress?: (value: number, message?: string) => void): Promise<Blob> {
   const project = await loadActiveProjectDocument()
   if (!project) {
     throw new Error('必须先打开工程才能导出')
   }
+
+  type ProjectSceneMeta = {
+    id: string
+    name?: string | null
+    sceneJsonUrl?: string | null
+    createdAt?: string | null
+  }
+  const projectScenes: ProjectSceneMeta[] = Array.isArray((project as any).scenes) ? ((project as any).scenes as ProjectSceneMeta[]) : []
 
   const activeProjectId = projectsStore.activeProjectId
   if (!activeProjectId) {
@@ -1160,74 +1168,60 @@ async function exportProjectBundle(options: SceneExportOptions, updateProgress?:
   const localSceneIds = localSummaries.map((entry) => entry.id)
   const localSceneIdSet = new Set(localSceneIds)
 
-  const externalOnly = (project.scenes ?? []).filter((meta) => meta && !localSceneIdSet.has(meta.id))
+  const externalOnly = projectScenes.filter((meta) => meta && !localSceneIdSet.has(meta.id))
 
   const orderedSceneIds = [...localSceneIds, ...externalOnly.map((meta) => meta.id)]
   const defaultSceneId = project.lastEditedSceneId ?? (orderedSceneIds[0] ?? null)
 
-  const scenes: ProjectExportSceneEntry[] = []
-  const totalToEmbed = localSceneIds.length
+  const embeddedScenes: Array<{ id: string; document: any }> = []
+  const totalToEmbed = orderedSceneIds.length
   for (let index = 0; index < orderedSceneIds.length; index += 1) {
     const id = orderedSceneIds[index]!
     const localSummary = localSummaries.find((s) => s.id === id) ?? null
-    const meta = project.scenes.find((s) => s.id === id) ?? null
+    const meta = projectScenes.find((s) => s.id === id) ?? null
+
+    const progressBase = 10
+    const progressSpan = 70
+    const ratio = totalToEmbed > 0 ? (index + 1) / totalToEmbed : 1
+    updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary?.name ?? meta?.name ?? id}…`)
 
     if (localSummary) {
-      const progressBase = 10
-      const progressSpan = 70
-      const ratio = totalToEmbed > 0 ? (localSceneIds.indexOf(id) + 1) / totalToEmbed : 1
-      updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary.name}…`)
-
       const document = await ensureExportableSceneDocument(id)
       if (!document) {
         throw new Error(`无法读取场景：${id}`)
       }
-      const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
-      document.packageAssetMap = packageAssetMap
-      document.assetIndex = assetIndex
-      document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
       const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
-
-      scenes.push({
-        kind: 'embedded',
-        id,
-        name: localSummary.name,
-        createdAt: localSummary.createdAt ?? null,
-        updatedAt: localSummary.updatedAt ?? null,
-        document: exportDocument,
-      })
+      embeddedScenes.push({ id, document: exportDocument })
       continue
     }
 
     if (meta?.sceneJsonUrl) {
-      scenes.push({
-        kind: 'external',
-        id: meta.id,
-        name: meta.name,
-        createdAt: null,
-        updatedAt: null,
-        sceneJsonUrl: meta.sceneJsonUrl,
-      })
+      const response = await fetch(meta.sceneJsonUrl, { method: 'GET', credentials: 'omit', cache: 'no-cache' })
+      if (!response.ok) {
+        throw new Error(`无法下载外部场景：${meta.sceneJsonUrl} (${response.status})`)
+      }
+      const text = await response.text()
+      const parsed = JSON.parse(text) as unknown
+      if (!isSceneJsonExportDocument(parsed)) {
+        throw new Error(`外部场景格式不正确：${meta.sceneJsonUrl}`)
+      }
+      embeddedScenes.push({ id, document: parsed })
       continue
     }
   }
 
-  const bundle: ProjectExportBundle = {
-    format: PROJECT_EXPORT_BUNDLE_FORMAT,
-    formatVersion: PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-    exportedAt: new Date().toISOString(),
+  updateProgress?.(85, '生成场景包…')
+  return await exportScenePackageZip({
     project: {
       id: project.id,
       name: project.name,
       defaultSceneId,
       lastEditedSceneId: project.lastEditedSceneId,
-      sceneOrder: scenes.map((entry) => entry.id),
+      sceneOrder: embeddedScenes.map((entry) => entry.id),
     },
-    scenes,
-  }
-
-  updateProgress?.(85, '生成导出文件…')
-  return new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+    scenes: embeddedScenes,
+    updateProgress,
+  })
 }
 
 async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
@@ -1275,7 +1269,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
 
   try {
     updateProgress(10, 'Exporting project')
-    const blob = await exportProjectBundle(options, updateProgress)
+    const blob = await exportProjectPackageZip(options, updateProgress)
     await config.afterExport({ blob, fileName, updateProgress })
     updateProgress(100, config.successMessage)
     workflowSucceeded = true
@@ -1305,7 +1299,9 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
     successMessage: 'Export complete',
     failureMessage: 'Export failed',
     afterExport: async ({ blob, fileName }) => {
-      triggerDownload(blob, fileName)
+      const normalized = typeof fileName === 'string' && fileName.trim().length ? fileName.trim() : 'scene-package.zip'
+      const zipName = normalized.toLowerCase().endsWith('.zip') ? normalized : `${normalized.replace(/\.[^./\\]+$/g, '')}.zip`
+      triggerDownload(blob, zipName)
     },
   })
 }
@@ -1430,13 +1426,12 @@ async function saveCurrentSceneWithOptions(options: SaveCurrentSceneOptions = {}
   pendingSceneSave = (async () => {
     try {
       const viewport = viewportRef.value
-      if (viewport?.flushTerrainPaintUploads) {
-        const ok = await viewport.flushTerrainPaintUploads()
-        if (!ok) {
-          console.error('Failed to upload terrain paint weightmaps before saving')
-          return false
-        }
+      const ok = await viewport?.flushTerrainPaintChanges()
+      if (!ok) {
+        console.error('Failed to persist terrain paint weightmaps before saving')
+        return false
       }
+      
       const document = await sceneStore.saveActiveScene({force: true})
       if (document && broadcastPreview) {
         void broadcastScenePreview(document)
