@@ -111,8 +111,10 @@ type ImageDimensionKey = 'imageWidth' | 'imageHeight'
 
 // Local state for dialog
 const uploadEntries = ref<UploadAssetEntry[]>([])
-const previewRefs = ref<Record<string, InstanceType<typeof AssetPreviewRenderer> | null>>({})
-const thumbnailInputRefs = ref<Record<string, HTMLInputElement | null>>({})
+// NOTE: These are non-reactive on purpose. Writing reactive state from template ref callbacks
+// can cause render feedback loops and severe input lag when editing fields.
+const previewRefs = new Map<string, InstanceType<typeof AssetPreviewRenderer>>()
+const thumbnailInputRefs = new Map<string, HTMLInputElement>()
 const activeEntryId = ref<string | null>(null)
 const activeEntry = computed<UploadAssetEntry | null>(() => {
   if (!uploadEntries.value.length) {
@@ -538,8 +540,8 @@ function resetUploadState() {
   uploadError.value = null
   activeEntryId.value = null
   closeGuardDialogOpen.value = false
-  previewRefs.value = {}
-  thumbnailInputRefs.value = {}
+  previewRefs.clear()
+  thumbnailInputRefs.clear()
 }
 
 async function loadServerTags(options: { force?: boolean } = {}) {
@@ -708,10 +710,11 @@ function handlePreviewImageMeta(entry: UploadAssetEntry, payload: { width: numbe
 }
 
 function registerPreviewRef(entryId: string, instance: InstanceType<typeof AssetPreviewRenderer> | null): void {
-  previewRefs.value = { ...previewRefs.value, [entryId]: instance }
   if (!instance) {
+    previewRefs.delete(entryId)
     return
   }
+  previewRefs.set(entryId, instance)
   const entry = uploadEntries.value.find((item) => item.assetId === entryId)
   if (entry && isModelAsset(entry.asset) && !entry.thumbnailFile) {
     // Capture default snapshot once preview becomes ready.
@@ -720,18 +723,16 @@ function registerPreviewRef(entryId: string, instance: InstanceType<typeof Asset
 }
 
 function registerThumbnailInput(entryId: string, element: HTMLInputElement | null): void {
-  const next = { ...thumbnailInputRefs.value }
   if (!element) {
-    delete next[entryId]
-  } else {
-    next[entryId] = element
+    thumbnailInputRefs.delete(entryId)
+    return
   }
-  thumbnailInputRefs.value = next
+  thumbnailInputRefs.set(entryId, element)
 }
 
 function promptThumbnailUpload(entry: UploadAssetEntry): void {
   if (!entry) return
-  const input = thumbnailInputRefs.value[entry.assetId]
+  const input = thumbnailInputRefs.get(entry.assetId)
   if (!input) return
   input.value = ''
   input.click()
@@ -770,7 +771,7 @@ async function capturePreviewThumbnail(entry: UploadAssetEntry, options: { silen
   if (!isModelAsset(entry.asset)) {
     return
   }
-  const instance = previewRefs.value[entry.assetId]
+  const instance = previewRefs.get(entry.assetId)
   if (!instance?.captureSnapshot) {
     if (!options.silent) {
       entry.error = 'Preview is not ready for capture yet.'
@@ -1323,7 +1324,7 @@ function handleUploadAll(): void {
                     </div>
                   </div>
                   <div class="upload-entry__preview-pane">
-                    <div class="upload-preview-wrapper">
+                    <div v-if="entry.assetId === activeEntryId" class="upload-preview-wrapper">
                       <AssetPreviewRenderer
                         :asset="entry.asset"
                         :primary-color="entry.color || entry.asset.color || null"
