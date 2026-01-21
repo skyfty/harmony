@@ -125,7 +125,7 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<voi
     assetBuckets[category] = await loadScatterAssets(category)
   } catch (error) {
     console.warn('Failed to load scatter assets', error)
-    errorMap[category] = (error as Error).message ?? '无法加载资源列表'
+    errorMap[category] = (error as Error).message ?? 'Failed to load asset list'
   } finally {
     loadingMap[category] = false
   }
@@ -171,7 +171,7 @@ watch(
 
 <template>
   <div class="asset-painter" :style="thumbnailCssVars">
-    <div v-if="props.showSearch !== false" class="asset-toolbar">
+      <div v-if="props.showSearch !== false" class="asset-toolbar">
       <v-text-field
         :model-value="searchQuery"
         density="compact"
@@ -180,7 +180,7 @@ watch(
         clearable
         class="asset-search"
         prepend-inner-icon="mdi-magnify"
-        placeholder="搜索撒件预设"
+        placeholder="Search scatter presets"
         :disabled="loadingMap[props.category]"
         @update:model-value="handleSearchInput"
       />
@@ -199,8 +199,8 @@ watch(
           :key="asset.id"
           class="thumbnail-item"
           type="button"
-          :title="asset.name || '未命名'"
-          :aria-label="asset.name || '未命名'"
+          :title="asset.name || 'Untitled'"
+          :aria-label="asset.name || 'Untitled'"
           :class="{ 'is-selected': isAssetActive(asset.id) }"
           @click="handleAssetClick(asset)"
         >
@@ -212,8 +212,8 @@ watch(
         </button>
       </div>
       <div v-else class="empty-placeholder">
-        <span v-if="isFiltering && hasAnyAssets">未找到匹配的预设</span>
-        <span v-else>当前分类没有可用资源</span>
+        <span v-if="isFiltering && hasAnyAssets">No matching presets found</span>
+        <span v-else>No assets available for this category</span>
       </div>
     </template>
 

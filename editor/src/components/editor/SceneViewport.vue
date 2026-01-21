@@ -304,6 +304,8 @@ const {
   brushShape,
   brushOperation,
   groundPanelTab,
+  paintSelectedAsset,
+  paintSmoothness,
   scatterCategory,
   scatterSelectedAsset,
   scatterBrushRadius,
@@ -321,6 +323,7 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
   if (prevHasGround && !hasGround) {
     terrainStore.setBrushOperation(null)
     terrainStore.setGroundPanelTab('terrain')
+    terrainStore.setPaintSelection(null)
     terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
   }
 }, { flush: 'sync' })
@@ -1132,6 +1135,9 @@ watch(
     if (ctx !== 'terrain-sculpt' && (terrainStore.brushOperation ?? null)) {
       terrainStore.setBrushOperation(null)
     }
+    if (ctx !== 'terrain-paint' && (terrainStore.paintSelectedAsset ?? null)) {
+      terrainStore.setPaintSelection(null)
+    }
   },
 )
 
@@ -1175,6 +1181,8 @@ const groundEditor = createGroundEditor({
   brushShape,
   brushOperation,
   groundPanelTab,
+  paintAsset: paintSelectedAsset,
+  paintSmoothness,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
@@ -2300,11 +2308,6 @@ const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const wallBrushPresetAssetId = ref<string | null>(null)
 const wallBrushPresetData = ref<WallPresetData | null>(null)
 let wallBrushPresetLoadToken = 0
-
-function handleOpenWallPresetPicker(anchor: { x: number; y: number }) {
-  wallPresetDialogAnchor.value = anchor
-  wallPresetDialogOpen.value = true
-}
 
 function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false

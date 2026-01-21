@@ -8,10 +8,13 @@ import { isImageLikeExtension } from '@harmony/schema'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
 
-export type AssetCacheEntry = SharedAssetCacheEntry
+export type AssetCacheEntry = SharedAssetCacheEntry & {
+  serverUpdatedAt?: string | null
+}
 
 export interface AssetDownloadOptions {
   force?: boolean
+  expectedServerUpdatedAt?: string | null
 }
 
 export interface AssetThumbnailOptions {
@@ -109,7 +112,7 @@ function inferFetchedFilename(candidate: string | null, fallbackName: string | n
 }
 
 const INDEXED_DB_NAME = 'harmony-asset-cache'
-const INDEXED_DB_VERSION = 2
+const INDEXED_DB_VERSION = 3
 const INDEXED_DB_STORE = 'assets'
 const INDEXED_DB_MAX_RECORDS = 1000
 const INDEXED_DB_PRUNE_BATCH = 100
@@ -120,6 +123,7 @@ interface StoredAssetRecord {
   mimeType: string | null
   filename: string | null
   downloadUrl: string | null
+  serverUpdatedAt?: string | null
   size: number
   cachedAt: number
 }
@@ -287,6 +291,7 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     mimeType: null,
     filename: null,
     downloadUrl: null,
+    serverUpdatedAt: null,
   }
 }
 
@@ -295,6 +300,7 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   mimeType: string | null
   filename: string | null
   downloadUrl: string | null
+  serverUpdatedAt?: string | null
 }) {
   if (entry.blobUrl) {
     URL.revokeObjectURL(entry.blobUrl)
@@ -310,6 +316,7 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   entry.mimeType = payload.mimeType
   entry.filename = payload.filename ?? `${entry.assetId}`
   entry.downloadUrl = payload.downloadUrl
+  entry.serverUpdatedAt = payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null
 }
 
 export const useAssetCacheStore = defineStore('assetCache', {
@@ -406,6 +413,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
         mimeType: stored.mimeType ?? stored.blob.type ?? null,
         filename: stored.filename,
         downloadUrl: stored.downloadUrl ?? null,
+        serverUpdatedAt: stored.serverUpdatedAt ?? null,
       })
       entry.lastUsedAt = now()
       this.evictIfNeeded(assetId)
@@ -419,6 +427,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
         mimeType?: string | null
         filename?: string | null
         downloadUrl?: string | null
+        serverUpdatedAt?: string | null
       },
     ): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(assetId)
@@ -430,6 +439,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
         mimeType: payload.mimeType ?? payload.blob.type ?? entry.mimeType ?? null,
         filename,
         downloadUrl: payload.downloadUrl ?? entry.downloadUrl ?? null,
+        serverUpdatedAt: payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null,
       })
 
       entry.size = payload.blob.size
@@ -442,6 +452,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
           mimeType: entry.mimeType,
           filename: entry.filename,
           downloadUrl: entry.downloadUrl,
+          serverUpdatedAt: entry.serverUpdatedAt ?? null,
           size: payload.blob.size,
           cachedAt: now(),
         })
@@ -455,10 +466,15 @@ export const useAssetCacheStore = defineStore('assetCache', {
 
     async downloadAsset(assetId:string, downloadUrl: string, name: string, options: AssetDownloadOptions = {}): Promise<AssetCacheEntry> {
       const scope = this
+      const expectedServerUpdatedAt = options.expectedServerUpdatedAt ?? null
       const entry = scope.ensureEntry(assetId)
       if (entry.status === 'cached' && !options.force) {
-        scope.touch(assetId)
-        return entry
+        if (expectedServerUpdatedAt && entry.serverUpdatedAt && expectedServerUpdatedAt !== entry.serverUpdatedAt) {
+          // Cached blob is stale; continue to re-download.
+        } else {
+          scope.touch(assetId)
+          return entry
+        }
       }
 
       if (assetId in scope.pending) {
@@ -469,10 +485,14 @@ export const useAssetCacheStore = defineStore('assetCache', {
         if (!options.force) {
           const restored = await scope.loadFromIndexedDb(assetId)
           if (restored) {
-            if (!restored.downloadUrl) {
-              restored.downloadUrl = downloadUrl
+            if (expectedServerUpdatedAt && restored.serverUpdatedAt && expectedServerUpdatedAt !== restored.serverUpdatedAt) {
+              // IndexedDB blob is stale; continue to re-download.
+            } else {
+              if (!restored.downloadUrl) {
+                restored.downloadUrl = downloadUrl
+              }
+              return restored
             }
-            return restored
           }
         }
 
@@ -507,6 +527,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
             mimeType: data.contentType,
             filename: data.filename,
             downloadUrl: raw.url ?? downloadUrl,
+            serverUpdatedAt: expectedServerUpdatedAt,
           })
 
         } catch (error) {
@@ -538,7 +559,11 @@ export const useAssetCacheStore = defineStore('assetCache', {
       if (!url) {
         throw new Error('该资源没有可用的下载地址')
       }
-      return scope.downloadAsset(asset.id, url, asset.name, options)
+      const expectedServerUpdatedAt =
+        options.expectedServerUpdatedAt
+        ?? (typeof asset.updatedAt === 'string' ? asset.updatedAt : null)
+        ?? null
+      return scope.downloadAsset(asset.id, url, asset.name, { ...options, expectedServerUpdatedAt })
     },
     
     cancelDownload(assetId: string) {

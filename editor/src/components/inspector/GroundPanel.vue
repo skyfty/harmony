@@ -6,6 +6,7 @@ import { useTerrainStore } from '@/stores/terrainStore'
 import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings, GroundSculptOperation } from '@harmony/schema'
 import { applyGroundGeneration } from '@schema/groundMesh'
 import TerrainSculptPanel from './TerrainSculptPanel.vue'
+import TerrainPaintPanel from './TerrainPaintPanel.vue'
 import GroundAssetPainter from './GroundAssetPainter.vue'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
@@ -16,7 +17,17 @@ import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterBrushRadius, scatterDensityPercent } =
+const {
+  brushRadius,
+  brushStrength,
+  brushShape,
+  brushOperation,
+  groundPanelTab,
+  paintSelectedAsset,
+  paintSmoothness,
+  scatterBrushRadius,
+  scatterDensityPercent,
+} =
   storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
@@ -53,6 +64,18 @@ const scatterTabs = computed(() =>
 const groundPanelTabModel = computed<GroundPanelTab>({
   get: () => groundPanelTab.value,
   set: (value) => terrainStore.setGroundPanelTab(value),
+})
+
+const isScatterTabActive = computed(() => groundPanelTabModel.value !== 'terrain' && groundPanelTabModel.value !== 'paint')
+
+const paintSmoothnessModel = computed({
+  get: () => paintSmoothness.value,
+  set: (value: number) => terrainStore.setPaintSmoothness(value),
+})
+
+const paintSelectedAssetModel = computed<ProjectAsset | null>({
+  get: () => paintSelectedAsset.value,
+  set: (asset) => terrainStore.setPaintSelection(asset),
 })
 
 const scatterBrushRadiusModel = computed({
@@ -269,6 +292,9 @@ function handleScatterAssetSelect(
             <v-tab value="terrain" :title="'地形工具'">
               <v-icon icon="mdi-image-edit-outline" size="16" />
             </v-tab>
+            <v-tab value="paint" :title="'地貌绘制'">
+              <v-icon icon="mdi-brush-variant" size="16" />
+            </v-tab>
             <v-tab
               v-for="tab in scatterTabs"
               :key="tab.key"
@@ -279,7 +305,7 @@ function handleScatterAssetSelect(
             </v-tab>
           </v-tabs>
           <div
-            v-if="groundPanelTabModel !== 'terrain'"
+            v-if="isScatterTabActive"
             class="scatter-spacing-panel"
           >
             <div class="scatter-spacing-item">
@@ -333,6 +359,16 @@ function handleScatterAssetSelect(
                 :noise-mode-options="noiseModeOptions"
               />
             </v-window-item>
+
+            <v-window-item value="paint">
+              <TerrainPaintPanel
+                v-model:brush-radius="brushRadius"
+                v-model:smoothness="paintSmoothnessModel"
+                v-model:asset="paintSelectedAssetModel"
+                :has-ground="hasGround"
+              />
+            </v-window-item>
+
             <v-window-item
               v-for="tab in scatterTabs"
               :key="`panel-${tab.key}`"

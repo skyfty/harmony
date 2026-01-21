@@ -185,6 +185,10 @@ function resolveChunkCells(definition: GroundDynamicMesh): number {
   return Math.max(4, Math.min(512, Math.trunc(candidate)))
 }
 
+export function resolveGroundChunkCells(definition: GroundDynamicMesh): number {
+  return resolveChunkCells(definition)
+}
+
 function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
   // Default to a moderate radius; keep streaming window smaller by default.
   const width = Number.isFinite(definition.width) ? definition.width : 0

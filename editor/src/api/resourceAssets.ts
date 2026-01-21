@@ -479,4 +479,143 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   return payload.asset
 }
 
+export async function fetchResourceAsset(assetId: string): Promise<ServerAssetDto> {
+  const trimmed = assetId.trim()
+  if (!trimmed.length) {
+    throw new Error('assetId 不能为空')
+  }
+  const url = buildServerApiUrl(`/resources/assets/${encodeURIComponent(trimmed)}`)
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+    cache: 'no-cache',
+  })
+  if (!response.ok) {
+    throw buildError('获取资源失败', response)
+  }
+  const payload = await parseJsonResponse<ServerAssetDto>(response)
+  if (!payload || typeof payload.id !== 'string') {
+    throw new Error('服务器返回的资源数据无效')
+  }
+  return payload
+}
+
+export interface UpdateAssetFileOptions {
+  assetId: string
+  file?: File | null
+  thumbnailFile?: File | null
+  name?: string
+  description?: string | null
+  type?: ProjectAsset['type']
+  tagIds?: string[]
+  categoryId?: string | null
+  categoryPathSegments?: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  imageWidth?: number | null
+  imageHeight?: number | null
+  seriesId?: string | null
+  terrainScatterPreset?: TerrainScatterCategory | null
+}
+
+export async function updateAssetOnServer(options: UpdateAssetFileOptions): Promise<ServerAssetDto> {
+  const trimmed = options.assetId.trim()
+  if (!trimmed.length) {
+    throw new Error('assetId 不能为空')
+  }
+  const url = buildServerApiUrl(`/resources/assets/${encodeURIComponent(trimmed)}`)
+  const formData = new FormData()
+  if (options.file) {
+    formData.append('file', options.file)
+  }
+  if (options.thumbnailFile) {
+    const thumbnailName = options.thumbnailFile.name && options.thumbnailFile.name.trim().length ? options.thumbnailFile.name : 'thumbnail.png'
+    formData.append('thumbnail', options.thumbnailFile, thumbnailName)
+  }
+  if (typeof options.name === 'string') {
+    formData.append('name', options.name)
+  }
+  if (options.type) {
+    formData.append('type', options.type)
+  }
+  if (options.description !== undefined) {
+    formData.append('description', options.description ?? '')
+  }
+  if (typeof options.color === 'string' && options.color.trim().length) {
+    formData.append('color', options.color.trim())
+  }
+  if (typeof options.dimensionLength === 'number' && Number.isFinite(options.dimensionLength)) {
+    formData.append('dimensionLength', options.dimensionLength.toString())
+  }
+  if (typeof options.dimensionWidth === 'number' && Number.isFinite(options.dimensionWidth)) {
+    formData.append('dimensionWidth', options.dimensionWidth.toString())
+  }
+  if (typeof options.dimensionHeight === 'number' && Number.isFinite(options.dimensionHeight)) {
+    formData.append('dimensionHeight', options.dimensionHeight.toString())
+  }
+  if (typeof options.imageWidth === 'number' && Number.isFinite(options.imageWidth)) {
+    formData.append('imageWidth', Math.round(options.imageWidth).toString())
+  }
+  if (typeof options.imageHeight === 'number' && Number.isFinite(options.imageHeight)) {
+    formData.append('imageHeight', Math.round(options.imageHeight).toString())
+  }
+  if (typeof options.categoryId === 'string' && options.categoryId.trim().length) {
+    formData.append('categoryId', options.categoryId.trim())
+  }
+  if (typeof options.seriesId === 'string' && options.seriesId.trim().length) {
+    formData.append('seriesId', options.seriesId.trim())
+  }
+  if (typeof options.terrainScatterPreset === 'string' && options.terrainScatterPreset.trim().length) {
+    formData.append('terrainScatterPreset', options.terrainScatterPreset.trim())
+  }
+  if (Array.isArray(options.categoryPathSegments)) {
+    options.categoryPathSegments
+      .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
+      .filter((segment) => segment.length > 0)
+      .forEach((segment) => formData.append('categoryPathSegments', segment))
+  }
+  if (Array.isArray(options.tagIds)) {
+    options.tagIds
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      .forEach((id) => {
+        formData.append('tagIds', id)
+      })
+  }
+
+  const authStore = useAuthStore()
+  const headers = new Headers()
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'PUT',
+    credentials: 'include',
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `更新资源失败（${response.status}）`)
+  }
+
+  const payload = await parseJsonResponse<ServerAssetDto>(response)
+  if (!payload || typeof payload.id !== 'string') {
+    throw new Error('服务器返回的资源数据无效')
+  }
+  return payload
+}
+
 export { mapServerAssetToProjectAsset }

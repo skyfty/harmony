@@ -929,6 +929,33 @@ export interface GroundGenerationSettings {
 
 export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
+export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
+
+export interface TerrainPaintLayerDefinition {
+  /** Which RGBA channel this layer occupies in the weightmap. */
+  channel: TerrainPaintChannel
+  /** Texture/image asset id to blend for this layer. */
+  textureAssetId: string
+}
+
+export interface TerrainPaintChunkWeightmapRef {
+  /** Server asset id containing the chunk RGBA weightmap (typically an image). */
+  assetId: string
+  /** Server `updatedAt` (ISO string) at last sync. Used for cache validation. */
+  assetUpdatedAt?: string | null
+}
+
+export interface TerrainPaintSettings {
+  /** Versioned payload to allow schema migrations later. */
+  version: 1
+  /** Weightmap resolution per chunk (pixels per side). */
+  weightmapResolution: number
+  /** Non-base paint layers. Base is always the ground material color. */
+  layers: TerrainPaintLayerDefinition[]
+  /** Map: chunkKey -> weightmap asset reference. */
+  chunks: Record<string, TerrainPaintChunkWeightmapRef>
+}
+
 export interface GroundDynamicMesh {
   type: 'Ground'
   width: number
@@ -942,6 +969,7 @@ export interface GroundDynamicMesh {
   generation?: GroundGenerationSettings | null
   hasManualEdits?: boolean
   terrainScatter?: TerrainScatterStoreSnapshot | null
+  terrainPaint?: TerrainPaintSettings | null
 }
 
 export type WallSegment = {

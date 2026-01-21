@@ -554,6 +554,8 @@ function handleBuildToolToggle(tool: BuildTool) {
 }
 
 function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
+  void tool
+  void event
   if (buildToolsDisabled.value) {
     return
   }

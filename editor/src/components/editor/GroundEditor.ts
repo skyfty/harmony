@@ -1,6 +1,6 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
+import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintChannel, TerrainPaintSettings } from '@harmony/schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -18,6 +18,7 @@ import {
 	sculptGround,
 	sampleGroundHeight,
 	stitchGroundChunkNormals,
+	resolveGroundChunkCells,
 	updateGroundChunks,
 	updateGroundMesh,
 	updateGroundMeshRegion,
@@ -46,6 +47,12 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { fetchResourceAsset, updateAssetOnServer, uploadAssetToServer } from '@/api/resourceAssets'
+import {
+	ensureTerrainPaintPreviewInstalled,
+	updateTerrainPaintPreviewLayerTexture,
+	updateTerrainPaintPreviewWeightmap,
+} from '@/utils/terrainPaintPreview'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
@@ -87,6 +94,8 @@ export type GroundEditorOptions = {
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
+	paintAsset: Ref<ProjectAsset | null>
+	paintSmoothness: Ref<number>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
@@ -123,9 +132,329 @@ const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
 const scatterPreviewProjectedHelper = new THREE.Vector3()
 
+const terrainPaintTextureLoader = new THREE.TextureLoader()
+const terrainPaintLayerTextureCache = new Map<string, Promise<THREE.Texture | null>>()
+
+async function loadTerrainPaintLayerTexture(asset: ProjectAsset): Promise<THREE.Texture | null> {
+	const assetId = typeof asset?.id === 'string' ? asset.id : ''
+	if (!assetId) {
+		return null
+	}
+	const cached = terrainPaintLayerTextureCache.get(assetId)
+	if (cached) {
+		return cached
+	}
+	const promise = (async () => {
+		try {
+			const cache = useAssetCacheStore()
+			const entry = await cache.downloaProjectAsset(asset)
+			const blobUrl = entry?.status === 'cached' ? (entry.blobUrl ?? null) : null
+			if (!blobUrl) {
+				return null
+			}
+			const texture = await terrainPaintTextureLoader.loadAsync(blobUrl)
+			texture.wrapS = THREE.RepeatWrapping
+			texture.wrapT = THREE.RepeatWrapping
+			;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
+			texture.needsUpdate = true
+			return texture
+		} catch (error) {
+			console.warn('加载地貌贴图纹理失败：', error)
+			return null
+		}
+	})()
+	terrainPaintLayerTextureCache.set(assetId, promise)
+	return promise
+}
+
 function clampFinite(value: unknown, fallback: number): number {
 	const num = typeof value === 'number' ? value : Number(value)
 	return Number.isFinite(num) ? num : fallback
+}
+
+function clamp01(value: number): number {
+	if (!Number.isFinite(value)) {
+		return 0
+	}
+	return Math.max(0, Math.min(1, value))
+}
+
+function channelToIndex(channel: TerrainPaintChannel): number {
+	switch (channel) {
+		case 'r':
+			return 0
+		case 'g':
+			return 1
+		case 'b':
+			return 2
+		case 'a':
+			return 3
+		default:
+			return 1
+	}
+}
+
+function chooseAvailablePaintChannel(settings: TerrainPaintSettings): TerrainPaintChannel | null {
+	const used = new Set<TerrainPaintChannel>(settings.layers.map((layer) => layer.channel))
+	const candidates: TerrainPaintChannel[] = ['g', 'b', 'a']
+	for (const candidate of candidates) {
+		if (!used.has(candidate)) {
+			return candidate
+		}
+	}
+	return null
+}
+
+function ensureTerrainPaintLayer(settings: TerrainPaintSettings, textureAssetId: string): TerrainPaintChannel | null {
+	const trimmed = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
+	if (!trimmed) {
+		return null
+	}
+	const existing = settings.layers.find((layer) => layer.textureAssetId === trimmed)
+	if (existing) {
+		return existing.channel
+	}
+	const nextChannel = chooseAvailablePaintChannel(settings)
+	if (!nextChannel) {
+		return null
+	}
+	settings.layers.push({ channel: nextChannel, textureAssetId: trimmed })
+	return nextChannel
+}
+
+function cloneOrCreateTerrainPaintSettings(definition: GroundDynamicMesh): TerrainPaintSettings {
+	const existing = definition.terrainPaint
+	if (existing && existing.version === 1) {
+		return {
+			version: 1,
+			weightmapResolution: Number.isFinite(existing.weightmapResolution)
+				? Math.max(8, Math.min(2048, Math.round(existing.weightmapResolution)))
+				: 256,
+			layers: Array.isArray(existing.layers) ? existing.layers.map((layer) => ({ ...layer })) : [],
+			chunks: existing.chunks ? { ...existing.chunks } : {},
+		}
+	}
+	return {
+		version: 1,
+		weightmapResolution: 256,
+		layers: [],
+		chunks: {},
+	}
+}
+
+function createBlankWeightmap(resolution: number): Uint8ClampedArray {
+	const res = Math.max(1, Math.round(resolution))
+	const data = new Uint8ClampedArray(res * res * 4)
+	for (let i = 0; i < res * res; i += 1) {
+		const offset = i * 4
+		data[offset] = 255
+		data[offset + 1] = 0
+		data[offset + 2] = 0
+		data[offset + 3] = 0
+	}
+	return data
+}
+
+function normalizeWeightsTo255(weights: [number, number, number, number]): [number, number, number, number] {
+	let total = weights[0] + weights[1] + weights[2] + weights[3]
+	if (total <= 0) {
+		return [255, 0, 0, 0]
+	}
+	if (total === 255) {
+		return weights
+	}
+	const scale = 255 / total
+	let r = Math.round(weights[0] * scale)
+	let g = Math.round(weights[1] * scale)
+	let b = Math.round(weights[2] * scale)
+	let a = Math.round(weights[3] * scale)
+	let sum = r + g + b + a
+	if (sum !== 255) {
+		const diff = 255 - sum
+		r = THREE.MathUtils.clamp(r + diff, 0, 255)
+		sum = r + g + b + a
+		if (sum !== 255) {
+			r = THREE.MathUtils.clamp(r, 0, 255)
+			g = THREE.MathUtils.clamp(g, 0, 255)
+			b = THREE.MathUtils.clamp(b, 0, 255)
+			a = THREE.MathUtils.clamp(a, 0, 255)
+			const fallbackSum = r + g + b + a
+			if (fallbackSum !== 255) {
+				r = THREE.MathUtils.clamp(r + (255 - fallbackSum), 0, 255)
+			}
+		}
+	}
+	return [r, g, b, a]
+}
+
+function addWeightToPixel(data: Uint8ClampedArray, baseOffset: number, targetChannelIndex: number, amount: number): boolean {
+	if (!Number.isFinite(amount) || amount <= 0) {
+		return false
+	}
+	const weights: [number, number, number, number] = [
+		data[baseOffset] ?? 0,
+		data[baseOffset + 1] ?? 0,
+		data[baseOffset + 2] ?? 0,
+		data[baseOffset + 3] ?? 0,
+	]
+	const normalized = normalizeWeightsTo255(weights)
+	let r = normalized[0]
+	let g = normalized[1]
+	let b = normalized[2]
+	let a = normalized[3]
+	const idx = THREE.MathUtils.clamp(Math.floor(targetChannelIndex), 0, 3)
+	const get = (i: number) => (i === 0 ? r : i === 1 ? g : i === 2 ? b : a)
+	const set = (i: number, value: number) => {
+		if (i === 0) r = value
+		else if (i === 1) g = value
+		else if (i === 2) b = value
+		else a = value
+	}
+	const available = 255 - get(idx)
+	const delta = Math.min(available, Math.max(0, Math.round(amount)))
+	if (delta <= 0) {
+		return false
+	}
+	set(idx, get(idx) + delta)
+	let remaining = delta
+	const otherTotal = 255 - get(idx) + remaining
+	if (otherTotal > 0) {
+		for (let c = 0; c < 4; c += 1) {
+			if (c === idx) {
+				continue
+			}
+			const current = get(c)
+			const take = Math.min(current, Math.floor((delta * current) / otherTotal))
+			set(c, current - take)
+			remaining -= take
+		}
+	}
+	if (remaining > 0) {
+		for (let c = 0; c < 4; c += 1) {
+			if (c === idx) {
+				continue
+			}
+			if (remaining <= 0) {
+				break
+			}
+			const current = get(c)
+			const take = Math.min(current, remaining)
+			set(c, current - take)
+			remaining -= take
+		}
+	}
+	data[baseOffset] = r
+	data[baseOffset + 1] = g
+	data[baseOffset + 2] = b
+	data[baseOffset + 3] = a
+	return true
+}
+
+function resolvePaintChunkBounds(
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+	chunkRow: number,
+	chunkColumn: number,
+): TerrainPaintChunkBounds | null {
+	const halfWidth = definition.width * 0.5
+	const halfDepth = definition.depth * 0.5
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	const startColumn = chunkColumn * Math.max(1, chunkCells)
+	const startRow = chunkRow * Math.max(1, chunkCells)
+	const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, definition.columns - startColumn)))
+	const effectiveRows = Math.max(0, Math.min(chunkCells, Math.max(0, definition.rows - startRow)))
+	const width = effectiveColumns * cellSize
+	const depth = effectiveRows * cellSize
+	if (!(width > 0) || !(depth > 0)) {
+		return null
+	}
+	const minX = -halfWidth + startColumn * cellSize
+	const minZ = -halfDepth + startRow * cellSize
+	return { minX, minZ, width, depth }
+}
+
+async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
+	const res = Math.max(1, Math.round(resolution))
+	const bitmap = await createImageBitmap(blob)
+	const canvas = document.createElement('canvas')
+	canvas.width = res
+	canvas.height = res
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })
+	if (!ctx) {
+		throw new Error('无法创建 2D Canvas 上下文')
+	}
+	ctx.clearRect(0, 0, res, res)
+	ctx.drawImage(bitmap, 0, 0, res, res)
+	bitmap.close?.()
+	const imageData = ctx.getImageData(0, 0, res, res)
+	return new Uint8ClampedArray(imageData.data)
+}
+
+async function encodeWeightmapToPng(data: Uint8ClampedArray, resolution: number): Promise<Blob> {
+	const res = Math.max(1, Math.round(resolution))
+	const canvas = document.createElement('canvas')
+	canvas.width = res
+	canvas.height = res
+	const ctx = canvas.getContext('2d')
+	if (!ctx) {
+		throw new Error('无法创建 2D Canvas 上下文')
+	}
+	const imageData = new ImageData(new Uint8ClampedArray(data), res, res)
+	ctx.putImageData(imageData, 0, 0)
+	const blob = await new Promise<Blob>((resolve, reject) => {
+		canvas.toBlob(
+			(result) => {
+				if (result) {
+					resolve(result)
+				} else {
+					reject(new Error('PNG 编码失败'))
+				}
+			},
+			'image/png',
+		)
+	})
+	return blob
+}
+
+function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: number): Uint8ClampedArray {
+	const res = Math.max(1, Math.round(resolution))
+	let src: Uint8ClampedArray<ArrayBufferLike> = data
+	let dst: Uint8ClampedArray<ArrayBufferLike> = new Uint8ClampedArray(src.length) as Uint8ClampedArray<ArrayBufferLike>
+	const iters = Math.max(0, Math.min(8, Math.round(iterations)))
+	for (let iter = 0; iter < iters; iter += 1) {
+		for (let y = 0; y < res; y += 1) {
+			for (let x = 0; x < res; x += 1) {
+				const base = (y * res + x) * 4
+				const sums: [number, number, number, number] = [0, 0, 0, 0]
+				let count = 0
+				for (let oy = -1; oy <= 1; oy += 1) {
+					const yy = THREE.MathUtils.clamp(y + oy, 0, res - 1)
+					for (let ox = -1; ox <= 1; ox += 1) {
+						const xx = THREE.MathUtils.clamp(x + ox, 0, res - 1)
+						const off = (yy * res + xx) * 4
+						sums[0] += src[off] ?? 0
+						sums[1] += src[off + 1] ?? 0
+						sums[2] += src[off + 2] ?? 0
+						sums[3] += src[off + 3] ?? 0
+						count += 1
+					}
+				}
+				const r = Math.round(sums[0] / Math.max(1, count))
+				const g = Math.round(sums[1] / Math.max(1, count))
+				const b = Math.round(sums[2] / Math.max(1, count))
+				const a = Math.round(sums[3] / Math.max(1, count))
+				const normalized = normalizeWeightsTo255([r, g, b, a])
+				dst[base] = normalized[0]
+				dst[base + 1] = normalized[1]
+				dst[base + 2] = normalized[2]
+				dst[base + 3] = normalized[3]
+			}
+		}
+		const swap = src
+		src = dst
+		dst = swap
+	}
+	return src
 }
 
 function clampScatterBrushRadius(value: unknown): number {
@@ -140,6 +469,8 @@ const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 const sculptStrokePrevPointHelper = new THREE.Vector3()
 const sculptStrokeNextPointHelper = new THREE.Vector3()
+const paintStrokePrevPointHelper = new THREE.Vector3()
+const paintStrokeNextPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -163,6 +494,44 @@ type ScatterSessionState = {
 }
 
 let scatterSession: ScatterSessionState | null = null
+
+type TerrainPaintStampRequest = {
+	localX: number
+	localZ: number
+	radius: number
+	strength: number
+	channelIndex: number
+}
+
+type TerrainPaintChunkBounds = {
+	minX: number
+	minZ: number
+	width: number
+	depth: number
+}
+
+type PaintChunkState = {
+	key: string
+	chunkRow: number
+	chunkColumn: number
+	resolution: number
+	data: Uint8ClampedArray
+	status: 'loading' | 'ready'
+	loadPromise: Promise<void> | null
+	pendingStamps: TerrainPaintStampRequest[]
+	dirty: boolean
+}
+
+type PaintSessionState = {
+	nodeId: string
+	definition: GroundDynamicMesh
+	chunkCells: number
+	settings: TerrainPaintSettings
+	chunkStates: Map<string, PaintChunkState>
+}
+
+let paintSessionState: PaintSessionState | null = null
+let paintCommitToken = 0
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -301,6 +670,8 @@ type SculptSessionState = {
 let sculptSessionState: SculptSessionState | null = null
 	let sculptStrokePointerId: number | null = null
 	let sculptStrokeLastLocalPoint: THREE.Vector3 | null = null
+	let paintStrokePointerId: number | null = null
+	let paintStrokeLastLocalPoint: THREE.Vector3 | null = null
 
 function mergeRegions(
 	current: GroundGeometryUpdateRegion | null,
@@ -628,6 +999,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	})
 	const groundTextureInputRef = ref<HTMLInputElement | null>(null)
 	const isSculpting = ref(false)
+	const isPainting = ref(false)
 
 	let groundSelectionDragState: GroundSelectionDragState | null = null
 	let scatterStore: TerrainScatterStore | null = null
@@ -657,6 +1029,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.scatterEraseModeActive.value || scatterModeEnabled()) {
 			return 'circle'
 		}
+		if (options.groundPanelTab.value === 'paint') {
+			return 'circle'
+		}
 		return getActiveBrushShape()
 	}
 
@@ -666,6 +1041,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (options.groundPanelTab.value === 'terrain') {
 			return 0x5fb0ff
+		}
+		if (options.groundPanelTab.value === 'paint') {
+			return 0x8bc34a
 		}
 		if (scatterModeEnabled()) {
 			return 0x4dd0e1
@@ -687,8 +1065,56 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	refreshBrushAppearance()
 
 	const stopTabWatch = watch(options.groundPanelTab, (tab) => {
-		if (tab === 'terrain') {
+		if (tab === 'terrain' || tab === 'paint') {
 			cancelScatterPlacement()
+			cancelScatterErase()
+		}
+		if (tab === 'paint') {
+			const selectedNode = options.sceneStore.selectedNode
+			if (selectedNode?.dynamicMesh?.type === 'Ground') {
+				const definition = selectedNode.dynamicMesh as GroundDynamicMesh
+				const groundObject = getGroundObject()
+				const settings = cloneOrCreateTerrainPaintSettings(definition)
+				if (groundObject) {
+					ensureTerrainPaintPreviewInstalled(groundObject, definition, settings)
+				}
+				// Warm layer textures (best-effort).
+				const catalogMap = options.sceneStore.collectCatalogAssetMap()
+				settings.layers.forEach((layer) => {
+					const asset = catalogMap.get(layer.textureAssetId) ?? null
+					if (asset) {
+						void pushTerrainPaintPreviewLayer(
+							{
+								nodeId: selectedNode.id,
+								definition,
+								chunkCells: resolveGroundChunkCells(definition),
+								settings,
+								chunkStates: new Map(),
+							},
+							layer.channel,
+							asset,
+						)
+					}
+				})
+				// Warm currently loaded chunk weightmaps.
+				const session = ensurePaintSession(definition, selectedNode.id)
+				settings.chunks && Object.entries(settings.chunks).forEach(([key]) => {
+					const parts = key.split(':')
+					const chunkRow = Number.parseInt(parts[0] ?? '', 10)
+					const chunkColumn = Number.parseInt(parts[1] ?? '', 10)
+					if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
+						return
+					}
+					// Only prewarm if the chunk mesh is currently present (loaded).
+					const loaded = groundObject
+						? !!groundObject.children.find((child) => (child as any)?.userData?.groundChunk?.chunkRow === chunkRow && (child as any)?.userData?.groundChunk?.chunkColumn === chunkColumn)
+						: false
+					if (!loaded) {
+						return
+					}
+					void ensurePaintChunkState(session, { key, chunkRow, chunkColumn })
+				})
+			}
 		}
 		refreshBrushAppearance()
 	})
@@ -1502,6 +1928,300 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function ensurePaintSession(definition: GroundDynamicMesh, nodeId: string): PaintSessionState {
+		if (paintSessionState && paintSessionState.nodeId === nodeId) {
+			return paintSessionState
+		}
+		const chunkCells = resolveGroundChunkCells(definition)
+		paintSessionState = {
+			nodeId,
+			definition,
+			chunkCells,
+			settings: cloneOrCreateTerrainPaintSettings(definition),
+			chunkStates: new Map(),
+		}
+		const groundObject = getGroundObject()
+		if (groundObject) {
+			ensureTerrainPaintPreviewInstalled(groundObject, definition, paintSessionState.settings)
+		}
+		return paintSessionState
+	}
+
+	function getGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
+		const cachedMaterialValue = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
+		const cachedMaterial = Array.isArray(cachedMaterialValue)
+			? (cachedMaterialValue[0] as THREE.Material | undefined)
+			: (cachedMaterialValue as THREE.Material | undefined)
+		if (cachedMaterial) {
+			return cachedMaterial
+		}
+		let found: THREE.Material | null = null
+		groundObject.traverse((obj) => {
+			if (found) {
+				return
+			}
+			const mesh = obj as THREE.Mesh
+			if (!mesh?.isMesh) {
+				return
+			}
+			const material = mesh.material
+			found = Array.isArray(material) ? ((material[0] as THREE.Material | undefined) ?? null) : (material as THREE.Material)
+		})
+		return found
+	}
+
+	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
+		const groundObject = getGroundObject()
+		if (!groundObject) {
+			return
+		}
+		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
+		const material = getGroundPreviewMaterial(groundObject)
+		if (!material) {
+			return
+		}
+		updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+	}
+
+	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
+		const groundObject = getGroundObject()
+		if (!groundObject) {
+			return
+		}
+		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
+		const material = getGroundPreviewMaterial(groundObject)
+		if (!material) {
+			return
+		}
+		const texture = await loadTerrainPaintLayerTexture(asset)
+		if (!texture) {
+			return
+		}
+		updateTerrainPaintPreviewLayerTexture(material, channel, texture)
+	}
+
+	function ensurePaintChunkState(session: PaintSessionState, payload: { key: string; chunkRow: number; chunkColumn: number }): PaintChunkState {
+		const existing = session.chunkStates.get(payload.key)
+		if (existing) {
+			return existing
+		}
+		const resolution = session.settings.weightmapResolution
+		const state: PaintChunkState = {
+			key: payload.key,
+			chunkRow: payload.chunkRow,
+			chunkColumn: payload.chunkColumn,
+			resolution,
+			data: createBlankWeightmap(resolution),
+			status: 'ready',
+			loadPromise: null,
+			pendingStamps: [],
+			dirty: false,
+		}
+		session.chunkStates.set(payload.key, state)
+
+		const ref = session.settings.chunks?.[payload.key] ?? null
+		if (ref?.assetId) {
+			state.status = 'loading'
+			state.loadPromise = (async () => {
+				try {
+					const cache = useAssetCacheStore()
+					const expectedUpdatedAt = typeof ref.assetUpdatedAt === 'string' ? ref.assetUpdatedAt : null
+					let entry = cache.getEntry(ref.assetId)
+					let blob: Blob | null = entry.status === 'cached' ? (entry.blob ?? null) : null
+					if (!blob || (expectedUpdatedAt && entry.serverUpdatedAt && expectedUpdatedAt !== entry.serverUpdatedAt)) {
+						let downloadUrl = entry.downloadUrl
+						if (!downloadUrl) {
+							const dto = await fetchResourceAsset(ref.assetId)
+							downloadUrl = dto.downloadUrl ?? dto.url ?? null
+						}
+						if (downloadUrl) {
+							entry = await cache.downloadAsset(ref.assetId, downloadUrl, `terrain-weightmap-${ref.assetId}.png`, {
+								expectedServerUpdatedAt: expectedUpdatedAt,
+							})
+							blob = entry.status === 'cached' ? (entry.blob ?? null) : null
+						}
+					}
+					if (blob) {
+						state.data = await decodeWeightmapToData(blob, state.resolution)
+					}
+				} catch (error) {
+					console.warn('加载地貌权重贴图失败，回退到空白贴图：', error)
+					state.data = createBlankWeightmap(state.resolution)
+				} finally {
+					pushTerrainPaintPreviewWeightmap(session, state)
+					state.status = 'ready'
+					state.loadPromise = null
+					if (state.pendingStamps.length) {
+						const pending = [...state.pendingStamps]
+						state.pendingStamps.length = 0
+						pending.forEach((stamp) => {
+							applyPaintStampToChunk(session, state, stamp)
+						})
+					}
+				}
+			})()
+		}
+
+		return state
+	}
+
+	function applyPaintStampToChunk(session: PaintSessionState, chunk: PaintChunkState, stamp: TerrainPaintStampRequest): void {
+		const definition = session.definition
+		const bounds = resolvePaintChunkBounds(definition, session.chunkCells, chunk.chunkRow, chunk.chunkColumn)
+		if (!bounds) {
+			return
+		}
+		const radius = stamp.radius
+		if (!Number.isFinite(radius) || radius <= 0) {
+			return
+		}
+		const res = Math.max(1, Math.round(chunk.resolution))
+		const cxMeters = stamp.localX - bounds.minX
+		const czMeters = stamp.localZ - bounds.minZ
+		const centerX = (cxMeters / bounds.width) * res
+		const centerY = (czMeters / bounds.depth) * res
+		const radiusX = (radius / bounds.width) * res
+		const radiusY = (radius / bounds.depth) * res
+		const minX = THREE.MathUtils.clamp(Math.floor(centerX - radiusX - 1), 0, res - 1)
+		const maxX = THREE.MathUtils.clamp(Math.ceil(centerX + radiusX + 1), 0, res - 1)
+		const minY = THREE.MathUtils.clamp(Math.floor(centerY - radiusY - 1), 0, res - 1)
+		const maxY = THREE.MathUtils.clamp(Math.ceil(centerY + radiusY + 1), 0, res - 1)
+		const strength = clamp01(stamp.strength)
+		if (strength <= 0) {
+			return
+		}
+		const strength255 = strength * 255
+		let any = false
+		for (let y = minY; y <= maxY; y += 1) {
+			for (let x = minX; x <= maxX; x += 1) {
+				const pxMeters = ((x + 0.5) / res) * bounds.width
+				const pzMeters = ((y + 0.5) / res) * bounds.depth
+				const dx = pxMeters - cxMeters
+				const dz = pzMeters - czMeters
+				const dist = Math.hypot(dx, dz)
+				if (dist > radius) {
+					continue
+				}
+				const t = dist / Math.max(1e-6, radius)
+				const falloff = (1 - t) * (1 - t)
+				const amount = strength255 * falloff
+				const offset = (y * res + x) * 4
+				if (addWeightToPixel(chunk.data, offset, stamp.channelIndex, amount)) {
+					any = true
+				}
+			}
+		}
+		if (any) {
+			chunk.dirty = true
+			pushTerrainPaintPreviewWeightmap(session, chunk)
+		}
+	}
+
+	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
+		if (!paintSessionState) {
+			return false
+		}
+		const session = paintSessionState
+		paintSessionState = null
+		if (!session.chunkStates.size) {
+			return false
+		}
+		let targetNode = selectedNode
+		if (!targetNode || targetNode.id !== session.nodeId) {
+			const sceneNode = getGroundNodeFromScene()
+			targetNode = sceneNode && sceneNode.id === session.nodeId ? sceneNode : null
+		}
+		if (!targetNode || targetNode.dynamicMesh?.type !== 'Ground') {
+			return false
+		}
+		const dirtyChunks = Array.from(session.chunkStates.values()).filter((chunk) => chunk.dirty)
+		if (!dirtyChunks.length) {
+			return false
+		}
+
+		const token = (paintCommitToken += 1)
+		try {
+			await Promise.all(
+				dirtyChunks
+					.map((chunk) => chunk.loadPromise)
+					.filter((promise): promise is Promise<void> => Boolean(promise)),
+			)
+			if (token !== paintCommitToken) {
+				return false
+			}
+
+			const smoothness = clamp01(options.paintSmoothness.value)
+			const smoothIterations = Math.max(0, Math.min(6, Math.round(smoothness * 4)))
+			if (smoothIterations > 0) {
+				dirtyChunks.forEach((chunk) => {
+					chunk.data = blurWeightmap(chunk.data, chunk.resolution, smoothIterations)
+					pushTerrainPaintPreviewWeightmap(session, chunk)
+				})
+			}
+
+			const groundObject = getGroundObject()
+			if (groundObject) {
+				ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
+			}
+
+			const cache = useAssetCacheStore()
+			for (const chunk of dirtyChunks) {
+				if (token !== paintCommitToken) {
+					return false
+				}
+				const pngBlob = await encodeWeightmapToPng(chunk.data, chunk.resolution)
+				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.png`
+				const file = new File([pngBlob], filename, { type: 'image/png' })
+
+				const existingRef = session.settings.chunks?.[chunk.key] ?? null
+				const dto = existingRef?.assetId
+					? await updateAssetOnServer({
+						assetId: existingRef.assetId,
+						file,
+						name: filename,
+						type: 'image',
+						imageWidth: chunk.resolution,
+						imageHeight: chunk.resolution,
+					})
+					: await uploadAssetToServer({
+						file,
+						name: filename,
+						type: 'image',
+						description: 'Terrain paint weightmap chunk',
+						imageWidth: chunk.resolution,
+						imageHeight: chunk.resolution,
+					})
+
+				const updatedAt = typeof dto.updatedAt === 'string' ? dto.updatedAt : null
+				session.settings.chunks[chunk.key] = {
+					assetId: dto.id,
+					assetUpdatedAt: updatedAt,
+				}
+				const downloadUrl = dto.downloadUrl ?? dto.url ?? null
+				if (downloadUrl) {
+					await cache.storeAssetBlob(dto.id, {
+						blob: pngBlob,
+						mimeType: 'image/png',
+						filename,
+						downloadUrl,
+						serverUpdatedAt: updatedAt,
+					})
+				}
+			}
+			if (token !== paintCommitToken) {
+				return false
+			}
+			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
+				terrainPaint: session.settings,
+				hasManualEdits: true,
+			})
+			return true
+		} catch (error) {
+			console.warn('提交地貌权重贴图失败：', error)
+			return false
+		}
+	}
+
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
 		const camera = options.getCamera()
 		if (!camera || !options.canvasRef.value) {
@@ -1539,10 +2259,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
-		if (options.groundPanelTab.value === 'terrain') {
+		if (options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint') {
 			return false
 		}
 		if (!options.scatterAsset.value) {
+			return false
+		}
+		const selectedNode = options.sceneStore.selectedNode
+		return selectedNode?.dynamicMesh?.type === 'Ground'
+	}
+
+	function paintModeEnabled(): boolean {
+		if (options.scatterEraseModeActive.value) {
+			return false
+		}
+		if (options.groundPanelTab.value !== 'paint') {
+			return false
+		}
+		if (!options.paintAsset.value) {
 			return false
 		}
 		const selectedNode = options.sceneStore.selectedNode
@@ -2586,6 +3320,83 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
+	function performPaint(event: PointerEvent) {
+		if (!brushMesh.visible) {
+			return
+		}
+		if (!paintModeEnabled()) {
+			return
+		}
+
+		const groundNode = options.sceneStore.selectedNode
+		if (groundNode?.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) {
+			return
+		}
+		const groundObject = getGroundObject()
+		if (!groundObject) {
+			return
+		}
+		updateGroundChunks(groundObject, definition, options.getCamera())
+
+		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
+		localPoint.y -= 0.1
+
+		const radius = options.brushRadius.value
+		const cellSize = definition.cellSize
+		const maxStep = Math.max(cellSize * 0.5, radius * 0.2, 0.05)
+		const prev = paintStrokeLastLocalPoint
+		let steps = 1
+		if (prev && paintStrokePointerId === event.pointerId) {
+			paintStrokePrevPointHelper.copy(prev)
+			paintStrokeNextPointHelper.copy(localPoint)
+			const dx = paintStrokeNextPointHelper.x - paintStrokePrevPointHelper.x
+			const dz = paintStrokeNextPointHelper.z - paintStrokePrevPointHelper.z
+			const dist = Math.hypot(dx, dz)
+			steps = Math.max(1, Math.ceil(dist / maxStep))
+			steps = Math.min(96, steps)
+		}
+
+		for (let i = 0; i < steps; i += 1) {
+			const t = steps <= 1 ? 1 : (i + 1) / steps
+			const point = prev && paintStrokePointerId === event.pointerId
+				? paintStrokePrevPointHelper.clone().lerp(paintStrokeNextPointHelper, t)
+				: localPoint
+			const paintAsset = options.paintAsset.value
+			if (!paintAsset) {
+				continue
+			}
+			const session = ensurePaintSession(definition, groundNode.id)
+			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
+			if (!channel) {
+				// No available channel slot (G/B/A) for new layers.
+				continue
+			}
+			// Best-effort: ensure the layer texture is visible during painting.
+			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
+			const stamp: TerrainPaintStampRequest = {
+				localX: point.x,
+				localZ: point.z,
+				radius,
+				strength: clamp01(options.brushStrength.value),
+				channelIndex: channelToIndex(channel),
+			}
+			const chunkInfo = getScatterChunkKeyFromLocal(definition, session.chunkCells, point.x, point.z)
+			const chunkState = ensurePaintChunkState(session, chunkInfo)
+			if (chunkState.status === 'loading') {
+				chunkState.pendingStamps.push(stamp)
+				continue
+			}
+			applyPaintStampToChunk(session, chunkState, stamp)
+		}
+
+		paintStrokePointerId = event.pointerId
+		paintStrokeLastLocalPoint = localPoint.clone()
+	}
+
 	function refreshGroundMesh(definition: GroundDynamicMesh | null = getGroundDynamicMeshDefinition()) {
 		if (!definition) {
 			return
@@ -2595,6 +3406,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			updateGroundChunks(mesh, definition, options.getCamera())
 			updateGroundMesh(mesh, definition)
 		}
+	}
+
+	function beginPaint(event: PointerEvent): boolean {
+		if (!paintModeEnabled()) {
+			return false
+		}
+		const groundNode = options.sceneStore.selectedNode
+		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 0) {
+			return false
+		}
+
+		isPainting.value = true
+		paintStrokePointerId = event.pointerId
+		paintStrokeLastLocalPoint = null
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		performPaint(event)
+		try {
+			options.canvasRef.value?.setPointerCapture(event.pointerId)
+		} catch (error) {
+			/* noop */
+		}
+		return true
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
@@ -2621,6 +3456,25 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		} catch (error) {
 			/* noop */
 		}
+		return true
+	}
+
+	function finalizePaint(event: PointerEvent): boolean {
+		if (!isPainting.value) {
+			return false
+		}
+		isPainting.value = false
+		paintStrokePointerId = null
+		paintStrokeLastLocalPoint = null
+		try {
+			options.canvasRef.value?.releasePointerCapture(event.pointerId)
+		} catch (error) {
+			/* noop */
+		}
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		void commitPaintSession(options.sceneStore.selectedNode ?? null)
 		return true
 	}
 
@@ -2774,6 +3628,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 
+		if (beginPaint(event)) {
+			return true
+		}
+
 		if (beginSculpt(event)) {
 			return true
 		}
@@ -2784,10 +3642,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function handlePointerMove(event: PointerEvent): boolean {
 		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
 		const showBrush = selectedNodeIsGround &&
-			(options.groundPanelTab.value === 'terrain' || options.scatterEraseModeActive.value || scatterModeEnabled())
+			(options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint' || options.scatterEraseModeActive.value || scatterModeEnabled())
 		if (showBrush) {
 			updateBrush(event)
 			updateScatterHoverPreview(event)
+			if (options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
+				performPaint(event)
+			}
 			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
@@ -2833,6 +3694,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		if (finalizeScatterErase(event)) {
+			return true
+		}
+		if (finalizePaint(event)) {
 			return true
 		}
 		if (finalizeSculpt(event)) {
@@ -2902,6 +3766,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (scatterEraseState && event.pointerId === scatterEraseState.pointerId) {
 			cancelScatterErase()
 			return true
+		}
+		if (isPainting.value) {
+			finalizePaint(event)
 		}
 		if (isSculpting.value) {
 			finalizeSculpt(event)

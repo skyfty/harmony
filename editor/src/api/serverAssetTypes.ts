@@ -32,6 +32,8 @@ export interface ServerAssetDto {
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  createdAt?: string
+  updatedAt?: string
 }
 
 export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
@@ -106,6 +108,8 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
       'terrainScatterPreset' in asset
         ? ((asset.terrainScatterPreset as TerrainScatterCategory | null | undefined) ?? null)
         : undefined,
+    createdAt: typeof asset.createdAt === 'string' ? asset.createdAt : undefined,
+    updatedAt: typeof asset.updatedAt === 'string' ? asset.updatedAt : undefined,
     gleaned: false,
   }
 }

@@ -26,5 +26,7 @@ export interface ProjectAsset {
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  createdAt?: string
+  updatedAt?: string
   gleaned: boolean
 }

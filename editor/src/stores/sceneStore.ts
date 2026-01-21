@@ -168,6 +168,8 @@ import {
 } from '@/utils/lodPreset'
 import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
+import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
+import { fetchResourceAsset } from '@/api/resourceAssets'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -1333,6 +1335,7 @@ function manualDeepClone<T>(source: T): T {
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
   const terrainScatter = manualDeepClone(definition.terrainScatter)
+  const terrainPaint = manualDeepClone(definition.terrainPaint)
   const result: GroundDynamicMesh = {
     type: 'Ground',
     width: definition.width,
@@ -1350,6 +1353,9 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   }
   if (terrainScatter !== undefined) {
     result.terrainScatter = terrainScatter
+  }
+  if (terrainPaint !== undefined) {
+    result.terrainPaint = terrainPaint
   }
   return result
 }
@@ -9835,6 +9841,47 @@ export const useSceneStore = defineStore('scene', {
     async ensureSceneAssetsReady(options: EnsureSceneAssetsOptions = {}) {
       const assetCache = useAssetCacheStore()
       const uiStore = useUiStore()
+
+      const nodesToScan = Array.isArray(options.nodes) ? options.nodes : this.nodes
+      const terrainPaintRefs = new Map<string, string | null>()
+      const collectTerrainPaintRefs = (node: SceneNode) => {
+        const dynamicMesh = node.dynamicMesh
+        if (dynamicMesh && dynamicMesh.type === 'Ground') {
+          const groundMesh = dynamicMesh as GroundDynamicMesh
+          const terrainPaint = groundMesh.terrainPaint ?? null
+          if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks) {
+            Object.values(terrainPaint.chunks).forEach((ref) => {
+              if (!ref || typeof ref.assetId !== 'string' || !ref.assetId.trim().length) {
+                return
+              }
+              const expected = typeof ref.assetUpdatedAt === 'string' ? ref.assetUpdatedAt : null
+              if (!terrainPaintRefs.has(ref.assetId)) {
+                terrainPaintRefs.set(ref.assetId, expected)
+              }
+            })
+          }
+        }
+        if (Array.isArray(node.children)) {
+          node.children.forEach((child) => collectTerrainPaintRefs(child))
+        }
+      }
+
+      nodesToScan.forEach((node) => collectTerrainPaintRefs(node))
+
+      if (terrainPaintRefs.size > 0) {
+        await Promise.allSettled(
+          Array.from(terrainPaintRefs.entries()).map(async ([assetId, expectedUpdatedAt]) => {
+            let asset = this.getAsset(assetId)
+            if (!asset) {
+              const dto = await fetchResourceAsset(assetId)
+              asset = mapServerAssetToProjectAsset(dto)
+            }
+            await assetCache.downloaProjectAsset(asset, {
+              expectedServerUpdatedAt: expectedUpdatedAt ?? asset.updatedAt ?? null,
+            })
+          }),
+        )
+      }
 
       const result = await updateSceneAssets({
         options,
