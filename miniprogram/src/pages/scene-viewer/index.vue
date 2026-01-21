@@ -390,6 +390,11 @@ import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
+  ensureTerrainPaintPreviewInstalled,
+  setTerrainPaintPreviewWeightmapTexture,
+  updateTerrainPaintPreviewLayerTexture,
+} from '@schema/terrainPaintPreview';
+import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
   syncBodyFromObject as syncSharedBodyFromObject,
@@ -918,6 +923,152 @@ const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
+const terrainPaintLayerTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
+const terrainPaintChunkWeightmapRequests = new Map<string, Promise<THREE.Texture | null>>();
+const terrainPaintChunkRefKeys = new Map<string, string>();
+
+async function loadTerrainPaintTextureFromAssetId(
+  assetId: string,
+  options: { colorSpace: 'srgb' | 'none' },
+): Promise<THREE.Texture | null> {
+  const resolved = await resolveAssetUrlFromCache(assetId);
+  if (!resolved?.url) {
+    return null;
+  }
+  try {
+    const texture = await textureLoader.loadAsync(resolved.url);
+    if (options.colorSpace === 'srgb') {
+      (texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace;
+    } else {
+      (texture as any).colorSpace = (THREE as any).NoColorSpace ?? undefined;
+    }
+    texture.needsUpdate = true;
+    return texture;
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to load terrain paint texture', assetId, error);
+    return null;
+  }
+}
+
+function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'): string | null {
+  const layers = Array.isArray(settings?.layers) ? settings.layers : [];
+  const match = layers.find((layer: any) => layer?.channel === channel);
+  const candidate = typeof match?.assetId === 'string' ? match.assetId.trim() : '';
+  return candidate.length ? candidate : null;
+}
+
+function findGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
+  const cached = (groundObject.userData as any)?.groundMaterial as THREE.Material | undefined;
+  if (cached) {
+    return cached;
+  }
+  let found: THREE.Material | null = null;
+  groundObject.traverse((obj) => {
+    if (found) {
+      return;
+    }
+    const mesh = obj as THREE.Mesh;
+    if (!mesh?.isMesh) {
+      return;
+    }
+    const material = mesh.material as any;
+    const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined);
+    if (resolved) {
+      found = resolved;
+    }
+  });
+  if (found) {
+    (groundObject.userData as any).groundMaterial = found;
+  }
+  return found;
+}
+
+function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
+  const settings: any = (dynamicMesh as any)?.terrainPaint ?? null;
+  ensureTerrainPaintPreviewInstalled(groundObject, dynamicMesh, settings);
+  const groundMaterial = findGroundPreviewMaterial(groundObject);
+  if (!groundMaterial) {
+    return;
+  }
+
+  const token = terrainPaintPreviewLoadToken;
+  const layerG = resolveTerrainPaintLayerAssetId(settings, 'g');
+  const layerB = resolveTerrainPaintLayerAssetId(settings, 'b');
+  const layerA = resolveTerrainPaintLayerAssetId(settings, 'a');
+  const layerPairs: Array<{ channel: 'g' | 'b' | 'a'; assetId: string | null }> = [
+    { channel: 'g', assetId: layerG },
+    { channel: 'b', assetId: layerB },
+    { channel: 'a', assetId: layerA },
+  ];
+
+  for (const pair of layerPairs) {
+    if (!pair.assetId) {
+      updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, null);
+      continue;
+    }
+    let pending = terrainPaintLayerTextureRequests.get(pair.assetId);
+    if (!pending) {
+      pending = loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' });
+      terrainPaintLayerTextureRequests.set(pair.assetId, pending);
+    }
+    pending.then((texture) => {
+      if (terrainPaintPreviewLoadToken !== token) {
+        return;
+      }
+      updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, texture);
+    });
+  }
+
+  const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null;
+  if (!chunks) {
+    return;
+  }
+  const visibleChunkKeys = new Set<string>();
+  groundObject.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh?.isMesh) {
+      return;
+    }
+    const chunk = (mesh.userData as any)?.groundChunk;
+    const row = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null;
+    const col = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null;
+    if (row === null || col === null) {
+      return;
+    }
+    visibleChunkKeys.add(`${row}:${col}`);
+  });
+
+  for (const chunkKey of visibleChunkKeys) {
+    const ref = (chunks as any)[chunkKey];
+    const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : '';
+    if (!assetId.length) {
+      terrainPaintChunkRefKeys.delete(chunkKey);
+      setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null);
+      continue;
+    }
+    const updatedAt = typeof ref?.updatedAt === 'string' ? ref.updatedAt : '';
+    const refKey = `${assetId}@${updatedAt}`;
+    if (terrainPaintChunkRefKeys.get(chunkKey) === refKey) {
+      continue;
+    }
+    terrainPaintChunkRefKeys.set(chunkKey, refKey);
+    let pending = terrainPaintChunkWeightmapRequests.get(refKey);
+    if (!pending) {
+      pending = loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'none' });
+      terrainPaintChunkWeightmapRequests.set(refKey, pending);
+    }
+    pending.then((texture) => {
+      if (terrainPaintPreviewLoadToken !== token) {
+        return;
+      }
+      if (terrainPaintChunkRefKeys.get(chunkKey) !== refKey) {
+        return;
+      }
+      setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, texture);
+    });
+  }
+}
+
 function ensureResourceCache(
   document: SceneJsonExportDocument,
   options: SceneGraphBuildOptions,
@@ -1159,6 +1310,7 @@ let environmentMapLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
+let terrainPaintPreviewLoadToken = 0;
 let dynamicGroundCache: { nodeId: string; dynamicMesh: GroundDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
@@ -3047,6 +3199,7 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
+  terrainPaintPreviewLoadToken += 1;
   if (!document) {
     dynamicGroundCache = null;
     return;
@@ -8724,6 +8877,7 @@ function startRenderLoop(
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+            syncTerrainPaintPreviewForGround(groundObject, cachedGround.dynamicMesh);
             if (debugEnabled.value) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

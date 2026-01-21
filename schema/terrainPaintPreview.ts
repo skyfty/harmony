@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from '@harmony/schema'
+import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from './index'
 
 const TERRAIN_PAINT_MATERIAL_KEY = '__harmonyTerrainPaintMaterialV1'
 
@@ -7,7 +7,7 @@ type TerrainPaintShaderState = {
 	shader: any
 	chunkBounds: THREE.Vector4
 	layerTextures: Partial<Record<TerrainPaintChannel, THREE.Texture>>
-	weightmaps: Map<string, THREE.DataTexture>
+	weightmaps: Map<string, THREE.Texture>
 	defaultWeightmap: THREE.DataTexture
 	defaultWhite: THREE.DataTexture
 }
@@ -181,10 +181,8 @@ export function ensureTerrainPaintPreviewInstalled(
 	}
 
 	const state = installShaderHooks(targetMaterial)
-	// Cache back to root so new chunks reuse the patched material.
 	;(root.userData as any).groundMaterial = targetMaterial
 
-	// Install per-mesh uniform binding.
 	root.traverse((obj) => {
 		const mesh = obj as THREE.Mesh
 		if (!mesh?.isMesh) {
@@ -225,6 +223,24 @@ export function ensureTerrainPaintPreviewInstalled(
 	})
 }
 
+export function setTerrainPaintPreviewWeightmapTexture(material: THREE.Material, chunkKey: string, texture: THREE.Texture | null): void {
+	const state = getOrCreateShaderState(material)
+	if (!chunkKey) {
+		return
+	}
+	if (!texture) {
+		state.weightmaps.delete(chunkKey)
+		return
+	}
+	texture.wrapS = THREE.ClampToEdgeWrapping
+	texture.wrapT = THREE.ClampToEdgeWrapping
+	texture.minFilter = THREE.LinearFilter
+	texture.magFilter = THREE.LinearFilter
+	;(texture as any).colorSpace = (THREE as any).NoColorSpace ?? undefined
+	texture.needsUpdate = true
+	state.weightmaps.set(chunkKey, texture)
+}
+
 export function updateTerrainPaintPreviewWeightmap(
 	material: THREE.Material,
 	chunkKey: string,
@@ -234,7 +250,9 @@ export function updateTerrainPaintPreviewWeightmap(
 	const state = getOrCreateShaderState(material)
 	const res = Math.max(1, Math.round(resolution))
 	const bytes = new Uint8Array(data.buffer as unknown as ArrayBuffer)
-	let texture = state.weightmaps.get(chunkKey) ?? null
+	const existing = state.weightmaps.get(chunkKey)
+	const existingData = existing instanceof THREE.DataTexture ? existing : null
+	let texture = existingData
 	if (!texture || texture.image.width !== res || texture.image.height !== res) {
 		texture = new THREE.DataTexture(bytes as unknown as BufferSource, res, res, THREE.RGBAFormat)
 		texture.needsUpdate = true
@@ -257,15 +275,15 @@ export function updateTerrainPaintPreviewLayerTexture(
 ): void {
 	const state = getOrCreateShaderState(material)
 	if (channel === 'r') {
-		// Base is the material itself.
 		return
 	}
 	if (texture) {
 		texture.wrapS = THREE.RepeatWrapping
 		texture.wrapT = THREE.RepeatWrapping
+		;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
 		texture.needsUpdate = true
-		state.layerTextures[channel] = texture
+		;(state.layerTextures as any)[channel] = texture
 		return
 	}
-	delete state.layerTextures[channel]
+	delete (state.layerTextures as any)[channel]
 }

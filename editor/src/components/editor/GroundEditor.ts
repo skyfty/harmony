@@ -52,7 +52,7 @@ import {
 	ensureTerrainPaintPreviewInstalled,
 	updateTerrainPaintPreviewLayerTexture,
 	updateTerrainPaintPreviewWeightmap,
-} from '@/utils/terrainPaintPreview'
+} from '@schema/terrainPaintPreview'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
@@ -532,6 +532,8 @@ type PaintSessionState = {
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
+let paintCommitInFlight: Promise<boolean> | null = null
+let paintCommitQueued = false
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -2122,7 +2124,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const session = paintSessionState
-		paintSessionState = null
 		if (!session.chunkStates.size) {
 			return false
 		}
@@ -2207,6 +2208,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 						serverUpdatedAt: updatedAt,
 					})
 				}
+				chunk.dirty = false
 			}
 			if (token !== paintCommitToken) {
 				return false
@@ -2220,6 +2222,25 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
 		}
+	}
+
+	function schedulePaintCommit(selectedNode: SceneNode | null): void {
+		if (paintCommitInFlight) {
+			paintCommitQueued = true
+			return
+		}
+		paintCommitInFlight = (async () => {
+			try {
+				return await commitPaintSession(selectedNode)
+			} finally {
+				paintCommitInFlight = null
+				if (paintCommitQueued) {
+					paintCommitQueued = false
+					// Use the latest selected node snapshot for the follow-up commit.
+					schedulePaintCommit(options.sceneStore.selectedNode ?? null)
+				}
+			}
+		})()
 	}
 
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -3474,7 +3495,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
-		void commitPaintSession(options.sceneStore.selectedNode ?? null)
+		schedulePaintCommit(options.sceneStore.selectedNode ?? null)
 		return true
 	}
 
