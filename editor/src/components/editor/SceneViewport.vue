@@ -1219,6 +1219,7 @@ const {
   cancelScatterPlacement: cancelGroundEditorScatterPlacement,
   dispose: disposeGroundEditor,
   clearScatterInstances,
+	flushTerrainPaintUploads,
 } = groundEditor
 
 function exitScatterEraseMode() {
@@ -4044,6 +4045,7 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 
 export type SceneViewportHandle = {
   captureScreenshot(mimeType?: string): Promise<Blob | null>
+	flushTerrainPaintUploads(): Promise<boolean>
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
@@ -9480,7 +9482,8 @@ watch(
 )
 
 defineExpose<SceneViewportHandle>({
-  captureScreenshot
+  captureScreenshot,
+  flushTerrainPaintUploads,
 })
 </script>
 

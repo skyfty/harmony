@@ -1429,6 +1429,14 @@ async function saveCurrentSceneWithOptions(options: SaveCurrentSceneOptions = {}
 
   pendingSceneSave = (async () => {
     try {
+      const viewport = viewportRef.value
+      if (viewport?.flushTerrainPaintUploads) {
+        const ok = await viewport.flushTerrainPaintUploads()
+        if (!ok) {
+          console.error('Failed to upload terrain paint weightmaps before saving')
+          return false
+        }
+      }
       const document = await sceneStore.saveActiveScene({force: true})
       if (document && broadcastPreview) {
         void broadcastScenePreview(document)

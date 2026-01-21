@@ -528,12 +528,11 @@ type PaintSessionState = {
 	chunkCells: number
 	settings: TerrainPaintSettings
 	chunkStates: Map<string, PaintChunkState>
+	hasPendingUploads: boolean
 }
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
-let paintCommitInFlight: Promise<boolean> | null = null
-let paintCommitQueued = false
 
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
@@ -1092,6 +1091,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 								chunkCells: resolveGroundChunkCells(definition),
 								settings,
 								chunkStates: new Map(),
+								hasPendingUploads: false,
 							},
 							layer.channel,
 							asset,
@@ -1941,6 +1941,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkCells,
 			settings: cloneOrCreateTerrainPaintSettings(definition),
 			chunkStates: new Map(),
+			hasPendingUploads: false,
 		}
 		const groundObject = getGroundObject()
 		if (groundObject) {
@@ -2114,9 +2115,39 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		if (any) {
+			const becameDirty = !chunk.dirty
 			chunk.dirty = true
 			pushTerrainPaintPreviewWeightmap(session, chunk)
+			if (becameDirty && !session.hasPendingUploads) {
+				session.hasPendingUploads = true
+				options.sceneStore.updateNodeDynamicMesh(session.nodeId, { hasManualEdits: true })
+			}
 		}
+	}
+
+	function hasDirtyPaintChunks(session: PaintSessionState | null): boolean {
+		if (!session) {
+			return false
+		}
+		for (const chunk of session.chunkStates.values()) {
+			if (chunk.dirty) {
+				return true
+			}
+		}
+		return false
+	}
+
+	async function flushTerrainPaintUploads(): Promise<boolean> {
+		for (let attempts = 0; attempts < 16; attempts += 1) {
+			if (!hasDirtyPaintChunks(paintSessionState)) {
+				return true
+			}
+			const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
+			if (!ok && hasDirtyPaintChunks(paintSessionState)) {
+				return false
+			}
+		}
+		return !hasDirtyPaintChunks(paintSessionState)
 	}
 
 	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
@@ -2222,25 +2253,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			console.warn('提交地貌权重贴图失败：', error)
 			return false
 		}
-	}
-
-	function schedulePaintCommit(selectedNode: SceneNode | null): void {
-		if (paintCommitInFlight) {
-			paintCommitQueued = true
-			return
-		}
-		paintCommitInFlight = (async () => {
-			try {
-				return await commitPaintSession(selectedNode)
-			} finally {
-				paintCommitInFlight = null
-				if (paintCommitQueued) {
-					paintCommitQueued = false
-					// Use the latest selected node snapshot for the follow-up commit.
-					schedulePaintCommit(options.sceneStore.selectedNode ?? null)
-				}
-			}
-		})()
 	}
 
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -3495,7 +3507,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		event.preventDefault()
 		event.stopPropagation()
 		event.stopImmediatePropagation()
-		schedulePaintCommit(options.sceneStore.selectedNode ?? null)
 		return true
 	}
 
@@ -3937,6 +3948,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		handleGroundTextureFileChange,
 		handleGroundCancel,
 		refreshGroundMesh,
+		flushTerrainPaintUploads,
 		hasActiveSelection,
 		handleActiveBuildToolChange,
 		dispose,
