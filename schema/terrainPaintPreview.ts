@@ -290,45 +290,59 @@ export function updateTerrainPaintPreviewLayerTexture(
 
 export async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
 	const res = Math.max(1, Math.round(resolution))
-	if (typeof createImageBitmap === 'undefined') {
-		throw new Error('createImageBitmap is not supported in this environment')
+	// Binary fast-path (preferred for persisted terrain paint weightmaps).
+	// Format:
+	// - 4 bytes magic: 'HWP1'
+	// - uint16 little-endian: resolution
+	// - uint32 little-endian: payload byte length
+	// - payload: RGBA bytes (res * res * 4)
+	// Only binary format is supported now.
+	if (blob.type === 'application/octet-stream' || blob.type === 'binary/octet-stream' || blob.type === '') {
+		const expectedLength = res * res * 4
+		const buffer = await blob.arrayBuffer()
+		const bytes = new Uint8Array(buffer)
+		if (bytes.length === expectedLength) {
+			return new Uint8ClampedArray(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + expectedLength))
+		}
+		if (bytes.length >= 10 && bytes[0] === 0x48 && bytes[1] === 0x57 && bytes[2] === 0x50 && bytes[3] === 0x31) {
+			const view = new DataView(buffer)
+			const storedRes = view.getUint16(4, true)
+			const payloadLen = view.getUint32(6, true)
+			const offset = 10
+			if (storedRes !== res) {
+				throw new Error(`Weightmap resolution mismatch: expected ${res}, got ${storedRes}`)
+			}
+			if (payloadLen !== expectedLength) {
+				throw new Error(`Weightmap payload length mismatch: expected ${expectedLength}, got ${payloadLen}`)
+			}
+			if (offset + payloadLen > bytes.length) {
+				throw new Error('Weightmap payload truncated')
+			}
+			const payload = bytes.subarray(offset, offset + payloadLen)
+			return new Uint8ClampedArray(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength))
+		}
 	}
-	const bitmap = await createImageBitmap(blob)
-	const canvas = document.createElement('canvas')
-	canvas.width = res
-	canvas.height = res
-	const ctx = canvas.getContext('2d', { willReadFrequently: true })
-	if (!ctx) {
-		throw new Error('Failed to create 2D Canvas context')
-	}
-	ctx.clearRect(0, 0, res, res)
-	ctx.drawImage(bitmap, 0, 0, res, res)
-	bitmap.close?.()
-	const imageData = ctx.getImageData(0, 0, res, res)
-	return new Uint8ClampedArray(imageData.data)
+	throw new Error('Unsupported weightmap format: only the binary HWP1 weightmap format is supported')
 }
 
-export async function encodeWeightmapToPng(data: Uint8ClampedArray, resolution: number): Promise<Blob> {
+export function encodeWeightmapToBinary(data: Uint8ClampedArray, resolution: number): Blob {
 	const res = Math.max(1, Math.round(resolution))
-	const canvas = document.createElement('canvas')
-	canvas.width = res
-	canvas.height = res
-	const ctx = canvas.getContext('2d')
-	if (!ctx) {
-		throw new Error('Failed to create 2D Canvas context')
+	const expectedLength = res * res * 4
+	const src = new Uint8Array(data.buffer as unknown as ArrayBuffer, data.byteOffset, data.byteLength)
+	if (src.byteLength !== expectedLength) {
+		throw new Error(`Weightmap byte length mismatch: expected ${expectedLength}, got ${src.byteLength}`)
 	}
-	const imageData = ctx.createImageData(res, res)
-	imageData.data.set(data)
-	ctx.putImageData(imageData, 0, 0)
-	return new Promise((resolve, reject) => {
-		canvas.toBlob((blob) => {
-			if (blob) {
-				resolve(blob)
-			} else {
-				reject(new Error('Failed to encode weightmap to PNG'))
-			}
-		}, 'image/png')
-	})
+	const headerSize = 10
+	const out = new Uint8Array(headerSize + expectedLength)
+	out[0] = 0x48 // H
+	out[1] = 0x57 // W
+	out[2] = 0x50 // P
+	out[3] = 0x31 // 1
+	const view = new DataView(out.buffer)
+	view.setUint16(4, res, true)
+	view.setUint32(6, expectedLength, true)
+	out.set(src, headerSize)
+	return new Blob([out], { type: 'application/octet-stream' })
 }
 
 export type AssetLoader = (assetId: string) => Promise<Blob | null>

@@ -63,8 +63,10 @@ import { updateGroundChunks } from '@schema/groundMesh'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	ensureTerrainPaintPreviewInstalled,
+	decodeWeightmapToData,
 	setTerrainPaintPreviewWeightmapTexture,
 	updateTerrainPaintPreviewLayerTexture,
+	updateTerrainPaintPreviewWeightmap,
 } from '@schema/terrainPaintPreview'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -904,7 +906,7 @@ const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
 const terrainPaintLayerTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
-const terrainPaintChunkWeightmapRequests = new Map<string, Promise<THREE.Texture | null>>()
+const terrainPaintChunkWeightmapRequests = new Map<string, Promise<Uint8ClampedArray | null>>()
 const terrainPaintChunkRefKeys = new Map<string, string>()
 
 async function loadTerrainPaintTextureFromAssetId(
@@ -926,6 +928,24 @@ async function loadTerrainPaintTextureFromAssetId(
 		return texture
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to load terrain paint texture', assetId, error)
+		return null
+	}
+}
+
+async function loadTerrainPaintWeightmapDataFromAssetId(assetId: string, resolution: number): Promise<Uint8ClampedArray | null> {
+	const resolved = await resolveAssetUrlFromCache(assetId)
+	if (!resolved?.url) {
+		return null
+	}
+	try {
+		const response = await fetch(resolved.url, { credentials: 'include' })
+		if (!response.ok) {
+			return null
+		}
+		const blob = await response.blob()
+		return await decodeWeightmapToData(blob, resolution)
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to load terrain paint weightmap', assetId, error)
 		return null
 	}
 }
@@ -1033,17 +1053,21 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 		terrainPaintChunkRefKeys.set(chunkKey, refKey)
 		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
 		if (!pending) {
-			pending = loadTerrainPaintTextureFromAssetId(logicalId, { colorSpace: 'none' })
+			pending = loadTerrainPaintWeightmapDataFromAssetId(logicalId, settings.weightmapResolution)
 			terrainPaintChunkWeightmapRequests.set(refKey, pending)
 		}
-		pending.then((texture) => {
+		pending.then((data) => {
 			if (terrainPaintPreviewLoadToken !== token) {
 				return
 			}
 			if (terrainPaintChunkRefKeys.get(chunkKey) !== refKey) {
 				return
 			}
-			setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, texture)
+			if (data) {
+				updateTerrainPaintPreviewWeightmap(groundMaterial, chunkKey, data, settings.weightmapResolution)
+			} else {
+				setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null)
+			}
 		})
 	}
 }

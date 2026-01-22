@@ -54,7 +54,7 @@ import {
 	updateTerrainPaintPreviewLayerTexture,
 	updateTerrainPaintPreviewWeightmap,
 	decodeWeightmapToData,
-	encodeWeightmapToPng,
+	encodeWeightmapToBinary,
 } from '@schema/terrainPaintPreview'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
@@ -2461,19 +2461,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (token !== paintCommitToken) {
 					return false
 				}
-				const pngBlob = await encodeWeightmapToPng(chunk.data, chunk.resolution)
-				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.png`
-				const logicalId = await computeBlobHash(pngBlob)
+				const weightmapBlob = encodeWeightmapToBinary(chunk.data, chunk.resolution)
+				const filename = `terrain-weightmap_${session.nodeId}_${chunk.key}.bin`
+				const logicalId = await computeBlobHash(weightmapBlob)
 				await cache.storeAssetBlob(logicalId, {
-					blob: pngBlob,
-					mimeType: 'image/png',
+					blob: weightmapBlob,
+					mimeType: 'application/octet-stream',
 					filename,
 				})
 				options.sceneStore.registerAsset(
 					{
 						id: logicalId,
 						name: filename,
-						type: 'texture',
+						type: 'file',
 						downloadUrl: logicalId,
 						previewColor: '#ffffff',
 						thumbnail: null,
