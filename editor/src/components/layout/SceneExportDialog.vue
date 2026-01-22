@@ -78,21 +78,6 @@ watch(
   },
 )
 
-function formatByteSize(value: number | null | undefined): string {
-  if (!value || value <= 0) {
-    return '0 B'
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = value
-  let index = 0
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024
-    index += 1
-  }
-  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
-  return `${size.toFixed(digits)} ${units[index]}`
-}
-
 function sanitizeInputName(input: string): string {
   const trimmed = (input ?? '').trim()
   if (!trimmed) {

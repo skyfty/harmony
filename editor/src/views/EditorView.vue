@@ -59,7 +59,6 @@ import type {
   BehaviorEventType,
   SceneBehavior,
   SceneNodeComponentState,
-  SceneResourceSummary,
 } from '@harmony/schema'
 import type { Project } from '@harmony/schema'
 
@@ -128,9 +127,6 @@ const exportPreferences = ref<SceneExportOptions>({
   lazyLoadMeshes: true,
   format: 'json',
 })
-const exportSummaryLoading = ref(false)
-const exportResourceSummary = ref<SceneResourceSummary | null>(null)
-let pendingExportSummary: Promise<SceneResourceSummary | null> | null = null
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isNewProjectDialogOpen = ref(false)
@@ -244,30 +240,6 @@ type BehaviorDetailsContext = {
   actions: BehaviorActionDefinition[]
   sequenceId: string
   nodeId: string | null
-}
-
-function formatByteSize(value: number | null | undefined): string {
-  if (!value || value <= 0) {
-    return '0 B'
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = value
-  let index = 0
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024
-    index += 1
-  }
-  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
-  return `${size.toFixed(digits)} ${units[index]}`
-}
-
-async function refreshExportSummary(force = false): Promise<SceneResourceSummary | null> {
-  // Resource summary calculation removed — keep a no-op that clears loading state
-  if (force) {
-    exportResourceSummary.value = null
-  }
-  exportSummaryLoading.value = false
-  return null
 }
 
 const behaviorDetailsState = reactive({

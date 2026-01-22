@@ -437,6 +437,7 @@ function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
 type AssetRegistrationOptions = {
   categoryIdForAsset: (asset: ProjectAsset) => string
   sourceForAsset: (asset: ProjectAsset) => AssetSourceMetadata | undefined
+  internalForAsset: (asset: ProjectAsset) => boolean
 }
 
 function upsertAssetsIntoCatalogAndIndex(
@@ -465,6 +466,7 @@ function upsertAssetsIntoCatalogAndIndex(
 
     const categoryId = options.categoryIdForAsset(asset)
     const source = options.sourceForAsset(asset)
+    const internal = options.internalForAsset(asset)
 
     const existingEntry = nextIndex[assetId]
     if (existingEntry?.categoryId && nextCatalog[existingEntry.categoryId]) {
@@ -478,6 +480,7 @@ function upsertAssetsIntoCatalogAndIndex(
     nextIndex[assetId] = {
       categoryId,
       source,
+      internal,
     }
 
     registeredAssets.push(registeredAsset)
@@ -485,6 +488,20 @@ function upsertAssetsIntoCatalogAndIndex(
   })
 
   return { nextCatalog, nextIndex, registeredAssets, sourceByAssetId }
+}
+
+function buildVisibleAssetCatalog(
+  catalog: Record<string, ProjectAsset[]>,
+  assetIndex: Record<string, AssetIndexEntry> | undefined,
+): Record<string, ProjectAsset[]> {
+  if (!assetIndex) {
+    return catalog
+  }
+  const next: Record<string, ProjectAsset[]> = {}
+  Object.entries(catalog).forEach(([categoryId, list]) => {
+    next[categoryId] = (list ?? []).filter((asset) => !assetIndex[asset.id]?.internal)
+  })
+  return next
 }
 
 function normalizeRemoteCandidate(value: string | null | undefined): string | null {
@@ -6062,6 +6079,16 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
       terrainScatter?: TerrainScatterStoreSnapshot | null
     }
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
+
+    const terrainPaint: any = (definition as any)?.terrainPaint
+    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+      Object.values(terrainPaint.chunks).forEach((ref: any) => {
+        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+        if (logicalId) {
+          bucket.add(logicalId)
+        }
+      })
+    }
   }
   if (node.children?.length) {
     node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
@@ -6190,6 +6217,7 @@ function filterAssetIndexByUsage(
     filtered[assetId] = {
       categoryId: entry.categoryId,
       source: entry.source ? { ...entry.source } : undefined,
+      internal: entry.internal,
     }
   })
   return filtered
@@ -7667,7 +7695,7 @@ export const useSceneStore = defineStore('scene', {
       packageAssetMap: {},
       packageDirectoryCache,
       packageDirectoryLoaded: {},
-      projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
+      projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
@@ -10096,7 +10124,10 @@ export const useSceneStore = defineStore('scene', {
     },
     // Helper: rebuild project tree from current catalog + package directory cache
     refreshProjectTree() {
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.projectTree = createProjectTreeFromCache(
+        buildVisibleAssetCatalog(this.assetCatalog, this.assetIndex),
+        this.packageDirectoryCache,
+      )
     },
     // Helper: ensure active directory and selected asset are valid in the current projectTree
     ensureActiveDirectoryAndSelectionValid() {
@@ -10247,6 +10278,7 @@ export const useSceneStore = defineStore('scene', {
       options: {
         categoryId?: string | ((asset: ProjectAsset) => string)
         source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+        internal?: boolean | ((asset: ProjectAsset) => boolean)
         commitOptions?: { updateNodes?: boolean }
       } = {},
     ): ProjectAsset[] {
@@ -10272,11 +10304,18 @@ export const useSceneStore = defineStore('scene', {
         return options.source
       }
 
+      const internalForAsset = (asset: ProjectAsset): boolean => {
+        if (typeof options.internal === 'function') {
+          return Boolean(options.internal(asset))
+        }
+        return Boolean(options.internal)
+      }
+
       const { nextCatalog, nextIndex, registeredAssets, sourceByAssetId } = upsertAssetsIntoCatalogAndIndex(
         this.assetCatalog,
         this.assetIndex,
         normalizedAssets,
-        { categoryIdForAsset, sourceForAsset },
+        { categoryIdForAsset, sourceForAsset, internalForAsset },
       )
 
       if (!registeredAssets.length) {
@@ -10294,10 +10333,15 @@ export const useSceneStore = defineStore('scene', {
 
     registerAsset(
       asset: ProjectAsset,
-      options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean } } = {},
+      options: { categoryId?: string; source?: AssetSourceMetadata; internal?: boolean; commitOptions?: { updateNodes?: boolean } } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
-      const registered = this.registerAssets([asset], { categoryId, source: options.source, commitOptions: options.commitOptions })
+      const registered = this.registerAssets([asset], {
+        categoryId,
+        source: options.source,
+        internal: options.internal,
+        commitOptions: options.commitOptions,
+      })
       return registered[0] ?? { ...asset }
     },
     async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {

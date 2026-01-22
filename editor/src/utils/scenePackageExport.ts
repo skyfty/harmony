@@ -1,11 +1,12 @@
 import { zipSync, strToU8 } from 'fflate'
-import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig, SceneNode } from '@harmony/schema'
+import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@harmony/schema'
 import {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
 } from '@harmony/schema'
+import { inferExtFromMimeType } from '@harmony/schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 export type ScenePackageExportScene = {
@@ -13,30 +14,15 @@ export type ScenePackageExportScene = {
   document: SceneJsonExportDocument
 }
 
-function collectTerrainWeightmapLogicalIdsFromNodes(nodes: SceneNode[], out: Set<string>) {
-  for (const node of nodes) {
-    const dynamicMesh: any = (node as any)?.dynamicMesh
-    if (dynamicMesh?.type === 'Ground') {
-      const terrainPaint = dynamicMesh?.terrainPaint
-      if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
-        Object.values(terrainPaint.chunks).forEach((ref: any) => {
-          const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
-          if (logicalId) {
-            out.add(logicalId)
-          }
-        })
-      }
-    }
-    if (Array.isArray((node as any)?.children) && (node as any).children.length) {
-      collectTerrainWeightmapLogicalIdsFromNodes((node as any).children as SceneNode[], out)
-    }
-  }
-}
+// inferExtFromMimeType moved to @harmony/schema (assetTypeConversion)
 
-function collectTerrainWeightmapLogicalIds(document: SceneJsonExportDocument): Set<string> {
-  const out = new Set<string>()
-  collectTerrainWeightmapLogicalIdsFromNodes(document.nodes ?? [], out)
-  return out
+function inferExtFromFilename(filename: string | null | undefined): string | null {
+  const raw = typeof filename === 'string' ? filename.trim() : ''
+  if (!raw) return null
+  const dot = raw.lastIndexOf('.')
+  if (dot <= 0 || dot >= raw.length - 1) return null
+  const ext = raw.slice(dot + 1).toLowerCase().trim()
+  return ext.length ? ext : null
 }
 
 function jsonBytes(value: unknown): Uint8Array {
@@ -46,6 +32,11 @@ function jsonBytes(value: unknown): Uint8Array {
 export async function exportScenePackageZip(payload: {
   project: ProjectExportBundleProjectConfig
   scenes: ScenePackageExportScene[]
+  /**
+   * Referenced local asset ids (IndexedDB-backed), typically derived from scene.assetIndex + collectSceneAssetReferences.
+   * These will be packed into the ZIP under `resources/localAsset/`.
+   */
+  localAssetIds?: string[]
   updateProgress?: (value: number, message?: string) => void
 }): Promise<Blob> {
   const createdAt = new Date().toISOString()
@@ -65,39 +56,36 @@ export async function exportScenePackageZip(payload: {
     manifestScenes.push({ sceneId: scene.id, path: scenePath })
   }
 
-  // resources
-  const weightmapIds = new Set<string>()
-  payload.scenes.forEach((scene) => {
-    collectTerrainWeightmapLogicalIds(scene.document).forEach((id) => weightmapIds.add(id))
-  })
-
+  // resources (referenced local assets)
   const assetCache = useAssetCacheStore()
   const resources: ScenePackageResourceEntry[] = []
-  const weightmapList = Array.from(weightmapIds.values())
-  for (let index = 0; index < weightmapList.length; index += 1) {
-    const logicalId = weightmapList[index]!
-    const ratio = weightmapList.length ? (index + 1) / weightmapList.length : 1
-    payload.updateProgress?.(85 + Math.round(10 * ratio), `打包地形权重贴图… (${index + 1}/${weightmapList.length})`)
+  const localAssetIds = Array.from(
+    new Set((payload.localAssetIds ?? []).map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)),
+  )
+  for (let index = 0; index < localAssetIds.length; index += 1) {
+    const assetId = localAssetIds[index]!
+    const ratio = localAssetIds.length ? (index + 1) / localAssetIds.length : 1
+    payload.updateProgress?.(85 + Math.round(10 * ratio), `打包本地资产… (${index + 1}/${localAssetIds.length})`)
 
-    let entry = assetCache.getEntry(logicalId)
+    let entry = assetCache.getEntry(assetId)
     if (entry.status !== 'cached' || !entry.blob) {
-      await assetCache.loadFromIndexedDb(logicalId)
-      entry = assetCache.getEntry(logicalId)
+      await assetCache.loadFromIndexedDb(assetId)
+      entry = assetCache.getEntry(assetId)
     }
     if (entry.status !== 'cached' || !entry.blob) {
-      throw new Error(`缺少地形权重贴图资源（logicalId=${logicalId}），请先保存场景后再导出`)
+      throw new Error(`缺少本地资产资源（assetId=${assetId}），请先确保本地资产已写入 IndexedDB 后再导出`)
     }
 
     const blob = entry.blob
     const bytes = new Uint8Array(await blob.arrayBuffer())
-    const ext = 'png'
-    const mimeType = entry.mimeType ?? blob.type ?? 'image/png'
-    const path = `resources/terrainWeightmap/${logicalId}.${ext}`
+    const mimeType = entry.mimeType ?? blob.type ?? 'application/octet-stream'
+    const ext = inferExtFromFilename(entry.filename) ?? inferExtFromMimeType(mimeType)
+    const path = `resources/localAsset/${assetId}.${ext}`
 
     files[path] = bytes
     resources.push({
-      logicalId,
-      resourceType: 'terrainWeightmap',
+      logicalId: assetId,
+      resourceType: 'localAsset',
       path,
       ext,
       mimeType,

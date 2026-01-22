@@ -2,6 +2,7 @@ export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
 export const SCENE_PACKAGE_VERSION = 1 as const;
 
 export type ScenePackageResourceType =
+  | 'localAsset'
   | 'terrainWeightmap'
   | 'lightmap'
   | 'navmesh'

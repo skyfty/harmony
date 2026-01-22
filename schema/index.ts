@@ -363,6 +363,8 @@ export type AssetSourceMetadata =
 export interface AssetIndexEntry {
   categoryId: string
   source?: AssetSourceMetadata
+  /** Internal assets are managed by the editor/runtime and should not be shown in user-facing asset lists. */
+  internal?: boolean
 }
 
 export interface SceneOutlineMesh {

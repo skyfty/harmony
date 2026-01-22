@@ -2200,6 +2200,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					mimeType: 'image/png',
 					filename,
 				})
+				options.sceneStore.registerAsset(
+					{
+						id: logicalId,
+						name: filename,
+						type: 'texture',
+						downloadUrl: logicalId,
+						previewColor: '#ffffff',
+						thumbnail: null,
+						description: `Terrain weightmap (${session.nodeId}:${chunk.key})`,
+						gleaned: true,
+					},
+					{
+						source: { type: 'local' },
+						internal: true,
+						commitOptions: { updateNodes: false },
+					},
+				)
 				session.settings.chunks[chunk.key] = {
 					logicalId,
 				}
