@@ -490,6 +490,8 @@ type PaintSessionState = {
 	settings: TerrainPaintSettings
 	chunkStates: Map<string, PaintChunkState>
 	hasPendingChanges: boolean
+	terrainPaintPreviewPendingChunkKeys: Map<string, true>
+	terrainPaintPreviewFlushRafId: number | null
 }
 
 let paintSessionState: PaintSessionState | null = null
@@ -502,6 +504,81 @@ const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
 // Safety cap to avoid runaway interactive placement on tiny assets / huge brushes.
 // Keep this high so densityPercent remains proportional for common use-cases.
 const SCATTER_MAX_INSTANCES_PER_STAMP = 20000
+
+// Performance caps for interactive terrain paint.
+const TERRAIN_PAINT_STAMP_AFFECTED_CHUNKS_MAX = 64
+const TERRAIN_PAINT_PREVIEW_FLUSH_CHUNKS_MAX = 64
+
+function collectPaintChunksOverlappedByBrush(
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+	localX: number,
+	localZ: number,
+	radius: number,
+): Array<{ key: string; chunkRow: number; chunkColumn: number }> {
+	if (!Number.isFinite(radius) || radius <= 0) {
+		return []
+	}
+	const chunkCellCount = Math.max(1, Math.round(chunkCells))
+	const halfWidth = definition.width * 0.5
+	const halfDepth = definition.depth * 0.5
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	const r2 = radius * radius
+
+	const minColumnUnclamped = Math.floor((localX - radius + halfWidth) / cellSize)
+	const maxColumnUnclamped = Math.ceil((localX + radius + halfWidth) / cellSize)
+	const minRowUnclamped = Math.floor((localZ - radius + halfDepth) / cellSize)
+	const maxRowUnclamped = Math.ceil((localZ + radius + halfDepth) / cellSize)
+
+	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
+	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+
+	const minChunkColumn = Math.floor(minColumn / chunkCellCount)
+	const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)
+	const minChunkRow = Math.floor(minRow / chunkCellCount)
+	const maxChunkRow = Math.floor(maxRow / chunkCellCount)
+
+	const candidates: Array<{ key: string; chunkRow: number; chunkColumn: number; distSq: number }> = []
+	for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+		for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+			const bounds = resolvePaintChunkBounds(definition, chunkCellCount, chunkRow, chunkColumn)
+			if (!bounds) {
+				continue
+			}
+			const x0 = bounds.minX
+			const x1 = bounds.minX + bounds.width
+			const z0 = bounds.minZ
+			const z1 = bounds.minZ + bounds.depth
+			const qx = THREE.MathUtils.clamp(localX, x0, x1)
+			const qz = THREE.MathUtils.clamp(localZ, z0, z1)
+			const dx = localX - qx
+			const dz = localZ - qz
+			const distSq = dx * dx + dz * dz
+			if (distSq > r2) {
+				continue
+			}
+			candidates.push({
+				key: `${chunkRow}:${chunkColumn}`,
+				chunkRow,
+				chunkColumn,
+				distSq,
+			})
+		}
+	}
+
+	if (!candidates.length) {
+		return []
+	}
+
+	// Performance cap: only process the closest chunk bounds.
+	candidates.sort((a, b) => a.distSq - b.distSq)
+	const limited = candidates.length > TERRAIN_PAINT_STAMP_AFFECTED_CHUNKS_MAX
+		? candidates.slice(0, TERRAIN_PAINT_STAMP_AFFECTED_CHUNKS_MAX)
+		: candidates
+	return limited.map((entry) => ({ key: entry.key, chunkRow: entry.chunkRow, chunkColumn: entry.chunkColumn }))
+}
 
 function getScatterChunkKeyFromLocal(
 	definition: GroundDynamicMesh,
@@ -1057,7 +1134,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 								chunkCells: resolveGroundChunkCells(definition),
 								settings,
 								chunkStates: new Map(),
-												hasPendingChanges: false,
+									hasPendingChanges: false,
+									terrainPaintPreviewPendingChunkKeys: new Map(),
+									terrainPaintPreviewFlushRafId: null,
 							},
 							layer.channel,
 							asset,
@@ -1680,6 +1759,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.settings = cloneOrCreateTerrainPaintSettings(definition)
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
+		session.terrainPaintPreviewPendingChunkKeys.clear()
+		if (session.terrainPaintPreviewFlushRafId !== null) {
+			window.cancelAnimationFrame(session.terrainPaintPreviewFlushRafId)
+			session.terrainPaintPreviewFlushRafId = null
+		}
 		ensureTerrainPaintPreviewInstalled(groundMesh, definition, session.settings)
 
 		const catalogMap = options.sceneStore.collectCatalogAssetMap()
@@ -2258,6 +2342,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			settings: cloneOrCreateTerrainPaintSettings(definition),
 			chunkStates: new Map(),
 			hasPendingChanges: false,
+			terrainPaintPreviewPendingChunkKeys: new Map(),
+			terrainPaintPreviewFlushRafId: null,
 		}
 		const groundObject = getGroundObject()
 		if (groundObject) {
@@ -2300,19 +2386,70 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return Array.from(found)
 	}
 
-	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
+	function scheduleTerrainPaintPreviewFlush(session: PaintSessionState): void {
+		if (session.terrainPaintPreviewFlushRafId !== null) {
+			return
+		}
+		session.terrainPaintPreviewFlushRafId = window.requestAnimationFrame(() => {
+			session.terrainPaintPreviewFlushRafId = null
+			flushTerrainPaintPreview(session)
+		})
+	}
+
+	function enqueueTerrainPaintPreviewChunkKey(session: PaintSessionState, chunkKey: string): void {
+		const trimmed = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+		if (!trimmed) {
+			return
+		}
+		// LRU behavior: re-insert to update recency.
+		if (session.terrainPaintPreviewPendingChunkKeys.has(trimmed)) {
+			session.terrainPaintPreviewPendingChunkKeys.delete(trimmed)
+		}
+		session.terrainPaintPreviewPendingChunkKeys.set(trimmed, true)
+		while (session.terrainPaintPreviewPendingChunkKeys.size > TERRAIN_PAINT_PREVIEW_FLUSH_CHUNKS_MAX) {
+			const oldest = session.terrainPaintPreviewPendingChunkKeys.keys().next().value as string | undefined
+			if (!oldest) {
+				break
+			}
+			session.terrainPaintPreviewPendingChunkKeys.delete(oldest)
+		}
+		scheduleTerrainPaintPreviewFlush(session)
+	}
+
+	function flushTerrainPaintPreview(session: PaintSessionState): void {
+		// Session may have been replaced due to scene/node switching.
+		if (paintSessionState !== session) {
+			return
+		}
+		if (!session.terrainPaintPreviewPendingChunkKeys.size) {
+			return
+		}
 		const groundObject = getGroundObject()
 		if (!groundObject) {
+			session.terrainPaintPreviewPendingChunkKeys.clear()
 			return
 		}
 		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
 		const materials = getGroundPreviewMaterials(groundObject)
 		if (!materials.length) {
+			session.terrainPaintPreviewPendingChunkKeys.clear()
 			return
 		}
-		materials.forEach((material) => {
-			updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
-		})
+		const keys = Array.from(session.terrainPaintPreviewPendingChunkKeys.keys())
+		session.terrainPaintPreviewPendingChunkKeys.clear()
+		for (const key of keys) {
+			const chunk = session.chunkStates.get(key)
+			if (!chunk) {
+				continue
+			}
+			materials.forEach((material) => {
+				updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+			})
+		}
+	}
+
+	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
+		enqueueTerrainPaintPreviewChunkKey(session, chunk.key)
 	}
 
 	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
@@ -3728,23 +3865,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			steps = Math.min(96, steps)
 		}
 
+		const paintAsset = options.paintAsset.value
+		if (!paintAsset) {
+			return
+		}
+		const session = ensurePaintSession(definition, groundNode.id)
+		const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
+		if (!channel) {
+			// No available channel slot (G/B/A) for new layers.
+			return
+		}
+		// Best-effort: ensure the layer texture is visible during painting.
+		void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
+
 		for (let i = 0; i < steps; i += 1) {
 			const t = steps <= 1 ? 1 : (i + 1) / steps
 			const point = prev && paintStrokePointerId === event.pointerId
 				? paintStrokePrevPointHelper.clone().lerp(paintStrokeNextPointHelper, t)
 				: localPoint
-			const paintAsset = options.paintAsset.value
-			if (!paintAsset) {
-				continue
-			}
-			const session = ensurePaintSession(definition, groundNode.id)
-			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
-			if (!channel) {
-				// No available channel slot (G/B/A) for new layers.
-				continue
-			}
-			// Best-effort: ensure the layer texture is visible during painting.
-			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
 			const stamp: TerrainPaintStampRequest = {
 				localX: point.x,
 				localZ: point.z,
@@ -3752,13 +3890,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				strength: clamp01(options.brushStrength.value),
 				channelIndex: channelToIndex(channel),
 			}
-			const chunkInfo = getScatterChunkKeyFromLocal(definition, session.chunkCells, point.x, point.z)
-			const chunkState = ensurePaintChunkState(session, chunkInfo)
-			if (chunkState.status === 'loading') {
-				chunkState.pendingStamps.push(stamp)
-				continue
+			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
+			for (const chunkInfo of chunks) {
+				const chunkState = ensurePaintChunkState(session, chunkInfo)
+				if (chunkState.status === 'loading') {
+					chunkState.pendingStamps.push(stamp)
+					continue
+				}
+				applyPaintStampToChunk(session, chunkState, stamp)
 			}
-			applyPaintStampToChunk(session, chunkState, stamp)
 		}
 
 		paintStrokePointerId = event.pointerId
