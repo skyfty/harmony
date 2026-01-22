@@ -50,6 +50,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { computeBlobHash } from '@/utils/blob'
 import {
 	ensureTerrainPaintPreviewInstalled,
+	loadTerrainPaintAssets,
 	updateTerrainPaintPreviewLayerTexture,
 	updateTerrainPaintPreviewWeightmap,
 	decodeWeightmapToData,
@@ -1442,20 +1443,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function collectVisibleTerrainPaintChunks(groundObject: THREE.Object3D): Array<{ key: string; chunkRow: number; chunkColumn: number }> {
 		const result: Array<{ key: string; chunkRow: number; chunkColumn: number }> = []
 		const seen = new Set<string>()
-		for (const child of groundObject.children) {
-			const chunk = (child as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
+		groundObject.traverse((obj) => {
+			if (obj === groundObject) {
+				return
+			}
+			const chunk = (obj as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
 			const chunkRow = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null
 			const chunkColumn = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null
 			if (chunkRow == null || chunkColumn == null) {
-				continue
+				return
 			}
 			const key = `${chunkRow}:${chunkColumn}`
 			if (seen.has(key)) {
-				continue
+				return
 			}
 			seen.add(key)
 			result.push({ key, chunkRow, chunkColumn })
-		}
+		})
 		return result
 	}
 
@@ -1507,6 +1511,92 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
+	async function loadTerrainPaintAssetsForChunkKeys(
+		groundMesh: THREE.Object3D,
+		definition: GroundDynamicMesh,
+		settings: TerrainPaintSettings,
+		chunkKeys: Iterable<string>,
+		tokenSnapshot: number,
+	): Promise<void> {
+		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			return
+		}
+
+		const subsetChunks: NonNullable<TerrainPaintSettings['chunks']> = {}
+		for (const key of chunkKeys) {
+			const trimmed = typeof key === 'string' ? key.trim() : ''
+			if (!trimmed) {
+				continue
+			}
+			const ref = settings.chunks?.[trimmed]
+			if (ref) {
+				subsetChunks[trimmed] = ref
+			}
+		}
+
+		const subsetSettings: TerrainPaintSettings = {
+			...settings,
+			chunks: subsetChunks,
+		}
+
+		await loadTerrainPaintAssets(
+			groundMesh,
+			definition,
+			subsetSettings,
+			async (assetId) => {
+				const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+				if (!trimmed) {
+					return null
+				}
+				try {
+					const restored = await assetCacheStore.loadFromIndexedDb(trimmed)
+					if (restored?.status === 'cached' && restored.blob) {
+						return restored.blob
+					}
+				} catch (error) {
+					/* noop */
+				}
+				const embedded = options.sceneStore.packageAssetMap?.[`local::${trimmed}`]
+				if (typeof embedded === 'string' && embedded.startsWith('data:')) {
+					try {
+						const response = await fetch(embedded)
+						if (response.ok) {
+							return await response.blob()
+						}
+					} catch (error) {
+						/* noop */
+					}
+				}
+				return null
+			},
+			async (assetId) => {
+				const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+				if (!trimmed) {
+					return null
+				}
+				const asset = options.sceneStore.getAsset(trimmed)
+				if (asset) {
+					return await loadTerrainPaintLayerTexture(asset)
+				}
+				const mappedUrl = options.sceneStore.packageAssetMap?.[`url::${trimmed}`]
+				if (typeof mappedUrl === 'string' && mappedUrl.trim().length) {
+					const pseudoAsset: ProjectAsset = {
+						id: trimmed,
+						name: trimmed,
+						type: 'texture',
+						downloadUrl: mappedUrl,
+						previewColor: '#ffffff',
+						thumbnail: null,
+						description: undefined,
+						gleaned: true,
+					}
+					return await loadTerrainPaintLayerTexture(pseudoAsset)
+				}
+				return null
+			},
+		)
+	}
+
 	function applyTerrainPaintForChunkKey(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
 		const ref = session.settings.chunks?.[chunk.key] ?? null
 		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
@@ -1539,6 +1629,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		const visibleChunks = collectVisibleTerrainPaintChunks(groundMesh)
+		// Load paint assets for the current scene so preview can render after reload.
+		// We intentionally only load streamed-in (visible) chunks for performance.
+		await loadTerrainPaintAssetsForChunkKeys(
+			groundMesh,
+			definition,
+			session.settings,
+			visibleChunks.map((chunk) => chunk.key),
+			tokenSnapshot,
+		)
+		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			return
+		}
+
 		const nextVisibleKeys = new Set<string>()
 		for (const chunk of visibleChunks) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
@@ -1595,7 +1698,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
 				return
 			}
+			// Load weightmaps for newly streamed-in chunks.
+			// We keep this separate from ensurePaintChunkState so preview updates immediately.
+			// (The paint session state is still initialized via applyTerrainPaintForChunkKey below.)
 			applyTerrainPaintForChunkKey(session, chunk)
+		}
+
+		if (newlyVisible.length) {
+			await loadTerrainPaintAssetsForChunkKeys(
+				groundMesh,
+				definition,
+				session.settings,
+				newlyVisible.map((chunk) => chunk.key),
+				tokenSnapshot,
+			)
+			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+				return
+			}
 		}
 		lastVisibleTerrainPaintChunkKeys = nextVisibleKeys
 	}
