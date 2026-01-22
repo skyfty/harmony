@@ -957,37 +957,13 @@ function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'
 	return candidate.length ? candidate : null
 }
 
-function findGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
-	const cached = (groundObject.userData as any)?.groundMaterial as THREE.Material | undefined
-	if (cached) {
-		return cached
-	}
-	let found: THREE.Material | null = null
-	groundObject.traverse((obj) => {
-		if (found) {
-			return
-		}
-		const mesh = obj as THREE.Mesh
-		if (!mesh?.isMesh) {
-			return
-		}
-		const material = mesh.material
-		const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined)
-		if (resolved) {
-			found = resolved
-		}
-	})
-	if (found) {
-		;(groundObject.userData as any).groundMaterial = found
-	}
-	return found
-}
-
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
 	const settings: any = (dynamicMesh as any)?.terrainPaint ?? null
 	ensureTerrainPaintPreviewInstalled(groundObject, dynamicMesh, settings)
-	const groundMaterial = findGroundPreviewMaterial(groundObject)
-	if (!groundMaterial) {
+	const cachedMaterials = (groundObject.userData as any)?.groundMaterials as THREE.Material[] | undefined
+	const cachedMaterial = (groundObject.userData as any)?.groundMaterial as THREE.Material | undefined
+	const targets = (cachedMaterials && cachedMaterials.length ? cachedMaterials : cachedMaterial ? [cachedMaterial] : []) as THREE.Material[]
+	if (!targets.length) {
 		return
 	}
 
@@ -1003,7 +979,9 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 
 	for (const pair of layerPairs) {
 		if (!pair.assetId) {
-			updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, null)
+			targets.forEach((target) => {
+				updateTerrainPaintPreviewLayerTexture(target, pair.channel, null)
+			})
 			continue
 		}
 		let pending = terrainPaintLayerTextureRequests.get(pair.assetId)
@@ -1015,7 +993,9 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 			if (terrainPaintPreviewLoadToken !== token) {
 				return
 			}
-			updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, texture)
+			targets.forEach((target) => {
+				updateTerrainPaintPreviewLayerTexture(target, pair.channel, texture)
+			})
 		})
 	}
 
@@ -1043,7 +1023,9 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 		const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
 		if (!logicalId.length) {
 			terrainPaintChunkRefKeys.delete(chunkKey)
-			setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null)
+			targets.forEach((target) => {
+				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+			})
 			continue
 		}
 		const refKey = logicalId
@@ -1064,9 +1046,13 @@ function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicM
 				return
 			}
 			if (data) {
-				updateTerrainPaintPreviewWeightmap(groundMaterial, chunkKey, data, settings.weightmapResolution)
+				targets.forEach((target) => {
+					updateTerrainPaintPreviewWeightmap(target, chunkKey, data, settings.weightmapResolution)
+				})
 			} else {
-				setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null)
+				targets.forEach((target) => {
+					setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+				})
 			}
 		})
 	}

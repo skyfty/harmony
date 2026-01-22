@@ -170,11 +170,17 @@ export function ensureTerrainPaintPreviewInstalled(
 		if (!mesh?.isMesh) {
 			return
 		}
-		// mesh encountered
 		const material = mesh.material
-		const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined)
-		if (resolved && resolved instanceof THREE.MeshStandardMaterial) {
-			materialSet.add(resolved)
+		if (Array.isArray(material)) {
+			material.forEach((entry) => {
+				if (entry && entry instanceof THREE.MeshStandardMaterial) {
+					materialSet.add(entry)
+				}
+			})
+			return
+		}
+		if (material && material instanceof THREE.MeshStandardMaterial) {
+			materialSet.add(material)
 		}
 	})
 	if (materialSet.size === 0) {
