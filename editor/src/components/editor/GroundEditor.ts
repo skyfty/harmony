@@ -1523,15 +1523,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
-		const material = getGroundPreviewMaterial(groundObject)
-		if (!material) {
+		const materials = getGroundPreviewMaterials(groundObject)
+		if (!materials.length) {
 			return
 		}
 
 		// Always clear first to avoid stale textures leaking across scene switches.
-		updateTerrainPaintPreviewLayerTexture(material, 'g', null)
-		updateTerrainPaintPreviewLayerTexture(material, 'b', null)
-		updateTerrainPaintPreviewLayerTexture(material, 'a', null)
+		materials.forEach((material) => {
+			updateTerrainPaintPreviewLayerTexture(material, 'g', null)
+			updateTerrainPaintPreviewLayerTexture(material, 'b', null)
+			updateTerrainPaintPreviewLayerTexture(material, 'a', null)
+		})
 
 		for (const layer of session.settings.layers ?? []) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
@@ -1539,13 +1541,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const textureAssetId = typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
 			if (!textureAssetId) {
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				materials.forEach((material) => {
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				})
 				continue
 			}
 			const asset = catalogMap.get(textureAssetId) ?? null
 			if (!asset) {
 				// Silent skip (and clear the channel so it doesn't keep stale data).
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				materials.forEach((material) => {
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				})
 				continue
 			}
 			const texture = await loadTerrainPaintLayerTexture(asset)
@@ -1554,10 +1560,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			if (!texture) {
 				// Silent skip
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				materials.forEach((material) => {
+					updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				})
 				continue
 			}
-			updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
+			materials.forEach((material) => {
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
+			})
 		}
 	}
 
@@ -2256,27 +2266,38 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return paintSessionState
 	}
 
-	function getGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
-		const cachedMaterialValue = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
-		const cachedMaterial = Array.isArray(cachedMaterialValue)
-			? (cachedMaterialValue[0] as THREE.Material | undefined)
-			: (cachedMaterialValue as THREE.Material | undefined)
-		if (cachedMaterial) {
-			return cachedMaterial
+	function getGroundPreviewMaterials(groundObject: THREE.Object3D): THREE.Material[] {
+		const userData = (groundObject.userData as Record<string, unknown> | undefined) ?? {}
+		const cachedMaterials = (userData as any).groundMaterials as THREE.Material[] | undefined
+		if (Array.isArray(cachedMaterials) && cachedMaterials.length) {
+			return cachedMaterials.filter(Boolean)
 		}
-		let found: THREE.Material | null = null
+		const cachedMaterialValue = (userData as any).groundMaterial as THREE.Material | THREE.Material[] | undefined
+		if (cachedMaterialValue) {
+			return Array.isArray(cachedMaterialValue)
+				? cachedMaterialValue.filter(Boolean)
+				: [cachedMaterialValue]
+		}
+		const found = new Set<THREE.Material>()
 		groundObject.traverse((obj) => {
-			if (found) {
-				return
-			}
 			const mesh = obj as THREE.Mesh
 			if (!mesh?.isMesh) {
 				return
 			}
 			const material = mesh.material
-			found = Array.isArray(material) ? ((material[0] as THREE.Material | undefined) ?? null) : (material as THREE.Material)
+			if (Array.isArray(material)) {
+				material.forEach((mat) => {
+					if (mat) {
+						found.add(mat)
+					}
+				})
+				return
+			}
+			if (material) {
+				found.add(material)
+			}
 		})
-		return found
+		return Array.from(found)
 	}
 
 	function pushTerrainPaintPreviewWeightmap(session: PaintSessionState, chunk: PaintChunkState): void {
@@ -2285,11 +2306,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
-		const material = getGroundPreviewMaterial(groundObject)
-		if (!material) {
+		const materials = getGroundPreviewMaterials(groundObject)
+		if (!materials.length) {
 			return
 		}
-		updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+		materials.forEach((material) => {
+			updateTerrainPaintPreviewWeightmap(material, chunk.key, chunk.data, chunk.resolution)
+		})
 	}
 
 	async function pushTerrainPaintPreviewLayer(session: PaintSessionState, channel: TerrainPaintChannel, asset: ProjectAsset): Promise<void> {
@@ -2298,15 +2321,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
-		const material = getGroundPreviewMaterial(groundObject)
-		if (!material) {
+		const materials = getGroundPreviewMaterials(groundObject)
+		if (!materials.length) {
 			return
 		}
 		const texture = await loadTerrainPaintLayerTexture(asset)
 		if (!texture) {
 			return
 		}
-		updateTerrainPaintPreviewLayerTexture(material, channel, texture)
+		materials.forEach((material) => {
+			updateTerrainPaintPreviewLayerTexture(material, channel, texture)
+		})
 	}
 
 	function ensurePaintChunkState(session: PaintSessionState, payload: { key: string; chunkRow: number; chunkColumn: number }): PaintChunkState {

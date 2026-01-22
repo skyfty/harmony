@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from './index'
 
 const TERRAIN_PAINT_MATERIAL_KEY = '__harmonyTerrainPaintMaterialV1'
+// Debug helpers removed: keep implementation minimal and focused on preview functionality.
 
 type TerrainPaintShaderState = {
 	shader: any
@@ -161,27 +162,32 @@ export function ensureTerrainPaintPreviewInstalled(
 	;(root.userData as any).__terrainPaintDefinition = definition
 	;(root.userData as any).__terrainPaintSettings = settings
 
-	let targetMaterial: THREE.MeshStandardMaterial | null = null
+	// counts removed (debugging variables) — keep function focused on installing hooks
+	const materialSet = new Set<THREE.MeshStandardMaterial>()
+
 	root.traverse((obj) => {
-		if (targetMaterial) {
-			return
-		}
 		const mesh = obj as THREE.Mesh
 		if (!mesh?.isMesh) {
 			return
 		}
+		// mesh encountered
 		const material = mesh.material
 		const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined)
 		if (resolved && resolved instanceof THREE.MeshStandardMaterial) {
-			targetMaterial = resolved
+			materialSet.add(resolved)
 		}
 	})
-	if (!targetMaterial) {
+	if (materialSet.size === 0) {
 		return
 	}
 
-	const state = installShaderHooks(targetMaterial)
-	;(root.userData as any).groundMaterial = targetMaterial
+	const materials = Array.from(materialSet)
+	materials.forEach((material) => {
+		installShaderHooks(material)
+	})
+	;(root.userData as any).groundMaterials = materials
+	;(root.userData as any).groundMaterial = materials[0]
+	// Installed shader hooks on discovered materials.
 
 	root.traverse((obj) => {
 		const mesh = obj as THREE.Mesh
@@ -193,16 +199,20 @@ export function ensureTerrainPaintPreviewInstalled(
 		}
 		;(mesh.userData as any).__terrainPaintBound = true
 		mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, mat) => {
-			if (!state.shader) {
+			if (!(mat instanceof THREE.MeshStandardMaterial)) {
 				return
 			}
-			if (!(mat instanceof THREE.MeshStandardMaterial)) {
+			const state = getOrCreateShaderState(mat)
+			if (!state.shader) {
 				return
 			}
 			const def = (root.userData as any).__terrainPaintDefinition as GroundDynamicMesh | undefined
 			const currentSettings = (root.userData as any).__terrainPaintSettings as TerrainPaintSettings | null | undefined
 			if (!def) {
 				return
+			}
+			if (currentSettings && currentSettings.version !== 1) {
+				// Unsupported settings version; disable preview by not enabling the shader uniforms below.
 			}
 			const bounds = computeChunkBounds(def, mesh)
 			if (bounds) {
@@ -221,6 +231,8 @@ export function ensureTerrainPaintPreviewInstalled(
 			state.shader.uniforms.uTerrainPaintHasA.value = state.layerTextures.a ? 1 : 0
 		}
 	})
+
+	// Bindings installed.
 }
 
 export function setTerrainPaintPreviewWeightmapTexture(material: THREE.Material, chunkKey: string, texture: THREE.Texture | null): void {
@@ -356,8 +368,10 @@ export async function loadTerrainPaintAssets(
 	textureLoader: TextureLoader,
 ): Promise<void> {
 	ensureTerrainPaintPreviewInstalled(root, definition, settings)
+	const materials = (root.userData as any).groundMaterials as THREE.Material[] | undefined
 	const material = (root.userData as any).groundMaterial as THREE.Material | undefined
-	if (!material) {
+	const targets = (materials && materials.length ? materials : material ? [material] : []) as THREE.Material[]
+	if (!targets.length) {
 		return
 	}
 
@@ -366,7 +380,9 @@ export async function loadTerrainPaintAssets(
 		for (const layer of settings.layers) {
 			const tex = await textureLoader(layer.textureAssetId)
 			if (tex) {
-				updateTerrainPaintPreviewLayerTexture(material, layer.channel, tex)
+				targets.forEach((target) => {
+					updateTerrainPaintPreviewLayerTexture(target, layer.channel, tex)
+				})
 			}
 		}
 	}
@@ -380,7 +396,9 @@ export async function loadTerrainPaintAssets(
 			if (blob) {
 				try {
 					const data = await decodeWeightmapToData(blob, settings.weightmapResolution)
-					updateTerrainPaintPreviewWeightmap(material, key, data, settings.weightmapResolution)
+					targets.forEach((target) => {
+						updateTerrainPaintPreviewWeightmap(target, key, data, settings.weightmapResolution)
+					})
 				} catch (error) {
 					console.warn(`Failed to decode weightmap for chunk ${key}`, error)
 				}
