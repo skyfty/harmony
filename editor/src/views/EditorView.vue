@@ -1588,7 +1588,7 @@ async function handleSelectScene(sceneId: string) {
       return
     }
   }
-  const changed = await sceneStore.selectScene(sceneId, { setLastEdited: false })
+  const changed = await sceneStore.selectScene(sceneId)
   if (changed) {
     isSceneManagerOpen.value = false
   }

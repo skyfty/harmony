@@ -1428,6 +1428,56 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		() => options.sceneStore.currentSceneId,
 		(next, previous) => {
 			if (next !== previous) {
+				// Scene boundaries: force-exit all pointer-driven modes and clear any
+				// in-flight session state so tools don't get stuck after switching/new.
+				try {
+					const canvas = options.canvasRef.value
+					const pointerIds: Array<number | null | undefined> = [
+						sculptStrokePointerId,
+						paintStrokePointerId,
+						scatterSession?.pointerId,
+						scatterEraseState?.pointerId,
+						groundSelectionDragState?.pointerId,
+					]
+					if (canvas) {
+						for (const id of pointerIds) {
+							if (typeof id === 'number') {
+								try {
+									canvas.releasePointerCapture(id)
+								} catch {
+									// ignore
+								}
+							}
+						}
+					}
+				} catch {
+					// ignore
+				}
+
+				isSculpting.value = false
+				isPainting.value = false
+				sculptStrokePointerId = null
+				sculptStrokeLastLocalPoint = null
+				paintStrokePointerId = null
+				paintStrokeLastLocalPoint = null
+				sculptSessionState = null
+				scatterSession = null
+				scatterEraseState = null
+				groundSelectionDragState = null
+				groundSelection.value = null
+				groundSelectionGroup.visible = false
+				isGroundToolbarVisible.value = false
+				groundSelectionToolbarStyle.opacity = 0
+
+				brushMesh.visible = false
+				scatterPreviewGroup.visible = false
+				scatterPreviewGroup.clear()
+				scatterPreviewObject = null
+				scatterPreviewAssetId = null
+
+				// Invalidate any in-flight paint work tied to the previous scene.
+				paintCommitToken += 1
+
 				resetScatterStoreState('scene-changed')
 				paintSessionState = null
 				lastVisibleTerrainPaintChunkKeys = new Set()

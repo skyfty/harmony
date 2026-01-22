@@ -15424,6 +15424,7 @@ export const useSceneStore = defineStore('scene', {
       this.isSceneReady = true
 
       await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
+      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
     async createSceneFromTemplate(
@@ -15517,6 +15518,7 @@ export const useSceneStore = defineStore('scene', {
       this.hasUnsavedChanges = false
 
       await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
+      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
     async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
