@@ -52,6 +52,8 @@ import {
 	ensureTerrainPaintPreviewInstalled,
 	updateTerrainPaintPreviewLayerTexture,
 	updateTerrainPaintPreviewWeightmap,
+	decodeWeightmapToData,
+	encodeWeightmapToPng,
 } from '@schema/terrainPaintPreview'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
@@ -373,48 +375,6 @@ function resolvePaintChunkBounds(
 	return { minX, minZ, width, depth }
 }
 
-async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
-	const res = Math.max(1, Math.round(resolution))
-	const bitmap = await createImageBitmap(blob)
-	const canvas = document.createElement('canvas')
-	canvas.width = res
-	canvas.height = res
-	const ctx = canvas.getContext('2d', { willReadFrequently: true })
-	if (!ctx) {
-		throw new Error('无法创建 2D Canvas 上下文')
-	}
-	ctx.clearRect(0, 0, res, res)
-	ctx.drawImage(bitmap, 0, 0, res, res)
-	bitmap.close?.()
-	const imageData = ctx.getImageData(0, 0, res, res)
-	return new Uint8ClampedArray(imageData.data)
-}
-
-async function encodeWeightmapToPng(data: Uint8ClampedArray, resolution: number): Promise<Blob> {
-	const res = Math.max(1, Math.round(resolution))
-	const canvas = document.createElement('canvas')
-	canvas.width = res
-	canvas.height = res
-	const ctx = canvas.getContext('2d')
-	if (!ctx) {
-		throw new Error('无法创建 2D Canvas 上下文')
-	}
-	const imageData = new ImageData(new Uint8ClampedArray(data), res, res)
-	ctx.putImageData(imageData, 0, 0)
-	const blob = await new Promise<Blob>((resolve, reject) => {
-		canvas.toBlob(
-			(result) => {
-				if (result) {
-					resolve(result)
-				} else {
-					reject(new Error('PNG 编码失败'))
-				}
-			},
-			'image/png',
-		)
-	})
-	return blob
-}
 
 function blurWeightmap(data: Uint8ClampedArray, resolution: number, iterations: number): Uint8ClampedArray {
 	const res = Math.max(1, Math.round(resolution))
@@ -1017,6 +977,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let lastScatterLodUpdateAt = 0
 	const scatterLodCameraPosition = new THREE.Vector3()
 
+	const TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS = 160
+	let terrainPaintStreamingSyncTimer: number | null = null
+	let lastVisibleTerrainPaintChunkKeys = new Set<string>()
+	let lastTerrainPaintSceneSwitchToken: number | null = null
+
 	function getActiveBrushShape(): TerrainBrushShape {
 		const value = options.brushShape.value
 		if (value === 'square' || value === 'star') {
@@ -1463,9 +1428,181 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		(next, previous) => {
 			if (next !== previous) {
 				resetScatterStoreState('scene-changed')
+				paintSessionState = null
+				lastVisibleTerrainPaintChunkKeys = new Set()
+				lastTerrainPaintSceneSwitchToken = null
+				if (terrainPaintStreamingSyncTimer !== null) {
+					window.clearTimeout(terrainPaintStreamingSyncTimer)
+					terrainPaintStreamingSyncTimer = null
+				}
 			}
 		},
 	)
+
+	function collectVisibleTerrainPaintChunks(groundObject: THREE.Object3D): Array<{ key: string; chunkRow: number; chunkColumn: number }> {
+		const result: Array<{ key: string; chunkRow: number; chunkColumn: number }> = []
+		const seen = new Set<string>()
+		for (const child of groundObject.children) {
+			const chunk = (child as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
+			const chunkRow = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null
+			const chunkColumn = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null
+			if (chunkRow == null || chunkColumn == null) {
+				continue
+			}
+			const key = `${chunkRow}:${chunkColumn}`
+			if (seen.has(key)) {
+				continue
+			}
+			seen.add(key)
+			result.push({ key, chunkRow, chunkColumn })
+		}
+		return result
+	}
+
+	async function ensureTerrainPaintLayersPushed(
+		session: PaintSessionState,
+		catalogMap: Map<string, ProjectAsset>,
+		tokenSnapshot: number,
+	): Promise<void> {
+		const groundObject = getGroundObject()
+		if (!groundObject) {
+			return
+		}
+		ensureTerrainPaintPreviewInstalled(groundObject, session.definition, session.settings)
+		const material = getGroundPreviewMaterial(groundObject)
+		if (!material) {
+			return
+		}
+
+		// Always clear first to avoid stale textures leaking across scene switches.
+		updateTerrainPaintPreviewLayerTexture(material, 'g', null)
+		updateTerrainPaintPreviewLayerTexture(material, 'b', null)
+		updateTerrainPaintPreviewLayerTexture(material, 'a', null)
+
+		for (const layer of session.settings.layers ?? []) {
+			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+				return
+			}
+			const textureAssetId = typeof layer?.textureAssetId === 'string' ? layer.textureAssetId.trim() : ''
+			if (!textureAssetId) {
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				continue
+			}
+			const asset = catalogMap.get(textureAssetId) ?? null
+			if (!asset) {
+				// Silent skip (and clear the channel so it doesn't keep stale data).
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				continue
+			}
+			const texture = await loadTerrainPaintLayerTexture(asset)
+			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+				return
+			}
+			if (!texture) {
+				// Silent skip
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, null)
+				continue
+			}
+			updateTerrainPaintPreviewLayerTexture(material, layer.channel, texture)
+		}
+	}
+
+	function applyTerrainPaintForChunkKey(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
+		const ref = session.settings.chunks?.[chunk.key] ?? null
+		const logicalId = typeof (ref as any)?.logicalId === 'string' ? String((ref as any).logicalId).trim() : ''
+		const state = ensurePaintChunkState(session, chunk)
+		if (!logicalId) {
+			// Ensure stale cached textures don't leak into this scene.
+			pushTerrainPaintPreviewWeightmap(session, state)
+		}
+	}
+
+	async function restoreGroundPaint(): Promise<void> {
+		const tokenSnapshot = options.sceneStore.sceneSwitchToken
+		const groundNode = getGroundNodeFromScene()
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground' || !groundMesh || !definition) {
+			return
+		}
+		const session = ensurePaintSession(definition, groundNode.id)
+		// Ensure we're working off the latest stored settings snapshot.
+		session.settings = cloneOrCreateTerrainPaintSettings(definition)
+		session.chunkStates = new Map()
+		session.hasPendingChanges = false
+		ensureTerrainPaintPreviewInstalled(groundMesh, definition, session.settings)
+
+		const catalogMap = options.sceneStore.collectCatalogAssetMap()
+		await ensureTerrainPaintLayersPushed(session, catalogMap, tokenSnapshot)
+		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			return
+		}
+
+		const visibleChunks = collectVisibleTerrainPaintChunks(groundMesh)
+		const nextVisibleKeys = new Set<string>()
+		for (const chunk of visibleChunks) {
+			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+				return
+			}
+			nextVisibleKeys.add(chunk.key)
+			applyTerrainPaintForChunkKey(session, chunk)
+		}
+		lastVisibleTerrainPaintChunkKeys = nextVisibleKeys
+		lastTerrainPaintSceneSwitchToken = tokenSnapshot
+	}
+
+	function scheduleTerrainPaintStreamingSync(): void {
+		if (terrainPaintStreamingSyncTimer !== null) {
+			return
+		}
+		terrainPaintStreamingSyncTimer = window.setTimeout(() => {
+			terrainPaintStreamingSyncTimer = null
+			void syncTerrainPaintForVisibleChunksIncremental()
+		}, TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS)
+	}
+
+	async function syncTerrainPaintForVisibleChunksIncremental(): Promise<void> {
+		const tokenSnapshot = options.sceneStore.sceneSwitchToken
+		// If we haven't successfully restored for this scene yet, do a full initial restore.
+		if (lastTerrainPaintSceneSwitchToken !== tokenSnapshot) {
+			await restoreGroundPaint()
+			return
+		}
+		const groundNode = getGroundNodeFromScene()
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground' || !groundMesh || !definition) {
+			return
+		}
+		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			return
+		}
+		const session = ensurePaintSession(definition, groundNode.id)
+		// Rebind preview hooks for newly created chunk meshes.
+		ensureTerrainPaintPreviewInstalled(groundMesh, definition, session.settings)
+
+		const visibleChunks = collectVisibleTerrainPaintChunks(groundMesh)
+		const nextVisibleKeys = new Set<string>()
+		const newlyVisible: Array<{ key: string; chunkRow: number; chunkColumn: number }> = []
+		for (const chunk of visibleChunks) {
+			nextVisibleKeys.add(chunk.key)
+			if (!lastVisibleTerrainPaintChunkKeys.has(chunk.key)) {
+				newlyVisible.push(chunk)
+			}
+		}
+
+		for (const chunk of newlyVisible) {
+			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+				return
+			}
+			applyTerrainPaintForChunkKey(session, chunk)
+		}
+		lastVisibleTerrainPaintChunkKeys = nextVisibleKeys
+	}
+
+	function onGroundChunkSetChanged(): void {
+		scheduleTerrainPaintStreamingSync()
+	}
 
 	async function restoreGroupdScatter(): Promise<void> {
 		const store = ensureScatterStoreRef()
@@ -2817,6 +2954,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
 			options.canvasRef.value.releasePointerCapture(event.pointerId)
 		}
+		// After finishing a full scatter paint stroke, ensure the selected scatter asset is
+		// registered as a scene asset so it can be located and restored after reloading.
+		try {
+			const asset = scatterSession.asset
+			if (asset?.id && !options.sceneStore.findAssetInCatalog(asset.id)) {
+				options.sceneStore.registerAssets([asset])
+			}
+		} catch (error) {
+			console.warn('Failed to register scatter asset into scene assets', error)
+		}
 		scatterSession = null
 		return true
 	}
@@ -3911,6 +4058,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundTextureInputRef,
 		isSculpting,
 		restoreGroupdScatter,
+		restoreGroundPaint,
+		onGroundChunkSetChanged,
 		updateScatterLod,
 		updateGroundSelectionToolbarPosition,
 		clearGroundSelection,
@@ -3935,4 +4084,3 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		dispose,
 	}
 }
-

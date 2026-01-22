@@ -966,6 +966,8 @@ export interface TerrainPaintChunkWeightmapRef {
   logicalId: string
 }
 
+export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapRef>
+
 export interface TerrainPaintSettings {
   /** Versioned payload to allow schema migrations later. */
   version: 1
@@ -973,8 +975,12 @@ export interface TerrainPaintSettings {
   weightmapResolution: number
   /** Non-base paint layers. Base is always the ground material color. */
   layers: TerrainPaintLayerDefinition[]
-  /** Map: chunkKey -> weightmap asset reference. */
-  chunks: Record<string, TerrainPaintChunkWeightmapRef>
+  /**
+   * Weightmap asset references keyed by chunk key (e.g., "0:0").
+   * Each chunk has one 4-channel texture mapping [Base, LayerG, LayerB, LayerA].
+   * The actual image data is stored in the project's private asset storage (or similar).
+   */
+  chunks: TerrainPaintChunkWeightmapMap
 }
 
 export interface GroundDynamicMesh {

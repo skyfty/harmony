@@ -1306,6 +1306,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>()
 function syncGroundCache(document: SceneJsonExportDocument | null): void {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
+	cameraDependentUpdateInitialized = false
 	terrainPaintPreviewLoadToken += 1
 	if (!document) {
 		return
@@ -9791,8 +9792,8 @@ async function applyInitialDocumentGraph(
 ): Promise<void> {
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
-	syncGroundCache(document)
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	syncGroundCache(document)
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
@@ -9813,7 +9814,6 @@ async function applyIncrementalDocumentGraph(
 	resourceCache: ResourceCache | null,
 	environmentSettings: EnvironmentSettings,
 ): Promise<void> {
-	syncGroundCache(document)
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument?.nodes ?? [], pendingObjects)
 
 	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
@@ -9822,6 +9822,8 @@ async function applyIncrementalDocumentGraph(
 			registerSubtree(object, pendingObjects)
 		}
 	}
+
+	syncGroundCache(document)
 
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)

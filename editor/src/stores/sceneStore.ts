@@ -2268,6 +2268,9 @@ function createGroundDynamicMeshDefinition(
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
+    hasManualEdits: overrides.hasManualEdits,
+    terrainScatter: manualDeepClone(overrides.terrainScatter),
+    terrainPaint: manualDeepClone(overrides.terrainPaint),
   }
 
   if (initialGeneration && !hasHeightOverrides) {

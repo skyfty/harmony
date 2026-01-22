@@ -287,3 +287,92 @@ export function updateTerrainPaintPreviewLayerTexture(
 	}
 	delete (state.layerTextures as any)[channel]
 }
+
+export async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
+	const res = Math.max(1, Math.round(resolution))
+	if (typeof createImageBitmap === 'undefined') {
+		throw new Error('createImageBitmap is not supported in this environment')
+	}
+	const bitmap = await createImageBitmap(blob)
+	const canvas = document.createElement('canvas')
+	canvas.width = res
+	canvas.height = res
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })
+	if (!ctx) {
+		throw new Error('Failed to create 2D Canvas context')
+	}
+	ctx.clearRect(0, 0, res, res)
+	ctx.drawImage(bitmap, 0, 0, res, res)
+	bitmap.close?.()
+	const imageData = ctx.getImageData(0, 0, res, res)
+	return new Uint8ClampedArray(imageData.data)
+}
+
+export async function encodeWeightmapToPng(data: Uint8ClampedArray, resolution: number): Promise<Blob> {
+	const res = Math.max(1, Math.round(resolution))
+	const canvas = document.createElement('canvas')
+	canvas.width = res
+	canvas.height = res
+	const ctx = canvas.getContext('2d')
+	if (!ctx) {
+		throw new Error('Failed to create 2D Canvas context')
+	}
+	const imageData = ctx.createImageData(res, res)
+	imageData.data.set(data)
+	ctx.putImageData(imageData, 0, 0)
+	return new Promise((resolve, reject) => {
+		canvas.toBlob((blob) => {
+			if (blob) {
+				resolve(blob)
+			} else {
+				reject(new Error('Failed to encode weightmap to PNG'))
+			}
+		}, 'image/png')
+	})
+}
+
+export type AssetLoader = (assetId: string) => Promise<Blob | null>
+export type TextureLoader = (assetId: string) => Promise<THREE.Texture | null>
+
+export async function loadTerrainPaintAssets(
+	root: THREE.Object3D,
+	definition: GroundDynamicMesh,
+	settings: TerrainPaintSettings,
+	assetLoader: AssetLoader,
+	textureLoader: TextureLoader,
+): Promise<void> {
+	ensureTerrainPaintPreviewInstalled(root, definition, settings)
+	const material = (root.userData as any).groundMaterial as THREE.Material | undefined
+	if (!material) {
+		return
+	}
+
+	// Load layers
+	if (settings.layers) {
+		for (const layer of settings.layers) {
+			const tex = await textureLoader(layer.textureAssetId)
+			if (tex) {
+				updateTerrainPaintPreviewLayerTexture(material, layer.channel, tex)
+			}
+		}
+	}
+
+	// Load chunks
+	if (settings.chunks) {
+		const promises = Object.entries(settings.chunks).map(async ([key, chunkRef]) => {
+			const logicalId = (chunkRef as any)?.logicalId
+			if (typeof logicalId !== 'string') return
+			const blob = await assetLoader(logicalId)
+			if (blob) {
+				try {
+					const data = await decodeWeightmapToData(blob, settings.weightmapResolution)
+					updateTerrainPaintPreviewWeightmap(material, key, data, settings.weightmapResolution)
+				} catch (error) {
+					console.warn(`Failed to decode weightmap for chunk ${key}`, error)
+				}
+			}
+		})
+		await Promise.all(promises)
+	}
+}
+
