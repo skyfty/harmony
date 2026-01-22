@@ -32,11 +32,6 @@ function jsonBytes(value: unknown): Uint8Array {
 export async function exportScenePackageZip(payload: {
   project: ProjectExportBundleProjectConfig
   scenes: ScenePackageExportScene[]
-  /**
-   * Referenced local asset ids (IndexedDB-backed), typically derived from scene.assetIndex + collectSceneAssetReferences.
-   * These will be packed into the ZIP under `resources/localAsset/`.
-   */
-  localAssetIds?: string[]
   updateProgress?: (value: number, message?: string) => void
 }): Promise<Blob> {
   const createdAt = new Date().toISOString()
@@ -47,50 +42,68 @@ export async function exportScenePackageZip(payload: {
   const projectPath = 'project/project.json'
   files[projectPath] = jsonBytes(payload.project)
 
-  // scenes
+  // scenes + per-scene resources (referenced local assets)
   const manifestScenes: ScenePackageManifestV1['scenes'] = []
-  for (let index = 0; index < payload.scenes.length; index += 1) {
-    const scene = payload.scenes[index]!
-    const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
-    files[scenePath] = jsonBytes(scene.document)
-    manifestScenes.push({ sceneId: scene.id, path: scenePath })
-  }
-
-  // resources (referenced local assets)
   const assetCache = useAssetCacheStore()
   const resources: ScenePackageResourceEntry[] = []
-  const localAssetIds = Array.from(
-    new Set((payload.localAssetIds ?? []).map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)),
-  )
-  for (let index = 0; index < localAssetIds.length; index += 1) {
-    const assetId = localAssetIds[index]!
-    const ratio = localAssetIds.length ? (index + 1) / localAssetIds.length : 1
-    payload.updateProgress?.(85 + Math.round(10 * ratio), `打包本地资产… (${index + 1}/${localAssetIds.length})`)
 
-    let entry = assetCache.getEntry(assetId)
-    if (entry.status !== 'cached' || !entry.blob) {
-      await assetCache.loadFromIndexedDb(assetId)
-      entry = assetCache.getEntry(assetId)
-    }
-    if (entry.status !== 'cached' || !entry.blob) {
-      throw new Error(`缺少本地资产资源（assetId=${assetId}），请先确保本地资产已写入 IndexedDB 后再导出`)
-    }
+  for (let sIndex = 0; sIndex < payload.scenes.length; sIndex += 1) {
+    const scene = payload.scenes[sIndex]!
+    const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
 
-    const blob = entry.blob
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    const mimeType = entry.mimeType ?? blob.type ?? 'application/octet-stream'
-    const ext = inferExtFromFilename(entry.filename) ?? inferExtFromMimeType(mimeType)
-    const path = `resources/localAsset/${assetId}.${ext}`
-
-    files[path] = bytes
-    resources.push({
-      logicalId: assetId,
-      resourceType: 'localAsset',
-      path,
-      ext,
-      mimeType,
-      size: blob.size,
+    // Collect local asset IDs from the scene's assetIndex (scene-scoped)
+    const indexMap = (scene.document as any).assetIndex ?? {}
+    const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => {
+      try {
+        return indexMap[assetId]?.source?.type === 'local'
+      } catch (e) {
+        return false
+      }
     })
+
+    // Prepare a clone of the scene document and ensure assetUrlOverrides exists
+    const docClone = JSON.parse(JSON.stringify(scene.document)) as typeof scene.document
+    ;(docClone as any).assetUrlOverrides = (docClone as any).assetUrlOverrides ?? {}
+
+    for (let aIndex = 0; aIndex < localAssetIds.length; aIndex += 1) {
+      const assetId = localAssetIds[aIndex]!
+      const ratio = localAssetIds.length ? (aIndex + 1) / localAssetIds.length : 1
+      payload.updateProgress?.(85 + Math.round(10 * ratio), `打包本地资产… (${aIndex + 1}/${localAssetIds.length})`)
+
+      let entry = assetCache.getEntry(assetId)
+      if (entry.status !== 'cached' || !entry.blob) {
+        await assetCache.loadFromIndexedDb(assetId)
+        entry = assetCache.getEntry(assetId)
+      }
+      if (entry.status !== 'cached' || !entry.blob) {
+        throw new Error(`缺少本地资产资源（assetId=${assetId}），请先确保本地资产已写入 IndexedDB 后再导出`)
+      }
+
+      const blob = entry.blob
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      const mimeType = entry.mimeType ?? blob.type ?? 'application/octet-stream'
+      const ext = inferExtFromFilename(entry.filename) ?? inferExtFromMimeType(mimeType) ?? 'bin'
+
+      // Place resources under the corresponding scene directory
+      const resourcePath = `scenes/${encodeURIComponent(scene.id)}/resources/${assetId}.${ext}`
+
+      files[resourcePath] = bytes
+      resources.push({
+        logicalId: assetId,
+        resourceType: 'localAsset',
+        path: resourcePath,
+        ext,
+        mimeType,
+        size: blob.size,
+      })
+
+      // update scene document mapping to point to the packaged path
+      ;(docClone as any).assetUrlOverrides[assetId] = resourcePath
+    }
+
+    // Add the (possibly modified) scene JSON to files and manifest
+    files[scenePath] = jsonBytes(docClone)
+    manifestScenes.push({ sceneId: scene.id, path: scenePath })
   }
 
   const manifest: ScenePackageManifestV1 = {

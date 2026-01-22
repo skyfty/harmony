@@ -5335,94 +5335,14 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-async function buildPackageEmbedAssetMapForExport(
-  scene: StoredSceneDocument,
-  packageAssetMap: Record<string, string>,
-  usedAssetIds: Set<string>): Promise<Record<string, string>> {
-  if (!usedAssetIds.size) {
-    return packageAssetMap
-  }
-  const assetCache = useAssetCacheStore()
-  const assetIdsToEmbed = new Set<string>()
-
-  const assetIndex = scene.assetIndex ?? {}
-  usedAssetIds.forEach((assetId) => {
-    const entry = assetIndex[assetId]
-    if (entry?.source?.type === 'local') {
-      assetIdsToEmbed.add(assetId)
-    }
-  })
-
-  if (!assetIdsToEmbed.size) {
-    return packageAssetMap
-  }
-
-  const normalizeUrl = (value: string | null | undefined): string | null => {
-    if (!value) {
-      return null
-    }
-    const trimmed = value.trim()
-    return trimmed.length > 0 ? trimmed : null
-  }
-
-  const embedTasks: Promise<void>[] = []
-
-  assetIdsToEmbed.forEach((assetId) => {
-    embedTasks.push((async () => {
-      const asset = getAssetFromCatalog(scene.assetCatalog, assetId)
-      if (!asset) {
-        return
-      }
-
-      let cacheEntry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        cacheEntry = await assetCache.loadFromIndexedDb(assetId)
-      }
-
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        const downloadUrl = normalizeUrl(asset.downloadUrl) ?? normalizeUrl(asset.description)
-        if (!downloadUrl) {
-          console.warn('Missing asset data, cannot embed in exported scene', assetId)
-          return
-        }
-        try {
-          cacheEntry = await assetCache.downloadAsset(assetId, downloadUrl, asset.name)
-        } catch (error) {
-          console.warn('Failed to download asset data, cannot embed in exported scene', assetId, error)
-          return
-        }
-      }
-
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        console.warn('Asset not cached, cannot embed in exported scene', assetId)
-        return
-      }
-
-      try {
-        packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`] = await blobToDataUrl(cacheEntry.blob)
-      } catch (error) {
-        console.warn('Failed to serialize asset, cannot embed in exported scene', assetId, error)
-      }
-    })())
-  })
-
-  if (embedTasks.length) {
-    await Promise.all(embedTasks)
-  }
-  return packageAssetMap
-}
-
 export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
+  _options?: { embedResources?: boolean },
 ): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
   const usedAssetIds = collectSceneAssetReferences(scene)
   let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
   const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)
-  const embedResources = options.embedResources ?? false
-  if (embedResources) {
-    packageAssetMap = await buildPackageEmbedAssetMapForExport(scene, packageAssetMap, usedAssetIds);
-  }
+
   return { packageAssetMap, assetIndex }
 }
 
@@ -5817,9 +5737,8 @@ export async function calculateSceneResourceSummary(
 
 export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
 ): Promise<StoredSceneDocument> {
-  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene,options)
+  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -15652,8 +15571,8 @@ export const useSceneStore = defineStore('scene', {
       if (!collected.length) {
         return null
       }
-      const options = exportOptions ?? { embedResources: false }
-      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene, options)))
+      void exportOptions
+      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene)))
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),

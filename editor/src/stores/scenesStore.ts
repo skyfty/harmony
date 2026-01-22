@@ -9,7 +9,6 @@ import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
-import { collectSceneAssetReferences } from '@/stores/sceneStore'
 
 export type SceneWorkspaceType = 'local' | 'user'
 
@@ -262,19 +261,6 @@ async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthSto
   return (entries as UserSceneBundleSummaryDto[]).filter((doc): doc is UserSceneBundleSummaryDto => !!doc && typeof doc.id === 'string')
 }
 
-function collectReferencedLocalAssetIds(document: StoredSceneDocument): string[] {
-  const used = collectSceneAssetReferences(document)
-  const index = document.assetIndex ?? {}
-  const localIds: string[] = []
-  used.forEach((assetId) => {
-    const entry = index[assetId]
-    if (entry?.source?.type === 'local') {
-      localIds.push(assetId)
-    }
-  })
-  return localIds
-}
-
 async function downloadSceneBundleZip(
   bundleUrl: string,
   authStore: ReturnType<typeof useAuthStore>,
@@ -340,8 +326,6 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
   }
 
   const bundleUrl = buildServerApiUrl(`${USER_SCENE_API_PREFIX}/${encodeURIComponent(document.id)}/bundle`)
-  const localAssetIds = collectReferencedLocalAssetIds(document)
-
   const bundleBlob = await exportScenePackageZip({
     project: {
       id: document.projectId,
@@ -350,8 +334,7 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
       lastEditedSceneId: document.id,
       sceneOrder: [document.id],
     },
-    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }],
-    localAssetIds,
+    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }]
   })
 
   const filename = `${document.name || document.id}.zip`

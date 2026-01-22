@@ -4669,7 +4669,7 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
+	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
 	document.packageAssetMap = packageAssetMap
 	document.assetIndex = assetIndex
 	document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })

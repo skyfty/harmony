@@ -1088,10 +1088,16 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary?.name ?? meta?.name ?? id}…`)
 
     if (localSummary) {
-      const document = await ensureExportableSceneDocument(id)
+      let document = await ensureExportableSceneDocument(id)
       if (!document) {
         throw new Error(`无法读取场景：${id}`)
       }
+
+      const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
+      document.packageAssetMap = packageAssetMap
+      document.assetIndex = assetIndex
+      document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
+
       const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
       embeddedScenes.push({ id, document: exportDocument })
       continue
@@ -1263,7 +1269,7 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       return
     }
 
-    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
+    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
     if (isStale?.()) {
       return
     }
