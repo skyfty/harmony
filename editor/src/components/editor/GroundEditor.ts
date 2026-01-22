@@ -44,7 +44,7 @@ import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
-import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { computeBlobHash } from '@/utils/blob'
@@ -2297,6 +2297,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const dirtyChunks = Array.from(session.chunkStates.values()).filter((chunk) => chunk.dirty)
 		if (!dirtyChunks.length) {
 			return false
+		}
+
+		// Persist layer texture asset mapping so terrain paint can be restored after reload.
+		// We only register after we have actual paint data to persist (i.e. at least one dirty chunk).
+		const paintAsset = options.paintAsset.value
+		if (paintAsset?.id) {
+			const existing = options.sceneStore.findAssetInCatalog(paintAsset.id)
+			if (!existing) {
+				options.sceneStore.registerAssets([paintAsset], {
+					source: { type: 'package', providerId: assetProvider.id, originalAssetId: paintAsset.id },
+					commitOptions: { updateNodes: false },
+				})
+			}
 		}
 
 		const token = (paintCommitToken += 1)
