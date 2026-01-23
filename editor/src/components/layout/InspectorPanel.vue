@@ -28,6 +28,7 @@ import GuideRoutePanel from '@/components/inspector/GuideRoutePanel.vue'
 import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
 import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
 import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
+import InstancedTilingPanel from '@/components/inspector/InstancedTilingPanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@harmony/schema'
@@ -54,6 +55,7 @@ import {
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
+  INSTANCED_TILING_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -587,6 +589,7 @@ watch(
               <PurePursuitPanel v-else-if="component.type === PURE_PURSUIT_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
+              <InstancedTilingPanel v-else-if="component.type === INSTANCED_TILING_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
                 @open-details="handleOpenBehaviorDetails"

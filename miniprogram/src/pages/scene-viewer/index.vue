@@ -468,6 +468,7 @@ import {
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
+  instancedTilingComponentDefinition,
   sceneStateAnchorComponentDefinition,
   preloadableComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
@@ -1376,6 +1377,7 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
+previewComponentManager.registerDefinition(instancedTilingComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 

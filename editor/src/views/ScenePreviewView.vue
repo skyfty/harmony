@@ -114,6 +114,7 @@ import {
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
+	instancedTilingComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -724,6 +725,7 @@ previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
+previewComponentManager.registerDefinition(instancedTilingComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
