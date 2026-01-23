@@ -43,6 +43,7 @@ import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useProjectStore } from '@/stores/projectStore';
 import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema';
+import { Base64 } from 'js-base64';
 
 const projectStore = useProjectStore();
 const { orderedProjects } = storeToRefs(projectStore);
@@ -81,26 +82,7 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
-    if (typeof (uni as any)?.arrayBufferToBase64 === 'function') {
-        return (uni as any).arrayBufferToBase64(buffer) as string;
-    }
-    const wxAny = typeof wx !== 'undefined' ? (wx as any) : null;
-    if (wxAny && typeof wxAny.arrayBufferToBase64 === 'function') {
-        return wxAny.arrayBufferToBase64(buffer) as string;
-    }
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 1) {
-        binary += String.fromCharCode(bytes[i] ?? 0);
-    }
-    if (typeof btoa === 'function') {
-        return btoa(binary);
-    }
-    const G: any = globalThis as any;
-    if (G && typeof G.Buffer !== 'undefined') {
-        return G.Buffer.from(bytes).toString('base64');
-    }
-    throw new Error('base64 encode not supported in this environment');
+
 }
 
 async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<ArrayBuffer | Uint8Array> {
@@ -174,25 +156,10 @@ async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResul
 }
 
 function base64ToUint8Array(base64: string): Uint8Array {
-    if (!base64) return new Uint8Array(0);
-    // remove data:*/*;base64, prefix if present
-    const idx = base64.indexOf('base64,');
-    const raw = idx >= 0 ? base64.slice(idx + 7) : base64;
-    let binary: string;
-    if (typeof atob === 'function') {
-        binary = atob(raw);
-    } else {
-        const G: any = globalThis as any;
-        if (G && typeof G.Buffer !== 'undefined') {
-            binary = G.Buffer.from(raw, 'base64').toString('binary');
-        } else {
-            throw new Error('base64 decode not supported in this environment');
-        }
+    if (!base64) {
+        return new Uint8Array(0);
     }
-    const len = binary.length;
-    const out = new Uint8Array(len);
-    for (let i = 0; i < len; i += 1) out[i] = binary.charCodeAt(i);
-    return out;
+    return Base64.toUint8Array(base64);
 }
 
 async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: string) {
@@ -234,8 +201,10 @@ async function handleLocalImport() {
     try {
         await new Promise<void>((resolve, reject) => {
             const canUseUniChooseFile = typeof uni.chooseFile === 'function';
+
             // 1) 优先使用 uni.chooseFile（H5/App 等支持的端）
             if (canUseUniChooseFile) {
+                console.log('使用 uni.chooseFile 选择文件');
                 uni.chooseFile({
                     count: 1,
                     extension: ['.zip'],
@@ -270,12 +239,14 @@ async function handleLocalImport() {
             const canUseWxChooseMessageFile =
                 typeof wx !== 'undefined' && typeof (wx as any).chooseMessageFile === 'function';
             if (canUseWxChooseMessageFile) {
+                console.log('使用 wx.chooseMessageFile 选择文件');
                 (wx as any).chooseMessageFile({
                     count: 1,
                     type: 'file',
                     // 只接受 zip
                     extension: ['.zip', 'zip'],
                     success: async (res: any) => {
+                console.log('使用 wx.chooseMessageFile 选择文件 11111111111111');
                         try {
                             const files = Array.isArray(res.tempFiles) ? res.tempFiles : [res.tempFiles];
                             const file = files[0] as any;
@@ -283,6 +254,7 @@ async function handleLocalImport() {
                                 reject(new Error('未选择文件'));
                                 return;
                             }
+                console.log('使用 wx.chooseMessageFile 选择文件 2222222222222222222');
                             const name = (file && (file.name || file.path)) || '';
                             const lower = (name || '').toLowerCase();
                             const originName = (file && (file.name || file.path)) || '本地文件';
@@ -290,6 +262,7 @@ async function handleLocalImport() {
                                 reject(new Error('仅支持 .zip 场景包导入'));
                                 return;
                             }
+                console.log('使用 wx.chooseMessageFile 选择文件 333333333333333333333');
                             const bytes = await readFileAsArrayBuffer(file as any);
                             await importScenePackageZip(bytes as any, originName);
                             resolve();
