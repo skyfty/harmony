@@ -24,8 +24,6 @@ export function handlePointerDownScatter(
     isNodeSelectionLocked: (nodeId: string) => boolean
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
 
-    beginContinuousInstancedCreate: (event: PointerEvent, node: SceneNode, object: THREE.Object3D) => boolean
-
     pickSceneInstancedTargetAtPointer: (event: PointerEvent) => unknown | null
     tryEraseRepairTargetAtPointer: (event: PointerEvent, options?: { skipKey?: string | null }) => EraseRepairResult
 
@@ -63,29 +61,6 @@ export function handlePointerDownScatter(
     }
     // If Ground is selected and no instanced target is under the cursor, fall through
     // so the ground-scatter erase can handle left click.
-  }
-
-  // Shift + left mouse triggers continuous instanced creation.
-  if (
-    !ctx.scatterEraseModeActive &&
-    event.button === 0 &&
-    event.shiftKey &&
-    ctx.activeTool === 'select' &&
-    ctx.activeBuildTool !== 'wall' &&
-    ctx.activeBuildTool !== 'road' &&
-    ctx.activeBuildTool !== 'floor'
-  ) {
-    const nodeId = ctx.selectedNodeId
-    if (nodeId && !ctx.isNodeSelectionLocked(nodeId)) {
-      const node = ctx.findSceneNode(ctx.nodes, nodeId)
-      const object = ctx.objectMap.get(nodeId) ?? null
-      if (node && object) {
-        const handled = ctx.beginContinuousInstancedCreate(event, node, object)
-        if (handled) {
-          return { handled: true, clearPointerTrackingState: true }
-        }
-      }
-    }
   }
 
   // Scatter erase mode: if continuous instanced models exist, allow camera controls.
