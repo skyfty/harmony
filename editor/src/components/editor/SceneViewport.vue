@@ -596,6 +596,10 @@ function tickInstancedTiling() {
         const binding = allocateModelInstanceBinding(resolvedAssetId, bindingId, nodeId)
         if (!binding) {
           created.forEach((id) => releaseModelInstanceBinding(id))
+          if (runtime.hiddenMesh) {
+            runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
+            runtime.hiddenMesh = null
+          }
           return
         }
         created.push(bindingId)
@@ -674,6 +678,16 @@ function tickInstancedTiling() {
         updateModelInstanceBindingMatrix(bindingId, instancedTilingInstanceMatrix)
       }
       runtime.localDirty = false
+    }
+
+    // Hide the template mesh child so the instanced array is the final visible result.
+    if (!runtime.hiddenMesh) {
+      const templateMesh = findFirstRenderableMeshChild(object)
+      if (templateMesh) {
+        runtime.hiddenMesh = templateMesh
+        runtime.hiddenMeshWasVisible = templateMesh.visible
+        templateMesh.visible = false
+      }
     }
 
     // Enable instanced outline/pick proxy path when tiling is active.

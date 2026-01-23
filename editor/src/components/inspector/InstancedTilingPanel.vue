@@ -105,7 +105,11 @@ function applyPatch(patch: Partial<InstancedTilingComponentProps>): void {
   if (!nodeId || !component) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, patch as Partial<Record<string, unknown>>)
+  const changed = sceneStore.updateNodeComponentProps(nodeId, component.id, patch as Partial<Record<string, unknown>>)
+  if (changed) {
+    // Ensure viewport observes the update immediately
+    sceneStore.bumpSceneNodePropertyVersion()
+  }
 }
 
 function clampCount(value: unknown): number {
@@ -122,6 +126,11 @@ function clampNumber(value: unknown, fallback = 0): number {
     return fallback
   }
   return numeric
+}
+
+function toFiniteNumberOrNull(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : null
 }
 
 function normalizeVector(value: Vector3Like, fallback: Vector3Like): Vector3Like {
@@ -151,6 +160,20 @@ function applyCountUpdate(axis: 'x' | 'y' | 'z') {
   if (axis === 'z') applyPatch({ countZ: clamped })
 }
 
+function applyCountLive(axis: 'x' | 'y' | 'z', rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const numeric = toFiniteNumberOrNull(rawValue)
+  if (numeric === null) {
+    return
+  }
+  const clamped = Math.max(1, Math.floor(numeric))
+  if (axis === 'x') applyPatch({ countX: clamped })
+  if (axis === 'y') applyPatch({ countY: clamped })
+  if (axis === 'z') applyPatch({ countZ: clamped })
+}
+
 function applySpacingUpdate(axis: 'x' | 'y' | 'z') {
   const current = axis === 'x' ? localSpacingX.value : axis === 'y' ? localSpacingY.value : localSpacingZ.value
   const normalized = clampNumber(current, 0)
@@ -161,6 +184,19 @@ function applySpacingUpdate(axis: 'x' | 'y' | 'z') {
   if (axis === 'x') applyPatch({ spacingX: normalized })
   if (axis === 'y') applyPatch({ spacingY: normalized })
   if (axis === 'z') applyPatch({ spacingZ: normalized })
+}
+
+function applySpacingLive(axis: 'x' | 'y' | 'z', rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const numeric = toFiniteNumberOrNull(rawValue)
+  if (numeric === null) {
+    return
+  }
+  if (axis === 'x') applyPatch({ spacingX: numeric })
+  if (axis === 'y') applyPatch({ spacingY: numeric })
+  if (axis === 'z') applyPatch({ spacingZ: numeric })
 }
 
 function applyVectorAxisUpdate(kind: 'forward' | 'up', axis: 'x' | 'y' | 'z', value: string) {
@@ -185,6 +221,17 @@ function applyRollDegreesUpdate() {
     localRollDegrees.value = normalized
   }
   applyPatch({ rollDegrees: normalized })
+}
+
+function applyRollDegreesLive(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const numeric = toFiniteNumberOrNull(rawValue)
+  if (numeric === null) {
+    return
+  }
+  applyPatch({ rollDegrees: numeric })
 }
 </script>
 
@@ -231,6 +278,7 @@ function applyRollDegreesUpdate() {
           variant="underlined"
           min="1"
           step="1"
+          @update:modelValue="(v) => applyCountLive('x', v)"
           @blur="() => applyCountUpdate('x')"
           @keydown.enter.prevent="() => applyCountUpdate('x')"
         />
@@ -242,6 +290,7 @@ function applyRollDegreesUpdate() {
           variant="underlined"
           min="1"
           step="1"
+          @update:modelValue="(v) => applyCountLive('y', v)"
           @blur="() => applyCountUpdate('y')"
           @keydown.enter.prevent="() => applyCountUpdate('y')"
         />
@@ -253,6 +302,7 @@ function applyRollDegreesUpdate() {
           variant="underlined"
           min="1"
           step="1"
+          @update:modelValue="(v) => applyCountLive('z', v)"
           @blur="() => applyCountUpdate('z')"
           @keydown.enter.prevent="() => applyCountUpdate('z')"
         />
@@ -266,6 +316,7 @@ function applyRollDegreesUpdate() {
           density="compact"
           variant="underlined"
           step="0.1"
+          @update:modelValue="(v) => applySpacingLive('x', v)"
           @blur="() => applySpacingUpdate('x')"
           @keydown.enter.prevent="() => applySpacingUpdate('x')"
         />
@@ -276,6 +327,7 @@ function applyRollDegreesUpdate() {
           density="compact"
           variant="underlined"
           step="0.1"
+          @update:modelValue="(v) => applySpacingLive('y', v)"
           @blur="() => applySpacingUpdate('y')"
           @keydown.enter.prevent="() => applySpacingUpdate('y')"
         />
@@ -286,6 +338,7 @@ function applyRollDegreesUpdate() {
           density="compact"
           variant="underlined"
           step="0.1"
+          @update:modelValue="(v) => applySpacingLive('z', v)"
           @blur="() => applySpacingUpdate('z')"
           @keydown.enter.prevent="() => applySpacingUpdate('z')"
         />
@@ -309,6 +362,7 @@ function applyRollDegreesUpdate() {
           density="compact"
           variant="underlined"
           step="1"
+          @update:modelValue="applyRollDegreesLive"
           @blur="applyRollDegreesUpdate"
           @keydown.enter.prevent="applyRollDegreesUpdate"
         />
