@@ -323,13 +323,13 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
 
 const instancedTilingComponentDefinition: ComponentDefinition<InstancedTilingComponentProps> = {
   type: INSTANCED_TILING_COMPONENT_TYPE,
-  label: 'Instanced Tiling',
+  label: 'Tiling',
   icon: 'mdi-grid',
   order: 85,
   description: 'Tile a model asset into an InstancedMesh 3D grid.',
   canAttach(node: SceneNode) {
     const type = String(node.nodeType ?? '').toLowerCase()
-    return type !== 'light' && type !== 'camera'
+    return type === 'mesh'
   },
   createDefaultProps() {
     return clampInstancedTilingComponentProps(null)

@@ -233,29 +233,66 @@ function applyRollDegreesLive(rawValue: unknown) {
   }
   applyPatch({ rollDegrees: numeric })
 }
+
+const componentEnabled = computed(() => componentState.value?.enabled !== false)
+
+function handleToggleComponent() {
+  const component = componentState.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = componentState.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 </script>
 
 <template>
   <v-expansion-panel :value="INSTANCED_TILING_COMPONENT_TYPE">
     <v-expansion-panel-title>
-      <div style="display:flex;align-items:center;width:100%;gap:0.4rem;">
-        <span style="font-weight:600;">Instanced Tiling</span>
+      <div class="instanced-tiling-header">
+        <span class="instanced-tiling-title">Tiling</span>
         <v-spacer />
-        <span style="font-size:0.78rem;opacity:0.78;">{{ hasTemplateAsset ? 'Active' : '未绑定模型' }}</span>
+        <v-menu
+          v-if="componentState"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="tiling-template">
-        <div class="template-row">
-          <span class="template-label">Template</span>
-          <span class="template-value" v-if="hasTemplateAsset">
-            <span v-if="templateAsset">{{ templateAsset.name }} · {{ templateAssetId.slice(0, 8) }}</span>
-            <span v-else>{{ templateAssetId.slice(0, 8) }}</span>
-          </span>
-          <span class="template-value" v-else>未绑定模型：请先在「Asset Model」面板给该节点绑定一个 model/mesh 资源</span>
-        </div>
-        <p v-if="feedbackMessage" class="asset-feedback">{{ feedbackMessage }}</p>
-      </div>
+      <div class="tiling-body" :class="{ 'is-disabled': !componentEnabled }">
 
       <v-select
         v-model="localMode"
@@ -315,7 +352,7 @@ function applyRollDegreesLive(rawValue: unknown) {
           type="number"
           density="compact"
           variant="underlined"
-          step="0.1"
+          step="0.01"
           @update:modelValue="(v) => applySpacingLive('x', v)"
           @blur="() => applySpacingUpdate('x')"
           @keydown.enter.prevent="() => applySpacingUpdate('x')"
@@ -326,7 +363,7 @@ function applyRollDegreesLive(rawValue: unknown) {
           type="number"
           density="compact"
           variant="underlined"
-          step="0.1"
+          step="0.01"
           @update:modelValue="(v) => applySpacingLive('y', v)"
           @blur="() => applySpacingUpdate('y')"
           @keydown.enter.prevent="() => applySpacingUpdate('y')"
@@ -337,7 +374,7 @@ function applyRollDegreesLive(rawValue: unknown) {
           type="number"
           density="compact"
           variant="underlined"
-          step="0.1"
+          step="0.01"
           @update:modelValue="(v) => applySpacingLive('z', v)"
           @blur="() => applySpacingUpdate('z')"
           @keydown.enter.prevent="() => applySpacingUpdate('z')"
@@ -347,11 +384,13 @@ function applyRollDegreesLive(rawValue: unknown) {
       <div v-if="localMode === 'vector'" class="tiling-vector-section">
         <InspectorVectorControls
           label="Forward (local)"
+          step="0.01"
           :model-value="localForward"
           @update:axis="(axis, value) => applyVectorAxisUpdate('forward', axis, value)"
         />
         <InspectorVectorControls
           label="Up (local)"
+          step="0.01"
           :model-value="localUp"
           @update:axis="(axis, value) => applyVectorAxisUpdate('up', axis, value)"
         />
@@ -366,6 +405,7 @@ function applyRollDegreesLive(rawValue: unknown) {
           @blur="applyRollDegreesUpdate"
           @keydown.enter.prevent="applyRollDegreesUpdate"
         />
+      </div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -415,5 +455,30 @@ function applyRollDegreesLive(rawValue: unknown) {
   flex-direction: column;
   gap: 0.6rem;
   margin-top: 0.6rem;
+}
+
+.instanced-tiling-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.4rem;
+}
+
+.instanced-tiling-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
+}
+
+.tiling-body.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 </style>

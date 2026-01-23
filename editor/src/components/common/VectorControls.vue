@@ -7,7 +7,7 @@
       :label="axis.toUpperCase()"
       :model-value="localValues[axis]"
       type="number"
-      step="0.1"
+      :step="props.step ?? 0.1"
       :min="props.min"
       density="compact"
       variant="underlined"
@@ -35,6 +35,7 @@ type VectorDisplay = Record<VectorAxis, VectorValue>
 
 const props = defineProps<{
   label: string
+  step?: number | string
   modelValue: VectorDisplay
   min?: number | string
   disabled?: boolean
