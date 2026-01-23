@@ -742,24 +742,24 @@ function createStarShape(points = 5, outerRadius = 1, innerRadius = 0.5): THREE.
 	shape.moveTo(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius)
 	for (let i = 0; i < points * 2; i += 1) {
 		const radius = i % 2 === 0 ? innerRadius : outerRadius
-		const x = Math.cos(angle + step * (i + 1)) * radius
-		const y = Math.sin(angle + step * (i + 1)) * radius
-		shape.lineTo(x, y)
+		angle += step
+		shape.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius)
 	}
 	shape.closePath()
 	return shape
 }
 
-function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
-	if (shape === 'square') {
-		return new THREE.PlaneGeometry(2, 2)
+function createBrushGeometry(shape: TerrainBrushShape | undefined): THREE.BufferGeometry {
+	switch (shape) {
+		case 'square':
+			return new THREE.PlaneGeometry(2, 2, 1, 1)
+		case 'star':
+			return new THREE.ShapeGeometry(createStarShape(5, 1, 0.5))
+		case 'circle':
+		default:
+			return new THREE.CircleGeometry(1, 64)
 	}
-	if (shape === 'star') {
-		return new THREE.ShapeGeometry(createStarShape())
-	}
-	return new THREE.CircleGeometry(1, 64)
 }
-
 function storeBrushBasePositions(geometry: THREE.BufferGeometry) {
 	const positionAttribute = geometry.getAttribute('position')
 	if (!positionAttribute) {
@@ -2771,9 +2771,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.groundPanelTab.value !== 'paint') {
 			return false
 		}
-		if (!options.paintAsset.value) {
-			return false
-		}
 		const selectedNode = options.sceneStore.selectedNode
 		return selectedNode?.dynamicMesh?.type === 'Ground'
 	}
@@ -3865,18 +3862,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			steps = Math.min(96, steps)
 		}
 
-		const paintAsset = options.paintAsset.value
-		if (!paintAsset) {
-			return
-		}
 		const session = ensurePaintSession(definition, groundNode.id)
-		const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
-		if (!channel) {
-			// No available channel slot (G/B/A) for new layers.
-			return
+		const paintAsset = options.paintAsset.value
+		let channelIndex = 0
+		if (paintAsset) {
+			const channel = ensureTerrainPaintLayer(session.settings, paintAsset.id)
+			if (!channel) {
+				// No available channel slot (G/B/A) for new layers.
+				return
+			}
+			channelIndex = channelToIndex(channel)
+			// Best-effort: ensure the layer texture is visible during painting.
+			void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
 		}
-		// Best-effort: ensure the layer texture is visible during painting.
-		void pushTerrainPaintPreviewLayer(session, channel, paintAsset)
 
 		for (let i = 0; i < steps; i += 1) {
 			const t = steps <= 1 ? 1 : (i + 1) / steps
@@ -3888,7 +3886,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				localZ: point.z,
 				radius,
 				strength: clamp01(options.brushStrength.value),
-				channelIndex: channelToIndex(channel),
+				// If no layer is selected ("empty" tile), paint into base channel (R) to erase.
+				channelIndex,
 			}
 			const chunks = collectPaintChunksOverlappedByBrush(definition, session.chunkCells, point.x, point.z, radius)
 			for (const chunkInfo of chunks) {

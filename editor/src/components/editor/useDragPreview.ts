@@ -61,20 +61,11 @@ function findAssetMetadata(assetId: string, projectTree: ProjectDirectory[] | un
 }
 
 function applyPreviewVisualTweaks(object: THREE.Object3D) {
-  object.traverse((child) => {
-    const meshChild = child as THREE.Mesh
-    if (meshChild?.isMesh) {
-      const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
-      for (const material of materials) {
-        if (!material) {
-          continue
-        }
-        material.transparent = true
-        material.opacity = Math.min(0.75, material.opacity ?? 1)
-        material.depthWrite = false
-      }
-    }
-  })
+  object.position.set(0, 0, 0)
+  object.rotation.set(0, 0, 0)
+  object.scale.set(1, 1, 1)
+  // Intentionally keep original materials for preview rendering.
+  // We avoid forcing transparency/opacity so the drag preview matches the final object visually.
 }
 
 export function useDragPreview(options: Options): DragPreviewController {

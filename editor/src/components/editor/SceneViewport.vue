@@ -3705,6 +3705,36 @@ const dragPreview = useDragPreview({
 })
 const dragPreviewGroup = dragPreview.group
 
+const dragPreviewBoundingBoxHelper = new THREE.Box3()
+const dragPreviewWorldPositionHelper = new THREE.Vector3()
+const dragPreviewAlignedPointHelper = new THREE.Vector3()
+
+function computeWorldAabbBottomAlignedPoint(
+  basePoint: THREE.Vector3 | null,
+  previewRoot: THREE.Object3D,
+): THREE.Vector3 | null {
+  if (!basePoint) {
+    return null
+  }
+
+  if (!previewRoot.children || previewRoot.children.length === 0) {
+    return null
+  }
+
+  previewRoot.updateWorldMatrix(true, true)
+  setBoundingBoxFromObject(previewRoot, dragPreviewBoundingBoxHelper)
+  if (dragPreviewBoundingBoxHelper.isEmpty()) {
+    return null
+  }
+
+  previewRoot.getWorldPosition(dragPreviewWorldPositionHelper)
+  const bottomOffsetFromOriginY = dragPreviewBoundingBoxHelper.min.y - dragPreviewWorldPositionHelper.y
+
+  dragPreviewAlignedPointHelper.copy(basePoint)
+  dragPreviewAlignedPointHelper.y = basePoint.y - bottomOffsetFromOriginY
+  return dragPreviewAlignedPointHelper.clone()
+}
+
 // Selection-based asset preview state: when a mesh/model/prefab is selected
 let selectionPreviewActive = false
 let selectionPreviewAssetId: string | null = null
@@ -6297,9 +6327,15 @@ function handlePointerMove(event: PointerEvent) {
       if (now - lastSelectionPreviewUpdate > 8) {
         lastSelectionPreviewUpdate = now
         const placement = computePointerDropPlacement(event)
-        const point = computePreviewPointForPlacement(placement)
-        dragPreview.setPosition(point)
+        const basePoint = computePreviewPointForPlacement(placement)
+        // Keep dragPreview internal state aligned to the *surface* point so grid highlight remains correct.
+        dragPreview.setPosition(basePoint)
         dragPreviewGroup.rotation.y = placementPreviewYaw
+        const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+        if (aligned) {
+          dragPreviewGroup.position.copy(aligned)
+          dragPreviewGroup.visible = true
+        }
       }
     }
   } catch (err) {
@@ -6492,18 +6528,11 @@ async function handlePointerUp(event: PointerEvent) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
           const placement = computePointerDropPlacement(event)
-          const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-          snapVectorToGrid(spawnPoint)
-          const groundNodeId = resolveGroundNodeIdForPlacement()
-          const shouldSnapToHeightfield =
-            placement?.kind === 'planeFallback'
-            || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
-          if (shouldSnapToHeightfield) {
-            const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
-            if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
-              spawnPoint.y = heightfieldY
-            }
-          }
+          const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+          const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === session.assetId
+          const spawnPoint = canUsePreviewBounds
+            ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
+            : basePoint
           const parentGroupId = resolveSelectedGroupDropParent()
           const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
@@ -7530,16 +7559,23 @@ function handleViewportDragOver(event: DragEvent) {
   }
 
   const placement = computeDropPlacement(event)
-  const point = computePreviewPointForPlacement(placement)
+  const basePoint = computePreviewPointForPlacement(placement)
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
   }
   isDragHovering.value = true
-  updateGridHighlight(point, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
-  dragPreview.setPosition(point)
+  updateGridHighlight(basePoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
+  // Keep dragPreview internal state aligned to the *surface* point so grid highlight remains correct.
+  dragPreview.setPosition(basePoint)
   if (info) {
     dragPreview.prepare(info.assetId)
+    // If preview object is already available, align it so its world-AABB bottom rests on the surface point.
+    const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+    if (aligned) {
+      dragPreviewGroup.position.copy(aligned)
+      dragPreviewGroup.visible = true
+    }
   } else {
     dragPreview.dispose()
   }
@@ -7564,8 +7600,8 @@ async function handleViewportDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   isDragHovering.value = false
-  dragPreview.dispose()
   if (!info) {
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -7578,6 +7614,7 @@ async function handleViewportDrop(event: DragEvent) {
   const isTexture = assetType === 'texture' || assetType === 'image'
 
   if (asset && isWallPresetAsset(asset)) {
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -7588,6 +7625,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveDisplayBoardDropTarget(event)
     if (target) {
       await sceneStore.applyDisplayBoardAsset(target.nodeId, target.component.id, assetId, { updateMaterial: true })
+      dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
@@ -7599,6 +7637,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
       console.warn('No compatible mesh found for material drop', assetId)
+      dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
@@ -7608,6 +7647,7 @@ async function handleViewportDrop(event: DragEvent) {
     if (!applied) {
       console.warn('Failed to apply material asset to node', assetId, target.nodeId)
     }
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -7625,6 +7665,7 @@ async function handleViewportDrop(event: DragEvent) {
         console.warn('Failed to apply behavior prefab to node', assetId, error)
       }
     }
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -7635,6 +7676,7 @@ async function handleViewportDrop(event: DragEvent) {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
       console.warn('No compatible mesh found for texture drop', assetId)
+      dragPreview.dispose()
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
@@ -7644,6 +7686,7 @@ async function handleViewportDrop(event: DragEvent) {
     if (!applied) {
       console.warn('Failed to apply texture asset to node', assetId, target.nodeId)
     } 
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -7651,18 +7694,11 @@ async function handleViewportDrop(event: DragEvent) {
   }
 
   const placement = computeDropPlacement(event)
-  const spawnPoint = placement?.point ? placement.point.clone() : new THREE.Vector3(0, 0, 0)
-  snapVectorToGrid(spawnPoint)
-  const groundNodeId = resolveGroundNodeIdForPlacement()
-  const shouldSnapToHeightfield =
-    placement?.kind === 'planeFallback'
-    || (placement?.kind === 'surfaceHit' && Boolean(groundNodeId) && placement.hitNodeId === groundNodeId)
-  if (shouldSnapToHeightfield) {
-    const heightfieldY = sampleHeightfieldWorldYAt(spawnPoint)
-    if (typeof heightfieldY === 'number' && Number.isFinite(heightfieldY)) {
-      spawnPoint.y = heightfieldY
-    }
-  }
+  const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+  const canUsePreviewBounds = Boolean(dragPreviewGroup.children && dragPreviewGroup.children.length > 0)
+  const spawnPoint = canUsePreviewBounds
+    ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
+    : basePoint
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
@@ -7685,6 +7721,7 @@ async function handleViewportDrop(event: DragEvent) {
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
+    dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
   }
   updateGridHighlight(null)
