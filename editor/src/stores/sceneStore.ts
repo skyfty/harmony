@@ -6004,6 +6004,11 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
 
     const terrainPaint: any = (definition as any)?.terrainPaint
     if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+      if (Array.isArray(terrainPaint.layers)) {
+        terrainPaint.layers.forEach((layer: any) => {
+          collectAssetIdCandidate(bucket, layer?.textureAssetId)
+        })
+      }
       Object.values(terrainPaint.chunks).forEach((ref: any) => {
         const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
         if (logicalId) {
