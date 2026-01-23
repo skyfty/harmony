@@ -140,33 +140,6 @@ export interface ProjectExportBundleProjectConfig {
   sceneOrder: string[]
 }
 
-export interface ProjectExportSceneEntryBase {
-  id: string
-  name: string
-  createdAt?: string | null
-  updatedAt?: string | null
-}
-
-export interface ProjectExportEmbeddedSceneEntry extends ProjectExportSceneEntryBase {
-  kind: 'embedded'
-  document: SceneJsonExportDocument
-}
-
-export interface ProjectExportExternalSceneEntry extends ProjectExportSceneEntryBase {
-  kind: 'external'
-  sceneJsonUrl: string
-}
-
-export type ProjectExportSceneEntry = ProjectExportEmbeddedSceneEntry | ProjectExportExternalSceneEntry
-
-export interface ProjectExportBundle {
-  format: typeof PROJECT_EXPORT_BUNDLE_FORMAT
-  formatVersion: typeof PROJECT_EXPORT_BUNDLE_FORMAT_VERSION
-  exportedAt: string
-  project: ProjectExportBundleProjectConfig
-  scenes: ProjectExportSceneEntry[]
-}
-
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export type GeometryType =
   | 'Box'

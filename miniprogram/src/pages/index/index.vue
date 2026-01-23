@@ -14,7 +14,7 @@
         <scroll-view scroll-y class="scene-list">
             <view v-if="!orderedProjects.length && !importing" class="empty">
                 <text class="empty-title">暂无项目</text>
-                <text class="empty-desc">通过本地文件导入工程（Project）导出文件</text>
+                <text class="empty-desc">通过本地文件导入场景包 ZIP</text>
             </view>
 
             <view
@@ -24,11 +24,11 @@
                 @tap="openProject(project.id)"
             >
                 <view class="card-header">
-                    <text class="scene-name">{{ project.bundle.project.name || '未命名项目' }}</text>
+                    <text class="scene-name">{{ project.project.name || '未命名项目' }}</text>
                 </view>
                 <view class="card-meta">
                     <text>导入于 {{ formatDate(project.savedAt) }}</text>
-                    <text>场景数 {{ project.bundle.scenes.length }} 个</text>
+                    <text>场景数 {{ project.sceneCount }} 个</text>
                 </view>
                 <view class="card-footer">
                     <text class="card-origin" v-if="project.origin">来源：{{ project.origin }}</text>
@@ -41,7 +41,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import { parseProjectBundle, useProjectStore } from '@/stores/projectStore';
+import { useProjectStore } from '@/stores/projectStore';
+import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema';
 
 const projectStore = useProjectStore();
 const { orderedProjects } = storeToRefs(projectStore);
@@ -70,49 +71,81 @@ function openProject(projectId: string) {
     uni.navigateTo({ url: `/pages/scene-viewer/index?projectId=${encodeURIComponent(projectId)}` });
 }
 
-async function readFileContent(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<string> {
+function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
+    if (input instanceof Uint8Array) {
+        const safe = new ArrayBuffer(input.byteLength);
+        new Uint8Array(safe).set(input);
+        return safe;
+    }
+    return input;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    if (typeof (uni as any)?.arrayBufferToBase64 === 'function') {
+        return (uni as any).arrayBufferToBase64(buffer) as string;
+    }
+    const wxAny = typeof wx !== 'undefined' ? (wx as any) : null;
+    if (wxAny && typeof wxAny.arrayBufferToBase64 === 'function') {
+        return wxAny.arrayBufferToBase64(buffer) as string;
+    }
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i] ?? 0);
+    }
+    if (typeof btoa === 'function') {
+        return btoa(binary);
+    }
+    const G: any = globalThis as any;
+    if (G && typeof G.Buffer !== 'undefined') {
+        return G.Buffer.from(bytes).toString('base64');
+    }
+    throw new Error('base64 encode not supported in this environment');
+}
+
+async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<ArrayBuffer | Uint8Array> {
     const anyFile = file as any;
     const fs = typeof uni.getFileSystemManager === 'function' ? uni.getFileSystemManager() : null;
     const filePath: string | undefined = anyFile.path || anyFile.tempFilePath || anyFile.url;
 
-    // 1) 小程序端：优先使用本地文件系统管理器读取
+    // 1) 小程序端：使用文件系统管理器读取 base64 再转换
     if (fs && filePath) {
         try {
-            const text = await new Promise<string>((resolve, reject) =>
+            const base64 = await new Promise<string>((resolve, reject) =>
                 fs.readFile({
                     filePath,
-                    encoding: 'utf-8',
+                    encoding: 'base64',
                     success: (res: any) => resolve(res.data as string),
                     fail: reject,
                 }),
             );
-            return text;
+            const bytes = base64ToUint8Array(base64);
+            return bytes;
         } catch (err) {
-            console.warn('uni.getFileSystemManager 读取失败，尝试其他方式', err);
+            console.warn('uni.getFileSystemManager 读取二进制失败，尝试其他方式', err);
         }
     }
 
-    // 2) 微信小程序兜底（保持与现有逻辑一致）
+    // 2) 微信小程序兜底
     const wxFileManager = typeof wx !== 'undefined' && typeof wx.getFileSystemManager === 'function' ? wx.getFileSystemManager() : null;
     if (wxFileManager && filePath) {
         try {
-            const text = await new Promise<string>((resolve, reject) =>
+            const base64 = await new Promise<string>((resolve, reject) =>
                 wxFileManager.readFile({
                     filePath,
-                    encoding: 'utf-8',
+                    encoding: 'base64',
                     success: (res: any) => resolve(res.data as string),
                     fail: reject,
                 }),
             );
-            return text;
+            return base64ToUint8Array(base64);
         } catch (err) {
-            console.warn('wx.getFileSystemManager 读取失败，尝试其他方式', err);
+            console.warn('wx.getFileSystemManager 读取二进制失败，尝试其他方式', err);
         }
     }
 
-    // 3) H5：尝试直接从 File/Blob 对象读取
+    // 3) H5：Blob/File -> arrayBuffer
     let blob: Blob | undefined = anyFile.file as Blob | undefined;
-    // 某些平台 file 对象本身就是 File/Blob
     if (!blob && typeof File !== 'undefined' && file instanceof File) {
         blob = file as unknown as Blob;
     }
@@ -120,44 +153,76 @@ async function readFileContent(file: UniApp.ChooseFileSuccessCallbackResultFile)
         blob = file as Blob;
     }
     if (blob) {
-        if (typeof (blob as any).text === 'function') {
-            return await (blob as any).text();
+        if (typeof (blob as any).arrayBuffer === 'function') {
+            return await (blob as any).arrayBuffer();
         }
-        const text = await new Promise<string>((resolve, reject) => {
+        return await new Promise<ArrayBuffer>((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = () => resolve((reader.result as string) || '');
+            reader.onload = () => resolve((reader.result as ArrayBuffer) || new ArrayBuffer(0));
             reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'));
-            reader.readAsText(blob as Blob, 'utf-8');
+            reader.readAsArrayBuffer(blob as Blob);
         });
-        return text;
     }
 
-    // 4) H5：如果拿到的是 blob:/data:/http(s) URL，则通过 fetch 拉取内容
+    // 4) H5 fetch URL
     if (filePath && (/^blob:/i.test(filePath) || /^data:/i.test(filePath) || /^https?:/i.test(filePath))) {
         const res = await fetch(filePath);
-        const ct = res.headers.get('content-type') || '';
-        if (ct.includes('application/json') || ct.startsWith('text/')) {
-            return await res.text();
-        }
-        const b = await res.blob();
-        if (typeof (b as any).text === 'function') {
-            return await (b as any).text();
-        }
-        return await new Promise<string>((resolve, reject) => {
-            const fr = new FileReader();
-            fr.onload = () => resolve((fr.result as string) || '');
-            fr.onerror = () => reject(fr.error ?? new Error('读取文件失败'));
-            fr.readAsText(b, 'utf-8');
-        });
+        return await res.arrayBuffer();
     }
 
-    // 5) 仍无法读取，给出明确提示
-    throw new Error('当前平台暂不支持直接读取所选文件，请在 H5/App 端或使用支持的端导入');
+    throw new Error('当前平台暂不支持以二进制读取所选文件');
 }
 
-async function importProject(bundle: unknown, origin?: string) {
-    const projectBundle = parseProjectBundle(bundle);
-    projectStore.importProject(projectBundle, origin);
+function base64ToUint8Array(base64: string): Uint8Array {
+    if (!base64) return new Uint8Array(0);
+    // remove data:*/*;base64, prefix if present
+    const idx = base64.indexOf('base64,');
+    const raw = idx >= 0 ? base64.slice(idx + 7) : base64;
+    let binary: string;
+    if (typeof atob === 'function') {
+        binary = atob(raw);
+    } else {
+        const G: any = globalThis as any;
+        if (G && typeof G.Buffer !== 'undefined') {
+            binary = G.Buffer.from(raw, 'base64').toString('binary');
+        } else {
+            throw new Error('base64 decode not supported in this environment');
+        }
+    }
+    const len = binary.length;
+    const out = new Uint8Array(len);
+    for (let i = 0; i < len; i += 1) out[i] = binary.charCodeAt(i);
+    return out;
+}
+
+async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: string) {
+    const pkg = unzipScenePackage(zip);
+    const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
+    const projectConfig = JSON.parse(projectText) as any;
+
+    if (!projectConfig || typeof projectConfig !== 'object') {
+        throw new Error('项目文件格式不正确');
+    }
+
+    const ab = toArrayBuffer(zip as any);
+    const zipBase64 = arrayBufferToBase64(ab);
+    const sceneCount = Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.length : 0;
+
+    projectStore.importScenePackage(
+        {
+            zipBase64,
+            project: {
+                id: String(projectConfig.id ?? ''),
+                name: String(projectConfig.name ?? ''),
+                sceneOrder: Array.isArray(projectConfig.sceneOrder)
+                    ? projectConfig.sceneOrder
+                    : (Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.map((s) => s.sceneId) : []),
+            } as any,
+            sceneCount,
+        },
+        origin,
+    );
+
     uni.showToast({ title: '项目导入成功', icon: 'success' });
 }
 
@@ -173,7 +238,7 @@ async function handleLocalImport() {
             if (canUseUniChooseFile) {
                 uni.chooseFile({
                     count: 1,
-                    extension: ['.json'],
+                    extension: ['.zip'],
                     success: async (result) => {
                         const files = Array.isArray(result.tempFiles) ? result.tempFiles : [result.tempFiles];
                         const file = files[0] as UniApp.ChooseFileSuccessCallbackResultFile | undefined;
@@ -182,9 +247,15 @@ async function handleLocalImport() {
                             return;
                         }
                         try {
-                            const content = await readFileContent(file);
+                            const name = (file as any).name || (file as any).path || '';
+                            const lower = (name || '').toLowerCase();
                             const originName = (file as any).name || '本地文件';
-                            await importProject(content, originName);
+                            if (!lower.endsWith('.zip')) {
+                                reject(new Error('仅支持 .zip 场景包导入'));
+                                return;
+                            }
+                            const bytes = await readFileAsArrayBuffer(file as any);
+                            await importScenePackageZip(bytes as any, originName);
                             resolve();
                         } catch (error) {
                             reject(error);
@@ -202,8 +273,8 @@ async function handleLocalImport() {
                 (wx as any).chooseMessageFile({
                     count: 1,
                     type: 'file',
-                    // 同时传入含/不含点的后缀，兼容性更好
-                    extension: ['.json', 'json'],
+                    // 只接受 zip
+                    extension: ['.zip', 'zip'],
                     success: async (res: any) => {
                         try {
                             const files = Array.isArray(res.tempFiles) ? res.tempFiles : [res.tempFiles];
@@ -212,9 +283,15 @@ async function handleLocalImport() {
                                 reject(new Error('未选择文件'));
                                 return;
                             }
-                            const content = await readFileContent(file as any);
+                            const name = (file && (file.name || file.path)) || '';
+                            const lower = (name || '').toLowerCase();
                             const originName = (file && (file.name || file.path)) || '本地文件';
-                            await importProject(content, originName);
+                            if (!lower.endsWith('.zip')) {
+                                reject(new Error('仅支持 .zip 场景包导入'));
+                                return;
+                            }
+                            const bytes = await readFileAsArrayBuffer(file as any);
+                            await importScenePackageZip(bytes as any, originName);
                             resolve();
                         } catch (error) {
                             reject(error);

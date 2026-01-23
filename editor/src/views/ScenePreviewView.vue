@@ -20,10 +20,6 @@ import {
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
-	PROJECT_EXPORT_BUNDLE_FORMAT,
-	PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-	type ProjectExportBundle,
-	type ProjectExportSceneEntry,
 	unzipScenePackage,
 	buildAssetOverridesFromScenePackage,
 	readTextFileFromScenePackage,
@@ -223,8 +219,7 @@ function switchToLivePreviewMode(): void {
 	}
 	try {
 		const url = new URL(window.location.href)
-		url.searchParams.delete('projectUrl')
-		url.searchParams.delete('bundleUrl')
+		url.searchParams.delete('packageUrl')
 		url.hash = '#/preview'
 		window.location.href = url.toString()
 	} catch {
@@ -232,8 +227,39 @@ function switchToLivePreviewMode(): void {
 	}
 }
 
-const projectBundle = ref<ProjectExportBundle | null>(null)
-const projectSceneIndex = new Map<string, ProjectExportSceneEntry>()
+type ScenePreviewProject = {
+	id: string
+	name: string
+	defaultSceneId: string | null
+	lastEditedSceneId: string | null
+	sceneOrder: string[]
+}
+
+type ScenePreviewSceneEntry =
+	| {
+			kind: 'embedded'
+			id: string
+			name: string
+			createdAt: string | null
+			updatedAt: string | null
+			document: SceneJsonExportDocument
+	  }
+	| {
+			kind: 'external'
+			id: string
+			name: string
+			createdAt: string | null
+			updatedAt: string | null
+			sceneJsonUrl: string
+	  }
+
+type ScenePreviewProjectPackage = {
+	project: ScenePreviewProject
+	scenes: ScenePreviewSceneEntry[]
+}
+
+const projectBundle = ref<ScenePreviewProjectPackage | null>(null)
+const projectSceneIndex = new Map<string, ScenePreviewSceneEntry>()
 const liveUpdatesDisabledLabel = computed(() => {
 	if (projectBundle.value) {
 		return 'Live updates disabled (bundle mode).'
@@ -4676,66 +4702,12 @@ async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
 	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 }
 
-function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
-	if (!raw || typeof raw !== 'object') {
-		return false
-	}
-	const candidate = raw as Partial<ProjectExportBundle>
-	if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
-		return false
-	}
-	if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
-		return false
-	}
-	if (!candidate.project || typeof candidate.project !== 'object') {
-		return false
-	}
-	if (!Array.isArray(candidate.scenes)) {
-		return false
-	}
-	return true
-}
-
 function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument {
 	if (!raw || typeof raw !== 'object') {
 		return false
 	}
 	const candidate = raw as Partial<SceneJsonExportDocument>
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
-}
-
-async function loadProjectBundleFromUrl(sourceUrl: string): Promise<void> {
-	const trimmed = sourceUrl.trim()
-	if (!trimmed) {
-		appendWarningMessage('Missing projectUrl')
-		return
-	}
-	activeScenePackageAssetOverrides = null
-	statusMessage.value = 'Loading project...'
-	try {
-		const text = await fetchTextFromUrl(trimmed)
-		const parsed = JSON.parse(text) as unknown
-		if (!isProjectExportBundle(parsed)) {
-			throw new Error('Invalid project export bundle')
-		}
-		projectBundle.value = parsed
-		projectSceneIndex.clear()
-		parsed.scenes.forEach((scene) => {
-			if (scene && typeof scene.id === 'string') {
-				projectSceneIndex.set(scene.id, scene)
-			}
-		})
-
-		const initialId = parsed.project.defaultSceneId || parsed.project.sceneOrder?.[0] || parsed.scenes[0]?.id || ''
-		if (initialId) {
-			await switchToProjectScene(initialId)
-		}
-		statusMessage.value = ''
-	} catch (error) {
-		console.error('[ScenePreview] Failed to load project bundle', error)
-		appendWarningMessage('Failed to load project bundle.')
-		statusMessage.value = 'Failed to load project bundle.'
-	}
 }
 
 async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
@@ -4753,7 +4725,7 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
 		const projectConfig = JSON.parse(projectText) as any
 
-		const scenes: ProjectExportSceneEntry[] = []
+		const scenes: ScenePreviewSceneEntry[] = []
 		projectSceneIndex.clear()
 		pkg.manifest.scenes.forEach((sceneEntry) => {
 			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
@@ -4763,7 +4735,7 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 			}
 			const document = sceneRaw as SceneJsonExportDocument
 			const id = sceneEntry.sceneId
-			const entry: ProjectExportSceneEntry = {
+			const entry: ScenePreviewSceneEntry = {
 				kind: 'embedded',
 				id,
 				name: document.name || id,
@@ -4776,9 +4748,6 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 		})
 
 		projectBundle.value = {
-			format: PROJECT_EXPORT_BUNDLE_FORMAT,
-			formatVersion: PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-			exportedAt: new Date().toISOString(),
 			project: {
 				id: String(projectConfig?.id ?? ''),
 				name: String(projectConfig?.name ?? ''),
@@ -9918,19 +9887,11 @@ onMounted(() => {
 	if (typeof window !== 'undefined') {
 		try {
 			const url = new URL(window.location.href)
-			const packageUrl = url.searchParams.get('packageUrl') || url.searchParams.get('zipUrl')
+			const packageUrl = url.searchParams.get('packageUrl')
 			if (packageUrl) {
 				liveUpdatesDisabledSourceUrl.value = packageUrl
 				handledInitialPayload = true
 				void loadScenePackageFromUrl(packageUrl)
-			}
-			if (!handledInitialPayload) {
-				const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
-				if (projectUrl) {
-					liveUpdatesDisabledSourceUrl.value = projectUrl
-					handledInitialPayload = true
-					void loadProjectBundleFromUrl(projectUrl)
-				}
 			}
 		} catch {
 			// ignore
