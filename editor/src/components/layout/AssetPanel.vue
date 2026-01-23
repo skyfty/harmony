@@ -325,9 +325,26 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
   sceneStore.setProjectPanelTreeSize(nextSize)
 }
 
-function selectAsset(asset: ProjectAsset) {
-  sceneStore.selectAsset(asset.id)
+async function selectAsset(asset: ProjectAsset) {
   const uiStore = useUiStore()
+  // For model-like assets, ensure the asset is downloaded/cached before selecting
+  if (MODEL_ASSET_TYPES.has(asset.type)) {
+    const prepared = prepareAssetForOperations(asset)
+    try {
+      assetCacheStore.setError(prepared.id, null)
+      await ensureAssetCached(prepared)
+    } catch (error) {
+      const message = (error as Error).message ?? 'Failed to load asset'
+      assetCacheStore.setError(prepared.id, message)
+      console.error('Failed to cache asset before select', error)
+      return
+    }
+    sceneStore.selectAsset(prepared.id)
+    uiStore.setActiveSelectionContext('asset-panel')
+    return
+  }
+
+  sceneStore.selectAsset(asset.id)
   uiStore.setActiveSelectionContext('asset-panel')
 }
 
