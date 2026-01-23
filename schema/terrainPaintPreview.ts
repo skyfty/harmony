@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from './index'
 
 const TERRAIN_PAINT_MATERIAL_KEY = '__harmonyTerrainPaintMaterialV1'
+// Debug helpers removed: keep implementation minimal and focused on preview functionality.
 
 type TerrainPaintShaderState = {
 	shader: any
@@ -161,27 +162,38 @@ export function ensureTerrainPaintPreviewInstalled(
 	;(root.userData as any).__terrainPaintDefinition = definition
 	;(root.userData as any).__terrainPaintSettings = settings
 
-	let targetMaterial: THREE.MeshStandardMaterial | null = null
+	// counts removed (debugging variables) — keep function focused on installing hooks
+	const materialSet = new Set<THREE.MeshStandardMaterial>()
+
 	root.traverse((obj) => {
-		if (targetMaterial) {
-			return
-		}
 		const mesh = obj as THREE.Mesh
 		if (!mesh?.isMesh) {
 			return
 		}
 		const material = mesh.material
-		const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined)
-		if (resolved && resolved instanceof THREE.MeshStandardMaterial) {
-			targetMaterial = resolved
+		if (Array.isArray(material)) {
+			material.forEach((entry) => {
+				if (entry && entry instanceof THREE.MeshStandardMaterial) {
+					materialSet.add(entry)
+				}
+			})
+			return
+		}
+		if (material && material instanceof THREE.MeshStandardMaterial) {
+			materialSet.add(material)
 		}
 	})
-	if (!targetMaterial) {
+	if (materialSet.size === 0) {
 		return
 	}
 
-	const state = installShaderHooks(targetMaterial)
-	;(root.userData as any).groundMaterial = targetMaterial
+	const materials = Array.from(materialSet)
+	materials.forEach((material) => {
+		installShaderHooks(material)
+	})
+	;(root.userData as any).groundMaterials = materials
+	;(root.userData as any).groundMaterial = materials[0]
+	// Installed shader hooks on discovered materials.
 
 	root.traverse((obj) => {
 		const mesh = obj as THREE.Mesh
@@ -193,16 +205,20 @@ export function ensureTerrainPaintPreviewInstalled(
 		}
 		;(mesh.userData as any).__terrainPaintBound = true
 		mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, mat) => {
-			if (!state.shader) {
+			if (!(mat instanceof THREE.MeshStandardMaterial)) {
 				return
 			}
-			if (!(mat instanceof THREE.MeshStandardMaterial)) {
+			const state = getOrCreateShaderState(mat)
+			if (!state.shader) {
 				return
 			}
 			const def = (root.userData as any).__terrainPaintDefinition as GroundDynamicMesh | undefined
 			const currentSettings = (root.userData as any).__terrainPaintSettings as TerrainPaintSettings | null | undefined
 			if (!def) {
 				return
+			}
+			if (currentSettings && currentSettings.version !== 1) {
+				// Unsupported settings version; disable preview by not enabling the shader uniforms below.
 			}
 			const bounds = computeChunkBounds(def, mesh)
 			if (bounds) {
@@ -221,6 +237,8 @@ export function ensureTerrainPaintPreviewInstalled(
 			state.shader.uniforms.uTerrainPaintHasA.value = state.layerTextures.a ? 1 : 0
 		}
 	})
+
+	// Bindings installed.
 }
 
 export function setTerrainPaintPreviewWeightmapTexture(material: THREE.Material, chunkKey: string, texture: THREE.Texture | null): void {
@@ -287,3 +305,394 @@ export function updateTerrainPaintPreviewLayerTexture(
 	}
 	delete (state.layerTextures as any)[channel]
 }
+
+export async function decodeWeightmapToData(blob: Blob, resolution: number): Promise<Uint8ClampedArray> {
+	const res = Math.max(1, Math.round(resolution))
+	// Binary fast-path (preferred for persisted terrain paint weightmaps).
+	// Format:
+	// - 4 bytes magic: 'HWP1'
+	// - uint16 little-endian: resolution
+	// - uint32 little-endian: payload byte length
+	// - payload: RGBA bytes (res * res * 4)
+	// Only binary format is supported now.
+	if (blob.type === 'application/octet-stream' || blob.type === 'binary/octet-stream' || blob.type === '') {
+		const expectedLength = res * res * 4
+		const buffer = await blob.arrayBuffer()
+		const bytes = new Uint8Array(buffer)
+		if (bytes.length === expectedLength) {
+			return new Uint8ClampedArray(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + expectedLength))
+		}
+		if (bytes.length >= 10 && bytes[0] === 0x48 && bytes[1] === 0x57 && bytes[2] === 0x50 && bytes[3] === 0x31) {
+			const view = new DataView(buffer)
+			const storedRes = view.getUint16(4, true)
+			const payloadLen = view.getUint32(6, true)
+			const offset = 10
+			if (storedRes !== res) {
+				throw new Error(`Weightmap resolution mismatch: expected ${res}, got ${storedRes}`)
+			}
+			if (payloadLen !== expectedLength) {
+				throw new Error(`Weightmap payload length mismatch: expected ${expectedLength}, got ${payloadLen}`)
+			}
+			if (offset + payloadLen > bytes.length) {
+				throw new Error('Weightmap payload truncated')
+			}
+			const payload = bytes.subarray(offset, offset + payloadLen)
+			return new Uint8ClampedArray(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength))
+		}
+	}
+	throw new Error('Unsupported weightmap format: only the binary HWP1 weightmap format is supported')
+}
+
+export function encodeWeightmapToBinary(data: Uint8ClampedArray, resolution: number): Blob {
+	const res = Math.max(1, Math.round(resolution))
+	const expectedLength = res * res * 4
+	const src = new Uint8Array(data.buffer as unknown as ArrayBuffer, data.byteOffset, data.byteLength)
+	if (src.byteLength !== expectedLength) {
+		throw new Error(`Weightmap byte length mismatch: expected ${expectedLength}, got ${src.byteLength}`)
+	}
+	const headerSize = 10
+	const out = new Uint8Array(headerSize + expectedLength)
+	out[0] = 0x48 // H
+	out[1] = 0x57 // W
+	out[2] = 0x50 // P
+	out[3] = 0x31 // 1
+	const view = new DataView(out.buffer)
+	view.setUint16(4, res, true)
+	view.setUint32(6, expectedLength, true)
+	out.set(src, headerSize)
+	return new Blob([out], { type: 'application/octet-stream' })
+}
+
+export type AssetLoader = (assetId: string) => Promise<Blob | null>
+export type TextureLoader = (assetId: string) => Promise<THREE.Texture | null>
+
+export async function loadTerrainPaintAssets(
+	root: THREE.Object3D,
+	definition: GroundDynamicMesh,
+	settings: TerrainPaintSettings,
+	assetLoader: AssetLoader,
+	textureLoader: TextureLoader,
+): Promise<void> {
+	ensureTerrainPaintPreviewInstalled(root, definition, settings)
+	const materials = (root.userData as any).groundMaterials as THREE.Material[] | undefined
+	const material = (root.userData as any).groundMaterial as THREE.Material | undefined
+	const targets = (materials && materials.length ? materials : material ? [material] : []) as THREE.Material[]
+	if (!targets.length) {
+		return
+	}
+
+	// Load layers
+	if (settings.layers) {
+		for (const layer of settings.layers) {
+			const tex = await textureLoader(layer.textureAssetId)
+			if (tex) {
+				targets.forEach((target) => {
+					updateTerrainPaintPreviewLayerTexture(target, layer.channel, tex)
+				})
+			}
+		}
+	}
+
+	// Load chunks
+	if (settings.chunks) {
+		const promises = Object.entries(settings.chunks).map(async ([key, chunkRef]) => {
+			const logicalId = (chunkRef as any)?.logicalId
+			if (typeof logicalId !== 'string') return
+			const blob = await assetLoader(logicalId)
+			if (blob) {
+				try {
+					const data = await decodeWeightmapToData(blob, settings.weightmapResolution)
+					targets.forEach((target) => {
+						updateTerrainPaintPreviewWeightmap(target, key, data, settings.weightmapResolution)
+					})
+				} catch (error) {
+					console.warn(`Failed to decode weightmap for chunk ${key}`, error)
+				}
+			}
+		})
+		await Promise.all(promises)
+	}
+}
+
+// Helper: clone per-mesh materials once to avoid shared-material state when previewing terrain paint.
+export function cloneTerrainPaintPreviewMaterialsOnce(root: THREE.Object3D): void {
+	root.traverse((obj) => {
+		const mesh = obj as THREE.Mesh
+		if (!mesh?.isMesh) {
+			return
+		}
+		if ((mesh.userData as any)?.__terrainPaintPreviewMaterialCloned) {
+			return
+		}
+		const mat = mesh.material
+		if (Array.isArray(mat)) {
+			let changed = false
+			const cloned = mat.map((entry) => {
+				if (entry instanceof THREE.MeshStandardMaterial) {
+					changed = true
+					return entry.clone()
+				}
+				return entry
+			})
+			if (changed) {
+				mesh.material = cloned
+			}
+		} else if (mat instanceof THREE.MeshStandardMaterial) {
+			mesh.material = mat.clone()
+		}
+		;(mesh.userData as any).__terrainPaintPreviewMaterialCloned = true
+	})
+}
+
+// Helper: collect visible chunk materials mapping (chunkKey -> materials[]) and a set of visible materials.
+export function collectVisibleChunkMaterials(root: THREE.Object3D): {
+	visibleChunkMaterials: Map<string, THREE.MeshStandardMaterial[]>
+	visibleMaterials: Set<THREE.MeshStandardMaterial>
+} {
+	const visibleChunkMaterials = new Map<string, THREE.MeshStandardMaterial[]>()
+	const visibleMaterials = new Set<THREE.MeshStandardMaterial>()
+	root.traverse((obj) => {
+		const mesh = obj as THREE.Mesh
+		if (!mesh?.isMesh) {
+			return
+		}
+		const chunk = (mesh.userData as any)?.groundChunk
+		const row = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null
+		const col = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null
+		if (row === null || col === null) {
+			return
+		}
+		const chunkKey = `${row}:${col}`
+		const materials: THREE.MeshStandardMaterial[] = []
+		const mat = mesh.material
+		if (Array.isArray(mat)) {
+			for (const entry of mat) {
+				if (entry instanceof THREE.MeshStandardMaterial) {
+					materials.push(entry)
+				}
+			}
+		} else if (mat instanceof THREE.MeshStandardMaterial) {
+			materials.push(mat)
+		}
+		if (!materials.length) {
+			return
+		}
+		const existing = visibleChunkMaterials.get(chunkKey)
+		if (existing) {
+			for (const material of materials) {
+				if (!existing.includes(material)) {
+					existing.push(material)
+				}
+				visibleMaterials.add(material)
+			}
+			return
+		}
+		visibleChunkMaterials.set(chunkKey, materials)
+		for (const material of materials) {
+			visibleMaterials.add(material)
+		}
+	})
+	return { visibleChunkMaterials, visibleMaterials }
+}
+
+// Internal caches and request maps used by sync helper
+const terrainPaintLayerTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
+const terrainPaintLayerTextureCache = new Map<string, THREE.Texture | null>()
+const terrainPaintChunkWeightmapRequests = new Map<string, Promise<Uint8ClampedArray | null>>()
+const terrainPaintChunkWeightmapDataCache = new Map<string, Uint8ClampedArray | null>()
+const terrainPaintChunkRefKeys = new Map<string, string>()
+
+export type TerrainPaintLoaders = {
+	loadTerrainPaintTextureFromAssetId: (assetId: string, options: { colorSpace: 'srgb' | 'none' }) => Promise<THREE.Texture | null>
+	loadTerrainPaintWeightmapDataFromAssetId: (assetId: string, resolution: number) => Promise<Uint8ClampedArray | null>
+}
+
+// Create default loaders using a provided `resolveAssetUrlFromCache` function.
+export function createDefaultTerrainPaintLoaders(
+	resolveAssetUrlFromCache: (assetId: string) => Promise<{ url: string | null } | null>,
+): TerrainPaintLoaders {
+	const loader = new THREE.TextureLoader()
+
+	async function loadTerrainPaintTextureFromAssetId(assetId: string, options: { colorSpace: 'srgb' | 'none' }) {
+		const resolved = await resolveAssetUrlFromCache(assetId)
+		if (!resolved?.url) {
+			return null
+		}
+		try {
+			const texture = await loader.loadAsync(resolved.url)
+			if (options.colorSpace === 'srgb') {
+				;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
+			} else {
+				;(texture as any).colorSpace = (THREE as any).NoColorSpace ?? undefined
+			}
+			texture.needsUpdate = true
+			return texture
+		} catch (error) {
+			console.warn('[terrainPaintPreview] Failed to load terrain paint texture', assetId, error)
+			return null
+		}
+	}
+
+	async function loadTerrainPaintWeightmapDataFromAssetId(assetId: string, resolution: number) {
+		const resolved = await resolveAssetUrlFromCache(assetId)
+		if (!resolved?.url) {
+			return null
+		}
+		try {
+			const response = await fetch(resolved.url, { credentials: 'include' })
+			if (!response.ok) {
+				return null
+			}
+			const blob = await response.blob()
+			return await decodeWeightmapToData(blob, resolution)
+		} catch (error) {
+			console.warn('[terrainPaintPreview] Failed to load terrain paint weightmap', assetId, error)
+			return null
+		}
+	}
+
+	return {
+		loadTerrainPaintTextureFromAssetId,
+		loadTerrainPaintWeightmapDataFromAssetId,
+	}
+}
+
+// Shared sync function: clones per-mesh materials (once), installs shader hooks, and loads/apply layer textures + weightmaps.
+export function syncTerrainPaintPreviewForGround(
+	groundObject: THREE.Object3D,
+	dynamicMesh: GroundDynamicMesh,
+	loaders: TerrainPaintLoaders,
+	getToken: () => number,
+): void {
+	const settings: any = (dynamicMesh as any)?.terrainPaint ?? null
+
+	// Ensure per-mesh cloned materials and shader hooks
+	cloneTerrainPaintPreviewMaterialsOnce(groundObject)
+	ensureTerrainPaintPreviewInstalled(groundObject, dynamicMesh, settings)
+
+	const { visibleChunkMaterials, visibleMaterials } = collectVisibleChunkMaterials(groundObject)
+	if (!visibleMaterials.size) {
+		return
+	}
+	const targets = Array.from(visibleMaterials)
+	const token = getToken()
+
+	const layerG = (function () {
+		const layers = Array.isArray(settings?.layers) ? settings.layers : []
+		const match = layers.find((layer: any) => layer?.channel === 'g')
+		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
+		return candidate.length ? candidate : null
+	})()
+	const layerB = (function () {
+		const layers = Array.isArray(settings?.layers) ? settings.layers : []
+		const match = layers.find((layer: any) => layer?.channel === 'b')
+		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
+		return candidate.length ? candidate : null
+	})()
+	const layerA = (function () {
+		const layers = Array.isArray(settings?.layers) ? settings.layers : []
+		const match = layers.find((layer: any) => layer?.channel === 'a')
+		const candidate = typeof match?.textureAssetId === 'string' ? match.textureAssetId.trim() : ''
+		return candidate.length ? candidate : null
+	})()
+
+	const layerPairs: Array<{ channel: 'g' | 'b' | 'a'; assetId: string | null }> = [
+		{ channel: 'g', assetId: layerG },
+		{ channel: 'b', assetId: layerB },
+		{ channel: 'a', assetId: layerA },
+	]
+
+	for (const pair of layerPairs) {
+		if (!pair.assetId) {
+			targets.forEach((target) => {
+				updateTerrainPaintPreviewLayerTexture(target, pair.channel, null)
+			})
+			continue
+		}
+		const cachedTexture = terrainPaintLayerTextureCache.get(pair.assetId)
+		if (cachedTexture !== undefined) {
+			targets.forEach((target) => {
+				updateTerrainPaintPreviewLayerTexture(target, pair.channel, cachedTexture)
+			})
+			continue
+		}
+		let pending = terrainPaintLayerTextureRequests.get(pair.assetId)
+		if (!pending) {
+			pending = loaders.loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' })
+			terrainPaintLayerTextureRequests.set(pair.assetId, pending)
+		}
+		pending.then((texture) => {
+			terrainPaintLayerTextureCache.set(pair.assetId as string, texture)
+			if (getToken() !== token) {
+				return
+			}
+			targets.forEach((target) => {
+				updateTerrainPaintPreviewLayerTexture(target, pair.channel, texture)
+			})
+		})
+	}
+
+	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null
+	if (!chunks) {
+		return
+	}
+
+	for (const [chunkKey, chunkTargets] of visibleChunkMaterials) {
+		const ref = (chunks as any)[chunkKey]
+		const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+		if (!logicalId.length) {
+			terrainPaintChunkRefKeys.delete(chunkKey)
+			chunkTargets.forEach((target) => {
+				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+			})
+			continue
+		}
+		const refKey = logicalId
+		const previousRefKey = terrainPaintChunkRefKeys.get(chunkKey)
+		if (previousRefKey !== refKey) {
+			terrainPaintChunkRefKeys.set(chunkKey, refKey)
+			chunkTargets.forEach((target) => {
+				setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+			})
+		}
+
+		const cachedData = terrainPaintChunkWeightmapDataCache.get(refKey)
+		if (cachedData !== undefined) {
+			if (cachedData) {
+				chunkTargets.forEach((target) => {
+					updateTerrainPaintPreviewWeightmap(target, chunkKey, cachedData, settings.weightmapResolution)
+				})
+			} else {
+				chunkTargets.forEach((target) => {
+					setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+				})
+			}
+			continue
+		}
+
+		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
+		if (!pending) {
+			pending = loaders.loadTerrainPaintWeightmapDataFromAssetId(logicalId, settings.weightmapResolution)
+			terrainPaintChunkWeightmapRequests.set(refKey, pending)
+		}
+		pending.then((data) => {
+			terrainPaintChunkWeightmapDataCache.set(refKey, data)
+			if (getToken() !== token) {
+				return
+			}
+			if (terrainPaintChunkRefKeys.get(chunkKey) !== refKey) {
+				return
+			}
+			if (data) {
+				chunkTargets.forEach((target) => {
+					updateTerrainPaintPreviewWeightmap(target, chunkKey, data, settings.weightmapResolution)
+				})
+			} else {
+				chunkTargets.forEach((target) => {
+					setTerrainPaintPreviewWeightmapTexture(target, chunkKey, null)
+				})
+			}
+		})
+	}
+}
+

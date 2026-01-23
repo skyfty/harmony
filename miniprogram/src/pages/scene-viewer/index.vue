@@ -390,9 +390,8 @@ import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
-  ensureTerrainPaintPreviewInstalled,
-  setTerrainPaintPreviewWeightmapTexture,
-  updateTerrainPaintPreviewLayerTexture,
+  createDefaultTerrainPaintLoaders,
+  syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
 } from '@schema/terrainPaintPreview';
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -435,13 +434,15 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  unzipScenePackage,
+  buildAssetOverridesFromScenePackage,
+  readTextFileFromScenePackage,
+  type ScenePackageUnzipped,
   type EnvironmentSettings,
   type SceneNode,
   type SceneNodeComponentState,
   type SceneSkyboxSettings,
   type SceneJsonExportDocument,
-  type ProjectExportBundle,
-  type ProjectExportSceneEntry,
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
@@ -553,8 +554,8 @@ interface ScenePreviewPayload {
   origin?: string;
   createdAt?: string;
   updatedAt?: string;
-  assetOverrides?: Record<string, string | ArrayBuffer>;
-  resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null;
+  assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
+  resolveAssetUrl?: SceneGraphBuildOptions['resolveAssetUrl'];
   enableGround?: boolean;
 }
 
@@ -605,8 +606,39 @@ type SceneViewControlSnapshot = {
 const sceneStateById = new Map<string, SceneViewControlSnapshot>();
 const previousSceneById = new Map<string, string>();
 
-const projectBundle = ref<ProjectExportBundle | null>(null);
-const projectSceneIndex = new Map<string, ProjectExportSceneEntry>();
+type ScenePackageProject = {
+  id: string;
+  name: string;
+  defaultSceneId: string | null;
+  lastEditedSceneId: string | null;
+  sceneOrder: string[];
+};
+
+type ScenePackageSceneEntry =
+  | {
+      kind: 'embedded';
+      id: string;
+      name: string;
+      createdAt: string | null;
+      updatedAt: string | null;
+      document: SceneJsonExportDocument;
+    }
+  | {
+      kind: 'external';
+      id: string;
+      name: string;
+      createdAt: string | null;
+      updatedAt: string | null;
+      sceneJsonUrl: string;
+    };
+
+type ScenePackageProjectData = {
+  project: ScenePackageProject;
+  scenes: ScenePackageSceneEntry[];
+};
+
+const projectBundle = ref<ScenePackageProjectData | null>(null);
+const projectSceneIndex = new Map<string, ScenePackageSceneEntry>();
 
 const previewPayload = ref<ScenePreviewPayload | null>(null);
 const loading = ref(true);
@@ -663,6 +695,8 @@ const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
+let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
+let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
@@ -923,150 +957,18 @@ const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
-const terrainPaintLayerTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
-const terrainPaintChunkWeightmapRequests = new Map<string, Promise<THREE.Texture | null>>();
-const terrainPaintChunkRefKeys = new Map<string, string>();
+// Use shared loaders and sync logic from schema/terrainPaintPreview
+const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 
-async function loadTerrainPaintTextureFromAssetId(
-  assetId: string,
-  options: { colorSpace: 'srgb' | 'none' },
-): Promise<THREE.Texture | null> {
-  const resolved = await resolveAssetUrlFromCache(assetId);
-  if (!resolved?.url) {
-    return null;
-  }
-  try {
-    const texture = await textureLoader.loadAsync(resolved.url);
-    if (options.colorSpace === 'srgb') {
-      (texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace;
-    } else {
-      (texture as any).colorSpace = (THREE as any).NoColorSpace ?? undefined;
-    }
-    texture.needsUpdate = true;
-    return texture;
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to load terrain paint texture', assetId, error);
-    return null;
-  }
-}
-
-function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'): string | null {
-  const layers = Array.isArray(settings?.layers) ? settings.layers : [];
-  const match = layers.find((layer: any) => layer?.channel === channel);
-  const candidate = typeof match?.assetId === 'string' ? match.assetId.trim() : '';
-  return candidate.length ? candidate : null;
-}
-
-function findGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
-  const cached = (groundObject.userData as any)?.groundMaterial as THREE.Material | undefined;
-  if (cached) {
-    return cached;
-  }
-  let found: THREE.Material | null = null;
-  groundObject.traverse((obj) => {
-    if (found) {
-      return;
-    }
-    const mesh = obj as THREE.Mesh;
-    if (!mesh?.isMesh) {
-      return;
-    }
-    const material = mesh.material as any;
-    const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined);
-    if (resolved) {
-      found = resolved;
-    }
-  });
-  if (found) {
-    (groundObject.userData as any).groundMaterial = found;
-  }
-  return found;
-}
+// loaders created via createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
-  const settings: any = (dynamicMesh as any)?.terrainPaint ?? null;
-  ensureTerrainPaintPreviewInstalled(groundObject, dynamicMesh, settings);
-  const groundMaterial = findGroundPreviewMaterial(groundObject);
-  if (!groundMaterial) {
-    return;
-  }
-
-  const token = terrainPaintPreviewLoadToken;
-  const layerG = resolveTerrainPaintLayerAssetId(settings, 'g');
-  const layerB = resolveTerrainPaintLayerAssetId(settings, 'b');
-  const layerA = resolveTerrainPaintLayerAssetId(settings, 'a');
-  const layerPairs: Array<{ channel: 'g' | 'b' | 'a'; assetId: string | null }> = [
-    { channel: 'g', assetId: layerG },
-    { channel: 'b', assetId: layerB },
-    { channel: 'a', assetId: layerA },
-  ];
-
-  for (const pair of layerPairs) {
-    if (!pair.assetId) {
-      updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, null);
-      continue;
-    }
-    let pending = terrainPaintLayerTextureRequests.get(pair.assetId);
-    if (!pending) {
-      pending = loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' });
-      terrainPaintLayerTextureRequests.set(pair.assetId, pending);
-    }
-    pending.then((texture) => {
-      if (terrainPaintPreviewLoadToken !== token) {
-        return;
-      }
-      updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, texture);
-    });
-  }
-
-  const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null;
-  if (!chunks) {
-    return;
-  }
-  const visibleChunkKeys = new Set<string>();
-  groundObject.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (!mesh?.isMesh) {
-      return;
-    }
-    const chunk = (mesh.userData as any)?.groundChunk;
-    const row = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null;
-    const col = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null;
-    if (row === null || col === null) {
-      return;
-    }
-    visibleChunkKeys.add(`${row}:${col}`);
-  });
-
-  for (const chunkKey of visibleChunkKeys) {
-    const ref = (chunks as any)[chunkKey];
-    const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : '';
-    if (!assetId.length) {
-      terrainPaintChunkRefKeys.delete(chunkKey);
-      setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null);
-      continue;
-    }
-    const updatedAt = typeof ref?.updatedAt === 'string' ? ref.updatedAt : '';
-    const refKey = `${assetId}@${updatedAt}`;
-    if (terrainPaintChunkRefKeys.get(chunkKey) === refKey) {
-      continue;
-    }
-    terrainPaintChunkRefKeys.set(chunkKey, refKey);
-    let pending = terrainPaintChunkWeightmapRequests.get(refKey);
-    if (!pending) {
-      pending = loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'none' });
-      terrainPaintChunkWeightmapRequests.set(refKey, pending);
-    }
-    pending.then((texture) => {
-      if (terrainPaintPreviewLoadToken !== token) {
-        return;
-      }
-      if (terrainPaintChunkRefKeys.get(chunkKey) !== refKey) {
-        return;
-      }
-      setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, texture);
-    });
-  }
+  return syncTerrainPaintPreviewForGroundShared(
+    groundObject,
+    dynamicMesh,
+    terrainPaintLoaders,
+    () => terrainPaintPreviewLoadToken,
+  )
 }
 
 function ensureResourceCache(
@@ -2697,6 +2599,12 @@ function isExternalAssetReference(value: string): boolean {
   return EXTERNAL_ASSET_PATTERN.test(value);
 }
 
+function getArrayBufferView(bytes: Uint8Array): ArrayBuffer {
+  const safe = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(safe).set(bytes);
+  return safe;
+}
+
 async function acquireViewerAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
   const trimmed = assetId.trim();
   if (!trimmed.length) {
@@ -2768,9 +2676,16 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
 	if (!trimmed.length) {
 		return null
 	}
-	if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed)) {
+  if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed) || trimmed.startsWith('/')) {
 		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
 	}
+  // scene-package internal path (e.g. scenes/<id>/resources/<assetId>.<ext>)
+  if (activeScenePackagePkg && activeScenePackagePkg.files?.[trimmed]) {
+    const bytes = activeScenePackagePkg.files[trimmed]!
+    const mimeType = inferMimeTypeFromAssetId(trimmed) ?? 'application/octet-stream'
+    const url = getOrCreateObjectUrl(trimmed, getArrayBufferView(bytes), mimeType)
+    return { url, mimeType }
+  }
 	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
 	return await resolveAssetUrlFromCache(assetId)
 }
@@ -8080,10 +7995,14 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       if (token !== projectSceneSwitchToken) {
         return;
       }
+
+      const sceneOverrides = activeScenePackageAssetOverrides ?? undefined;
+
       previewPayload.value = {
         document: entry.document,
         title: entry.document.name || entry.name || '场景预览',
-        origin: 'project-bundle',
+        origin: 'scene-package',
+        assetOverrides: sceneOverrides,
         createdAt: entry.document.createdAt,
         updatedAt: entry.document.updatedAt,
       };
@@ -8095,10 +8014,15 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       if (token !== projectSceneSwitchToken) {
         return;
       }
+
+      // External scene JSON: clear any active scene-package overrides.
+      activeScenePackageAssetOverrides = null;
+
       previewPayload.value = {
         document,
         title: document.name || entry.name || '场景预览',
         origin: entry.sceneJsonUrl,
+        assetOverrides: undefined,
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
       };
@@ -8112,11 +8036,11 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
   }
 }
 
-async function loadProjectFromBundle(bundle: ProjectExportBundle): Promise<void> {
+async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<void> {
   error.value = null;
   projectBundle.value = bundle;
   projectSceneIndex.clear();
-  bundle.scenes.forEach((scene: ProjectExportSceneEntry) => {
+  bundle.scenes.forEach((scene: ScenePackageSceneEntry) => {
     if (scene && typeof scene.id === 'string') {
       projectSceneIndex.set(scene.id, scene);
     }
@@ -8132,6 +8056,161 @@ async function loadProjectFromBundle(bundle: ProjectExportBundle): Promise<void>
 
   requestedMode.value = 'project';
   await switchToProjectScene(initialId);
+}
+
+function requestBinary(url: string): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    if (sceneDownloadTask) {
+      sceneDownloadTask.abort();
+      sceneDownloadTask = null;
+    }
+    const task = uni.request({
+      url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`场景包下载失败（${statusCode}）`));
+          return;
+        }
+        const buffer = res.data as ArrayBuffer;
+        if (!buffer || typeof buffer.byteLength !== 'number') {
+          reject(new Error('场景包下载失败（响应不是二进制数据）'));
+          return;
+        }
+        resolve(buffer);
+      },
+      fail: (requestError) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '场景包下载失败';
+        reject(new Error(message));
+      },
+      complete: () => {
+        sceneDownloadTask = null;
+      },
+    }) as SceneRequestTask;
+    sceneDownloadTask = task;
+  });
+}
+
+async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
+  error.value = null;
+  activeScenePackageAssetOverrides = null;
+  activeScenePackagePkg = null;
+  loading.value = true;
+  try {
+    resetSceneDownloadState();
+    sceneDownload.active = true;
+    sceneDownload.label = '正在下载场景包…';
+    const buffer = await requestBinary(url);
+
+    sceneDownload.label = '正在解析场景包…';
+    await loadProjectFromScenePackageBytes(buffer);
+  } finally {
+    sceneDownload.active = false;
+    loading.value = false;
+  }
+}
+
+function decodeZipBase64ToArrayBuffer(base64: string): ArrayBuffer {
+  const trimmed = (base64 ?? '').trim();
+  if (!trimmed) {
+    return new ArrayBuffer(0);
+  }
+
+  if (typeof (uni as any)?.base64ToArrayBuffer === 'function') {
+    return (uni as any).base64ToArrayBuffer(trimmed) as ArrayBuffer;
+  }
+
+  const wxAny = typeof wx !== 'undefined' ? (wx as any) : null;
+  if (wxAny && typeof wxAny.base64ToArrayBuffer === 'function') {
+    return wxAny.base64ToArrayBuffer(trimmed) as ArrayBuffer;
+  }
+
+  // Web fallback
+  if (typeof atob === 'function') {
+    const binary = atob(trimmed);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out.buffer;
+  }
+
+  const G: any = globalThis as any;
+  if (G && typeof G.Buffer !== 'undefined') {
+    const buf = G.Buffer.from(trimmed, 'base64');
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  }
+
+  throw new Error('当前环境不支持 base64 解码');
+}
+
+function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackageProjectData {
+  const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
+  const projectConfig = JSON.parse(projectText) as any;
+
+  const scenes: ScenePackageSceneEntry[] = [];
+  pkg.manifest.scenes.forEach((sceneEntry) => {
+    const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path);
+    const sceneRaw = JSON.parse(sceneText) as unknown;
+    if (!sceneRaw || typeof sceneRaw !== 'object') {
+      throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
+    }
+    const document = sceneRaw as SceneJsonExportDocument;
+    const id = sceneEntry.sceneId;
+    scenes.push({
+      kind: 'embedded',
+      id,
+      name: document.name || id,
+      createdAt: (document as any).createdAt ?? null,
+      updatedAt: (document as any).updatedAt ?? null,
+      document,
+    });
+  });
+
+  return {
+    project: {
+      id: String(projectConfig?.id ?? ''),
+      name: String(projectConfig?.name ?? ''),
+      defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+      lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+      sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+    },
+    scenes,
+  };
+}
+
+async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<void> {
+  const pkg = unzipScenePackage(buffer);
+  activeScenePackagePkg = pkg as ScenePackageUnzipped;
+  activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any;
+  const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
+  await loadProjectFromBundle(projectData);
+}
+
+async function loadProjectFromScenePackageBase64(base64: string): Promise<void> {
+  error.value = null;
+  activeScenePackageAssetOverrides = null;
+  activeScenePackagePkg = null;
+  loading.value = true;
+  try {
+    const buffer = decodeZipBase64ToArrayBuffer(base64);
+    if (!buffer || buffer.byteLength <= 0) {
+      throw new Error('项目数据为空，请重新导入');
+    }
+    await loadProjectFromScenePackageBytes(buffer);
+  } catch (e) {
+    console.error(e);
+    error.value = '项目加载失败，请返回首页重新导入';
+    previewPayload.value = null;
+  } finally {
+    loading.value = false;
+  }
 }
 
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
@@ -9078,12 +9157,20 @@ onLoad((query) => {
   ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
   const projectIdParam = typeof query?.projectId === 'string' ? query.projectId : '';
+  const packageUrlParam = typeof (query as any)?.packageUrl === 'string'
+    ? String((query as any).packageUrl)
+    : '';
 
   error.value = null;
 
   projectStore.bootstrap();
 
-  if (projectIdParam) {
+  if (packageUrlParam) {
+    requestedMode.value = 'project';
+    currentProjectId.value = null;
+    loading.value = true;
+    void loadProjectFromScenePackageUrl(packageUrlParam);
+  } else if (projectIdParam) {
     requestedMode.value = 'project';
     currentProjectId.value = projectIdParam;
     const entry = projectStore.getProject(projectIdParam);
@@ -9093,7 +9180,8 @@ onLoad((query) => {
       loading.value = false;
     } else {
       loading.value = true;
-      void loadProjectFromBundle(entry.bundle);
+      // project entry now stores the scene-package zip; load via store entry.
+      void loadProjectFromScenePackageBase64(entry.zipBase64);
     }
   } else {
     requestedMode.value = null;

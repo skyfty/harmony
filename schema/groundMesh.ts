@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from '@harmony/schema'
 
+import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
+
 const textureLoader = new THREE.TextureLoader()
 
 const DEFAULT_GROUND_CHUNK_CELLS = 100
@@ -1051,6 +1053,8 @@ export function updateGroundChunks(
   if (!root) {
     return
   }
+
+  const terrainPaintSettings = (root.userData as any)?.__terrainPaintSettings ?? undefined
   const state = ensureGroundRuntimeState(root, definition)
   const now = Date.now()
   // Throttle chunk churn a bit.
@@ -1121,6 +1125,7 @@ export function updateGroundChunks(
 
   // Load chunks within the tighter load radius.
   let stitchRegion: GroundGeometryUpdateRegion | null = null
+  let needsTerrainPaintRebind = false
   const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
     if (!current) {
       return { ...next }
@@ -1146,8 +1151,18 @@ export function updateGroundChunks(
           minColumn: runtime.spec.startColumn,
           maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
         })
+
+        // Newly streamed-in chunk meshes won't have terrain paint preview bindings yet.
+        // Re-run installer once per update (not per chunk) when terrain paint is active.
+        if (terrainPaintSettings) {
+          needsTerrainPaintRebind = true
+        }
       }
     }
+  }
+
+  if (needsTerrainPaintRebind) {
+    ensureTerrainPaintPreviewInstalled(root, definition, terrainPaintSettings)
   }
 
   state.chunks.forEach((chunk, key) => {

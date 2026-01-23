@@ -74,7 +74,10 @@ export interface SceneGraphBuildOptions {
   enableGround?: boolean;
   presetAssetBaseUrl?: string;
   resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null | undefined;
-  assetOverrides?: Record<string, string | ArrayBuffer>;
+  assetOverrides?: Record<
+    string,
+    string | ArrayBuffer | { bytes: ArrayBuffer | Uint8Array; mimeType?: string | null; filename?: string | null }
+  >;
   onProgress?: (progress: SceneGraphResourceProgress) => void;
   lazyLoadMeshes?: boolean;
   materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;

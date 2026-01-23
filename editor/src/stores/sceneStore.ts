@@ -168,8 +168,6 @@ import {
 } from '@/utils/lodPreset'
 import { buildWallPresetFilename, isWallPresetFilename } from '@/utils/wallPreset'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
-import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
-import { fetchResourceAsset } from '@/api/resourceAssets'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -439,6 +437,7 @@ function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
 type AssetRegistrationOptions = {
   categoryIdForAsset: (asset: ProjectAsset) => string
   sourceForAsset: (asset: ProjectAsset) => AssetSourceMetadata | undefined
+  internalForAsset: (asset: ProjectAsset) => boolean
 }
 
 function upsertAssetsIntoCatalogAndIndex(
@@ -467,6 +466,7 @@ function upsertAssetsIntoCatalogAndIndex(
 
     const categoryId = options.categoryIdForAsset(asset)
     const source = options.sourceForAsset(asset)
+    const internal = options.internalForAsset(asset)
 
     const existingEntry = nextIndex[assetId]
     if (existingEntry?.categoryId && nextCatalog[existingEntry.categoryId]) {
@@ -480,6 +480,7 @@ function upsertAssetsIntoCatalogAndIndex(
     nextIndex[assetId] = {
       categoryId,
       source,
+      internal,
     }
 
     registeredAssets.push(registeredAsset)
@@ -487,6 +488,20 @@ function upsertAssetsIntoCatalogAndIndex(
   })
 
   return { nextCatalog, nextIndex, registeredAssets, sourceByAssetId }
+}
+
+function buildVisibleAssetCatalog(
+  catalog: Record<string, ProjectAsset[]>,
+  assetIndex: Record<string, AssetIndexEntry> | undefined,
+): Record<string, ProjectAsset[]> {
+  if (!assetIndex) {
+    return catalog
+  }
+  const next: Record<string, ProjectAsset[]> = {}
+  Object.entries(catalog).forEach(([categoryId, list]) => {
+    next[categoryId] = (list ?? []).filter((asset) => !assetIndex[asset.id]?.internal)
+  })
+  return next
 }
 
 function normalizeRemoteCandidate(value: string | null | undefined): string | null {
@@ -2253,6 +2268,9 @@ function createGroundDynamicMeshDefinition(
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
+    hasManualEdits: overrides.hasManualEdits,
+    terrainScatter: manualDeepClone(overrides.terrainScatter),
+    terrainPaint: manualDeepClone(overrides.terrainPaint),
   }
 
   if (initialGeneration && !hasHeightOverrides) {
@@ -5317,94 +5335,14 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-async function buildPackageEmbedAssetMapForExport(
-  scene: StoredSceneDocument,
-  packageAssetMap: Record<string, string>,
-  usedAssetIds: Set<string>): Promise<Record<string, string>> {
-  if (!usedAssetIds.size) {
-    return packageAssetMap
-  }
-  const assetCache = useAssetCacheStore()
-  const assetIdsToEmbed = new Set<string>()
-
-  const assetIndex = scene.assetIndex ?? {}
-  usedAssetIds.forEach((assetId) => {
-    const entry = assetIndex[assetId]
-    if (entry?.source?.type === 'local') {
-      assetIdsToEmbed.add(assetId)
-    }
-  })
-
-  if (!assetIdsToEmbed.size) {
-    return packageAssetMap
-  }
-
-  const normalizeUrl = (value: string | null | undefined): string | null => {
-    if (!value) {
-      return null
-    }
-    const trimmed = value.trim()
-    return trimmed.length > 0 ? trimmed : null
-  }
-
-  const embedTasks: Promise<void>[] = []
-
-  assetIdsToEmbed.forEach((assetId) => {
-    embedTasks.push((async () => {
-      const asset = getAssetFromCatalog(scene.assetCatalog, assetId)
-      if (!asset) {
-        return
-      }
-
-      let cacheEntry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        cacheEntry = await assetCache.loadFromIndexedDb(assetId)
-      }
-
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        const downloadUrl = normalizeUrl(asset.downloadUrl) ?? normalizeUrl(asset.description)
-        if (!downloadUrl) {
-          console.warn('Missing asset data, cannot embed in exported scene', assetId)
-          return
-        }
-        try {
-          cacheEntry = await assetCache.downloadAsset(assetId, downloadUrl, asset.name)
-        } catch (error) {
-          console.warn('Failed to download asset data, cannot embed in exported scene', assetId, error)
-          return
-        }
-      }
-
-      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        console.warn('Asset not cached, cannot embed in exported scene', assetId)
-        return
-      }
-
-      try {
-        packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`] = await blobToDataUrl(cacheEntry.blob)
-      } catch (error) {
-        console.warn('Failed to serialize asset, cannot embed in exported scene', assetId, error)
-      }
-    })())
-  })
-
-  if (embedTasks.length) {
-    await Promise.all(embedTasks)
-  }
-  return packageAssetMap
-}
-
 export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
+  _options?: { embedResources?: boolean },
 ): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
   const usedAssetIds = collectSceneAssetReferences(scene)
   let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
   const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)
-  const embedResources = options.embedResources ?? false
-  if (embedResources) {
-    packageAssetMap = await buildPackageEmbedAssetMapForExport(scene, packageAssetMap, usedAssetIds);
-  }
+
   return { packageAssetMap, assetIndex }
 }
 
@@ -5799,9 +5737,8 @@ export async function calculateSceneResourceSummary(
 
 export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
 ): Promise<StoredSceneDocument> {
-  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene,options)
+  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -6064,6 +6001,16 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
       terrainScatter?: TerrainScatterStoreSnapshot | null
     }
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
+
+    const terrainPaint: any = (definition as any)?.terrainPaint
+    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+      Object.values(terrainPaint.chunks).forEach((ref: any) => {
+        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+        if (logicalId) {
+          bucket.add(logicalId)
+        }
+      })
+    }
   }
   if (node.children?.length) {
     node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
@@ -6192,6 +6139,7 @@ function filterAssetIndexByUsage(
     filtered[assetId] = {
       categoryId: entry.categoryId,
       source: entry.source ? { ...entry.source } : undefined,
+      internal: entry.internal,
     }
   })
   return filtered
@@ -7669,7 +7617,7 @@ export const useSceneStore = defineStore('scene', {
       packageAssetMap: {},
       packageDirectoryCache,
       packageDirectoryLoaded: {},
-      projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
+      projectTree: createProjectTreeFromCache(buildVisibleAssetCatalog(assetCatalog, assetIndex), packageDirectoryCache),
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
@@ -9851,12 +9799,12 @@ export const useSceneStore = defineStore('scene', {
           const terrainPaint = groundMesh.terrainPaint ?? null
           if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks) {
             Object.values(terrainPaint.chunks).forEach((ref) => {
-              if (!ref || typeof ref.assetId !== 'string' || !ref.assetId.trim().length) {
+              if (!ref || typeof (ref as any).logicalId !== 'string' || !String((ref as any).logicalId).trim().length) {
                 return
               }
-              const expected = typeof ref.assetUpdatedAt === 'string' ? ref.assetUpdatedAt : null
-              if (!terrainPaintRefs.has(ref.assetId)) {
-                terrainPaintRefs.set(ref.assetId, expected)
+              const logicalId = String((ref as any).logicalId).trim()
+              if (!terrainPaintRefs.has(logicalId)) {
+                terrainPaintRefs.set(logicalId, null)
               }
             })
           }
@@ -9870,15 +9818,8 @@ export const useSceneStore = defineStore('scene', {
 
       if (terrainPaintRefs.size > 0) {
         await Promise.allSettled(
-          Array.from(terrainPaintRefs.entries()).map(async ([assetId, expectedUpdatedAt]) => {
-            let asset = this.getAsset(assetId)
-            if (!asset) {
-              const dto = await fetchResourceAsset(assetId)
-              asset = mapServerAssetToProjectAsset(dto)
-            }
-            await assetCache.downloaProjectAsset(asset, {
-              expectedServerUpdatedAt: expectedUpdatedAt ?? asset.updatedAt ?? null,
-            })
+          Array.from(terrainPaintRefs.keys()).map(async (logicalId) => {
+            await assetCache.loadFromIndexedDb(logicalId)
           }),
         )
       }
@@ -10105,7 +10046,10 @@ export const useSceneStore = defineStore('scene', {
     },
     // Helper: rebuild project tree from current catalog + package directory cache
     refreshProjectTree() {
-      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.projectTree = createProjectTreeFromCache(
+        buildVisibleAssetCatalog(this.assetCatalog, this.assetIndex),
+        this.packageDirectoryCache,
+      )
     },
     // Helper: ensure active directory and selected asset are valid in the current projectTree
     ensureActiveDirectoryAndSelectionValid() {
@@ -10256,6 +10200,7 @@ export const useSceneStore = defineStore('scene', {
       options: {
         categoryId?: string | ((asset: ProjectAsset) => string)
         source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+        internal?: boolean | ((asset: ProjectAsset) => boolean)
         commitOptions?: { updateNodes?: boolean }
       } = {},
     ): ProjectAsset[] {
@@ -10281,11 +10226,18 @@ export const useSceneStore = defineStore('scene', {
         return options.source
       }
 
+      const internalForAsset = (asset: ProjectAsset): boolean => {
+        if (typeof options.internal === 'function') {
+          return Boolean(options.internal(asset))
+        }
+        return Boolean(options.internal)
+      }
+
       const { nextCatalog, nextIndex, registeredAssets, sourceByAssetId } = upsertAssetsIntoCatalogAndIndex(
         this.assetCatalog,
         this.assetIndex,
         normalizedAssets,
-        { categoryIdForAsset, sourceForAsset },
+        { categoryIdForAsset, sourceForAsset, internalForAsset },
       )
 
       if (!registeredAssets.length) {
@@ -10303,10 +10255,15 @@ export const useSceneStore = defineStore('scene', {
 
     registerAsset(
       asset: ProjectAsset,
-      options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean } } = {},
+      options: { categoryId?: string; source?: AssetSourceMetadata; internal?: boolean; commitOptions?: { updateNodes?: boolean } } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
-      const registered = this.registerAssets([asset], { categoryId, source: options.source, commitOptions: options.commitOptions })
+      const registered = this.registerAssets([asset], {
+        categoryId,
+        source: options.source,
+        internal: options.internal,
+        commitOptions: options.commitOptions,
+      })
       return registered[0] ?? { ...asset }
     },
     async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {
@@ -15386,6 +15343,7 @@ export const useSceneStore = defineStore('scene', {
       this.isSceneReady = true
 
       await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
+      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
     async createSceneFromTemplate(
@@ -15479,6 +15437,7 @@ export const useSceneStore = defineStore('scene', {
       this.hasUnsavedChanges = false
 
       await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
+      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
     async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
@@ -15612,8 +15571,8 @@ export const useSceneStore = defineStore('scene', {
       if (!collected.length) {
         return null
       }
-      const options = exportOptions ?? { embedResources: false }
-      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene, options)))
+      void exportOptions
+      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene)))
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),

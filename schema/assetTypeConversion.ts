@@ -276,6 +276,28 @@ export function getExtensionFromMimeType(mimeType: string | null | undefined): s
   return null
 }
 
+export function inferExtFromMimeType(mimeType: string | null | undefined): string {
+  const extFromMap = getExtensionFromMimeType(mimeType)
+  if (extFromMap) {
+    if (extFromMap === 'jpeg') return 'jpg'
+    return extFromMap
+  }
+  const normalized = (mimeType ?? '').toLowerCase().trim()
+  if (!normalized) return 'bin'
+  if (normalized.includes('png')) return 'png'
+  if (normalized.includes('jpeg')) return 'jpg'
+  if (normalized.includes('jpg')) return 'jpg'
+  if (normalized.includes('webp')) return 'webp'
+  if (normalized.includes('gif')) return 'gif'
+  if (normalized.includes('json')) return 'json'
+  if (normalized.includes('gltf')) return 'gltf'
+  if (normalized.includes('glb')) return 'glb'
+  if (normalized.includes('mp3')) return 'mp3'
+  if (normalized.includes('mp4')) return 'mp4'
+  if (normalized.includes('octet-stream')) return 'bin'
+  return 'bin'
+}
+
 /**
  * Infer a MIME type from a filename, URL or asset id.
  * Exported so other packages can reuse the same mapping logic.

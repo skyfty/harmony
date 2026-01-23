@@ -20,10 +20,9 @@ import {
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
-	PROJECT_EXPORT_BUNDLE_FORMAT,
-	PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-	type ProjectExportBundle,
-	type ProjectExportSceneEntry,
+	unzipScenePackage,
+	buildAssetOverridesFromScenePackage,
+	readTextFileFromScenePackage,
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
@@ -59,9 +58,8 @@ import {
 import { updateGroundChunks } from '@schema/groundMesh'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
-	ensureTerrainPaintPreviewInstalled,
-	setTerrainPaintPreviewWeightmapTexture,
-	updateTerrainPaintPreviewLayerTexture,
+	syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
+	createDefaultTerrainPaintLoaders,
 } from '@schema/terrainPaintPreview'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -221,8 +219,7 @@ function switchToLivePreviewMode(): void {
 	}
 	try {
 		const url = new URL(window.location.href)
-		url.searchParams.delete('projectUrl')
-		url.searchParams.delete('bundleUrl')
+		url.searchParams.delete('packageUrl')
 		url.hash = '#/preview'
 		window.location.href = url.toString()
 	} catch {
@@ -230,8 +227,39 @@ function switchToLivePreviewMode(): void {
 	}
 }
 
-const projectBundle = ref<ProjectExportBundle | null>(null)
-const projectSceneIndex = new Map<string, ProjectExportSceneEntry>()
+type ScenePreviewProject = {
+	id: string
+	name: string
+	defaultSceneId: string | null
+	lastEditedSceneId: string | null
+	sceneOrder: string[]
+}
+
+type ScenePreviewSceneEntry =
+	| {
+			kind: 'embedded'
+			id: string
+			name: string
+			createdAt: string | null
+			updatedAt: string | null
+			document: SceneJsonExportDocument
+	  }
+	| {
+			kind: 'external'
+			id: string
+			name: string
+			createdAt: string | null
+			updatedAt: string | null
+			sceneJsonUrl: string
+	  }
+
+type ScenePreviewProjectPackage = {
+	project: ScenePreviewProject
+	scenes: ScenePreviewSceneEntry[]
+}
+
+const projectBundle = ref<ScenePreviewProjectPackage | null>(null)
+const projectSceneIndex = new Map<string, ScenePreviewSceneEntry>()
 const liveUpdatesDisabledLabel = computed(() => {
 	if (projectBundle.value) {
 		return 'Live updates disabled (bundle mode).'
@@ -542,6 +570,8 @@ const assetCacheStore = useAssetCacheStore()
 const editorAssetCache = new StoreBackedAssetCache(assetCacheStore)
 const editorAssetLoader = new AssetLoader(editorAssetCache)
 let editorResourceCache: ResourceCache | null = null
+
+let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null
 
 const resourceProgressPercent = computed(() => {
 	if (resourceProgress.totalBytes > 0) {
@@ -892,156 +922,30 @@ const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>(
 const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
 
+
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
-const terrainPaintLayerTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
-const terrainPaintChunkWeightmapRequests = new Map<string, Promise<THREE.Texture | null>>()
-const terrainPaintChunkRefKeys = new Map<string, string>()
+// Create loaders via schema factory to centralize terrain paint asset loading logic
+const terrainPaintLoaders = createDefaultTerrainPaintLoaders(resolveAssetUrlFromCache)
 
-async function loadTerrainPaintTextureFromAssetId(
-	assetId: string,
-	options: { colorSpace: 'srgb' | 'none' },
-): Promise<THREE.Texture | null> {
-	const resolved = await resolveAssetUrlFromCache(assetId)
-	if (!resolved?.url) {
-		return null
-	}
-	try {
-		const texture = await textureLoader.loadAsync(resolved.url)
-		if (options.colorSpace === 'srgb') {
-			;(texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace
-		} else {
-			;(texture as any).colorSpace = (THREE as any).NoColorSpace ?? undefined
-		}
-		texture.needsUpdate = true
-		return texture
-	} catch (error) {
-		console.warn('[ScenePreview] Failed to load terrain paint texture', assetId, error)
-		return null
-	}
-}
 
-function resolveTerrainPaintLayerAssetId(settings: any, channel: 'g' | 'b' | 'a'): string | null {
-	const layers = Array.isArray(settings?.layers) ? settings.layers : []
-	const match = layers.find((layer: any) => layer?.channel === channel)
-	const candidate = typeof match?.assetId === 'string' ? match.assetId.trim() : ''
-	return candidate.length ? candidate : null
-}
 
-function findGroundPreviewMaterial(groundObject: THREE.Object3D): THREE.Material | null {
-	const cached = (groundObject.userData as any)?.groundMaterial as THREE.Material | undefined
-	if (cached) {
-		return cached
-	}
-	let found: THREE.Material | null = null
-	groundObject.traverse((obj) => {
-		if (found) {
-			return
-		}
-		const mesh = obj as THREE.Mesh
-		if (!mesh?.isMesh) {
-			return
-		}
-		const material = mesh.material
-		const resolved = Array.isArray(material) ? (material[0] as THREE.Material | undefined) : (material as THREE.Material | undefined)
-		if (resolved) {
-			found = resolved
-		}
-	})
-	if (found) {
-		;(groundObject.userData as any).groundMaterial = found
-	}
-	return found
-}
+
 
 function syncTerrainPaintPreviewForGround(groundObject: THREE.Object3D, dynamicMesh: GroundDynamicMesh): void {
-	const settings: any = (dynamicMesh as any)?.terrainPaint ?? null
-	ensureTerrainPaintPreviewInstalled(groundObject, dynamicMesh, settings)
-	const groundMaterial = findGroundPreviewMaterial(groundObject)
-	if (!groundMaterial) {
-		return
-	}
-
-	const token = terrainPaintPreviewLoadToken
-	const layerG = resolveTerrainPaintLayerAssetId(settings, 'g')
-	const layerB = resolveTerrainPaintLayerAssetId(settings, 'b')
-	const layerA = resolveTerrainPaintLayerAssetId(settings, 'a')
-	const layerPairs: Array<{ channel: 'g' | 'b' | 'a'; assetId: string | null }> = [
-		{ channel: 'g', assetId: layerG },
-		{ channel: 'b', assetId: layerB },
-		{ channel: 'a', assetId: layerA },
-	]
-
-	for (const pair of layerPairs) {
-		if (!pair.assetId) {
-			updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, null)
-			continue
-		}
-		let pending = terrainPaintLayerTextureRequests.get(pair.assetId)
-		if (!pending) {
-			pending = loadTerrainPaintTextureFromAssetId(pair.assetId, { colorSpace: 'srgb' })
-			terrainPaintLayerTextureRequests.set(pair.assetId, pending)
-		}
-		pending.then((texture) => {
-			if (terrainPaintPreviewLoadToken !== token) {
-				return
-			}
-			updateTerrainPaintPreviewLayerTexture(groundMaterial, pair.channel, texture)
-		})
-	}
-
-	const chunks = settings?.chunks && typeof settings.chunks === 'object' ? settings.chunks : null
-	if (!chunks) {
-		return
-	}
-	const visibleChunkKeys = new Set<string>()
-	groundObject.traverse((obj) => {
-		const mesh = obj as THREE.Mesh
-		if (!mesh?.isMesh) {
-			return
-		}
-		const chunk = (mesh.userData as any)?.groundChunk
-		const row = typeof chunk?.chunkRow === 'number' ? chunk.chunkRow : null
-		const col = typeof chunk?.chunkColumn === 'number' ? chunk.chunkColumn : null
-		if (row === null || col === null) {
-			return
-		}
-		visibleChunkKeys.add(`${row}:${col}`)
-	})
-
-	for (const chunkKey of visibleChunkKeys) {
-		const ref = (chunks as any)[chunkKey]
-		const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
-		if (!assetId.length) {
-			terrainPaintChunkRefKeys.delete(chunkKey)
-			setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, null)
-			continue
-		}
-		const updatedAt = typeof ref?.updatedAt === 'string' ? ref.updatedAt : ''
-		const refKey = `${assetId}@${updatedAt}`
-		if (terrainPaintChunkRefKeys.get(chunkKey) === refKey) {
-			continue
-		}
-		terrainPaintChunkRefKeys.set(chunkKey, refKey)
-		let pending = terrainPaintChunkWeightmapRequests.get(refKey)
-		if (!pending) {
-			pending = loadTerrainPaintTextureFromAssetId(assetId, { colorSpace: 'none' })
-			terrainPaintChunkWeightmapRequests.set(refKey, pending)
-		}
-		pending.then((texture) => {
-			if (terrainPaintPreviewLoadToken !== token) {
-				return
-			}
-			if (terrainPaintChunkRefKeys.get(chunkKey) !== refKey) {
-				return
-			}
-			setTerrainPaintPreviewWeightmapTexture(groundMaterial, chunkKey, texture)
-		})
-	}
+	return syncTerrainPaintPreviewForGroundShared(
+		groundObject,
+		dynamicMesh,
+		{
+			loadTerrainPaintTextureFromAssetId: terrainPaintLoaders.loadTerrainPaintTextureFromAssetId,
+			loadTerrainPaintWeightmapDataFromAssetId: terrainPaintLoaders.loadTerrainPaintWeightmapDataFromAssetId,
+		},
+		() => terrainPaintPreviewLoadToken,
+	)
 }
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
@@ -1302,6 +1206,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>()
 function syncGroundCache(document: SceneJsonExportDocument | null): void {
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
+	cameraDependentUpdateInitialized = false
 	terrainPaintPreviewLoadToken += 1
 	if (!document) {
 		return
@@ -3829,6 +3734,14 @@ async function fetchTextFromUrl(source: string): Promise<string> {
 	return await response.text()
 }
 
+async function fetchArrayBufferFromUrl(source: string): Promise<ArrayBuffer> {
+	const response = await fetch(source)
+	if (!response.ok) {
+		throw new Error(`Failed to fetch binary asset (${response.status})`)
+	}
+	return await response.arrayBuffer()
+}
+
 async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
@@ -4782,31 +4695,11 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
+	const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document)
 	document.packageAssetMap = packageAssetMap
 	document.assetIndex = assetIndex
 	document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
 	return await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-}
-
-function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
-	if (!raw || typeof raw !== 'object') {
-		return false
-	}
-	const candidate = raw as Partial<ProjectExportBundle>
-	if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
-		return false
-	}
-	if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
-		return false
-	}
-	if (!candidate.project || typeof candidate.project !== 'object') {
-		return false
-	}
-	if (!Array.isArray(candidate.scenes)) {
-		return false
-	}
-	return true
 }
 
 function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument {
@@ -4817,36 +4710,64 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
-async function loadProjectBundleFromUrl(sourceUrl: string): Promise<void> {
+async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 	const trimmed = sourceUrl.trim()
 	if (!trimmed) {
-		appendWarningMessage('Missing projectUrl')
+		appendWarningMessage('Missing packageUrl')
 		return
 	}
-	statusMessage.value = 'Loading project...'
+	statusMessage.value = 'Loading scene package...'
 	try {
-		const text = await fetchTextFromUrl(trimmed)
-		const parsed = JSON.parse(text) as unknown
-		if (!isProjectExportBundle(parsed)) {
-			throw new Error('Invalid project export bundle')
-		}
-		projectBundle.value = parsed
+		const buffer = await fetchArrayBufferFromUrl(trimmed)
+		const pkg = unzipScenePackage(buffer)
+		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any
+
+		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
+		const projectConfig = JSON.parse(projectText) as any
+
+		const scenes: ScenePreviewSceneEntry[] = []
 		projectSceneIndex.clear()
-		parsed.scenes.forEach((scene) => {
-			if (scene && typeof scene.id === 'string') {
-				projectSceneIndex.set(scene.id, scene)
+		pkg.manifest.scenes.forEach((sceneEntry) => {
+			const sceneText = readTextFileFromScenePackage(pkg, sceneEntry.path)
+			const sceneRaw = JSON.parse(sceneText) as unknown
+			if (!isSceneJsonExportDocument(sceneRaw)) {
+				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
 			}
+			const document = sceneRaw as SceneJsonExportDocument
+			const id = sceneEntry.sceneId
+			const entry: ScenePreviewSceneEntry = {
+				kind: 'embedded',
+				id,
+				name: document.name || id,
+				createdAt: (document as any).createdAt ?? null,
+				updatedAt: (document as any).updatedAt ?? null,
+				document,
+			}
+			scenes.push(entry)
+			projectSceneIndex.set(id, entry)
 		})
 
-		const initialId = parsed.project.defaultSceneId || parsed.project.sceneOrder?.[0] || parsed.scenes[0]?.id || ''
+		projectBundle.value = {
+			project: {
+				id: String(projectConfig?.id ?? ''),
+				name: String(projectConfig?.name ?? ''),
+				defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+				lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+				sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+			},
+			scenes,
+		}
+
+		const initialId =
+			(projectBundle.value.project.defaultSceneId || projectBundle.value.project.sceneOrder?.[0] || scenes[0]?.id || '').trim()
 		if (initialId) {
 			await switchToProjectScene(initialId)
 		}
 		statusMessage.value = ''
 	} catch (error) {
-		console.error('[ScenePreview] Failed to load project bundle', error)
-		appendWarningMessage('Failed to load project bundle.')
-		statusMessage.value = 'Failed to load project bundle.'
+		console.error('[ScenePreview] Failed to load scene package', error)
+		appendWarningMessage('Failed to load scene package.')
+		statusMessage.value = 'Failed to load scene package.'
 	}
 }
 
@@ -9714,8 +9635,8 @@ async function applyInitialDocumentGraph(
 ): Promise<void> {
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
-	syncGroundCache(document)
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	syncGroundCache(document)
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
@@ -9736,7 +9657,6 @@ async function applyIncrementalDocumentGraph(
 	resourceCache: ResourceCache | null,
 	environmentSettings: EnvironmentSettings,
 ): Promise<void> {
-	syncGroundCache(document)
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument?.nodes ?? [], pendingObjects)
 
 	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
@@ -9745,6 +9665,8 @@ async function applyIncrementalDocumentGraph(
 			registerSubtree(object, pendingObjects)
 		}
 	}
+
+	syncGroundCache(document)
 
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)
@@ -9808,6 +9730,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 			materialFactoryOptions: {
 				hdrLoader: rgbeLoader,
 			},
+		}
+		if (activeScenePackageAssetOverrides) {
+			buildOptions.assetOverrides = activeScenePackageAssetOverrides
 		}
 		resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
@@ -9962,11 +9887,11 @@ onMounted(() => {
 	if (typeof window !== 'undefined') {
 		try {
 			const url = new URL(window.location.href)
-			const projectUrl = url.searchParams.get('projectUrl') || url.searchParams.get('bundleUrl')
-			if (projectUrl) {
-				liveUpdatesDisabledSourceUrl.value = projectUrl
+			const packageUrl = url.searchParams.get('packageUrl')
+			if (packageUrl) {
+				liveUpdatesDisabledSourceUrl.value = packageUrl
 				handledInitialPayload = true
-				void loadProjectBundleFromUrl(projectUrl)
+				void loadScenePackageFromUrl(packageUrl)
 			}
 		} catch {
 			// ignore

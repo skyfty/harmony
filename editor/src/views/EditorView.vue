@@ -23,16 +23,17 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
-  buildPackageAssetMapForExport,
-  calculateSceneResourceSummary,
   type EditorPanel,
   type SceneBundleImportPayload,
   type SceneBundleImportScene,
   SCENE_BUNDLE_FORMAT_VERSION,
+  buildPackageAssetMapForExport,
+  calculateSceneResourceSummary,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -58,15 +59,9 @@ import type {
   BehaviorEventType,
   SceneBehavior,
   SceneNodeComponentState,
-  SceneResourceSummary,
 } from '@harmony/schema'
-import {
-  PROJECT_EXPORT_BUNDLE_FORMAT,
-  PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-  type Project,
-  type ProjectExportBundle,
-  type ProjectExportSceneEntry,
-} from '@harmony/schema'
+import type { Project } from '@harmony/schema'
+
 
 const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
@@ -132,9 +127,6 @@ const exportPreferences = ref<SceneExportOptions>({
   lazyLoadMeshes: true,
   format: 'json',
 })
-const exportSummaryLoading = ref(false)
-const exportResourceSummary = ref<SceneResourceSummary | null>(null)
-let pendingExportSummary: Promise<SceneResourceSummary | null> | null = null
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isNewProjectDialogOpen = ref(false)
@@ -248,99 +240,6 @@ type BehaviorDetailsContext = {
   actions: BehaviorActionDefinition[]
   sequenceId: string
   nodeId: string | null
-}
-
-function formatByteSize(value: number | null | undefined): string {
-  if (!value || value <= 0) {
-    return '0 B'
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = value
-  let index = 0
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024
-    index += 1
-  }
-  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
-  return `${size.toFixed(digits)} ${units[index]}`
-}
-
-async function refreshExportSummary(force = false): Promise<SceneResourceSummary | null> {
-  if (!force && exportResourceSummary.value && !pendingExportSummary) {
-    return exportResourceSummary.value
-  }
-
-  if (pendingExportSummary) {
-    return pendingExportSummary
-  }
-
-  if (force) {
-    exportResourceSummary.value = null
-  }
-  exportSummaryLoading.value = true
-
-  pendingExportSummary = (async () => {
-    try {
-      const activeProjectId = projectsStore.activeProjectId
-      if (!activeProjectId) {
-        exportResourceSummary.value = null
-        return null
-      }
-
-      const localSummaries = sortSceneSummariesBySceneManagerOrder(sceneSummaries.value)
-      if (!localSummaries.length) {
-        exportResourceSummary.value = null
-        return null
-      }
-
-      let textureBytes = 0
-      const aggregatedAssets: SceneResourceSummary['assets'] = []
-      const unknown = new Set<string>()
-      const aggregated: SceneResourceSummary = {
-        totalBytes: 0,
-        embeddedBytes: 0,
-        externalBytes: 0,
-        computedAt: new Date().toISOString(),
-        assets: aggregatedAssets,
-        textureBytes: 0,
-        unknownAssetIds: [],
-      }
-
-      for (const summary of localSummaries) {
-        const document = await ensureExportableSceneDocument(summary.id)
-        if (!document) {
-          continue
-        }
-        const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
-        document.packageAssetMap = packageAssetMap
-        document.assetIndex = assetIndex
-        const resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-        aggregated.totalBytes += resourceSummary.totalBytes ?? 0
-        aggregated.embeddedBytes += resourceSummary.embeddedBytes ?? 0
-        aggregated.externalBytes += resourceSummary.externalBytes ?? 0
-        textureBytes += resourceSummary.textureBytes ?? 0
-        ;(resourceSummary.assets ?? []).forEach((entry) => aggregatedAssets.push(entry))
-        ;(resourceSummary.unknownAssetIds ?? []).forEach((id) => unknown.add(id))
-      }
-
-      aggregated.textureBytes = textureBytes
-      aggregated.unknownAssetIds = Array.from(unknown)
-      exportResourceSummary.value = aggregated
-      return aggregated
-    } catch (error) {
-      console.warn('Failed to calculate resource summary', error)
-      exportResourceSummary.value = null
-      return null
-    } finally {
-      exportSummaryLoading.value = false
-    }
-  })()
-
-  try {
-    return await pendingExportSummary
-  } finally {
-    pendingExportSummary = null
-  }
 }
 
 const behaviorDetailsState = reactive({
@@ -1072,8 +971,7 @@ function openExportDialog() {
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
-  exportResourceSummary.value = null
-  void refreshExportSummary(true)
+  // Resource summary UI removed — skip summary calculation
   isExportDialogOpen.value = true
 }
 
@@ -1145,11 +1043,23 @@ async function ensureExportableSceneDocument(sceneId: string): Promise<StoredSce
   return await scenesStore.loadSceneDocument(trimmed)
 }
 
-async function exportProjectBundle(options: SceneExportOptions, updateProgress?: (value: number, message?: string) => void): Promise<Blob> {
+function isSceneJsonExportDocument(raw: unknown): raw is any {
+	return !!raw && typeof raw === 'object' && typeof (raw as any).id === 'string' && Array.isArray((raw as any).nodes)
+}
+
+async function exportProjectPackageZip(options: SceneExportOptions, updateProgress?: (value: number, message?: string) => void): Promise<Blob> {
   const project = await loadActiveProjectDocument()
   if (!project) {
     throw new Error('必须先打开工程才能导出')
   }
+
+  type ProjectSceneMeta = {
+    id: string
+    name?: string | null
+    sceneJsonUrl?: string | null
+    createdAt?: string | null
+  }
+  const projectScenes: ProjectSceneMeta[] = Array.isArray((project as any).scenes) ? ((project as any).scenes as ProjectSceneMeta[]) : []
 
   const activeProjectId = projectsStore.activeProjectId
   if (!activeProjectId) {
@@ -1160,74 +1070,66 @@ async function exportProjectBundle(options: SceneExportOptions, updateProgress?:
   const localSceneIds = localSummaries.map((entry) => entry.id)
   const localSceneIdSet = new Set(localSceneIds)
 
-  const externalOnly = (project.scenes ?? []).filter((meta) => meta && !localSceneIdSet.has(meta.id))
+  const externalOnly = projectScenes.filter((meta) => meta && !localSceneIdSet.has(meta.id))
 
   const orderedSceneIds = [...localSceneIds, ...externalOnly.map((meta) => meta.id)]
   const defaultSceneId = project.lastEditedSceneId ?? (orderedSceneIds[0] ?? null)
 
-  const scenes: ProjectExportSceneEntry[] = []
-  const totalToEmbed = localSceneIds.length
+  const embeddedScenes: Array<{ id: string; document: any }> = []
+  const totalToEmbed = orderedSceneIds.length
   for (let index = 0; index < orderedSceneIds.length; index += 1) {
     const id = orderedSceneIds[index]!
     const localSummary = localSummaries.find((s) => s.id === id) ?? null
-    const meta = project.scenes.find((s) => s.id === id) ?? null
+    const meta = projectScenes.find((s) => s.id === id) ?? null
+
+    const progressBase = 10
+    const progressSpan = 70
+    const ratio = totalToEmbed > 0 ? (index + 1) / totalToEmbed : 1
+    updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary?.name ?? meta?.name ?? id}…`)
 
     if (localSummary) {
-      const progressBase = 10
-      const progressSpan = 70
-      const ratio = totalToEmbed > 0 ? (localSceneIds.indexOf(id) + 1) / totalToEmbed : 1
-      updateProgress?.(progressBase + Math.round(progressSpan * ratio), `导出场景 ${localSummary.name}…`)
-
-      const document = await ensureExportableSceneDocument(id)
+      let document = await ensureExportableSceneDocument(id)
       if (!document) {
         throw new Error(`无法读取场景：${id}`)
       }
-      const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(document, { embedResources: true })
+
+      const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
       document.packageAssetMap = packageAssetMap
       document.assetIndex = assetIndex
       document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
-      const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
 
-      scenes.push({
-        kind: 'embedded',
-        id,
-        name: localSummary.name,
-        createdAt: localSummary.createdAt ?? null,
-        updatedAt: localSummary.updatedAt ?? null,
-        document: exportDocument,
-      })
+      const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
+      embeddedScenes.push({ id, document: exportDocument })
       continue
     }
 
     if (meta?.sceneJsonUrl) {
-      scenes.push({
-        kind: 'external',
-        id: meta.id,
-        name: meta.name,
-        createdAt: null,
-        updatedAt: null,
-        sceneJsonUrl: meta.sceneJsonUrl,
-      })
+      const response = await fetch(meta.sceneJsonUrl, { method: 'GET', credentials: 'omit', cache: 'no-cache' })
+      if (!response.ok) {
+        throw new Error(`无法下载外部场景：${meta.sceneJsonUrl} (${response.status})`)
+      }
+      const text = await response.text()
+      const parsed = JSON.parse(text) as unknown
+      if (!isSceneJsonExportDocument(parsed)) {
+        throw new Error(`外部场景格式不正确：${meta.sceneJsonUrl}`)
+      }
+      embeddedScenes.push({ id, document: parsed })
       continue
     }
   }
 
-  const bundle: ProjectExportBundle = {
-    format: PROJECT_EXPORT_BUNDLE_FORMAT,
-    formatVersion: PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-    exportedAt: new Date().toISOString(),
+  updateProgress?.(85, '生成场景包…')
+  return await exportScenePackageZip({
     project: {
       id: project.id,
       name: project.name,
       defaultSceneId,
       lastEditedSceneId: project.lastEditedSceneId,
-      sceneOrder: scenes.map((entry) => entry.id),
+      sceneOrder: embeddedScenes.map((entry) => entry.id),
     },
-    scenes,
-  }
-
-  updateProgress?.(85, '生成导出文件…')
-  return new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+    scenes: embeddedScenes,
+    updateProgress,
+  })
 }
 
 async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
@@ -1242,12 +1144,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  const summary = await refreshExportSummary(true)
-  const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-  const confirmMessage = summary
-    ? `导出该工程需要打包约 ${sizeLabel} 的资源，是否继续？`
-    : '暂时无法计算工程资源总大小，仍要继续导出吗？'
-  const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+  const proceed = typeof window !== 'undefined' ? window.confirm('仍要继续导出该工程吗？') : true
   if (!proceed) {
     exportProgress.value = 0
     exportProgressMessage.value = ''
@@ -1275,7 +1172,7 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
 
   try {
     updateProgress(10, 'Exporting project')
-    const blob = await exportProjectBundle(options, updateProgress)
+    const blob = await exportProjectPackageZip(options, updateProgress)
     await config.afterExport({ blob, fileName, updateProgress })
     updateProgress(100, config.successMessage)
     workflowSucceeded = true
@@ -1305,7 +1202,9 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
     successMessage: 'Export complete',
     failureMessage: 'Export failed',
     afterExport: async ({ blob, fileName }) => {
-      triggerDownload(blob, fileName)
+      const normalized = typeof fileName === 'string' && fileName.trim().length ? fileName.trim() : 'scene-package.zip'
+      const zipName = normalized.toLowerCase().endsWith('.zip') ? normalized : `${normalized.replace(/\.[^./\\]+$/g, '')}.zip`
+      triggerDownload(blob, zipName)
     },
   })
 }
@@ -1370,7 +1269,7 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       return
     }
 
-    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
+    const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document)
     if (isStale?.()) {
       return
     }
@@ -1430,13 +1329,12 @@ async function saveCurrentSceneWithOptions(options: SaveCurrentSceneOptions = {}
   pendingSceneSave = (async () => {
     try {
       const viewport = viewportRef.value
-      if (viewport?.flushTerrainPaintUploads) {
-        const ok = await viewport.flushTerrainPaintUploads()
-        if (!ok) {
-          console.error('Failed to upload terrain paint weightmaps before saving')
-          return false
-        }
+      const ok = await viewport?.flushTerrainPaintChanges()
+      if (!ok) {
+        console.error('Failed to persist terrain paint weightmaps before saving')
+        return false
       }
+      
       const document = await sceneStore.saveActiveScene({force: true})
       if (document && broadcastPreview) {
         void broadcastScenePreview(document)
@@ -1696,7 +1594,7 @@ async function handleSelectScene(sceneId: string) {
       return
     }
   }
-  const changed = await sceneStore.selectScene(sceneId, { setLastEdited: false })
+  const changed = await sceneStore.selectScene(sceneId)
   if (changed) {
     isSceneManagerOpen.value = false
   }
@@ -2404,8 +2302,6 @@ onBeforeUnmount(() => {
       :progress="exportProgress"
       :progress-message="exportProgressMessage"
       :error-message="exportErrorMessage"
-      :resource-summary="exportResourceSummary"
-      :resource-summary-loading="exportSummaryLoading"
       @confirm="handleExportDialogConfirm"
       @cancel="handleExportDialogCancel"
     />

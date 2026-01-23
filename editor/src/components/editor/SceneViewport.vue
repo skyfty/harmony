@@ -1205,6 +1205,8 @@ const {
   groundSelection,
   groundTextureInputRef,
   restoreGroupdScatter,
+  restoreGroundPaint,
+  onGroundChunkSetChanged,
   updateScatterLod,
   updateGroundSelectionToolbarPosition,
   cancelGroundSelection,
@@ -1219,7 +1221,7 @@ const {
   cancelScatterPlacement: cancelGroundEditorScatterPlacement,
   dispose: disposeGroundEditor,
   clearScatterInstances,
-	flushTerrainPaintUploads,
+  flushTerrainPaintChanges,
 } = groundEditor
 
 function exitScatterEraseMode() {
@@ -3886,6 +3888,7 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
 async function restoreGroupdScatterGuarded(): Promise<void> {
   const tokenSnapshot = sceneStore.sceneSwitchToken
   await restoreGroupdScatter()
+  await restoreGroundPaint()
   // If a scene switch happened during restore, don't continue with any follow-up.
   if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
     return
@@ -4045,7 +4048,7 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 
 export type SceneViewportHandle = {
   captureScreenshot(mimeType?: string): Promise<Blob | null>
-	flushTerrainPaintUploads(): Promise<boolean>
+  flushTerrainPaintChanges(): Promise<boolean>
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
@@ -8281,6 +8284,10 @@ function updateGroundChunkStreaming() {
     lastGroundChunkSetSignatureForPlacement = signature
     refreshPlacementSurfaceTargetsForNode(node.id)
     placementSurfaceTargetsDirty = true
+
+    // Chunk meshes stream in/out without scene patches; notify GroundEditor so
+    // terrain paint preview can bind to new chunk meshes and load newly visible weightmaps.
+    onGroundChunkSetChanged()
   }
 }
 
@@ -9483,7 +9490,7 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   captureScreenshot,
-  flushTerrainPaintUploads,
+  flushTerrainPaintChanges,
 })
 </script>
 

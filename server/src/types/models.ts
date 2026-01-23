@@ -190,7 +190,16 @@ export interface UserSceneDocument extends Document<Types.ObjectId> {
   userId: string
   sceneId: string
   projectId: string
-  document: Record<string, unknown>
+  name: string
+  thumbnail?: string | null
+  sceneCreatedAt: Date
+  sceneUpdatedAt: Date
+
+  bundleFileKey: string
+  bundleFileSize: number
+  bundleFileType?: string | null
+  bundleOriginalFilename?: string | null
+  bundleEtag: string
   createdAt: Date
   updatedAt: Date
 }

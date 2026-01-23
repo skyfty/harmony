@@ -1,19 +1,30 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { defineStore } from 'pinia';
-import {
-	PROJECT_EXPORT_BUNDLE_FORMAT,
-	PROJECT_EXPORT_BUNDLE_FORMAT_VERSION,
-	type ProjectExportBundle,
-} from '@harmony/schema';
+
+export interface ProjectConfig {
+	id: string;
+	name: string;
+	defaultSceneId: string | null;
+	lastEditedSceneId: string | null;
+	sceneOrder: string[];
+}
 
 export interface StoredProjectEntry {
 	id: string;
 	savedAt: string;
 	origin?: string;
-	bundle: ProjectExportBundle;
+	zipBase64: string;
+	project: {
+		id: string;
+		name: string;
+		defaultSceneId: string | null;
+		lastEditedSceneId: string | null;
+		sceneOrder: string[];
+	};
+	sceneCount: number;
 }
 
-const STORAGE_KEY = 'PROJECT_LIBRARY_V1';
+const STORAGE_KEY = 'PROJECT_LIBRARY_V2';
 
 function generateId(prefix = 'project'): string {
 	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -24,56 +35,45 @@ function generateId(prefix = 'project'): string {
 	return `${prefix}-${time}-${random}`;
 }
 
-function isProjectExportBundle(raw: unknown): raw is ProjectExportBundle {
-	if (!raw || typeof raw !== 'object') {
-		return false;
-	}
-	const candidate = raw as Partial<ProjectExportBundle>;
-	if (candidate.format !== PROJECT_EXPORT_BUNDLE_FORMAT) {
-		return false;
-	}
-	if (candidate.formatVersion !== PROJECT_EXPORT_BUNDLE_FORMAT_VERSION) {
-		return false;
-	}
-	if (!candidate.project || typeof candidate.project !== 'object') {
-		return false;
-	}
-	if (!Array.isArray(candidate.scenes)) {
-		return false;
-	}
-	return true;
+
+
+function isProjectConfig(raw: unknown): raw is ProjectConfig {
+	if (!raw || typeof raw !== 'object') return false;
+	const candidate = raw as Partial<ProjectConfig>;
+	return typeof candidate.id === 'string' && typeof candidate.name === 'string' && Array.isArray(candidate.sceneOrder);
 }
 
-export function parseProjectBundle(payload: unknown): ProjectExportBundle {
-	if (typeof payload === 'string') {
-		try {
-			const parsed = JSON.parse(payload) as unknown;
-			if (isProjectExportBundle(parsed)) {
-				return parsed;
-			}
-		} catch (_error) {
-			throw new Error('JSON 解析失败');
-		}
-		throw new Error('工程导出文件格式不正确');
+export function createProjectEntryFromScenePackage(payload: {
+	zipBase64: string;
+	project: ProjectConfig;
+	sceneCount: number;
+}, origin?: string): StoredProjectEntry {
+	const zipBase64 = (payload.zipBase64 ?? '').trim();
+	if (!zipBase64) {
+		throw new Error('场景包数据为空');
 	}
-
-	if (isProjectExportBundle(payload)) {
-		return payload;
-	}
-
-	throw new Error('工程导出文件格式不正确');
-}
-
-export function createProjectEntry(bundle: ProjectExportBundle, origin?: string): StoredProjectEntry {
-	const projectId = typeof bundle.project?.id === 'string' && bundle.project.id.trim().length
-		? bundle.project.id.trim()
-		: generateId('project');
+	const projectConfig = payload.project;
+	const projectId =
+		typeof projectConfig.id === 'string' && projectConfig.id.trim().length
+			? projectConfig.id.trim()
+			: generateId('project');
 	const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
+	const sceneOrder = Array.isArray(projectConfig.sceneOrder)
+		? projectConfig.sceneOrder.filter((s) => typeof s === 'string')
+		: [];
 	return {
 		id: projectId,
 		savedAt: new Date().toISOString(),
 		...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-		bundle,
+		zipBase64,
+		project: {
+			id: projectId,
+			name: String(projectConfig.name ?? ''),
+			defaultSceneId: projectConfig.defaultSceneId ?? null,
+			lastEditedSceneId: projectConfig.lastEditedSceneId ?? null,
+			sceneOrder,
+		},
+		sceneCount: Number.isFinite(payload.sceneCount) ? Math.max(0, Math.floor(payload.sceneCount)) : sceneOrder.length,
 	};
 }
 
@@ -82,7 +82,7 @@ type ProjectStoreSetup = {
 	initialized: Ref<boolean>;
 	orderedProjects: ComputedRef<StoredProjectEntry[]>;
 	bootstrap: () => void;
-	importProject: (bundle: ProjectExportBundle, origin?: string) => StoredProjectEntry;
+	importScenePackage: (payload: { zipBase64: string; project: ProjectConfig; sceneCount: number }, origin?: string) => StoredProjectEntry;
 	removeProject: (projectId: string) => void;
 	getProject: (projectId: string) => StoredProjectEntry | undefined;
 };
@@ -116,18 +116,29 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 				if (!entry || typeof entry !== 'object') {
 					return;
 				}
-				const { id, savedAt, origin, bundle } = entry as StoredProjectEntry;
-				if (typeof id !== 'string' || typeof savedAt !== 'string') {
+				const { id, savedAt, origin, zipBase64, project, sceneCount } = entry as StoredProjectEntry;
+				if (typeof id !== 'string' || typeof savedAt !== 'string' || typeof zipBase64 !== 'string') {
 					return;
 				}
 				try {
-					const parsedBundle = parseProjectBundle(bundle);
+					const rawProject = project as unknown;
+					if (!isProjectConfig(rawProject)) {
+						return;
+					}
 					const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
 					sanitized.push({
 						id,
 						savedAt,
 						...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-						bundle: parsedBundle,
+						zipBase64,
+						project: {
+							id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
+							name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
+							defaultSceneId: (rawProject as any).defaultSceneId ?? null,
+							lastEditedSceneId: (rawProject as any).lastEditedSceneId ?? null,
+							sceneOrder: Array.isArray((rawProject as any).sceneOrder) ? (rawProject as any).sceneOrder : [],
+						},
+						sceneCount: Number.isFinite(sceneCount) ? Math.max(0, Math.floor(sceneCount)) : 0,
 					});
 				} catch (_error) {
 					// ignore invalid entries
@@ -158,8 +169,11 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 		return entry;
 	}
 
-	function importProject(bundle: ProjectExportBundle, origin?: string): StoredProjectEntry {
-		const entry = createProjectEntry(bundle, origin);
+	function importScenePackage(
+		payload: { zipBase64: string; project: ProjectConfig; sceneCount: number },
+		origin?: string,
+	): StoredProjectEntry {
+		const entry = createProjectEntryFromScenePackage(payload, origin);
 		return upsertProject(entry);
 	}
 
@@ -177,7 +191,7 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 		initialized,
 		orderedProjects,
 		bootstrap,
-		importProject,
+		importScenePackage,
 		removeProject,
 		getProject,
 	};

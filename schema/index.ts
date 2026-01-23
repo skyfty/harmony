@@ -29,6 +29,27 @@ export type {
   PagedResponse,
 } from './asset-api'
 
+export {
+  SCENE_PACKAGE_FORMAT,
+  SCENE_PACKAGE_VERSION,
+  isScenePackageManifest,
+} from './scenePackage'
+export type {
+  ScenePackageManifest,
+  ScenePackageManifestV1,
+  ScenePackageProjectEntry,
+  ScenePackageResourceEntry,
+  ScenePackageResourceType,
+  ScenePackageSceneEntry,
+} from './scenePackage'
+
+export {
+  unzipScenePackage,
+  buildAssetOverridesFromScenePackage,
+  readTextFileFromScenePackage,
+} from './scenePackageZip'
+export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } from './scenePackageZip'
+
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 
 export { createAutoTourRuntime } from './autoTourRuntime'
@@ -117,33 +138,6 @@ export interface ProjectExportBundleProjectConfig {
    * Scene ids in export order (matches Scene Manager UI creation-time order).
    */
   sceneOrder: string[]
-}
-
-export interface ProjectExportSceneEntryBase {
-  id: string
-  name: string
-  createdAt?: string | null
-  updatedAt?: string | null
-}
-
-export interface ProjectExportEmbeddedSceneEntry extends ProjectExportSceneEntryBase {
-  kind: 'embedded'
-  document: SceneJsonExportDocument
-}
-
-export interface ProjectExportExternalSceneEntry extends ProjectExportSceneEntryBase {
-  kind: 'external'
-  sceneJsonUrl: string
-}
-
-export type ProjectExportSceneEntry = ProjectExportEmbeddedSceneEntry | ProjectExportExternalSceneEntry
-
-export interface ProjectExportBundle {
-  format: typeof PROJECT_EXPORT_BUNDLE_FORMAT
-  formatVersion: typeof PROJECT_EXPORT_BUNDLE_FORMAT_VERSION
-  exportedAt: string
-  project: ProjectExportBundleProjectConfig
-  scenes: ProjectExportSceneEntry[]
 }
 
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
@@ -342,6 +336,8 @@ export type AssetSourceMetadata =
 export interface AssetIndexEntry {
   categoryId: string
   source?: AssetSourceMetadata
+  /** Internal assets are managed by the editor/runtime and should not be shown in user-facing asset lists. */
+  internal?: boolean
 }
 
 export interface SceneOutlineMesh {
@@ -939,11 +935,11 @@ export interface TerrainPaintLayerDefinition {
 }
 
 export interface TerrainPaintChunkWeightmapRef {
-  /** Server asset id containing the chunk RGBA weightmap (typically an image). */
-  assetId: string
-  /** Server `updatedAt` (ISO string) at last sync. Used for cache validation. */
-  assetUpdatedAt?: string | null
+  /** Stable content id (recommended: `sha256-...`) of the chunk RGBA weightmap PNG stored as a private resource. */
+  logicalId: string
 }
+
+export type TerrainPaintChunkWeightmapMap = Record<string, TerrainPaintChunkWeightmapRef>
 
 export interface TerrainPaintSettings {
   /** Versioned payload to allow schema migrations later. */
@@ -952,8 +948,12 @@ export interface TerrainPaintSettings {
   weightmapResolution: number
   /** Non-base paint layers. Base is always the ground material color. */
   layers: TerrainPaintLayerDefinition[]
-  /** Map: chunkKey -> weightmap asset reference. */
-  chunks: Record<string, TerrainPaintChunkWeightmapRef>
+  /**
+   * Weightmap asset references keyed by chunk key (e.g., "0:0").
+   * Each chunk has one 4-channel texture mapping [Base, LayerG, LayerB, LayerA].
+   * The actual image data is stored in the project's private asset storage (or similar).
+   */
+  chunks: TerrainPaintChunkWeightmapMap
 }
 
 export interface GroundDynamicMesh {

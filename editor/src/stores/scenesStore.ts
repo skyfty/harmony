@@ -6,6 +6,9 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
+import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { exportScenePackageZip } from '@/utils/scenePackageExport'
 
 export type SceneWorkspaceType = 'local' | 'user'
 
@@ -39,6 +42,21 @@ const LOCAL_WORKSPACE_DESCRIPTOR: SceneWorkspaceDescriptor = {
 }
 
 const USER_SCENE_API_PREFIX = '/api/user-scenes'
+
+type UserSceneBundleSummaryDto = {
+  id: string
+  name: string
+  projectId: string
+  thumbnail: string | null
+  createdAt: string
+  updatedAt: string
+  bundle: {
+    url: string
+    size: number
+    etag: string
+    updatedAt: string
+  }
+}
 
 function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): SceneWorkspaceDescriptor {
   if (!user) {
@@ -215,7 +233,7 @@ async function replaceWorkspaceDocuments(workspaceId: string, documents: StoredS
   await writeSceneDocuments(workspaceId, documents)
 }
 
-async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<StoredSceneDocument[] | null> {
+async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<UserSceneBundleSummaryDto[] | null> {
   const authorization = authStore.authorizationHeader
   if (!authorization) {
     return null
@@ -236,11 +254,69 @@ async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthSto
   const entries: unknown =
     payload && typeof payload === 'object' && Array.isArray((payload as { scenes?: unknown[] }).scenes)
       ? (payload as { scenes?: unknown[] }).scenes
-      : payload
+      : null
   if (!Array.isArray(entries)) {
     return []
   }
-  return (entries as StoredSceneDocument[]).filter((doc): doc is StoredSceneDocument => !!doc && typeof doc.id === 'string')
+  return (entries as UserSceneBundleSummaryDto[]).filter((doc): doc is UserSceneBundleSummaryDto => !!doc && typeof doc.id === 'string')
+}
+
+async function downloadSceneBundleZip(
+  bundleUrl: string,
+  authStore: ReturnType<typeof useAuthStore>,
+  options: { etag?: string | null } = {},
+): Promise<{ bytes: ArrayBuffer; etag: string | null } | null> {
+  const authorization = authStore.authorizationHeader
+  if (!authorization) {
+    return null
+  }
+  const url = buildServerApiUrl(bundleUrl)
+  const headers = new Headers({ Accept: 'application/zip' })
+  headers.set('Authorization', authorization)
+  if (options.etag) {
+    headers.set('If-None-Match', options.etag)
+  }
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+    cache: 'no-cache',
+  })
+  if (response.status === 304) {
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to download scene bundle (${response.status})`)
+  }
+  const etag = response.headers.get('ETag')
+  const bytes = await response.arrayBuffer()
+  return { bytes, etag }
+}
+
+async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<StoredSceneDocument> {
+  const pkg = unzipScenePackage(zipBytes)
+  const sceneEntry = pkg.manifest.scenes?.[0]
+  if (!sceneEntry?.path) {
+    throw new Error('Scene bundle missing scene entry')
+  }
+  const rawScene = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as unknown
+  if (!rawScene || typeof rawScene !== 'object') {
+    throw new Error('Invalid scene.json in scene bundle')
+  }
+
+  const assetCache = useAssetCacheStore()
+  for (const entry of pkg.manifest.resources ?? []) {
+    const bytes = pkg.files[entry.path]
+    if (!bytes) {
+      throw new Error(`Missing resource file in scene bundle: ${entry.path}`)
+    }
+    const mimeType = entry.mimeType || 'application/octet-stream'
+    const filename = `${entry.logicalId}.${entry.ext}`
+    const blob = new Blob([new Uint8Array(bytes)], { type: mimeType })
+    await assetCache.storeAssetBlob(entry.logicalId, { blob, mimeType, filename })
+  }
+
+  return rawScene as StoredSceneDocument
 }
 
 async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<void> {
@@ -248,21 +324,33 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
   if (!authorization) {
     return
   }
-  const payload = cloneForIndexedDb(document)
-  const url = buildServerApiUrl(`${USER_SCENE_API_PREFIX}/${encodeURIComponent(document.id)}`)
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
+
+  const bundleUrl = buildServerApiUrl(`${USER_SCENE_API_PREFIX}/${encodeURIComponent(document.id)}/bundle`)
+  const bundleBlob = await exportScenePackageZip({
+    project: {
+      id: document.projectId,
+      name: document.projectId,
+      defaultSceneId: document.id,
+      lastEditedSceneId: document.id,
+      sceneOrder: [document.id],
+    },
+    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }]
   })
+
+  const filename = `${document.name || document.id}.zip`
+  const form = new FormData()
+  form.append('file', new File([bundleBlob], filename, { type: 'application/zip' }))
+
+  const headers = new Headers()
   headers.set('Authorization', authorization)
-  const response = await fetch(url, {
+  const response = await fetch(bundleUrl, {
     method: 'PUT',
     credentials: 'include',
     headers,
-    body: JSON.stringify(payload),
+    body: form,
   })
   if (!response.ok) {
-    throw new Error(`Failed to save scene (${response.status})`)
+    throw new Error(`Failed to upload scene bundle (${response.status})`)
   }
 }
 
@@ -612,11 +700,21 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
+        const downloaded: StoredSceneDocument[] = []
+        for (const entry of remoteScenes) {
+          const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore)
+          if (!bundle) {
+            continue
+          }
+          const doc = await unpackSceneBundleIntoStores(bundle.bytes)
+          downloaded.push(doc)
+        }
+
         if (options.replace) {
-          await replaceWorkspaceDocuments(this.workspaceId, remoteScenes)
-          this.metadata = remoteScenes.map((doc) => toMetadata(doc))
+          await replaceWorkspaceDocuments(this.workspaceId, downloaded)
+          this.metadata = downloaded.map((doc) => toMetadata(doc))
         } else {
-          await writeSceneDocuments(this.workspaceId, remoteScenes)
+          await writeSceneDocuments(this.workspaceId, downloaded)
           await this.refreshMetadata()
         }
         this.workspaceRevision += 1
