@@ -82,7 +82,8 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
-
+    const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+    return Base64.fromUint8Array(bytes);
 }
 
 async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<ArrayBuffer | Uint8Array> {

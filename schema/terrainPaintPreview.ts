@@ -315,7 +315,7 @@ export async function decodeWeightmapToData(blob: Blob, resolution: number): Pro
 	// - uint32 little-endian: payload byte length
 	// - payload: RGBA bytes (res * res * 4)
 	// Only binary format is supported now.
-	if (blob.type === 'application/octet-stream' || blob.type === 'binary/octet-stream' || blob.type === '') {
+	if (blob.type === 'application/octet-stream' || blob.type === 'binary/octet-stream' || blob.type === '' || blob.type === 'undefined') {
 		const expectedLength = res * res * 4
 		const buffer = await blob.arrayBuffer()
 		const bytes = new Uint8Array(buffer)
