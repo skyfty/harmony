@@ -45,7 +45,6 @@ import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/ro
 import type { InstancedTilingComponentProps } from './components/definitions/instancedTilingComponent'
 import {
   INSTANCED_TILING_COMPONENT_TYPE,
-  clampInstancedTilingComponentProps,
 } from './components/definitions/instancedTilingComponent'
 
 import { getOrLoadModelObject } from './modelObjectCache'
@@ -506,11 +505,9 @@ class SceneGraphBuilder {
         | SceneNodeComponentState<InstancedTilingComponentProps>
         | undefined;
       if (tilingState?.enabled !== false) {
-        const props = clampInstancedTilingComponentProps(
-          tilingState?.props as Partial<InstancedTilingComponentProps> | null | undefined,
-        )
-        if (props.meshId) {
-          ids.add(props.meshId)
+        // Instanced tiling uses the node's own model asset (sourceAssetId).
+        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+          ids.add(node.sourceAssetId)
         }
       }
     }
@@ -529,11 +526,9 @@ class SceneGraphBuilder {
         | SceneNodeComponentState<InstancedTilingComponentProps>
         | undefined
       if (tilingState?.enabled !== false) {
-        const props = clampInstancedTilingComponentProps(
-          tilingState?.props as Partial<InstancedTilingComponentProps> | null | undefined,
-        )
-        if (props.meshId) {
-          ids.add(props.meshId)
+        // New behavior: use the node's own model asset.
+        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+          ids.add(node.sourceAssetId)
         }
       }
       if (Array.isArray(node.children) && node.children.length) {

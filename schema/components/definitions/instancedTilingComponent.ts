@@ -27,9 +27,6 @@ export const INSTANCED_TILING_DEFAULT_UP: Vector3Like = { x: 0, y: 1, z: 0 }
 export const INSTANCED_TILING_DEFAULT_ROLL_DEGREES = 0
 
 export interface InstancedTilingComponentProps {
-  /** Model/Mesh assetId to be instanced. Empty string means "not selected". */
-  meshId: string
-
   /** Instance counts along X/Y/Z (positive direction only). */
   countX: number
   countY: number
@@ -73,9 +70,6 @@ function clampVec3(value: unknown, fallback: Vector3Like): Vector3Like {
 export function clampInstancedTilingComponentProps(
   props: Partial<InstancedTilingComponentProps> | null | undefined,
 ): InstancedTilingComponentProps {
-  const meshIdRaw = typeof props?.meshId === 'string' ? props.meshId : ''
-  const meshId = meshIdRaw.trim()
-
   const modeRaw = typeof props?.mode === 'string' ? props.mode : INSTANCED_TILING_DEFAULT_MODE
   const mode: InstancedTilingMode = modeRaw === 'vector' ? 'vector' : 'axis'
 
@@ -84,7 +78,6 @@ export function clampInstancedTilingComponentProps(
     : INSTANCED_TILING_DEFAULT_ROLL_DEGREES
 
   return {
-    meshId,
     countX: clampCount(props?.countX),
     countY: clampCount(props?.countY),
     countZ: clampCount(props?.countZ),
@@ -100,7 +93,6 @@ export function clampInstancedTilingComponentProps(
 
 export function cloneInstancedTilingComponentProps(props: InstancedTilingComponentProps): InstancedTilingComponentProps {
   return {
-    meshId: props.meshId,
     countX: props.countX,
     countY: props.countY,
     countZ: props.countZ,
@@ -118,7 +110,7 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
   private readonly baseMatrix = new Matrix4()
   private readonly instanceMatrix = new Matrix4()
 
-  private activeMeshId: string | null = null
+  private activeAssetId: string | null = null
   private bindingIds: string[] = []
 
   private layoutSignature: string | null = null
@@ -166,18 +158,20 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
     }
 
     const props = clampInstancedTilingComponentProps(this.context.getProps())
-    if (!props.meshId) {
+
+    const resolvedAssetId = this.resolveTemplateAssetId(runtimeObject)
+    if (!resolvedAssetId) {
       this.cleanupBindings()
       return
     }
 
-    const group = getCachedModelObject(props.meshId)
+    const group = getCachedModelObject(resolvedAssetId)
     if (!group) {
       // Asset not loaded into modelObjectCache yet.
       return
     }
 
-    ensureInstancedMeshesRegistered(props.meshId)
+    ensureInstancedMeshesRegistered(resolvedAssetId)
 
     const instanceCount = props.countX * props.countY * props.countZ
     if (!Number.isFinite(instanceCount) || instanceCount <= 0) {
@@ -185,7 +179,7 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
       return
     }
 
-    if (!this.ensureBindings(props.meshId, instanceCount)) {
+    if (!this.ensureBindings(resolvedAssetId, instanceCount)) {
       return
     }
 
@@ -201,7 +195,7 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
     const stepY = extents.y + props.spacingY
     const stepZ = extents.z + props.spacingZ
 
-    const signature = this.buildLayoutSignature(props, extents)
+    const signature = this.buildLayoutSignature(props, resolvedAssetId, extents)
     if (signature !== this.layoutSignature || this.localMatrices.length !== instanceCount) {
       this.layoutSignature = signature
       this.localMatrices = buildInstancedTilingLocalMatrices({
@@ -236,10 +230,24 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
     this.localDirty = false
   }
 
-  private buildLayoutSignature(props: InstancedTilingComponentProps, extents: { x: number; y: number; z: number }): string {
+  private resolveTemplateAssetId(runtimeObject: Object3D): string | null {
+    const userData = (runtimeObject as Object3D & { userData?: Record<string, unknown> }).userData
+    const instancedAssetId = typeof userData?.instancedAssetId === 'string' ? userData.instancedAssetId.trim() : ''
+    if (instancedAssetId) {
+      return instancedAssetId
+    }
+    const sourceAssetId = typeof userData?.sourceAssetId === 'string' ? userData.sourceAssetId.trim() : ''
+    return sourceAssetId || null
+  }
+
+  private buildLayoutSignature(
+    props: InstancedTilingComponentProps,
+    resolvedAssetId: string,
+    extents: { x: number; y: number; z: number },
+  ): string {
     // Include everything that changes local placement.
     return [
-      props.meshId,
+      resolvedAssetId,
       props.mode,
       `${props.countX},${props.countY},${props.countZ}`,
       `${props.spacingX},${props.spacingY},${props.spacingZ}`,
@@ -273,22 +281,22 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
     return changed || this.localDirty
   }
 
-  private ensureBindings(meshId: string, count: number): boolean {
-    const needsReset = this.activeMeshId !== meshId || this.bindingIds.length !== count
+  private ensureBindings(assetId: string, count: number): boolean {
+    const needsReset = this.activeAssetId !== assetId || this.bindingIds.length !== count
     if (!needsReset && this.bindingIds.length === count) {
       return true
     }
 
     this.cleanupBindings()
-    this.activeMeshId = meshId
+    this.activeAssetId = assetId
 
     const created: string[] = []
     for (let i = 0; i < count; i += 1) {
       const bindingId = `${this.context.nodeId}:${this.context.componentId}:${i}`
-      const binding = allocateModelInstanceBinding(meshId, bindingId, this.context.nodeId)
+      const binding = allocateModelInstanceBinding(assetId, bindingId, this.context.nodeId)
       if (!binding) {
         created.forEach((id) => releaseModelInstanceBinding(id))
-        this.activeMeshId = null
+        this.activeAssetId = null
         this.bindingIds = []
         return false
       }
@@ -305,7 +313,7 @@ class InstancedTilingComponent extends Component<InstancedTilingComponentProps> 
       releaseModelInstanceBinding(bindingId)
     }
     this.bindingIds = []
-    this.activeMeshId = null
+    this.activeAssetId = null
     this.layoutSignature = null
     this.localMatrices = []
     this.lastBaseElements = null

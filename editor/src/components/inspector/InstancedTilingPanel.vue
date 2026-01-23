@@ -3,8 +3,6 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState, Vector3Like } from '@harmony/schema'
-import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import {
   INSTANCED_TILING_COMPONENT_TYPE,
@@ -18,7 +16,7 @@ import {
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const componentState = computed(() => {
   const component = selectedNode.value?.components?.[INSTANCED_TILING_COMPONENT_TYPE]
@@ -28,7 +26,19 @@ const componentState = computed(() => {
   return component as SceneNodeComponentState<InstancedTilingComponentProps>
 })
 
-const hasMeshSelected = computed(() => Boolean(componentState.value?.props?.meshId?.trim()))
+const templateAssetId = computed(() => {
+  const raw = selectedNode.value?.sourceAssetId
+  return typeof raw === 'string' ? raw.trim() : ''
+})
+
+const hasTemplateAsset = computed(() => Boolean(templateAssetId.value))
+
+const templateAsset = computed(() => {
+  if (!templateAssetId.value) {
+    return null
+  }
+  return sceneStore.getAsset(templateAssetId.value) ?? null
+})
 
 const localMode = ref<'axis' | 'vector'>(INSTANCED_TILING_DEFAULT_MODE)
 const localCountX = ref(INSTANCED_TILING_DEFAULT_COUNT)
@@ -84,37 +94,7 @@ watch(
   { immediate: true },
 )
 
-const currentMeshAsset = computed(() => {
-  const assetId = componentState.value?.props?.meshId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.getAsset(assetId) ?? null
-})
-
-const meshPreviewStyle = computed(() => {
-  const asset = currentMeshAsset.value
-  if (!asset) {
-    return undefined
-  }
-  if (asset.thumbnail?.trim()) {
-    return { backgroundImage: `url(${asset.thumbnail})` }
-  }
-  if (asset.previewColor) {
-    return { backgroundColor: asset.previewColor }
-  }
-  return undefined
-})
-
-const assetDialogVisible = ref(false)
-const assetDialogSelectedId = ref('')
-const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-
-function openAssetDialog(event: MouseEvent): void {
-  assetDialogSelectedId.value = componentState.value?.props?.meshId ?? ''
-  assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
-  assetDialogVisible.value = true
-}
+const feedbackMessage = ref<string | null>(null)
 
 function applyPatch(patch: Partial<InstancedTilingComponentProps>): void {
   if (isSyncingFromScene.value) {
@@ -206,120 +186,6 @@ function applyRollDegreesUpdate() {
   }
   applyPatch({ rollDegrees: normalized })
 }
-
-function serializeAssetDragPayload(raw: string | null): string | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as { assetId?: string }
-    if (parsed?.assetId) {
-      return parsed.assetId
-    }
-  } catch (error) {
-    console.warn('Unable to parse asset drag payload', error)
-  }
-  return null
-}
-
-function resolveDragAssetId(event: DragEvent): string | null {
-  if (event.dataTransfer) {
-    const payload = serializeAssetDragPayload(event.dataTransfer.getData(ASSET_DRAG_MIME))
-    if (payload) {
-      return payload
-    }
-  }
-  return draggingAssetId.value ?? null
-}
-
-function validateMeshAssetId(assetId: string): string | null {
-  const asset = sceneStore.getAsset(assetId)
-  if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
-    return 'Only model/mesh assets can be assigned here.'
-  }
-  return null
-}
-
-const dropAreaRef = ref<HTMLElement | null>(null)
-const dropActive = ref(false)
-const feedbackMessage = ref<string | null>(null)
-
-function handleDragEnter(event: DragEvent) {
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
-    return
-  }
-  const invalid = validateMeshAssetId(assetId)
-  if (invalid) {
-    return
-  }
-  dropActive.value = true
-  event.preventDefault()
-}
-
-function handleDragOver(event: DragEvent) {
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
-    return
-  }
-  const invalid = validateMeshAssetId(assetId)
-  if (invalid) {
-    return
-  }
-  dropActive.value = true
-  event.preventDefault()
-}
-
-function handleDragLeave(event: DragEvent) {
-  const related = event.relatedTarget as Node | null
-  if (!dropAreaRef.value || (related && dropAreaRef.value.contains(related))) {
-    return
-  }
-  dropActive.value = false
-}
-
-function handleDrop(event: DragEvent) {
-  event.preventDefault()
-  dropActive.value = false
-  feedbackMessage.value = null
-
-  const component = componentState.value
-  if (!component) {
-    return
-  }
-
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
-    feedbackMessage.value = 'Drag a model/mesh asset from the Asset Panel.'
-    return
-  }
-  const invalid = validateMeshAssetId(assetId)
-  if (invalid) {
-    feedbackMessage.value = invalid
-    return
-  }
-
-  if (assetId === component.props.meshId) {
-    return
-  }
-
-  applyPatch({ meshId: assetId })
-}
-
-function handleAssetDialogUpdate(asset: { id: string } | null) {
-  if (!asset) {
-    return
-  }
-  applyPatch({ meshId: asset.id })
-}
-
-function handleAssetDialogCancel() {
-  assetDialogVisible.value = false
-}
-
-function clearMeshSelection() {
-  applyPatch({ meshId: '' })
-}
 </script>
 
 <template>
@@ -328,40 +194,20 @@ function clearMeshSelection() {
       <div style="display:flex;align-items:center;width:100%;gap:0.4rem;">
         <span style="font-weight:600;">Instanced Tiling</span>
         <v-spacer />
-        <span style="font-size:0.78rem;opacity:0.78;">{{ hasMeshSelected ? 'Active' : '未选择 mesh' }}</span>
+        <span style="font-size:0.78rem;opacity:0.78;">{{ hasTemplateAsset ? 'Active' : '未绑定模型' }}</span>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div
-        class="tiling-asset-drop"
-        ref="dropAreaRef"
-        :class="{ 'is-active': dropActive }"
-        @dragenter="handleDragEnter"
-        @dragover="handleDragOver"
-        @dragleave="handleDragLeave"
-        @drop="handleDrop"
-      >
-        <div v-if="currentMeshAsset" class="asset-summary">
-          <div class="asset-thumbnail" :style="meshPreviewStyle" @click.stop="openAssetDialog($event as any)" />
-          <div class="asset-text">
-            <div class="asset-name">{{ currentMeshAsset.name }}</div>
-            <div class="asset-subtitle">Model/mesh · {{ currentMeshAsset.id.slice(0, 8) }}</div>
-          </div>
-          <v-spacer />
-          <v-btn size="x-small" variant="text" @click.stop="clearMeshSelection">Clear</v-btn>
-        </div>
-        <div v-else class="asset-summary empty">
-          <div class="asset-thumbnail placeholder" @click.stop="openAssetDialog($event as any)" />
-          <div class="asset-text">
-            <div class="asset-name">未选择 mesh</div>
-            <div class="asset-subtitle">拖拽一个 model/mesh 资源或点击选择</div>
-          </div>
+      <div class="tiling-template">
+        <div class="template-row">
+          <span class="template-label">Template</span>
+          <span class="template-value" v-if="hasTemplateAsset">
+            <span v-if="templateAsset">{{ templateAsset.name }} · {{ templateAssetId.slice(0, 8) }}</span>
+            <span v-else>{{ templateAssetId.slice(0, 8) }}</span>
+          </span>
+          <span class="template-value" v-else>未绑定模型：请先在「Asset Model」面板给该节点绑定一个 model/mesh 资源</span>
         </div>
         <p v-if="feedbackMessage" class="asset-feedback">{{ feedbackMessage }}</p>
-      </div>
-
-      <div v-if="!hasMeshSelected" class="tiling-warning">
-        未选择 mesh：请选择一个 model/mesh 资源后再调整平铺参数。
       </div>
 
       <v-select
@@ -373,7 +219,6 @@ function clearMeshSelection() {
           { title: 'Axis (XYZ)', value: 'axis' },
           { title: 'Vector (Tilted)', value: 'vector' },
         ]"
-        :disabled="!hasMeshSelected"
         @update:modelValue="applyModeUpdate"
       />
 
@@ -384,7 +229,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           min="1"
           step="1"
           @blur="() => applyCountUpdate('x')"
@@ -396,7 +240,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           min="1"
           step="1"
           @blur="() => applyCountUpdate('y')"
@@ -408,7 +251,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           min="1"
           step="1"
           @blur="() => applyCountUpdate('z')"
@@ -423,7 +265,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           step="0.1"
           @blur="() => applySpacingUpdate('x')"
           @keydown.enter.prevent="() => applySpacingUpdate('x')"
@@ -434,7 +275,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           step="0.1"
           @blur="() => applySpacingUpdate('y')"
           @keydown.enter.prevent="() => applySpacingUpdate('y')"
@@ -445,7 +285,6 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           step="0.1"
           @blur="() => applySpacingUpdate('z')"
           @keydown.enter.prevent="() => applySpacingUpdate('z')"
@@ -456,13 +295,11 @@ function clearMeshSelection() {
         <InspectorVectorControls
           label="Forward (local)"
           :model-value="localForward"
-          :disabled="!hasMeshSelected"
           @update:axis="(axis, value) => applyVectorAxisUpdate('forward', axis, value)"
         />
         <InspectorVectorControls
           label="Up (local)"
           :model-value="localUp"
-          :disabled="!hasMeshSelected"
           @update:axis="(axis, value) => applyVectorAxisUpdate('up', axis, value)"
         />
         <v-text-field
@@ -471,87 +308,45 @@ function clearMeshSelection() {
           type="number"
           density="compact"
           variant="underlined"
-          :disabled="!hasMeshSelected"
           step="1"
           @blur="applyRollDegreesUpdate"
           @keydown.enter.prevent="applyRollDegreesUpdate"
         />
       </div>
-
-      <AssetPickerDialog
-        v-model="assetDialogVisible"
-        :asset-id="assetDialogSelectedId"
-        assetType="model,mesh"
-        title="Select Mesh Asset"
-        :anchor="assetDialogAnchor"
-        @update:asset="handleAssetDialogUpdate"
-        @cancel="handleAssetDialogCancel"
-      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
 
 <style scoped>
-.tiling-asset-drop {
+
+.tiling-template {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   padding: 0.75rem;
-  transition: border-color 0.2s, background-color 0.2s;
 }
 
-.tiling-asset-drop.is-active {
-  border-color: rgba(110, 231, 183, 0.8);
-  background-color: rgba(110, 231, 183, 0.08);
-}
-
-.asset-summary {
+.template-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 0.75rem;
 }
 
-.asset-thumbnail {
-  width: 48px;
-  height: 48px;
-  border-radius: 6px;
-  background-size: cover;
-  background-position: center;
-  cursor: pointer;
+.template-label {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  min-width: 4.5rem;
 }
 
-.asset-thumbnail.placeholder {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
-}
-
-.asset-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.asset-name {
-  font-weight: 600;
-  font-size: 0.9rem;
-}
-
-.asset-subtitle {
-  font-size: 0.75rem;
-  color: rgba(233, 236, 241, 0.7);
+.template-value {
+  font-size: 0.85rem;
 }
 
 .asset-feedback {
   font-size: 0.75rem;
   color: #f97316;
-}
-
-.tiling-warning {
-  margin-top: 0.6rem;
-  margin-bottom: 0.4rem;
-  font-size: 0.8rem;
-  color: rgba(245, 158, 11, 0.95);
 }
 
 .tiling-grid-3 {

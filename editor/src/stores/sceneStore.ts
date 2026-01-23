@@ -221,7 +221,6 @@ import {
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
-  INSTANCED_TILING_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -3983,15 +3982,6 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
 function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
   const map = new Map<string, SceneNode[]>()
 
-  const ensureAssetId = (assetId: string) => {
-    if (!assetId.trim()) {
-      return
-    }
-    if (!map.has(assetId)) {
-      map.set(assetId, [])
-    }
-  }
-
   const ensureNodeAssetId = (assetId: string, node: SceneNode) => {
     if (!assetId.trim()) {
       return
@@ -4006,18 +3996,6 @@ function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
     list.forEach((node) => {
       if (node.sourceAssetId) {
         ensureNodeAssetId(node.sourceAssetId, node)
-      }
-
-      const instancedTiling = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-        | SceneNodeComponentState<{ meshId?: unknown }>
-        | undefined
-      const meshIdRaw = instancedTiling?.props?.meshId
-      if (typeof meshIdRaw === 'string') {
-        const meshId = meshIdRaw.trim()
-        if (meshId) {
-          // Ensure the asset is downloaded/cached, but do NOT bind it to this node's runtime.
-          ensureAssetId(meshId)
-        }
       }
 
       if (node.children?.length) {

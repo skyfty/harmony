@@ -147,6 +147,7 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  INSTANCED_TILING_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
   WALL_DEFAULT_THICKNESS,
@@ -8042,6 +8043,16 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   const runtimeBackedType = usesRuntimeObjectTypes.has(nodeType)
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
+
+  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+    | SceneNodeComponentState<Record<string, unknown>>
+    | undefined
+  if (instancedTilingState?.enabled !== false) {
+    const assetId = node.sourceAssetId ?? null
+    if (assetId && !getCachedModelObject(assetId)) {
+      void ensureModelObjectCached(assetId)
+    }
+  }
 
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
