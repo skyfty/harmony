@@ -42,6 +42,13 @@ import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
+import type { InstancedTilingComponentProps } from './components/definitions/instancedTilingComponent'
+import {
+  INSTANCED_TILING_COMPONENT_TYPE,
+} from './components/definitions/instancedTilingComponent'
+
+import { getOrLoadModelObject } from './modelObjectCache'
+import { loadNodeObject } from './modelAssetLoader'
 
 import type { SceneNodeWithExtras } from './sceneGraph/types';
 import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
@@ -276,6 +283,7 @@ class SceneGraphBuilder {
     const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
     await this.preloadAssets(nodes, materials);
+    await this.preloadInstancedTilingModels(nodes);
     await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
@@ -436,9 +444,14 @@ class SceneGraphBuilder {
     const meshInfo = this.document.assetPreload?.mesh;
     if (this.lazyLoadMeshes) {
       if (Array.isArray(meshInfo?.essential) && meshInfo.essential.length) {
-        return this.normalizeAssetIdList(meshInfo.essential);
+        const essential = this.normalizeAssetIdList(meshInfo.essential);
+        const tiling = this.collectInstancedTilingAssetIds(nodes);
+        if (!tiling.length) {
+          return essential;
+        }
+        return this.normalizeAssetIdList([...essential, ...tiling]);
       }
-      return [];
+      return this.collectInstancedTilingAssetIds(nodes);
     }
     if (Array.isArray(meshInfo?.all) && meshInfo.all.length) {
       return this.normalizeAssetIdList(meshInfo.all);
@@ -487,8 +500,65 @@ class SceneGraphBuilder {
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
       }
+
+      const tilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+        | SceneNodeComponentState<InstancedTilingComponentProps>
+        | undefined;
+      if (tilingState?.enabled !== false) {
+        // Instanced tiling uses the node's own model asset (sourceAssetId).
+        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+          ids.add(node.sourceAssetId)
+        }
+      }
     }
     return Array.from(ids);
+  }
+
+  private collectInstancedTilingAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>()
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) {
+        continue
+      }
+      const tilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+        | SceneNodeComponentState<InstancedTilingComponentProps>
+        | undefined
+      if (tilingState?.enabled !== false) {
+        // New behavior: use the node's own model asset.
+        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+          ids.add(node.sourceAssetId)
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]))
+      }
+    }
+    return Array.from(ids)
+  }
+
+  private async preloadInstancedTilingModels(nodes: SceneNodeWithExtras[]): Promise<void> {
+    const assetIds = this.collectInstancedTilingAssetIds(nodes)
+    if (!assetIds.length) {
+      return
+    }
+
+    await Promise.all(
+      assetIds.map(async (assetId) => {
+        try {
+          await getOrLoadModelObject(assetId, async () => {
+            const object = await loadNodeObject(this.resourceCache, assetId, null)
+            if (!object) {
+              throw new Error('Instanced tiling preload returned empty object')
+            }
+            return object
+          })
+        } catch (error) {
+          this.warn(`Failed to preload instanced tiling model ${assetId}: ${(error as Error)?.message ?? String(error)}`)
+        }
+      }),
+    )
   }
 
   private collectTextureAssetIds(

@@ -73,13 +73,21 @@ import {
   getCachedModelObject,
   getOrLoadModelObject,
   allocateModelInstance,
+  allocateModelInstanceBinding,
   releaseModelInstance,
+  releaseModelInstanceBinding,
   ensureInstancedMeshesRegistered,
   subscribeInstancedMeshes,
   getModelInstanceBindingById,
+  updateModelInstanceBindingMatrix,
   findBindingIdForInstance,
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
+import {
+  buildInstancedTilingLocalMatrices,
+  computeBoxExtentsAlongBasis,
+  computeInstancedTilingBasis,
+} from '@schema/instancedMeshTiling'
 import {
   buildContinuousInstancedModelUserDataPatch,
   buildContinuousInstancedModelUserDataPatchV2,
@@ -147,6 +155,7 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  INSTANCED_TILING_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
   WALL_DEFAULT_THICKNESS,
@@ -156,6 +165,7 @@ import {
   ROAD_DEFAULT_WIDTH,
   ROAD_DEFAULT_JUNCTION_SMOOTHING,
   ROAD_COMPONENT_TYPE,
+  clampInstancedTilingComponentProps,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -188,6 +198,7 @@ import type {
   GuideboardEffectInstance,
   LodComponentProps,
   GuideRouteComponentProps,
+  InstancedTilingComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
@@ -387,6 +398,295 @@ const instancedHoverMaterial = new THREE.MeshBasicMaterial({
 instancedHoverMaterial.toneMapped = false
 
 const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
+
+type InstancedTilingRuntimeState = {
+  nodeId: string
+  componentId: string
+  assetId: string | null
+  bindingIds: string[]
+  layoutSignature: string | null
+  localMatrices: THREE.Matrix4[]
+  lastBaseElements: Float32Array | null
+  localDirty: boolean
+  hiddenMesh: THREE.Mesh | null
+  hiddenMeshWasVisible: boolean
+  previousInstancedAssetId: unknown
+  injectedInstancedAssetId: boolean
+}
+
+const instancedTilingRuntimes = new Map<string, InstancedTilingRuntimeState>()
+const INSTANCED_TILING_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
+
+const instancedTilingBaseMatrix = new THREE.Matrix4()
+const instancedTilingInstanceMatrix = new THREE.Matrix4()
+
+function isInternalViewportObjectName(name: unknown): boolean {
+  if (typeof name !== 'string' || !name) {
+    return false
+  }
+  return INSTANCED_TILING_INTERNAL_NAME_PARTS.some((part) => name.includes(part))
+}
+
+function findFirstRenderableMeshChild(root: THREE.Object3D): THREE.Mesh | null {
+  const stack: THREE.Object3D[] = [...root.children]
+  while (stack.length) {
+    const current = stack.shift()
+    if (!current) {
+      continue
+    }
+    if (isInternalViewportObjectName(current.name)) {
+      continue
+    }
+    const mesh = current as THREE.Mesh
+    if (mesh?.isMesh) {
+      return mesh
+    }
+    if (current.children?.length) {
+      stack.unshift(...current.children)
+    }
+  }
+  return null
+}
+
+function getEnabledInstancedTilingState(node: SceneNode): { componentId: string; props: InstancedTilingComponentProps } | null {
+  const state = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+    | SceneNodeComponentState<Partial<InstancedTilingComponentProps> | Record<string, unknown>>
+    | undefined
+  if (!state || state.enabled === false) {
+    return null
+  }
+  const componentId = typeof state.id === 'string' ? state.id : ''
+  const props = clampInstancedTilingComponentProps(state.props as Partial<InstancedTilingComponentProps> | null | undefined)
+  return { componentId, props }
+}
+
+function cleanupInstancedTilingRuntime(nodeId: string, options: { restoreTemplateMesh?: boolean } = {}) {
+  const entry = instancedTilingRuntimes.get(nodeId)
+  if (!entry) {
+    return
+  }
+
+  for (const bindingId of entry.bindingIds) {
+    releaseModelInstanceBinding(bindingId)
+  }
+
+  const restore = options.restoreTemplateMesh !== false
+  if (restore && entry.hiddenMesh) {
+    entry.hiddenMesh.visible = entry.hiddenMeshWasVisible
+  }
+
+  if (entry.injectedInstancedAssetId) {
+    const object = objectMap.get(nodeId)
+    if (object) {
+      const userData = object.userData ?? (object.userData = {})
+      const previous = entry.previousInstancedAssetId
+      if (typeof previous === 'undefined') {
+        delete userData.instancedAssetId
+      } else {
+        ;(userData as any).instancedAssetId = previous
+      }
+    }
+  }
+
+  instancedTilingRuntimes.delete(nodeId)
+}
+
+function clearAllInstancedTilingRuntimes() {
+  Array.from(instancedTilingRuntimes.keys()).forEach((nodeId) => cleanupInstancedTilingRuntime(nodeId))
+}
+
+function syncInstancedTilingRegistration(object: THREE.Object3D, node: SceneNode) {
+  const enabled = getEnabledInstancedTilingState(node)
+  if (!enabled) {
+    cleanupInstancedTilingRuntime(node.id)
+    return
+  }
+
+  const existing = instancedTilingRuntimes.get(node.id)
+  if (existing) {
+    existing.componentId = enabled.componentId
+    return
+  }
+
+  instancedTilingRuntimes.set(node.id, {
+    nodeId: node.id,
+    componentId: enabled.componentId,
+    assetId: null,
+    bindingIds: [],
+    layoutSignature: null,
+    localMatrices: [],
+    lastBaseElements: null,
+    localDirty: true,
+    hiddenMesh: null,
+    hiddenMeshWasVisible: true,
+    previousInstancedAssetId: (object.userData ?? {}).instancedAssetId,
+    injectedInstancedAssetId: false,
+  })
+}
+
+function tickInstancedTiling() {
+  if (!instancedTilingRuntimes.size) {
+    return
+  }
+
+  instancedTilingRuntimes.forEach((runtime, nodeId) => {
+    const object = objectMap.get(nodeId)
+    const node = resolveSceneNodeById(nodeId)
+    if (!object || !node) {
+      cleanupInstancedTilingRuntime(nodeId)
+      return
+    }
+
+    const enabled = getEnabledInstancedTilingState(node)
+    if (!enabled) {
+      cleanupInstancedTilingRuntime(nodeId)
+      return
+    }
+
+    const objectUserData = object.userData as Record<string, unknown> | undefined
+    const resolvedAssetId = typeof objectUserData?.instancedAssetId === 'string'
+      ? (objectUserData.instancedAssetId as string).trim()
+      : typeof objectUserData?.sourceAssetId === 'string'
+        ? (objectUserData.sourceAssetId as string).trim()
+        : ''
+
+    if (!resolvedAssetId) {
+      // No template asset -> show template mesh and ensure no stale bindings.
+      if (runtime.hiddenMesh) {
+        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
+        runtime.hiddenMesh = null
+      }
+      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
+      runtime.bindingIds = []
+      return
+    }
+
+    const group = getCachedModelObject(resolvedAssetId)
+    if (!group) {
+      void ensureModelObjectCached(resolvedAssetId)
+      if (runtime.hiddenMesh) {
+        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
+        runtime.hiddenMesh = null
+      }
+      return
+    }
+
+    ensureInstancedMeshesRegistered(resolvedAssetId)
+
+    const props = enabled.props
+    const instanceCount = props.countX * props.countY * props.countZ
+    if (!Number.isFinite(instanceCount) || instanceCount <= 0) {
+      cleanupInstancedTilingRuntime(nodeId)
+      return
+    }
+
+    const needsReset = runtime.assetId !== resolvedAssetId || runtime.bindingIds.length !== instanceCount
+    if (needsReset) {
+      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
+      runtime.bindingIds = []
+      runtime.assetId = resolvedAssetId
+      runtime.layoutSignature = null
+      runtime.localMatrices = []
+      runtime.lastBaseElements = null
+      runtime.localDirty = true
+
+      const created: string[] = []
+      for (let i = 0; i < instanceCount; i += 1) {
+        const bindingId = `${nodeId}:${INSTANCED_TILING_COMPONENT_TYPE}:${runtime.componentId || 'default'}:${i}`
+        const binding = allocateModelInstanceBinding(resolvedAssetId, bindingId, nodeId)
+        if (!binding) {
+          created.forEach((id) => releaseModelInstanceBinding(id))
+          return
+        }
+        created.push(bindingId)
+      }
+      runtime.bindingIds = created
+    }
+
+    const basis = computeInstancedTilingBasis({
+      mode: props.mode,
+      forwardLocal: props.forwardLocal,
+      upLocal: props.upLocal,
+      rollDegrees: props.rollDegrees,
+    })
+
+    const extents = computeBoxExtentsAlongBasis(group.boundingBox, basis)
+    const stepX = extents.x + props.spacingX
+    const stepY = extents.y + props.spacingY
+    const stepZ = extents.z + props.spacingZ
+
+    const signature = [
+      resolvedAssetId,
+      props.mode,
+      `${props.countX},${props.countY},${props.countZ}`,
+      `${props.spacingX},${props.spacingY},${props.spacingZ}`,
+      `${props.forwardLocal.x},${props.forwardLocal.y},${props.forwardLocal.z}`,
+      `${props.upLocal.x},${props.upLocal.y},${props.upLocal.z}`,
+      `${props.rollDegrees}`,
+      `${extents.x},${extents.y},${extents.z}`,
+    ].join('|')
+
+    if (signature !== runtime.layoutSignature || runtime.localMatrices.length !== instanceCount) {
+      runtime.layoutSignature = signature
+      runtime.localMatrices = buildInstancedTilingLocalMatrices({
+        countX: props.countX,
+        countY: props.countY,
+        countZ: props.countZ,
+        stepX,
+        stepY,
+        stepZ,
+        basis,
+      })
+      runtime.localDirty = true
+    }
+
+    object.updateMatrixWorld(true)
+    instancedTilingBaseMatrix.copy(object.matrixWorld)
+
+    const elements = instancedTilingBaseMatrix.elements
+    const cached = runtime.lastBaseElements
+    let baseChanged = false
+    if (!cached) {
+      runtime.lastBaseElements = new Float32Array(elements)
+      baseChanged = true
+    } else {
+      for (let i = 0; i < 16; i += 1) {
+        if (Math.abs((cached[i] ?? 0) - (elements[i] ?? 0)) > 1e-7) {
+          baseChanged = true
+          break
+        }
+      }
+      if (baseChanged) {
+        for (let i = 0; i < 16; i += 1) {
+          cached[i] = elements[i] ?? 0
+        }
+      }
+    }
+
+    if (baseChanged || runtime.localDirty) {
+      for (let i = 0; i < runtime.bindingIds.length; i += 1) {
+        const bindingId = runtime.bindingIds[i]
+        const local = runtime.localMatrices[i]
+        if (!bindingId || !local) {
+          continue
+        }
+        instancedTilingInstanceMatrix.multiplyMatrices(instancedTilingBaseMatrix, local)
+        updateModelInstanceBindingMatrix(bindingId, instancedTilingInstanceMatrix)
+      }
+      runtime.localDirty = false
+    }
+
+    // Enable instanced outline/pick proxy path when tiling is active.
+    const userData = object.userData ?? (object.userData = {})
+    if (!userData.instancedAssetId) {
+      runtime.previousInstancedAssetId = userData.instancedAssetId
+      userData.instancedAssetId = resolvedAssetId
+      runtime.injectedInstancedAssetId = true
+    }
+
+    ensureInstancedPickProxy(object, node)
+  })
+}
 
 let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
@@ -5106,6 +5406,12 @@ function animate() {
     prof.groundStreaming = performance.now() - t_gc0
   }
 
+  {
+    const t0 = performance.now()
+    tickInstancedTiling()
+    prof.instancedTiling = performance.now() - t0
+  }
+
   const t0_scatter = performance.now()
   updateScatterLod()
   updateInstancedCullingAndLod()
@@ -5161,6 +5467,7 @@ function disposeScene() {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null
   }
+  clearAllInstancedTilingRuntimes()
   clearInstancedMeshes()
   instancedMeshRevision.value += 1
   instancedMeshGroup.removeFromParent()
@@ -8048,6 +8355,18 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
 
+  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+    | SceneNodeComponentState<Record<string, unknown>>
+    | undefined
+  if (instancedTilingState?.enabled !== false) {
+    const assetId = node.sourceAssetId ?? null
+    if (assetId && !getCachedModelObject(assetId)) {
+      void ensureModelObjectCached(assetId)
+    }
+  }
+
+  syncInstancedTilingRegistration(object, node)
+
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
@@ -8431,6 +8750,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
 
   const nodeId = object.userData?.nodeId as string | undefined
   if (nodeId) {
+    cleanupInstancedTilingRuntime(nodeId)
     objectMap.delete(nodeId)
     releaseInstancedOutlineEntry(nodeId)
     unregisterLightHelpersForNode(nodeId)
@@ -8525,6 +8845,7 @@ function syncSceneGraph() {
 
 function disposeSceneNodes() {
   clearOutlineSelectionTargets()
+  clearAllInstancedTilingRuntimes()
   clearLightHelpers()
   placementSurfaceTargetsByNodeId.clear()
   placementSurfaceTargets.length = 0
@@ -9083,6 +9404,18 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
   userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
+
+  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
+    | SceneNodeComponentState<Record<string, unknown>>
+    | undefined
+  if (instancedTilingState?.enabled !== false) {
+    const assetId = node.sourceAssetId ?? null
+    if (assetId && !getCachedModelObject(assetId)) {
+      void ensureModelObjectCached(assetId)
+    }
+  }
+
+  syncInstancedTilingRegistration(object, node)
 
   const isVisible = node.visible ?? true
   object.visible = isVisible

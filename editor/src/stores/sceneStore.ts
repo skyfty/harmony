@@ -4039,14 +4039,22 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
 function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
   const map = new Map<string, SceneNode[]>()
 
+  const ensureNodeAssetId = (assetId: string, node: SceneNode) => {
+    if (!assetId.trim()) {
+      return
+    }
+    if (!map.has(assetId)) {
+      map.set(assetId, [])
+    }
+    map.get(assetId)!.push(node)
+  }
+
   const traverse = (list: SceneNode[]) => {
     list.forEach((node) => {
       if (node.sourceAssetId) {
-        if (!map.has(node.sourceAssetId)) {
-          map.set(node.sourceAssetId, [])
-        }
-        map.get(node.sourceAssetId)!.push(node)
+        ensureNodeAssetId(node.sourceAssetId, node)
       }
+
       if (node.children?.length) {
         traverse(node.children)
       }
