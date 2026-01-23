@@ -1024,8 +1024,10 @@ export interface FloorDynamicMesh {
    * Height is implicitly 0.
    */
   vertices: FloorVertex2D[]
-  /** Optional material assignment token (editor-defined). */
-  materialId?: string | null
+  /** Material config id used for the top/bottom surface mesh (editor-defined). */
+  topBottomMaterialConfigId?: string | null
+  /** Material config id used for the side-wall mesh (editor-defined). */
+  sideMaterialConfigId?: string | null
   /** Controls how rounded the floor corners are. */
   smooth?: number
   /** Extrusion thickness in meters. 0 generates a flat floor. */

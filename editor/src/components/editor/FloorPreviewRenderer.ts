@@ -272,7 +272,8 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
   const definition: FloorDynamicMesh = {
     type: 'Floor',
     vertices: normalizedVertices,
-    materialId: null,
+    topBottomMaterialConfigId: null,
+    sideMaterialConfigId: null,
     smooth: FLOOR_DEFAULT_SMOOTH,
     thickness: FLOOR_DEFAULT_THICKNESS,
     sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },

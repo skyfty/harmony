@@ -103,6 +103,7 @@ import {
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
+import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -750,6 +751,58 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   return sceneNodeTypeSupportsMaterials(type)
+}
+
+function ensureFloorMaterialConvention(node: SceneNode): { materialsChanged: boolean; meshChanged: boolean } {
+  if (node.dynamicMesh?.type !== 'Floor') {
+    return { materialsChanged: false, meshChanged: false }
+  }
+
+  const currentMaterials = Array.isArray(node.materials) ? node.materials : []
+  let nextMaterials = currentMaterials
+
+  if (!currentMaterials.length) {
+    nextMaterials = createFloorNodeMaterials({ topBottomName: 'TopBottom', sideName: 'Side' })
+  } else if (currentMaterials.length === 1) {
+    const first = currentMaterials[0]!
+    const sideMaterial = createNodeMaterial(first.materialId ?? null, first, {
+      name: 'Side',
+      type: first.type,
+    })
+    nextMaterials = [first, sideMaterial]
+  }
+
+  const materialsChanged = nextMaterials !== currentMaterials
+  if (materialsChanged) {
+    node.materials = nextMaterials
+  }
+
+  const mesh = node.dynamicMesh as any
+  const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
+  const materialIds = nextMaterials.map((m) => m.id)
+
+  const topFallback = nextMaterials[0]?.id ?? null
+  const sideFallback = nextMaterials[1]?.id ?? topFallback
+
+  let topId = normalizeId(mesh.topBottomMaterialConfigId) ?? topFallback
+  if (topId && !materialIds.includes(topId)) {
+    topId = topFallback
+  }
+  let sideId = normalizeId(mesh.sideMaterialConfigId) ?? sideFallback ?? topId
+  if (sideId && !materialIds.includes(sideId)) {
+    sideId = sideFallback
+  }
+
+  const meshChanged = mesh.topBottomMaterialConfigId !== topId || mesh.sideMaterialConfigId !== sideId
+  if (meshChanged) {
+    node.dynamicMesh = {
+      ...mesh,
+      topBottomMaterialConfigId: topId,
+      sideMaterialConfigId: sideId,
+    }
+  }
+
+  return { materialsChanged, meshChanged }
 }
 
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
@@ -1653,7 +1706,8 @@ function buildFloorDynamicMeshFromWorldPoints(
   const definition: FloorDynamicMesh = {
     type: 'Floor',
     vertices,
-    materialId: null,
+    topBottomMaterialConfigId: null,
+    sideMaterialConfigId: null,
     smooth: FLOOR_DEFAULT_SMOOTH,
     thickness: FLOOR_DEFAULT_THICKNESS,
     sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },
@@ -2127,6 +2181,10 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         .map(normalizeVertex2D)
         .filter((value): value is [number, number] => !!value)
 
+      const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
+      const topBottomMaterialConfigId = normalizeId(floorMesh.topBottomMaterialConfigId)
+      const sideMaterialConfigId = normalizeId(floorMesh.sideMaterialConfigId) ?? topBottomMaterialConfigId
+
       const thicknessRaw = (floorMesh as any).thickness
       const thicknessValue = typeof thicknessRaw === 'number' && Number.isFinite(thicknessRaw) ? thicknessRaw : FLOOR_DEFAULT_THICKNESS
       const thickness = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, thicknessValue))
@@ -2138,9 +2196,8 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
       return {
         type: 'Floor',
         vertices,
-        materialId: typeof floorMesh.materialId === 'string' && floorMesh.materialId.trim().length
-          ? floorMesh.materialId
-          : null,
+        topBottomMaterialConfigId,
+        sideMaterialConfigId,
         smooth: Number.isFinite(floorMesh.smooth) ? floorMesh.smooth : FLOOR_DEFAULT_SMOOTH,
         thickness,
         sideUvScale: { x: Math.max(0, sideU), y: Math.max(0, sideV) },
@@ -9095,6 +9152,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       let removed = false
+      let requiresDynamicMeshPatch = false
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
@@ -9113,6 +9171,11 @@ export const useSceneStore = defineStore('scene', {
             node.materials = nextMaterials
           }
           removed = true
+
+          const { meshChanged } = ensureFloorMaterialConvention(node)
+          if (meshChanged) {
+            requiresDynamicMeshPatch = true
+          }
         }
       })
 
@@ -9121,6 +9184,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -9238,12 +9304,17 @@ export const useSceneStore = defineStore('scene', {
 
       const clones = cloneNodeMaterials(materials)
       let updated = false
+      let requiresDynamicMeshPatch = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node)) {
           return
         }
         node.materials = clones
+        const { meshChanged } = ensureFloorMaterialConvention(node)
+        if (meshChanged) {
+          requiresDynamicMeshPatch = true
+        }
         updated = true
       })
 
@@ -9252,6 +9323,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.queueSceneNodePatch(nodeId, ['materials'])
+      if (requiresDynamicMeshPatch) {
+        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -13746,7 +13820,22 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const floorGroup = createFloorGroup(build.definition)
+      // Floors use 2 material slots by default: TopBottom + Side.
+      const defaultMaterials = createFloorNodeMaterials({
+        topBottomName: 'TopBottom',
+        sideName: 'Side',
+      })
+
+      const defaultTopId = defaultMaterials[0]?.id ?? null
+      const defaultSideId = defaultMaterials[1]?.id ?? defaultTopId
+
+      const defaultMesh: FloorDynamicMesh = {
+        ...build.definition,
+        topBottomMaterialConfigId: defaultTopId,
+        sideMaterialConfigId: defaultSideId,
+      }
+
+      const floorGroup = createFloorGroup(defaultMesh)
       const nodeName = payload.name ?? this.generateFloorNodeName()
 
       this.captureHistorySnapshot()
@@ -13765,7 +13854,14 @@ export const useSceneStore = defineStore('scene', {
             rotation: createVector(0, 0, 0),
             scale: createVector(1, 1, 1),
           })
-          this.updateNodeDynamicMesh(desiredId, build.definition)
+
+          // Keep existing material selector ids when updating geometry.
+          const existingMesh = existing.dynamicMesh?.type === 'Floor' ? (existing.dynamicMesh as FloorDynamicMesh) : null
+          this.updateNodeDynamicMesh(desiredId, {
+            ...build.definition,
+            topBottomMaterialConfigId: existingMesh?.topBottomMaterialConfigId ?? null,
+            sideMaterialConfigId: existingMesh?.sideMaterialConfigId ?? null,
+          } as FloorDynamicMesh)
 
           const floorComponent = (findNodeById(this.nodes, desiredId)?.components?.[FLOOR_COMPONENT_TYPE] as { id?: string } | undefined)
           if (!floorComponent?.id) {
@@ -13781,6 +13877,25 @@ export const useSceneStore = defineStore('scene', {
               sideUvScale: nextProps.sideUvScale,
             })
           }
+
+          // Ensure floor keeps 2 material slots and selector ids reference existing slots.
+          let materialsChanged = false
+          let meshChanged = false
+          visitNode(this.nodes, desiredId, (node) => {
+            const result = ensureFloorMaterialConvention(node)
+            materialsChanged ||= result.materialsChanged
+            meshChanged ||= result.meshChanged
+          })
+          if (materialsChanged) {
+            this.queueSceneNodePatch(desiredId, ['materials'])
+          }
+          if (meshChanged) {
+            this.queueSceneNodePatch(desiredId, ['dynamicMesh'])
+          }
+          if (materialsChanged || meshChanged) {
+            this.nodes = [...this.nodes]
+            commitSceneSnapshot(this)
+          }
           return updated
         }
 
@@ -13792,15 +13907,18 @@ export const useSceneStore = defineStore('scene', {
           position: createVector(build.center.x, build.center.y, build.center.z),
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
-          dynamicMesh: build.definition,
+          dynamicMesh: defaultMesh,
           editorFlags: payload.editorFlags,
         })
 
         if (node) {
+          // Replace the default single material slot created by addSceneNode with our 2-slot floor convention.
+          this.setNodeMaterials(node.id, defaultMaterials)
+
           const result = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE)
           const component = result?.component
           if (component?.id) {
-            const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
+            const nextProps = resolveFloorComponentPropsFromMesh(defaultMesh)
             this.updateNodeComponentProps(node.id, component.id, {
               smooth: nextProps.smooth,
               thickness: nextProps.thickness,

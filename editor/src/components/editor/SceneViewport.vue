@@ -996,9 +996,13 @@ function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string 
   const thickness = Number.isFinite(definition.thickness) ? definition.thickness : null
   const sideX = Number.isFinite((definition.sideUvScale as any)?.x) ? Number((definition.sideUvScale as any).x) : null
   const sideY = Number.isFinite((definition.sideUvScale as any)?.y) ? Number((definition.sideUvScale as any).y) : null
+  const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
+  const topBottomId = normalizeId((definition as any).topBottomMaterialConfigId)
+  const sideId = normalizeId((definition as any).sideMaterialConfigId) ?? topBottomId
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
-    typeof definition.materialId === 'string' ? definition.materialId : null,
+    topBottomId,
+    sideId,
     Number.isFinite(definition.smooth) ? definition.smooth : null,
     thickness,
     sideX,
@@ -2182,7 +2186,8 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
     vertices: startVertices.map(([x, z]) => [x, z] as [number, number]),
     ...(base
       ? {
-          materialId: base.materialId ?? null,
+          topBottomMaterialConfigId: base.topBottomMaterialConfigId ?? null,
+          sideMaterialConfigId: base.sideMaterialConfigId ?? null,
           smooth: base.smooth,
           thickness: (base as any).thickness,
           sideUvScale: (base as any).sideUvScale,

@@ -14,6 +14,17 @@ const FLOOR_SURFACE_Y_OFFSET = 0.01
 const FLOOR_EPSILON = 1e-6
 const FLOOR_CORNER_EPSILON = 1e-8
 
+function normalizeMaterialConfigId(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw.length ? raw : null
+}
+
+function resolveFloorMaterialConfigIds(definition: FloorDynamicMesh): { topBottom: string | null; side: string | null } {
+  const topBottom = normalizeMaterialConfigId(definition.topBottomMaterialConfigId)
+  const side = normalizeMaterialConfigId(definition.sideMaterialConfigId) ?? topBottom
+  return { topBottom, side }
+}
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh
@@ -125,99 +136,6 @@ function resolveSideUvScale(value: unknown): { u: number; v: number } {
   }
 }
 
-type PerimeterSegment = {
-  a: THREE.Vector2
-  b: THREE.Vector2
-  len: number
-  prefix: number
-}
-
-function buildPerimeterSegments(shape: THREE.Shape, fallback: THREE.Vector2[]): PerimeterSegment[] {
-  const extracted = shape.extractPoints(64)
-  const raw = Array.isArray(extracted?.shape) && extracted.shape.length ? extracted.shape : fallback
-
-  const points: THREE.Vector2[] = []
-  raw.forEach((p) => {
-    if (!p) {
-      return
-    }
-    const x = Number(p.x)
-    const y = Number(p.y)
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      return
-    }
-    const prev = points[points.length - 1]
-    if (prev && prev.distanceToSquared(p) <= FLOOR_EPSILON) {
-      return
-    }
-    points.push(new THREE.Vector2(x, y))
-  })
-
-  if (points.length >= 2) {
-    const first = points[0]!
-    const last = points[points.length - 1]!
-    if (first.distanceToSquared(last) <= FLOOR_EPSILON) {
-      points.pop()
-    }
-  }
-
-  if (points.length < 2) {
-    return []
-  }
-
-  const segments: PerimeterSegment[] = []
-  let prefix = 0
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i]!
-    const b = points[(i + 1) % points.length]!
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const len = Math.hypot(dx, dy)
-    if (len <= FLOOR_EPSILON) {
-      continue
-    }
-    segments.push({ a: a.clone(), b: b.clone(), len, prefix })
-    prefix += len
-  }
-  return segments
-}
-
-function computePerimeterDistanceAlongSegments(segments: PerimeterSegment[], point: THREE.Vector2): number {
-  if (!segments.length) {
-    return 0
-  }
-
-  let bestDistanceSq = Number.POSITIVE_INFINITY
-  let bestS = 0
-  for (const seg of segments) {
-    const ax = seg.a.x
-    const ay = seg.a.y
-    const bx = seg.b.x
-    const by = seg.b.y
-    const dx = bx - ax
-    const dy = by - ay
-    const lenSq = dx * dx + dy * dy
-    if (lenSq <= FLOOR_EPSILON) {
-      continue
-    }
-    const px = point.x - ax
-    const py = point.y - ay
-    let t = (px * dx + py * dy) / lenSq
-    t = Math.min(1, Math.max(0, t))
-    const cx = ax + dx * t
-    const cy = ay + dy * t
-    const ddx = point.x - cx
-    const ddy = point.y - cy
-    const distSq = ddx * ddx + ddy * ddy
-    if (distSq < bestDistanceSq) {
-      bestDistanceSq = distSq
-      bestS = seg.prefix + seg.len * t
-    }
-  }
-
-  return bestS
-}
-
 function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): THREE.Shape {
   const shape = new THREE.Shape()
   if (!points.length) {
@@ -290,7 +208,7 @@ function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): T
   return shape
 }
 
-function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry | null {
+function buildFloorShape(definition: FloorDynamicMesh): { shape: THREE.Shape; points: THREE.Vector2[] } | null {
   const vertices = sanitizeVertices(definition.vertices)
   if (vertices.length < 3) {
     return null
@@ -302,46 +220,15 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
   const points = vertices.map(([x, z]) => new THREE.Vector2(x, -z))
 
   const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
+  return { shape, points }
+}
 
-  const thickness = clampFloorThickness((definition as any).thickness)
-  const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
-
-  // Build in XY first (like PlaneGeometry), then rotate to XZ.
-  let geometry: THREE.BufferGeometry
-  if (thickness <= FLOOR_EPSILON) {
-    geometry = new THREE.ShapeGeometry(shape)
-  } else {
-    const extruded = new THREE.ExtrudeGeometry(shape, {
-      depth: thickness,
-      steps: 1,
-      bevelEnabled: false,
-    })
-    // Use non-indexed geometry so we can assign per-face UVs without
-    // vertex-normal averaging causing top/side misclassification.
-    geometry = extruded.toNonIndexed()
-    extruded.dispose()
-  }
-
+function buildPlanarUvAttribute(geometry: THREE.BufferGeometry): void {
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!position || position.count <= 0) {
-    geometry.dispose()
-    return null
+    return
   }
 
-  // Ensure normals exist for UV classification.
-  if (!geometry.getAttribute('normal')) {
-    geometry.computeVertexNormals()
-  }
-
-  // Rotate so the floor lies on the XZ plane with +Y normal.
-  geometry.rotateX(-Math.PI / 2)
-
-  const normal = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
-  if (!normal || normal.count !== position.count) {
-    geometry.computeVertexNormals()
-  }
-
-  // Planar UVs for top/bottom: normalized across XZ extents with V flipped.
   let minX = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
   let minZ = Number.POSITIVE_INFINITY
@@ -357,80 +244,226 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
 
   const sizeX = Math.max(maxX - minX, FLOOR_EPSILON)
   const sizeZ = Math.max(maxZ - minZ, FLOOR_EPSILON)
-
-  const perimeterSegments = thickness > FLOOR_EPSILON ? buildPerimeterSegments(shape, points) : []
-
   const uvs = new Float32Array(position.count * 2)
-  const tmp2 = new THREE.Vector2()
-  const a = new THREE.Vector3()
-  const b = new THREE.Vector3()
-  const c = new THREE.Vector3()
-  const ab = new THREE.Vector3()
-  const ac = new THREE.Vector3()
-  const faceNormal = new THREE.Vector3()
-
-  if (thickness <= FLOOR_EPSILON) {
-    for (let i = 0; i < position.count; i += 1) {
-      const x = position.getX(i)
-      const z = position.getZ(i)
-      const u = (x - minX) / sizeX
-      const v = (z - minZ) / sizeZ
-      uvs[i * 2] = u
-      uvs[i * 2 + 1] = v
-    }
-  } else {
-    for (let i = 0; i < position.count; i += 3) {
-      a.set(position.getX(i), position.getY(i), position.getZ(i))
-      b.set(position.getX(i + 1), position.getY(i + 1), position.getZ(i + 1))
-      c.set(position.getX(i + 2), position.getY(i + 2), position.getZ(i + 2))
-
-      ab.copy(b).sub(a)
-      ac.copy(c).sub(a)
-      faceNormal.copy(ab).cross(ac)
-      const len = faceNormal.length()
-      const ny = len > FLOOR_EPSILON ? faceNormal.y / len : 1
-      const isTopOrBottom = Math.abs(ny) > 0.5
-
-      for (let k = 0; k < 3; k += 1) {
-        const idx = i + k
-        const x = position.getX(idx)
-        const y = position.getY(idx)
-        const z = position.getZ(idx)
-
-        if (isTopOrBottom) {
-          const u = (x - minX) / sizeX
-          const v = (z - minZ) / sizeZ
-          uvs[idx * 2] = u
-          uvs[idx * 2 + 1] = v
-        } else {
-          // Side-wall UVs: U along perimeter distance, V along height.
-          tmp2.set(x, -z)
-          const s = computePerimeterDistanceAlongSegments(perimeterSegments, tmp2)
-          uvs[idx * 2] = s * sideUvScale.u
-          uvs[idx * 2 + 1] = y * sideUvScale.v
-        }
-      }
-    }
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i)
+    const z = position.getZ(i)
+    uvs[i * 2] = (x - minX) / sizeX
+    uvs[i * 2 + 1] = (z - minZ) / sizeZ
   }
-
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+}
 
-  if (thickness <= FLOOR_EPSILON) {
-    // Flat floors: ensure stable +Y normal after rotation.
-    const flatNormals = new Float32Array(position.count * 3)
-    for (let i = 0; i < position.count; i += 1) {
-      flatNormals[i * 3] = 0
-      flatNormals[i * 3 + 1] = 1
-      flatNormals[i * 3 + 2] = 0
-    }
-    geometry.setAttribute('normal', new THREE.BufferAttribute(flatNormals, 3))
-  } else {
-    geometry.computeVertexNormals()
+function buildFlatNormalAttribute(count: number, y: number): THREE.BufferAttribute {
+  const normals = new Float32Array(count * 3)
+  for (let i = 0; i < count; i += 1) {
+    normals[i * 3] = 0
+    normals[i * 3 + 1] = y
+    normals[i * 3 + 2] = 0
+  }
+  return new THREE.BufferAttribute(normals, 3)
+}
+
+function mergeNonIndexedGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const valid = geometries.filter((g) => {
+    const position = g.getAttribute('position') as THREE.BufferAttribute | undefined
+    return !!position && position.count > 0
+  })
+  if (!valid.length) {
+    return new THREE.BufferGeometry()
   }
 
+  const attributes = ['position', 'normal', 'uv'] as const
+  const totals: Record<(typeof attributes)[number], number> = { position: 0, normal: 0, uv: 0 }
+
+  valid.forEach((g) => {
+    attributes.forEach((name) => {
+      const attr = g.getAttribute(name) as THREE.BufferAttribute | undefined
+      if (!attr) {
+        return
+      }
+      totals[name] = (totals[name] ?? 0) + attr.array.length
+    })
+  })
+
+  const merged = new THREE.BufferGeometry()
+  attributes.forEach((name) => {
+    const total = totals[name]
+    if (!total) {
+      return
+    }
+    const firstAttr = valid.find((g) => !!g.getAttribute(name))!.getAttribute(name) as THREE.BufferAttribute
+    const array = new Float32Array(total)
+    let offset = 0
+    valid.forEach((g) => {
+      const attr = g.getAttribute(name) as THREE.BufferAttribute | undefined
+      if (!attr) {
+        return
+      }
+      array.set(attr.array as Float32Array, offset)
+      offset += attr.array.length
+    })
+    merged.setAttribute(name, new THREE.BufferAttribute(array, firstAttr.itemSize))
+  })
+
+  merged.computeBoundingBox()
+  merged.computeBoundingSphere()
+  return merged
+}
+
+function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.Shape): THREE.BufferGeometry | null {
+  const thickness = clampFloorThickness((definition as any).thickness)
+
+  // Flat floors: single surface mesh.
+  if (thickness <= FLOOR_EPSILON) {
+    const geometry = new THREE.ShapeGeometry(shape).toNonIndexed()
+    geometry.rotateX(-Math.PI / 2)
+    buildPlanarUvAttribute(geometry)
+
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute
+    geometry.setAttribute('normal', buildFlatNormalAttribute(position.count, 1))
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+    return geometry
+  }
+
+  // Thickness > 0: top + bottom faces.
+  const base = new THREE.ShapeGeometry(shape).toNonIndexed()
+  base.rotateX(-Math.PI / 2)
+  buildPlanarUvAttribute(base)
+  const basePos = base.getAttribute('position') as THREE.BufferAttribute
+  // Bottom face at y=0 (points down).
+  base.setAttribute('normal', buildFlatNormalAttribute(basePos.count, -1))
+
+  const top = base.clone()
+  top.translate(0, thickness, 0)
+  const topPos = top.getAttribute('position') as THREE.BufferAttribute
+  top.setAttribute('normal', buildFlatNormalAttribute(topPos.count, 1))
+
+  const merged = mergeNonIndexedGeometries([base, top])
+  base.dispose()
+  top.dispose()
+  return merged
+}
+
+function computePolygonAreaXZ(points: Array<{ x: number; z: number }>): number {
+  let area = 0
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % points.length]!
+    area += a.x * b.z - b.x * a.z
+  }
+  return area * 0.5
+}
+
+function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape, fallback: THREE.Vector2[]): THREE.BufferGeometry | null {
+  const thickness = clampFloorThickness((definition as any).thickness)
+  if (thickness <= FLOOR_EPSILON) {
+    return null
+  }
+
+  const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
+
+  const extracted = shape.extractPoints(96)
+  const raw = Array.isArray(extracted?.shape) && extracted.shape.length ? extracted.shape : fallback
+
+  // Cleanup & de-duplicate.
+  const outline2: THREE.Vector2[] = []
+  raw.forEach((p) => {
+    if (!p) {
+      return
+    }
+    const x = Number(p.x)
+    const y = Number(p.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return
+    }
+    const prev = outline2[outline2.length - 1]
+    if (prev && prev.distanceToSquared(p) <= FLOOR_EPSILON) {
+      return
+    }
+    outline2.push(new THREE.Vector2(x, y))
+  })
+  if (outline2.length >= 2) {
+    const first = outline2[0]!
+    const last = outline2[outline2.length - 1]!
+    if (first.distanceToSquared(last) <= FLOOR_EPSILON) {
+      outline2.pop()
+    }
+  }
+  if (outline2.length < 2) {
+    return null
+  }
+
+  const outlineWorld = outline2.map((p) => ({ x: p.x, z: -p.y }))
+  const isCcw = computePolygonAreaXZ(outlineWorld) > 0
+
+  // Build non-indexed side wall triangles.
+  const positions: number[] = []
+  const uvs: number[] = []
+
+  let s = 0
+  for (let i = 0; i < outlineWorld.length; i += 1) {
+    const a = outlineWorld[i]!
+    const b = outlineWorld[(i + 1) % outlineWorld.length]!
+    const dx = b.x - a.x
+    const dz = b.z - a.z
+    const segLen = Math.hypot(dx, dz)
+    if (segLen <= FLOOR_EPSILON) {
+      continue
+    }
+
+    const sA = s
+    const sB = s + segLen
+    s = sB
+
+    // Quad corners.
+    const bottomA = { x: a.x, y: 0, z: a.z }
+    const topA = { x: a.x, y: thickness, z: a.z }
+    const bottomB = { x: b.x, y: 0, z: b.z }
+    const topB = { x: b.x, y: thickness, z: b.z }
+
+    const pushVertex = (v: { x: number; y: number; z: number }, u: number, vv: number) => {
+      positions.push(v.x, v.y, v.z)
+      uvs.push(u, vv)
+    }
+
+    const uA = sA * sideUvScale.u
+    const uB = sB * sideUvScale.u
+    const v0 = 0 * sideUvScale.v
+    const v1 = thickness * sideUvScale.v
+
+    if (isCcw) {
+      // Outward normals for CCW contour.
+      pushVertex(bottomA, uA, v0)
+      pushVertex(topB, uB, v1)
+      pushVertex(bottomB, uB, v0)
+
+      pushVertex(bottomA, uA, v0)
+      pushVertex(topA, uA, v1)
+      pushVertex(topB, uB, v1)
+    } else {
+      // Outward normals for CW contour.
+      pushVertex(bottomA, uA, v0)
+      pushVertex(bottomB, uB, v0)
+      pushVertex(topB, uB, v1)
+
+      pushVertex(bottomA, uA, v0)
+      pushVertex(topB, uB, v1)
+      pushVertex(topA, uA, v1)
+    }
+  }
+
+  if (!positions.length) {
+    return null
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2))
+  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
-
   return geometry
 }
 
@@ -438,21 +471,34 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
   disposeObject3D(group)
   group.clear()
 
-  const geometry = buildFloorGeometry(definition)
-  if (!geometry) {
+  const shapeInfo = buildFloorShape(definition)
+  if (!shapeInfo) {
     return
   }
 
-  const mesh = new THREE.Mesh(geometry, materialTemplate.clone())
-  mesh.name = 'FloorMesh'
-  mesh.castShadow = false
-  mesh.receiveShadow = true
+  const { topBottom, side } = resolveFloorMaterialConfigIds(definition)
 
-  const rawMaterialId = typeof definition.materialId === 'string' ? definition.materialId.trim() : ''
-  const materialId = rawMaterialId || null
-  mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
+  const topBottomGeometry = buildFloorTopBottomGeometry(definition, shapeInfo.shape)
+  if (!topBottomGeometry) {
+    return
+  }
 
-  group.add(mesh)
+  const topBottomMesh = new THREE.Mesh(topBottomGeometry, materialTemplate.clone())
+  topBottomMesh.name = 'FloorTopBottomMesh'
+  topBottomMesh.castShadow = false
+  topBottomMesh.receiveShadow = true
+  topBottomMesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
+  group.add(topBottomMesh)
+
+  const sideGeometry = buildFloorSideGeometry(definition, shapeInfo.shape, shapeInfo.points)
+  if (sideGeometry) {
+    const sideMesh = new THREE.Mesh(sideGeometry, materialTemplate.clone())
+    sideMesh.name = 'FloorSideMesh'
+    sideMesh.castShadow = false
+    sideMesh.receiveShadow = true
+    sideMesh.userData[MATERIAL_CONFIG_ID_KEY] = side
+    group.add(sideMesh)
+  }
 }
 
 function collectInstancableMeshes(object: THREE.Object3D): Array<THREE.Mesh> {
@@ -507,10 +553,16 @@ function buildInstancedMeshesFromTemplate(
 function computeFloorBodyInstanceMatrices(definition: FloorDynamicMesh, templateObject: THREE.Object3D): THREE.Matrix4[] {
   // For now, a floor is a single polygon; if an asset body is supplied, we just place 1 instance at origin.
   // This keeps parity with createRoadRenderGroup signature without adding new UX.
-  const geometry = buildFloorGeometry(definition)
+  const shapeInfo = buildFloorShape(definition)
+  if (!shapeInfo) {
+    return []
+  }
+
+  const geometry = buildFloorTopBottomGeometry(definition, shapeInfo.shape)
   if (!geometry) {
     return []
   }
+
   geometry.computeBoundingBox()
   const bounds = computeObjectBounds(templateObject)
   const baseSizeX = Math.max(Math.abs(bounds.max.x - bounds.min.x), 1e-3)
@@ -556,9 +608,8 @@ export function createFloorRenderGroup(definition: FloorDynamicMesh, assets: Flo
       if (!mesh?.isMesh) {
         return
       }
-      const rawMaterialId = typeof definition.materialId === 'string' ? definition.materialId.trim() : ''
-      const materialId = rawMaterialId || null
-      mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
+      const { topBottom } = resolveFloorMaterialConfigIds(definition)
+      mesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
     })
   }
 
