@@ -68,7 +68,7 @@ export async function exportScenePackageZip(payload: {
     for (let aIndex = 0; aIndex < localAssetIds.length; aIndex += 1) {
       const assetId = localAssetIds[aIndex]!
       const ratio = localAssetIds.length ? (aIndex + 1) / localAssetIds.length : 1
-      payload.updateProgress?.(85 + Math.round(10 * ratio), `打包本地资产… (${aIndex + 1}/${localAssetIds.length})`)
+      payload.updateProgress?.(85 + Math.round(10 * ratio), `Packaging local assets… (${aIndex + 1}/${localAssetIds.length})`)
 
       let entry = assetCache.getEntry(assetId)
       if (entry.status !== 'cached' || !entry.blob) {
@@ -76,7 +76,7 @@ export async function exportScenePackageZip(payload: {
         entry = assetCache.getEntry(assetId)
       }
       if (entry.status !== 'cached' || !entry.blob) {
-        throw new Error(`缺少本地资产资源（assetId=${assetId}），请先确保本地资产已写入 IndexedDB 后再导出`)
+        throw new Error(`Missing local asset resource (assetId=${assetId}); please ensure the local asset has been written to IndexedDB before exporting.`)
       }
 
       const blob = entry.blob
@@ -117,7 +117,7 @@ export async function exportScenePackageZip(payload: {
 
   files['manifest.json'] = jsonBytes(manifest)
 
-  payload.updateProgress?.(96, '压缩 ZIP…')
+  payload.updateProgress?.(96, 'Compressing ZIP…')
   const zipBytes = zipSync(files, { level: 6 })
   // fflate returns Uint8Array<ArrayBufferLike> which fails BlobPart typing; copy into ArrayBuffer.
   const zipArrayBuffer = new ArrayBuffer(zipBytes.byteLength)

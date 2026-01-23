@@ -247,7 +247,6 @@ async function handleLocalImport() {
                     // 只接受 zip
                     extension: ['.zip', 'zip'],
                     success: async (res: any) => {
-                console.log('使用 wx.chooseMessageFile 选择文件 11111111111111');
                         try {
                             const files = Array.isArray(res.tempFiles) ? res.tempFiles : [res.tempFiles];
                             const file = files[0] as any;
@@ -255,7 +254,6 @@ async function handleLocalImport() {
                                 reject(new Error('未选择文件'));
                                 return;
                             }
-                console.log('使用 wx.chooseMessageFile 选择文件 2222222222222222222');
                             const name = (file && (file.name || file.path)) || '';
                             const lower = (name || '').toLowerCase();
                             const originName = (file && (file.name || file.path)) || '本地文件';
@@ -263,7 +261,6 @@ async function handleLocalImport() {
                                 reject(new Error('仅支持 .zip 场景包导入'));
                                 return;
                             }
-                console.log('使用 wx.chooseMessageFile 选择文件 333333333333333333333');
                             const bytes = await readFileAsArrayBuffer(file as any);
                             await importScenePackageZip(bytes as any, originName);
                             resolve();
