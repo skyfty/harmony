@@ -39,6 +39,9 @@ const templateAsset = computed(() => {
   }
   return sceneStore.getAsset(templateAssetId.value) ?? null
 })
+// quiet unused-local errors in some TS configs by referencing the values
+void hasTemplateAsset
+void templateAsset
 
 const localMode = ref<'axis' | 'vector'>(INSTANCED_TILING_DEFAULT_MODE)
 const localCountX = ref(INSTANCED_TILING_DEFAULT_COUNT)
@@ -95,6 +98,7 @@ watch(
 )
 
 const feedbackMessage = ref<string | null>(null)
+void feedbackMessage
 
 function applyPatch(patch: Partial<InstancedTilingComponentProps>): void {
   if (isSyncingFromScene.value) {

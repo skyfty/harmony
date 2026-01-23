@@ -329,7 +329,7 @@ const instancedTilingComponentDefinition: ComponentDefinition<InstancedTilingCom
   description: 'Tile a model asset into an InstancedMesh 3D grid.',
   canAttach(node: SceneNode) {
     const type = String(node.nodeType ?? '').toLowerCase()
-    return type === 'mesh'
+    return type === 'mesh' || node.userData?.instanced === true
   },
   createDefaultProps() {
     return clampInstancedTilingComponentProps(null)
