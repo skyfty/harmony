@@ -543,19 +543,12 @@ function tickInstancedTiling() {
       return
     }
 
-    const templateMesh = findFirstRenderableMeshChild(object)
-    if (templateMesh) {
-      templateMesh.userData = templateMesh.userData ?? {}
-      templateMesh.userData.sourceAssetId = object.userData?.sourceAssetId ?? templateMesh.userData.sourceAssetId ?? null
-    }
-
-    const meshUserData = templateMesh?.userData as Record<string, unknown> | undefined
-    const resolvedAssetIdRaw = typeof meshUserData?.instancedAssetId === 'string'
-      ? (meshUserData.instancedAssetId as string).trim()
-      : typeof meshUserData?.sourceAssetId === 'string'
-        ? (meshUserData.sourceAssetId as string).trim()
+    const objectUserData = object.userData as Record<string, unknown> | undefined
+    const resolvedAssetId = typeof objectUserData?.instancedAssetId === 'string'
+      ? (objectUserData.instancedAssetId as string).trim()
+      : typeof objectUserData?.sourceAssetId === 'string'
+        ? (objectUserData.sourceAssetId as string).trim()
         : ''
-    const resolvedAssetId = resolvedAssetIdRaw || null
 
     if (!resolvedAssetId) {
       // No template asset -> show template mesh and ensure no stale bindings.
@@ -689,13 +682,6 @@ function tickInstancedTiling() {
       runtime.previousInstancedAssetId = userData.instancedAssetId
       userData.instancedAssetId = resolvedAssetId
       runtime.injectedInstancedAssetId = true
-    }
-
-    // Hide the template mesh child once the instanced array is ready.
-    if (templateMesh && !runtime.hiddenMesh) {
-      runtime.hiddenMesh = templateMesh
-      runtime.hiddenMeshWasVisible = templateMesh.visible
-      templateMesh.visible = false
     }
 
     ensureInstancedPickProxy(object, node)
