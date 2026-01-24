@@ -25,15 +25,16 @@ export type FaceSnapController = {
 export function createFaceSnapController(options: FaceSnapControllerOptions): FaceSnapController {
   const manager = createFaceSnapManager(options)
   return {
-    handleKeyDown: manager.handleKeyDown,
-    handleKeyUp: manager.handleKeyUp,
-    handleBlur: manager.handleBlur,
-    setCommitActive: manager.setCommitActive,
-    ensureEffectPool: manager.ensureEffectPool,
-    updateEffectIntensity: manager.updateEffectIntensity,
-    hideEffect: manager.hideEffect,
-    applyAlignmentSnap: manager.applyAlignmentSnap,
-    dispose: manager.dispose,
+    handleKeyDown: (event: KeyboardEvent) => manager.handleKeyDown(event),
+    handleKeyUp: (event: KeyboardEvent) => manager.handleKeyUp(event),
+    handleBlur: () => manager.handleBlur(),
+    setCommitActive: (active: boolean) => manager.setCommitActive(active),
+    ensureEffectPool: () => manager.ensureEffectPool(),
+    updateEffectIntensity: (delta: number) => manager.updateEffectIntensity(delta),
+    hideEffect: () => manager.hideEffect(),
+    applyAlignmentSnap: (target: THREE.Object3D, movementDelta: THREE.Vector3, excludedIds: Set<string>) =>
+      manager.applyAlignmentSnap(target, movementDelta, excludedIds),
+    dispose: () => manager.dispose(),
   }
 }
 
