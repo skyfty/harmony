@@ -249,7 +249,7 @@ import {
   DEFAULT_PERSPECTIVE_FOV,
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
-import { createFaceSnapManager } from './useFaceSnapping'
+import { createFaceSnapController, createSurfaceSnapController } from './pointer/snap'
 import { SceneCloudRenderer } from '@schema/cloudRenderer'
 import {
   createProtagonistInitialVisibilityCapture,
@@ -960,10 +960,17 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
   }
 }
 
-const faceSnapManager = createFaceSnapManager({
+const faceSnapController = createFaceSnapController({
   getScene: () => scene,
   objectMap,
   getActiveTool: () => props.activeTool,
+  isEditableKeyboardTarget,
+})
+
+const surfaceSnapController = createSurfaceSnapController({
+  normalizedPointerGuard,
+  raycaster,
+  ensurePlacementSurfaceTargets: ensurePlacementSurfaceTargetsUpToDate,
   isEditableKeyboardTarget,
 })
 
@@ -3568,7 +3575,7 @@ const draggingChangedHandler = (event: unknown) => {
 
   if (!value) {
     // Dragging ends
-    faceSnapManager.hideEffect()
+    faceSnapController.hideEffect()
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
       const updates = commitTransformControlUpdates()
@@ -3594,7 +3601,7 @@ const draggingChangedHandler = (event: unknown) => {
     }
   } else {
     // Dragging begins
-    faceSnapManager.hideEffect()
+    faceSnapController.hideEffect()
     hasTransformLastWorldPosition = false
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
@@ -4658,7 +4665,7 @@ function initScene() {
   if (gridHighlight) {
     scene.add(gridHighlight)
   }
-  faceSnapManager.ensureEffectPool()
+  faceSnapController.ensureEffectPool()
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
@@ -5425,7 +5432,7 @@ function animate() {
   gizmoControls?.cameraUpdate()
   if (props.activeTool === 'translate') {
     const t0 = performance.now()
-    faceSnapManager.updateEffectIntensity(effectiveDelta)
+    faceSnapController.updateEffectIntensity(effectiveDelta)
     prof.faceSnap = performance.now() - t0
   }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
@@ -5521,7 +5528,7 @@ function disposeScene() {
   resizeObserver?.disconnect()
   resizeObserver = null
 
-  faceSnapManager.dispose()
+  faceSnapController.dispose()
   hasTransformLastWorldPosition = false
 
   if (canvasRef.value) {
@@ -6301,6 +6308,7 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
 }
 
 async function handlePointerDown(event: PointerEvent) {
+  surfaceSnapController.updatePointer(event)
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
       pointerTrackingState = null
@@ -6476,6 +6484,7 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  surfaceSnapController.updatePointer(event)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
     const dy = event.clientY - middleClickSessionState.startY
@@ -6609,6 +6618,7 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 async function handlePointerUp(event: PointerEvent) {
+  surfaceSnapController.updatePointer(event)
   try {
     const isPointerUpOnCanvas = (() => {
       const canvas = canvasRef.value
@@ -8080,10 +8090,10 @@ function handleTransformChange() {
   const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
 
   if (isTranslateMode && shouldSnapTranslate) {
-    faceSnapManager.hideEffect()
+    faceSnapController.hideEffect()
     snapVectorToGridForNode(target.position, nodeId)
   } else if (!isTranslateMode || !isActiveTranslateTool) {
-    faceSnapManager.hideEffect()
+    faceSnapController.hideEffect()
   }
 
   target.updateMatrixWorld(true)
@@ -8102,7 +8112,12 @@ function handleTransformChange() {
       groupState.entries.forEach((entry) => faceSnapExcludedIds.add(entry.nodeId))
     }
 
-    faceSnapManager.applyAlignmentSnap(target, transformMovementDelta, faceSnapExcludedIds)
+    const didSurfaceSnap = surfaceSnapController.applySurfaceSnap(target, faceSnapExcludedIds)
+    if (!didSurfaceSnap) {
+      faceSnapController.applyAlignmentSnap(target, transformMovementDelta, faceSnapExcludedIds)
+    } else {
+      faceSnapController.hideEffect()
+    }
     target.updateMatrixWorld(true)
     target.getWorldPosition(transformCurrentWorldPosition)
   } else {
@@ -9625,9 +9640,12 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.addEventListener('keydown', faceSnapManager.handleKeyDown, { capture: true })
-  window.addEventListener('keyup', faceSnapManager.handleKeyUp, { capture: true })
-  window.addEventListener('blur', faceSnapManager.handleBlur, { capture: true })
+  window.addEventListener('keydown', faceSnapController.handleKeyDown, { capture: true })
+  window.addEventListener('keyup', faceSnapController.handleKeyUp, { capture: true })
+  window.addEventListener('blur', faceSnapController.handleBlur, { capture: true })
+  window.addEventListener('keydown', surfaceSnapController.handleKeyDown, { capture: true })
+  window.addEventListener('keyup', surfaceSnapController.handleKeyUp, { capture: true })
+  window.addEventListener('blur', surfaceSnapController.handleBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
@@ -9652,9 +9670,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.removeEventListener('keydown', faceSnapManager.handleKeyDown, { capture: true })
-  window.removeEventListener('keyup', faceSnapManager.handleKeyUp, { capture: true })
-  window.removeEventListener('blur', faceSnapManager.handleBlur, { capture: true })
+  window.removeEventListener('keydown', faceSnapController.handleKeyDown, { capture: true })
+  window.removeEventListener('keyup', faceSnapController.handleKeyUp, { capture: true })
+  window.removeEventListener('blur', faceSnapController.handleBlur, { capture: true })
+  window.removeEventListener('keydown', surfaceSnapController.handleKeyDown, { capture: true })
+  window.removeEventListener('keyup', surfaceSnapController.handleKeyUp, { capture: true })
+  window.removeEventListener('blur', surfaceSnapController.handleBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
   }
@@ -9802,8 +9823,9 @@ watch(
   (tool) => {
     updateToolMode(tool)
     if (tool !== 'translate') {
-      faceSnapManager.setCommitActive(false)
-      faceSnapManager.hideEffect()
+      faceSnapController.setCommitActive(false)
+      faceSnapController.hideEffect()
+      surfaceSnapController.setActive(false)
     }
   }
 )

@@ -19,6 +19,14 @@ function handleToolSelect(tool: TransformToolDefinition) {
   if (transformDisabled.value) return
   emit('change-tool', tool.value)
 }
+
+function toolTitle(tool: TransformToolDefinition): string {
+  const base = `${tool.label} (${tool.key.replace('Key', '')})`
+  if (tool.value === 'translate') {
+    return `${base} — hold Shift to snap, hold V for surface snap`
+  }
+  return base
+}
 </script>
 
 <template>
@@ -28,7 +36,7 @@ function handleToolSelect(tool: TransformToolDefinition) {
         v-for="tool in TRANSFORM_TOOLS"
         :key="tool.value"
         :icon="tool.icon"
-        :title="`${tool.label} (${tool.key.replace('Key', '')})`"
+        :title="toolTitle(tool)"
         :color="(!transformDisabled && props.activeTool === tool.value) ? 'primary' : undefined"
         :variant="(!transformDisabled && props.activeTool === tool.value) ? 'flat' : 'text'"
         density="comfortable"
