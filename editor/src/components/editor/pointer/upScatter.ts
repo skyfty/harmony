@@ -8,8 +8,6 @@ type EraseRepairResult = {
 export function handlePointerUpScatter(
   event: PointerEvent,
   ctx: {
-    finalizeContinuousInstancedCreate: (event: PointerEvent, cancel: boolean) => boolean
-
     instancedEraseDragState: InstancedEraseDragState | null
     pointerInteractionReleaseIfCaptured: (pointerId: number) => void
 
@@ -21,15 +19,6 @@ export function handlePointerUpScatter(
     tryEraseRepairTargetAtPointer: (event: PointerEvent) => EraseRepairResult
   },
 ): PointerUpResult | null {
-  if (ctx.finalizeContinuousInstancedCreate(event, false)) {
-    return {
-      handled: true,
-      preventDefault: true,
-      stopPropagation: true,
-      stopImmediatePropagation: true,
-    }
-  }
-
   if (ctx.instancedEraseDragState && event.pointerId === ctx.instancedEraseDragState.pointerId && event.button === 0) {
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
     return {

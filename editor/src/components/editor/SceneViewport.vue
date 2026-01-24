@@ -89,14 +89,10 @@ import {
   computeInstancedTilingBasis,
 } from '@schema/instancedMeshTiling'
 import {
-  buildContinuousInstancedModelUserDataPatch,
   buildContinuousInstancedModelUserDataPatchV2,
   buildLinearLocalPositions,
-  clearContinuousInstancedModelPreview,
-  computeDefaultInstancedSpacing,
   getContinuousInstancedModelUserData,
   syncContinuousInstancedModelCommitted,
-  syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -2058,264 +2054,6 @@ type AssetPlacementClickSessionState = {
 }
 
 let assetPlacementClickSessionState: AssetPlacementClickSessionState | null = null
-
-type ContinuousInstancedCreateState = {
-  pointerId: number
-  nodeId: string
-  assetId: string
-  object: THREE.Object3D
-  startWorldPoint: THREE.Vector3
-  spacing: number
-  existingCount: number
-  anchorIndex: number
-  previewEndIndexExclusive: number
-  initialRotation: THREE.Euler
-}
-
-let continuousInstancedCreateState: ContinuousInstancedCreateState | null = null
-
-const continuousPointerWorldHelper = new THREE.Vector3()
-const continuousDragDirHelper = new THREE.Vector3()
-const continuousYAxisHelper = new THREE.Vector3(0, 1, 0)
-const continuousParentWorldQuaternion = new THREE.Quaternion()
-const continuousDesiredWorldQuaternion = new THREE.Quaternion()
-const continuousLocalQuaternion = new THREE.Quaternion()
-const continuousAnchorWorldHelper = new THREE.Vector3()
-const continuousAnchorMatrixHelper = new THREE.Matrix4()
-const continuousAnchorWorldMatrixHelper = new THREE.Matrix4()
-
-function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, object: THREE.Object3D): boolean {
-  if (!canvasRef.value || !camera || !scene) {
-    return false
-  }
-  if (event.button !== 0) {
-    return false
-  }
-  if (!event.shiftKey) {
-    return false
-  }
-  if (props.activeTool !== 'select') {
-    return false
-  }
-  if (!object.userData?.instancedAssetId) {
-    return false
-  }
-
-  const assetId = object.userData.instancedAssetId as string
-  const definition = getContinuousInstancedModelUserData(node)
-  const existingCount = definition
-    ? ('positions' in definition ? definition.positions.length : definition.count)
-    : 1
-  const spacing = definition?.spacing ?? computeDefaultInstancedSpacing(object.userData?.instancedBounds)
-
-  let anchorIndex = 0
-  let hasAnchorPoint = false
-
-  // If the pointer is on one of this node's committed instanced instances, use that instance as the anchor.
-  {
-    const rect = canvasRef.value.getBoundingClientRect()
-    if (rect.width > 0 && rect.height > 0) {
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-      raycaster.setFromCamera(pointer, camera)
-
-      const pickTargets: THREE.Object3D[] = []
-      const seen = new Set<THREE.Object3D>()
-      const addPickTarget = (candidate: THREE.Object3D | undefined | null) => {
-        if (!candidate || seen.has(candidate)) {
-          return
-        }
-        const mesh = candidate as THREE.InstancedMesh
-        if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
-          return
-        }
-        if (!mesh.visible || mesh.count === 0) {
-          return
-        }
-        pickTargets.push(mesh)
-        seen.add(mesh)
-      }
-
-      instancedMeshGroup.children.forEach((child) => addPickTarget(child))
-      instancedMeshes.forEach((mesh) => addPickTarget(mesh))
-
-      if (instancedBoundsHasPending()) {
-        flushInstancedBounds()
-      }
-
-      const intersections = raycaster.intersectObjects(pickTargets, false)
-      intersections.sort((a, b) => a.distance - b.distance)
-      for (const intersection of intersections) {
-        if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
-          continue
-        }
-        const mesh = intersection.object as THREE.InstancedMesh
-        const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
-        if (!bindingId || bindingId.startsWith('inst-preview:')) {
-          continue
-        }
-        const hitNodeId = findNodeIdForInstance(mesh, intersection.instanceId)
-        if (hitNodeId !== node.id) {
-          continue
-        }
-        const resolvedIndex = continuousIndexFromBindingId(node.id, bindingId)
-        if (resolvedIndex === null) {
-          continue
-        }
-
-        mesh.updateMatrixWorld(true)
-        mesh.getMatrixAt(intersection.instanceId, continuousAnchorMatrixHelper)
-        continuousAnchorWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, continuousAnchorMatrixHelper)
-        continuousAnchorWorldHelper.setFromMatrixPosition(continuousAnchorWorldMatrixHelper)
-
-        anchorIndex = resolvedIndex
-        hasAnchorPoint = true
-        break
-      }
-    }
-  }
-
-  if (!hasAnchorPoint) {
-    if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
-      return false
-    }
-    continuousAnchorWorldHelper.copy(continuousPointerWorldHelper)
-    anchorIndex = 0
-  }
-
-  continuousInstancedCreateState = {
-    pointerId: event.pointerId,
-    nodeId: node.id,
-    assetId,
-    object,
-    startWorldPoint: continuousAnchorWorldHelper.clone(),
-    spacing: Math.max(1e-4, spacing),
-    existingCount: Math.max(1, existingCount),
-    anchorIndex: Math.max(0, Math.min(Math.max(1, existingCount) - 1, anchorIndex)),
-    previewEndIndexExclusive: Math.max(1, existingCount),
-    initialRotation: object.rotation.clone(),
-  }
-
-  disableOrbitForSelectDrag()
-  pointerInteraction.capture(event.pointerId)
-
-  event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
-  return true
-}
-
-function updateContinuousInstancedCreate(event: PointerEvent): boolean {
-  const state = continuousInstancedCreateState
-  if (!state || event.pointerId !== state.pointerId) {
-    return false
-  }
-  if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return true
-  }
-
-  continuousDragDirHelper.copy(continuousPointerWorldHelper).sub(state.startWorldPoint)
-  continuousDragDirHelper.y = 0
-  const distance = continuousDragDirHelper.length()
-
-  // Update node facing direction from drag.
-  if (distance > 1e-4) {
-    const yaw = Math.atan2(continuousDragDirHelper.x, continuousDragDirHelper.z)
-    continuousDesiredWorldQuaternion.setFromAxisAngle(continuousYAxisHelper, yaw)
-    if (state.object.parent) {
-      state.object.parent.getWorldQuaternion(continuousParentWorldQuaternion)
-    } else {
-      continuousParentWorldQuaternion.identity()
-    }
-    continuousLocalQuaternion.copy(continuousParentWorldQuaternion).invert().multiply(continuousDesiredWorldQuaternion)
-    state.object.quaternion.copy(continuousLocalQuaternion)
-    state.object.rotation.setFromQuaternion(continuousLocalQuaternion)
-  }
-
-  // Sync committed instances (including rotation changes)
-  syncInstancedTransform(state.object, false)
-
-  const spacing = state.spacing
-  const desiredFromAnchor = Math.floor(distance / spacing) + 1
-  const remainingFromAnchor = Math.max(1, state.existingCount - state.anchorIndex)
-  const neededBeyondEnd = Math.max(0, desiredFromAnchor - remainingFromAnchor)
-  const desiredTotal = state.existingCount + neededBeyondEnd
-  const previousEnd = state.previewEndIndexExclusive
-  const nextEnd = Math.max(state.existingCount, desiredTotal)
-
-  syncContinuousInstancedModelPreviewRange({
-    nodeId: state.nodeId,
-    assetId: state.assetId,
-    object: state.object,
-    spacing,
-    startIndex: state.existingCount,
-    endIndexExclusive: nextEnd,
-    previousEndIndexExclusive: previousEnd,
-  })
-
-  state.previewEndIndexExclusive = nextEnd
-
-  event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
-  return true
-}
-
-function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false): boolean {
-  const state = continuousInstancedCreateState
-  if (!state || event.pointerId !== state.pointerId) {
-    return false
-  }
-  continuousInstancedCreateState = null
-
-  pointerInteraction.releaseIfCaptured(event.pointerId)
-
-  restoreOrbitAfterSelectDrag()
-
-  clearContinuousInstancedModelPreview(state.nodeId, state.existingCount, state.previewEndIndexExclusive)
-
-  if (cancel) {
-    state.object.rotation.copy(state.initialRotation)
-    state.object.updateMatrixWorld(true)
-    syncInstancedTransform(state.object, false)
-    updateSelectionHighlights()
-    return true
-  }
-
-  const nextCount = Math.max(state.existingCount, state.previewEndIndexExclusive)
-  if (nextCount > state.existingCount) {
-    const node = findSceneNode(sceneStore.nodes, state.nodeId)
-    if (node) {
-      const nextUserData = buildContinuousInstancedModelUserDataPatch({
-        previousUserData: node.userData,
-        spacing: state.spacing,
-        count: nextCount,
-      })
-      sceneStore.updateNodeUserData(state.nodeId, nextUserData as Record<string, unknown>)
-
-      // Ensure new committed instances are allocated + mapped immediately so they are pickable.
-      syncContinuousInstancedModelCommitted({
-        node: { ...node, userData: nextUserData } as SceneNode,
-        object: state.object,
-        assetId: state.assetId,
-      })
-    }
-  }
-
-  // Commit facing direction (rotation)
-  emitTransformUpdates([
-    {
-      id: state.nodeId,
-      rotation: toEulerLike(state.object.rotation),
-    },
-  ])
-
-  updateSelectionHighlights()
-  return true
-}
 
 // wall build session moved into `wallBuildTool`
 
@@ -6391,7 +6129,6 @@ async function handlePointerDown(event: PointerEvent) {
     objectMap,
     isNodeSelectionLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
     findSceneNode,
-    beginContinuousInstancedCreate,
     pickSceneInstancedTargetAtPointer,
     tryEraseRepairTargetAtPointer,
     beginRepairClick: (e) => pointerInteraction.beginRepairClick(e),
@@ -6535,7 +6272,6 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   const scatter = handlePointerMoveScatter(event, {
-    updateContinuousInstancedCreate,
     scatterEraseModeActive: scatterEraseModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
     updateRepairHoverHighlight,
@@ -6712,7 +6448,6 @@ async function handlePointerUp(event: PointerEvent) {
       }
 
       const scatter = handlePointerUpScatter(event, {
-        finalizeContinuousInstancedCreate,
         instancedEraseDragState,
         pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
         scatterEraseModeActive: scatterEraseModeActive.value,
@@ -6927,13 +6662,6 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  if (finalizeContinuousInstancedCreate(event, true)) {
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
