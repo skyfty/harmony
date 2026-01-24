@@ -464,7 +464,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
         serverUpdatedAt: stored.serverUpdatedAt ?? null,
       })
       entry.lastUsedAt = now()
-      this.evictIfNeeded(assetId)
       return entry
     },
 
@@ -508,7 +507,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
         console.warn('写入 IndexedDB 失败', error)
       }
 
-      this.evictIfNeeded(assetId)
       return entry
     },
 
@@ -707,7 +705,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
     },
     setMaxEntries(count: number) {
       this.maxEntries = Math.max(0, count)
-      this.evictIfNeeded()
     },
   },
 })

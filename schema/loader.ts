@@ -146,11 +146,11 @@ export default class Loader {
     // manager.addHandler(/\.tga$/i, new TGALoader());
 
     for (const file of files) {
-      this.loadFile(file, manager);
+      this.loadFile(file, undefined, manager);
     }
   }
 
-  public loadFile(file: File, manager?: THREE.LoadingManager, extension?: string) {
+  public loadFile(file: File, extension?: string, manager?: THREE.LoadingManager) {
     const filename = file.name;
     const inferred = filename.split('.').pop()?.toLowerCase();
     const ext = (extension && typeof extension === 'string' && extension.trim().length)
@@ -288,7 +288,7 @@ export default class Loader {
 
 
       default:
-        console.error(`Unsupported file format (${extension}).`);
+        console.error(`Unsupported file format (${ext}).`);
         break;
     }
   }
