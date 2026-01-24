@@ -68,7 +68,7 @@ async function ensureModelBoundsCachedForAsset(asset: ProjectAsset): Promise<voi
     return
   }
   try {
-    await getOrLoadModelObject(asset.id, async () => loadObjectFromFile(file))
+    await getOrLoadModelObject(asset.id, async () => loadObjectFromFile(file, asset.extension ?? undefined))
   } catch (_error) {
     // noop
   } finally {

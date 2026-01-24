@@ -146,7 +146,7 @@ export function useDragPreview(options: Options): DragPreviewController {
           pendingPreviewAssetId = null
           return false
         }
-        baseGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file,asset.extension))
+        baseGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
         options.assetCacheStore.releaseInMemoryBlob(asset.id)
       }
 

@@ -30,7 +30,16 @@ export function prepareImportedObject(object: THREE.Object3D) {
   }
 }
 
-export async function loadObjectFromFile(file: File, options: LoadObjectOptions = {}): Promise<THREE.Object3D> {
+export async function loadObjectFromFile(
+  file: File,
+  extensionOrOptions?: string | LoadObjectOptions,
+  optionsParam: LoadObjectOptions = {},
+): Promise<THREE.Object3D> {
+  const extension = typeof extensionOrOptions === 'string' ? extensionOrOptions : undefined
+  const options: LoadObjectOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
+    ? (extensionOrOptions as LoadObjectOptions)
+    : optionsParam
+
   return new Promise<THREE.Object3D>((resolve, reject) => {
     const loader = new Loader()
 

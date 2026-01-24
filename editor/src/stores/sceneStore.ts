@@ -12802,12 +12802,12 @@ export const useSceneStore = defineStore('scene', {
             throw new Error('资源未缓存完成')
           }
           if (shouldCacheModelObject) {
-            const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+            const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
             modelGroup = loadedGroup
             baseObject = loadedGroup.object
             assetCache.releaseInMemoryBlob(asset.id)
           } else {
-            baseObject = await loadObjectFromFile(file)
+            baseObject = await loadObjectFromFile(file, asset.extension ?? undefined)
           }
         }
 
@@ -12989,12 +12989,12 @@ export const useSceneStore = defineStore('scene', {
 
       if (!baseObject) {
         if (shouldCacheModelObject) {
-          const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
           modelGroup = loaded
           baseObject = loaded.object
           assetCache.releaseInMemoryBlob(asset.id)
         } else {
-          baseObject = await loadObjectFromFile(file)
+          baseObject = await loadObjectFromFile(file, asset.extension ?? undefined)
         }
       }
 
@@ -13127,7 +13127,7 @@ export const useSceneStore = defineStore('scene', {
           if (!file) {
             throw new Error('Missing asset data in cache')
           }
-          const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
           assetCache.releaseInMemoryBlob(asset.id)
           modelGroup = baseObject
         }

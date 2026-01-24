@@ -12,6 +12,7 @@ import {
   releaseModelInstancesForNode,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { useSceneStore } from '@/stores/sceneStore'
 import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schema/wallMesh'
 import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
@@ -622,7 +623,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const promise = (async () => {
       try {
         let group = getCachedModelObject(assetId)
-        if (!group) {
+          if (!group) {
           let file = options.assetCacheStore.createFileFromCache(assetId)
           if (!file) {
             await options.assetCacheStore.loadFromIndexedDb(assetId)
@@ -631,7 +632,8 @@ export function createWallRenderer(options: WallRendererOptions) {
           if (!file) {
             return
           }
-          group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+          group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
           options.assetCacheStore.releaseInMemoryBlob(assetId)
         }
 

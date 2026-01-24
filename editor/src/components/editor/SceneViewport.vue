@@ -2579,7 +2579,7 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     if (!file) {
       return
     }
-    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
     assetCacheStore.releaseInMemoryBlob(asset.id)
     ensureInstancedMeshesRegistered(asset.id)
   })()

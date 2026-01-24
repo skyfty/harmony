@@ -1484,7 +1484,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			try {
 				await getOrLoadModelObject(normalized, async () => {
-					const object = await loadObjectFromFile(file)
+					const object = await loadObjectFromFile(file, asset.extension ?? undefined)
 					normalizeScatterMaterials(object)
 					return object
 				})
@@ -2074,7 +2074,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		try {
 			group = await getOrLoadModelObject(asset.id, async () => {
-				const object = await loadObjectFromFile(file)
+				const object = await loadObjectFromFile(file, asset.extension ?? undefined)
 				normalizeScatterMaterials(object)
 				return object
 			})

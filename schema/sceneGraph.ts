@@ -1192,7 +1192,8 @@ class SceneGraphBuilder {
     }
 
     try {
-      const parsed = await loadObjectFromFile(file);
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const parsed = await loadObjectFromFile(file, ext);
       const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
       return { scene: parsed, animations };
     } catch (error) {

@@ -35,6 +35,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { extractExtension } from '@/utils/blob'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
+import { useSceneStore } from '@/stores/sceneStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import {
   FLOOR_COMPONENT_TYPE,
@@ -525,7 +526,8 @@ async function ensureModelBoundsCachedForAssetId(assetId: string, assetCacheStor
     return
   }
   try {
-    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file))
+    const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file, ext))
   } catch (_error) {
     // noop
   } finally {

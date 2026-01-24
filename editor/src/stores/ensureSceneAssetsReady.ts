@@ -80,7 +80,7 @@ export async function updateSceneAssets(args: {
   // model/object helpers
   getCachedModelObject: (assetId: string) => ModelInstanceGroup | null
   getOrLoadModelObject: (assetId: string, loader: () => Promise<Object3D>) => Promise<ModelInstanceGroup>
-  loadObjectFromFile: (file: File) => Promise<Object3D>
+  loadObjectFromFile: (file: File, extension?: string) => Promise<Object3D>
 
   // runtime building helpers
   createInstancedRuntimeProxy: (node: SceneNode, group: ModelInstanceGroup, sourceAssetId?: string) => Object3D | null
@@ -337,12 +337,12 @@ export async function updateSceneAssets(args: {
       }
 
       if (shouldCacheModelObject) {
-        const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+        const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, getAsset(assetId)?.extension ?? undefined))
         modelGroup = loadedGroup
         baseObject = loadedGroup.object
         assetCache.releaseInMemoryBlob(assetId)
       } else {
-        baseObject = await loadObjectFromFile(file)
+        baseObject = await loadObjectFromFile(file, getAsset(assetId)?.extension ?? undefined)
       }
     }
 
