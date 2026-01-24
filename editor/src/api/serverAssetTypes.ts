@@ -1,6 +1,7 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
+import { extractExtension } from '@/utils/blob'
 
 export interface ServerAssetTagDto {
   id: string
@@ -111,5 +112,6 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     createdAt: typeof asset.createdAt === 'string' ? asset.createdAt : undefined,
     updatedAt: typeof asset.updatedAt === 'string' ? asset.updatedAt : undefined,
     gleaned: false,
+      extension: extractExtension(downloadUrl) ?? null,
   }
 }

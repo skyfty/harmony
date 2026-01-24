@@ -33,6 +33,7 @@ import {
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { extractExtension } from '@/utils/blob'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import {
@@ -1494,6 +1495,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             thumbnail: 'https://v.touchmagic.cn/uploads/thumb-xjq8ZTRJEQo8_7e0.jpg',
             description: "waternormals.jpg",
             gleaned: true,
+            extension: extractExtension('https://v.touchmagic.cn/uploads/FhhKc4p770XqX71U.jpg') ?? extractExtension('waternormals.jpg') ?? null,
           }
           await sceneStore.registerAsset(projectAsset)
   

@@ -69,6 +69,7 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import { getExtensionFromMimeType } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
@@ -3017,6 +3018,7 @@ async function createTextureAssetFromTexture(texture: Texture, context: External
     previewColor: '#ffffff',
     thumbnail: null,
     gleaned: true,
+    extension: payload.extension ?? null,
   }
 
   context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
@@ -5353,6 +5355,7 @@ function replaceAssetIdReferences(scene: StoredSceneDocument, previousId: string
       ...extracted.asset,
       id: nextId,
       downloadUrl: extracted.asset.downloadUrl === previousId ? nextId : extracted.asset.downloadUrl,
+      extension: extracted.asset.extension ?? extractExtension(extracted.asset.downloadUrl) ?? null,
     }
     insertAssetIntoCatalog(scene.assetCatalog, extracted.categoryId, nextAsset)
   }
@@ -9429,6 +9432,7 @@ export const useSceneStore = defineStore('scene', {
         previewColor,
         thumbnail: null,
         gleaned: true,
+        extension: extractExtension(`material://${material.id}.material`) ?? null,
       }
 
       this.registerAsset(asset, {
@@ -10271,6 +10275,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description,
         gleaned: metadata.gleaned ?? true,
+        extension: extractExtension(file.name) ?? getExtensionFromMimeType(file.type) ?? null,
       }
 
       const registered = this.registerAsset(projectAsset, {
@@ -10529,6 +10534,7 @@ export const useSceneStore = defineStore('scene', {
           name: prefabData.name,
           description: fileName,
           previewColor: NODE_PREFAB_PREVIEW_COLOR,
+          extension: extractExtension(fileName) ?? existing.extension ?? null,
         }
         const categoryId = determineAssetCategoryId(updated)
         const sourceMeta = this.assetIndex[targetAssetId]?.source
@@ -10548,6 +10554,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
       const categoryId = determineAssetCategoryId(projectAsset)
       const registered = this.registerAsset(projectAsset, {
@@ -11247,6 +11254,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
 
       return this.registerAsset(projectAsset, {
@@ -11313,6 +11321,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
 
       const categoryId = determineAssetCategoryId(projectAsset)
@@ -11466,6 +11475,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
       const categoryId = determineAssetCategoryId(projectAsset)
       const registered = this.registerAsset(projectAsset, {
@@ -11660,6 +11670,7 @@ export const useSceneStore = defineStore('scene', {
             thumbnail: ref.thumbnail ?? null,
             description: ref.description ?? (ref.filename ?? undefined),
             gleaned: true,
+            extension: extractExtension(ref.filename ?? ref.description ?? remoteUrl) ?? null,
           }
 
           this.registerAsset(projectAsset, {

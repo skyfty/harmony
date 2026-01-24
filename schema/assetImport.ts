@@ -59,7 +59,7 @@ export async function loadObjectFromFile(file: File, options: LoadObjectOptions 
     }
 
     try {
-      loader.loadFile(file)
+      loader.loadFile(file, undefined, extension)
     } catch (error) {
       cleanup()
       reject(error)

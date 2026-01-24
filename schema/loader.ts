@@ -150,11 +150,14 @@ export default class Loader {
     }
   }
 
-  public loadFile(file: File, manager?: THREE.LoadingManager) {
+  public loadFile(file: File, manager?: THREE.LoadingManager, extension?: string) {
     const filename = file.name;
-    const extension = filename.split('.').pop()?.toLowerCase();
+    const inferred = filename.split('.').pop()?.toLowerCase();
+    const ext = (extension && typeof extension === 'string' && extension.trim().length)
+      ? extension.toLowerCase()
+      : inferred;
 
-    if (!extension) {
+    if (!ext) {
       console.error('Unable to determine file extension.');
       return;
     }
@@ -168,7 +171,7 @@ export default class Loader {
       });
     });
 
-    switch (extension) {
+    switch (ext) {
       case 'fbx': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
           const contents = event.target?.result as ArrayBuffer;

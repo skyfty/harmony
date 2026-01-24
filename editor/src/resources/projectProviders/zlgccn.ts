@@ -40,6 +40,15 @@ function transformZlgccnResponse(payload: unknown): ProjectDirectory[] {
       description: item.file,
       downloadUrl: item.file,
       gleaned: false,
+      extension: (() => {
+        try {
+          const urlOrName = String(item.file)
+          const m = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(urlOrName)
+          return m && m[1] ? m[1].toLowerCase() : null
+        } catch (_e) {
+          return null
+        }
+      })(),
     }
 
     if (!seriesMap.has(series)) {

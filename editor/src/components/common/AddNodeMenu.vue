@@ -30,6 +30,7 @@ import {
 } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
+import { extractExtension } from '@/utils/blob'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   DEFAULT_RIGIDBODY_FRICTION,
@@ -276,6 +277,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
       thumbnail: null,
       description: normalizedUrl,
       gleaned: true,
+      extension: extractExtension(displayName) ?? extractExtension(normalizedUrl) ?? null,
     }
     const categoryId = determineAssetCategoryId(importedAsset)
     const registeredAsset = sceneStore.registerAsset(importedAsset, {
