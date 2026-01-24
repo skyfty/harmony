@@ -441,6 +441,11 @@ class TransformControls extends Controls {
 
 				this.object.matrixWorld.decompose( this.worldPositionStart, this.worldQuaternionStart, this._worldScaleStart );
 
+				const pivotOverride = this.object.userData && this.object.userData.transformControlsPivotWorld;
+				if ( pivotOverride && pivotOverride.isVector3 ) {
+					this.worldPositionStart.copy( pivotOverride );
+				}
+
 				this.pointStart.copy( planeIntersect.point ).sub( this.worldPositionStart );
 
 			}
@@ -1074,6 +1079,13 @@ class TransformControlsRoot extends Object3D {
 			}
 
 			controls.object.matrixWorld.decompose( controls.worldPosition, controls.worldQuaternion, controls._worldScale );
+
+			// Optional pivot override (e.g. for instanced tiling nodes).
+			// When present, use this world position for gizmo placement and plane alignment.
+			const pivotOverride = controls.object.userData && controls.object.userData.transformControlsPivotWorld;
+			if ( pivotOverride && pivotOverride.isVector3 ) {
+				controls.worldPosition.copy( pivotOverride );
+			}
 
 			controls._parentQuaternionInv.copy( controls._parentQuaternion ).invert();
 			controls._worldQuaternionInv.copy( controls.worldQuaternion ).invert();

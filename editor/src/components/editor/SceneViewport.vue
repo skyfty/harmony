@@ -569,8 +569,8 @@ function tickInstancedTiling() {
 
     ensureInstancedMeshesRegistered(resolvedAssetId)
 
-    const props = enabled.props
-    const instanceCount = props.countX * props.countY * props.countZ
+    const tilingProps = enabled.props
+    const instanceCount = tilingProps.countX * tilingProps.countY * tilingProps.countZ
     if (!Number.isFinite(instanceCount) || instanceCount <= 0) {
       cleanupInstancedTilingRuntime(nodeId)
       return
@@ -604,34 +604,34 @@ function tickInstancedTiling() {
     }
 
     const basis = computeInstancedTilingBasis({
-      mode: props.mode,
-      forwardLocal: props.forwardLocal,
-      upLocal: props.upLocal,
-      rollDegrees: props.rollDegrees,
+      mode: tilingProps.mode,
+      forwardLocal: tilingProps.forwardLocal,
+      upLocal: tilingProps.upLocal,
+      rollDegrees: tilingProps.rollDegrees,
     })
 
     const extents = computeBoxExtentsAlongBasis(group.boundingBox, basis)
-    const stepX = extents.x + props.spacingX
-    const stepY = extents.y + props.spacingY
-    const stepZ = extents.z + props.spacingZ
+    const stepX = extents.x + tilingProps.spacingX
+    const stepY = extents.y + tilingProps.spacingY
+    const stepZ = extents.z + tilingProps.spacingZ
 
     const signature = [
       resolvedAssetId,
-      props.mode,
-      `${props.countX},${props.countY},${props.countZ}`,
-      `${props.spacingX},${props.spacingY},${props.spacingZ}`,
-      `${props.forwardLocal.x},${props.forwardLocal.y},${props.forwardLocal.z}`,
-      `${props.upLocal.x},${props.upLocal.y},${props.upLocal.z}`,
-      `${props.rollDegrees}`,
+      tilingProps.mode,
+      `${tilingProps.countX},${tilingProps.countY},${tilingProps.countZ}`,
+      `${tilingProps.spacingX},${tilingProps.spacingY},${tilingProps.spacingZ}`,
+      `${tilingProps.forwardLocal.x},${tilingProps.forwardLocal.y},${tilingProps.forwardLocal.z}`,
+      `${tilingProps.upLocal.x},${tilingProps.upLocal.y},${tilingProps.upLocal.z}`,
+      `${tilingProps.rollDegrees}`,
       `${extents.x},${extents.y},${extents.z}`,
     ].join('|')
 
     if (signature !== runtime.layoutSignature || runtime.localMatrices.length !== instanceCount) {
       runtime.layoutSignature = signature
       runtime.localMatrices = buildInstancedTilingLocalMatrices({
-        countX: props.countX,
-        countY: props.countY,
-        countZ: props.countZ,
+        countX: tilingProps.countX,
+        countY: tilingProps.countY,
+        countZ: tilingProps.countZ,
         stepX,
         stepY,
         stepZ,
@@ -702,6 +702,11 @@ function tickInstancedTiling() {
     }
 
     ensureInstancedPickProxy(object, node)
+
+    // Keep TransformControls pivot aligned with the updated PickProxy bounds when selected.
+    if (props.selectedNodeId === nodeId && props.activeTool !== 'select' && transformControls?.object === object) {
+      updateTransformControlsPivotOverride(object)
+    }
   })
 }
 
@@ -2908,15 +2913,34 @@ function rotateActiveSelection(nodeId: string) {
 
   const updates: TransformUpdatePayload[] = []
 
+  const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    RIGHT_CLICK_ROTATION_STEP,
+  )
+  const pivotWorld = new THREE.Vector3()
+  const worldPosition = new THREE.Vector3()
+  const worldOffset = new THREE.Vector3()
+
   selectionIds.forEach((id) => {
     const object = objectMap.get(id)
     if (!object) {
       return
     }
 
-    const nextRotation = object.rotation.clone()
-    nextRotation.y += RIGHT_CLICK_ROTATION_STEP
-    object.rotation.copy(nextRotation)
+    computeTransformPivotWorld(object, pivotWorld)
+
+    object.updateMatrixWorld(true)
+    object.getWorldPosition(worldPosition)
+    worldOffset.copy(worldPosition).sub(pivotWorld).applyQuaternion(rotateDeltaQuaternion)
+    worldPosition.copy(pivotWorld).add(worldOffset)
+
+    if (object.parent) {
+      object.parent.updateMatrixWorld(true)
+      object.parent.worldToLocal(worldPosition)
+    }
+    object.position.copy(worldPosition)
+    object.quaternion.premultiply(rotateDeltaQuaternion)
+    object.rotation.setFromQuaternion(object.quaternion)
     object.updateMatrixWorld(true)
 
     updates.push({
@@ -3229,6 +3253,57 @@ function isInstancedPickProxyBoundsPayload(value: unknown): value is InstancedPi
   return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
 }
 
+function computeTransformPivotWorld(object: THREE.Object3D, out: THREE.Vector3): void {
+  const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
+  const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
+
+  // PickProxyManager persists `instancedPickProxyBounds` in *object-local* space.
+  // Convert object-local center -> world using the node object's transform.
+  if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
+    instancedPivotCenterLocalHelper.fromArray(proxyBoundsCandidate.min)
+    instancedPivotWorldHelper.fromArray(proxyBoundsCandidate.max)
+    instancedPivotCenterLocalHelper.add(instancedPivotWorldHelper).multiplyScalar(0.5)
+    object.updateMatrixWorld(true)
+    out.copy(instancedPivotCenterLocalHelper)
+    object.localToWorld(out)
+    return
+  }
+
+  // Fallback: use the proxy geometry center if bounds payload is unavailable.
+  const meshProxy = proxy as unknown as THREE.Mesh | undefined
+  const geometry = meshProxy?.geometry as THREE.BufferGeometry | undefined
+  if (meshProxy && geometry) {
+    if (!geometry.boundingBox) {
+      geometry.computeBoundingBox()
+    }
+    if (geometry.boundingBox && !geometry.boundingBox.isEmpty()) {
+      instancedPivotCenterLocalHelper.copy(geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+      meshProxy.updateMatrixWorld(true)
+      out.copy(instancedPivotCenterLocalHelper)
+      meshProxy.localToWorld(out)
+      return
+    }
+  }
+
+  object.getWorldPosition(out)
+}
+
+function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
+  const userData = object.userData ?? (object.userData = {})
+  const proxy = userData.instancedPickProxy as THREE.Object3D | undefined
+
+  // Only override pivot when the node has a PickProxy (instanced tiling path).
+  if (!proxy) {
+    delete (userData as any).transformControlsPivotWorld
+    return
+  }
+
+  const existing = (userData as any).transformControlsPivotWorld as THREE.Vector3 | undefined
+  const pivotWorld = existing && (existing as any).isVector3 ? existing : new THREE.Vector3()
+  computeTransformPivotWorld(object, pivotWorld)
+  ;(userData as any).transformControlsPivotWorld = pivotWorld
+}
+
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
   const relevantIds = new Set(selectedIds)
@@ -3246,35 +3321,9 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
       return
     }
     object.updateMatrixWorld(true)
-
-    const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
     const pivotWorld = new THREE.Vector3()
 
-    const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-    if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-      instancedPivotCenterLocalHelper
-        .fromArray(proxyBoundsCandidate.min)
-        .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-        .multiplyScalar(0.5)
-      proxy.updateMatrixWorld(true)
-      pivotWorld.copy(instancedPivotCenterLocalHelper)
-      proxy.localToWorld(pivotWorld)
-    } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-      const meshProxy = proxy as unknown as THREE.Mesh
-      if (!meshProxy.geometry.boundingBox) {
-        meshProxy.geometry.computeBoundingBox()
-      }
-      if (meshProxy.geometry.boundingBox) {
-        instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-        meshProxy.updateMatrixWorld(true)
-        pivotWorld.copy(instancedPivotCenterLocalHelper)
-        meshProxy.localToWorld(pivotWorld)
-      } else {
-        object.getWorldPosition(pivotWorld)
-      }
-    } else {
-      object.getWorldPosition(pivotWorld)
-    }
+    computeTransformPivotWorld(object, pivotWorld)
 
     const worldPosition = new THREE.Vector3()
     object.getWorldPosition(worldPosition)
@@ -7818,6 +7867,8 @@ function handleTransformChange() {
     return
   }
 
+  const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
+
   const mode = transformControls.getMode()
   const nodeId = target.userData.nodeId as string
   const isTranslateMode = mode === 'translate'
@@ -7911,18 +7962,9 @@ function handleTransformChange() {
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
-        // For instanced nodes, rotate around the pick-proxy center (not the node origin).
-        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
-        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-          instancedPivotCenterLocalHelper
-            .fromArray(proxyBoundsCandidate.min)
-            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-            .multiplyScalar(0.5)
-          proxy.updateMatrixWorld(true)
-          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-          proxy.localToWorld(instancedPivotWorldHelper)
-
+        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+        if (!hasPivotOverride) {
+          computeTransformPivotWorld(target, instancedPivotWorldHelper)
           transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
           if (transformDeltaPosition.lengthSq() > 1e-12) {
             target.getWorldPosition(transformWorldPositionBuffer)
@@ -7934,30 +7976,6 @@ function handleTransformChange() {
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
             syncInstancedOutlineEntryTransform(nodeId)
-          }
-        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-          const meshProxy = proxy as unknown as THREE.Mesh
-          if (!meshProxy.geometry.boundingBox) {
-            meshProxy.geometry.computeBoundingBox()
-          }
-          if (meshProxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            meshProxy.updateMatrixWorld(true)
-            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            meshProxy.localToWorld(instancedPivotWorldHelper)
-
-            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-            if (transformDeltaPosition.lengthSq() > 1e-12) {
-              target.getWorldPosition(transformWorldPositionBuffer)
-              transformWorldPositionBuffer.add(transformDeltaPosition)
-              if (target.parent) {
-                target.parent.worldToLocal(transformWorldPositionBuffer)
-              }
-              target.position.copy(transformWorldPositionBuffer)
-              target.updateMatrixWorld(true)
-              syncInstancedTransform(target, true)
-              syncInstancedOutlineEntryTransform(nodeId)
-            }
           }
         }
 
@@ -7989,18 +8007,9 @@ function handleTransformChange() {
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
-        // For instanced nodes, keep the pick-proxy center fixed while scaling.
-        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
-        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-          instancedPivotCenterLocalHelper
-            .fromArray(proxyBoundsCandidate.min)
-            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-            .multiplyScalar(0.5)
-          proxy.updateMatrixWorld(true)
-          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-          proxy.localToWorld(instancedPivotWorldHelper)
-
+        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+        if (!hasPivotOverride) {
+          computeTransformPivotWorld(target, instancedPivotWorldHelper)
           transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
           if (transformDeltaPosition.lengthSq() > 1e-12) {
             target.getWorldPosition(transformWorldPositionBuffer)
@@ -8012,30 +8021,6 @@ function handleTransformChange() {
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
             syncInstancedOutlineEntryTransform(nodeId)
-          }
-        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-          const meshProxy = proxy as unknown as THREE.Mesh
-          if (!meshProxy.geometry.boundingBox) {
-            meshProxy.geometry.computeBoundingBox()
-          }
-          if (meshProxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            meshProxy.updateMatrixWorld(true)
-            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            meshProxy.localToWorld(instancedPivotWorldHelper)
-
-            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-            if (transformDeltaPosition.lengthSq() > 1e-12) {
-              target.getWorldPosition(transformWorldPositionBuffer)
-              transformWorldPositionBuffer.add(transformDeltaPosition)
-              if (target.parent) {
-                target.parent.worldToLocal(transformWorldPositionBuffer)
-              }
-              target.position.copy(transformWorldPositionBuffer)
-              target.updateMatrixWorld(true)
-              syncInstancedTransform(target, true)
-              syncInstancedOutlineEntryTransform(nodeId)
-            }
           }
         }
 
@@ -9281,6 +9266,10 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   // 根据当前工具选择合适的变换坐标系
   applyTransformSpace(tool)
   transformControls.setMode(tool)
+
+  // For instanced tiling nodes, place the gizmo at the PickProxy-derived pivot.
+  updateTransformControlsPivotOverride(target)
+
   transformControls.attach(target)
 }
 
