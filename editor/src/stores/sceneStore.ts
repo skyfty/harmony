@@ -5741,10 +5741,10 @@ export async function calculateSceneResourceSummary(
       bytes = cacheEntry?.blob?.size ?? bytes
     }
 
-    if (bytes > 0) {
+    if (bytes > 0 || downloadUrl) {
       const entry: SceneResourceSummaryEntry = {
         assetId,
-        name:asset?.name ?? undefined,
+        name: asset?.name ?? undefined,
         type: asset?.type ?? undefined,
         bytes,
         embedded: false,
@@ -5753,8 +5753,10 @@ export async function calculateSceneResourceSummary(
       }
       summary.assets.push(entry)
       recordTextureAssetEntry(assetId, entry)
-      summary.totalBytes += bytes
-      summary.externalBytes += bytes
+      if (bytes > 0) {
+        summary.totalBytes += bytes
+        summary.externalBytes += bytes
+      }
       processed.add(assetId)
     } else {
       summary.unknownAssetIds?.push(assetId)
