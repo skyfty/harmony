@@ -663,6 +663,7 @@ function tickInstancedTiling() {
       }
     }
 
+    let didUpdateMatrices = false
     if (baseChanged || runtime.localDirty) {
       for (let i = 0; i < runtime.bindingIds.length; i += 1) {
         const bindingId = runtime.bindingIds[i]
@@ -674,6 +675,12 @@ function tickInstancedTiling() {
         updateModelInstanceBindingMatrix(bindingId, instancedTilingInstanceMatrix)
       }
       runtime.localDirty = false
+      didUpdateMatrices = true
+    }
+
+    // Keep instanced outline proxies aligned with the updated instance matrices.
+    if (didUpdateMatrices) {
+      syncInstancedOutlineEntryTransform(nodeId)
     }
 
     // Hide the template mesh child so the instanced array is the final visible result.
