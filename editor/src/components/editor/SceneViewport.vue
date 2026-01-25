@@ -245,7 +245,7 @@ import {
   DEFAULT_PERSPECTIVE_FOV,
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
-import { createFaceSnapController, createSurfaceSnapController } from './pointer/snap'
+// face/surface snap controllers removed: no alignment hint UI
 import { SceneCloudRenderer } from '@schema/cloudRenderer'
 import {
   createProtagonistInitialVisibilityCapture,
@@ -968,19 +968,7 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
   }
 }
 
-const faceSnapController = createFaceSnapController({
-  getScene: () => scene,
-  objectMap,
-  getActiveTool: () => props.activeTool,
-  isEditableKeyboardTarget,
-})
-
-const surfaceSnapController = createSurfaceSnapController({
-  normalizedPointerGuard,
-  raycaster,
-  ensurePlacementSurfaceTargets: ensurePlacementSurfaceTargetsUpToDate,
-  isEditableKeyboardTarget,
-})
+// snap controllers disabled in SceneViewport
 
 const protagonistPreview = useProtagonistPreview({
   getScene: () => scene,
@@ -3369,7 +3357,6 @@ const draggingChangedHandler = (event: unknown) => {
 
   if (!value) {
     // Dragging ends
-    faceSnapController.hideEffect()
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
       const updates = commitTransformControlUpdates()
@@ -3395,7 +3382,6 @@ const draggingChangedHandler = (event: unknown) => {
     }
   } else {
     // Dragging begins
-    faceSnapController.hideEffect()
     hasTransformLastWorldPosition = false
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
@@ -4459,7 +4445,7 @@ function initScene() {
   if (gridHighlight) {
     scene.add(gridHighlight)
   }
-  faceSnapController.ensureEffectPool()
+  // face snap effects disabled
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
@@ -5225,9 +5211,7 @@ function animate() {
   prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
   if (props.activeTool === 'translate') {
-    const t0 = performance.now()
-    faceSnapController.updateEffectIntensity(effectiveDelta)
-    prof.faceSnap = performance.now() - t0
+    // alignment hint visuals disabled
   }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
     const t0 = performance.now()
@@ -5322,7 +5306,7 @@ function disposeScene() {
   resizeObserver?.disconnect()
   resizeObserver = null
 
-  faceSnapController.dispose()
+  // face snap controller disposed elsewhere (feature disabled)
   hasTransformLastWorldPosition = false
 
   if (canvasRef.value) {
@@ -6102,7 +6086,6 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
 }
 
 async function handlePointerDown(event: PointerEvent) {
-  surfaceSnapController.updatePointer(event)
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
       pointerTrackingState = null
@@ -6277,7 +6260,7 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
-  surfaceSnapController.updatePointer(event)
+  // surface snap pointer updates removed (alignment hint disabled)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
     const dy = event.clientY - middleClickSessionState.startY
@@ -6410,7 +6393,7 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 async function handlePointerUp(event: PointerEvent) {
-  surfaceSnapController.updatePointer(event)
+  // surface snap pointer updates removed (alignment hint disabled)
   try {
     const isPointerUpOnCanvas = (() => {
       const canvas = canvasRef.value
@@ -7876,10 +7859,10 @@ function handleTransformChange() {
   const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
 
   if (isTranslateMode && shouldSnapTranslate) {
-    faceSnapController.hideEffect()
+    // alignment hint visuals disabled
     snapVectorToGridForNode(target.position, nodeId)
   } else if (!isTranslateMode || !isActiveTranslateTool) {
-    faceSnapController.hideEffect()
+    // alignment hint visuals disabled
   }
 
   target.updateMatrixWorld(true)
@@ -7898,12 +7881,7 @@ function handleTransformChange() {
       groupState.entries.forEach((entry) => faceSnapExcludedIds.add(entry.nodeId))
     }
 
-    const didSurfaceSnap = surfaceSnapController.applySurfaceSnap(target, faceSnapExcludedIds)
-    if (!didSurfaceSnap) {
-      faceSnapController.applyAlignmentSnap(target, transformMovementDelta, faceSnapExcludedIds)
-    } else {
-      faceSnapController.hideEffect()
-    }
+    // surface/face alignment snapping and hint visuals disabled
     target.updateMatrixWorld(true)
     target.getWorldPosition(transformCurrentWorldPosition)
   } else {
@@ -9369,12 +9347,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.addEventListener('keydown', faceSnapController.handleKeyDown, { capture: true })
-  window.addEventListener('keyup', faceSnapController.handleKeyUp, { capture: true })
-  window.addEventListener('blur', faceSnapController.handleBlur, { capture: true })
-  window.addEventListener('keydown', surfaceSnapController.handleKeyDown, { capture: true })
-  window.addEventListener('keyup', surfaceSnapController.handleKeyUp, { capture: true })
-  window.addEventListener('blur', surfaceSnapController.handleBlur, { capture: true })
+  // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
@@ -9399,12 +9372,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.removeEventListener('keydown', faceSnapController.handleKeyDown, { capture: true })
-  window.removeEventListener('keyup', faceSnapController.handleKeyUp, { capture: true })
-  window.removeEventListener('blur', faceSnapController.handleBlur, { capture: true })
-  window.removeEventListener('keydown', surfaceSnapController.handleKeyDown, { capture: true })
-  window.removeEventListener('keyup', surfaceSnapController.handleKeyUp, { capture: true })
-  window.removeEventListener('blur', surfaceSnapController.handleBlur, { capture: true })
+  // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
   }
@@ -9552,9 +9520,7 @@ watch(
   (tool) => {
     updateToolMode(tool)
     if (tool !== 'translate') {
-      faceSnapController.setCommitActive(false)
-      faceSnapController.hideEffect()
-      surfaceSnapController.setActive(false)
+      // disable snap/align hint behavior
     }
   }
 )
