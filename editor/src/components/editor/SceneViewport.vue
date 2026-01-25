@@ -644,7 +644,17 @@ function tickInstancedTiling() {
     }
 
     object.updateMatrixWorld(true)
-    instancedTilingBaseMatrix.copy(object.matrixWorld)
+    const isCulled = (object.userData as any)?.__harmonyCulled === true
+    const isVisible = object.visible !== false
+    if (isCulled || !isVisible) {
+      // Keep position/orientation but collapse scale so instances are effectively hidden,
+      // matching the generic instanced sync behavior.
+      object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+      instancedScaleHelper.setScalar(0)
+      instancedTilingBaseMatrix.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+    } else {
+      instancedTilingBaseMatrix.copy(object.matrixWorld)
+    }
 
     const elements = instancedTilingBaseMatrix.elements
     const cached = runtime.lastBaseElements
@@ -683,6 +693,16 @@ function tickInstancedTiling() {
 
     // Keep instanced outline proxies aligned with the updated instance matrices.
     if (didUpdateMatrices) {
+      if ((globalThis as any).__HARMONY_DEBUG_INSTANCED_TILING__ === true) {
+        console.debug('[InstancedTiling] updated matrices', {
+          nodeId,
+          instanceCount: runtime.bindingIds.length,
+          isCulled,
+          isVisible,
+          baseChanged,
+          localDirty: runtime.localDirty,
+        })
+      }
       syncInstancedOutlineEntryTransform(nodeId)
     }
 
@@ -2534,7 +2554,26 @@ const {
   {
     syncInstancedOutlineEntryTransform,
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
-    syncInstancedTransformOverride: ({ nodeId, baseMatrix }) => wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix),
+    syncInstancedTransformOverride: ({ nodeId, baseMatrix, isVisible, isCulled }) => {
+      // Instanced tiling owns instance matrices. Prevent the generic multi-binding sync
+      // from overriding tiling-authored matrices (can cause probabilistic wrong positions).
+      const tilingRuntime = instancedTilingRuntimes.get(nodeId)
+      if (tilingRuntime) {
+        tilingRuntime.lastBaseElements = null
+        tilingRuntime.localDirty = true
+        if ((globalThis as any).__HARMONY_DEBUG_INSTANCED_TILING__ === true) {
+          console.debug('[InstancedTiling] override syncInstancedTransform', {
+            nodeId,
+            isVisible,
+            isCulled,
+            baseDet: baseMatrix.determinant(),
+          })
+        }
+        return true
+      }
+
+      return wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)
+    },
   }
 )
 

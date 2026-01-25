@@ -33,7 +33,7 @@ export type PickProxyManager = {
 
 export function createPickProxyManager(): PickProxyManager {
   // Toggle to make pick proxies visible for debugging (temporary).
-  const DEBUG_PICK_PROXY = true
+  const DEBUG_PICK_PROXY = false
 
   const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
   const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
