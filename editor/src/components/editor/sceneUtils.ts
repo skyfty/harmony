@@ -106,8 +106,8 @@ export function setBoundingBoxFromObject(object: THREE.Object3D | null, target: 
     instancedBoundsBox.min.copy(instancedBoundsMin)
     instancedBoundsBox.max.copy(instancedBoundsMax)
     target.copy(instancedBoundsBox)
-    object.updateMatrixWorld(true)
-    target.applyMatrix4(object.matrixWorld)
+    pickProxy.updateMatrixWorld(true)
+    target.applyMatrix4(pickProxy.matrixWorld)
     return target
   }
 

@@ -4232,7 +4232,6 @@ function applyArrange(direction: ArrangeDirection, options?: { fixedPrimaryAsAnc
       return
     }
     let edge = fixedPrimaryAsAnchor ? anchor.maxX : anchorEntry!.bounds.maxX
-    const anchorCenterY = fixedPrimaryAsAnchor ? anchor.centerY : anchorEntry!.bounds.centerY
     const anchorCenterZ = fixedPrimaryAsAnchor ? anchor.centerZ : anchorEntry!.bounds.centerZ
 
     const toMove = fixedPrimaryAsAnchor ? sorted : sorted.slice(1)
@@ -4241,7 +4240,8 @@ function applyArrange(direction: ArrangeDirection, options?: { fixedPrimaryAsAnc
       // Place to the right (+X): target minX = current edge.
       const deltaX = edge - bounds.minX
       edge += bounds.sizeX
-      const deltaY = (fixedPrimaryAsAnchor ? anchor.centerY : anchorCenterY) - bounds.centerY
+      // Horizontal arrange only uses footprint along X/Z; keep world Y unchanged.
+      const deltaY = 0
       const deltaZ = (fixedPrimaryAsAnchor ? anchor.centerZ : anchorCenterZ) - bounds.centerZ
       const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
       if (!local) {
@@ -4378,7 +4378,8 @@ function applyDistribute(direction: ArrangeDirection, options?: { fixedPrimaryAs
       ordered.forEach((entry, i) => {
         const targetCenterX = primaryBounds.centerX + step * (i + 1)
         const deltaX = targetCenterX - entry.bounds.centerX
-        const deltaY = primaryBounds.centerY - entry.bounds.centerY
+        // Horizontal distribute only uses footprint along X/Z; keep world Y unchanged.
+        const deltaY = 0
         const deltaZ = primaryBounds.centerZ - entry.bounds.centerZ
         const local = applyWorldDelta(entry.object, deltaX, deltaY, deltaZ)
         if (!local) {
