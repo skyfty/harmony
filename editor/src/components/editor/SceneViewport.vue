@@ -7915,6 +7915,11 @@ function handleTransformChange() {
   // Keep them in sync during TransformControls dragging (e.g. instanced wall assets).
   syncInstancedOutlineEntryTransform(nodeId)
 
+  // Keep pivot overrides in sync so the gizmo follows instanced PickProxy nodes while moving.
+  if (target.userData?.instancedPickProxy) {
+    updateTransformControlsPivotOverride(target)
+  }
+
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
 
