@@ -112,6 +112,7 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
+import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
@@ -201,6 +202,7 @@ import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
+import { useSnapController } from '@/components/useSnapController'
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
@@ -210,6 +212,7 @@ import {
   computeOrientedGroundRectFromObject,
   snapVectorToGrid,
   snapVectorToMajorGrid,
+  filterTopLevelSelection,
   setBoundingBoxFromObject,
   toEulerLike,
   findSceneNode
@@ -1350,6 +1353,15 @@ const {
   instancedMeshGroup,
   objectMap
 )
+
+const snapController = useSnapController({
+  canvasRef,
+  camera: { get value() { return camera } } as Ref<THREE.Camera | null>,
+  objectMap,
+  isNodeVisible: (nodeId) => sceneStore.isNodeVisible(nodeId),
+  isObjectWorldVisible,
+  pixelThreshold: 12,
+})
 
 protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
   getNodes: () => sceneStore.nodes,
@@ -2811,7 +2823,16 @@ const {
     updateGridHighlightFromObject,
     updateSelectionHighlights,
     updatePlaceholderOverlayPositions,
-    gizmoControlsUpdate: () => gizmoControls?.update()
+    gizmoControlsUpdate: () => gizmoControls?.update(),
+    getVertexSnapDelta: ({ drag, event }) => {
+      const result = snapController.update({
+        event,
+        selectedNodeId: drag.nodeId,
+        selectedObject: drag.object,
+        shiftKey: event.shiftKey,
+      })
+      return result?.delta ?? null
+    },
   }
 )
 
@@ -3956,8 +3977,515 @@ function applyAxesVisibility(visible: boolean) {
   axesHelper.visible = visible
 }
 
-function handleAlignSelection(mode: AlignMode) {
-  alignSelection(mode)
+type WorldBounds = {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+  minZ: number
+  maxZ: number
+  centerX: number
+  centerY: number
+  centerZ: number
+  sizeX: number
+  sizeY: number
+  sizeZ: number
+}
+
+const worldAlignBoxHelper = new THREE.Box3()
+const worldAlignSizeHelper = new THREE.Vector3()
+const worldAlignWorldPositionHelper = new THREE.Vector3()
+const worldAlignLocalPositionHelper = new THREE.Vector3()
+
+function computeWorldBoundsForObject(object: THREE.Object3D): WorldBounds | null {
+  object.updateMatrixWorld(true)
+  setBoundingBoxFromObject(object, worldAlignBoxHelper)
+  if (worldAlignBoxHelper.isEmpty()) {
+    return null
+  }
+
+  const min = worldAlignBoxHelper.min
+  const max = worldAlignBoxHelper.max
+  worldAlignBoxHelper.getSize(worldAlignSizeHelper)
+
+  return {
+    minX: min.x,
+    maxX: max.x,
+    minY: min.y,
+    maxY: max.y,
+    minZ: min.z,
+    maxZ: max.z,
+    centerX: (min.x + max.x) * 0.5,
+    centerY: (min.y + max.y) * 0.5,
+    centerZ: (min.z + max.z) * 0.5,
+    sizeX: worldAlignSizeHelper.x,
+    sizeY: worldAlignSizeHelper.y,
+    sizeZ: worldAlignSizeHelper.z,
+  }
+}
+
+function applyWorldDelta(object: THREE.Object3D, deltaX: number, deltaY: number, deltaZ: number): THREE.Vector3 | null {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) || !Number.isFinite(deltaZ)) {
+    return null
+  }
+
+  if (Math.abs(deltaX) <= 1e-10 && Math.abs(deltaY) <= 1e-10 && Math.abs(deltaZ) <= 1e-10) {
+    return null
+  }
+
+  object.updateMatrixWorld(true)
+  object.getWorldPosition(worldAlignWorldPositionHelper)
+  worldAlignWorldPositionHelper.x += deltaX
+  worldAlignWorldPositionHelper.y += deltaY
+  worldAlignWorldPositionHelper.z += deltaZ
+
+  worldAlignLocalPositionHelper.copy(worldAlignWorldPositionHelper)
+  if (object.parent) {
+    object.parent.worldToLocal(worldAlignLocalPositionHelper)
+  }
+  object.position.copy(worldAlignLocalPositionHelper)
+  object.updateMatrixWorld(true)
+  return worldAlignLocalPositionHelper
+}
+
+function sortBySelectionAndAxis<T extends { id: string; axisValue: number }>(items: T[], selectionOrder: string[], ascending: boolean): T[] {
+  const order = new Map<string, number>()
+  selectionOrder.forEach((id, index) => order.set(id, index))
+  const sign = ascending ? 1 : -1
+  return items.sort((a, b) => {
+    const diff = (a.axisValue - b.axisValue) * sign
+    if (Math.abs(diff) > 1e-6) {
+      return diff
+    }
+    const ai = order.get(a.id) ?? Number.MAX_SAFE_INTEGER
+    const bi = order.get(b.id) ?? Number.MAX_SAFE_INTEGER
+    if (ai !== bi) {
+      return ai - bi
+    }
+    return a.id.localeCompare(b.id)
+  })
+}
+
+function collectTopLevelMovableSelection(excludeIds: Set<string>): string[] {
+  const selection = sceneStore.selectedNodeIds.filter((id) => !!id && !excludeIds.has(id) && !sceneStore.isNodeSelectionLocked(id))
+  if (!selection.length) {
+    return []
+  }
+  const { parentMap } = buildHierarchyMaps()
+  return filterTopLevelSelection(selection, parentMap)
+}
+
+function applyWorldAlign(mode: WorldAlignMode): void {
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+
+  const referenceBounds = computeWorldBoundsForObject(primaryObject)
+  if (!referenceBounds) {
+    return
+  }
+
+  const idsToMove = collectTopLevelMovableSelection(new Set([primaryId]))
+  if (!idsToMove.length) {
+    return
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  for (const nodeId of idsToMove) {
+    const object = objectMap.get(nodeId)
+    if (!object) {
+      continue
+    }
+
+    const bounds = computeWorldBoundsForObject(object)
+    if (!bounds) {
+      continue
+    }
+
+    let deltaX = 0
+    let deltaY = 0
+    let deltaZ = 0
+
+    switch (mode) {
+      case 'left':
+        deltaX = referenceBounds.minX - bounds.minX
+        break
+      case 'right':
+        deltaX = referenceBounds.maxX - bounds.maxX
+        break
+      case 'center-x':
+        deltaX = referenceBounds.centerX - bounds.centerX
+        break
+      case 'top':
+        deltaY = referenceBounds.maxY - bounds.maxY
+        break
+      case 'bottom':
+        deltaY = referenceBounds.minY - bounds.minY
+        break
+      case 'center-y':
+        deltaY = referenceBounds.centerY - bounds.centerY
+        break
+      default:
+        continue
+    }
+
+    const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+    if (!local) {
+      continue
+    }
+    updates.push({ id: nodeId, position: local.clone() })
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function applyArrange(direction: ArrangeDirection, options?: { fixedPrimaryAsAnchor?: boolean }): void {
+  const fixedPrimaryAsAnchor = options?.fixedPrimaryAsAnchor ?? true
+  const selectionOrder = sceneStore.selectedNodeIds.slice()
+
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+  const primaryBounds = computeWorldBoundsForObject(primaryObject)
+  if (!primaryBounds) {
+    return
+  }
+
+  const exclude = fixedPrimaryAsAnchor ? new Set([primaryId]) : new Set<string>()
+  const ids = collectTopLevelMovableSelection(exclude)
+  if (!ids.length) {
+    return
+  }
+
+  const entries = ids
+    .map((id) => {
+      const object = objectMap.get(id)
+      if (!object) {
+        return null
+      }
+      const bounds = computeWorldBoundsForObject(object)
+      if (!bounds) {
+        return null
+      }
+      return { id, object, bounds }
+    })
+    .filter((value): value is { id: string; object: THREE.Object3D; bounds: WorldBounds } => Boolean(value))
+
+  if (!entries.length) {
+    return
+  }
+
+  if (!fixedPrimaryAsAnchor) {
+    // When not fixed, keep the first item in sorted order as the anchor.
+    // Include the primary in the arrange set if possible.
+    const primaryEntry = (() => {
+      if (sceneStore.isNodeSelectionLocked(primaryId)) {
+        return null
+      }
+      return { id: primaryId, object: primaryObject, bounds: primaryBounds }
+    })()
+    if (primaryEntry) {
+      entries.push(primaryEntry)
+    }
+  }
+
+  const axisAscending = true
+  const sorted = sortBySelectionAndAxis(
+    entries.map((entry) => ({
+      id: entry.id,
+      axisValue: direction === 'horizontal' ? entry.bounds.centerX : entry.bounds.centerY,
+      entry,
+    })),
+    selectionOrder,
+    axisAscending,
+  ).map((item) => item.entry)
+
+  const updates: TransformUpdatePayload[] = []
+
+  if (direction === 'horizontal') {
+    const anchor = primaryBounds
+    const anchorEntry = fixedPrimaryAsAnchor ? null : sorted[0] ?? null
+    if (!fixedPrimaryAsAnchor && !anchorEntry) {
+      return
+    }
+    let edge = fixedPrimaryAsAnchor ? anchor.maxX : anchorEntry!.bounds.maxX
+    const anchorCenterY = fixedPrimaryAsAnchor ? anchor.centerY : anchorEntry!.bounds.centerY
+    const anchorCenterZ = fixedPrimaryAsAnchor ? anchor.centerZ : anchorEntry!.bounds.centerZ
+
+    const toMove = fixedPrimaryAsAnchor ? sorted : sorted.slice(1)
+    for (const entry of toMove) {
+      const { id, object, bounds } = entry
+      // Place to the right (+X): target minX = current edge.
+      const deltaX = edge - bounds.minX
+      edge += bounds.sizeX
+      const deltaY = (fixedPrimaryAsAnchor ? anchor.centerY : anchorCenterY) - bounds.centerY
+      const deltaZ = (fixedPrimaryAsAnchor ? anchor.centerZ : anchorCenterZ) - bounds.centerZ
+      const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+      if (!local) {
+        continue
+      }
+      updates.push({ id, position: local.clone() })
+    }
+  } else {
+    const anchor = primaryBounds
+    // Upward expansion in screen space means decreasing Y.
+    const anchorEntry = fixedPrimaryAsAnchor ? null : sorted[0] ?? null
+    if (!fixedPrimaryAsAnchor && !anchorEntry) {
+      return
+    }
+    // Vertical operations use world +Y (height).
+    let edge = fixedPrimaryAsAnchor ? anchor.maxY : anchorEntry!.bounds.maxY
+    const anchorCenterX = fixedPrimaryAsAnchor ? anchor.centerX : anchorEntry!.bounds.centerX
+    const anchorCenterZ = fixedPrimaryAsAnchor ? anchor.centerZ : anchorEntry!.bounds.centerZ
+
+    const orderedForUp = sortBySelectionAndAxis(
+      sorted.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerY, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    const toMove = fixedPrimaryAsAnchor ? orderedForUp : orderedForUp.slice(1)
+    for (const entry of toMove) {
+      const { id, object, bounds } = entry
+      // Place upward (+Y): target minY = current edge.
+      const deltaY = edge - bounds.minY
+      edge += bounds.sizeY
+      const deltaX = (fixedPrimaryAsAnchor ? anchor.centerX : anchorCenterX) - bounds.centerX
+      const deltaZ = (fixedPrimaryAsAnchor ? anchor.centerZ : anchorCenterZ) - bounds.centerZ
+      const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+      if (!local) {
+        continue
+      }
+      updates.push({ id, position: local.clone() })
+    }
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function applyDistribute(direction: ArrangeDirection, options?: { fixedPrimaryAsAnchor?: boolean }): void {
+  const fixedPrimaryAsAnchor = options?.fixedPrimaryAsAnchor ?? true
+  const selectionOrder = sceneStore.selectedNodeIds.slice()
+
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+  const primaryBounds = computeWorldBoundsForObject(primaryObject)
+  if (!primaryBounds) {
+    return
+  }
+
+  const exclude = fixedPrimaryAsAnchor ? new Set([primaryId]) : new Set<string>()
+  const ids = collectTopLevelMovableSelection(exclude)
+
+  if (fixedPrimaryAsAnchor) {
+    if (ids.length < 2) {
+      return
+    }
+  } else {
+    if (ids.length < 2) {
+      return
+    }
+    // Include primary when not fixed.
+    if (!sceneStore.isNodeSelectionLocked(primaryId)) {
+      ids.push(primaryId)
+    }
+    if (ids.length < 3) {
+      return
+    }
+  }
+
+  const entries = ids
+    .map((id) => {
+      const object = objectMap.get(id)
+      if (!object) {
+        return null
+      }
+      const bounds = computeWorldBoundsForObject(object)
+      if (!bounds) {
+        return null
+      }
+      return { id, object, bounds }
+    })
+    .filter((value): value is { id: string; object: THREE.Object3D; bounds: WorldBounds } => Boolean(value))
+
+  if (fixedPrimaryAsAnchor) {
+    if (entries.length < 2) {
+      return
+    }
+  } else {
+    if (entries.length < 3) {
+      return
+    }
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  if (direction === 'horizontal') {
+    const ordered = sortBySelectionAndAxis(
+      entries.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerX, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    if (fixedPrimaryAsAnchor) {
+      let max = Number.NEGATIVE_INFINITY
+      ordered.forEach((entry) => {
+        max = Math.max(max, entry.bounds.centerX)
+      })
+      const span = Math.max(0, max - primaryBounds.centerX)
+      const step = span / (ordered.length + 1)
+      ordered.forEach((entry, i) => {
+        const targetCenterX = primaryBounds.centerX + step * (i + 1)
+        const deltaX = targetCenterX - entry.bounds.centerX
+        const deltaY = primaryBounds.centerY - entry.bounds.centerY
+        const deltaZ = primaryBounds.centerZ - entry.bounds.centerZ
+        const local = applyWorldDelta(entry.object, deltaX, deltaY, deltaZ)
+        if (!local) {
+          return
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      })
+    } else {
+      // Standard distribute: keep endpoints fixed, distribute middles.
+      const start = ordered[0]!
+      const end = ordered[ordered.length - 1]!
+      const span = end.bounds.centerX - start.bounds.centerX
+      const step = span / (ordered.length - 1)
+      for (let i = 1; i < ordered.length - 1; i += 1) {
+        const entry = ordered[i]!
+        const targetCenterX = start.bounds.centerX + step * i
+        const deltaX = targetCenterX - entry.bounds.centerX
+        const local = applyWorldDelta(entry.object, deltaX, 0, 0)
+        if (!local) {
+          continue
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      }
+    }
+  } else {
+    // Vertical distribution; upward is +Y.
+    const ordered = sortBySelectionAndAxis(
+      entries.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerY, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    if (fixedPrimaryAsAnchor) {
+      let max = Number.NEGATIVE_INFINITY
+      ordered.forEach((entry) => {
+        max = Math.max(max, entry.bounds.centerY)
+      })
+      const span = Math.max(0, max - primaryBounds.centerY)
+      const step = span / (ordered.length + 1)
+      ordered.forEach((entry, i) => {
+        const targetCenterY = primaryBounds.centerY + step * (i + 1)
+        const deltaY = targetCenterY - entry.bounds.centerY
+        const deltaX = primaryBounds.centerX - entry.bounds.centerX
+        const deltaZ = primaryBounds.centerZ - entry.bounds.centerZ
+        const local = applyWorldDelta(entry.object, deltaX, deltaY, deltaZ)
+        if (!local) {
+          return
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      })
+    } else {
+      const start = ordered[0]!
+      const end = ordered[ordered.length - 1]!
+      const span = end.bounds.centerY - start.bounds.centerY
+      const step = span / (ordered.length - 1)
+      for (let i = 1; i < ordered.length - 1; i += 1) {
+        const entry = ordered[i]!
+        const targetCenterY = start.bounds.centerY + step * i
+        const deltaY = targetCenterY - entry.bounds.centerY
+        const local = applyWorldDelta(entry.object, 0, deltaY, 0)
+        if (!local) {
+          continue
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      }
+    }
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function handleAlignSelection(command: AlignMode | AlignCommand) {
+  if (typeof command === 'string') {
+    // Legacy axis align.
+    alignSelection(command, { snapToGrid: false })
+    return
+  }
+
+  if (!canAlignSelection.value) {
+    return
+  }
+
+  switch (command.type) {
+    case 'world-align':
+      applyWorldAlign(command.mode)
+      break
+    case 'arrange':
+      applyArrange(command.direction, command.options)
+      break
+    case 'distribute':
+      applyDistribute(command.direction, command.options)
+      break
+    default:
+      break
+  }
 }
 
 function handleRotateSelection(options: SelectionRotationOptions) {
@@ -6657,6 +7185,7 @@ async function handlePointerUp(event: PointerEvent) {
   } finally {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
+    snapController.reset()
 
     if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
       middleClickSessionState = null
@@ -6673,6 +7202,7 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  snapController.reset()
   pointerInteraction.clearIfPointer(event.pointerId)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
     middleClickSessionState = null

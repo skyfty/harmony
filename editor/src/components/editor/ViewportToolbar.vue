@@ -170,19 +170,123 @@
         :disabled="!canDropSelection"
         @click="emit('drop-to-ground')"
       />
-      <v-btn
-        v-for="button in alignButtons"
-        :key="button.mode"
-        :icon="button.icon"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        color="undefined"
-        variant="text"
-        :disabled="!canAlignSelection"
-        :title="button.title"
-        @click="emitAlign(button.mode)"
-      />
+      <v-menu
+        v-if="selectionCount > 0"
+        v-model="alignMenuOpen"
+        location="bottom"
+        :offset="6"
+        :close-on-content-click="false"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-format-align-left"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            title="对齐/排列/分布"
+            :disabled="!canAlignSelection"
+            :color="alignMenuOpen ? 'primary' : undefined"
+            :variant="alignMenuOpen ? 'flat' : 'text'"
+          />
+        </template>
+        <v-list density="compact" class="align-menu">
+          <v-list-item title="轴对齐（按主选中位置 / 世界坐标）" prepend-icon="mdi-axis-arrow" :disabled="true" />
+          <v-list-item
+            title="X轴对齐（世界 X）"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-x')"
+          />
+          <v-list-item
+            title="Y轴对齐（世界 Y）"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-y')"
+          />
+          <v-list-item
+            title="Z轴对齐（世界 Z）"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-z')"
+          />
+
+          <v-divider class="align-menu__divider" />
+          <v-list-item
+            title="左对齐（世界 X-）"
+            prepend-icon="mdi-format-align-left"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'left' })"
+          />
+          <v-list-item
+            title="右对齐（世界 X+）"
+            prepend-icon="mdi-format-align-right"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'right' })"
+          />
+          <v-list-item
+            title="顶部对齐（世界 Y+）"
+            prepend-icon="mdi-format-align-top"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'top' })"
+          />
+          <v-list-item
+            title="底部对齐（世界 Y-）"
+            prepend-icon="mdi-format-align-bottom"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'bottom' })"
+          />
+          <v-list-item
+            title="水平居中对齐（世界 X）"
+            prepend-icon="mdi-format-align-center"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'center-x' })"
+          />
+          <v-list-item
+            title="垂直居中对齐（世界 Y）"
+            prepend-icon="mdi-format-align-middle"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand({ type: 'world-align', mode: 'center-y' })"
+          />
+
+          <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
+          <v-list-item
+            v-if="selectionCount >= 2"
+            title="固定主选中为锚点"
+            :prepend-icon="fixedPrimaryAsAnchor ? 'mdi-check' : 'mdi-checkbox-blank-outline'"
+            @click="toggleFixedPrimaryAsAnchor"
+          />
+
+          <template v-if="selectionCount >= 2">
+            <v-divider class="align-menu__divider" />
+            <v-list-item
+              title="水平排列（向右 / 世界 X+）"
+              prepend-icon="mdi-format-horizontal-align-left"
+              :disabled="!canAlignSelection"
+              @click="handleAlignCommand({ type: 'arrange', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-list-item
+              title="垂直排列（向上 / 世界 Y+）"
+              prepend-icon="mdi-format-vertical-align-top"
+              :disabled="!canAlignSelection"
+              @click="handleAlignCommand({ type: 'arrange', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-divider class="align-menu__divider" />
+            <v-list-item
+              title="水平分布"
+              prepend-icon="mdi-format-horizontal-distribute"
+              :disabled="!canAlignSelection || selectionCount < 3"
+              @click="handleAlignCommand({ type: 'distribute', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-list-item
+              title="垂直分布（世界 Y）"
+              prepend-icon="mdi-format-vertical-distribute"
+              :disabled="!canAlignSelection || selectionCount < 3"
+              @click="handleAlignCommand({ type: 'distribute', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+            />
+          </template>
+        </v-list>
+      </v-menu>
       <v-menu
         :model-value="scatterEraseMenuOpen"
         location="bottom"
@@ -306,6 +410,7 @@
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
@@ -338,7 +443,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'reset-camera'): void
   (event: 'drop-to-ground'): void
-  (event: 'align-selection', mode: AlignMode): void
+  (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
@@ -376,6 +481,8 @@ const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
 const wallPresetMenuOpen = ref(false)
+const alignMenuOpen = ref(false)
+const fixedPrimaryAsAnchor = ref(true)
 
 const scatterEraseRadiusModel = computed({
   get: () => scatterEraseRadius.value,
@@ -513,11 +620,6 @@ function handleRecenterGroupOrigin() {
   sceneStore.recenterGroupOrigin(node.id)
 }
 
-const alignButtons = [
-  { mode: 'axis-x', icon: 'mdi-axis-x-arrow', title: 'Align X Axis' },
-  { mode: 'axis-y', icon: 'mdi-axis-y-arrow', title: 'Align Y Axis' },
-  { mode: 'axis-z', icon: 'mdi-axis-z-arrow', title: 'Align Z Axis' },
-] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
 const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
@@ -535,9 +637,13 @@ const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildSh
       : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
 }))
 
+function toggleFixedPrimaryAsAnchor() {
+  fixedPrimaryAsAnchor.value = !fixedPrimaryAsAnchor.value
+}
 
-function emitAlign(mode: AlignMode) {
-  emit('align-selection', mode)
+function handleAlignCommand(command: AlignCommand | AlignMode) {
+  emit('align-selection', command)
+  alignMenuOpen.value = false
 }
 
 function handleBuildToolToggle(tool: BuildTool) {
@@ -763,6 +869,11 @@ function handleClearScatterMenuAction() {
 
 .scatter-erase-menu__divider {
   margin: 12px 0;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.align-menu__divider {
+  margin: 6px 0;
   border-color: rgba(255, 255, 255, 0.1);
 }
 
