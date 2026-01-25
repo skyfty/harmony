@@ -5,6 +5,45 @@ export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
 }
 
+function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
+  object.traverse((child: THREE.Object3D) => {
+    const mesh = child as unknown as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    const rawMaterial = (mesh as any).material as THREE.Material | THREE.Material[] | null | undefined
+    const materials = Array.isArray(rawMaterial) ? rawMaterial : rawMaterial ? [rawMaterial] : []
+    for (const material of materials) {
+      if (!material) {
+        continue
+      }
+
+      material.side = THREE.DoubleSide
+
+      const anyMaterial = material as any
+      const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
+      const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
+      const hasAlphaMap = Boolean(anyMaterial.alphaMap)
+      const hasMap = Boolean(anyMaterial.map)
+      const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
+      const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
+
+      const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
+      const mightNeedAlpha = hasAlphaMap || alphaTest > 0
+
+      if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
+        anyMaterial.transparent = false
+        if (typeof anyMaterial.depthWrite === 'boolean') {
+          anyMaterial.depthWrite = true
+        }
+      }
+
+      material.needsUpdate = true
+    }
+  })
+}
+
 export function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
 
@@ -58,6 +97,7 @@ export async function loadObjectFromFile(
       }
       const object = payload as THREE.Object3D
       prepareImportedObject(object)
+      normalizeImportedMeshMaterials(object)
       resolve(object)
     }
 
