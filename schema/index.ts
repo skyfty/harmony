@@ -1,5 +1,6 @@
 
 import * as THREE from 'three'
+import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 import type { AssetType } from './asset-types'
 
@@ -76,6 +77,8 @@ export { resolveEnabledComponentState } from './componentRuntimeUtils'
 
 export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from './nodeIndexUtils'
 export type { SceneNodeId, SceneNodeMap, SceneNodeParentMap } from './nodeIndexUtils'
+
+export * from './instanceLayout'
 
 export {
   AssetTypes,
@@ -704,6 +707,8 @@ export interface SceneNode {
   downloadProgress?: number;
   downloadStatus?: SceneNodeDownloadStatus;
   downloadError?: string | null;
+  /** Controls InstancedMesh rendering for this node (single instance or multi-instance layout). */
+  instanceLayout?: SceneNodeInstanceLayout | null;
   userData?: Record<string, unknown> | null;
   groupExpanded?: boolean;
   allowChildNodes?: boolean;

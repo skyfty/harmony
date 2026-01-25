@@ -96,7 +96,7 @@ export function setBoundingBoxFromObject(object: THREE.Object3D | null, target: 
     )
   }
 
-  // Prefer pick-proxy bounds when available: InstancedTiling expands the node's
+  // Prefer pick-proxy bounds when available: instanceLayout expands the node's
   // effective footprint, and the PickProxy is kept in sync with that.
   const pickProxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
   const pickProxyBounds = pickProxy?.userData?.instancedPickProxyBounds as { min?: unknown; max?: unknown } | undefined

@@ -11,8 +11,14 @@ import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
 	ENVIRONMENT_NODE_ID,
+	clampSceneNodeInstanceLayout,
+	computeInstanceLayoutLocalBoundingBox,
 	createAutoTourRuntime,
+	forEachInstanceWorldMatrix,
+	getInstanceLayoutBindingId,
+	getInstanceLayoutCount,
 	rebuildSceneNodeIndex,
+	resolveInstanceLayoutTemplateAssetId,
 	resolveSceneNodeById,
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
@@ -85,8 +91,11 @@ import {
 	subscribeInstancedMeshes,
 	ensureInstancedMeshesRegistered,
 	allocateModelInstance,
-	getModelInstanceBinding,
+	allocateModelInstanceBinding,
+	getModelInstanceBindingById,
+	getModelInstanceBindingsForNode,
 	releaseModelInstance,
+	updateModelInstanceBindingMatrix,
 	updateModelInstanceMatrix,
 	findNodeIdForInstance,
 	type ModelInstanceGroup,
@@ -114,7 +123,6 @@ import {
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
-	instancedTilingComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -725,7 +733,6 @@ previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
-previewComponentManager.registerDefinition(instancedTilingComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
@@ -1160,6 +1167,16 @@ type InstancedMatrixCacheEntry = {
 }
 
 const instancedMatrixCache = new Map<string, InstancedMatrixCacheEntry>()
+
+function clearInstancedMatrixCacheForNode(nodeId: string): void {
+	instancedMatrixCache.delete(nodeId)
+	const prefix = `${nodeId}:instance:`
+	for (const key of instancedMatrixCache.keys()) {
+		if (key.startsWith(prefix)) {
+			instancedMatrixCache.delete(key)
+		}
+	}
+}
 
 function buildModelInstanceBindingKey(binding: ModelInstanceBinding): string {
 	// Slot count is typically small (LOD variants), so a compact string key is fine.
@@ -2216,18 +2233,35 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
 		return
 	}
 
+	const node = resolveNodeById(nodeId)
+	const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
+	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+	const desiredCount = getInstanceLayoutCount(layout)
+
 	releaseModelInstance(nodeId)
-	const binding = allocateModelInstance(assetId, nodeId)
-	if (!binding) {
+	const baseBinding = allocateModelInstance(assetId, nodeId)
+	if (!baseBinding) {
 		return
 	}
+	for (let i = 1; i < desiredCount; i += 1) {
+		const bindingId = getInstanceLayoutBindingId(nodeId, i)
+		const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+		if (!binding) {
+			releaseModelInstance(nodeId)
+			return
+		}
+	}
+	clearInstancedMatrixCacheForNode(nodeId)
+	const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox
+	const sphere = new THREE.Sphere()
+	layoutBounds.getBoundingSphere(sphere)
 
 	object.userData = {
 		...(object.userData ?? {}),
 		instancedAssetId: assetId,
-		instancedBounds: serializeBoundingBox(cached.boundingBox),
+		instancedBounds: serializeBoundingBox(layoutBounds),
 	}
-	object.userData.__harmonyInstancedRadius = cached.radius
+	object.userData.__harmonyInstancedRadius = sphere.radius
 	object.userData.__harmonyCulled = false
 	syncInstancedTransform(object)
 }
@@ -2538,7 +2572,7 @@ function updateInstancedCullingAndLod(): void {
 			if (object.userData.__harmonyCulled !== true) {
 				object.userData.__harmonyCulled = true
 			}
-			instancedMatrixCache.delete(nodeId)
+			clearInstancedMatrixCacheForNode(nodeId)
 			releaseModelInstance(nodeId)
 			return
 		}
@@ -2553,10 +2587,27 @@ function updateInstancedCullingAndLod(): void {
 			applyInstancedLodSwitch(nodeId, object, desiredAssetId)
 			return
 		}
-		const binding = allocateModelInstance(desiredAssetId, nodeId)
-		if (!binding) {
-			void ensureModelObjectCached(desiredAssetId, node)
-			return
+		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+		const desiredCount = getInstanceLayoutCount(layout)
+		// Ensure bindings exist for this node/layout.
+		const bindings = getModelInstanceBindingsForNode(nodeId)
+		if (bindings.length !== desiredCount) {
+			releaseModelInstance(nodeId)
+			const baseBinding = allocateModelInstance(desiredAssetId, nodeId)
+			if (!baseBinding) {
+				void ensureModelObjectCached(desiredAssetId, node)
+				return
+			}
+			for (let i = 1; i < desiredCount; i += 1) {
+				const bindingId = getInstanceLayoutBindingId(nodeId, i)
+				const binding = allocateModelInstanceBinding(desiredAssetId, bindingId, nodeId)
+				if (!binding) {
+					releaseModelInstance(nodeId)
+					return
+				}
+			}
+			clearInstancedMatrixCacheForNode(nodeId)
 		}
 		syncInstancedTransform(object)
 	})
@@ -2627,11 +2678,14 @@ function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<strin
 		if (!node) {
 			continue
 		}
-		if (node.sourceAssetId) {
-			if (!map.has(node.sourceAssetId)) {
-				map.set(node.sourceAssetId, [])
+		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+		const assetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
+		if (assetId) {
+			if (!map.has(assetId)) {
+				map.set(assetId, [])
 			}
-			map.get(node.sourceAssetId)!.push(node)
+			map.get(assetId)!.push(node)
 		}
 		if (Array.isArray(node.children) && node.children.length) {
 			stack.push(...node.children)
@@ -2675,22 +2729,38 @@ async function ensureModelInstanceGroup(
 }
 
 function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
-	if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+	const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
+	if (!resolvedAssetId || resolvedAssetId !== group.assetId) {
 		return null
 	}
+
 	releaseModelInstance(node.id)
-	const binding = allocateModelInstance(group.assetId, node.id)
-	if (!binding) {
+	const desiredCount = getInstanceLayoutCount(layout)
+	const baseBinding = allocateModelInstance(group.assetId, node.id)
+	if (!baseBinding) {
 		return null
+	}
+	for (let i = 1; i < desiredCount; i += 1) {
+		const bindingId = getInstanceLayoutBindingId(node.id, i)
+		const binding = allocateModelInstanceBinding(group.assetId, bindingId, node.id)
+		if (!binding) {
+			releaseModelInstance(node.id)
+			return null
+		}
 	}
 	const proxy = new THREE.Object3D()
 	proxy.name = node.name ?? group.object.name ?? 'Instanced Model'
+	const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, group.boundingBox) ?? group.boundingBox
 	proxy.userData = {
 		...(proxy.userData ?? {}),
 		nodeId: node.id,
 		instanced: true,
 		instancedAssetId: group.assetId,
-		instancedBounds: serializeBoundingBox(group.boundingBox),
+		instancedBounds: serializeBoundingBox(layoutBounds),
+		__harmonyInstanceLayoutSignature: null,
+		__harmonyInstanceLayoutLocals: [] as THREE.Matrix4[],
 	}
 	updateNodeTransfrom(proxy, node)
 	return proxy
@@ -7495,36 +7565,106 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		if (!nodeId) {
 			return
 		}
-		const binding = getModelInstanceBinding(nodeId)
-		if (!binding) {
-			instancedMatrixCache.delete(nodeId)
+		const assetId = target.userData?.instancedAssetId as string | undefined
+		if (!assetId) {
 			return
 		}
+		const node = resolveNodeById(nodeId)
+		if (!node) {
+			return
+		}
+		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+		const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
+		if (resolvedAssetId && resolvedAssetId !== assetId) {
+			// Asset changed; allow the normal document sync pipeline to rebuild this proxy.
+			return
+		}
+		const group = getCachedModelObject(assetId)
+		if (!group) {
+			return
+		}
+
+		const desiredCount = getInstanceLayoutCount(layout)
+		const existingBindings = getModelInstanceBindingsForNode(nodeId)
+		if (existingBindings.length !== desiredCount) {
+			releaseModelInstance(nodeId)
+			const baseBinding = allocateModelInstance(assetId, nodeId)
+			if (!baseBinding) {
+				return
+			}
+			for (let i = 1; i < desiredCount; i += 1) {
+				const bindingId = getInstanceLayoutBindingId(nodeId, i)
+				const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+				if (!binding) {
+					releaseModelInstance(nodeId)
+					return
+				}
+			}
+			clearInstancedMatrixCacheForNode(nodeId)
+		}
+
 		removeVehicleInstance(nodeId)
-		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-		const isVisible = target.visible !== false && target.userData?.__harmonyCulled !== true
-		if (!isVisible) {
+		const isCulled = target.userData?.__harmonyCulled === true
+		const isVisible = target.visible !== false && !isCulled
+		if (isVisible) {
+			instancedMatrixHelper.copy(target.matrixWorld)
+		} else {
+			target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 			instancedScaleHelper.setScalar(0)
+			instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 		}
-		instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-		const bindingKey = buildModelInstanceBindingKey(binding)
-		const cached = instancedMatrixCache.get(nodeId)
-		if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, instancedMatrixHelper.elements)) {
-			return
+
+		const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, group.boundingBox) ?? group.boundingBox
+		target.userData.instancedBounds = serializeBoundingBox(layoutBounds)
+		const sphere = new THREE.Sphere()
+		layoutBounds.getBoundingSphere(sphere)
+		target.userData.__harmonyInstancedRadius = sphere.radius
+
+		const cache = {
+			signature: (target.userData.__harmonyInstanceLayoutSignature as string | null | undefined) ?? null,
+			locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[] | undefined) ?? [],
 		}
-		const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
-		nextEntry.bindingKey = bindingKey
-		copyMatrixElements(nextEntry.elements, instancedMatrixHelper.elements)
-		instancedMatrixCache.set(nodeId, nextEntry)
-		if (isInstancingDebugVisible.value) {
-			binding.slots.forEach((slot) => {
-				instancedMatrixUploadMeshes.add(slot.mesh)
-			})
-		}
-		binding.slots.forEach((slot) => {
-			addInstancedBoundsMesh(slot.mesh)
+
+		const result = forEachInstanceWorldMatrix({
+			nodeId,
+			baseMatrixWorld: instancedMatrixHelper,
+			layout,
+			templateBoundingBox: group.boundingBox,
+			cache,
+			onMatrix: (bindingId, worldMatrix) => {
+				const binding = getModelInstanceBindingById(bindingId)
+				if (!binding) {
+					instancedMatrixCache.delete(bindingId)
+					return
+				}
+				const bindingKey = buildModelInstanceBindingKey(binding)
+				const cached = instancedMatrixCache.get(bindingId)
+				if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, worldMatrix.elements)) {
+					return
+				}
+				const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
+				nextEntry.bindingKey = bindingKey
+				copyMatrixElements(nextEntry.elements, worldMatrix.elements)
+				instancedMatrixCache.set(bindingId, nextEntry)
+				if (isInstancingDebugVisible.value) {
+					binding.slots.forEach((slot) => {
+						instancedMatrixUploadMeshes.add(slot.mesh)
+					})
+				}
+				binding.slots.forEach((slot) => {
+					addInstancedBoundsMesh(slot.mesh)
+				})
+				if (bindingId === nodeId) {
+					updateModelInstanceMatrix(nodeId, worldMatrix)
+				} else {
+					updateModelInstanceBindingMatrix(bindingId, worldMatrix)
+				}
+			},
 		})
-		updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+
+		target.userData.__harmonyInstanceLayoutSignature = result.signature
+		target.userData.__harmonyInstanceLayoutLocals = result.locals
 	})
 }
 

@@ -78,16 +78,21 @@ import {
   releaseModelInstanceBinding,
   ensureInstancedMeshesRegistered,
   subscribeInstancedMeshes,
+  getModelInstanceBindingsForNode,
   getModelInstanceBindingById,
+  updateModelInstanceMatrix,
   updateModelInstanceBindingMatrix,
   findBindingIdForInstance,
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
 import {
-  buildInstancedTilingLocalMatrices,
-  computeBoxExtentsAlongBasis,
-  computeInstancedTilingBasis,
-} from '@schema/instancedMeshTiling'
+  clampSceneNodeInstanceLayout,
+  computeInstanceLayoutLocalBoundingBox,
+  forEachInstanceWorldMatrix,
+  getInstanceLayoutBindingId,
+  getInstanceLayoutCount,
+  resolveInstanceLayoutTemplateAssetId,
+} from '@schema/instanceLayout'
 import {
   buildContinuousInstancedModelUserDataPatchV2,
   buildLinearLocalPositions,
@@ -152,7 +157,6 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
-  INSTANCED_TILING_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
   WALL_DEFAULT_THICKNESS,
@@ -162,7 +166,6 @@ import {
   ROAD_DEFAULT_WIDTH,
   ROAD_DEFAULT_JUNCTION_SMOOTHING,
   ROAD_COMPONENT_TYPE,
-  clampInstancedTilingComponentProps,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -195,7 +198,6 @@ import type {
   GuideboardEffectInstance,
   LodComponentProps,
   GuideRouteComponentProps,
-  InstancedTilingComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
@@ -398,32 +400,74 @@ instancedHoverMaterial.toneMapped = false
 
 const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
 
-type InstancedTilingRuntimeState = {
-  nodeId: string
-  componentId: string
-  assetId: string | null
-  bindingIds: string[]
-  layoutSignature: string | null
-  localMatrices: THREE.Matrix4[]
-  lastBaseElements: Float32Array | null
-  localDirty: boolean
-  hiddenMesh: THREE.Mesh | null
-  hiddenMeshWasVisible: boolean
-  previousInstancedAssetId: unknown
-  injectedInstancedAssetId: boolean
+type InstanceLayoutMatrixCacheEntry = {
+  bindingKey: string
+  elements: Float32Array
 }
 
-const instancedTilingRuntimes = new Map<string, InstancedTilingRuntimeState>()
-const INSTANCED_TILING_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
+const instanceLayoutMatrixCache = new Map<string, InstanceLayoutMatrixCacheEntry>()
 
-const instancedTilingBaseMatrix = new THREE.Matrix4()
-const instancedTilingInstanceMatrix = new THREE.Matrix4()
+function buildModelInstanceBindingKey(binding: { slots: Array<{ mesh: THREE.InstancedMesh; index: number }> }): string {
+  return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
+}
+
+function matrixElementsEqual(a: Float32Array, b: ArrayLike<number>, epsilon = 1e-7): boolean {
+  for (let i = 0; i < 16; i += 1) {
+    if (Math.abs(a[i]! - (b[i] ?? 0)) > epsilon) {
+      return false
+    }
+  }
+  return true
+}
+
+function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): void {
+  for (let i = 0; i < 16; i += 1) {
+    target[i] = source[i] ?? 0
+  }
+}
+
+function clearInstanceLayoutMatrixCacheForNode(nodeId: string): void {
+  instanceLayoutMatrixCache.delete(nodeId)
+  const prefix = `${nodeId}:instance:`
+  for (const key of instanceLayoutMatrixCache.keys()) {
+    if (key.startsWith(prefix)) {
+      instanceLayoutMatrixCache.delete(key)
+    }
+  }
+}
+
+function updateInstanceLayoutMatrixIfChanged(bindingId: string, nodeId: string, matrix: THREE.Matrix4): void {
+  const binding = getModelInstanceBindingById(bindingId)
+  if (!binding) {
+    instanceLayoutMatrixCache.delete(bindingId)
+    return
+  }
+
+  const bindingKey = buildModelInstanceBindingKey(binding as any)
+  const cached = instanceLayoutMatrixCache.get(bindingId)
+  if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, matrix.elements)) {
+    return
+  }
+
+  const entry = cached ?? { bindingKey, elements: new Float32Array(16) }
+  entry.bindingKey = bindingKey
+  copyMatrixElements(entry.elements, matrix.elements)
+  instanceLayoutMatrixCache.set(bindingId, entry)
+
+  if (bindingId === nodeId) {
+    updateModelInstanceMatrix(nodeId, matrix)
+  } else {
+    updateModelInstanceBindingMatrix(bindingId, matrix)
+  }
+}
+
+const INSTANCE_LAYOUT_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
 
 function isInternalViewportObjectName(name: unknown): boolean {
   if (typeof name !== 'string' || !name) {
     return false
   }
-  return INSTANCED_TILING_INTERNAL_NAME_PARTS.some((part) => name.includes(part))
+  return INSTANCE_LAYOUT_INTERNAL_NAME_PARTS.some((part) => name.includes(part))
 }
 
 function findFirstRenderableMeshChild(root: THREE.Object3D): THREE.Mesh | null {
@@ -447,290 +491,133 @@ function findFirstRenderableMeshChild(root: THREE.Object3D): THREE.Mesh | null {
   return null
 }
 
-function getEnabledInstancedTilingState(node: SceneNode): { componentId: string; props: InstancedTilingComponentProps } | null {
-  const state = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Partial<InstancedTilingComponentProps> | Record<string, unknown>>
-    | undefined
-  if (!state || state.enabled === false) {
-    return null
-  }
-  const componentId = typeof state.id === 'string' ? state.id : ''
-  const props = clampInstancedTilingComponentProps(state.props as Partial<InstancedTilingComponentProps> | null | undefined)
-  return { componentId, props }
-}
+function applyInstanceLayoutVisibilityAndAssetBinding(object: THREE.Object3D, node: SceneNode): {
+  layout: ReturnType<typeof clampSceneNodeInstanceLayout>
+  instanceCount: number
+  templateAssetId: string | null
+  active: boolean
+} {
+  const userData = object.userData ?? (object.userData = {})
+  const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+  const instanceCount = layout ? getInstanceLayoutCount(layout) : 1
+  const templateAssetId = layout && instanceCount > 1 ? resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId) : null
+  const active = Boolean(layout && instanceCount > 1 && templateAssetId)
 
-function cleanupInstancedTilingRuntime(nodeId: string, options: { restoreTemplateMesh?: boolean } = {}) {
-  const entry = instancedTilingRuntimes.get(nodeId)
-  if (!entry) {
-    return
-  }
-
-  for (const bindingId of entry.bindingIds) {
-    releaseModelInstanceBinding(bindingId)
-  }
-
-  const restore = options.restoreTemplateMesh !== false
-  if (restore && entry.hiddenMesh) {
-    entry.hiddenMesh.visible = entry.hiddenMeshWasVisible
-  }
-
-  if (entry.injectedInstancedAssetId) {
-    const object = objectMap.get(nodeId)
-    if (object) {
-      const userData = object.userData ?? (object.userData = {})
-      const previous = entry.previousInstancedAssetId
-      if (typeof previous === 'undefined') {
-        delete userData.instancedAssetId
-      } else {
-        ;(userData as any).instancedAssetId = previous
-      }
+  if (active && templateAssetId) {
+    if (!userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
+      userData.__harmonyInstanceLayoutPreviousInstancedAssetId = userData.instancedAssetId
+      userData.__harmonyInstanceLayoutInjectedInstancedAssetId = true
     }
-  }
+    userData.instancedAssetId = templateAssetId
 
-  instancedTilingRuntimes.delete(nodeId)
-}
-
-function clearAllInstancedTilingRuntimes() {
-  Array.from(instancedTilingRuntimes.keys()).forEach((nodeId) => cleanupInstancedTilingRuntime(nodeId))
-}
-
-function syncInstancedTilingRegistration(object: THREE.Object3D, node: SceneNode) {
-  const enabled = getEnabledInstancedTilingState(node)
-  if (!enabled) {
-    cleanupInstancedTilingRuntime(node.id)
-    return
-  }
-
-  const existing = instancedTilingRuntimes.get(node.id)
-  if (existing) {
-    existing.componentId = enabled.componentId
-    return
-  }
-
-  instancedTilingRuntimes.set(node.id, {
-    nodeId: node.id,
-    componentId: enabled.componentId,
-    assetId: null,
-    bindingIds: [],
-    layoutSignature: null,
-    localMatrices: [],
-    lastBaseElements: null,
-    localDirty: true,
-    hiddenMesh: null,
-    hiddenMeshWasVisible: true,
-    previousInstancedAssetId: (object.userData ?? {}).instancedAssetId,
-    injectedInstancedAssetId: false,
-  })
-}
-
-function tickInstancedTiling() {
-  if (!instancedTilingRuntimes.size) {
-    return
-  }
-
-  instancedTilingRuntimes.forEach((runtime, nodeId) => {
-    const object = objectMap.get(nodeId)
-    const node = resolveSceneNodeById(nodeId)
-    if (!object || !node) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const enabled = getEnabledInstancedTilingState(node)
-    if (!enabled) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const objectUserData = object.userData as Record<string, unknown> | undefined
-    const resolvedAssetId = typeof objectUserData?.instancedAssetId === 'string'
-      ? (objectUserData.instancedAssetId as string).trim()
-      : typeof objectUserData?.sourceAssetId === 'string'
-        ? (objectUserData.sourceAssetId as string).trim()
-        : ''
-
-    if (!resolvedAssetId) {
-      // No template asset -> show template mesh and ensure no stale bindings.
-      if (runtime.hiddenMesh) {
-        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-        runtime.hiddenMesh = null
-      }
-      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
-      runtime.bindingIds = []
-      return
-    }
-
-    const group = getCachedModelObject(resolvedAssetId)
-    if (!group) {
-      void ensureModelObjectCached(resolvedAssetId)
-      if (runtime.hiddenMesh) {
-        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-        runtime.hiddenMesh = null
-      }
-      return
-    }
-
-    ensureInstancedMeshesRegistered(resolvedAssetId)
-
-    const tilingProps = enabled.props
-    const instanceCount = tilingProps.countX * tilingProps.countY * tilingProps.countZ
-    if (!Number.isFinite(instanceCount) || instanceCount <= 0) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const needsReset = runtime.assetId !== resolvedAssetId || runtime.bindingIds.length !== instanceCount
-    if (needsReset) {
-      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
-      runtime.bindingIds = []
-      runtime.assetId = resolvedAssetId
-      runtime.layoutSignature = null
-      runtime.localMatrices = []
-      runtime.lastBaseElements = null
-      runtime.localDirty = true
-
-      const created: string[] = []
-      for (let i = 0; i < instanceCount; i += 1) {
-        const bindingId = `${nodeId}:${INSTANCED_TILING_COMPONENT_TYPE}:${runtime.componentId || 'default'}:${i}`
-        const binding = allocateModelInstanceBinding(resolvedAssetId, bindingId, nodeId)
-        if (!binding) {
-          created.forEach((id) => releaseModelInstanceBinding(id))
-          if (runtime.hiddenMesh) {
-            runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-            runtime.hiddenMesh = null
-          }
-          return
-        }
-        created.push(bindingId)
-      }
-      runtime.bindingIds = created
-    }
-
-    const basis = computeInstancedTilingBasis({
-      mode: tilingProps.mode,
-      forwardLocal: tilingProps.forwardLocal,
-      upLocal: tilingProps.upLocal,
-      rollDegrees: tilingProps.rollDegrees,
-    })
-
-    const extents = computeBoxExtentsAlongBasis(group.boundingBox, basis)
-    const stepX = extents.x + tilingProps.spacingX
-    const stepY = extents.y + tilingProps.spacingY
-    const stepZ = extents.z + tilingProps.spacingZ
-
-    const signature = [
-      resolvedAssetId,
-      tilingProps.mode,
-      `${tilingProps.countX},${tilingProps.countY},${tilingProps.countZ}`,
-      `${tilingProps.spacingX},${tilingProps.spacingY},${tilingProps.spacingZ}`,
-      `${tilingProps.forwardLocal.x},${tilingProps.forwardLocal.y},${tilingProps.forwardLocal.z}`,
-      `${tilingProps.upLocal.x},${tilingProps.upLocal.y},${tilingProps.upLocal.z}`,
-      `${tilingProps.rollDegrees}`,
-      `${extents.x},${extents.y},${extents.z}`,
-    ].join('|')
-
-    if (signature !== runtime.layoutSignature || runtime.localMatrices.length !== instanceCount) {
-      runtime.layoutSignature = signature
-      runtime.localMatrices = buildInstancedTilingLocalMatrices({
-        countX: tilingProps.countX,
-        countY: tilingProps.countY,
-        countZ: tilingProps.countZ,
-        stepX,
-        stepY,
-        stepZ,
-        basis,
-      })
-      runtime.localDirty = true
-    }
-
-    object.updateMatrixWorld(true)
-    const isCulled = (object.userData as any)?.__harmonyCulled === true
-    const isVisible = object.visible !== false
-    if (isCulled || !isVisible) {
-      // Keep position/orientation but collapse scale so instances are effectively hidden,
-      // matching the generic instanced sync behavior.
-      object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-      instancedScaleHelper.setScalar(0)
-      instancedTilingBaseMatrix.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-    } else {
-      instancedTilingBaseMatrix.copy(object.matrixWorld)
-    }
-
-    const elements = instancedTilingBaseMatrix.elements
-    const cached = runtime.lastBaseElements
-    let baseChanged = false
+    const cached = getCachedModelObject(templateAssetId)
     if (!cached) {
-      runtime.lastBaseElements = new Float32Array(elements)
-      baseChanged = true
+      void ensureModelObjectCached(templateAssetId)
     } else {
-      for (let i = 0; i < 16; i += 1) {
-        if (Math.abs((cached[i] ?? 0) - (elements[i] ?? 0)) > 1e-7) {
-          baseChanged = true
-          break
-        }
-      }
-      if (baseChanged) {
-        for (let i = 0; i < 16; i += 1) {
-          cached[i] = elements[i] ?? 0
-        }
-      }
+      ensureInstancedMeshesRegistered(templateAssetId)
     }
 
-    let didUpdateMatrices = false
-    if (baseChanged || runtime.localDirty) {
-      for (let i = 0; i < runtime.bindingIds.length; i += 1) {
-        const bindingId = runtime.bindingIds[i]
-        const local = runtime.localMatrices[i]
-        if (!bindingId || !local) {
-          continue
-        }
-        instancedTilingInstanceMatrix.multiplyMatrices(instancedTilingBaseMatrix, local)
-        updateModelInstanceBindingMatrix(bindingId, instancedTilingInstanceMatrix)
-      }
-      runtime.localDirty = false
-      didUpdateMatrices = true
-    }
-
-    // Keep instanced outline proxies aligned with the updated instance matrices.
-    if (didUpdateMatrices) {
-      if ((globalThis as any).__HARMONY_DEBUG_INSTANCED_TILING__ === true) {
-        console.debug('[InstancedTiling] updated matrices', {
-          nodeId,
-          instanceCount: runtime.bindingIds.length,
-          isCulled,
-          isVisible,
-          baseChanged,
-          localDirty: runtime.localDirty,
-        })
-      }
-      syncInstancedOutlineEntryTransform(nodeId)
-    }
-
-    // Hide the template mesh child so the instanced array is the final visible result.
-    if (!runtime.hiddenMesh) {
+    if (!userData.__harmonyInstanceLayoutHiddenMesh) {
       const templateMesh = findFirstRenderableMeshChild(object)
       if (templateMesh) {
-        runtime.hiddenMesh = templateMesh
-        runtime.hiddenMeshWasVisible = templateMesh.visible
+        userData.__harmonyInstanceLayoutHiddenMesh = templateMesh
+        userData.__harmonyInstanceLayoutHiddenMeshWasVisible = templateMesh.visible
         templateMesh.visible = false
       }
     }
-
-    // Enable instanced outline/pick proxy path when tiling is active.
-    const userData = object.userData ?? (object.userData = {})
-    if (!userData.instancedAssetId) {
-      runtime.previousInstancedAssetId = userData.instancedAssetId
-      userData.instancedAssetId = resolvedAssetId
-      runtime.injectedInstancedAssetId = true
+  } else {
+    if (userData.__harmonyInstanceLayoutHiddenMesh) {
+      const mesh = userData.__harmonyInstanceLayoutHiddenMesh as THREE.Mesh
+      const wasVisible = Boolean(userData.__harmonyInstanceLayoutHiddenMeshWasVisible)
+      mesh.visible = wasVisible
+      delete userData.__harmonyInstanceLayoutHiddenMesh
+      delete userData.__harmonyInstanceLayoutHiddenMeshWasVisible
     }
 
-    ensureInstancedPickProxy(object, node)
+    if (userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
+      const previous = userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+      if (typeof previous === 'undefined') {
+        delete userData.instancedAssetId
+      } else {
+        userData.instancedAssetId = previous
+      }
+      delete userData.__harmonyInstanceLayoutInjectedInstancedAssetId
+      delete userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+      delete userData.__harmonyInstanceLayoutCache
+      clearInstanceLayoutMatrixCacheForNode(node.id)
+      // Release any layout-authored bindings.
+      releaseModelInstance(node.id)
+    } else if (layout && instanceCount <= 1) {
+      // Layout disabled or single-instance: drop any stale extra bindings.
+      const bindings = getModelInstanceBindingsForNode(node.id)
+      bindings.forEach((binding) => {
+        if (binding.bindingId !== node.id) {
+          releaseModelInstanceBinding(binding.bindingId)
+          instanceLayoutMatrixCache.delete(binding.bindingId)
+        }
+      })
+    }
+  }
 
-    // Keep TransformControls pivot aligned with the updated PickProxy bounds when selected.
-    if (props.selectedNodeId === nodeId && props.activeTool !== 'select' && transformControls?.object === object) {
-      updateTransformControlsPivotOverride(object)
+  return { layout, instanceCount, templateAssetId, active }
+}
+
+function syncInstanceLayoutInstancedMatrices(params: {
+  nodeId: string
+  object: THREE.Object3D
+  assetId: string
+  layout: NonNullable<ReturnType<typeof clampSceneNodeInstanceLayout>>
+  baseMatrixWorld: THREE.Matrix4
+}): void {
+  const { nodeId, object, assetId, layout, baseMatrixWorld } = params
+
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    void ensureModelObjectCached(assetId)
+    return
+  }
+  ensureInstancedMeshesRegistered(assetId)
+
+  const desiredCount = getInstanceLayoutCount(layout)
+  const desiredBindingIds = new Set<string>()
+  for (let index = 0; index < desiredCount; index += 1) {
+    desiredBindingIds.add(getInstanceLayoutBindingId(nodeId, index))
+  }
+
+  const existingBindings = getModelInstanceBindingsForNode(nodeId)
+  existingBindings.forEach((binding) => {
+    if (!desiredBindingIds.has(binding.bindingId)) {
+      releaseModelInstanceBinding(binding.bindingId)
+      instanceLayoutMatrixCache.delete(binding.bindingId)
     }
   })
+
+  for (const bindingId of desiredBindingIds) {
+    const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+    if (!binding) {
+      return
+    }
+  }
+
+  const bounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox.clone()
+  const userData = object.userData ?? (object.userData = {})
+  userData.instancedBounds = serializeBoundingBox(bounds)
+  bounds.getBoundingSphere(instancedCullingSphere)
+  userData.__harmonyInstancedRadius = instancedCullingSphere.radius
+
+  const cache = userData.__harmonyInstanceLayoutCache as { signature: string | null; locals: THREE.Matrix4[] } | undefined
+  const next = forEachInstanceWorldMatrix({
+    nodeId,
+    baseMatrixWorld,
+    layout,
+    templateBoundingBox: cached.boundingBox,
+    cache,
+    onMatrix: (bindingId, worldMatrix) => {
+      updateInstanceLayoutMatrixIfChanged(bindingId, nodeId, worldMatrix as unknown as THREE.Matrix4)
+    },
+  })
+
+  userData.__harmonyInstanceLayoutCache = { signature: next.signature, locals: next.locals as unknown as THREE.Matrix4[] }
 }
 
 let scene: THREE.Scene | null = null
@@ -2554,22 +2441,23 @@ const {
   {
     syncInstancedOutlineEntryTransform,
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
-    syncInstancedTransformOverride: ({ nodeId, baseMatrix, isVisible, isCulled }) => {
-      // Instanced tiling owns instance matrices. Prevent the generic multi-binding sync
-      // from overriding tiling-authored matrices (can cause probabilistic wrong positions).
-      const tilingRuntime = instancedTilingRuntimes.get(nodeId)
-      if (tilingRuntime) {
-        tilingRuntime.lastBaseElements = null
-        tilingRuntime.localDirty = true
-        if ((globalThis as any).__HARMONY_DEBUG_INSTANCED_TILING__ === true) {
-          console.debug('[InstancedTiling] override syncInstancedTransform', {
-            nodeId,
-            isVisible,
-            isCulled,
-            baseDet: baseMatrix.determinant(),
-          })
+    syncInstancedTransformOverride: ({ nodeId, object, baseMatrix, assetId }) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      if (node && assetId) {
+        const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+        if (layout && getInstanceLayoutCount(layout) > 1) {
+          const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
+          if (templateAssetId && templateAssetId === assetId) {
+            syncInstanceLayoutInstancedMatrices({
+              nodeId,
+              object,
+              assetId,
+              layout,
+              baseMatrixWorld: baseMatrix,
+            })
+            return true
+          }
         }
-        return true
       }
 
       return wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)
@@ -2733,6 +2621,12 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return
     }
+
+    const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+    if (layout && getInstanceLayoutCount(layout) > 1) {
+      return
+    }
+
     const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
     if (!component || !component.enabled) {
       return
@@ -5803,12 +5697,6 @@ function animate() {
     prof.groundStreaming = performance.now() - t_gc0
   }
 
-  {
-    const t0 = performance.now()
-    tickInstancedTiling()
-    prof.instancedTiling = performance.now() - t0
-  }
-
   const t0_scatter = performance.now()
   updateScatterLod()
   updateInstancedCullingAndLod()
@@ -5864,7 +5752,7 @@ function disposeScene() {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null
   }
-  clearAllInstancedTilingRuntimes()
+  instanceLayoutMatrixCache.clear()
   clearInstancedMeshes()
   instancedMeshRevision.value += 1
   instancedMeshGroup.removeFromParent()
@@ -8694,17 +8582,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
 
-  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Record<string, unknown>>
-    | undefined
-  if (instancedTilingState?.enabled !== false) {
-    const assetId = node.sourceAssetId ?? null
-    if (assetId && !getCachedModelObject(assetId)) {
-      void ensureModelObjectCached(assetId)
-    }
-  }
-
-  syncInstancedTilingRegistration(object, node)
+  applyInstanceLayoutVisibilityAndAssetBinding(object, node)
 
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
@@ -9089,7 +8967,8 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
 
   const nodeId = object.userData?.nodeId as string | undefined
   if (nodeId) {
-    cleanupInstancedTilingRuntime(nodeId)
+    clearInstanceLayoutMatrixCacheForNode(nodeId)
+    releaseModelInstance(nodeId)
     objectMap.delete(nodeId)
     releaseInstancedOutlineEntry(nodeId)
     unregisterLightHelpersForNode(nodeId)
@@ -9184,7 +9063,7 @@ function syncSceneGraph() {
 
 function disposeSceneNodes() {
   clearOutlineSelectionTargets()
-  clearAllInstancedTilingRuntimes()
+  instanceLayoutMatrixCache.clear()
   clearLightHelpers()
   placementSurfaceTargetsByNodeId.clear()
   placementSurfaceTargets.length = 0
@@ -9744,17 +9623,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   userData.sourceAssetId = node.sourceAssetId ?? null
   userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
 
-  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Record<string, unknown>>
-    | undefined
-  if (instancedTilingState?.enabled !== false) {
-    const assetId = node.sourceAssetId ?? null
-    if (assetId && !getCachedModelObject(assetId)) {
-      void ensureModelObjectCached(assetId)
-    }
-  }
-
-  syncInstancedTilingRegistration(object, node)
+  applyInstanceLayoutVisibilityAndAssetBinding(object, node)
 
   const isVisible = node.visible ?? true
   object.visible = isVisible

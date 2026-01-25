@@ -417,8 +417,11 @@ import {
   subscribeInstancedMeshes,
   ensureInstancedMeshesRegistered,
   allocateModelInstance,
+  allocateModelInstanceBinding,
+  getModelInstanceBindingsForNode,
   getModelInstanceBinding,
   releaseModelInstance,
+  updateModelInstanceBindingMatrix,
   updateModelInstanceMatrix,
   findNodeIdForInstance,
   type ModelInstanceGroup,
@@ -429,8 +432,15 @@ import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
 import {
   ENVIRONMENT_NODE_ID,
+  clampSceneNodeInstanceLayout,
+  computeInstanceLayoutLocalBoundingBox,
   createAutoTourRuntime,
+
+  forEachInstanceWorldMatrix,
+  getInstanceLayoutBindingId,
+  getInstanceLayoutCount,
   rebuildSceneNodeIndex,
+  resolveInstanceLayoutTemplateAssetId,
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
@@ -447,7 +457,7 @@ import {
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
   type Vector3Like,
-} from '@harmony/schema';
+} from '@schema/index';
 import { ComponentManager } from '@schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@schema/multiuserContext';
 import {
@@ -468,7 +478,6 @@ import {
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
   purePursuitComponentDefinition,
-  instancedTilingComponentDefinition,
   sceneStateAnchorComponentDefinition,
   preloadableComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
@@ -737,6 +746,16 @@ type InstancedTransformCacheEntry = {
 };
 
 const instancedTransformCache = new Map<string, InstancedTransformCacheEntry>();
+
+function clearInstancedTransformCacheForNode(nodeId: string): void {
+  instancedTransformCache.delete(nodeId);
+  const prefix = `${nodeId}:instance:`;
+  for (const key of instancedTransformCache.keys()) {
+    if (key.startsWith(prefix)) {
+      instancedTransformCache.delete(key);
+    }
+  }
+}
 
 function matricesAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-6): boolean {
   for (let i = 0; i < 16; i += 1) {
@@ -1033,8 +1052,10 @@ function beginSceneSwitchTransition(token: number): void {
     if (token !== initializeToken) {
       return;
     }
+
     sceneSwitchOverlayVisible.value = true;
     sceneSwitchMinVisibleUntil = Date.now() + SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS;
+
     const schedule = typeof requestAnimationFrame === 'function'
       ? requestAnimationFrame
       : (callback: () => void) => setTimeout(callback, 16);
@@ -1043,29 +1064,55 @@ function beginSceneSwitchTransition(token: number): void {
         return;
       }
       sceneSwitchFlashActive.value = true;
+
+      sceneSwitchHideTimer = setTimeout(() => {
+        if (token !== initializeToken) {
+          return;
+        }
+        sceneSwitchOverlayVisible.value = false;
+        sceneSwitching.value = false;
+
+        setTimeout(() => {
+          if (token !== initializeToken) {
+            return;
+          }
+          sceneSwitchFlashActive.value = false;
+        }, SCENE_SWITCH_OVERLAY_FADE_OUT_MS);
+      }, SCENE_SWITCH_OVERLAY_MIN_VISIBLE_MS);
     });
   }, SCENE_SWITCH_OVERLAY_DELAY_MS);
 }
 
 function endSceneSwitchTransition(token: number): void {
+  if (!hasRenderedSceneOnce) {
+    return;
+  }
   if (token !== initializeToken) {
     return;
   }
 
   cancelSceneSwitchTimers();
-  const now = Date.now();
-  const delay = sceneSwitchOverlayVisible.value ? Math.max(0, sceneSwitchMinVisibleUntil - now) : 0;
+
+  // If overlay was never shown, just reset flags.
+  if (!sceneSwitchOverlayVisible.value) {
+    sceneSwitching.value = false;
+    sceneSwitchFlashActive.value = false;
+    return;
+  }
+
+  const delay = Math.max(0, sceneSwitchMinVisibleUntil - Date.now());
   sceneSwitchHideTimer = setTimeout(() => {
     if (token !== initializeToken) {
       return;
     }
-    sceneSwitchFlashActive.value = false;
+    sceneSwitchOverlayVisible.value = false;
+    sceneSwitching.value = false;
+
     setTimeout(() => {
       if (token !== initializeToken) {
         return;
       }
-      sceneSwitchOverlayVisible.value = false;
-      sceneSwitching.value = false;
+      sceneSwitchFlashActive.value = false;
     }, SCENE_SWITCH_OVERLAY_FADE_OUT_MS);
   }, delay);
 }
@@ -1377,7 +1424,6 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
-previewComponentManager.registerDefinition(instancedTilingComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
@@ -3188,23 +3234,40 @@ async function ensureModelInstanceGroup(
 }
 
 function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
-  if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+  const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
+  const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
+  const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null);
+  if (!resolvedAssetId || resolvedAssetId !== group.assetId) {
     return null;
   }
+
   releaseModelInstance(node.id);
-  const binding = allocateModelInstance(group.assetId, node.id);
-  if (!binding) {
+  clearInstancedTransformCacheForNode(node.id);
+  const desiredCount = getInstanceLayoutCount(layout);
+  const baseBinding = allocateModelInstance(group.assetId, node.id);
+  if (!baseBinding) {
     return null;
+  }
+  for (let i = 1; i < desiredCount; i += 1) {
+    const bindingId = getInstanceLayoutBindingId(node.id, i);
+    const binding = allocateModelInstanceBinding(group.assetId, bindingId, node.id);
+    if (!binding) {
+      releaseModelInstance(node.id);
+      return null;
+    }
   }
   const proxy = new THREE.Object3D();
   proxy.name = node.name ?? group.object.name ?? 'Instanced Model';
+  const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, group.boundingBox) ?? group.boundingBox;
   proxy.userData = {
     ...(proxy.userData ?? {}),
     nodeId: node.id,
     instanced: true,
     instancedAssetId: group.assetId,
-    instancedBounds: serializeBoundingBox(group.boundingBox),
+    instancedBounds: serializeBoundingBox(layoutBounds),
     __harmonyInstancedRadius: group.radius,
+    __harmonyInstanceLayoutSignature: null,
+    __harmonyInstanceLayoutLocals: [] as THREE.Matrix4[],
   };
   updateNodeTransfrom(proxy, node);
   return proxy;
@@ -3275,16 +3338,33 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
     void ensureModelObjectCached(assetId, node);
     return;
   }
+  const node = resolveNodeById(nodeId);
+  const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout;
+  const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
+  const desiredCount = getInstanceLayoutCount(layout);
+
   releaseModelInstance(nodeId);
-  const binding = allocateModelInstance(assetId, nodeId);
-  if (!binding) {
+  clearInstancedTransformCacheForNode(nodeId);
+  const baseBinding = allocateModelInstance(assetId, nodeId);
+  if (!baseBinding) {
     return;
   }
+  for (let i = 1; i < desiredCount; i += 1) {
+    const bindingId = getInstanceLayoutBindingId(nodeId, i);
+    const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId);
+    if (!binding) {
+      releaseModelInstance(nodeId);
+      return;
+    }
+  }
+  const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox;
+  const sphere = new THREE.Sphere();
+  layoutBounds.getBoundingSphere(sphere);
   object.userData = {
     ...(object.userData ?? {}),
     instancedAssetId: assetId,
-    instancedBounds: serializeBoundingBox(cached.boundingBox),
-    __harmonyInstancedRadius: cached.radius,
+    instancedBounds: serializeBoundingBox(layoutBounds),
+    __harmonyInstancedRadius: sphere.radius,
   };
   syncInstancedTransform(object, true);
 }
@@ -5048,8 +5128,34 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     }
     removeVehicleInstance(nodeId);
 
+    const node = resolveNodeById(nodeId);
+    if (!node) {
+      return;
+    }
+
+    const layout = clampSceneNodeInstanceLayout(node.instanceLayout);
+
     const assetId = typeof target.userData?.instancedAssetId === 'string' ? (target.userData.instancedAssetId as string) : null;
     const visible = target.visible !== false;
+
+    const group = assetId ? getCachedModelObject(assetId) : null;
+    if (!group) {
+      return;
+    }
+
+    const desiredCount = getInstanceLayoutCount(layout);
+    const existingBindings = getModelInstanceBindingsForNode(nodeId);
+    if (existingBindings.length !== desiredCount) {
+      if (!assetId) {
+        return;
+      }
+      releaseModelInstance(nodeId);
+      allocateModelInstance(assetId, nodeId);
+      for (let i = 1; i < desiredCount; i++) {
+        allocateModelInstanceBinding(assetId, getInstanceLayoutBindingId(nodeId, i), nodeId);
+      }
+      clearInstancedTransformCacheForNode(nodeId);
+    }
 
     if (!visible) {
       target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
@@ -5059,39 +5165,63 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
       instancedMatrixHelper.copy(target.matrixWorld);
     }
 
-    const cached = instancedTransformCache.get(nodeId) ?? null;
-    const shouldUpdate =
-      force ||
-      !cached ||
-      cached.visible !== visible ||
-      cached.assetId !== assetId ||
-      !matricesAlmostEqual(cached.elements, instancedMatrixHelper.elements);
+    // bounds should represent the whole layout
+    target.userData.instancedBounds = computeInstanceLayoutLocalBoundingBox(layout, group.boundingBox);
 
-    if (!shouldUpdate) {
-      return;
-    }
+    const result = forEachInstanceWorldMatrix({
+      nodeId,
+      baseMatrixWorld: instancedMatrixHelper,
+      layout,
+      templateBoundingBox: group.boundingBox,
+      cache: {
+        signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
+        locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
+      },
+      onMatrix: (bindingId, worldMatrix) => {
+        const cached = instancedTransformCache.get(bindingId) ?? null;
+        const shouldUpdate =
+          force ||
+          !cached ||
+          cached.visible !== visible ||
+          cached.assetId !== assetId ||
+          !matricesAlmostEqual(cached.elements, worldMatrix.elements);
 
-    updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
-    // Mark any associated InstancedMesh objects as dirty so their bounding spheres
-    // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
-    try {
-      const binding = getModelInstanceBinding(nodeId) as any | null;
-      if (binding && Array.isArray(binding.slots)) {
-        for (const slot of binding.slots) {
-          const mesh = slot?.mesh as THREE.InstancedMesh | null;
-          if (mesh && (mesh as any).isInstancedMesh) {
-            addInstancedBoundsMesh(mesh);
-          }
+        if (!shouldUpdate) {
+          return;
         }
-      }
-    } catch (_error) {
-      // ignore binding lookup errors
-    }
-    instancedTransformCache.set(nodeId, {
-      assetId,
-      visible,
-      elements: Array.from(instancedMatrixHelper.elements),
+
+        if (bindingId === nodeId) {
+          updateModelInstanceMatrix(nodeId, worldMatrix);
+        } else {
+          updateModelInstanceBindingMatrix(bindingId, worldMatrix);
+        }
+
+        // Mark any associated InstancedMesh objects as dirty so their bounding spheres
+        // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
+        try {
+          const binding = getModelInstanceBinding(bindingId) as any | null;
+          if (binding && Array.isArray(binding.slots)) {
+            for (const slot of binding.slots) {
+              const mesh = slot?.mesh as THREE.InstancedMesh | null;
+              if (mesh && (mesh as any).isInstancedMesh) {
+                addInstancedBoundsMesh(mesh);
+              }
+            }
+          }
+        } catch (_error) {
+          // ignore binding lookup errors
+        }
+
+        instancedTransformCache.set(bindingId, {
+          assetId,
+          visible,
+          elements: Array.from(worldMatrix.elements),
+        });
+      },
     });
+
+    target.userData.__harmonyInstanceLayoutSignature = result.signature;
+    target.userData.__harmonyInstanceLayoutLocals = result.locals;
   };
 
   // Fast path: instanced proxy itself.

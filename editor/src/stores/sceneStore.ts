@@ -50,6 +50,7 @@ import type {
   SceneNodeComponentMap,
   SceneNodeComponentState,
   SceneNodeEditorFlags,
+  SceneNodeInstanceLayout,
   SceneNodeType,
   Vector3Like,
   WallDynamicMesh,
@@ -57,6 +58,7 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
+import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { ClipboardMeta, QuaternionJson } from '@/types/prefab'
@@ -561,6 +563,7 @@ export type ScenePatchField =
   | 'light'
   | 'runtime'
   | 'userData'
+  | 'instanceLayout'
   | 'name'
   | 'groupExpanded'
   | 'download'
@@ -8890,6 +8893,37 @@ export const useSceneStore = defineStore('scene', {
         }
       })
       this.queueSceneNodePatch(nodeId, ['userData'])
+      commitSceneSnapshot(this)
+    },
+
+    updateNodeInstanceLayout(nodeId: string, instanceLayout: SceneNodeInstanceLayout | null) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return
+      }
+
+      const sanitized = instanceLayout
+        ? ((clonePlainRecord(instanceLayout as unknown as Record<string, unknown>) ?? null) as unknown as SceneNodeInstanceLayout)
+        : null
+
+      const existing = (target as any).instanceLayout as unknown
+      const existingSerialized = typeof existing === 'undefined' ? null : stableSerialize(existing)
+      const nextSerialized = sanitized ? stableSerialize(sanitized) : null
+      if (existingSerialized === nextSerialized) {
+        return
+      }
+
+      this.captureHistorySnapshot()
+
+      visitNode(this.nodes, nodeId, (node) => {
+        if (sanitized) {
+          ;(node as any).instanceLayout = sanitized
+        } else if ('instanceLayout' in (node as any)) {
+          ;(node as any).instanceLayout = null
+        }
+      })
+
+      this.queueSceneNodePatch(nodeId, ['instanceLayout'])
       commitSceneSnapshot(this)
     },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
