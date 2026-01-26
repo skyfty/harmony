@@ -56,6 +56,9 @@ export type UseSnapControllerOptions = {
   camera: Ref<THREE.Camera | null>
   objectMap: Map<string, THREE.Object3D>
   instancedMeshes?: THREE.InstancedMesh[]
+  // Prefer providing instanced pick targets via a callback so callers can keep
+  // matrices/bounds in sync with their existing picking architecture.
+  getInstancedPickTargets?: () => THREE.InstancedMesh[]
   isNodeVisible: (nodeId: string) => boolean
   isObjectWorldVisible: (object: THREE.Object3D | null) => boolean
   isNodeLocked?: (nodeId: string) => boolean
@@ -72,6 +75,8 @@ export type SnapQuery = {
 }
 
 export function useSnapController(options: UseSnapControllerOptions) {
+  // Debugging: enable verbose logs to trace instanced picking and vertex candidates.
+  const DEBUG_SNAP = true
   const pixelThreshold = (typeof options.pixelThreshold === 'number' && Number.isFinite(options.pixelThreshold))
     ? options.pixelThreshold
     : 12
@@ -165,6 +170,19 @@ export function useSnapController(options: UseSnapControllerOptions) {
           ? query.pixelThresholdPx
           : pixelThreshold
 
+    if (DEBUG_SNAP) {
+      try {
+        console.debug('[snap] update query', {
+          active: query.active,
+          selectedNodeId: query.selectedNodeId,
+          threshold,
+          sourceExists: !!activeSource,
+        })
+      } catch (err) {
+        // swallow
+      }
+    }
+
     const sourceThreshold = Math.min(
       Math.max(Math.round(threshold * sourceAcquireMultiplier), sourceAcquireMinPx),
       sourceAcquireMaxPx,
@@ -214,15 +232,22 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
       // If selected object has no direct mesh vertices (common for instanced-only rendering),
       // fall back to picking an instanced vertex belonging to this node.
+      // NOTE: callers typically pass `excludeNodeIds` that include the currently-selected node
+      // to prevent snapping *targets* to itself. Source acquisition is different: we must allow
+      // selecting a source vertex on the selected node.
+      const sourceExcludeNodeIds = excludeNodeIds && excludeNodeIds.has(selectedNodeId)
+        ? new Set(Array.from(excludeNodeIds).filter((id) => id !== selectedNodeId))
+        : excludeNodeIds
       const instancedSourceCandidate = !sourceCandidate
         ? findNearestVertexOnInstancedMeshes(query.event, canvas, camera, sourceThreshold, {
             includeNodeIds: new Set([selectedNodeId]),
-            excludeNodeIds,
+            excludeNodeIds: sourceExcludeNodeIds,
           })
         : null
 
       const chosen = sourceCandidate ?? instancedSourceCandidate
       if (!chosen) {
+        if (DEBUG_SNAP) console.debug('[snap] no source candidate for selectedObject', selectedNodeId)
         activeSource = null
         return null
       }
@@ -433,6 +458,11 @@ export function useSnapController(options: UseSnapControllerOptions) {
     }
 
     let best: SnapSourceCandidate | null = null
+    if (DEBUG_SNAP) {
+      try {
+        console.debug('[snap] scanning object vertices', { object: object.name ?? object.uuid })
+      } catch (err) {}
+    }
 
     object.traverse((child) => {
       const mesh = child as THREE.Mesh
@@ -480,6 +510,11 @@ export function useSnapController(options: UseSnapControllerOptions) {
             worldPosition: vertexWorldHelper.clone(),
             screenDistance: distance,
             vertexIndex: i,
+          }
+          if (DEBUG_SNAP) {
+            try {
+              console.debug('[snap] candidate vertex', { mesh: mesh.uuid, vertexIndex: i, distance })
+            } catch (err) {}
           }
         }
       }
@@ -567,7 +602,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
       includeNodeIds?: Set<string>
     },
   ): (SnapTargetCandidate & { mesh: THREE.InstancedMesh; instanceId: number; vertexIndex: number; localPosition: THREE.Vector3 }) | null {
-    const meshes = options.instancedMeshes
+    const meshes = options.getInstancedPickTargets?.() ?? options.instancedMeshes
     if (!meshes || meshes.length === 0) {
       return null
     }

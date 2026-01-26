@@ -1265,7 +1265,7 @@ const snapController = useSnapController({
   canvasRef,
   camera: { get value() { return camera } } as Ref<THREE.Camera | null>,
   objectMap,
-  instancedMeshes,
+  getInstancedPickTargets: collectInstancedPickTargets,
   isNodeVisible: (nodeId) => sceneStore.isNodeVisible(nodeId),
   isNodeLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
   isObjectWorldVisible,
@@ -1413,6 +1413,178 @@ const vertexOverlayGroup = new THREE.Group()
 vertexOverlayGroup.name = 'VertexOverlay'
 vertexOverlayGroup.renderOrder = 20000
 vertexOverlayGroup.frustumCulled = false
+
+// Temporary debug: show scene mesh vertices as Points to validate vertex recognition.
+const DEBUG_SHOW_VERTICES = true
+const debugVerticesGroup = new THREE.Group()
+debugVerticesGroup.name = 'DebugVertices'
+debugVerticesGroup.renderOrder = 21000
+debugVerticesGroup.frustumCulled = false
+const debugVerticesGeometry = new THREE.BufferGeometry()
+const debugVerticesMaterial = new THREE.PointsMaterial({
+  color: 0xff00ff,
+  size: 4,
+  sizeAttenuation: false,
+  transparent: true,
+  opacity: 0.9,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+})
+debugVerticesMaterial.toneMapped = false
+const debugVerticesPoints = new THREE.Points(debugVerticesGeometry, debugVerticesMaterial)
+debugVerticesPoints.visible = false
+debugVerticesGroup.add(debugVerticesPoints)
+vertexOverlayGroup.add(debugVerticesGroup)
+
+let lastDebugVertexUpdate = 0
+const DEBUG_VERTEX_UPDATE_MS = 500
+const DEBUG_MAX_POINTS = 60000
+
+const DEBUG_MAX_POINTS_PER_GEOMETRY = 2500
+const debugVertexSampleCache = new Map<string, Float32Array>()
+const debugVertexSampleScratch = {
+  local: new THREE.Vector3(),
+  world: new THREE.Vector3(),
+  instanceMatrix: new THREE.Matrix4(),
+  worldMatrix: new THREE.Matrix4(),
+}
+
+function getSampledLocalVertexPositions(
+  geometry: THREE.BufferGeometry,
+  maxPoints: number,
+): Float32Array | null {
+  const key = `${geometry.uuid}:${maxPoints}`
+  const cached = debugVertexSampleCache.get(key)
+  if (cached) {
+    return cached
+  }
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  if (!posAttr || posAttr.count <= 0) {
+    return null
+  }
+  const desired = Math.min(posAttr.count, Math.max(1, Math.floor(maxPoints)))
+  const stride = posAttr.count > desired ? Math.ceil(posAttr.count / desired) : 1
+  const result = new Float32Array(Math.ceil(posAttr.count / stride) * 3)
+  let write = 0
+  for (let i = 0; i < posAttr.count; i += stride) {
+    result[write++] = posAttr.getX(i)
+    result[write++] = posAttr.getY(i)
+    result[write++] = posAttr.getZ(i)
+  }
+  const trimmed = write === result.length ? result : result.slice(0, write)
+  debugVertexSampleCache.set(key, trimmed)
+  return trimmed
+}
+
+function updateDebugVertexPoints(nowMs: number) {
+  if (!DEBUG_SHOW_VERTICES) return
+  if (nowMs - lastDebugVertexUpdate < DEBUG_VERTEX_UPDATE_MS) return
+  lastDebugVertexUpdate = nowMs
+
+  const positions: number[] = []
+  try {
+    for (const [nodeId, object] of objectMap.entries()) {
+      if (!object) continue
+      if (object.userData?.instanced !== true) continue
+      if (!object.visible) continue
+
+      const instancedAssetId = object.userData?.instancedAssetId as string | undefined
+      if (typeof instancedAssetId === 'string' && instancedAssetId) {
+        const bindings = getModelInstanceBindingsForNode(nodeId)
+        if (!bindings.length) {
+          continue
+        }
+
+        let perBindingEstimatedPoints = 0
+        const first = bindings[0]
+        if (first) {
+          for (const slot of first.slots) {
+            const samples = getSampledLocalVertexPositions(
+              slot.mesh.geometry as THREE.BufferGeometry,
+              DEBUG_MAX_POINTS_PER_GEOMETRY,
+            )
+            if (samples) {
+              perBindingEstimatedPoints += samples.length / 3
+            }
+          }
+        }
+        if (perBindingEstimatedPoints <= 0) {
+          continue
+        }
+
+        const remaining = DEBUG_MAX_POINTS - positions.length / 3
+        const maxBindings = Math.max(1, Math.floor(remaining / perBindingEstimatedPoints))
+        const bindingStride = bindings.length > maxBindings ? Math.ceil(bindings.length / maxBindings) : 1
+
+        for (let b = 0; b < bindings.length; b += bindingStride) {
+          const binding = bindings[b]
+          if (!binding) continue
+
+          for (const slot of binding.slots) {
+            const mesh = slot.mesh
+            if (!mesh.visible) continue
+
+            mesh.updateMatrixWorld(true)
+            mesh.getMatrixAt(slot.index, debugVertexSampleScratch.instanceMatrix)
+            debugVertexSampleScratch.worldMatrix.multiplyMatrices(mesh.matrixWorld, debugVertexSampleScratch.instanceMatrix)
+
+            const samples = getSampledLocalVertexPositions(
+              mesh.geometry as THREE.BufferGeometry,
+              DEBUG_MAX_POINTS_PER_GEOMETRY,
+            )
+            if (!samples) continue
+
+            for (let i = 0; i < samples.length; i += 3) {
+              debugVertexSampleScratch.local.set(samples[i] ?? 0, samples[i + 1] ?? 0, samples[i + 2] ?? 0)
+              debugVertexSampleScratch.world.copy(debugVertexSampleScratch.local).applyMatrix4(debugVertexSampleScratch.worldMatrix)
+              positions.push(
+                debugVertexSampleScratch.world.x,
+                debugVertexSampleScratch.world.y,
+                debugVertexSampleScratch.world.z,
+              )
+              if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+            }
+            if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+          }
+
+          if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+        }
+
+        if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+        continue
+      }
+
+      // Fallback for non-instanced proxy objects that are actual meshes.
+      const mesh = object as THREE.Mesh
+      if ((mesh as any).isInstancedMesh) continue
+      if (!(mesh as any).isMesh) continue
+      if (!mesh.visible) continue
+      const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+      const posAttr = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (!posAttr) continue
+      mesh.updateMatrixWorld(true)
+      const stride = posAttr.count > DEBUG_MAX_POINTS ? Math.ceil(posAttr.count / DEBUG_MAX_POINTS) : 1
+      for (let i = 0; i < posAttr.count; i += stride) {
+        debugVertexSampleScratch.local.fromBufferAttribute(posAttr, i).applyMatrix4(mesh.matrixWorld)
+        positions.push(debugVertexSampleScratch.local.x, debugVertexSampleScratch.local.y, debugVertexSampleScratch.local.z)
+        if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+      }
+      if (positions.length / 3 >= DEBUG_MAX_POINTS) break
+    }
+  } catch (err) {
+    console.warn('[DebugVertices] failed to build points', err)
+  }
+
+  if (positions.length === 0) {
+    debugVerticesPoints.visible = false
+    debugVerticesGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3))
+    return
+  }
+  debugVerticesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(positions), 3))
+  debugVerticesGeometry.computeBoundingSphere()
+  debugVerticesPoints.visible = true
+}
 
 // NOTE: WebGL line width is effectively 1px on many platforms.
 // Use a mesh "beam" so the hint remains obvious.
@@ -5776,6 +5948,7 @@ function animate() {
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   updateVertexSnapHintPulse(performance.now())
+  updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)

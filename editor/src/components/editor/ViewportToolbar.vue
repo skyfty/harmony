@@ -211,44 +211,6 @@
             @click="handleAlignCommand('axis-z')"
           />
 
-          <v-divider class="align-menu__divider" />
-          <v-list-item
-            title="左对齐（世界 X-）"
-            prepend-icon="mdi-format-align-left"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'left' })"
-          />
-          <v-list-item
-            title="右对齐（世界 X+）"
-            prepend-icon="mdi-format-align-right"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'right' })"
-          />
-          <v-list-item
-            title="顶部对齐（世界 Y+）"
-            prepend-icon="mdi-format-align-top"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'top' })"
-          />
-          <v-list-item
-            title="底部对齐（世界 Y-）"
-            prepend-icon="mdi-format-align-bottom"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'bottom' })"
-          />
-          <v-list-item
-            title="水平居中对齐（世界 X）"
-            prepend-icon="mdi-format-align-center"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'center-x' })"
-          />
-          <v-list-item
-            title="垂直居中对齐（世界 Y）"
-            prepend-icon="mdi-format-align-middle"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand({ type: 'world-align', mode: 'center-y' })"
-          />
-
           <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
           <v-list-item
             v-if="selectionCount >= 2"
