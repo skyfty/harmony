@@ -403,17 +403,6 @@
         @click="toggleVertexSnap"
       />
 
-      <v-btn
-        :icon="showVertexOverlay ? 'mdi-dots-grid' : 'mdi-dots-grid'"
-        :color="showVertexOverlay ? 'primary' : undefined"
-        :variant="showVertexOverlay ? 'flat' : 'text'"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        title="Toggle Vertex Overlay (Debug)"
-        @click="toggleVertexOverlay"
-      />
-
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -445,7 +434,6 @@ const props = withDefaults(
   showGrid: boolean
   showAxes: boolean
   vertexSnapEnabled?: boolean
-  showVertexOverlay?: boolean
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -462,7 +450,6 @@ const props = withDefaults(
   {
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
-    showVertexOverlay: false,
   },
 )
 
@@ -488,7 +475,6 @@ const {
   showGrid,
   showAxes,
   vertexSnapEnabled,
-  showVertexOverlay,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
@@ -757,10 +743,6 @@ function toggleAxesVisibility() {
 
 function toggleVertexSnap() {
   sceneStore.toggleViewportVertexSnap()
-}
-
-function toggleVertexOverlay() {
-  sceneStore.toggleViewportShowVertexOverlay()
 }
 
 function handleClearScatterMenuAction() {

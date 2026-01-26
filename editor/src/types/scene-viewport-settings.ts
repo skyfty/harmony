@@ -12,7 +12,4 @@ export interface SceneViewportSettings {
   // Vertex snap (Blender-like vertex alignment)
   snapMode: SceneViewportSnapMode
   snapThresholdPx: number
-
-  // Debug: show sampled vertices for current hover/candidate
-  showVertexOverlay: boolean
 }

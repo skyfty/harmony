@@ -1307,7 +1307,6 @@ const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const vertexSnapMode = computed(() => sceneStore.viewportSettings.snapMode)
 const vertexSnapThresholdPx = computed(() => sceneStore.viewportSettings.snapThresholdPx)
-const showVertexOverlay = computed(() => sceneStore.viewportSettings.showVertexOverlay)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
@@ -1410,83 +1409,10 @@ repairHoverGroup.name = 'RepairHover'
 repairHoverGroup.visible = false
 const repairHoverProxies = new Map<string, THREE.Mesh>()
 
-type VertexHoverCandidate = {
-  nodeId: string
-  mesh: THREE.Mesh | THREE.InstancedMesh
-  instanceId: number | null
-  localPosition: THREE.Vector3
-  worldPosition: THREE.Vector3
-}
-
 const vertexOverlayGroup = new THREE.Group()
 vertexOverlayGroup.name = 'VertexOverlay'
 vertexOverlayGroup.renderOrder = 20000
 vertexOverlayGroup.frustumCulled = false
-
-const vertexOverlaySphere = new THREE.SphereGeometry(0.05, 12, 12)
-const vertexOverlaySourceMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffc107,
-  transparent: true,
-  opacity: 0.95,
-  depthTest: false,
-  depthWrite: false,
-})
-vertexOverlaySourceMaterial.toneMapped = false
-const vertexOverlayTargetMaterial = new THREE.MeshBasicMaterial({
-  color: 0x00e676,
-  transparent: true,
-  opacity: 0.95,
-  depthTest: false,
-  depthWrite: false,
-})
-vertexOverlayTargetMaterial.toneMapped = false
-const vertexOverlayHoverMaterial = new THREE.MeshBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.75,
-  depthTest: false,
-  depthWrite: false,
-})
-vertexOverlayHoverMaterial.toneMapped = false
-
-const vertexOverlaySourceMarker = new THREE.Mesh(vertexOverlaySphere, vertexOverlaySourceMaterial)
-vertexOverlaySourceMarker.name = 'VertexOverlaySourceMarker'
-vertexOverlaySourceMarker.renderOrder = 20001
-vertexOverlaySourceMarker.visible = false
-vertexOverlaySourceMarker.frustumCulled = false
-;(vertexOverlaySourceMarker as any).raycast = () => {}
-
-const vertexOverlayTargetMarker = new THREE.Mesh(vertexOverlaySphere, vertexOverlayTargetMaterial)
-vertexOverlayTargetMarker.name = 'VertexOverlayTargetMarker'
-vertexOverlayTargetMarker.renderOrder = 20001
-vertexOverlayTargetMarker.visible = false
-vertexOverlayTargetMarker.frustumCulled = false
-;(vertexOverlayTargetMarker as any).raycast = () => {}
-
-const vertexOverlayHoverMarker = new THREE.Mesh(vertexOverlaySphere, vertexOverlayHoverMaterial)
-vertexOverlayHoverMarker.name = 'VertexOverlayHoverMarker'
-vertexOverlayHoverMarker.renderOrder = 20000
-vertexOverlayHoverMarker.visible = false
-vertexOverlayHoverMarker.frustumCulled = false
-;(vertexOverlayHoverMarker as any).raycast = () => {}
-
-const vertexOverlayPointsGeometry = new THREE.BufferGeometry()
-const vertexOverlayPointsMaterial = new THREE.PointsMaterial({
-  color: 0xffffff,
-  size: 2.5,
-  sizeAttenuation: false,
-  transparent: true,
-  opacity: 0.55,
-  depthTest: false,
-  depthWrite: false,
-})
-vertexOverlayPointsMaterial.toneMapped = false
-const vertexOverlayPoints = new THREE.Points(vertexOverlayPointsGeometry, vertexOverlayPointsMaterial)
-vertexOverlayPoints.name = 'VertexOverlayPoints'
-vertexOverlayPoints.renderOrder = 20000
-vertexOverlayPoints.visible = false
-vertexOverlayPoints.frustumCulled = false
-;(vertexOverlayPoints as any).raycast = () => {}
 
 const vertexOverlayHintLineGeometry = new THREE.BufferGeometry()
 vertexOverlayHintLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3))
@@ -1505,88 +1431,12 @@ vertexOverlayHintLine.visible = false
 vertexOverlayHintLine.frustumCulled = false
 ;(vertexOverlayHintLine as any).raycast = () => {}
 
-vertexOverlayGroup.add(vertexOverlayPoints)
-vertexOverlayGroup.add(vertexOverlayHoverMarker)
 vertexOverlayGroup.add(vertexOverlayHintLine)
-vertexOverlayGroup.add(vertexOverlaySourceMarker)
-vertexOverlayGroup.add(vertexOverlayTargetMarker)
 
-const vertexOverlayMatrixHelper = new THREE.Matrix4()
-const vertexOverlayWorldHelper = new THREE.Matrix4()
-const vertexOverlayVectorHelper = new THREE.Vector3()
-const vertexOverlayCameraDirHelper = new THREE.Vector3()
-let vertexOverlayPointCloudKey: string | null = null
-let lastVertexOverlayHoverUpdateAt = 0
 
 let pendingVertexSnapResult: VertexSnapResult | null = null
 
-const VERTEX_OVERLAY_MARKER_BASE_RADIUS = 0.05
-const VERTEX_OVERLAY_MARKER_RADIUS_PX = 6
-
-function updateVertexOverlayMarkerScreenSizing() {
-  const cam = camera
-  if (!cam || !canvasRef.value) {
-    return
-  }
-
-  const canvas = canvasRef.value
-  const rect = canvas.getBoundingClientRect()
-  if (rect.height <= 0) {
-    return
-  }
-
-  const camAny = cam as unknown as { isPerspectiveCamera?: boolean; isOrthographicCamera?: boolean }
-  const isPerspective = Boolean(camAny.isPerspectiveCamera)
-  const isOrthographic = Boolean(camAny.isOrthographicCamera)
-  if (!isPerspective && !isOrthographic) {
-    return
-  }
-
-  cam.getWorldDirection(vertexOverlayCameraDirHelper)
-
-  const applyScale = (marker: THREE.Object3D) => {
-    if (!marker.visible) {
-      return
-    }
-    marker.getWorldPosition(vertexOverlayVectorHelper)
-    const toMarker = vertexOverlayVectorHelper.sub(cam.position)
-    const depth = toMarker.dot(vertexOverlayCameraDirHelper)
-    if (!Number.isFinite(depth) || depth <= 0) {
-      return
-    }
-
-    let worldUnitsPerPixel = 0
-    if (isPerspective) {
-      const perspective = cam as THREE.PerspectiveCamera
-      const fovRad = THREE.MathUtils.degToRad((perspective.fov ?? 50) as number)
-      worldUnitsPerPixel = (2 * Math.tan(fovRad * 0.5) * depth) / rect.height
-    } else {
-      const orthographic = cam as unknown as THREE.OrthographicCamera
-      const zoom = typeof orthographic.zoom === 'number' && orthographic.zoom > 0 ? orthographic.zoom : 1
-      const heightWorld = (orthographic.top - orthographic.bottom) / zoom
-      worldUnitsPerPixel = heightWorld / rect.height
-    }
-
-    if (!Number.isFinite(worldUnitsPerPixel) || worldUnitsPerPixel <= 0) {
-      return
-    }
-
-    const desiredWorldRadius = worldUnitsPerPixel * VERTEX_OVERLAY_MARKER_RADIUS_PX
-    const scale = desiredWorldRadius / VERTEX_OVERLAY_MARKER_BASE_RADIUS
-    if (!Number.isFinite(scale) || scale <= 0) {
-      return
-    }
-    marker.scale.setScalar(scale)
-  }
-
-  applyScale(vertexOverlaySourceMarker)
-  applyScale(vertexOverlayTargetMarker)
-  applyScale(vertexOverlayHoverMarker)
-}
-
 function clearVertexSnapMarkers() {
-  vertexOverlaySourceMarker.visible = false
-  vertexOverlayTargetMarker.visible = false
   vertexOverlayHintLine.visible = false
 }
 
@@ -1595,8 +1445,6 @@ function updateVertexSnapMarkers(result: VertexSnapResult | null) {
     clearVertexSnapMarkers()
     return
   }
-  vertexOverlaySourceMarker.position.copy(result.sourceWorld)
-  vertexOverlayTargetMarker.position.copy(result.targetWorld)
   const lineAttr = vertexOverlayHintLineGeometry.getAttribute('position') as THREE.BufferAttribute | null
   if (lineAttr && lineAttr.count >= 2) {
     lineAttr.setXYZ(0, result.sourceWorld.x, result.sourceWorld.y, result.sourceWorld.z)
@@ -1605,82 +1453,6 @@ function updateVertexSnapMarkers(result: VertexSnapResult | null) {
   }
   vertexOverlayHintLineGeometry.computeBoundingSphere()
   vertexOverlayHintLine.visible = true
-  vertexOverlaySourceMarker.visible = true
-  vertexOverlayTargetMarker.visible = true
-}
-
-function clearVertexHoverOverlay() {
-  vertexOverlayHoverMarker.visible = false
-  vertexOverlayPoints.visible = false
-  vertexOverlayPointCloudKey = null
-  vertexOverlayPointsGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3))
-}
-
-function updateVertexHoverOverlay(event: PointerEvent) {
-  if (!showVertexOverlay.value) {
-    clearVertexHoverOverlay()
-    return
-  }
-  const now = performance.now()
-  if (now - lastVertexOverlayHoverUpdateAt < 30) {
-    return
-  }
-  lastVertexOverlayHoverUpdateAt = now
-
-  const excludeNodeIds = new Set(sceneStore.selectedNodeIds)
-  const candidate = snapController.findHoverCandidate({
-    event,
-    excludeNodeIds,
-    pixelThresholdPx: vertexSnapThresholdPx.value,
-  }) as VertexHoverCandidate | null
-
-  if (!candidate) {
-    clearVertexHoverOverlay()
-    return
-  }
-
-  vertexOverlayHoverMarker.position.copy(candidate.worldPosition)
-  vertexOverlayHoverMarker.visible = true
-
-  const key = `${candidate.mesh.uuid}:${candidate.instanceId ?? 'none'}`
-  if (vertexOverlayPointCloudKey === key) {
-    vertexOverlayPoints.visible = true
-    return
-  }
-  vertexOverlayPointCloudKey = key
-
-  const geometry = (candidate.mesh as any).geometry as THREE.BufferGeometry | undefined
-  const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
-  if (!position || position.itemSize < 3) {
-    vertexOverlayPoints.visible = false
-    return
-  }
-
-  candidate.mesh.updateMatrixWorld(true)
-
-  if ((candidate.mesh as THREE.InstancedMesh).isInstancedMesh && typeof candidate.instanceId === 'number') {
-    ;(candidate.mesh as THREE.InstancedMesh).getMatrixAt(candidate.instanceId, vertexOverlayMatrixHelper)
-    vertexOverlayWorldHelper.multiplyMatrices(candidate.mesh.matrixWorld, vertexOverlayMatrixHelper)
-  } else {
-    vertexOverlayWorldHelper.copy(candidate.mesh.matrixWorld)
-  }
-
-  const MAX_POINTS = 8000
-  const stride = position.count > MAX_POINTS ? Math.ceil(position.count / MAX_POINTS) : 1
-  const outCount = Math.ceil(position.count / stride)
-  const data = new Float32Array(outCount * 3)
-  let write = 0
-  for (let i = 0; i < position.count; i += stride) {
-    vertexOverlayVectorHelper.fromBufferAttribute(position, i)
-    vertexOverlayVectorHelper.applyMatrix4(vertexOverlayWorldHelper)
-    data[write++] = vertexOverlayVectorHelper.x
-    data[write++] = vertexOverlayVectorHelper.y
-    data[write++] = vertexOverlayVectorHelper.z
-  }
-
-  vertexOverlayPointsGeometry.setAttribute('position', new THREE.BufferAttribute(data, 3))
-  vertexOverlayPointsGeometry.computeBoundingSphere()
-  vertexOverlayPoints.visible = true
 }
 
 const groundEditor = createGroundEditor({
@@ -5968,7 +5740,6 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
-  updateVertexOverlayMarkerScreenSizing()
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -6112,7 +5883,6 @@ function disposeScene() {
   groundSelectionGroup.removeFromParent()
   vertexOverlayGroup.removeFromParent()
   clearVertexSnapMarkers()
-  clearVertexHoverOverlay()
 
   if (mapControls) {
     mapControls.removeEventListener('change', handleControlsChange)
@@ -7129,8 +6899,6 @@ function handlePointerMove(event: PointerEvent) {
     onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
     updateSelectDragPosition,
   })
-
-  updateVertexHoverOverlay(event)
 
   // If selection-based preview is active, update preview position to follow the mouse.
   try {
@@ -10366,7 +10134,6 @@ defineExpose<SceneViewportHandle>({
         :show-grid="gridVisible"
         :show-axes="axesVisible"
         :vertex-snap-enabled="vertexSnapMode === 'vertex'"
-        :show-vertex-overlay="showVertexOverlay"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"

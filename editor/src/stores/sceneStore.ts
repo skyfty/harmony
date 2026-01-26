@@ -3530,7 +3530,6 @@ const defaultViewportSettings: SceneViewportSettings = {
 
   snapMode: 'off',
   snapThresholdPx: 12,
-  showVertexOverlay: false,
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjection {
@@ -3573,7 +3572,6 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
       ? settings!.snapMode
       : defaultViewportSettings.snapMode,
     snapThresholdPx: normalizeSnapThresholdPx(settings?.snapThresholdPx),
-    showVertexOverlay: settings?.showVertexOverlay ?? defaultViewportSettings.showVertexOverlay,
   }
 }
 
@@ -3630,8 +3628,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.cameraProjection === b.cameraProjection &&
     a.cameraControlMode === b.cameraControlMode &&
     a.snapMode === b.snapMode &&
-    a.snapThresholdPx === b.snapThresholdPx &&
-    a.showVertexOverlay === b.showVertexOverlay
+    a.snapThresholdPx === b.snapThresholdPx
   )
 }
 
@@ -6456,9 +6453,6 @@ function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportS
   }
   if (typeof (input as any).snapThresholdPx === 'number' || typeof (input as any).snapThresholdPx === 'string') {
     normalized.snapThresholdPx = normalizeSnapThresholdPx((input as any).snapThresholdPx)
-  }
-  if (typeof (input as any).showVertexOverlay === 'boolean') {
-    normalized.showVertexOverlay = (input as any).showVertexOverlay
   }
   if (input.skybox && isPlainObject(input.skybox)) {
     normalized.skybox = input.skybox as Partial<SceneSkyboxSettings>
@@ -12160,9 +12154,6 @@ export const useSceneStore = defineStore('scene', {
     },
     setViewportSnapThresholdPx(value: number) {
       this.setViewportSettings({ snapThresholdPx: normalizeSnapThresholdPx(value) })
-    },
-    toggleViewportShowVertexOverlay() {
-      this.setViewportSettings({ showVertexOverlay: !this.viewportSettings.showVertexOverlay })
     },
     setShadowsEnabled(enabled: boolean) {
       const next = normalizeShadowsEnabledInput(enabled)
