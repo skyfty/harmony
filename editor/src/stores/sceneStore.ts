@@ -10847,7 +10847,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const trackedAssetIds = normalizedIds
-      let stopPrefabProgressWatcher: WatchStopHandle | null = null
+      const prefabProgressWatcher = { stop: null as WatchStopHandle | null }
 
       const clampPercent = (value: unknown): number => {
         const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0
@@ -10896,35 +10896,45 @@ export const useSceneStore = defineStore('scene', {
         return { active, progress, error }
       }
 
-      if (shouldReportPrefabProgress) {
-        this.prefabAssetDownloadProgress[prefabProgressKey] = {
-          active: true,
-          progress: 0,
-          error: null,
-          assetIds: trackedAssetIds,
-        }
+      let prefabProgressTimer: ReturnType<typeof setTimeout> | null = null
+      const PREFAB_PROGRESS_VISIBILITY_DELAY_MS = 120
 
-        stopPrefabProgressWatcher = watch(
-          () =>
-            trackedAssetIds.map((id) => {
-              const entry = assetCache.getEntry(id)
-              return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
-            }),
-          () => {
-            const next = computePrefabAggregateProgress()
-            const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
-            if (!previous) {
-              return
-            }
-            this.prefabAssetDownloadProgress[prefabProgressKey] = {
-              ...previous,
-              active: next.active,
-              progress: next.progress,
-              error: next.error,
-            }
-          },
-          { immediate: true },
-        )
+      if (shouldReportPrefabProgress) {
+        prefabProgressTimer = setTimeout(() => {
+          const initial = computePrefabAggregateProgress()
+          if (!initial.active && !initial.error) {
+            return
+          }
+
+          this.prefabAssetDownloadProgress[prefabProgressKey] = {
+            active: initial.active,
+            progress: initial.progress,
+            error: initial.error,
+            assetIds: trackedAssetIds,
+          }
+
+          prefabProgressWatcher.stop = watch(
+            () =>
+              trackedAssetIds.map((id) => {
+                const entry = assetCache.getEntry(id)
+                return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
+              }),
+            () => {
+              const next = computePrefabAggregateProgress()
+              const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
+              if (!previous) {
+                return
+              }
+              this.prefabAssetDownloadProgress[prefabProgressKey] = {
+                ...previous,
+                active: next.active,
+                progress: next.progress,
+                error: next.error,
+              }
+            },
+            { immediate: true },
+          )
+        }, PREFAB_PROGRESS_VISIBILITY_DELAY_MS)
       }
 
       const errors: Array<{ assetId: string; message: string }> = []
@@ -10946,7 +10956,12 @@ export const useSceneStore = defineStore('scene', {
           }),
         )
       } finally {
-        stopPrefabProgressWatcher?.()
+        if (prefabProgressTimer) {
+          clearTimeout(prefabProgressTimer)
+          prefabProgressTimer = null
+        }
+        prefabProgressWatcher.stop?.()
+        prefabProgressWatcher.stop = null
         if (shouldReportPrefabProgress) {
           const latest = this.prefabAssetDownloadProgress[prefabProgressKey]
           const next = computePrefabAggregateProgress()
@@ -10958,7 +10973,7 @@ export const useSceneStore = defineStore('scene', {
               error: errors.length === 1 ? errors[0]?.message ?? next.error : `${errors.length} assets failed`,
               assetIds: trackedAssetIds,
             }
-          } else {
+          } else if (latest) {
             delete this.prefabAssetDownloadProgress[prefabProgressKey]
           }
         }
