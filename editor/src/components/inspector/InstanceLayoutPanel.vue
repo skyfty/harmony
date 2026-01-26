@@ -145,7 +145,12 @@ function handleReset(): void {
 <template>
   <v-expansion-panel value="instanceLayout">
     <v-expansion-panel-title>
-      Instance Layout
+      <div class="title-row">
+        <span>Layout</span>
+        <v-btn icon size="small" variant="text" @click="handleReset" title="Reset Layout" aria-label="Reset Layout">
+          <v-icon size="18">mdi-refresh</v-icon>
+        </v-btn>
+      </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="panel-content">
@@ -157,24 +162,11 @@ function handleReset(): void {
           ]"
           label="Mode"
           density="compact"
-          variant="outlined"
+          variant="underlined"
           @update:model-value="commitLayout"
         />
 
-        <v-text-field
-          v-model="localTemplateAssetIdOverride"
-          label="Template AssetId (optional)"
-          density="compact"
-          variant="outlined"
-          hint="Empty = use node sourceAssetId"
-          persistent-hint
-          @update:model-value="commitLayout"
-        />
-
-        <div class="template-hint" v-if="templateAssetId">
-          <span class="template-hint__label">Node sourceAssetId:</span>
-          <span class="template-hint__value">{{ templateAssetId }}</span>
-        </div>
+  
 
         <template v-if="localMode === 'grid'">
           <div class="grid-row">
@@ -183,7 +175,7 @@ function handleReset(): void {
               type="number"
               label="Count X"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               min="1"
               @update:model-value="commitLayout"
             />
@@ -192,7 +184,7 @@ function handleReset(): void {
               type="number"
               label="Count Y"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               min="1"
               @update:model-value="commitLayout"
             />
@@ -201,7 +193,7 @@ function handleReset(): void {
               type="number"
               label="Count Z"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               min="1"
               @update:model-value="commitLayout"
             />
@@ -213,7 +205,7 @@ function handleReset(): void {
               type="number"
               label="Spacing X"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               @update:model-value="commitLayout"
             />
             <v-text-field
@@ -221,7 +213,7 @@ function handleReset(): void {
               type="number"
               label="Spacing Y"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               @update:model-value="commitLayout"
             />
             <v-text-field
@@ -229,7 +221,7 @@ function handleReset(): void {
               type="number"
               label="Spacing Z"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               @update:model-value="commitLayout"
             />
           </div>
@@ -242,7 +234,7 @@ function handleReset(): void {
             ]"
             label="Basis"
             density="compact"
-            variant="outlined"
+            variant="underlined"
             @update:model-value="commitLayout"
           />
 
@@ -262,17 +254,13 @@ function handleReset(): void {
               type="number"
               label="Roll (degrees)"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               @update:model-value="commitLayout"
             />
           </template>
         </template>
 
-        <div class="actions">
-          <v-btn size="small" variant="text" @click="handleReset">
-            Reset
-          </v-btn>
-        </div>
+        
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -306,5 +294,12 @@ function handleReset(): void {
 .actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
 }
 </style>
