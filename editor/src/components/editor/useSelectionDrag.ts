@@ -220,6 +220,45 @@ export function useSelectionDrag(
     emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
   }
 
+  function applyWorldDeltaToSelectionDrag(drag: SelectionDragState, deltaWorld: THREE.Vector3) {
+    if (!deltaWorld || deltaWorld.lengthSq() < 1e-12) {
+      return
+    }
+
+    // Selection drag is constrained to the original Y plane.
+    // Keep behavior consistent by ignoring vertical delta.
+    selectDragDelta.copy(deltaWorld)
+    selectDragDelta.y = 0
+
+    drag.object.updateMatrixWorld(true)
+    drag.object.getWorldPosition(selectDragWorldPosition)
+    selectDragWorldPosition.add(selectDragDelta)
+
+    const newLocalPosition = selectDragWorldPosition.clone()
+    if (drag.parent) {
+      drag.parent.worldToLocal(newLocalPosition)
+    }
+    newLocalPosition.y = drag.initialLocalPosition.y
+    drag.object.position.copy(newLocalPosition)
+    drag.object.updateMatrixWorld(true)
+    callbacks.syncInstancedTransform(drag.object, true)
+
+    drag.companions.forEach((companion) => {
+      companion.object.updateMatrixWorld(true)
+      companion.object.getWorldPosition(dropWorldPositionHelper)
+      dropWorldPositionHelper.add(selectDragDelta)
+
+      const localPosition = dropWorldPositionHelper.clone()
+      if (companion.parent) {
+        companion.parent.worldToLocal(localPosition)
+      }
+      localPosition.y = companion.initialLocalPosition.y
+      companion.object.position.copy(localPosition)
+      companion.object.updateMatrixWorld(true)
+      callbacks.syncInstancedTransform(companion.object, true)
+    })
+  }
+
   function dropSelectionToGround() {
     const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
     if (!unlockedSelection.length) {
@@ -437,6 +476,7 @@ export function useSelectionDrag(
     createSelectionDragState,
     updateSelectDragPosition,
     commitSelectionDragTransforms,
+    applyWorldDeltaToSelectionDrag,
     dropSelectionToGround,
     alignSelection,
     rotateSelection

@@ -392,6 +392,28 @@
         @click="toggleAxesVisibility"
       />
 
+      <v-btn
+        :icon="vertexSnapEnabled ? 'mdi-magnet' : 'mdi-magnet-off'"
+        :color="vertexSnapEnabled ? 'primary' : undefined"
+        :variant="vertexSnapEnabled ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Toggle Vertex Snap"
+        @click="toggleVertexSnap"
+      />
+
+      <v-btn
+        :icon="showVertexOverlay ? 'mdi-dots-grid' : 'mdi-dots-grid'"
+        :color="showVertexOverlay ? 'primary' : undefined"
+        :variant="showVertexOverlay ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Toggle Vertex Overlay (Debug)"
+        @click="toggleVertexOverlay"
+      />
+
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -422,6 +444,8 @@ const props = withDefaults(
   defineProps<{
   showGrid: boolean
   showAxes: boolean
+  vertexSnapEnabled?: boolean
+  showVertexOverlay?: boolean
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -437,6 +461,8 @@ const props = withDefaults(
   }>(),
   {
     buildToolsDisabled: false,
+    vertexSnapEnabled: false,
+    showVertexOverlay: false,
   },
 )
 
@@ -461,6 +487,8 @@ const emit = defineEmits<{
 const {
   showGrid,
   showAxes,
+  vertexSnapEnabled,
+  showVertexOverlay,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
@@ -725,6 +753,14 @@ function toggleGridVisibility() {
 
 function toggleAxesVisibility() {
   sceneStore.toggleViewportAxesVisible()
+}
+
+function toggleVertexSnap() {
+  sceneStore.toggleViewportVertexSnap()
+}
+
+function toggleVertexOverlay() {
+  sceneStore.toggleViewportShowVertexOverlay()
 }
 
 function handleClearScatterMenuAction() {

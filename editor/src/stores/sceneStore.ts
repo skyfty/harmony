@@ -87,7 +87,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
   ClipboardEntry,
   SceneMaterialTextureSlot,
@@ -3527,6 +3527,10 @@ const defaultViewportSettings: SceneViewportSettings = {
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
+
+  snapMode: 'off',
+  snapThresholdPx: 12,
+  showVertexOverlay: false,
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjection {
@@ -3535,6 +3539,23 @@ function isCameraProjectionMode(value: unknown): value is CameraProjection {
 
 function isCameraControlMode(value: unknown): value is CameraControlMode {
   return value === 'orbit' || value === 'map'
+}
+
+function isViewportSnapMode(value: unknown): value is SceneViewportSnapMode {
+  return value === 'off' || value === 'vertex'
+}
+
+function normalizeSnapThresholdPx(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    return defaultViewportSettings.snapThresholdPx
+  }
+  // Keep it within sane UI bounds.
+  return Math.min(Math.max(Math.round(numeric), 1), 128)
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
@@ -3547,6 +3568,12 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
       ? settings!.cameraControlMode
       : defaultViewportSettings.cameraControlMode,
+
+    snapMode: isViewportSnapMode(settings?.snapMode)
+      ? settings!.snapMode
+      : defaultViewportSettings.snapMode,
+    snapThresholdPx: normalizeSnapThresholdPx(settings?.snapThresholdPx),
+    showVertexOverlay: settings?.showVertexOverlay ?? defaultViewportSettings.showVertexOverlay,
   }
 }
 
@@ -3601,7 +3628,10 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showGrid === b.showGrid &&
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
-    a.cameraControlMode === b.cameraControlMode
+    a.cameraControlMode === b.cameraControlMode &&
+    a.snapMode === b.snapMode &&
+    a.snapThresholdPx === b.snapThresholdPx &&
+    a.showVertexOverlay === b.showVertexOverlay
   )
 }
 
@@ -6420,6 +6450,15 @@ function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportS
   }
   if (isCameraControlMode(input.cameraControlMode)) {
     normalized.cameraControlMode = input.cameraControlMode
+  }
+  if (isViewportSnapMode((input as any).snapMode)) {
+    normalized.snapMode = (input as any).snapMode
+  }
+  if (typeof (input as any).snapThresholdPx === 'number' || typeof (input as any).snapThresholdPx === 'string') {
+    normalized.snapThresholdPx = normalizeSnapThresholdPx((input as any).snapThresholdPx)
+  }
+  if (typeof (input as any).showVertexOverlay === 'boolean') {
+    normalized.showVertexOverlay = (input as any).showVertexOverlay
   }
   if (input.skybox && isPlainObject(input.skybox)) {
     normalized.skybox = input.skybox as Partial<SceneSkyboxSettings>
@@ -12107,6 +12146,23 @@ export const useSceneStore = defineStore('scene', {
     },
     toggleViewportAxesVisible() {
       this.setViewportAxesVisible(!this.viewportSettings.showAxes)
+    },
+
+    setViewportSnapMode(mode: SceneViewportSnapMode) {
+      if (!isViewportSnapMode(mode)) {
+        return
+      }
+      this.setViewportSettings({ snapMode: mode })
+    },
+    toggleViewportVertexSnap() {
+      const next: SceneViewportSnapMode = this.viewportSettings.snapMode === 'vertex' ? 'off' : 'vertex'
+      this.setViewportSnapMode(next)
+    },
+    setViewportSnapThresholdPx(value: number) {
+      this.setViewportSettings({ snapThresholdPx: normalizeSnapThresholdPx(value) })
+    },
+    toggleViewportShowVertexOverlay() {
+      this.setViewportSettings({ showVertexOverlay: !this.viewportSettings.showVertexOverlay })
     },
     setShadowsEnabled(enabled: boolean) {
       const next = normalizeShadowsEnabledInput(enabled)

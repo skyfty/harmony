@@ -22,11 +22,6 @@ const currentLayout = computed<SceneNodeInstanceLayout>(() => {
   return clampSceneNodeInstanceLayout(selectedNode.value?.instanceLayout)
 })
 
-const templateAssetId = computed(() => {
-  const raw = selectedNode.value?.sourceAssetId
-  return typeof raw === 'string' ? raw.trim() : ''
-})
-
 const localMode = ref<'single' | 'grid'>('single')
 const localTemplateAssetIdOverride = ref<string>('')
 
