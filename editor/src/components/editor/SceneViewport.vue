@@ -1414,30 +1414,41 @@ vertexOverlayGroup.name = 'VertexOverlay'
 vertexOverlayGroup.renderOrder = 20000
 vertexOverlayGroup.frustumCulled = false
 
-const vertexOverlayHintLineGeometry = new THREE.BufferGeometry()
-vertexOverlayHintLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3))
-const vertexOverlayHintLineMaterial = new THREE.LineBasicMaterial({
+// NOTE: WebGL line width is effectively 1px on many platforms.
+// Use a mesh "beam" so the hint remains obvious.
+const vertexOverlayHintBeamGeometry = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true)
+const vertexOverlayHintBeamMaterial = new THREE.MeshBasicMaterial({
   color: 0x00e5ff,
   transparent: true,
-  opacity: 0.8,
+  opacity: 0.75,
   depthTest: false,
   depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
 })
-vertexOverlayHintLineMaterial.toneMapped = false
-const vertexOverlayHintLine = new THREE.Line(vertexOverlayHintLineGeometry, vertexOverlayHintLineMaterial)
-vertexOverlayHintLine.name = 'VertexOverlayHintLine'
-vertexOverlayHintLine.renderOrder = 19999
-vertexOverlayHintLine.visible = false
-vertexOverlayHintLine.frustumCulled = false
-;(vertexOverlayHintLine as any).raycast = () => {}
+vertexOverlayHintBeamMaterial.toneMapped = false
+const vertexOverlayHintBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, vertexOverlayHintBeamMaterial)
+vertexOverlayHintBeam.name = 'VertexOverlayHintBeam'
+vertexOverlayHintBeam.renderOrder = 19999
+vertexOverlayHintBeam.visible = false
+vertexOverlayHintBeam.frustumCulled = false
+;(vertexOverlayHintBeam as any).raycast = () => {}
 
-vertexOverlayGroup.add(vertexOverlayHintLine)
+vertexOverlayGroup.add(vertexOverlayHintBeam)
+
+const vertexOverlayHintDirHelper = new THREE.Vector3()
+const vertexOverlayHintMidHelper = new THREE.Vector3()
+const vertexOverlayHintQuatHelper = new THREE.Quaternion()
+const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.06
+const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.015
+const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
+const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
 
 
 let pendingVertexSnapResult: VertexSnapResult | null = null
 
 function clearVertexSnapMarkers() {
-  vertexOverlayHintLine.visible = false
+  vertexOverlayHintBeam.visible = false
 }
 
 function updateVertexSnapMarkers(result: VertexSnapResult | null) {
@@ -1445,14 +1456,38 @@ function updateVertexSnapMarkers(result: VertexSnapResult | null) {
     clearVertexSnapMarkers()
     return
   }
-  const lineAttr = vertexOverlayHintLineGeometry.getAttribute('position') as THREE.BufferAttribute | null
-  if (lineAttr && lineAttr.count >= 2) {
-    lineAttr.setXYZ(0, result.sourceWorld.x, result.sourceWorld.y, result.sourceWorld.z)
-    lineAttr.setXYZ(1, result.targetWorld.x, result.targetWorld.y, result.targetWorld.z)
-    lineAttr.needsUpdate = true
+
+  vertexOverlayHintDirHelper.copy(result.targetWorld).sub(result.sourceWorld)
+  const len = vertexOverlayHintDirHelper.length()
+  if (!Number.isFinite(len) || len <= 1e-6) {
+    clearVertexSnapMarkers()
+    return
   }
-  vertexOverlayHintLineGeometry.computeBoundingSphere()
-  vertexOverlayHintLine.visible = true
+
+  vertexOverlayHintMidHelper.copy(result.sourceWorld).add(result.targetWorld).multiplyScalar(0.5)
+  vertexOverlayHintDirHelper.multiplyScalar(1 / len)
+  vertexOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, vertexOverlayHintDirHelper)
+
+  vertexOverlayHintBeam.position.copy(vertexOverlayHintMidHelper)
+  vertexOverlayHintBeam.quaternion.copy(vertexOverlayHintQuatHelper)
+  // CylinderGeometry is unit height along +Y; scale Y to length.
+  vertexOverlayHintBeam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
+  vertexOverlayHintBeam.visible = true
+}
+
+const updateVertexSnapHintPulse = (nowMs: number) => {
+  if (!vertexOverlayHintBeam.visible) {
+    return
+  }
+  // Gentle ~2Hz pulse.
+  const t = nowMs * 0.002
+  const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
+  const opacity = VERTEX_OVERLAY_HINT_BASE_OPACITY + VERTEX_OVERLAY_HINT_PULSE_OPACITY * pulse
+  vertexOverlayHintBeamMaterial.opacity = opacity
+
+  const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
+  vertexOverlayHintBeam.scale.x = radius
+  vertexOverlayHintBeam.scale.z = radius
 }
 
 const groundEditor = createGroundEditor({
@@ -5740,6 +5775,7 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
+  updateVertexSnapHintPulse(performance.now())
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
