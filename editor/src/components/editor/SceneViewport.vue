@@ -500,8 +500,11 @@ function applyInstanceLayoutVisibilityAndAssetBinding(object: THREE.Object3D, no
   const userData = object.userData ?? (object.userData = {})
   const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
   const instanceCount = layout ? getInstanceLayoutCount(layout) : 1
-  const templateAssetId = layout && instanceCount > 1 ? resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId) : null
-  const active = Boolean(layout && instanceCount > 1 && templateAssetId)
+  // Treat grid layouts as instanced-rendered even when instanceCount === 1.
+  // This avoids a transient state where the template mesh is hidden and the instanced
+  // binding is not updated, which can cause the model to disappear until a reload.
+  const templateAssetId = layout && layout.mode === 'grid' ? resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId) : null
+  const active = Boolean(layout && layout.mode === 'grid' && templateAssetId)
 
   if (active && templateAssetId) {
     if (!userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
@@ -2702,7 +2705,7 @@ const {
       const node = findSceneNode(sceneStore.nodes, nodeId)
       if (node && assetId) {
         const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
-        if (layout && getInstanceLayoutCount(layout) > 1) {
+        if (layout && layout.mode === 'grid') {
           const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
           if (templateAssetId && templateAssetId === assetId) {
             syncInstanceLayoutInstancedMatrices({
@@ -2880,7 +2883,7 @@ function updateInstancedCullingAndLod(): void {
     }
 
     const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
-    if (layout && getInstanceLayoutCount(layout) > 1) {
+    if (layout && layout.mode === 'grid') {
       return
     }
 

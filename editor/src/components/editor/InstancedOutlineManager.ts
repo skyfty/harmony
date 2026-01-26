@@ -177,9 +177,12 @@ export function createInstancedOutlineManager(options: { outlineGroup: THREE.Gro
     let needsRebuild = false
     const isVisible = object.visible !== false
 
+    const activeHandles = new Set<string>()
+
     bindings.forEach((binding) => {
       binding.slots.forEach((slot) => {
         const proxyKey = `${binding.bindingId}:${slot.handleId}`
+        activeHandles.add(proxyKey)
         const proxy = entry.proxies.get(proxyKey)
         if (!proxy) {
           needsRebuild = true
@@ -190,6 +193,26 @@ export function createInstancedOutlineManager(options: { outlineGroup: THREE.Gro
         proxy.visible = isVisible && mesh.visible !== false
       })
     })
+
+    const unusedHandles: string[] = []
+    entry.proxies.forEach((_proxy, proxyKey) => {
+      if (!activeHandles.has(proxyKey)) {
+        unusedHandles.push(proxyKey)
+      }
+    })
+
+    if (unusedHandles.length) {
+      needsRebuild = true
+      unusedHandles.forEach((proxyKey) => {
+        const proxy = entry.proxies.get(proxyKey)
+        if (!proxy) {
+          return
+        }
+        proxy.visible = false
+        proxy.parent?.remove(proxy)
+        entry.proxies.delete(proxyKey)
+      })
+    }
 
     entry.group.visible = Array.from(entry.proxies.values()).some((proxy) => proxy.visible)
     return { needsRebuild }
