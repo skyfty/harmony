@@ -16,6 +16,7 @@
       <PrefabPreview
         v-else-if="showPrefabPreview"
         :file="previewState.file"
+        :asset-id="props.asset.id"
         class="upload-preview__renderer"
         ref="threePreviewRef"
         @dimensions="(payload) => emit('dimensions', payload)"

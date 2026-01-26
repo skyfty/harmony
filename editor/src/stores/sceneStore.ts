@@ -141,7 +141,11 @@ import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
-import { computeInstanceLayoutGridCenterOffsetLocal, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
+import {
+  clampSceneNodeInstanceLayout,
+  computeInstanceLayoutGridCenterOffsetLocal,
+  resolveInstanceLayoutTemplateAssetId,
+} from '@schema/instanceLayout'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -6072,6 +6076,16 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   }
   collectAssetIdCandidate(bucket, node.sourceAssetId)
   collectAssetIdCandidate(bucket, node.importMetadata?.assetId)
+
+  // InstanceLayout may reference a different template asset.
+  const rawLayout = (node as any).instanceLayout as unknown
+  if (rawLayout) {
+    const layout = clampSceneNodeInstanceLayout(rawLayout)
+    if (layout?.mode === 'grid') {
+      const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
+      collectAssetIdCandidate(bucket, templateAssetId)
+    }
+  }
   if (node.materials?.length) {
     node.materials.forEach((material) => {
       collectAssetIdsFromUnknown(material, bucket)

@@ -4,15 +4,9 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 import { loadObjectFromFile } from '@schema/assetImport'
-import ResourceCache from '@schema/ResourceCache'
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
-
-import { parsePrefabFile } from '@/utils/prefabDocument'
-import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
-import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
 import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
-import { collectPrefabAssetReferences } from '@/stores/sceneStore'
+import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 
 export type DragPreviewController = {
   group: THREE.Group
@@ -78,13 +72,20 @@ export function useDragPreview(options: Options): DragPreviewController {
   let pendingPreviewAssetId: string | null = null
   let dragPreviewLoadToken = 0
   let lastDragPoint: THREE.Vector3 | null = null
+  let activePrefabHandle: PrefabPreviewHandle | null = null
 
   const clearObject = (disposeResources = true) => {
     if (dragPreviewAssetId) {
       setDragPreviewReady(dragPreviewAssetId, false)
     }
+    // Release pinned prefab cache entry (if any).
+    activePrefabHandle?.release()
+    activePrefabHandle = null
+
+    // NOTE: drag preview objects share geometry/material/texture by design.
+    // Avoid disposing shared GPU resources here.
     if (dragPreviewObject && disposeResources) {
-      options.disposeObjectResources(dragPreviewObject)
+      // Intentionally no-op.
     }
     group.clear()
     dragPreviewObject = null
@@ -113,17 +114,6 @@ export function useDragPreview(options: Options): DragPreviewController {
 
   const getLastPoint = () => (lastDragPoint ? lastDragPoint.clone() : null)
 
-  const ensureAssetsCachedLocally = async (assetIds: string[]): Promise<boolean> => {
-    if (!assetIds.length) {
-      return true
-    }
-    const missing = assetIds.filter((id) => id && !options.assetCacheStore.hasCache(id))
-    if (missing.length) {
-      await Promise.all(missing.map((id) => options.assetCacheStore.loadFromIndexedDb(id)))
-    }
-    return assetIds.every((id) => !id || options.assetCacheStore.hasCache(id))
-  }
-
   const loadForAsset = async (asset: ProjectAsset): Promise<boolean> => {
     if (pendingPreviewAssetId === asset.id) {
       return false
@@ -151,14 +141,15 @@ export function useDragPreview(options: Options): DragPreviewController {
       }
 
       if (token !== dragPreviewLoadToken) {
-        options.disposeObjectResources(baseGroup.object)
         return false
       }
 
-      applyPreviewVisualTweaks(baseGroup.object)
-      dragPreviewObject = baseGroup.object
+      // Clone to avoid mutating cached modelObjectCache entries.
+      const previewObject = baseGroup.object.clone(true)
+      applyPreviewVisualTweaks(previewObject)
+      dragPreviewObject = previewObject
       dragPreviewAssetId = asset.id
-      group.add(baseGroup.object)
+      group.add(previewObject)
 
       if (lastDragPoint) {
         group.position.copy(lastDragPoint)
@@ -199,38 +190,26 @@ export function useDragPreview(options: Options): DragPreviewController {
         return false
       }
 
-      const document = await parsePrefabFile(file)
-      const rootNode = document.nodes?.[0] ?? null
-      const dependencyAssetIds = collectPrefabAssetReferences(rootNode)
-
-      const allCached = await ensureAssetsCachedLocally(dependencyAssetIds)
-      if (!allCached) {
-        pendingPreviewAssetId = null
-        return false
-      }
-
-      const buildOptions: SceneGraphBuildOptions = {
-        enableGround: true,
-        lazyLoadMeshes: false,
-      }
-
-      const assetLoader = new CacheOnlyAssetLoader(new StoreBackedAssetCache(options.assetCacheStore as any))
-      const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
-        warn: (message: string) => console.warn('[DragPreview:Prefab] resource warning:', message),
-        reportDownloadProgress: undefined,
+      // Build (or reuse) a fully post-processed prefab preview root.
+      const handle = await acquirePrefabPreviewRoot({
+        assetId: asset.id,
+        file,
+        assetCacheStore: options.assetCacheStore,
+        cacheOnly: true,
       })
 
-      const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
-
       if (token !== dragPreviewLoadToken) {
-        options.disposeObjectResources(root)
+        handle.release()
         return false
       }
+
+      const root = handle.root
 
       root.position.set(0, 0, 0)
       applyPreviewVisualTweaks(root)
       dragPreviewObject = root
       dragPreviewAssetId = asset.id
+      activePrefabHandle = handle
       group.add(root)
       setDragPreviewReady(asset.id, true)
 

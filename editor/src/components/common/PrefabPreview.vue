@@ -6,16 +6,12 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { AssetLoader } from '@schema/assetCache'
-import ResourceCache from '@schema/ResourceCache'
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
-import { disposeMaterialTextures } from '@schema/material'
-import { parsePrefabFile } from '@/utils/prefabDocument'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
+import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 
 const props = defineProps<{
   file: File | null
+  assetId?: string | null
   background?: string
 }>()
 
@@ -32,37 +28,18 @@ let controls: OrbitControls | null = null
 let animationHandle = 0
 let currentRoot: THREE.Object3D | null = null
 let loadToken = 0
+let activeHandle: PrefabPreviewHandle | null = null
 
 const assetCacheStore = useAssetCacheStore()
-const assetLoader = new AssetLoader(new StoreBackedAssetCache(assetCacheStore))
-
-function disposeObject(object: THREE.Object3D | null): void {
-  if (!object) {
-    return
-  }
-  object.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (mesh.isMesh) {
-      mesh.geometry?.dispose()
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      materials.forEach((mat) => {
-        if (!mat) {
-          return
-        }
-        disposeMaterialTextures(mat)
-        mat.dispose?.()
-      })
-    }
-  })
-}
 
 function clearScene(): void {
   if (!scene) {
     return
   }
+  activeHandle?.release()
+  activeHandle = null
   if (currentRoot) {
     scene.remove(currentRoot)
-    disposeObject(currentRoot)
     currentRoot = null
   }
 }
@@ -114,25 +91,21 @@ async function loadPrefabScene(): Promise<void> {
     return
   }
   try {
-    const document = await parsePrefabFile(props.file)
-    const buildOptions: SceneGraphBuildOptions = {
-      enableGround: true,
-      lazyLoadMeshes: false,
-    }
-
-    const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
-      warn: (message) => console.warn('[PrefabPreview] resource warning:', message),
-      reportDownloadProgress: undefined,
+    const handle = await acquirePrefabPreviewRoot({
+      assetId: props.assetId ?? 'prefab-preview',
+      file: props.file,
+      assetCacheStore,
+      cacheOnly: false,
     })
-    const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
     if (token !== loadToken) {
-      disposeObject(root)
+      handle.release()
       return
     }
-    currentRoot = root
-    scene.add(root)
-    fitCamera(root)
-    emitDimensions(root)
+    activeHandle = handle
+    currentRoot = handle.root
+    scene.add(handle.root)
+    fitCamera(handle.root)
+    emitDimensions(handle.root)
   } catch (error) {
     console.warn('[PrefabPreview] failed to load prefab scene', error)
   }
@@ -231,7 +204,8 @@ onBeforeUnmount(() => {
   loadToken += 1
   cancelAnimationFrame(animationHandle)
   window.removeEventListener('resize', handleResize)
-  disposeObject(currentRoot)
+  activeHandle?.release()
+  activeHandle = null
   currentRoot = null
   controls?.dispose()
   controls = null
