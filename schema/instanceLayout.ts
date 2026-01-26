@@ -154,7 +154,52 @@ export function buildInstanceLayoutSignature(
   const counts = `${layout.countX},${layout.countY},${layout.countZ}`
   const spacing = `${layout.spacingX},${layout.spacingY},${layout.spacingZ}`
   const ex = extents ? `${extents.x},${extents.y},${extents.z}` : 'noextents'
-  return `${templateAssetId}|grid|${counts}|${spacing}|${basis}|${ex}`
+  // NOTE: grid layouts are centered around the node origin.
+  return `${templateAssetId}|grid|centered|${counts}|${spacing}|${basis}|${ex}`
+}
+
+export function computeInstanceLayoutGridCenterOffsetLocal(
+  layout: SceneNodeInstanceLayout,
+  templateBoundingBox: Box3 | null | undefined,
+): Vector3 | null {
+  if (layout.mode !== 'grid') {
+    return null
+  }
+  const box = templateBoundingBox
+  if (!box || box.isEmpty()) {
+    return null
+  }
+
+  const basis = computeInstancedTilingBasis({
+    mode: layout.basisMode,
+    forwardLocal: layout.forwardLocal,
+    upLocal: layout.upLocal,
+    rollDegrees: layout.rollDegrees,
+  })
+
+  const extents = computeBoxExtentsAlongBasis(box, basis)
+  const stepX = extents.x + layout.spacingX
+  const stepY = extents.y + layout.spacingY
+  const stepZ = extents.z + layout.spacingZ
+
+  const maxX = Math.max(0, Math.floor(layout.countX) - 1) * (Number.isFinite(stepX) ? stepX : 0)
+  const maxY = Math.max(0, Math.floor(layout.countY) - 1) * (Number.isFinite(stepY) ? stepY : 0)
+  const maxZ = Math.max(0, Math.floor(layout.countZ) - 1) * (Number.isFinite(stepZ) ? stepZ : 0)
+
+  const offset = new Vector3()
+    .addScaledVector(basis.xAxis, maxX * 0.5)
+    .addScaledVector(basis.yAxis, maxY * 0.5)
+    .addScaledVector(basis.zAxis, maxZ * 0.5)
+
+  if (!Number.isFinite(offset.x) || !Number.isFinite(offset.y) || !Number.isFinite(offset.z)) {
+    return null
+  }
+
+  if (offset.lengthSq() < 1e-12) {
+    return new Vector3(0, 0, 0)
+  }
+
+  return offset
 }
 
 export function buildInstanceLayoutLocalMatrices(layout: SceneNodeInstanceLayout, templateBoundingBox: Box3 | null | undefined): {
@@ -208,6 +253,16 @@ export function buildInstanceLayoutLocalMatrices(layout: SceneNodeInstanceLayout
     stepZ,
     basis,
   }).slice(0, count)
+
+  // Center the entire grid around the node origin.
+  const centerOffset = computeInstanceLayoutGridCenterOffsetLocal(layout, box)
+  if (centerOffset && centerOffset.lengthSq() > 1e-12) {
+    const tmp = new Vector3()
+    for (const matrix of localMatrices) {
+      tmp.setFromMatrixPosition(matrix).sub(centerOffset)
+      matrix.setPosition(tmp)
+    }
+  }
 
   return {
     signature: buildInstanceLayoutSignature(layout, templateAssetId, extents),
@@ -266,6 +321,16 @@ export function computeInstanceLayoutLocalBoundingBox(
         maxOffset.max(offset)
       }
     }
+  }
+
+  // Grid layouts are centered around the node origin.
+  const centerOffset = new Vector3()
+    .addScaledVector(xAxis, maxX * 0.5)
+    .addScaledVector(yAxis, maxY * 0.5)
+    .addScaledVector(zAxis, maxZ * 0.5)
+  if (Number.isFinite(centerOffset.x) && Number.isFinite(centerOffset.y) && Number.isFinite(centerOffset.z)) {
+    minOffset.sub(centerOffset)
+    maxOffset.sub(centerOffset)
   }
 
   return new Box3(

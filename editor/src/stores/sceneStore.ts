@@ -141,6 +141,7 @@ import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
+import { computeInstanceLayoutGridCenterOffsetLocal, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -8946,9 +8947,55 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
+      const prevMode = typeof (existing as any)?.mode === 'string' && (existing as any).mode === 'grid' ? 'grid' : 'single'
+      const nextMode = typeof (sanitized as any)?.mode === 'string' && (sanitized as any).mode === 'grid' ? 'grid' : 'single'
+      // Keep world-space geometry stable when toggling layout mode by compensating node position.
+      // - single -> grid: keep instance 0 (node binding) in place
+      // - grid -> single: keep instance 0 (node binding) in place
+      const shouldCompensatePivot = prevMode !== nextMode && (prevMode === 'grid' || nextMode === 'grid')
+
       this.captureHistorySnapshot()
 
       visitNode(this.nodes, nodeId, (node) => {
+        if (shouldCompensatePivot) {
+          const gridLayout =
+            nextMode === 'grid' && sanitized && sanitized.mode === 'grid'
+              ? sanitized
+              : prevMode === 'grid' && (existing as any)?.mode === 'grid'
+                ? (existing as SceneNodeInstanceLayout)
+                : null
+
+          // Enabling grid shifts locals by -center, so move base by +center.
+          // Disabling grid removes that shift, so move base by -center.
+          const direction = nextMode === 'grid' ? 1 : -1
+
+          if (gridLayout) {
+            const sourceAssetId = typeof (node as any).sourceAssetId === 'string' ? ((node as any).sourceAssetId as string) : null
+            const templateAssetId = resolveInstanceLayoutTemplateAssetId(gridLayout, sourceAssetId)
+            if (templateAssetId) {
+              const cached = getCachedModelObject(templateAssetId)
+              const bbox = cached?.boundingBox
+              const centerOffsetLocal = computeInstanceLayoutGridCenterOffsetLocal(gridLayout, bbox)
+              if (centerOffsetLocal && centerOffsetLocal.lengthSq() > 1e-12) {
+                const scale = (node as any).scale as Vector3Like
+                const rotation = (node as any).rotation as Vector3Like
+                const position = (node as any).position as Vector3Like
+
+                const deltaWorld = centerOffsetLocal
+                  .clone()
+                  .multiplyScalar(direction)
+                  .multiply(new Vector3(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1))
+                  .applyEuler(new Euler(rotation?.x ?? 0, rotation?.y ?? 0, rotation?.z ?? 0))
+
+                ;(node as any).position = {
+                  x: (position?.x ?? 0) + deltaWorld.x,
+                  y: (position?.y ?? 0) + deltaWorld.y,
+                  z: (position?.z ?? 0) + deltaWorld.z,
+                } as Vector3Like
+              }
+            }
+          }
+        }
         if (sanitized) {
           ;(node as any).instanceLayout = sanitized
         } else if ('instanceLayout' in (node as any)) {
@@ -8957,6 +9004,9 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.queueSceneNodePatch(nodeId, ['instanceLayout'])
+      if (shouldCompensatePivot) {
+        this.queueSceneNodePatch(nodeId, ['transform'])
+      }
       commitSceneSnapshot(this)
     },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
