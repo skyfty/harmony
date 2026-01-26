@@ -120,7 +120,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="分组选中"
+        title="Group Selection"
         :disabled="selectionCount < 1"
         @click="handleGroupSelection"
       />
@@ -131,7 +131,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="应用变换到节点"
+        title="Apply Transform to Nodes"
         :disabled="!canApplyTransformsToGroup"
         @click="handleApplyTransformsToGroup"
       />
@@ -142,7 +142,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="重算组原点"
+        title="Recalculate Group Origin"
         :disabled="!canRecenterGroupOrigin"
         @click="handleRecenterGroupOrigin"
       />
@@ -171,7 +171,6 @@
         @click="emit('drop-to-ground')"
       />
       <v-menu
-        v-if="selectionCount > 0"
         v-model="alignMenuOpen"
         location="bottom"
         :offset="6"
@@ -184,28 +183,27 @@
             density="compact"
             size="small"
             class="toolbar-button"
-            title="对齐/排列/分布"
+            title="Align/Arrange/Distribute"
             :disabled="!canAlignSelection"
             :color="alignMenuOpen ? 'primary' : undefined"
             :variant="alignMenuOpen ? 'flat' : 'text'"
           />
         </template>
         <v-list density="compact" class="align-menu">
-          <v-list-item title="轴对齐（按主选中位置 / 世界坐标）" prepend-icon="mdi-axis-arrow" :disabled="true" />
           <v-list-item
-            title="X轴对齐（世界 X）"
+            title="X Axis Alignment (World X)"
             prepend-icon="mdi-axis-arrow"
             :disabled="!canAlignSelection"
             @click="handleAlignCommand('axis-x')"
           />
           <v-list-item
-            title="Y轴对齐（世界 Y）"
+            title="Y Axis Alignment (World Y)"
             prepend-icon="mdi-axis-arrow"
             :disabled="!canAlignSelection"
             @click="handleAlignCommand('axis-y')"
           />
           <v-list-item
-            title="Z轴对齐（世界 Z）"
+            title="Z Axis Alignment (World Z)"
             prepend-icon="mdi-axis-arrow"
             :disabled="!canAlignSelection"
             @click="handleAlignCommand('axis-z')"
@@ -214,7 +212,7 @@
           <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
           <v-list-item
             v-if="selectionCount >= 2"
-            title="固定主选中为锚点"
+            title="Fix Primary Selection as Anchor"
             :prepend-icon="fixedPrimaryAsAnchor ? 'mdi-check' : 'mdi-checkbox-blank-outline'"
             @click="toggleFixedPrimaryAsAnchor"
           />
@@ -222,26 +220,26 @@
           <template v-if="selectionCount >= 2">
             <v-divider class="align-menu__divider" />
             <v-list-item
-              title="水平排列（向右 / 世界 X+）"
+              title="Horizontal Arrange (Right / World X+)"
               prepend-icon="mdi-format-horizontal-align-left"
               :disabled="!canAlignSelection"
               @click="handleAlignCommand({ type: 'arrange', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
             />
             <v-list-item
-              title="垂直排列（向上 / 世界 Y+）"
+              title="Vertical Arrange (Up / World Y+)"
               prepend-icon="mdi-format-vertical-align-top"
               :disabled="!canAlignSelection"
               @click="handleAlignCommand({ type: 'arrange', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
             />
             <v-divider class="align-menu__divider" />
             <v-list-item
-              title="水平分布"
+              title="Horizontal Distribute"
               prepend-icon="mdi-format-horizontal-distribute"
               :disabled="!canAlignSelection || selectionCount < 3"
               @click="handleAlignCommand({ type: 'distribute', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
             />
             <v-list-item
-              title="垂直分布（世界 Y）"
+              title="Vertical Distribute (World Y)"
               prepend-icon="mdi-format-vertical-distribute"
               :disabled="!canAlignSelection || selectionCount < 3"
               @click="handleAlignCommand({ type: 'distribute', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
@@ -267,7 +265,7 @@
             :color="scatterEraseModeActive ? 'primary' : undefined"
             :variant="scatterEraseModeActive ? 'flat' : 'text'"
             :disabled="!canEraseScatter"
-            title="Scatter 擦除"
+            title="Scatter Erase"
             @click="handleScatterEraseButtonClick"
             @contextmenu.prevent.stop="handleScatterEraseContextMenu"
           />
@@ -276,7 +274,7 @@
           <div class="scatter-erase-menu__card">
             <div class="scatter-erase-menu__slider">
               <div class="scatter-erase-menu__slider-labels">
-                <span>擦除半径</span>
+                <span>Erase Radius</span>
                 <span>{{ scatterEraseRadiusLabel }}</span>
               </div>
               <v-slider
@@ -299,7 +297,7 @@
                 :disabled="!canClearAllScatterInstances"
                 @click="handleClearScatterMenuAction"
               >
-                清除所有Scatter实例
+                Clear All Scatter Instances
               </v-btn>
             </v-list-item>
           </div>
@@ -313,7 +311,7 @@
             density="compact"
             size="small"
             class="toolbar-button"
-            title="旋转"
+            title="Rotate"
             :disabled="!canRotateSelection"
             :color="rotationMenuOpen ? 'primary' : undefined"
             :variant="rotationMenuOpen ? 'flat' : 'text'"
@@ -479,20 +477,20 @@ type RotationAction = {
 const rotationSections = [
   {
     id: 'vertical',
-    label: '垂直旋转',
+    label: 'Vertical Rotation',
     actions: [
-      { id: 'vertical-45', label: '垂直旋转45°', axis: 'x', degrees: 45 },
-      { id: 'vertical-90', label: '垂直旋转90°', axis: 'x', degrees: 90 },
-      { id: 'vertical-180', label: '垂直旋转180°', axis: 'x', degrees: 180 },
+      { id: 'vertical-45', label: 'Vertical Rotation 45°', axis: 'x', degrees: 45 },
+      { id: 'vertical-90', label: 'Vertical Rotation 90°', axis: 'x', degrees: 90 },
+      { id: 'vertical-180', label: 'Vertical Rotation 180°', axis: 'x', degrees: 180 },
     ],
   },
   {
     id: 'horizontal',
-    label: '水平旋转',
+    label: 'Horizontal Rotation',
     actions: [
-      { id: 'horizontal-45', label: '水平旋转45°', axis: 'y', degrees: 45 },
-      { id: 'horizontal-90', label: '水平旋转90°', axis: 'y', degrees: 90 },
-      { id: 'horizontal-180', label: '水平旋转180°', axis: 'y', degrees: 180 },
+      { id: 'horizontal-45', label: 'Horizontal Rotation 45°', axis: 'y', degrees: 45 },
+      { id: 'horizontal-90', label: 'Horizontal Rotation 90°', axis: 'y', degrees: 90 },
+      { id: 'horizontal-180', label: 'Horizontal Rotation 180°', axis: 'y', degrees: 180 },
     ],
   },
 ] satisfies Array<{ id: string; label: string; actions: RotationAction[] }>
@@ -515,6 +513,12 @@ watch(buildToolsDisabled, (disabled) => {
   }
   if (disabled && wallPresetMenuOpen.value) {
     wallPresetMenuOpen.value = false
+  }
+})
+
+watch(selectionCount, (count) => {
+  if (count === 0) {
+    alignMenuOpen.value = false
   }
 })
 
