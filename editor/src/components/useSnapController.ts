@@ -76,6 +76,12 @@ export function useSnapController(options: UseSnapControllerOptions) {
     ? options.pixelThreshold
     : 12
   const releaseMultiplier = 1.5
+  // Source vertex acquisition should be easier than target snapping.
+  // Users expect to "grab" a corner vertex even when the pointer is near it,
+  // without needing pixel-perfect placement.
+  const sourceAcquireMultiplier = 2.5
+  const sourceAcquireMinPx = 20
+  const sourceAcquireMaxPx = 64
   const switchImprovementRatio = 0.7
   const switchMinImprovementPx = 2
   const switchScanGateRatio = 0.6
@@ -159,6 +165,11 @@ export function useSnapController(options: UseSnapControllerOptions) {
           ? query.pixelThresholdPx
           : pixelThreshold
 
+    const sourceThreshold = Math.min(
+      Math.max(Math.round(threshold * sourceAcquireMultiplier), sourceAcquireMinPx),
+      sourceAcquireMaxPx,
+    )
+
     if (!query.active) {
       reset()
       return null
@@ -198,13 +209,13 @@ export function useSnapController(options: UseSnapControllerOptions) {
         query.event,
         canvas,
         camera,
-        threshold,
+        sourceThreshold,
       )
 
       // If selected object has no direct mesh vertices (common for instanced-only rendering),
       // fall back to picking an instanced vertex belonging to this node.
       const instancedSourceCandidate = !sourceCandidate
-        ? findNearestVertexOnInstancedMeshes(query.event, canvas, camera, threshold, {
+        ? findNearestVertexOnInstancedMeshes(query.event, canvas, camera, sourceThreshold, {
             includeNodeIds: new Set([selectedNodeId]),
             excludeNodeIds,
           })
