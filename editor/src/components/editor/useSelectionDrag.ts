@@ -220,15 +220,23 @@ export function useSelectionDrag(
     emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
   }
 
-  function applyWorldDeltaToSelectionDrag(drag: SelectionDragState, deltaWorld: THREE.Vector3) {
+  function applyWorldDeltaToSelectionDrag(
+    drag: SelectionDragState,
+    deltaWorld: THREE.Vector3,
+    options?: { allowVertical?: boolean },
+  ) {
     if (!deltaWorld || deltaWorld.lengthSq() < 1e-12) {
       return
     }
 
-    // Selection drag is constrained to the original Y plane.
-    // Keep behavior consistent by ignoring vertical delta.
+    const allowVertical = options?.allowVertical === true
+
+    // Selection drag is typically constrained to the original Y plane.
+    // For vertex snapping we must also align Y so the snapped endpoints meet.
     selectDragDelta.copy(deltaWorld)
-    selectDragDelta.y = 0
+    if (!allowVertical) {
+      selectDragDelta.y = 0
+    }
 
     drag.object.updateMatrixWorld(true)
     drag.object.getWorldPosition(selectDragWorldPosition)
@@ -238,7 +246,9 @@ export function useSelectionDrag(
     if (drag.parent) {
       drag.parent.worldToLocal(newLocalPosition)
     }
-    newLocalPosition.y = drag.initialLocalPosition.y
+    if (!allowVertical) {
+      newLocalPosition.y = drag.initialLocalPosition.y
+    }
     drag.object.position.copy(newLocalPosition)
     drag.object.updateMatrixWorld(true)
     callbacks.syncInstancedTransform(drag.object, true)
@@ -252,7 +262,9 @@ export function useSelectionDrag(
       if (companion.parent) {
         companion.parent.worldToLocal(localPosition)
       }
-      localPosition.y = companion.initialLocalPosition.y
+      if (!allowVertical) {
+        localPosition.y = companion.initialLocalPosition.y
+      }
       companion.object.position.copy(localPosition)
       companion.object.updateMatrixWorld(true)
       callbacks.syncInstancedTransform(companion.object, true)

@@ -2879,7 +2879,7 @@ const {
 function commitSelectionDragTransformsWithDeferredVertexSnap(dragState: any) {
   const delta = pendingVertexSnapResult?.delta ?? null
   if (delta && delta.lengthSq() > 1e-12) {
-    applyWorldDeltaToSelectionDrag(dragState, delta)
+    applyWorldDeltaToSelectionDrag(dragState, delta, { allowVertical: true })
   }
   commitSelectionDragTransforms(dragState)
   pendingVertexSnapResult = null

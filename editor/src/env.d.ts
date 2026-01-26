@@ -53,3 +53,7 @@ interface ImportMetaEnv {}
 interface ImportMeta {
 	readonly env: ImportMetaEnv
 }
+
+declare module '@/utils/OrbitControls.js' {
+	export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+}
