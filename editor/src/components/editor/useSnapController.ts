@@ -66,9 +66,17 @@ export type UseSnapControllerOptions = {
 }
 
 export type SnapQuery = {
-  event: PointerEvent
+  event: MouseEvent
   selectedNodeId: string | null
   selectedObject: THREE.Object3D | null
+  active: boolean
+  excludeNodeIds?: Set<string>
+  pixelThresholdPx?: number
+}
+
+export type PlacementSideSnapQuery = {
+  event: MouseEvent
+  previewObject: THREE.Object3D | null
   active: boolean
   excludeNodeIds?: Set<string>
   pixelThresholdPx?: number
@@ -92,6 +100,9 @@ export function useSnapController(options: UseSnapControllerOptions) {
   const switchScanGateRatio = 0.6
   let activeSource: SnapSourceState | null = null
   let lockedTarget: LockedTargetState | null = null
+
+  let placementLockedTarget: LockedTargetState | null = null
+  let placementSideSnapResult: VertexSnapResult | null = null
 
   const sourceWorldHelper = new THREE.Vector3()
   const targetWorldHelper = new THREE.Vector3()
@@ -122,6 +133,69 @@ export function useSnapController(options: UseSnapControllerOptions) {
   const reset = () => {
     activeSource = null
     lockedTarget = null
+  }
+
+  const resetPlacementSideSnap = () => {
+    placementLockedTarget = null
+    placementSideSnapResult = null
+  }
+
+  function isObjectGeometryReady(object: THREE.Object3D | null): boolean {
+    if (!object) {
+      return false
+    }
+    let hasVertexData = false
+    object.traverse((child) => {
+      if (hasVertexData) {
+        return
+      }
+      const mesh = child as THREE.Mesh
+      if (!(mesh as any)?.isMesh) {
+        return
+      }
+      if (isInternalHelperMesh(mesh)) {
+        return
+      }
+      const geometry = (mesh as any).geometry as THREE.BufferGeometry | undefined
+      const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (!position || position.itemSize < 3 || position.count <= 0) {
+        return
+      }
+      hasVertexData = true
+    })
+    return hasVertexData
+  }
+
+  function isNodeGeometryReady(nodeId: string | null | undefined): boolean {
+    if (!nodeId) {
+      return false
+    }
+    const object = options.objectMap.get(nodeId) ?? null
+    return isObjectGeometryReady(object)
+  }
+
+  function computeWorldYToleranceFromPixelThreshold(targetWorld: THREE.Vector3, thresholdPx: number): number | null {
+    if (!Number.isFinite(thresholdPx) || thresholdPx <= 0) {
+      return null
+    }
+    const projected = projectWorldToViewportPixels(targetWorld)
+    if (!projected) {
+      return null
+    }
+
+    // Convert pixels to world-Y tolerance at this depth by measuring how many pixels
+    // a +1 world-Y offset maps to. If the mapping is tiny (top-down-ish view), treat
+    // tolerance as effectively unbounded.
+    const up = new THREE.Vector3(0, 1, 0)
+    const projectedUp = projectWorldToViewportPixels(targetWorld.clone().add(up))
+    if (!projectedUp) {
+      return null
+    }
+    const pixelsPerWorldY = Math.hypot(projectedUp.x - projected.x, projectedUp.y - projected.y)
+    if (!Number.isFinite(pixelsPerWorldY) || pixelsPerWorldY <= 1e-6) {
+      return Number.POSITIVE_INFINITY
+    }
+    return thresholdPx / pixelsPerWorldY
   }
 
   const projectWorldToViewportPixels = (worldPosition: THREE.Vector3, out?: THREE.Vector3): ViewportPixelProjection | null => {
@@ -353,6 +427,145 @@ export function useSnapController(options: UseSnapControllerOptions) {
     }
   }
 
+  const updatePlacementSideSnap = (query: PlacementSideSnapQuery): VertexSnapResult | null => {
+    const threshold = typeof query.pixelThresholdPx === 'number' && Number.isFinite(query.pixelThresholdPx)
+      ? query.pixelThresholdPx
+      : pixelThreshold
+
+    if (!query.active) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    const previewObject = query.previewObject
+    if (!previewObject) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    const canvas = options.canvasRef.value
+    const camera = options.camera.value
+    if (!canvas || !camera) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    const sourceThreshold = Math.min(
+      Math.max(Math.round(threshold * sourceAcquireMultiplier), sourceAcquireMinPx),
+      sourceAcquireMaxPx,
+    )
+
+    previewObject.updateMatrixWorld(true)
+    const sourceCandidate = findNearestVertexOnObject(previewObject, query.event, canvas, camera, sourceThreshold)
+    if (!sourceCandidate) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    const sourceWorld = sourceCandidate.worldPosition.clone()
+
+    // Keep the placement target sticky (hysteresis) based on source↔target proximity.
+    let lockedTargetWorld = placementLockedTarget
+      ? computeLockedTargetWorld(placementLockedTarget, camera, rect, sourceWorld, threshold)
+      : null
+    if (!lockedTargetWorld) {
+      const best = findNearestVertexInScene(query.event, canvas, camera, threshold, {
+        excludeNodeIds: query.excludeNodeIds ?? new Set<string>(),
+      })
+      if (!best) {
+        resetPlacementSideSnap()
+        return null
+      }
+
+      if (options.isNodeLocked?.(best.nodeId)) {
+        resetPlacementSideSnap()
+        return null
+      }
+
+      placementLockedTarget = {
+        nodeId: best.nodeId,
+        mesh: best.mesh,
+        instanceId: best.instanceId,
+        vertexIndex: best.vertexIndex,
+        localPosition: best.localPosition.clone(),
+      }
+      lockedTargetWorld = best.worldPosition.clone()
+    }
+
+    if (!placementLockedTarget) {
+      placementSideSnapResult = null
+      return null
+    }
+
+    const targetWorld = computeTargetWorld(placementLockedTarget)
+    if (!targetWorld) {
+      resetPlacementSideSnap()
+      return null
+    }
+
+    // Ensure source and target vertices are actually near each other on-screen.
+    if (!projectToScreen(sourceWorld, camera, rect, vertexWorldHelper) || !projectToScreen(targetWorld, camera, rect, projectedHelper)) {
+      resetPlacementSideSnap()
+      return null
+    }
+    {
+      const dx = projectedHelper.x - vertexWorldHelper.x
+      const dy = projectedHelper.y - vertexWorldHelper.y
+      const distance = Math.hypot(dx, dy)
+      if (!Number.isFinite(distance) || distance > threshold) {
+        placementSideSnapResult = null
+        return null
+      }
+    }
+
+    const delta = targetWorld.clone().sub(sourceWorld)
+
+    // Side-only: require movement to be predominantly horizontal (XZ).
+    const horizontal = Math.hypot(delta.x, delta.z)
+    if (!Number.isFinite(horizontal) || horizontal <= 1e-6) {
+      placementSideSnapResult = null
+      return null
+    }
+
+    const yTolWorld = computeWorldYToleranceFromPixelThreshold(targetWorld, threshold)
+    if (yTolWorld == null) {
+      placementSideSnapResult = null
+      return null
+    }
+    if (Math.abs(delta.y) > yTolWorld) {
+      placementSideSnapResult = null
+      return null
+    }
+    if (horizontal < Math.abs(delta.y) * 2) {
+      placementSideSnapResult = null
+      return null
+    }
+
+    placementSideSnapResult = {
+      sourceWorld: sourceWorld.clone(),
+      targetWorld: targetWorld.clone(),
+      delta,
+      targetNodeId: placementLockedTarget.nodeId,
+      sourceMesh: sourceCandidate.mesh,
+      sourceInstanceId: sourceCandidate.instanceId,
+      targetMesh: placementLockedTarget.mesh,
+      targetInstanceId: placementLockedTarget.instanceId,
+    }
+    return placementSideSnapResult
+  }
+
+  const consumePlacementSideSnapResult = (): VertexSnapResult | null => {
+    const result = placementSideSnapResult
+    resetPlacementSideSnap()
+    return result
+  }
+
   function computeSourceWorld(source: SnapSourceState): THREE.Vector3 | null {
     if (!source.mesh) {
       return null
@@ -388,7 +601,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
   }
 
   function findNearestVertexInScene(
-    event: PointerEvent,
+    event: MouseEvent,
     canvas: HTMLCanvasElement,
     camera: THREE.Camera,
     threshold: number,
@@ -447,7 +660,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
   function findNearestVertexOnObject(
     object: THREE.Object3D,
-    event: PointerEvent,
+    event: MouseEvent,
     canvas: HTMLCanvasElement,
     camera: THREE.Camera,
     threshold: number,
@@ -543,7 +756,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
     worldPosition: THREE.Vector3,
     camera: THREE.Camera,
     rect: DOMRect,
-    event: PointerEvent,
+    event: MouseEvent,
   ): number | null {
     if (!projectToScreen(worldPosition, camera, rect, projectedHelper)) {
       return null
@@ -593,7 +806,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
   }
 
   function findNearestVertexOnInstancedMeshes(
-    event: PointerEvent,
+    event: MouseEvent,
     canvas: HTMLCanvasElement,
     camera: THREE.Camera,
     threshold: number,
@@ -697,7 +910,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
     return best
   }
 
-  const findHoverCandidate = (query: { event: PointerEvent; excludeNodeIds?: Set<string>; pixelThresholdPx?: number }): {
+  const findHoverCandidate = (query: { event: MouseEvent; excludeNodeIds?: Set<string>; pixelThresholdPx?: number }): {
     nodeId: string
     mesh: THREE.Mesh | THREE.InstancedMesh
     instanceId: number | null
@@ -729,6 +942,10 @@ export function useSnapController(options: UseSnapControllerOptions) {
   return {
     update,
     reset,
+    updatePlacementSideSnap,
+    consumePlacementSideSnapResult,
+    resetPlacementSideSnap,
+    isNodeGeometryReady,
     findHoverCandidate,
     projectWorldToViewportPixels,
     unprojectViewportPixelsAtNdcZ,
