@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
-import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { OrbitControls } from '@/utils/OrbitControls.js'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -627,7 +627,7 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let mapControls: MapControls | null = null
+let mapControls: OrbitControls | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -4877,7 +4877,7 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = new MapControls(camera, domElement)
+  mapControls = new OrbitControls(camera, domElement)
   if (previousTarget) {
     mapControls.target.copy(previousTarget)
   } else {
@@ -6823,7 +6823,7 @@ async function handlePointerDown(event: PointerEvent) {
   if (selection) {
     applyPointerDownResult(selection)
 
-    // Only block MapControls left-pan when we are starting a selection drag
+    // Only block OrbitControls left-pan when we are starting a selection drag
     // (i.e. dragging the currently selected object). Otherwise allow pan.
     if (
       event.button === 0 &&
