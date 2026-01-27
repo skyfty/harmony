@@ -849,6 +849,13 @@ function resolveNodeIcon(item: HierarchyTreeItem) {
   })
 }
 
+function resolveRowIcon(row: VisibleHierarchyRow): string {
+  if (row.isGroup) {
+    return row.expanded ? 'mdi-folder-open-outline' : 'mdi-folder-outline'
+  }
+  return resolveNodeIcon(row.item)
+}
+
 function handleNodeClick(event: MouseEvent, nodeId: string) {
   event.stopPropagation()
   event.preventDefault()
@@ -1525,7 +1532,7 @@ function handleTreeDragLeave(event: DragEvent) {
               <div
                 class="node-label"
                 :class="getNodeInteractionClasses(row.id)"
-                :style="{ paddingLeft: `${row.depth * 16 + 6}px` }"
+                :style="{ paddingLeft: `${row.depth * 16 + 30}px` }"
                 draggable="true"
                 @dragstart="handleDragStart($event, row.id)"
                 @dragend="handleDragEnd"
@@ -1545,9 +1552,8 @@ function handleTreeDragLeave(event: DragEvent) {
                   :disabled="!row.hasChildren"
                   @click.stop="sceneStore.toggleGroupExpansion(row.id, { captureHistory: false })"
                 />
-                <span v-else class="group-expander-placeholder" />
 
-                <v-icon size="small" class="node-icon" :icon="resolveNodeIcon(row.item)" />
+                <v-icon size="small" class="node-icon" :icon="resolveRowIcon(row)" />
                 <span class="node-label-text" :title="row.item.name">{{ row.item.name }}</span>
 
                 <div class="tree-node-trailing" @mousedown.stop @click.stop>
@@ -1623,7 +1629,7 @@ function handleTreeDragLeave(event: DragEvent) {
     grid-auto-flow: column;
     grid-gap: 10px;
     display: inline-grid;
-    margin-right: 6px;
+    margin-right: 1px;
 }
 
 .panel-body {
@@ -1688,14 +1694,14 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .hierarchy-row {
   min-height: 30px;
-  padding-inline: 6px;
+  padding-inline: 0px;
 }
 
 .node-label {
   display: flex;
   align-items: center;
   position: relative;
-  padding: 4px 8px 4px 1px;
+  padding: 1px 1px 1px 1px;
   border-radius: 6px;
   cursor: grab;
   user-select: none;
@@ -1715,26 +1721,52 @@ function handleTreeDragLeave(event: DragEvent) {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  margin-left: 2px;
+}
+
+.hierarchy-row {
+  min-height: 30px;
+  padding-inline: 0px;
+  position: relative;
 }
 
 .group-expander-btn {
-  margin-inline-end: 2px;
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   opacity: 0.72;
-}
-
-.group-expander-placeholder {
-  display: inline-block;
-  width: 24px;
-  height: 24px;
-  margin-inline-end: 2px;
 }
 
 .node-label.is-selected {
   color: #4dd0e1;
 }
 
+/* Make selection/active states clearly visible.
+   Do not override explicit drop/material/asset highlight backgrounds. */
+.node-label.is-selected:not(.drop-inside):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
+  background: rgba(77, 208, 225, 0.08);
+}
+
 .node-label.is-active {
   color: #fafafa;
+}
+
+.node-label.is-active:not(.drop-inside):not(.material-drop-target):not(.asset-drop-target):not(.drop-disabled) {
+  background: rgba(77, 208, 225, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(77, 208, 225, 0.35);
+}
+
+.node-label.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 3px;
+  background: rgba(77, 208, 225, 0.95);
+  opacity: 0.95;
 }
 
 .node-label.drop-inside {
