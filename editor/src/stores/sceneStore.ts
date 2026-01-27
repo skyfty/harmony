@@ -9943,37 +9943,63 @@ export const useSceneStore = defineStore('scene', {
       const next = !this.isNodeSelectionLocked(id)
       this.setNodeSelectionLock(id, next)
     },
-    setAllNodesSelectionLock(locked: boolean) {
+    setAllNodesSelectionLock(
+      locked: boolean,
+      options: {
+        fullSyncThreshold?: number
+      } = {},
+    ) {
+      const thresholdRaw = options.fullSyncThreshold
+      const fullSyncThreshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw as number)) : 200
+
       const changedIds: string[] = []
+      const scan = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
+            const current = node.locked ?? false
+            if (current !== locked) {
+              changedIds.push(node.id)
+            }
+          }
+          if (node.children?.length) {
+            scan(node.children)
+          }
+        })
+      }
+
+      scan(this.nodes)
+      if (!changedIds.length) {
+        return
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
+
+      const changedSet = new Set(changedIds)
       const apply = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
-          const current = node.locked ?? false
-          if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
-            return
-          }
-          if (current !== locked) {
-            changedIds.push(node.id)
+          if (changedSet.has(node.id)) {
+            ;(node as any).locked = locked
           }
           if (node.children?.length) {
             apply(node.children)
           }
         })
       }
-      apply(this.nodes)
-      if (!changedIds.length) {
-        return
-      }
 
-      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
-      changedIds.forEach((id) => {
-        visitNode(this.nodes, id, (node) => {
-          ;(node as any).locked = locked
-        })
-      })
+      apply(this.nodes)
+      this.nodes = [...this.nodes]
+
       if (locked && this.selectedNodeIds.length) {
         this.setSelection([])
       }
-      this.queueSceneStructurePatch('setAllNodesSelectionLock')
+
+      if (changedIds.length > fullSyncThreshold) {
+        // Large batches: prefer a single full sync in the viewport.
+        this.queueSceneStructurePatch('setAllNodesSelectionLock')
+      } else {
+        changedIds.forEach((id) => this.queueSceneNodePatch(id, ['lock']))
+      }
+
       commitSceneSnapshot(this)
     },
     toggleSelectionLock(): boolean {
