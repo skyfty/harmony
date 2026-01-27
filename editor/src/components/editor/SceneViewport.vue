@@ -3985,6 +3985,68 @@ let selectionPreviewAssetId: string | null = null
 let lastSelectionPreviewUpdate = 0
 let placementPreviewYaw = 0
 
+let lastPointerClientX = 0
+let lastPointerClientY = 0
+let lastPointerType: string | null = null
+let selectionPreviewVisibilityRaf: number | null = null
+
+function isStrictPointOnCanvas(x: number, y: number): boolean {
+  const canvas = canvasRef.value
+  if (!canvas || typeof document === 'undefined') {
+    return false
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return false
+  }
+  try {
+    return document.elementFromPoint(x, y) === canvas
+  } catch {
+    return false
+  }
+}
+
+function stopSelectionPreviewVisibilityMonitor(): void {
+  if (selectionPreviewVisibilityRaf != null && typeof cancelAnimationFrame !== 'undefined') {
+    cancelAnimationFrame(selectionPreviewVisibilityRaf)
+  }
+  selectionPreviewVisibilityRaf = null
+}
+
+function hideSelectionHoverPreview(): void {
+  // Avoid interfering with drag-and-drop placement preview while dragging.
+  if (isDragHovering.value) {
+    return
+  }
+  dragPreview.setPosition(null)
+  dragPreviewGroup.visible = false
+  snapController.resetPlacementSideSnap()
+  clearPlacementSideSnapMarkers()
+}
+
+function ensureSelectionPreviewVisibilityMonitor(): void {
+  if (selectionPreviewVisibilityRaf != null) {
+    return
+  }
+  if (typeof requestAnimationFrame === 'undefined') {
+    return
+  }
+
+  selectionPreviewVisibilityRaf = requestAnimationFrame(() => {
+    selectionPreviewVisibilityRaf = null
+    if (!selectionPreviewActive || isDragHovering.value) {
+      return
+    }
+
+    const allowed = lastPointerType === 'mouse' && isStrictPointOnCanvas(lastPointerClientX, lastPointerClientY)
+    if (!allowed) {
+      hideSelectionHoverPreview()
+    }
+
+    // Keep monitoring while selection preview remains active.
+    ensureSelectionPreviewVisibilityMonitor()
+  })
+}
+
 watch(
   () => sceneStore.selectedAssetId,
   (nextId) => {
@@ -6973,6 +7035,10 @@ async function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   // surface snap pointer updates removed (alignment hint disabled)
+  lastPointerClientX = event.clientX
+  lastPointerClientY = event.clientY
+  lastPointerType = event.pointerType
+
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
     const dy = event.clientY - middleClickSessionState.startY
@@ -7082,6 +7148,11 @@ function handlePointerMove(event: PointerEvent) {
   // If selection-based preview is active, update preview position to follow the mouse.
   try {
     if (selectionPreviewActive && dragPreview && canvasRef.value && camera && !isDragHovering.value) {
+      ensureSelectionPreviewVisibilityMonitor()
+      const hoverPreviewAllowed = event.pointerType === 'mouse' && isStrictPointOnCanvas(event.clientX, event.clientY)
+      if (!hoverPreviewAllowed) {
+        hideSelectionHoverPreview()
+      } else {
       const now = Date.now()
       // throttle updates to ~60Hz
       if (now - lastSelectionPreviewUpdate > 8) {
@@ -7109,6 +7180,7 @@ function handlePointerMove(event: PointerEvent) {
           clearPlacementSideSnapMarkers()
         }
       }
+      }
     }
   } catch (err) {
     // non-fatal: ensure we don't break pointer handling
@@ -7124,22 +7196,7 @@ function handlePointerMove(event: PointerEvent) {
 async function handlePointerUp(event: PointerEvent) {
   // surface snap pointer updates removed (alignment hint disabled)
   try {
-    const isPointerUpOnCanvas = (() => {
-      const canvas = canvasRef.value
-      if (!canvas || typeof document === 'undefined') {
-        return false
-      }
-      const x = event.clientX
-      const y = event.clientY
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        return false
-      }
-      try {
-        return document.elementFromPoint(x, y) === canvas
-      } catch {
-        return false
-      }
-    })()
+    const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
 
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
@@ -7253,7 +7310,9 @@ async function handlePointerUp(event: PointerEvent) {
       pointerTrackingState &&
       pointerTrackingState.pointerId === event.pointerId &&
       pointerTrackingState.button === 2 &&
-      !pointerTrackingState.moved
+      !pointerTrackingState.moved &&
+      event.pointerType === 'mouse' &&
+      isPointerUpOnCanvas
     ) {
       placementPreviewYaw += RIGHT_CLICK_ROTATION_STEP
       dragPreviewGroup.rotation.y = placementPreviewYaw
@@ -7427,6 +7486,11 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  // Ensure any selection-hover preview is hidden when pointer is cancelled.
+  stopSelectionPreviewVisibilityMonitor()
+  dragPreview.setPosition(null)
+  dragPreviewGroup.visible = false
+
   snapController.reset()
   snapController.resetPlacementSideSnap()
   clearVertexSnapMarkers()
@@ -8363,6 +8427,22 @@ function handleViewportDragOver(event: DragEvent) {
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
+    return
+  }
+
+  // For placeable 3D assets, only show preview when the pointer is strictly over the canvas
+  // (i.e. not occluded by other UI).
+  if (!isStrictPointOnCanvas(event.clientX, event.clientY)) {
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    isDragHovering.value = true
+    updateGridHighlight(null)
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
+    dragPreview.setPosition(null)
+    dragPreviewGroup.visible = false
     return
   }
 
@@ -10264,6 +10344,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopSelectionPreviewVisibilityMonitor()
   if (nodePickerStore.isActive) {
     nodePickerStore.cancelActivePick('user')
   }
