@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   useSceneStore,
@@ -15,9 +15,8 @@ import { useUiStore } from '@/stores/uiStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
-import { MULTIUSER_NODE_ID } from '@harmony/schema'
 import type { SceneNode } from '@harmony/schema'
-import { PROTAGONIST_COMPONENT_TYPE, ONLINE_COMPONENT_TYPE } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import { Group, Vector3 } from 'three'
@@ -46,13 +45,177 @@ type DragState = {
   position: HierarchyDropPosition | null
 }
 
+type DragSessionCache = {
+  sourceIds: string[]
+  sourceIdSet: Set<string>
+  draggingMultiuserNode: boolean
+}
+
 const dragState = ref<DragState>({
   sourceIds: [],
   primaryId: null,
   targetId: null,
   position: null,
 })
+
+const dragSession = ref<DragSessionCache | null>(null)
+
+let dragHoverRaf: number | null = null
+let pendingDragHover: { targetId: string | null; position: HierarchyDropPosition | null } | null = null
+
+const treeContainerRef = ref<HTMLElement | null>(null)
+
+let autoScrollRaf: number | null = null
+let autoScrollVelocity = 0
+let autoScrollContainer: HTMLElement | null = null
+let cachedScrollContainer: HTMLElement | null = null
+
+const AUTO_SCROLL_EDGE_PX = 48
+const AUTO_SCROLL_MAX_PX_PER_FRAME = 18
+
+function findFirstScrollableDescendant(root: HTMLElement): HTMLElement | null {
+  const preferredSelectors = ['.v-virtual-scroll', '.v-virtual-scroll__container']
+  for (const selector of preferredSelectors) {
+    const el = root.querySelector<HTMLElement>(selector)
+    if (el && el.scrollHeight > el.clientHeight + 1) {
+      return el
+    }
+  }
+
+  const stack: HTMLElement[] = Array.from(root.children) as HTMLElement[]
+  while (stack.length) {
+    const el = stack.pop()
+    if (!el) continue
+    const style = window.getComputedStyle(el)
+    const overflowY = style.overflowY
+    if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 1) {
+      return el
+    }
+    for (let i = 0; i < el.children.length; i++) {
+      const child = el.children.item(i)
+      if (child instanceof HTMLElement) {
+        stack.push(child)
+      }
+    }
+  }
+  return null
+}
+
+function getHierarchyScrollContainer(): HTMLElement | null {
+  const root = treeContainerRef.value
+  if (!root) return null
+  if (cachedScrollContainer?.isConnected) {
+    return cachedScrollContainer
+  }
+  cachedScrollContainer = findFirstScrollableDescendant(root) ?? root
+  return cachedScrollContainer
+}
+
+function stopAutoScroll() {
+  autoScrollVelocity = 0
+  autoScrollContainer = null
+  if (autoScrollRaf !== null) {
+    cancelAnimationFrame(autoScrollRaf)
+    autoScrollRaf = null
+  }
+}
+
+function ensureAutoScrollTick() {
+  if (autoScrollRaf !== null) return
+  autoScrollRaf = requestAnimationFrame(function tick() {
+    autoScrollRaf = null
+    const container = autoScrollContainer
+    const velocity = autoScrollVelocity
+    if (!container || !container.isConnected || velocity === 0) {
+      stopAutoScroll()
+      return
+    }
+
+    const next = container.scrollTop + velocity
+    const maxScrollTop = container.scrollHeight - container.clientHeight
+    container.scrollTop = Math.max(0, Math.min(maxScrollTop, next))
+
+    ensureAutoScrollTick()
+  })
+}
+
+function updateAutoScrollFromDragEvent(event: DragEvent) {
+  const hasActiveDrag = dragState.value.sourceIds.length > 0 || Boolean(draggingAssetId.value)
+  if (!hasActiveDrag) {
+    stopAutoScroll()
+    return
+  }
+
+  const container = getHierarchyScrollContainer()
+  if (!container) {
+    stopAutoScroll()
+    return
+  }
+
+  const rect = container.getBoundingClientRect()
+  const clientY = event.clientY
+  const distTop = clientY - rect.top
+  const distBottom = rect.bottom - clientY
+
+  let velocity = 0
+  if (distTop >= 0 && distTop < AUTO_SCROLL_EDGE_PX) {
+    const t = 1 - distTop / AUTO_SCROLL_EDGE_PX
+    velocity = -AUTO_SCROLL_MAX_PX_PER_FRAME * t
+  } else if (distBottom >= 0 && distBottom < AUTO_SCROLL_EDGE_PX) {
+    const t = 1 - distBottom / AUTO_SCROLL_EDGE_PX
+    velocity = AUTO_SCROLL_MAX_PX_PER_FRAME * t
+  }
+
+  // Avoid tiny jitter.
+  if (Math.abs(velocity) < 0.5) {
+    velocity = 0
+  }
+
+  if (velocity === 0) {
+    stopAutoScroll()
+    return
+  }
+
+  autoScrollContainer = container
+  autoScrollVelocity = velocity
+  ensureAutoScrollTick()
+}
+
+function scheduleDragHoverUpdate(next: { targetId: string | null; position: HierarchyDropPosition | null }) {
+  pendingDragHover = next
+  if (dragHoverRaf !== null) {
+    return
+  }
+  dragHoverRaf = requestAnimationFrame(() => {
+    dragHoverRaf = null
+    const update = pendingDragHover
+    pendingDragHover = null
+    if (!update) {
+      return
+    }
+    const prev = dragState.value
+    if (prev.targetId === update.targetId && prev.position === update.position) {
+      return
+    }
+    dragState.value = {
+      ...prev,
+      targetId: update.targetId,
+      position: update.position,
+    }
+  })
+}
+
+onBeforeUnmount(() => {
+  if (dragHoverRaf !== null) {
+    cancelAnimationFrame(dragHoverRaf)
+    dragHoverRaf = null
+  }
+  pendingDragHover = null
+
+  stopAutoScroll()
+})
 const panelRef = ref<HTMLDivElement | null>(null)
+void panelRef
 const materialDropTargetId = ref<string | null>(null)
 const assetDropTargetId = ref<string | null>(null)
 const assetRootDropActive = ref(false)
@@ -70,22 +233,6 @@ const openedIds = computed({
   },
 })
 
-
-const active = computed({
-  get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
-  set: (ids: string[]) => {
-    const nextId = ids[0] ?? null
-    if (nextId !== selectedNodeId.value) {
-      if (sceneStore.selectedAssetId) {
-        if (uiStore.activeSelectionContext === 'asset-panel') {
-          uiStore.setActiveSelectionContext(null)
-        }
-        sceneStore.selectAsset(null)
-      }
-      sceneStore.selectNode(nextId)
-    }
-  },
-})
 
 function areSameSelection(a: string[], b: string[]): boolean {
   if (a === b) return true
@@ -108,6 +255,35 @@ const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyIt
 const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
+
+type VisibleHierarchyRow = {
+  id: string
+  item: HierarchyTreeItem
+  depth: number
+  isGroup: boolean
+  hasChildren: boolean
+  expanded: boolean
+}
+
+const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
+  const openedSet = new Set(openedIds.value)
+  const rows: VisibleHierarchyRow[] = []
+
+  const walk = (items: HierarchyTreeItem[], depth: number) => {
+    for (const item of items) {
+      const isGroup = item.nodeType === 'Group'
+      const hasChildren = isGroup && Boolean(item.children?.length)
+      const expanded = hasChildren && openedSet.has(item.id)
+      rows.push({ id: item.id, item, depth, isGroup, hasChildren, expanded })
+      if (hasChildren && expanded) {
+        walk(item.children ?? [], depth + 1)
+      }
+    }
+  }
+
+  walk(hierarchyItems.value, 0)
+  return rows
+})
 
 // Global visibility toggle: exclude system nodes and skip selection-locked nodes.
 const visibilityCandidates = computed(() =>
@@ -145,7 +321,7 @@ const activeSceneNode = computed<SceneNode | null>(() => {
   if (!id) {
     return null
   }
-  return findSceneNodeById(sceneStore.nodes, id)
+  return sceneStore.getNodeById(id)
 })
 
 const selectedGroupId = computed(() => {
@@ -299,44 +475,11 @@ function resolveDragSources(nodeId: string): { primaryId: string | null; sourceI
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
 
-function findSceneNodeById(nodes: SceneNode[] | undefined, id: string): SceneNode | null {
-  if (!Array.isArray(nodes) || !id) {
-    return null
-  }
-  for (const node of nodes) {
-    if (!node) {
-      continue
-    }
-    if (node.id === id) {
-      return node
-    }
-    const child = findSceneNodeById(node.children, id)
-    if (child) {
-      return child
-    }
-  }
-  return null
-}
-
-function isMultiuserSceneNode(node: SceneNode | null | undefined): boolean {
-  if (!node) {
-    return false
-  }
-  if (node.id === MULTIUSER_NODE_ID) {
-    return true
-  }
-  const userData = node.userData as Record<string, unknown> | undefined
-  if (userData?.multiuser) {
-    return true
-  }
-  return Boolean(node.components?.[ONLINE_COMPONENT_TYPE])
-}
-
 function isMultiuserNodeId(nodeId: string | null | undefined): boolean {
   if (!nodeId) {
     return false
   }
-  return isMultiuserSceneNode(findSceneNodeById(sceneStore.nodes, nodeId))
+  return sceneStore.isMultiuserNodeId(nodeId)
 }
 
 type ParentInfo = { parentId: string | null; parentNode: SceneNode | null }
@@ -345,25 +488,9 @@ function findParentInfo(nodeId: string): ParentInfo {
   if (!nodeId) {
     return { parentId: null, parentNode: null }
   }
-  const stack: Array<{ list: SceneNode[]; parent: SceneNode | null }> = [{ list: sceneStore.nodes, parent: null }]
-  while (stack.length) {
-    const current = stack.pop()
-    if (!current) {
-      continue
-    }
-    for (const entry of current.list) {
-      if (!entry) {
-        continue
-      }
-      if (entry.id === nodeId) {
-        return { parentId: current.parent?.id ?? null, parentNode: current.parent ?? null }
-      }
-      if (entry.children?.length) {
-        stack.push({ list: entry.children, parent: entry })
-      }
-    }
-  }
-  return { parentId: null, parentNode: null }
+  const parentId = sceneStore.getParentNodeId(nodeId)
+  const parentNode = parentId ? sceneStore.getNodeById(parentId) : null
+  return { parentId, parentNode }
 }
 
 function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): string | null {
@@ -377,7 +504,7 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
   if (adoptNodeId && protectedIds.has(adoptNodeId)) {
     return null
   }
-  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  const targetNode = sceneStore.getNodeById(targetId)
   if (!targetNode) {
     return null
   }
@@ -431,7 +558,7 @@ function resolveAssetDropParentId(targetId: string): string | null {
   if (!targetId) {
     return null
   }
-  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  const targetNode = sceneStore.getNodeById(targetId)
   if (!targetNode) {
     return null
   }
@@ -467,7 +594,7 @@ function supportsMaterialDrop(targetId: string): boolean {
   if (item?.nodeType) {
     return item.nodeType !== 'Light' && item.nodeType !== 'Group'
   }
-  const node = findSceneNodeById(sceneStore.nodes, targetId)
+  const node = sceneStore.getNodeById(targetId)
   return isNormalNodeType(node) && nodeSupportsMaterials(node)
 }
 
@@ -601,7 +728,7 @@ function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): boolean
   if (!supportsMaterialDrop(nodeId)) {
     return false
   }
-  const node = findSceneNodeById(sceneStore.nodes, nodeId)
+  const node = sceneStore.getNodeById(nodeId)
   if (!node || !nodeSupportsMaterials(node)) {
     return false
   }
@@ -825,6 +952,13 @@ function handleTreeBackgroundMouseDown(event: MouseEvent) {
 
 function resetDragState() {
   dragState.value = { sourceIds: [], primaryId: null, targetId: null, position: null }
+  dragSession.value = null
+  if (dragHoverRaf !== null) {
+    cancelAnimationFrame(dragHoverRaf)
+    dragHoverRaf = null
+  }
+  pendingDragHover = null
+  stopAutoScroll()
   materialDropTargetId.value = null
   assetDropTargetId.value = null
   assetRootDropActive.value = false
@@ -852,6 +986,7 @@ function handleDragStart(event: DragEvent, nodeId: string) {
   const { primaryId, sourceIds } = resolveDragSources(nodeId)
   if (!sourceIds.length) {
     dragState.value = { sourceIds: [], primaryId: null, targetId: null, position: null }
+    dragSession.value = null
     return
   }
   const transferableId = primaryId ?? nodeId
@@ -861,6 +996,13 @@ function handleDragStart(event: DragEvent, nodeId: string) {
     targetId: null,
     position: null,
   }
+
+  dragSession.value = {
+    sourceIds: [...sourceIds],
+    sourceIdSet: new Set(sourceIds),
+    draggingMultiuserNode: sourceIds.some((id) => sceneStore.isMultiuserNodeId(id)),
+  }
+
   event.dataTransfer?.setData('text/plain', transferableId)
   event.dataTransfer?.setData('application/x-harmony-node', transferableId)
   event.dataTransfer?.setData(NODE_DRAG_LIST_MIME, JSON.stringify(sourceIds))
@@ -874,10 +1016,13 @@ function handleDragEnd() {
 }
 
 function handleDragOver(event: DragEvent, targetId: string) {
+  updateAutoScrollFromDragEvent(event)
   const materialAsset = resolveMaterialAssetFromEvent(event)
   if (materialAsset) {
     if (!supportsMaterialDrop(targetId)) {
-      materialDropTargetId.value = null
+      if (materialDropTargetId.value !== null) {
+        materialDropTargetId.value = null
+      }
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'none'
       }
@@ -888,29 +1033,41 @@ function handleDragOver(event: DragEvent, targetId: string) {
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'copy'
     }
-    materialDropTargetId.value = targetId
+    if (materialDropTargetId.value !== targetId) {
+      materialDropTargetId.value = targetId
+    }
     return
   }
   const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
   if (hierarchyAsset) {
-    materialDropTargetId.value = null
+    if (materialDropTargetId.value !== null) {
+      materialDropTargetId.value = null
+    }
     const isSupported = hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab'
     if (!isSupported) {
-      assetDropTargetId.value = null
+      if (assetDropTargetId.value !== null) {
+        assetDropTargetId.value = null
+      }
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'none'
       }
       return
     }
     if (!sceneStore.nodeAllowsChildCreation(targetId)) {
-      assetDropTargetId.value = null
+      if (assetDropTargetId.value !== null) {
+        assetDropTargetId.value = null
+      }
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'none'
       }
       return
     }
-    assetDropTargetId.value = targetId
-    assetRootDropActive.value = false
+    if (assetDropTargetId.value !== targetId) {
+      assetDropTargetId.value = targetId
+    }
+    if (assetRootDropActive.value) {
+      assetRootDropActive.value = false
+    }
     event.preventDefault()
     event.stopPropagation()
     if (event.dataTransfer) {
@@ -918,18 +1075,24 @@ function handleDragOver(event: DragEvent, targetId: string) {
     }
     return
   }
-  materialDropTargetId.value = null
+  if (materialDropTargetId.value !== null) {
+    materialDropTargetId.value = null
+  }
   if (assetDropTargetId.value === targetId) {
     assetDropTargetId.value = null
   }
-  const { sourceIds, primaryId } = dragState.value
-  if (!sourceIds.length || sourceIds.includes(targetId)) {
+
+  const session = dragSession.value
+  const { sourceIds } = dragState.value
+  const sourceIdSet = session?.sourceIdSet ?? new Set(sourceIds)
+  const draggingMultiuserNode = session?.draggingMultiuserNode ?? sourceIds.some((id) => isMultiuserNodeId(id))
+
+  if (!sourceIds.length || sourceIdSet.has(targetId)) {
     return
   }
 
-  const draggingMultiuserNode = sourceIds.some((id) => isMultiuserNodeId(id))
   if (draggingMultiuserNode) {
-    dragState.value = { sourceIds, primaryId, targetId, position: null }
+    scheduleDragHoverUpdate({ targetId, position: null })
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
@@ -938,12 +1101,22 @@ function handleDragOver(event: DragEvent, targetId: string) {
     return
   }
 
-  const isInvalid = sourceIds.some((id) => sceneStore.isDescendant(id, targetId))
-  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  // Invalid if target is inside any dragged subtree.
+  let isInvalid = false
+  let current = sceneStore.getParentNodeId(targetId)
+  while (current) {
+    if (sourceIdSet.has(current)) {
+      isInvalid = true
+      break
+    }
+    current = sceneStore.getParentNodeId(current)
+  }
+
+  const targetNode = sceneStore.getNodeById(targetId)
   const supportsChildren =
     targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
   if (isInvalid || !supportsChildren) {
-    dragState.value = { sourceIds, primaryId, targetId, position: null }
+    scheduleDragHoverUpdate({ targetId, position: null })
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
@@ -951,7 +1124,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
     event.stopPropagation()
     return
   }
-  dragState.value = { sourceIds, primaryId, targetId, position: 'inside' }
+  scheduleDragHoverUpdate({ targetId, position: 'inside' })
   event.preventDefault()
   event.stopPropagation()
   if (event.dataTransfer) {
@@ -1023,7 +1196,7 @@ async function handleDrop(event: DragEvent, targetId: string) {
     resetDragState()
     return
   }
-  const draggingMultiuserNode = sourceIds.some((id) => isMultiuserNodeId(id))
+  const draggingMultiuserNode = dragSession.value?.draggingMultiuserNode ?? sourceIds.some((id) => isMultiuserNodeId(id))
   if (draggingMultiuserNode) {
     event.preventDefault()
     event.stopPropagation()
@@ -1032,7 +1205,7 @@ async function handleDrop(event: DragEvent, targetId: string) {
   }
   event.preventDefault()
   event.stopPropagation()
-  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  const targetNode = sceneStore.getNodeById(targetId)
   const canAdopt =
     targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
   if (!canAdopt) {
@@ -1074,8 +1247,11 @@ function handleNodeDoubleClick(nodeId: string) {
 }
 
 function handleTreeDragOver(event: DragEvent) {
+  updateAutoScrollFromDragEvent(event)
   if (resolveMaterialAssetFromEvent(event)) {
-    materialDropTargetId.value = null
+    if (materialDropTargetId.value !== null) {
+      materialDropTargetId.value = null
+    }
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
@@ -1083,27 +1259,35 @@ function handleTreeDragOver(event: DragEvent) {
   }
   const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
   if (hierarchyAsset) {
-    materialDropTargetId.value = null
+    if (materialDropTargetId.value !== null) {
+      materialDropTargetId.value = null
+    }
     const isSupported = hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab'
     if (!isSupported) {
-      assetRootDropActive.value = false
+      if (assetRootDropActive.value) {
+        assetRootDropActive.value = false
+      }
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'none'
       }
       return
     }
     assetDropTargetId.value = null
-    assetRootDropActive.value = true
+    if (!assetRootDropActive.value) {
+      assetRootDropActive.value = true
+    }
     event.preventDefault()
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'copy'
     }
     return
   }
-  assetRootDropActive.value = false
-  const { sourceIds, primaryId } = dragState.value
+  if (assetRootDropActive.value) {
+    assetRootDropActive.value = false
+  }
+  const { sourceIds } = dragState.value
   if (!sourceIds.length) return
-  dragState.value = { sourceIds: [...sourceIds], primaryId, targetId: null, position: 'inside' }
+  scheduleDragHoverUpdate({ targetId: null, position: 'inside' })
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
@@ -1140,17 +1324,37 @@ async function handleTreeDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
+
+  // Dropping onto the blank area should behave like "move to end of root".
+  const sourceIdSet = dragSession.value?.sourceIdSet ?? new Set(sourceIds)
+  let anchorId: string | null = null
+  for (let i = hierarchyItems.value.length - 1; i >= 0; i--) {
+    const candidate = hierarchyItems.value[i]?.id
+    if (candidate && !sourceIdSet.has(candidate)) {
+      anchorId = candidate
+      break
+    }
+  }
+
   for (const nodeId of sourceIds) {
     const { parentId } = findParentInfo(nodeId)
-    if (parentId === null) {
+    if (parentId === null && anchorId === null) {
       continue
     }
-    sceneStore.moveNode({ nodeId, targetId: null, position: 'inside' })
+
+    if (anchorId) {
+      sceneStore.moveNode({ nodeId, targetId: anchorId, position: 'after' })
+      anchorId = nodeId
+    } else {
+      sceneStore.moveNode({ nodeId, targetId: null, position: 'inside' })
+      anchorId = nodeId
+    }
   }
   resetDragState()
 }
 
 function handleTreeDragLeave(event: DragEvent) {
+  stopAutoScroll()
   if (materialDropTargetId.value) {
     materialDropTargetId.value = null
   }
@@ -1276,67 +1480,77 @@ function handleTreeDragLeave(event: DragEvent) {
       <div
         class="tree-container"
         :class="rootDropClasses"
+        ref="treeContainerRef"
         @dragover="handleTreeDragOver"
         @drop="handleTreeDrop"
         @dragleave="handleTreeDragLeave"
         @mousedown="handleTreeBackgroundMouseDown"
       >
-        <v-treeview
-          v-model:opened="openedIds"
-          v-model:activated="active"
-          density="compact"
-          :items="hierarchyItems"
-          item-title="name"
-          item-value="id"
-          color="primary"
-          activatable
-          class="hierarchy-tree"
+        <v-virtual-scroll
+          :items="visibleHierarchyRows"
+          item-key="id"
+          :item-height="30"
+          class="hierarchy-virtual-list"
+          @dragover.capture.prevent="handleTreeDragOver"
+          @drop.capture.prevent="handleTreeDrop"
+          @dragleave.capture="handleTreeDragLeave"
         >
-          <template #prepend="{ item }">
-            <v-icon size="small" class="node-icon" :icon="resolveNodeIcon(item)" />
-          </template>
-          <template #title="{ item }">
-            <div
-              class="node-label"
-              :class="getNodeInteractionClasses(item.id)"
-              draggable="true"
-              @dragstart="handleDragStart($event, item.id)"
-              @dragend="handleDragEnd"
-              @dragover="handleDragOver($event, item.id)"
-              @dragleave="handleDragLeave($event, item.id)"
-              @drop="handleDrop($event, item.id)"
-              @click="handleNodeClick($event, item.id)"
-              @dblclick.stop.prevent="handleNodeDoubleClick(item.id)"
-            >
-              <span class="node-label-text">{{ item.name }}</span>
+          <template #default="{ item: row }">
+            <div class="hierarchy-row" :key="row.id">
+              <div
+                class="node-label"
+                :class="getNodeInteractionClasses(row.id)"
+                :style="{ paddingLeft: `${row.depth * 16 + 6}px` }"
+                draggable="true"
+                @dragstart="handleDragStart($event, row.id)"
+                @dragend="handleDragEnd"
+                @dragover="handleDragOver($event, row.id)"
+                @dragleave="handleDragLeave($event, row.id)"
+                @drop="handleDrop($event, row.id)"
+                @click="handleNodeClick($event, row.id)"
+                @dblclick.stop.prevent="handleNodeDoubleClick(row.id)"
+              >
+                <v-btn
+                  v-if="row.isGroup"
+                  :icon="row.expanded ? 'mdi-chevron-down' : 'mdi-chevron-right'"
+                  variant="text"
+                  density="compact"
+                  size="24"
+                  class="group-expander-btn"
+                  :disabled="!row.hasChildren"
+                  @click.stop="sceneStore.toggleGroupExpansion(row.id, { captureHistory: false })"
+                />
+                <span v-else class="group-expander-placeholder" />
+
+                <v-icon size="small" class="node-icon" :icon="resolveNodeIcon(row.item)" />
+                <span class="node-label-text" :title="row.item.name">{{ row.item.name }}</span>
+
+                <div class="tree-node-trailing" @mousedown.stop @click.stop>
+                  <v-btn
+                    :icon="(row.item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
+                    variant="text"
+                    density="compact"
+                    size="26"
+                    class="visibility-btn"
+                    :class="{ 'is-visible': (row.item.visible ?? true) }"
+                    :title="(row.item.visible ?? true) ? 'Hide' : 'Show'"
+                    @click.stop="toggleNodeVisibility(row.id)"
+                  />
+                  <v-btn
+                    :icon="row.item.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
+                    variant="text"
+                    density="compact"
+                    size="26"
+                    class="selection-lock-btn"
+                    :class="{ 'is-locked': row.item.locked }"
+                    :title="row.item.locked ? 'Enable mouse selection' : 'Disable mouse selection'"
+                    @click.stop="toggleNodeSelectionLock(row.id)"
+                  />
+                </div>
+              </div>
             </div>
           </template>
-          <template #append="{ item }">
-            <div class="tree-node-trailing" @mousedown.stop @click.stop>
-              <v-btn
-                :icon="(item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
-                variant="text"
-                density="compact"
-                size="26"
-                class="visibility-btn"
-                :class="{ 'is-visible': (item.visible ?? true) }"
-                :title="(item.visible ?? true) ? 'Hide' : 'Show'"
-                @click.stop="toggleNodeVisibility(item.id)"
-              />
-              <v-btn
-                :icon="item.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
-                variant="text"
-                density="compact"
-                size="26"
-                class="selection-lock-btn"
-                :class="{ 'is-locked': item.locked }"
-                
-                :title="item.locked ? 'Enable mouse selection' : 'Disable mouse selection'"
-                @click.stop="toggleNodeSelectionLock(item.id)"
-              />
-            </div>
-          </template>
-        </v-treeview>
+        </v-virtual-scroll>
       </div>
     </div>
   </v-card>
@@ -1431,46 +1645,25 @@ function handleTreeDragLeave(event: DragEvent) {
   opacity: 0.08;
 }
 
-.hierarchy-tree {
-  flex: 1;
-  overflow-y: auto;
+.hierarchy-virtual-list {
+  height: 100%;
 }
 
 .tree-container {
   position: relative;
   flex: 1;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
   border-radius: 6px;
-}
-
-.hierarchy-tree :deep(.v-treeview-item__checkbox),
-.hierarchy-tree :deep(.v-treeview-item__selection) {
-  display: none !important;
-}
-
-.hierarchy-tree :deep(.v-treeview-item--active > .v-treeview-item__content) {
-  background: transparent;
-}
-
-
-.hierarchy-tree :deep(.v-treeview-item__content) {
-  padding-inline-end: 6px;
 }
 
 .tree-container.root-drop-active {
   background: rgba(77, 208, 225, 0.08);
 }
 
-
-.hierarchy-tree :deep(.v-treeview-item) {
+.hierarchy-row {
   min-height: 30px;
-  padding-inline: 10px 6px;
-}
-
-
-.hierarchy-tree :deep(.v-list-item-title) {
-  font-size: 0.85rem;
+  padding-inline: 6px;
 }
 
 .node-label {
@@ -1494,6 +1687,21 @@ function handleTreeDragLeave(event: DragEvent) {
   flex: 1;
   min-width: 0;
   color: inherit;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.group-expander-btn {
+  margin-inline-end: 2px;
+  opacity: 0.72;
+}
+
+.group-expander-placeholder {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  margin-inline-end: 2px;
 }
 
 .node-label.is-selected {
@@ -1543,9 +1751,9 @@ function handleTreeDragLeave(event: DragEvent) {
   pointer-events: none;
 }
 
-.hierarchy-tree :deep(.v-treeview-item:hover .tree-node-trailing) .visibility-btn,
-.hierarchy-tree :deep(.v-treeview-item__append:hover .tree-node-trailing) .visibility-btn,
-.hierarchy-tree :deep(.v-treeview-item__append:focus-within .tree-node-trailing) .visibility-btn {
+.node-label:hover .tree-node-trailing .visibility-btn,
+.tree-node-trailing:hover .visibility-btn,
+.tree-node-trailing:focus-within .visibility-btn {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -1582,9 +1790,9 @@ function handleTreeDragLeave(event: DragEvent) {
   pointer-events: none;
 }
 
-.hierarchy-tree :deep(.v-treeview-item:hover .tree-node-trailing) .selection-lock-btn ,
-.hierarchy-tree :deep(.v-treeview-item__append:hover .tree-node-trailing) .selection-lock-btn ,
-.hierarchy-tree :deep(.v-treeview-item__append:focus-within .tree-node-trailing) .selection-lock-btn  {
+.node-label:hover .tree-node-trailing .selection-lock-btn,
+.tree-node-trailing:hover .selection-lock-btn,
+.tree-node-trailing:focus-within .selection-lock-btn {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
