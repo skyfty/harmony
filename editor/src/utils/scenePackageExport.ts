@@ -187,10 +187,10 @@ export async function exportScenePackageZip(payload: {
       const bytes = new Uint8Array(await blob.arrayBuffer())
       const ext = inferExtFromFilename(filename) ?? inferExtFromMimeType(mimeType ?? '') ?? 'bin'
 
-      // Store in a shared folder; stable hashed name to avoid path issues.
+      // Store in a shared folder (`resources/`); stable hashed name to avoid path issues.
       const hash = await sha256Hex(item.assetId)
       const safeName = hash.length > 16 ? hash.slice(0, 16) : hash
-      const resourcePath = `assets/${safeName}.${ext}`
+      const resourcePath = `resources/${safeName}.${ext}`
 
       // De-dup: if two ids map to same path (shouldn't), last one wins.
       files[resourcePath] = bytes

@@ -167,7 +167,7 @@ function handleConfirm() {
           <v-checkbox
             v-model="form.embedAssets"
             :disabled="exporting"
-            label="嵌入资产"
+            label="Embed assets"
             density="compact"
             hide-details
           />
