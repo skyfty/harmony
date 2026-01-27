@@ -152,10 +152,6 @@ export default class ResourceCache {
       return null;
     }
 
-    if (this.isRemoteUrl(assetId)) {
-      return { kind: 'remote-url', url: assetId };
-    }
-
     if (assetId.startsWith('data:')) {
       return { kind: 'data-url', dataUrl: assetId };
     }
@@ -163,6 +159,11 @@ export default class ResourceCache {
     const override = this.resolveOverride(assetId);
     if (override) {
       return override;
+    }
+
+    // Remote URL should be resolved only after overrides, so embedded packages can override URL-like IDs.
+    if (this.isRemoteUrl(assetId)) {
+      return { kind: 'remote-url', url: assetId };
     }
 
     const embedded = this.resolveEmbedded(assetId);

@@ -119,6 +119,7 @@ const exportErrorMessage = ref<string | null>(null)
 const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportOptions>({
   fileName: 'scene',
+  embedAssets: false,
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
@@ -1128,6 +1129,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
       sceneOrder: embeddedScenes.map((entry) => entry.id),
     },
     scenes: embeddedScenes,
+    embedAssets: options.embedAssets ?? false,
     updateProgress,
   })
 }
@@ -1251,6 +1253,7 @@ let pendingSceneSave: Promise<boolean> | null = null
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   format: 'json',
   fileName: 'preview',
+  embedAssets: false,
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,

@@ -14,6 +14,8 @@ export interface SceneExportOptions {
   includeExtras: boolean
   rotateCoordinateSystem: boolean
   lazyLoadMeshes: boolean
+  /** When true, export embeds all referenced runtime assets into the ZIP for offline use. */
+  embedAssets: boolean
 }
 
 export interface GLBExportSettings {
