@@ -7,12 +7,10 @@ import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-v
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
 import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from './constants'
 import {
-  findSceneNode,
   buildParentIndex,
   filterTopLevelSelection,
   setBoundingBoxFromObject,
   toEulerLike,
-  snapVectorToGrid,
   cloneVectorCoordinates,
   type VectorCoordinates,
   snapValueToGrid
@@ -30,6 +28,7 @@ export function useSelectionDrag(
     updateSelectionHighlights: () => void
     updatePlaceholderOverlayPositions: () => void
     gizmoControlsUpdate: () => void
+    getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
   }
 ) {
   const sceneStore = useSceneStore()
@@ -86,23 +85,6 @@ export function useSelectionDrag(
     return Number.isFinite(groundWorldY) ? groundWorldY : 0
   }
 
-  function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
-    if (!nodeId) {
-      return null
-    }
-    return findSceneNode(sceneStore.nodes, nodeId) ?? findSceneNode(sceneNodes, nodeId)
-  }
-
-  function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | undefined) {
-    const node = resolveSceneNodeById(nodeId)
-    if (node?.editorFlags?.ignoreGridSnapping) {
-      return vec
-    }
-    // Assuming Wall check is not strictly needed or can be added later if critical
-    // if (node?.dynamicMesh?.type === 'Wall') { ... }
-    return snapVectorToGrid(vec)
-  }
-
   function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
     callbacks.primeInstancedTransform?.(object)
 
@@ -155,7 +137,10 @@ export function useSelectionDrag(
     }
 
     const worldPosition = planePoint.sub(drag.pointerOffset)
-    snapVectorToGridForNode(worldPosition, drag.nodeId)
+    const snapDelta = callbacks.getVertexSnapDelta?.({ drag, event })
+    if (snapDelta) {
+      worldPosition.add(snapDelta)
+    }
 
     const newLocalPosition = worldPosition.clone()
     if (drag.parent) {
@@ -181,7 +166,6 @@ export function useSelectionDrag(
 
     drag.companions.forEach((companion) => {
       const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
-      snapVectorToGridForNode(companionWorldPosition, companion.nodeId)
       const localPosition = companionWorldPosition.clone()
       if (companion.parent) {
         companion.parent.worldToLocal(localPosition)
@@ -234,6 +218,57 @@ export function useSelectionDrag(
     })
 
     emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
+  }
+
+  function applyWorldDeltaToSelectionDrag(
+    drag: SelectionDragState,
+    deltaWorld: THREE.Vector3,
+    options?: { allowVertical?: boolean },
+  ) {
+    if (!deltaWorld || deltaWorld.lengthSq() < 1e-12) {
+      return
+    }
+
+    const allowVertical = options?.allowVertical === true
+
+    // Selection drag is typically constrained to the original Y plane.
+    // For vertex snapping we must also align Y so the snapped endpoints meet.
+    selectDragDelta.copy(deltaWorld)
+    if (!allowVertical) {
+      selectDragDelta.y = 0
+    }
+
+    drag.object.updateMatrixWorld(true)
+    drag.object.getWorldPosition(selectDragWorldPosition)
+    selectDragWorldPosition.add(selectDragDelta)
+
+    const newLocalPosition = selectDragWorldPosition.clone()
+    if (drag.parent) {
+      drag.parent.worldToLocal(newLocalPosition)
+    }
+    if (!allowVertical) {
+      newLocalPosition.y = drag.initialLocalPosition.y
+    }
+    drag.object.position.copy(newLocalPosition)
+    drag.object.updateMatrixWorld(true)
+    callbacks.syncInstancedTransform(drag.object, true)
+
+    drag.companions.forEach((companion) => {
+      companion.object.updateMatrixWorld(true)
+      companion.object.getWorldPosition(dropWorldPositionHelper)
+      dropWorldPositionHelper.add(selectDragDelta)
+
+      const localPosition = dropWorldPositionHelper.clone()
+      if (companion.parent) {
+        companion.parent.worldToLocal(localPosition)
+      }
+      if (!allowVertical) {
+        localPosition.y = companion.initialLocalPosition.y
+      }
+      companion.object.position.copy(localPosition)
+      companion.object.updateMatrixWorld(true)
+      callbacks.syncInstancedTransform(companion.object, true)
+    })
   }
 
   function dropSelectionToGround() {
@@ -302,8 +337,9 @@ export function useSelectionDrag(
     callbacks.updateSelectionHighlights()
   }
 
-  function alignSelection(mode: AlignMode) {
+  function alignSelection(mode: AlignMode, options?: { snapToGrid?: boolean }) {
     const axis = ALIGN_MODE_AXIS[mode]
+    const snapToGridEnabled = options?.snapToGrid ?? true
 
     const primaryId = sceneStore.selectedNodeId
     if (!primaryId) {
@@ -328,7 +364,9 @@ export function useSelectionDrag(
 
     referenceObject.updateMatrixWorld(true)
     referenceObject.getWorldPosition(alignReferenceWorldPositionHelper)
-    const targetAxisValue = snapValueToGrid(alignReferenceWorldPositionHelper[axis])
+    const targetAxisValue = snapToGridEnabled
+      ? snapValueToGrid(alignReferenceWorldPositionHelper[axis])
+      : alignReferenceWorldPositionHelper[axis]
 
     const updates: TransformUpdatePayload[] = []
 
@@ -450,6 +488,7 @@ export function useSelectionDrag(
     createSelectionDragState,
     updateSelectDragPosition,
     commitSelectionDragTransforms,
+    applyWorldDeltaToSelectionDrag,
     dropSelectionToGround,
     alignSelection,
     rotateSelection

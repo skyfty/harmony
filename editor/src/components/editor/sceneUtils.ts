@@ -83,6 +83,34 @@ export function setBoundingBoxFromObject(object: THREE.Object3D | null, target: 
   if (!object) {
     return target.makeEmpty()
   }
+
+  const isVector3Tuple = (value: unknown): value is [number, number, number] => {
+    if (!Array.isArray(value) || value.length !== 3) {
+      return false
+    }
+    const [x, y, z] = value as unknown[]
+    return (
+      typeof x === 'number' && Number.isFinite(x) &&
+      typeof y === 'number' && Number.isFinite(y) &&
+      typeof z === 'number' && Number.isFinite(z)
+    )
+  }
+
+  // Prefer pick-proxy bounds when available: instanceLayout expands the node's
+  // effective footprint, and the PickProxy is kept in sync with that.
+  const pickProxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
+  const pickProxyBounds = pickProxy?.userData?.instancedPickProxyBounds as { min?: unknown; max?: unknown } | undefined
+  if (pickProxy && pickProxyBounds && isVector3Tuple(pickProxyBounds.min) && isVector3Tuple(pickProxyBounds.max)) {
+    instancedBoundsMin.fromArray(pickProxyBounds.min)
+    instancedBoundsMax.fromArray(pickProxyBounds.max)
+    instancedBoundsBox.min.copy(instancedBoundsMin)
+    instancedBoundsBox.max.copy(instancedBoundsMax)
+    target.copy(instancedBoundsBox)
+    pickProxy.updateMatrixWorld(true)
+    target.applyMatrix4(pickProxy.matrixWorld)
+    return target
+  }
+
   const instancedBounds = object.userData?.instancedBounds as { min?: number[]; max?: number[] } | undefined
   if (instancedBounds?.min?.length === 3 && instancedBounds?.max?.length === 3) {
     instancedBoundsMin.fromArray(instancedBounds.min)
@@ -90,6 +118,7 @@ export function setBoundingBoxFromObject(object: THREE.Object3D | null, target: 
     instancedBoundsBox.min.copy(instancedBoundsMin)
     instancedBoundsBox.max.copy(instancedBoundsMax)
     target.copy(instancedBoundsBox)
+    object.updateMatrixWorld(true)
     target.applyMatrix4(object.matrixWorld)
     return target
   }

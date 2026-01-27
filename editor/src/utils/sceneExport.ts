@@ -9,6 +9,7 @@ import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export
 import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { useSceneStore } from '@/stores/sceneStore'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -542,7 +543,8 @@ async function generateOutlineMeshesForCandidates(
           file = assetCacheStore.createFileFromCache(assetId)
         }
         if (file) {
-          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
         }
       }
       if (!baseGroup) {
@@ -786,9 +788,10 @@ async function loadAssetObjectForNode(
       await assetCacheStore.loadFromIndexedDb(assetId)
       file = assetCacheStore.createFileFromCache(assetId)
     }
-    if (file) {
-      baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file!))
-    }
+      if (file) {
+          const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file!, ext))
+        }
   }
 
   const baseObject = baseGroup?.object ?? null

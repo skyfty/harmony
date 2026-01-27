@@ -24,6 +24,7 @@ import type {
 import {
   createPrimitiveGeometry,
 } from '@harmony/schema';
+import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@harmony/schema'
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
@@ -42,10 +43,6 @@ import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
-import type { InstancedTilingComponentProps } from './components/definitions/instancedTilingComponent'
-import {
-  INSTANCED_TILING_COMPONENT_TYPE,
-} from './components/definitions/instancedTilingComponent'
 
 import { getOrLoadModelObject } from './modelObjectCache'
 import { loadNodeObject } from './modelAssetLoader'
@@ -283,7 +280,7 @@ class SceneGraphBuilder {
     const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
     await this.preloadAssets(nodes, materials);
-    await this.preloadInstancedTilingModels(nodes);
+    await this.preloadInstanceLayoutModels(nodes);
     await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
@@ -445,13 +442,13 @@ class SceneGraphBuilder {
     if (this.lazyLoadMeshes) {
       if (Array.isArray(meshInfo?.essential) && meshInfo.essential.length) {
         const essential = this.normalizeAssetIdList(meshInfo.essential);
-        const tiling = this.collectInstancedTilingAssetIds(nodes);
-        if (!tiling.length) {
+        const layout = this.collectInstanceLayoutAssetIds(nodes);
+        if (!layout.length) {
           return essential;
         }
-        return this.normalizeAssetIdList([...essential, ...tiling]);
+        return this.normalizeAssetIdList([...essential, ...layout]);
       }
-      return this.collectInstancedTilingAssetIds(nodes);
+      return this.collectInstanceLayoutAssetIds(nodes);
     }
     if (Array.isArray(meshInfo?.all) && meshInfo.all.length) {
       return this.normalizeAssetIdList(meshInfo.all);
@@ -500,21 +497,11 @@ class SceneGraphBuilder {
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
       }
-
-      const tilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-        | SceneNodeComponentState<InstancedTilingComponentProps>
-        | undefined;
-      if (tilingState?.enabled !== false) {
-        // Instanced tiling uses the node's own model asset (sourceAssetId).
-        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
-          ids.add(node.sourceAssetId)
-        }
-      }
     }
     return Array.from(ids);
   }
 
-  private collectInstancedTilingAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+  private collectInstanceLayoutAssetIds(nodes: SceneNodeWithExtras[]): string[] {
     const ids = new Set<string>()
     const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
     while (stack.length) {
@@ -522,13 +509,13 @@ class SceneGraphBuilder {
       if (!node) {
         continue
       }
-      const tilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-        | SceneNodeComponentState<InstancedTilingComponentProps>
-        | undefined
-      if (tilingState?.enabled !== false) {
-        // New behavior: use the node's own model asset.
-        if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
-          ids.add(node.sourceAssetId)
+      // Only preload when we need template bounds for multi-instance layout.
+      const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+      const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null
+      if (layout?.mode === 'grid') {
+        const assetId = resolveInstanceLayoutTemplateAssetId(layout, typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null)
+        if (assetId) {
+          ids.add(assetId)
         }
       }
       if (Array.isArray(node.children) && node.children.length) {
@@ -538,8 +525,8 @@ class SceneGraphBuilder {
     return Array.from(ids)
   }
 
-  private async preloadInstancedTilingModels(nodes: SceneNodeWithExtras[]): Promise<void> {
-    const assetIds = this.collectInstancedTilingAssetIds(nodes)
+  private async preloadInstanceLayoutModels(nodes: SceneNodeWithExtras[]): Promise<void> {
+    const assetIds = this.collectInstanceLayoutAssetIds(nodes)
     if (!assetIds.length) {
       return
     }
@@ -550,12 +537,12 @@ class SceneGraphBuilder {
           await getOrLoadModelObject(assetId, async () => {
             const object = await loadNodeObject(this.resourceCache, assetId, null)
             if (!object) {
-              throw new Error('Instanced tiling preload returned empty object')
+              throw new Error('Instance layout preload returned empty object')
             }
             return object
           })
         } catch (error) {
-          this.warn(`Failed to preload instanced tiling model ${assetId}: ${(error as Error)?.message ?? String(error)}`)
+          this.warn(`Failed to preload instance layout model ${assetId}: ${(error as Error)?.message ?? String(error)}`)
         }
       }),
     )
@@ -1192,7 +1179,8 @@ class SceneGraphBuilder {
     }
 
     try {
-      const parsed = await loadObjectFromFile(file);
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const parsed = await loadObjectFromFile(file, ext);
       const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
       return { scene: parsed, animations };
     } catch (error) {

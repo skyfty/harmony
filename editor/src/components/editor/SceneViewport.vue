@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
-import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { OrbitControls } from '@/utils/OrbitControls.js'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -78,16 +78,21 @@ import {
   releaseModelInstanceBinding,
   ensureInstancedMeshesRegistered,
   subscribeInstancedMeshes,
+  getModelInstanceBindingsForNode,
   getModelInstanceBindingById,
+  updateModelInstanceMatrix,
   updateModelInstanceBindingMatrix,
   findBindingIdForInstance,
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
 import {
-  buildInstancedTilingLocalMatrices,
-  computeBoxExtentsAlongBasis,
-  computeInstancedTilingBasis,
-} from '@schema/instancedMeshTiling'
+  clampSceneNodeInstanceLayout,
+  computeInstanceLayoutLocalBoundingBox,
+  forEachInstanceWorldMatrix,
+  getInstanceLayoutBindingId,
+  getInstanceLayoutCount,
+  resolveInstanceLayoutTemplateAssetId,
+} from '@schema/instanceLayout'
 import {
   buildContinuousInstancedModelUserDataPatchV2,
   buildLinearLocalPositions,
@@ -112,6 +117,7 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
+import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
@@ -151,7 +157,6 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
-  INSTANCED_TILING_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
   WALL_DEFAULT_THICKNESS,
@@ -161,7 +166,6 @@ import {
   ROAD_DEFAULT_WIDTH,
   ROAD_DEFAULT_JUNCTION_SMOOTHING,
   ROAD_COMPONENT_TYPE,
-  clampInstancedTilingComponentProps,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -194,13 +198,13 @@ import type {
   GuideboardEffectInstance,
   LodComponentProps,
   GuideRouteComponentProps,
-  InstancedTilingComponentProps,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
+import { useSnapController, type VertexSnapResult } from '@/components/editor/useSnapController'
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
@@ -210,6 +214,7 @@ import {
   computeOrientedGroundRectFromObject,
   snapVectorToGrid,
   snapVectorToMajorGrid,
+  filterTopLevelSelection,
   setBoundingBoxFromObject,
   toEulerLike,
   findSceneNode
@@ -245,7 +250,7 @@ import {
   DEFAULT_PERSPECTIVE_FOV,
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
-import { createFaceSnapManager } from './useFaceSnapping'
+// face/surface snap controllers removed: no alignment hint UI
 import { SceneCloudRenderer } from '@schema/cloudRenderer'
 import {
   createProtagonistInitialVisibilityCapture,
@@ -395,32 +400,74 @@ instancedHoverMaterial.toneMapped = false
 
 const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
 
-type InstancedTilingRuntimeState = {
-  nodeId: string
-  componentId: string
-  assetId: string | null
-  bindingIds: string[]
-  layoutSignature: string | null
-  localMatrices: THREE.Matrix4[]
-  lastBaseElements: Float32Array | null
-  localDirty: boolean
-  hiddenMesh: THREE.Mesh | null
-  hiddenMeshWasVisible: boolean
-  previousInstancedAssetId: unknown
-  injectedInstancedAssetId: boolean
+type InstanceLayoutMatrixCacheEntry = {
+  bindingKey: string
+  elements: Float32Array
 }
 
-const instancedTilingRuntimes = new Map<string, InstancedTilingRuntimeState>()
-const INSTANCED_TILING_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
+const instanceLayoutMatrixCache = new Map<string, InstanceLayoutMatrixCacheEntry>()
 
-const instancedTilingBaseMatrix = new THREE.Matrix4()
-const instancedTilingInstanceMatrix = new THREE.Matrix4()
+function buildModelInstanceBindingKey(binding: { slots: Array<{ mesh: THREE.InstancedMesh; index: number }> }): string {
+  return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
+}
+
+function matrixElementsEqual(a: Float32Array, b: ArrayLike<number>, epsilon = 1e-7): boolean {
+  for (let i = 0; i < 16; i += 1) {
+    if (Math.abs(a[i]! - (b[i] ?? 0)) > epsilon) {
+      return false
+    }
+  }
+  return true
+}
+
+function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): void {
+  for (let i = 0; i < 16; i += 1) {
+    target[i] = source[i] ?? 0
+  }
+}
+
+function clearInstanceLayoutMatrixCacheForNode(nodeId: string): void {
+  instanceLayoutMatrixCache.delete(nodeId)
+  const prefix = `${nodeId}:instance:`
+  for (const key of instanceLayoutMatrixCache.keys()) {
+    if (key.startsWith(prefix)) {
+      instanceLayoutMatrixCache.delete(key)
+    }
+  }
+}
+
+function updateInstanceLayoutMatrixIfChanged(bindingId: string, nodeId: string, matrix: THREE.Matrix4): void {
+  const binding = getModelInstanceBindingById(bindingId)
+  if (!binding) {
+    instanceLayoutMatrixCache.delete(bindingId)
+    return
+  }
+
+  const bindingKey = buildModelInstanceBindingKey(binding as any)
+  const cached = instanceLayoutMatrixCache.get(bindingId)
+  if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, matrix.elements)) {
+    return
+  }
+
+  const entry = cached ?? { bindingKey, elements: new Float32Array(16) }
+  entry.bindingKey = bindingKey
+  copyMatrixElements(entry.elements, matrix.elements)
+  instanceLayoutMatrixCache.set(bindingId, entry)
+
+  if (bindingId === nodeId) {
+    updateModelInstanceMatrix(nodeId, matrix)
+  } else {
+    updateModelInstanceBindingMatrix(bindingId, matrix)
+  }
+}
+
+const INSTANCE_LAYOUT_INTERNAL_NAME_PARTS = ['PickProxy', 'Outline', 'InstancedOutline']
 
 function isInternalViewportObjectName(name: unknown): boolean {
   if (typeof name !== 'string' || !name) {
     return false
   }
-  return INSTANCED_TILING_INTERNAL_NAME_PARTS.some((part) => name.includes(part))
+  return INSTANCE_LAYOUT_INTERNAL_NAME_PARTS.some((part) => name.includes(part))
 }
 
 function findFirstRenderableMeshChild(root: THREE.Object3D): THREE.Mesh | null {
@@ -444,265 +491,143 @@ function findFirstRenderableMeshChild(root: THREE.Object3D): THREE.Mesh | null {
   return null
 }
 
-function getEnabledInstancedTilingState(node: SceneNode): { componentId: string; props: InstancedTilingComponentProps } | null {
-  const state = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Partial<InstancedTilingComponentProps> | Record<string, unknown>>
-    | undefined
-  if (!state || state.enabled === false) {
-    return null
-  }
-  const componentId = typeof state.id === 'string' ? state.id : ''
-  const props = clampInstancedTilingComponentProps(state.props as Partial<InstancedTilingComponentProps> | null | undefined)
-  return { componentId, props }
-}
+function applyInstanceLayoutVisibilityAndAssetBinding(object: THREE.Object3D, node: SceneNode): {
+  layout: ReturnType<typeof clampSceneNodeInstanceLayout>
+  instanceCount: number
+  templateAssetId: string | null
+  active: boolean
+} {
+  const userData = object.userData ?? (object.userData = {})
+  const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+  const instanceCount = layout ? getInstanceLayoutCount(layout) : 1
+  // Treat grid layouts as instanced-rendered even when instanceCount === 1.
+  // This avoids a transient state where the template mesh is hidden and the instanced
+  // binding is not updated, which can cause the model to disappear until a reload.
+  const templateAssetId = layout && layout.mode === 'grid' ? resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId) : null
+  const active = Boolean(layout && layout.mode === 'grid' && templateAssetId)
 
-function cleanupInstancedTilingRuntime(nodeId: string, options: { restoreTemplateMesh?: boolean } = {}) {
-  const entry = instancedTilingRuntimes.get(nodeId)
-  if (!entry) {
-    return
-  }
-
-  for (const bindingId of entry.bindingIds) {
-    releaseModelInstanceBinding(bindingId)
-  }
-
-  const restore = options.restoreTemplateMesh !== false
-  if (restore && entry.hiddenMesh) {
-    entry.hiddenMesh.visible = entry.hiddenMeshWasVisible
-  }
-
-  if (entry.injectedInstancedAssetId) {
-    const object = objectMap.get(nodeId)
-    if (object) {
-      const userData = object.userData ?? (object.userData = {})
-      const previous = entry.previousInstancedAssetId
-      if (typeof previous === 'undefined') {
-        delete userData.instancedAssetId
-      } else {
-        ;(userData as any).instancedAssetId = previous
-      }
+  if (active && templateAssetId) {
+    if (!userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
+      userData.__harmonyInstanceLayoutPreviousInstancedAssetId = userData.instancedAssetId
+      userData.__harmonyInstanceLayoutInjectedInstancedAssetId = true
     }
-  }
+    userData.instancedAssetId = templateAssetId
 
-  instancedTilingRuntimes.delete(nodeId)
-}
-
-function clearAllInstancedTilingRuntimes() {
-  Array.from(instancedTilingRuntimes.keys()).forEach((nodeId) => cleanupInstancedTilingRuntime(nodeId))
-}
-
-function syncInstancedTilingRegistration(object: THREE.Object3D, node: SceneNode) {
-  const enabled = getEnabledInstancedTilingState(node)
-  if (!enabled) {
-    cleanupInstancedTilingRuntime(node.id)
-    return
-  }
-
-  const existing = instancedTilingRuntimes.get(node.id)
-  if (existing) {
-    existing.componentId = enabled.componentId
-    return
-  }
-
-  instancedTilingRuntimes.set(node.id, {
-    nodeId: node.id,
-    componentId: enabled.componentId,
-    assetId: null,
-    bindingIds: [],
-    layoutSignature: null,
-    localMatrices: [],
-    lastBaseElements: null,
-    localDirty: true,
-    hiddenMesh: null,
-    hiddenMeshWasVisible: true,
-    previousInstancedAssetId: (object.userData ?? {}).instancedAssetId,
-    injectedInstancedAssetId: false,
-  })
-}
-
-function tickInstancedTiling() {
-  if (!instancedTilingRuntimes.size) {
-    return
-  }
-
-  instancedTilingRuntimes.forEach((runtime, nodeId) => {
-    const object = objectMap.get(nodeId)
-    const node = resolveSceneNodeById(nodeId)
-    if (!object || !node) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const enabled = getEnabledInstancedTilingState(node)
-    if (!enabled) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const objectUserData = object.userData as Record<string, unknown> | undefined
-    const resolvedAssetId = typeof objectUserData?.instancedAssetId === 'string'
-      ? (objectUserData.instancedAssetId as string).trim()
-      : typeof objectUserData?.sourceAssetId === 'string'
-        ? (objectUserData.sourceAssetId as string).trim()
-        : ''
-
-    if (!resolvedAssetId) {
-      // No template asset -> show template mesh and ensure no stale bindings.
-      if (runtime.hiddenMesh) {
-        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-        runtime.hiddenMesh = null
-      }
-      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
-      runtime.bindingIds = []
-      return
-    }
-
-    const group = getCachedModelObject(resolvedAssetId)
-    if (!group) {
-      void ensureModelObjectCached(resolvedAssetId)
-      if (runtime.hiddenMesh) {
-        runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-        runtime.hiddenMesh = null
-      }
-      return
-    }
-
-    ensureInstancedMeshesRegistered(resolvedAssetId)
-
-    const props = enabled.props
-    const instanceCount = props.countX * props.countY * props.countZ
-    if (!Number.isFinite(instanceCount) || instanceCount <= 0) {
-      cleanupInstancedTilingRuntime(nodeId)
-      return
-    }
-
-    const needsReset = runtime.assetId !== resolvedAssetId || runtime.bindingIds.length !== instanceCount
-    if (needsReset) {
-      runtime.bindingIds.forEach((bindingId) => releaseModelInstanceBinding(bindingId))
-      runtime.bindingIds = []
-      runtime.assetId = resolvedAssetId
-      runtime.layoutSignature = null
-      runtime.localMatrices = []
-      runtime.lastBaseElements = null
-      runtime.localDirty = true
-
-      const created: string[] = []
-      for (let i = 0; i < instanceCount; i += 1) {
-        const bindingId = `${nodeId}:${INSTANCED_TILING_COMPONENT_TYPE}:${runtime.componentId || 'default'}:${i}`
-        const binding = allocateModelInstanceBinding(resolvedAssetId, bindingId, nodeId)
-        if (!binding) {
-          created.forEach((id) => releaseModelInstanceBinding(id))
-          if (runtime.hiddenMesh) {
-            runtime.hiddenMesh.visible = runtime.hiddenMeshWasVisible
-            runtime.hiddenMesh = null
-          }
-          return
-        }
-        created.push(bindingId)
-      }
-      runtime.bindingIds = created
-    }
-
-    const basis = computeInstancedTilingBasis({
-      mode: props.mode,
-      forwardLocal: props.forwardLocal,
-      upLocal: props.upLocal,
-      rollDegrees: props.rollDegrees,
-    })
-
-    const extents = computeBoxExtentsAlongBasis(group.boundingBox, basis)
-    const stepX = extents.x + props.spacingX
-    const stepY = extents.y + props.spacingY
-    const stepZ = extents.z + props.spacingZ
-
-    const signature = [
-      resolvedAssetId,
-      props.mode,
-      `${props.countX},${props.countY},${props.countZ}`,
-      `${props.spacingX},${props.spacingY},${props.spacingZ}`,
-      `${props.forwardLocal.x},${props.forwardLocal.y},${props.forwardLocal.z}`,
-      `${props.upLocal.x},${props.upLocal.y},${props.upLocal.z}`,
-      `${props.rollDegrees}`,
-      `${extents.x},${extents.y},${extents.z}`,
-    ].join('|')
-
-    if (signature !== runtime.layoutSignature || runtime.localMatrices.length !== instanceCount) {
-      runtime.layoutSignature = signature
-      runtime.localMatrices = buildInstancedTilingLocalMatrices({
-        countX: props.countX,
-        countY: props.countY,
-        countZ: props.countZ,
-        stepX,
-        stepY,
-        stepZ,
-        basis,
-      })
-      runtime.localDirty = true
-    }
-
-    object.updateMatrixWorld(true)
-    instancedTilingBaseMatrix.copy(object.matrixWorld)
-
-    const elements = instancedTilingBaseMatrix.elements
-    const cached = runtime.lastBaseElements
-    let baseChanged = false
+    const cached = getCachedModelObject(templateAssetId)
     if (!cached) {
-      runtime.lastBaseElements = new Float32Array(elements)
-      baseChanged = true
+      void ensureModelObjectCached(templateAssetId)
     } else {
-      for (let i = 0; i < 16; i += 1) {
-        if (Math.abs((cached[i] ?? 0) - (elements[i] ?? 0)) > 1e-7) {
-          baseChanged = true
-          break
-        }
-      }
-      if (baseChanged) {
-        for (let i = 0; i < 16; i += 1) {
-          cached[i] = elements[i] ?? 0
-        }
-      }
+      ensureInstancedMeshesRegistered(templateAssetId)
     }
 
-    if (baseChanged || runtime.localDirty) {
-      for (let i = 0; i < runtime.bindingIds.length; i += 1) {
-        const bindingId = runtime.bindingIds[i]
-        const local = runtime.localMatrices[i]
-        if (!bindingId || !local) {
-          continue
-        }
-        instancedTilingInstanceMatrix.multiplyMatrices(instancedTilingBaseMatrix, local)
-        updateModelInstanceBindingMatrix(bindingId, instancedTilingInstanceMatrix)
-      }
-      runtime.localDirty = false
-    }
-
-    // Hide the template mesh child so the instanced array is the final visible result.
-    if (!runtime.hiddenMesh) {
+    if (!userData.__harmonyInstanceLayoutHiddenMesh) {
       const templateMesh = findFirstRenderableMeshChild(object)
       if (templateMesh) {
-        runtime.hiddenMesh = templateMesh
-        runtime.hiddenMeshWasVisible = templateMesh.visible
+        userData.__harmonyInstanceLayoutHiddenMesh = templateMesh
+        userData.__harmonyInstanceLayoutHiddenMeshWasVisible = templateMesh.visible
         templateMesh.visible = false
       }
     }
-
-    // Enable instanced outline/pick proxy path when tiling is active.
-    const userData = object.userData ?? (object.userData = {})
-    if (!userData.instancedAssetId) {
-      runtime.previousInstancedAssetId = userData.instancedAssetId
-      userData.instancedAssetId = resolvedAssetId
-      runtime.injectedInstancedAssetId = true
+  } else {
+    if (userData.__harmonyInstanceLayoutHiddenMesh) {
+      const mesh = userData.__harmonyInstanceLayoutHiddenMesh as THREE.Mesh
+      const wasVisible = Boolean(userData.__harmonyInstanceLayoutHiddenMeshWasVisible)
+      mesh.visible = wasVisible
+      delete userData.__harmonyInstanceLayoutHiddenMesh
+      delete userData.__harmonyInstanceLayoutHiddenMeshWasVisible
     }
 
-    ensureInstancedPickProxy(object, node)
+    if (userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
+      const previous = userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+      if (typeof previous === 'undefined') {
+        delete userData.instancedAssetId
+      } else {
+        userData.instancedAssetId = previous
+      }
+      delete userData.__harmonyInstanceLayoutInjectedInstancedAssetId
+      delete userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+      delete userData.__harmonyInstanceLayoutCache
+      clearInstanceLayoutMatrixCacheForNode(node.id)
+      // Release any layout-authored bindings.
+      releaseModelInstance(node.id)
+    } else if (layout && instanceCount <= 1) {
+      // Layout disabled or single-instance: drop any stale extra bindings.
+      const bindings = getModelInstanceBindingsForNode(node.id)
+      bindings.forEach((binding) => {
+        if (binding.bindingId !== node.id) {
+          releaseModelInstanceBinding(binding.bindingId)
+          instanceLayoutMatrixCache.delete(binding.bindingId)
+        }
+      })
+    }
+  }
+
+  return { layout, instanceCount, templateAssetId, active }
+}
+
+function syncInstanceLayoutInstancedMatrices(params: {
+  nodeId: string
+  object: THREE.Object3D
+  assetId: string
+  layout: NonNullable<ReturnType<typeof clampSceneNodeInstanceLayout>>
+  baseMatrixWorld: THREE.Matrix4
+}): void {
+  const { nodeId, object, assetId, layout, baseMatrixWorld } = params
+
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    void ensureModelObjectCached(assetId)
+    return
+  }
+  ensureInstancedMeshesRegistered(assetId)
+
+  const desiredCount = getInstanceLayoutCount(layout)
+  const desiredBindingIds = new Set<string>()
+  for (let index = 0; index < desiredCount; index += 1) {
+    desiredBindingIds.add(getInstanceLayoutBindingId(nodeId, index))
+  }
+
+  const existingBindings = getModelInstanceBindingsForNode(nodeId)
+  existingBindings.forEach((binding) => {
+    if (!desiredBindingIds.has(binding.bindingId)) {
+      releaseModelInstanceBinding(binding.bindingId)
+      instanceLayoutMatrixCache.delete(binding.bindingId)
+    }
   })
+
+  for (const bindingId of desiredBindingIds) {
+    const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+    if (!binding) {
+      return
+    }
+  }
+
+  const bounds = computeInstanceLayoutLocalBoundingBox(layout, cached.boundingBox) ?? cached.boundingBox.clone()
+  const userData = object.userData ?? (object.userData = {})
+  userData.instancedBounds = serializeBoundingBox(bounds)
+  bounds.getBoundingSphere(instancedCullingSphere)
+  userData.__harmonyInstancedRadius = instancedCullingSphere.radius
+
+  const cache = userData.__harmonyInstanceLayoutCache as { signature: string | null; locals: THREE.Matrix4[] } | undefined
+  const next = forEachInstanceWorldMatrix({
+    nodeId,
+    baseMatrixWorld,
+    layout,
+    templateBoundingBox: cached.boundingBox,
+    cache,
+    onMatrix: (bindingId, worldMatrix) => {
+      updateInstanceLayoutMatrixIfChanged(bindingId, nodeId, worldMatrix as unknown as THREE.Matrix4)
+    },
+  })
+
+  userData.__harmonyInstanceLayoutCache = { signature: next.signature, locals: next.locals as unknown as THREE.Matrix4[] }
 }
 
 let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let mapControls: MapControls | null = null
+let mapControls: OrbitControls | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -956,12 +881,7 @@ async function createOrUpdateGuideRouteWaypointLabels(node: SceneNode, container
   }
 }
 
-const faceSnapManager = createFaceSnapManager({
-  getScene: () => scene,
-  objectMap,
-  getActiveTool: () => props.activeTool,
-  isEditableKeyboardTarget,
-})
+// snap controllers disabled in SceneViewport
 
 const protagonistPreview = useProtagonistPreview({
   getScene: () => scene,
@@ -1344,6 +1264,17 @@ const {
   objectMap
 )
 
+const snapController = useSnapController({
+  canvasRef,
+  camera: { get value() { return camera } } as Ref<THREE.Camera | null>,
+  objectMap,
+  getInstancedPickTargets: collectInstancedPickTargets,
+  isNodeVisible: (nodeId) => sceneStore.isNodeVisible(nodeId),
+  isNodeLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
+  isObjectWorldVisible,
+  pixelThreshold: 12,
+})
+
 protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
   getNodes: () => sceneStore.nodes,
   isSceneReady: () => sceneStore.isSceneReady,
@@ -1377,6 +1308,8 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
+const vertexSnapMode = computed(() => sceneStore.viewportSettings.snapMode)
+const vertexSnapThresholdPx = computed(() => sceneStore.viewportSettings.snapThresholdPx)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
@@ -1478,6 +1411,92 @@ const repairHoverGroup = new THREE.Group()
 repairHoverGroup.name = 'RepairHover'
 repairHoverGroup.visible = false
 const repairHoverProxies = new Map<string, THREE.Mesh>()
+
+const vertexOverlayGroup = new THREE.Group()
+vertexOverlayGroup.name = 'VertexOverlay'
+vertexOverlayGroup.renderOrder = 20000
+vertexOverlayGroup.frustumCulled = false
+
+// Vertex debug overlay removed. No-op placeholder to keep callers safe.
+function updateDebugVertexPoints(_nowMs: number) {
+  // intentionally empty
+}
+
+// NOTE: WebGL line width is effectively 1px on many platforms.
+// Use a mesh "beam" so the hint remains obvious.
+const vertexOverlayHintBeamGeometry = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true)
+const vertexOverlayHintBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0x00e5ff,
+  transparent: true,
+  opacity: 0.75,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+})
+vertexOverlayHintBeamMaterial.toneMapped = false
+const vertexOverlayHintBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, vertexOverlayHintBeamMaterial)
+vertexOverlayHintBeam.name = 'VertexOverlayHintBeam'
+vertexOverlayHintBeam.renderOrder = 19999
+vertexOverlayHintBeam.visible = false
+vertexOverlayHintBeam.frustumCulled = false
+;(vertexOverlayHintBeam as any).raycast = () => {}
+
+vertexOverlayGroup.add(vertexOverlayHintBeam)
+
+const vertexOverlayHintDirHelper = new THREE.Vector3()
+const vertexOverlayHintMidHelper = new THREE.Vector3()
+const vertexOverlayHintQuatHelper = new THREE.Quaternion()
+const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.06
+const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.015
+const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
+const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
+
+
+let pendingVertexSnapResult: VertexSnapResult | null = null
+
+function clearVertexSnapMarkers() {
+  vertexOverlayHintBeam.visible = false
+}
+
+function updateVertexSnapMarkers(result: VertexSnapResult | null) {
+  if (!result) {
+    clearVertexSnapMarkers()
+    return
+  }
+
+  vertexOverlayHintDirHelper.copy(result.targetWorld).sub(result.sourceWorld)
+  const len = vertexOverlayHintDirHelper.length()
+  if (!Number.isFinite(len) || len <= 1e-6) {
+    clearVertexSnapMarkers()
+    return
+  }
+
+  vertexOverlayHintMidHelper.copy(result.sourceWorld).add(result.targetWorld).multiplyScalar(0.5)
+  vertexOverlayHintDirHelper.multiplyScalar(1 / len)
+  vertexOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, vertexOverlayHintDirHelper)
+
+  vertexOverlayHintBeam.position.copy(vertexOverlayHintMidHelper)
+  vertexOverlayHintBeam.quaternion.copy(vertexOverlayHintQuatHelper)
+  // CylinderGeometry is unit height along +Y; scale Y to length.
+  vertexOverlayHintBeam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
+  vertexOverlayHintBeam.visible = true
+}
+
+const updateVertexSnapHintPulse = (nowMs: number) => {
+  if (!vertexOverlayHintBeam.visible) {
+    return
+  }
+  // Gentle ~2Hz pulse.
+  const t = nowMs * 0.002
+  const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
+  const opacity = VERTEX_OVERLAY_HINT_BASE_OPACITY + VERTEX_OVERLAY_HINT_PULSE_OPACITY * pulse
+  vertexOverlayHintBeamMaterial.opacity = opacity
+
+  const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
+  vertexOverlayHintBeam.scale.x = radius
+  vertexOverlayHintBeam.scale.z = radius
+}
 
 const groundEditor = createGroundEditor({
   sceneStore,
@@ -2515,7 +2534,27 @@ const {
   {
     syncInstancedOutlineEntryTransform,
     resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
-    syncInstancedTransformOverride: ({ nodeId, baseMatrix }) => wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix),
+    syncInstancedTransformOverride: ({ nodeId, object, baseMatrix, assetId }) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      if (node && assetId) {
+        const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+        if (layout && layout.mode === 'grid') {
+          const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
+          if (templateAssetId && templateAssetId === assetId) {
+            syncInstanceLayoutInstancedMatrices({
+              nodeId,
+              object,
+              assetId,
+              layout,
+              baseMatrixWorld: baseMatrix,
+            })
+            return true
+          }
+        }
+      }
+
+      return wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)
+    },
   }
 )
 
@@ -2565,7 +2604,7 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     if (!file) {
       return
     }
-    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
     assetCacheStore.releaseInMemoryBlob(asset.id)
     ensureInstancedMeshesRegistered(asset.id)
   })()
@@ -2675,6 +2714,12 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return
     }
+
+    const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+    if (layout && layout.mode === 'grid') {
+      return
+    }
+
     const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
     if (!component || !component.enabled) {
       return
@@ -2790,6 +2835,7 @@ const {
   createSelectionDragState,
   updateSelectDragPosition,
   commitSelectionDragTransforms,
+  applyWorldDeltaToSelectionDrag,
   dropSelectionToGround,
   alignSelection,
   rotateSelection
@@ -2804,9 +2850,41 @@ const {
     updateGridHighlightFromObject,
     updateSelectionHighlights,
     updatePlaceholderOverlayPositions,
-    gizmoControlsUpdate: () => gizmoControls?.update()
+    gizmoControlsUpdate: () => gizmoControls?.update(),
+    getVertexSnapDelta: ({ drag, event }) => {
+      const active = vertexSnapMode.value === 'vertex' || event.shiftKey
+      if (!active) {
+        pendingVertexSnapResult = null
+        clearVertexSnapMarkers()
+        return null
+      }
+
+      const result = snapController.update({
+        event,
+        selectedNodeId: drag.nodeId,
+        selectedObject: drag.object,
+        active,
+        excludeNodeIds: new Set(sceneStore.selectedNodeIds),
+        pixelThresholdPx: vertexSnapThresholdPx.value,
+      })
+      pendingVertexSnapResult = result
+      updateVertexSnapMarkers(result)
+
+      // Deferred snap: only apply on pointer-up.
+      return null
+    },
   }
 )
+
+function commitSelectionDragTransformsWithDeferredVertexSnap(dragState: any) {
+  const delta = pendingVertexSnapResult?.delta ?? null
+  if (delta && delta.lengthSq() > 1e-12) {
+    applyWorldDeltaToSelectionDrag(dragState, delta, { allowVertical: true })
+  }
+  commitSelectionDragTransforms(dragState)
+  pendingVertexSnapResult = null
+  clearVertexSnapMarkers()
+}
 
 
 
@@ -2894,15 +2972,34 @@ function rotateActiveSelection(nodeId: string) {
 
   const updates: TransformUpdatePayload[] = []
 
+  const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    RIGHT_CLICK_ROTATION_STEP,
+  )
+  const pivotWorld = new THREE.Vector3()
+  const worldPosition = new THREE.Vector3()
+  const worldOffset = new THREE.Vector3()
+
   selectionIds.forEach((id) => {
     const object = objectMap.get(id)
     if (!object) {
       return
     }
 
-    const nextRotation = object.rotation.clone()
-    nextRotation.y += RIGHT_CLICK_ROTATION_STEP
-    object.rotation.copy(nextRotation)
+    computeTransformPivotWorld(object, pivotWorld)
+
+    object.updateMatrixWorld(true)
+    object.getWorldPosition(worldPosition)
+    worldOffset.copy(worldPosition).sub(pivotWorld).applyQuaternion(rotateDeltaQuaternion)
+    worldPosition.copy(pivotWorld).add(worldOffset)
+
+    if (object.parent) {
+      object.parent.updateMatrixWorld(true)
+      object.parent.worldToLocal(worldPosition)
+    }
+    object.position.copy(worldPosition)
+    object.quaternion.premultiply(rotateDeltaQuaternion)
+    object.rotation.setFromQuaternion(object.quaternion)
     object.updateMatrixWorld(true)
 
     updates.push({
@@ -3215,6 +3312,57 @@ function isInstancedPickProxyBoundsPayload(value: unknown): value is InstancedPi
   return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
 }
 
+function computeTransformPivotWorld(object: THREE.Object3D, out: THREE.Vector3): void {
+  const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
+  const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
+
+  // PickProxyManager persists `instancedPickProxyBounds` in *object-local* space.
+  // Convert object-local center -> world using the node object's transform.
+  if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
+    instancedPivotCenterLocalHelper.fromArray(proxyBoundsCandidate.min)
+    instancedPivotWorldHelper.fromArray(proxyBoundsCandidate.max)
+    instancedPivotCenterLocalHelper.add(instancedPivotWorldHelper).multiplyScalar(0.5)
+    object.updateMatrixWorld(true)
+    out.copy(instancedPivotCenterLocalHelper)
+    object.localToWorld(out)
+    return
+  }
+
+  // Fallback: use the proxy geometry center if bounds payload is unavailable.
+  const meshProxy = proxy as unknown as THREE.Mesh | undefined
+  const geometry = meshProxy?.geometry as THREE.BufferGeometry | undefined
+  if (meshProxy && geometry) {
+    if (!geometry.boundingBox) {
+      geometry.computeBoundingBox()
+    }
+    if (geometry.boundingBox && !geometry.boundingBox.isEmpty()) {
+      instancedPivotCenterLocalHelper.copy(geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+      meshProxy.updateMatrixWorld(true)
+      out.copy(instancedPivotCenterLocalHelper)
+      meshProxy.localToWorld(out)
+      return
+    }
+  }
+
+  object.getWorldPosition(out)
+}
+
+function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
+  const userData = object.userData ?? (object.userData = {})
+  const proxy = userData.instancedPickProxy as THREE.Object3D | undefined
+
+  // Only override pivot when the node has a PickProxy (instanced tiling path).
+  if (!proxy) {
+    delete (userData as any).transformControlsPivotWorld
+    return
+  }
+
+  const existing = (userData as any).transformControlsPivotWorld as THREE.Vector3 | undefined
+  const pivotWorld = existing && (existing as any).isVector3 ? existing : new THREE.Vector3()
+  computeTransformPivotWorld(object, pivotWorld)
+  ;(userData as any).transformControlsPivotWorld = pivotWorld
+}
+
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
   const relevantIds = new Set(selectedIds)
@@ -3232,35 +3380,9 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
       return
     }
     object.updateMatrixWorld(true)
-
-    const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
     const pivotWorld = new THREE.Vector3()
 
-    const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-    if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-      instancedPivotCenterLocalHelper
-        .fromArray(proxyBoundsCandidate.min)
-        .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-        .multiplyScalar(0.5)
-      proxy.updateMatrixWorld(true)
-      pivotWorld.copy(instancedPivotCenterLocalHelper)
-      proxy.localToWorld(pivotWorld)
-    } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-      const meshProxy = proxy as unknown as THREE.Mesh
-      if (!meshProxy.geometry.boundingBox) {
-        meshProxy.geometry.computeBoundingBox()
-      }
-      if (meshProxy.geometry.boundingBox) {
-        instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-        meshProxy.updateMatrixWorld(true)
-        pivotWorld.copy(instancedPivotCenterLocalHelper)
-        meshProxy.localToWorld(pivotWorld)
-      } else {
-        object.getWorldPosition(pivotWorld)
-      }
-    } else {
-      object.getWorldPosition(pivotWorld)
-    }
+    computeTransformPivotWorld(object, pivotWorld)
 
     const worldPosition = new THREE.Vector3()
     object.getWorldPosition(worldPosition)
@@ -3306,7 +3428,6 @@ const draggingChangedHandler = (event: unknown) => {
 
   if (!value) {
     // Dragging ends
-    faceSnapManager.hideEffect()
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
       const updates = commitTransformControlUpdates()
@@ -3332,7 +3453,6 @@ const draggingChangedHandler = (event: unknown) => {
     }
   } else {
     // Dragging begins
-    faceSnapManager.hideEffect()
     hasTransformLastWorldPosition = false
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
@@ -3907,8 +4027,516 @@ function applyAxesVisibility(visible: boolean) {
   axesHelper.visible = visible
 }
 
-function handleAlignSelection(mode: AlignMode) {
-  alignSelection(mode)
+type WorldBounds = {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+  minZ: number
+  maxZ: number
+  centerX: number
+  centerY: number
+  centerZ: number
+  sizeX: number
+  sizeY: number
+  sizeZ: number
+}
+
+const worldAlignBoxHelper = new THREE.Box3()
+const worldAlignSizeHelper = new THREE.Vector3()
+const worldAlignWorldPositionHelper = new THREE.Vector3()
+const worldAlignLocalPositionHelper = new THREE.Vector3()
+
+function computeWorldBoundsForObject(object: THREE.Object3D): WorldBounds | null {
+  object.updateMatrixWorld(true)
+  setBoundingBoxFromObject(object, worldAlignBoxHelper)
+  if (worldAlignBoxHelper.isEmpty()) {
+    return null
+  }
+
+  const min = worldAlignBoxHelper.min
+  const max = worldAlignBoxHelper.max
+  worldAlignBoxHelper.getSize(worldAlignSizeHelper)
+
+  return {
+    minX: min.x,
+    maxX: max.x,
+    minY: min.y,
+    maxY: max.y,
+    minZ: min.z,
+    maxZ: max.z,
+    centerX: (min.x + max.x) * 0.5,
+    centerY: (min.y + max.y) * 0.5,
+    centerZ: (min.z + max.z) * 0.5,
+    sizeX: worldAlignSizeHelper.x,
+    sizeY: worldAlignSizeHelper.y,
+    sizeZ: worldAlignSizeHelper.z,
+  }
+}
+
+function applyWorldDelta(object: THREE.Object3D, deltaX: number, deltaY: number, deltaZ: number): THREE.Vector3 | null {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) || !Number.isFinite(deltaZ)) {
+    return null
+  }
+
+  if (Math.abs(deltaX) <= 1e-10 && Math.abs(deltaY) <= 1e-10 && Math.abs(deltaZ) <= 1e-10) {
+    return null
+  }
+
+  object.updateMatrixWorld(true)
+  object.getWorldPosition(worldAlignWorldPositionHelper)
+  worldAlignWorldPositionHelper.x += deltaX
+  worldAlignWorldPositionHelper.y += deltaY
+  worldAlignWorldPositionHelper.z += deltaZ
+
+  worldAlignLocalPositionHelper.copy(worldAlignWorldPositionHelper)
+  if (object.parent) {
+    object.parent.worldToLocal(worldAlignLocalPositionHelper)
+  }
+  object.position.copy(worldAlignLocalPositionHelper)
+  object.updateMatrixWorld(true)
+  return worldAlignLocalPositionHelper
+}
+
+function sortBySelectionAndAxis<T extends { id: string; axisValue: number }>(items: T[], selectionOrder: string[], ascending: boolean): T[] {
+  const order = new Map<string, number>()
+  selectionOrder.forEach((id, index) => order.set(id, index))
+  const sign = ascending ? 1 : -1
+  return items.sort((a, b) => {
+    const diff = (a.axisValue - b.axisValue) * sign
+    if (Math.abs(diff) > 1e-6) {
+      return diff
+    }
+    const ai = order.get(a.id) ?? Number.MAX_SAFE_INTEGER
+    const bi = order.get(b.id) ?? Number.MAX_SAFE_INTEGER
+    if (ai !== bi) {
+      return ai - bi
+    }
+    return a.id.localeCompare(b.id)
+  })
+}
+
+function collectTopLevelMovableSelection(excludeIds: Set<string>): string[] {
+  const selection = sceneStore.selectedNodeIds.filter((id) => !!id && !excludeIds.has(id) && !sceneStore.isNodeSelectionLocked(id))
+  if (!selection.length) {
+    return []
+  }
+  const { parentMap } = buildHierarchyMaps()
+  return filterTopLevelSelection(selection, parentMap)
+}
+
+function applyWorldAlign(mode: WorldAlignMode): void {
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+
+  const referenceBounds = computeWorldBoundsForObject(primaryObject)
+  if (!referenceBounds) {
+    return
+  }
+
+  const idsToMove = collectTopLevelMovableSelection(new Set([primaryId]))
+  if (!idsToMove.length) {
+    return
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  for (const nodeId of idsToMove) {
+    const object = objectMap.get(nodeId)
+    if (!object) {
+      continue
+    }
+
+    const bounds = computeWorldBoundsForObject(object)
+    if (!bounds) {
+      continue
+    }
+
+    let deltaX = 0
+    let deltaY = 0
+    let deltaZ = 0
+
+    switch (mode) {
+      case 'left':
+        deltaX = referenceBounds.minX - bounds.minX
+        break
+      case 'right':
+        deltaX = referenceBounds.maxX - bounds.maxX
+        break
+      case 'center-x':
+        deltaX = referenceBounds.centerX - bounds.centerX
+        break
+      case 'top':
+        deltaY = referenceBounds.maxY - bounds.maxY
+        break
+      case 'bottom':
+        deltaY = referenceBounds.minY - bounds.minY
+        break
+      case 'center-y':
+        deltaY = referenceBounds.centerY - bounds.centerY
+        break
+      default:
+        continue
+    }
+
+    const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+    if (!local) {
+      continue
+    }
+    updates.push({ id: nodeId, position: local.clone() })
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function applyArrange(direction: ArrangeDirection, options?: { fixedPrimaryAsAnchor?: boolean }): void {
+  const fixedPrimaryAsAnchor = options?.fixedPrimaryAsAnchor ?? true
+  const selectionOrder = sceneStore.selectedNodeIds.slice()
+
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+  const primaryBounds = computeWorldBoundsForObject(primaryObject)
+  if (!primaryBounds) {
+    return
+  }
+
+  const exclude = fixedPrimaryAsAnchor ? new Set([primaryId]) : new Set<string>()
+  const ids = collectTopLevelMovableSelection(exclude)
+  if (!ids.length) {
+    return
+  }
+
+  const entries = ids
+    .map((id) => {
+      const object = objectMap.get(id)
+      if (!object) {
+        return null
+      }
+      const bounds = computeWorldBoundsForObject(object)
+      if (!bounds) {
+        return null
+      }
+      return { id, object, bounds }
+    })
+    .filter((value): value is { id: string; object: THREE.Object3D; bounds: WorldBounds } => Boolean(value))
+
+  if (!entries.length) {
+    return
+  }
+
+  if (!fixedPrimaryAsAnchor) {
+    // When not fixed, keep the first item in sorted order as the anchor.
+    // Include the primary in the arrange set if possible.
+    const primaryEntry = (() => {
+      if (sceneStore.isNodeSelectionLocked(primaryId)) {
+        return null
+      }
+      return { id: primaryId, object: primaryObject, bounds: primaryBounds }
+    })()
+    if (primaryEntry) {
+      entries.push(primaryEntry)
+    }
+  }
+
+  const axisAscending = true
+  const sorted = sortBySelectionAndAxis(
+    entries.map((entry) => ({
+      id: entry.id,
+      axisValue: direction === 'horizontal' ? entry.bounds.centerX : entry.bounds.centerY,
+      entry,
+    })),
+    selectionOrder,
+    axisAscending,
+  ).map((item) => item.entry)
+
+  const updates: TransformUpdatePayload[] = []
+
+  if (direction === 'horizontal') {
+    const anchor = primaryBounds
+    const anchorEntry = fixedPrimaryAsAnchor ? null : sorted[0] ?? null
+    if (!fixedPrimaryAsAnchor && !anchorEntry) {
+      return
+    }
+    let edge = fixedPrimaryAsAnchor ? anchor.maxX : anchorEntry!.bounds.maxX
+    const anchorCenterZ = fixedPrimaryAsAnchor ? anchor.centerZ : anchorEntry!.bounds.centerZ
+
+    const toMove = fixedPrimaryAsAnchor ? sorted : sorted.slice(1)
+    for (const entry of toMove) {
+      const { id, object, bounds } = entry
+      // Place to the right (+X): target minX = current edge.
+      const deltaX = edge - bounds.minX
+      edge += bounds.sizeX
+      // Horizontal arrange only uses footprint along X/Z; keep world Y unchanged.
+      const deltaY = 0
+      const deltaZ = (fixedPrimaryAsAnchor ? anchor.centerZ : anchorCenterZ) - bounds.centerZ
+      const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+      if (!local) {
+        continue
+      }
+      updates.push({ id, position: local.clone() })
+    }
+  } else {
+    const anchor = primaryBounds
+    // Upward expansion in screen space means decreasing Y.
+    const anchorEntry = fixedPrimaryAsAnchor ? null : sorted[0] ?? null
+    if (!fixedPrimaryAsAnchor && !anchorEntry) {
+      return
+    }
+    // Vertical operations use world +Y (height).
+    let edge = fixedPrimaryAsAnchor ? anchor.maxY : anchorEntry!.bounds.maxY
+    const anchorCenterX = fixedPrimaryAsAnchor ? anchor.centerX : anchorEntry!.bounds.centerX
+    const anchorCenterZ = fixedPrimaryAsAnchor ? anchor.centerZ : anchorEntry!.bounds.centerZ
+
+    const orderedForUp = sortBySelectionAndAxis(
+      sorted.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerY, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    const toMove = fixedPrimaryAsAnchor ? orderedForUp : orderedForUp.slice(1)
+    for (const entry of toMove) {
+      const { id, object, bounds } = entry
+      // Place upward (+Y): target minY = current edge.
+      const deltaY = edge - bounds.minY
+      edge += bounds.sizeY
+      const deltaX = (fixedPrimaryAsAnchor ? anchor.centerX : anchorCenterX) - bounds.centerX
+      const deltaZ = (fixedPrimaryAsAnchor ? anchor.centerZ : anchorCenterZ) - bounds.centerZ
+      const local = applyWorldDelta(object, deltaX, deltaY, deltaZ)
+      if (!local) {
+        continue
+      }
+      updates.push({ id, position: local.clone() })
+    }
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function applyDistribute(direction: ArrangeDirection, options?: { fixedPrimaryAsAnchor?: boolean }): void {
+  const fixedPrimaryAsAnchor = options?.fixedPrimaryAsAnchor ?? true
+  const selectionOrder = sceneStore.selectedNodeIds.slice()
+
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+  const primaryObject = objectMap.get(primaryId)
+  if (!primaryObject) {
+    return
+  }
+  const primaryBounds = computeWorldBoundsForObject(primaryObject)
+  if (!primaryBounds) {
+    return
+  }
+
+  const exclude = fixedPrimaryAsAnchor ? new Set([primaryId]) : new Set<string>()
+  const ids = collectTopLevelMovableSelection(exclude)
+
+  if (fixedPrimaryAsAnchor) {
+    if (ids.length < 2) {
+      return
+    }
+  } else {
+    if (ids.length < 2) {
+      return
+    }
+    // Include primary when not fixed.
+    if (!sceneStore.isNodeSelectionLocked(primaryId)) {
+      ids.push(primaryId)
+    }
+    if (ids.length < 3) {
+      return
+    }
+  }
+
+  const entries = ids
+    .map((id) => {
+      const object = objectMap.get(id)
+      if (!object) {
+        return null
+      }
+      const bounds = computeWorldBoundsForObject(object)
+      if (!bounds) {
+        return null
+      }
+      return { id, object, bounds }
+    })
+    .filter((value): value is { id: string; object: THREE.Object3D; bounds: WorldBounds } => Boolean(value))
+
+  if (fixedPrimaryAsAnchor) {
+    if (entries.length < 2) {
+      return
+    }
+  } else {
+    if (entries.length < 3) {
+      return
+    }
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  if (direction === 'horizontal') {
+    const ordered = sortBySelectionAndAxis(
+      entries.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerX, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    if (fixedPrimaryAsAnchor) {
+      let max = Number.NEGATIVE_INFINITY
+      ordered.forEach((entry) => {
+        max = Math.max(max, entry.bounds.centerX)
+      })
+      const span = Math.max(0, max - primaryBounds.centerX)
+      const step = span / (ordered.length + 1)
+      ordered.forEach((entry, i) => {
+        const targetCenterX = primaryBounds.centerX + step * (i + 1)
+        const deltaX = targetCenterX - entry.bounds.centerX
+        // Horizontal distribute only uses footprint along X/Z; keep world Y unchanged.
+        const deltaY = 0
+        const deltaZ = primaryBounds.centerZ - entry.bounds.centerZ
+        const local = applyWorldDelta(entry.object, deltaX, deltaY, deltaZ)
+        if (!local) {
+          return
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      })
+    } else {
+      // Standard distribute: keep endpoints fixed, distribute middles.
+      const start = ordered[0]!
+      const end = ordered[ordered.length - 1]!
+      const span = end.bounds.centerX - start.bounds.centerX
+      const step = span / (ordered.length - 1)
+      for (let i = 1; i < ordered.length - 1; i += 1) {
+        const entry = ordered[i]!
+        const targetCenterX = start.bounds.centerX + step * i
+        const deltaX = targetCenterX - entry.bounds.centerX
+        const local = applyWorldDelta(entry.object, deltaX, 0, 0)
+        if (!local) {
+          continue
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      }
+    }
+  } else {
+    // Vertical distribution; upward is +Y.
+    const ordered = sortBySelectionAndAxis(
+      entries.map((entry) => ({ id: entry.id, axisValue: entry.bounds.centerY, entry })),
+      selectionOrder,
+      true,
+    ).map((item) => item.entry)
+
+    if (fixedPrimaryAsAnchor) {
+      let max = Number.NEGATIVE_INFINITY
+      ordered.forEach((entry) => {
+        max = Math.max(max, entry.bounds.centerY)
+      })
+      const span = Math.max(0, max - primaryBounds.centerY)
+      const step = span / (ordered.length + 1)
+      ordered.forEach((entry, i) => {
+        const targetCenterY = primaryBounds.centerY + step * (i + 1)
+        const deltaY = targetCenterY - entry.bounds.centerY
+        const deltaX = primaryBounds.centerX - entry.bounds.centerX
+        const deltaZ = primaryBounds.centerZ - entry.bounds.centerZ
+        const local = applyWorldDelta(entry.object, deltaX, deltaY, deltaZ)
+        if (!local) {
+          return
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      })
+    } else {
+      const start = ordered[0]!
+      const end = ordered[ordered.length - 1]!
+      const span = end.bounds.centerY - start.bounds.centerY
+      const step = span / (ordered.length - 1)
+      for (let i = 1; i < ordered.length - 1; i += 1) {
+        const entry = ordered[i]!
+        const targetCenterY = start.bounds.centerY + step * i
+        const deltaY = targetCenterY - entry.bounds.centerY
+        const local = applyWorldDelta(entry.object, 0, deltaY, 0)
+        if (!local) {
+          continue
+        }
+        updates.push({ id: entry.id, position: local.clone() })
+      }
+    }
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+}
+
+function handleAlignSelection(command: AlignMode | AlignCommand) {
+  if (typeof command === 'string') {
+    // Legacy axis align.
+    alignSelection(command, { snapToGrid: false })
+    return
+  }
+
+  if (!canAlignSelection.value) {
+    return
+  }
+
+  switch (command.type) {
+    case 'world-align':
+      applyWorldAlign(command.mode)
+      break
+    case 'arrange':
+      applyArrange(command.direction, command.options)
+      break
+    case 'distribute':
+      applyDistribute(command.direction, command.options)
+      break
+    default:
+      break
+  }
 }
 
 function handleRotateSelection(options: SelectionRotationOptions) {
@@ -4249,7 +4877,7 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = new MapControls(camera, domElement)
+  mapControls = new OrbitControls(camera, domElement)
   if (previousTarget) {
     mapControls.target.copy(previousTarget)
   } else {
@@ -4383,6 +5011,7 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
   scene.add(instancedOutlineGroup)
+  scene.add(vertexOverlayGroup)
   if (repairHoverGroup.parent !== instancedOutlineGroup) {
     instancedOutlineGroup.add(repairHoverGroup)
   }
@@ -4396,7 +5025,7 @@ function initScene() {
   if (gridHighlight) {
     scene.add(gridHighlight)
   }
-  faceSnapManager.ensureEffectPool()
+  // face snap effects disabled
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
@@ -5154,6 +5783,8 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
+  updateVertexSnapHintPulse(performance.now())
+  updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -5162,9 +5793,7 @@ function animate() {
   prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
   if (props.activeTool === 'translate') {
-    const t0 = performance.now()
-    faceSnapManager.updateEffectIntensity(effectiveDelta)
-    prof.faceSnap = performance.now() - t0
+    // alignment hint visuals disabled
   }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
     const t0 = performance.now()
@@ -5186,12 +5815,6 @@ function animate() {
     const t_gc0 = performance.now()
     updateGroundChunkStreaming()
     prof.groundStreaming = performance.now() - t_gc0
-  }
-
-  {
-    const t0 = performance.now()
-    tickInstancedTiling()
-    prof.instancedTiling = performance.now() - t0
   }
 
   const t0_scatter = performance.now()
@@ -5249,7 +5872,7 @@ function disposeScene() {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null
   }
-  clearAllInstancedTilingRuntimes()
+  instanceLayoutMatrixCache.clear()
   clearInstancedMeshes()
   instancedMeshRevision.value += 1
   instancedMeshGroup.removeFromParent()
@@ -5259,7 +5882,7 @@ function disposeScene() {
   resizeObserver?.disconnect()
   resizeObserver = null
 
-  faceSnapManager.dispose()
+  // face snap controller disposed elsewhere (feature disabled)
   hasTransformLastWorldPosition = false
 
   if (canvasRef.value) {
@@ -5303,6 +5926,8 @@ function disposeScene() {
   }
 
   groundSelectionGroup.removeFromParent()
+  vertexOverlayGroup.removeFromParent()
+  clearVertexSnapMarkers()
 
   if (mapControls) {
     mapControls.removeEventListener('change', handleControlsChange)
@@ -6198,7 +6823,7 @@ async function handlePointerDown(event: PointerEvent) {
   if (selection) {
     applyPointerDownResult(selection)
 
-    // Only block MapControls left-pan when we are starting a selection drag
+    // Only block OrbitControls left-pan when we are starting a selection drag
     // (i.e. dragging the currently selected object). Otherwise allow pan.
     if (
       event.button === 0 &&
@@ -6213,6 +6838,7 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  // surface snap pointer updates removed (alignment hint disabled)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
     const dy = event.clientY - middleClickSessionState.startY
@@ -6345,6 +6971,7 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 async function handlePointerUp(event: PointerEvent) {
+  // surface snap pointer updates removed (alignment hint disabled)
   try {
     const isPointerUpOnCanvas = (() => {
       const canvas = canvasRef.value
@@ -6366,6 +6993,9 @@ async function handlePointerUp(event: PointerEvent) {
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
         pointerTrackingState = null
+      }
+      if (result.clearPointerTrackingState) {
+        clearVertexSnapMarkers()
       }
       if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
         roadVertexDragState = result.nextRoadVertexDragState ?? null
@@ -6496,7 +7126,7 @@ async function handlePointerUp(event: PointerEvent) {
       transformControlsDragging: Boolean(transformControls?.dragging),
       restoreOrbitAfterSelectDrag,
       updateGridHighlightFromObject,
-      commitSelectionDragTransforms,
+      commitSelectionDragTransforms: commitSelectionDragTransformsWithDeferredVertexSnap,
       sceneStoreEndTransformInteraction: () => sceneStore.endTransformInteraction(),
       updateSelectionHighlights,
       onSelectionDragEnd: (nodeId) => wallRenderer.endWallDrag(nodeId),
@@ -6608,6 +7238,7 @@ async function handlePointerUp(event: PointerEvent) {
   } finally {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
+    snapController.reset()
 
     if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
       middleClickSessionState = null
@@ -6624,6 +7255,9 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  snapController.reset()
+  clearVertexSnapMarkers()
+  pendingVertexSnapResult = null
   pointerInteraction.clearIfPointer(event.pointerId)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
     middleClickSessionState = null
@@ -6708,7 +7342,7 @@ function handlePointerCancel(event: PointerEvent) {
     restoreOrbitAfterSelectDrag()
     updateGridHighlightFromObject(dragState.object)
     if (dragState.hasDragged) {
-      commitSelectionDragTransforms(dragState)
+      commitSelectionDragTransformsWithDeferredVertexSnap(dragState)
       sceneStore.endTransformInteraction()
       wallRenderer.endWallDrag(dragState.nodeId)
     }
@@ -7801,6 +8435,8 @@ function handleTransformChange() {
     return
   }
 
+  const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
+
   const mode = transformControls.getMode()
   const nodeId = target.userData.nodeId as string
   const isTranslateMode = mode === 'translate'
@@ -7808,10 +8444,10 @@ function handleTransformChange() {
   const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
 
   if (isTranslateMode && shouldSnapTranslate) {
-    faceSnapManager.hideEffect()
+    // alignment hint visuals disabled
     snapVectorToGridForNode(target.position, nodeId)
   } else if (!isTranslateMode || !isActiveTranslateTool) {
-    faceSnapManager.hideEffect()
+    // alignment hint visuals disabled
   }
 
   target.updateMatrixWorld(true)
@@ -7830,7 +8466,7 @@ function handleTransformChange() {
       groupState.entries.forEach((entry) => faceSnapExcludedIds.add(entry.nodeId))
     }
 
-    faceSnapManager.applyAlignmentSnap(target, transformMovementDelta, faceSnapExcludedIds)
+    // surface/face alignment snapping and hint visuals disabled
     target.updateMatrixWorld(true)
     target.getWorldPosition(transformCurrentWorldPosition)
   } else {
@@ -7841,6 +8477,11 @@ function handleTransformChange() {
   // Instanced outline proxies cache per-instance world matrices.
   // Keep them in sync during TransformControls dragging (e.g. instanced wall assets).
   syncInstancedOutlineEntryTransform(nodeId)
+
+  // Keep pivot overrides in sync so the gizmo follows instanced PickProxy nodes while moving.
+  if (target.userData?.instancedPickProxy) {
+    updateTransformControlsPivotOverride(target)
+  }
 
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -7889,18 +8530,9 @@ function handleTransformChange() {
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
-        // For instanced nodes, rotate around the pick-proxy center (not the node origin).
-        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
-        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-          instancedPivotCenterLocalHelper
-            .fromArray(proxyBoundsCandidate.min)
-            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-            .multiplyScalar(0.5)
-          proxy.updateMatrixWorld(true)
-          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-          proxy.localToWorld(instancedPivotWorldHelper)
-
+        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+        if (!hasPivotOverride) {
+          computeTransformPivotWorld(target, instancedPivotWorldHelper)
           transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
           if (transformDeltaPosition.lengthSq() > 1e-12) {
             target.getWorldPosition(transformWorldPositionBuffer)
@@ -7912,30 +8544,6 @@ function handleTransformChange() {
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
             syncInstancedOutlineEntryTransform(nodeId)
-          }
-        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-          const meshProxy = proxy as unknown as THREE.Mesh
-          if (!meshProxy.geometry.boundingBox) {
-            meshProxy.geometry.computeBoundingBox()
-          }
-          if (meshProxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            meshProxy.updateMatrixWorld(true)
-            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            meshProxy.localToWorld(instancedPivotWorldHelper)
-
-            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-            if (transformDeltaPosition.lengthSq() > 1e-12) {
-              target.getWorldPosition(transformWorldPositionBuffer)
-              transformWorldPositionBuffer.add(transformDeltaPosition)
-              if (target.parent) {
-                target.parent.worldToLocal(transformWorldPositionBuffer)
-              }
-              target.position.copy(transformWorldPositionBuffer)
-              target.updateMatrixWorld(true)
-              syncInstancedTransform(target, true)
-              syncInstancedOutlineEntryTransform(nodeId)
-            }
           }
         }
 
@@ -7967,18 +8575,9 @@ function handleTransformChange() {
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
-        // For instanced nodes, keep the pick-proxy center fixed while scaling.
-        const proxy = target.userData?.instancedPickProxy as THREE.Object3D | undefined
-        const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
-        if (proxy && isInstancedPickProxyBoundsPayload(proxyBoundsCandidate)) {
-          instancedPivotCenterLocalHelper
-            .fromArray(proxyBoundsCandidate.min)
-            .add(new THREE.Vector3().fromArray(proxyBoundsCandidate.max))
-            .multiplyScalar(0.5)
-          proxy.updateMatrixWorld(true)
-          instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-          proxy.localToWorld(instancedPivotWorldHelper)
-
+        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+        if (!hasPivotOverride) {
+          computeTransformPivotWorld(target, instancedPivotWorldHelper)
           transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
           if (transformDeltaPosition.lengthSq() > 1e-12) {
             target.getWorldPosition(transformWorldPositionBuffer)
@@ -7990,30 +8589,6 @@ function handleTransformChange() {
             target.updateMatrixWorld(true)
             syncInstancedTransform(target, true)
             syncInstancedOutlineEntryTransform(nodeId)
-          }
-        } else if ((proxy as unknown as THREE.Mesh | undefined)?.geometry) {
-          const meshProxy = proxy as unknown as THREE.Mesh
-          if (!meshProxy.geometry.boundingBox) {
-            meshProxy.geometry.computeBoundingBox()
-          }
-          if (meshProxy.geometry.boundingBox) {
-            instancedPivotCenterLocalHelper.copy(meshProxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
-            meshProxy.updateMatrixWorld(true)
-            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
-            meshProxy.localToWorld(instancedPivotWorldHelper)
-
-            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-            if (transformDeltaPosition.lengthSq() > 1e-12) {
-              target.getWorldPosition(transformWorldPositionBuffer)
-              transformWorldPositionBuffer.add(transformDeltaPosition)
-              if (target.parent) {
-                target.parent.worldToLocal(transformWorldPositionBuffer)
-              }
-              target.position.copy(transformWorldPositionBuffer)
-              target.updateMatrixWorld(true)
-              syncInstancedTransform(target, true)
-              syncInstancedOutlineEntryTransform(nodeId)
-            }
           }
         }
 
@@ -8134,17 +8709,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
 
-  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Record<string, unknown>>
-    | undefined
-  if (instancedTilingState?.enabled !== false) {
-    const assetId = node.sourceAssetId ?? null
-    if (assetId && !getCachedModelObject(assetId)) {
-      void ensureModelObjectCached(assetId)
-    }
-  }
-
-  syncInstancedTilingRegistration(object, node)
+  applyInstanceLayoutVisibilityAndAssetBinding(object, node)
 
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
@@ -8529,7 +9094,8 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
 
   const nodeId = object.userData?.nodeId as string | undefined
   if (nodeId) {
-    cleanupInstancedTilingRuntime(nodeId)
+    clearInstanceLayoutMatrixCacheForNode(nodeId)
+    releaseModelInstance(nodeId)
     objectMap.delete(nodeId)
     releaseInstancedOutlineEntry(nodeId)
     unregisterLightHelpersForNode(nodeId)
@@ -8624,7 +9190,7 @@ function syncSceneGraph() {
 
 function disposeSceneNodes() {
   clearOutlineSelectionTargets()
-  clearAllInstancedTilingRuntimes()
+  instanceLayoutMatrixCache.clear()
   clearLightHelpers()
   placementSurfaceTargetsByNodeId.clear()
   placementSurfaceTargets.length = 0
@@ -9184,17 +9750,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   userData.sourceAssetId = node.sourceAssetId ?? null
   userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
 
-  const instancedTilingState = node.components?.[INSTANCED_TILING_COMPONENT_TYPE] as
-    | SceneNodeComponentState<Record<string, unknown>>
-    | undefined
-  if (instancedTilingState?.enabled !== false) {
-    const assetId = node.sourceAssetId ?? null
-    if (assetId && !getCachedModelObject(assetId)) {
-      void ensureModelObjectCached(assetId)
-    }
-  }
-
-  syncInstancedTilingRegistration(object, node)
+  applyInstanceLayoutVisibilityAndAssetBinding(object, node)
 
   const isVisible = node.visible ?? true
   object.visible = isVisible
@@ -9259,6 +9815,10 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   // 根据当前工具选择合适的变换坐标系
   applyTransformSpace(tool)
   transformControls.setMode(tool)
+
+  // For instanced tiling nodes, place the gizmo at the PickProxy-derived pivot.
+  updateTransformControlsPivotOverride(target)
+
   transformControls.attach(target)
 }
 
@@ -9353,9 +9913,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.addEventListener('keydown', faceSnapManager.handleKeyDown, { capture: true })
-  window.addEventListener('keyup', faceSnapManager.handleKeyUp, { capture: true })
-  window.addEventListener('blur', faceSnapManager.handleBlur, { capture: true })
+  // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
@@ -9380,9 +9938,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.removeEventListener('keydown', faceSnapManager.handleKeyDown, { capture: true })
-  window.removeEventListener('keyup', faceSnapManager.handleKeyUp, { capture: true })
-  window.removeEventListener('blur', faceSnapManager.handleBlur, { capture: true })
+  // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
   }
@@ -9530,8 +10086,7 @@ watch(
   (tool) => {
     updateToolMode(tool)
     if (tool !== 'translate') {
-      faceSnapManager.setCommitActive(false)
-      faceSnapManager.hideEffect()
+      // disable snap/align hint behavior
     }
   }
 )
@@ -9623,6 +10178,7 @@ defineExpose<SceneViewportHandle>({
       <ViewportToolbar
         :show-grid="gridVisible"
         :show-axes="axesVisible"
+        :vertex-snap-enabled="vertexSnapMode === 'vertex'"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"

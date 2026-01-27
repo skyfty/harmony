@@ -146,15 +146,18 @@ export default class Loader {
     // manager.addHandler(/\.tga$/i, new TGALoader());
 
     for (const file of files) {
-      this.loadFile(file, manager);
+      this.loadFile(file, undefined, manager);
     }
   }
 
-  public loadFile(file: File, manager?: THREE.LoadingManager) {
+  public loadFile(file: File, extension?: string, manager?: THREE.LoadingManager) {
     const filename = file.name;
-    const extension = filename.split('.').pop()?.toLowerCase();
+    const inferred = filename.split('.').pop()?.toLowerCase();
+    const ext = (extension && typeof extension === 'string' && extension.trim().length)
+      ? extension.toLowerCase()
+      : inferred;
 
-    if (!extension) {
+    if (!ext) {
       console.error('Unable to determine file extension.');
       return;
     }
@@ -168,7 +171,7 @@ export default class Loader {
       });
     });
 
-    switch (extension) {
+    switch (ext) {
       case 'fbx': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
           const contents = event.target?.result as ArrayBuffer;
@@ -285,7 +288,7 @@ export default class Loader {
 
 
       default:
-        console.error(`Unsupported file format (${extension}).`);
+        console.error(`Unsupported file format (${ext}).`);
         break;
     }
   }

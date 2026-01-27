@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
-import { extractExtension } from '@/utils/blob'
+import { extractExtension, ensureExtension } from '@/utils/blob'
 import { invalidateModelObject } from '@schema/modelObjectCache'
 import { isImageLikeExtension } from '@harmony/schema'
 
@@ -314,7 +314,28 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   entry.abortController = null
   entry.lastUsedAt = now()
   entry.mimeType = payload.mimeType
-  entry.filename = payload.filename ?? `${entry.assetId}`
+  // Ensure filename includes an extension when possible.
+  let initialFilename = payload.filename ?? `${entry.assetId}`
+  try {
+    initialFilename = initialFilename.trim()
+  } catch (_e) {
+    /* noop */
+  }
+  let ext = extractExtension(initialFilename)
+  if (!ext && payload.mimeType) {
+    try {
+      const parts = (payload.mimeType ?? '').split(';')
+      const mtVal = parts[0] ?? ''
+      const idx = mtVal.lastIndexOf('/')
+      const maybe = idx >= 0 ? mtVal.slice(idx + 1) : mtVal
+      if (maybe && maybe.length) {
+        ext = maybe.toLowerCase()
+      }
+    } catch (_err) {
+      /* noop */
+    }
+  }
+  entry.filename = ext ? ensureExtension(initialFilename, ext) : initialFilename
   entry.downloadUrl = payload.downloadUrl
   entry.serverUpdatedAt = payload.serverUpdatedAt ?? entry.serverUpdatedAt ?? null
 }
@@ -390,9 +411,36 @@ export const useAssetCacheStore = defineStore('assetCache', {
       if (!entry || entry.status !== 'cached' || !entry.blob) {
         return null
       }
-      const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}`
+      let filename = entry.filename && entry.filename.trim().length ? entry.filename.trim() : `${assetId}`
       const mimeType = entry.mimeType ?? 'application/octet-stream'
-      return new File([entry.blob], filename, { type: mimeType })
+
+      // Ensure filename has an extension when possible. Prefer extension from
+      // the stored filename, otherwise try to infer from mimeType.
+      let extension = extractExtension(filename)
+      if (!extension && entry.mimeType) {
+        try {
+          const parts = (entry.mimeType ?? '').split(';')
+          const mtVal = parts[0] ?? ''
+          const idx = mtVal.lastIndexOf('/')
+          const maybe = idx >= 0 ? mtVal.slice(idx + 1) : mtVal
+          if (maybe && maybe.length) {
+            extension = maybe.toLowerCase()
+          }
+        } catch (_error) {
+          /* noop */
+        }
+      }
+
+      if (extension) {
+        filename = ensureExtension(filename, extension)
+      }
+
+      try {
+        return new File([entry.blob], filename, { type: mimeType })
+      } catch (_error) {
+        // Some environments may not support File constructor; fallback to null.
+        return null
+      }
     },
     setError(assetId: string, message: string | null) {
       const entry = this.ensureEntry(assetId)
@@ -416,7 +464,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
         serverUpdatedAt: stored.serverUpdatedAt ?? null,
       })
       entry.lastUsedAt = now()
-      this.evictIfNeeded(assetId)
       return entry
     },
 
@@ -460,7 +507,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
         console.warn('写入 IndexedDB 失败', error)
       }
 
-      this.evictIfNeeded(assetId)
       return entry
     },
 
@@ -659,7 +705,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
     },
     setMaxEntries(count: number) {
       this.maxEntries = Math.max(0, count)
-      this.evictIfNeeded()
     },
   },
 })

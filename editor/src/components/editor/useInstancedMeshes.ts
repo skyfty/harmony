@@ -31,6 +31,11 @@ export function useInstancedMeshes(
   const instancedPositionHelper = new THREE.Vector3()
   const instancedQuaternionHelper = new THREE.Quaternion()
 
+  const DEBUG_MULTI_BINDING =
+    (globalThis as any).__HARMONY_DEBUG_MULTI_BINDING__ === true ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('__HARMONY_DEBUG_MULTI_BINDING__') === '1')
+  const INVERT_DETERMINANT_EPSILON = 1e-12
+
   type InstancedMatrixCacheEntry = {
     bindingKey: string
     elements: Float32Array
@@ -58,6 +63,20 @@ export function useInstancedMeshes(
       }
     }
     return true
+  }
+
+  function matrixArrayEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-7): boolean {
+    for (let i = 0; i < 16; i += 1) {
+      if (Math.abs((a[i] ?? 0) - (b[i] ?? 0)) > epsilon) {
+        return false
+      }
+    }
+    return true
+  }
+
+  function isMatrixInvertible(matrix: THREE.Matrix4): boolean {
+    const det = matrix.determinant()
+    return Number.isFinite(det) && Math.abs(det) > INVERT_DETERMINANT_EPSILON
   }
 
   function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): void {
@@ -133,24 +152,70 @@ export function useInstancedMeshes(
       locals: new Map<string, THREE.Matrix4>(),
     }
 
+    const baseInvertible = isMatrixInvertible(baseMatrix)
+    const cachedBaseInvertible = cached ? isMatrixInvertible(cached.base) : false
+
+    if (DEBUG_MULTI_BINDING && (needsRebuild || !baseInvertible)) {
+      const baseDet = baseMatrix.determinant()
+      const cachedDet = cached ? cached.base.determinant() : undefined
+      // Avoid spamming huge keys; log only sizes.
+      console.debug('[InstancedMeshes] syncMultiBindingTransform', {
+        nodeId,
+        bindingCount: bindings.length,
+        needsRebuild,
+        baseDet,
+        baseInvertible,
+        cachedDet,
+        cachedBaseInvertible,
+        cachedLocals: cached ? cached.locals.size : 0,
+      })
+    }
+
     if (needsRebuild) {
-      entry.bindingKey = nextBindingKey
-      entry.locals.clear()
       // Best-effort: derive locals from the currently committed instance matrices.
       // At steady state, those matrices were authored as: instance = base * local.
-      // IMPORTANT: use the *current* baseMatrix as the reference to avoid drift.
-      entry.base.copy(baseMatrix)
-      entry.baseInverse.copy(baseMatrix).invert()
+      // During drag / visibility transitions, the "current" baseMatrix may be singular (scale=0)
+      // or may not match the base used to author the committed instance matrices.
 
-      for (const binding of bindings) {
-        const slot = binding.slots[0]
-        if (!slot) {
-          continue
+      const canDeriveLocals = baseInvertible || cachedBaseInvertible
+      if (canDeriveLocals) {
+        entry.bindingKey = nextBindingKey
+        entry.locals.clear()
+
+        let derivationBase = baseMatrix
+        if (!baseInvertible && cached && cachedBaseInvertible) {
+          derivationBase = cached.base
+        } else if (cached && cachedBaseInvertible) {
+          // If the incoming base differs from the last cached base, the committed instance matrices
+          // are more likely to still correspond to the cached base at this moment.
+          const baseChanged = !matrixArrayEqual(cached.base.elements, baseMatrix.elements, 1e-6)
+          if (baseChanged) {
+            derivationBase = cached.base
+          }
         }
-        slot.mesh.getMatrixAt(slot.index, instancedMatrixHelper)
-        const local = entry.locals.get(binding.bindingId) ?? new THREE.Matrix4()
-        local.multiplyMatrices(entry.baseInverse, instancedMatrixHelper)
-        entry.locals.set(binding.bindingId, local)
+
+        entry.base.copy(derivationBase)
+        entry.baseInverse.copy(derivationBase).invert()
+
+        for (const binding of bindings) {
+          const slot = binding.slots[0]
+          if (!slot) {
+            continue
+          }
+          slot.mesh.getMatrixAt(slot.index, instancedMatrixHelper)
+          const local = entry.locals.get(binding.bindingId) ?? new THREE.Matrix4()
+          local.multiplyMatrices(entry.baseInverse, instancedMatrixHelper)
+          entry.locals.set(binding.bindingId, local)
+        }
+      } else {
+        // Base is not invertible (typically culled/hidden scale=0), and we have no cached invertible base.
+        // Do NOT clear or rebuild locals, and do NOT update the bindingKey so we can rebuild later.
+        if (DEBUG_MULTI_BINDING) {
+          console.debug('[InstancedMeshes] skip local rebuild (non-invertible base, no cached base)', {
+            nodeId,
+            bindingCount: bindings.length,
+          })
+        }
       }
     }
 
@@ -168,14 +233,29 @@ export function useInstancedMeshes(
       }
     }
 
-    entry.base.copy(baseMatrix)
-    entry.baseInverse.copy(baseMatrix).invert()
+    // Only update cached inverses when baseMatrix is invertible.
+    // Avoid poisoning the cache with NaNs when culled/hidden path collapses scale to 0.
+    if (baseInvertible) {
+      entry.base.copy(baseMatrix)
+      entry.baseInverse.copy(baseMatrix).invert()
+    }
     multiBindingLocalCache.set(nodeId, entry)
   }
 
   function primeMultiBindingLocalCache(nodeId: string, baseMatrix: THREE.Matrix4): void {
     const bindings = getModelInstanceBindingsForNode(nodeId)
     if (bindings.length <= 1) {
+      return
+    }
+
+    if (!isMatrixInvertible(baseMatrix)) {
+      if (DEBUG_MULTI_BINDING) {
+        console.debug('[InstancedMeshes] skip prime (non-invertible base)', {
+          nodeId,
+          bindingCount: bindings.length,
+          baseDet: baseMatrix.determinant(),
+        })
+      }
       return
     }
 

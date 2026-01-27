@@ -33,7 +33,9 @@ import {
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { extractExtension } from '@/utils/blob'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
+import { useSceneStore } from '@/stores/sceneStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import {
   FLOOR_COMPONENT_TYPE,
@@ -524,7 +526,8 @@ async function ensureModelBoundsCachedForAssetId(assetId: string, assetCacheStor
     return
   }
   try {
-    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file))
+    const ext = useSceneStore().getAsset(assetId)?.extension ?? undefined
+    await getOrLoadModelObject(assetId, async () => loadObjectFromFile(file, ext))
   } catch (_error) {
     // noop
   } finally {
@@ -1494,6 +1497,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             thumbnail: 'https://v.touchmagic.cn/uploads/thumb-xjq8ZTRJEQo8_7e0.jpg',
             description: "waternormals.jpg",
             gleaned: true,
+            extension: extractExtension('https://v.touchmagic.cn/uploads/FhhKc4p770XqX71U.jpg') ?? extractExtension('waternormals.jpg') ?? null,
           }
           await sceneStore.registerAsset(projectAsset)
   

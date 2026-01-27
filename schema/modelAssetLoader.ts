@@ -36,7 +36,8 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
     return null
   }
   try {
-    const object = await loadObjectFromFile(file)
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    const object = await loadObjectFromFile(file, ext)
     return object
   } catch (error) {
     console.warn('[ModelAssetLoader] Failed to parse asset object', assetId, error)

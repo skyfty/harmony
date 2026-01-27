@@ -22,7 +22,7 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { assetProvider } from '@/resources/projectProviders/asset'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@schema/modelObjectCache'
-import { dataUrlToBlob } from '@/utils/blob'
+import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import type { SceneNode } from '@harmony/schema'
 import { getExtensionFromMimeType, inferAssetType } from '@harmony/schema'
 import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
@@ -1718,6 +1718,7 @@ function importRemoteAssetFromUrl(url: string): ProjectAsset {
     thumbnail: assetType === 'image' && isLikelyImageUrl(normalizedUrl) ? normalizedUrl : null,
     description: normalizedUrl,
     gleaned: true,
+    extension: extractExtension(name) ?? null,
   }
   const categoryId = determineAssetCategoryId(asset)
   return sceneStore.registerAsset(asset, {

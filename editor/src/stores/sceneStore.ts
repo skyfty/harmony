@@ -50,6 +50,7 @@ import type {
   SceneNodeComponentMap,
   SceneNodeComponentState,
   SceneNodeEditorFlags,
+  SceneNodeInstanceLayout,
   SceneNodeType,
   Vector3Like,
   WallDynamicMesh,
@@ -57,6 +58,7 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
+import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { ClipboardMeta, QuaternionJson } from '@/types/prefab'
@@ -69,6 +71,7 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import { getExtensionFromMimeType } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
@@ -84,7 +87,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
   ClipboardEntry,
   SceneMaterialTextureSlot,
@@ -138,6 +141,11 @@ import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
+import {
+  clampSceneNodeInstanceLayout,
+  computeInstanceLayoutGridCenterOffsetLocal,
+  resolveInstanceLayoutTemplateAssetId,
+} from '@schema/instanceLayout'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -560,6 +568,7 @@ export type ScenePatchField =
   | 'light'
   | 'runtime'
   | 'userData'
+  | 'instanceLayout'
   | 'name'
   | 'groupExpanded'
   | 'download'
@@ -3017,6 +3026,7 @@ async function createTextureAssetFromTexture(texture: Texture, context: External
     previewColor: '#ffffff',
     thumbnail: null,
     gleaned: true,
+    extension: payload.extension ?? null,
   }
 
   context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
@@ -3522,6 +3532,9 @@ const defaultViewportSettings: SceneViewportSettings = {
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
+
+  snapMode: 'off',
+  snapThresholdPx: 12,
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjection {
@@ -3530,6 +3543,23 @@ function isCameraProjectionMode(value: unknown): value is CameraProjection {
 
 function isCameraControlMode(value: unknown): value is CameraControlMode {
   return value === 'orbit' || value === 'map'
+}
+
+function isViewportSnapMode(value: unknown): value is SceneViewportSnapMode {
+  return value === 'off' || value === 'vertex'
+}
+
+function normalizeSnapThresholdPx(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    return defaultViewportSettings.snapThresholdPx
+  }
+  // Keep it within sane UI bounds.
+  return Math.min(Math.max(Math.round(numeric), 1), 128)
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
@@ -3542,6 +3572,11 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
       ? settings!.cameraControlMode
       : defaultViewportSettings.cameraControlMode,
+
+    snapMode: isViewportSnapMode(settings?.snapMode)
+      ? settings!.snapMode
+      : defaultViewportSettings.snapMode,
+    snapThresholdPx: normalizeSnapThresholdPx(settings?.snapThresholdPx),
   }
 }
 
@@ -3596,7 +3631,9 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showGrid === b.showGrid &&
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
-    a.cameraControlMode === b.cameraControlMode
+    a.cameraControlMode === b.cameraControlMode &&
+    a.snapMode === b.snapMode &&
+    a.snapThresholdPx === b.snapThresholdPx
   )
 }
 
@@ -5353,6 +5390,7 @@ function replaceAssetIdReferences(scene: StoredSceneDocument, previousId: string
       ...extracted.asset,
       id: nextId,
       downloadUrl: extracted.asset.downloadUrl === previousId ? nextId : extracted.asset.downloadUrl,
+      extension: extracted.asset.extension ?? extractExtension(extracted.asset.downloadUrl) ?? null,
     }
     insertAssetIntoCatalog(scene.assetCatalog, extracted.categoryId, nextAsset)
   }
@@ -6040,6 +6078,16 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   }
   collectAssetIdCandidate(bucket, node.sourceAssetId)
   collectAssetIdCandidate(bucket, node.importMetadata?.assetId)
+
+  // InstanceLayout may reference a different template asset.
+  const rawLayout = (node as any).instanceLayout as unknown
+  if (rawLayout) {
+    const layout = clampSceneNodeInstanceLayout(rawLayout)
+    if (layout?.mode === 'grid') {
+      const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
+      collectAssetIdCandidate(bucket, templateAssetId)
+    }
+  }
   if (node.materials?.length) {
     node.materials.forEach((material) => {
       collectAssetIdsFromUnknown(material, bucket)
@@ -6416,6 +6464,12 @@ function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportS
   }
   if (isCameraControlMode(input.cameraControlMode)) {
     normalized.cameraControlMode = input.cameraControlMode
+  }
+  if (isViewportSnapMode((input as any).snapMode)) {
+    normalized.snapMode = (input as any).snapMode
+  }
+  if (typeof (input as any).snapThresholdPx === 'number' || typeof (input as any).snapThresholdPx === 'string') {
+    normalized.snapThresholdPx = normalizeSnapThresholdPx((input as any).snapThresholdPx)
   }
   if (input.skybox && isPlainObject(input.skybox)) {
     normalized.skybox = input.skybox as Partial<SceneSkyboxSettings>
@@ -8891,6 +8945,86 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(nodeId, ['userData'])
       commitSceneSnapshot(this)
     },
+
+    updateNodeInstanceLayout(nodeId: string, instanceLayout: SceneNodeInstanceLayout | null) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return
+      }
+
+      const sanitized = instanceLayout
+        ? ((clonePlainRecord(instanceLayout as unknown as Record<string, unknown>) ?? null) as unknown as SceneNodeInstanceLayout)
+        : null
+
+      const existing = (target as any).instanceLayout as unknown
+      const existingSerialized = typeof existing === 'undefined' ? null : stableSerialize(existing)
+      const nextSerialized = sanitized ? stableSerialize(sanitized) : null
+      if (existingSerialized === nextSerialized) {
+        return
+      }
+
+      const prevMode = typeof (existing as any)?.mode === 'string' && (existing as any).mode === 'grid' ? 'grid' : 'single'
+      const nextMode = typeof (sanitized as any)?.mode === 'string' && (sanitized as any).mode === 'grid' ? 'grid' : 'single'
+      // Keep world-space geometry stable when toggling layout mode by compensating node position.
+      // - single -> grid: keep instance 0 (node binding) in place
+      // - grid -> single: keep instance 0 (node binding) in place
+      const shouldCompensatePivot = prevMode !== nextMode && (prevMode === 'grid' || nextMode === 'grid')
+
+      this.captureHistorySnapshot()
+
+      visitNode(this.nodes, nodeId, (node) => {
+        if (shouldCompensatePivot) {
+          const gridLayout =
+            nextMode === 'grid' && sanitized && sanitized.mode === 'grid'
+              ? sanitized
+              : prevMode === 'grid' && (existing as any)?.mode === 'grid'
+                ? (existing as SceneNodeInstanceLayout)
+                : null
+
+          // Enabling grid shifts locals by -center, so move base by +center.
+          // Disabling grid removes that shift, so move base by -center.
+          const direction = nextMode === 'grid' ? 1 : -1
+
+          if (gridLayout) {
+            const sourceAssetId = typeof (node as any).sourceAssetId === 'string' ? ((node as any).sourceAssetId as string) : null
+            const templateAssetId = resolveInstanceLayoutTemplateAssetId(gridLayout, sourceAssetId)
+            if (templateAssetId) {
+              const cached = getCachedModelObject(templateAssetId)
+              const bbox = cached?.boundingBox
+              const centerOffsetLocal = computeInstanceLayoutGridCenterOffsetLocal(gridLayout, bbox)
+              if (centerOffsetLocal && centerOffsetLocal.lengthSq() > 1e-12) {
+                const scale = (node as any).scale as Vector3Like
+                const rotation = (node as any).rotation as Vector3Like
+                const position = (node as any).position as Vector3Like
+
+                const deltaWorld = centerOffsetLocal
+                  .clone()
+                  .multiplyScalar(direction)
+                  .multiply(new Vector3(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1))
+                  .applyEuler(new Euler(rotation?.x ?? 0, rotation?.y ?? 0, rotation?.z ?? 0))
+
+                ;(node as any).position = {
+                  x: (position?.x ?? 0) + deltaWorld.x,
+                  y: (position?.y ?? 0) + deltaWorld.y,
+                  z: (position?.z ?? 0) + deltaWorld.z,
+                } as Vector3Like
+              }
+            }
+          }
+        }
+        if (sanitized) {
+          ;(node as any).instanceLayout = sanitized
+        } else if ('instanceLayout' in (node as any)) {
+          ;(node as any).instanceLayout = null
+        }
+      })
+
+      this.queueSceneNodePatch(nodeId, ['instanceLayout'])
+      if (shouldCompensatePivot) {
+        this.queueSceneNodePatch(nodeId, ['transform'])
+      }
+      commitSceneSnapshot(this)
+    },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
       if (!Array.isArray(payloads) || payloads.length === 0) {
         return
@@ -9431,6 +9565,7 @@ export const useSceneStore = defineStore('scene', {
         previewColor,
         thumbnail: null,
         gleaned: true,
+        extension: extractExtension(`material://${material.id}.material`) ?? null,
       }
 
       this.registerAsset(asset, {
@@ -10273,6 +10408,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description,
         gleaned: metadata.gleaned ?? true,
+        extension: extractExtension(file.name) ?? getExtensionFromMimeType(file.type) ?? null,
       }
 
       const registered = this.registerAsset(projectAsset, {
@@ -10531,6 +10667,7 @@ export const useSceneStore = defineStore('scene', {
           name: prefabData.name,
           description: fileName,
           previewColor: NODE_PREFAB_PREVIEW_COLOR,
+          extension: extractExtension(fileName) ?? existing.extension ?? null,
         }
         const categoryId = determineAssetCategoryId(updated)
         const sourceMeta = this.assetIndex[targetAssetId]?.source
@@ -10550,6 +10687,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
       const categoryId = determineAssetCategoryId(projectAsset)
       const registered = this.registerAsset(projectAsset, {
@@ -11249,6 +11387,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
 
       return this.registerAsset(projectAsset, {
@@ -11315,6 +11454,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
 
       const categoryId = determineAssetCategoryId(projectAsset)
@@ -11468,6 +11608,7 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: null,
         description: fileName,
         gleaned: true,
+        extension: extractExtension(fileName) ?? null,
       }
       const categoryId = determineAssetCategoryId(projectAsset)
       const registered = this.registerAsset(projectAsset, {
@@ -11662,6 +11803,7 @@ export const useSceneStore = defineStore('scene', {
             thumbnail: ref.thumbnail ?? null,
             description: ref.description ?? (ref.filename ?? undefined),
             gleaned: true,
+            extension: extractExtension(ref.filename ?? ref.description ?? remoteUrl) ?? null,
           }
 
           this.registerAsset(projectAsset, {
@@ -12064,6 +12206,20 @@ export const useSceneStore = defineStore('scene', {
     },
     toggleViewportAxesVisible() {
       this.setViewportAxesVisible(!this.viewportSettings.showAxes)
+    },
+
+    setViewportSnapMode(mode: SceneViewportSnapMode) {
+      if (!isViewportSnapMode(mode)) {
+        return
+      }
+      this.setViewportSettings({ snapMode: mode })
+    },
+    toggleViewportVertexSnap() {
+      const next: SceneViewportSnapMode = this.viewportSettings.snapMode === 'vertex' ? 'off' : 'vertex'
+      this.setViewportSnapMode(next)
+    },
+    setViewportSnapThresholdPx(value: number) {
+      this.setViewportSettings({ snapThresholdPx: normalizeSnapThresholdPx(value) })
     },
     setShadowsEnabled(enabled: boolean) {
       const next = normalizeShadowsEnabledInput(enabled)
@@ -12793,12 +12949,12 @@ export const useSceneStore = defineStore('scene', {
             throw new Error('资源未缓存完成')
           }
           if (shouldCacheModelObject) {
-            const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+            const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
             modelGroup = loadedGroup
             baseObject = loadedGroup.object
             assetCache.releaseInMemoryBlob(asset.id)
           } else {
-            baseObject = await loadObjectFromFile(file)
+            baseObject = await loadObjectFromFile(file, asset.extension ?? undefined)
           }
         }
 
@@ -12980,12 +13136,12 @@ export const useSceneStore = defineStore('scene', {
 
       if (!baseObject) {
         if (shouldCacheModelObject) {
-          const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
           modelGroup = loaded
           baseObject = loaded.object
           assetCache.releaseInMemoryBlob(asset.id)
         } else {
-          baseObject = await loadObjectFromFile(file)
+          baseObject = await loadObjectFromFile(file, asset.extension ?? undefined)
         }
       }
 
@@ -13118,7 +13274,7 @@ export const useSceneStore = defineStore('scene', {
           if (!file) {
             throw new Error('Missing asset data in cache')
           }
-          const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
           assetCache.releaseInMemoryBlob(asset.id)
           modelGroup = baseObject
         }

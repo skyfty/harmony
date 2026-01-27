@@ -120,7 +120,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="分组选中"
+        title="Group Selection"
         :disabled="selectionCount < 1"
         @click="handleGroupSelection"
       />
@@ -131,7 +131,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="应用变换到节点"
+        title="Apply Transform to Nodes"
         :disabled="!canApplyTransformsToGroup"
         @click="handleApplyTransformsToGroup"
       />
@@ -142,7 +142,7 @@
         color="undefined"
         variant="text"
         class="toolbar-button"
-        title="重算组原点"
+        title="Recalculate Group Origin"
         :disabled="!canRecenterGroupOrigin"
         @click="handleRecenterGroupOrigin"
       />
@@ -170,19 +170,83 @@
         :disabled="!canDropSelection"
         @click="emit('drop-to-ground')"
       />
-      <v-btn
-        v-for="button in alignButtons"
-        :key="button.mode"
-        :icon="button.icon"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        color="undefined"
-        variant="text"
-        :disabled="!canAlignSelection"
-        :title="button.title"
-        @click="emitAlign(button.mode)"
-      />
+      <v-menu
+        v-model="alignMenuOpen"
+        location="bottom"
+        :offset="6"
+        :close-on-content-click="false"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-format-align-left"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            title="Align/Arrange/Distribute"
+            :disabled="!canAlignSelection"
+            :color="alignMenuOpen ? 'primary' : undefined"
+            :variant="alignMenuOpen ? 'flat' : 'text'"
+          />
+        </template>
+        <v-list density="compact" class="align-menu">
+          <v-list-item
+            title="X Axis Alignment (World X)"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-x')"
+          />
+          <v-list-item
+            title="Y Axis Alignment (World Y)"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-y')"
+          />
+          <v-list-item
+            title="Z Axis Alignment (World Z)"
+            prepend-icon="mdi-axis-arrow"
+            :disabled="!canAlignSelection"
+            @click="handleAlignCommand('axis-z')"
+          />
+
+          <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
+          <v-list-item
+            v-if="selectionCount >= 2"
+            title="Fix Primary Selection as Anchor"
+            :prepend-icon="fixedPrimaryAsAnchor ? 'mdi-check' : 'mdi-checkbox-blank-outline'"
+            @click="toggleFixedPrimaryAsAnchor"
+          />
+
+          <template v-if="selectionCount >= 2">
+            <v-divider class="align-menu__divider" />
+            <v-list-item
+              title="Horizontal Arrange (Right / World X+)"
+              prepend-icon="mdi-format-horizontal-align-left"
+              :disabled="!canAlignSelection"
+              @click="handleAlignCommand({ type: 'arrange', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-list-item
+              title="Vertical Arrange (Up / World Y+)"
+              prepend-icon="mdi-format-vertical-align-top"
+              :disabled="!canAlignSelection"
+              @click="handleAlignCommand({ type: 'arrange', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-divider class="align-menu__divider" />
+            <v-list-item
+              title="Horizontal Distribute"
+              prepend-icon="mdi-format-horizontal-distribute"
+              :disabled="!canAlignSelection || selectionCount < 3"
+              @click="handleAlignCommand({ type: 'distribute', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+            />
+            <v-list-item
+              title="Vertical Distribute (World Y)"
+              prepend-icon="mdi-format-vertical-distribute"
+              :disabled="!canAlignSelection || selectionCount < 3"
+              @click="handleAlignCommand({ type: 'distribute', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+            />
+          </template>
+        </v-list>
+      </v-menu>
       <v-menu
         :model-value="scatterEraseMenuOpen"
         location="bottom"
@@ -201,7 +265,7 @@
             :color="scatterEraseModeActive ? 'primary' : undefined"
             :variant="scatterEraseModeActive ? 'flat' : 'text'"
             :disabled="!canEraseScatter"
-            title="Scatter 擦除"
+            title="Scatter Erase"
             @click="handleScatterEraseButtonClick"
             @contextmenu.prevent.stop="handleScatterEraseContextMenu"
           />
@@ -210,7 +274,7 @@
           <div class="scatter-erase-menu__card">
             <div class="scatter-erase-menu__slider">
               <div class="scatter-erase-menu__slider-labels">
-                <span>擦除半径</span>
+                <span>Erase Radius</span>
                 <span>{{ scatterEraseRadiusLabel }}</span>
               </div>
               <v-slider
@@ -233,7 +297,7 @@
                 :disabled="!canClearAllScatterInstances"
                 @click="handleClearScatterMenuAction"
               >
-                清除所有Scatter实例
+                Clear All Scatter Instances
               </v-btn>
             </v-list-item>
           </div>
@@ -247,7 +311,7 @@
             density="compact"
             size="small"
             class="toolbar-button"
-            title="旋转"
+            title="Rotate"
             :disabled="!canRotateSelection"
             :color="rotationMenuOpen ? 'primary' : undefined"
             :variant="rotationMenuOpen ? 'flat' : 'text'"
@@ -288,6 +352,17 @@
         @click="toggleAxesVisibility"
       />
 
+      <v-btn
+        :icon="vertexSnapEnabled ? 'mdi-magnet' : 'mdi-magnet-off'"
+        :color="vertexSnapEnabled ? 'primary' : undefined"
+        :variant="vertexSnapEnabled ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Toggle Vertex Snap"
+        @click="toggleVertexSnap"
+      />
+
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -306,6 +381,7 @@
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
@@ -317,6 +393,7 @@ const props = withDefaults(
   defineProps<{
   showGrid: boolean
   showAxes: boolean
+  vertexSnapEnabled?: boolean
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -332,13 +409,14 @@ const props = withDefaults(
   }>(),
   {
     buildToolsDisabled: false,
+    vertexSnapEnabled: false,
   },
 )
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
   (event: 'drop-to-ground'): void
-  (event: 'align-selection', mode: AlignMode): void
+  (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
@@ -356,6 +434,7 @@ const emit = defineEmits<{
 const {
   showGrid,
   showAxes,
+  vertexSnapEnabled,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
@@ -376,6 +455,8 @@ const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
 const wallPresetMenuOpen = ref(false)
+const alignMenuOpen = ref(false)
+const fixedPrimaryAsAnchor = ref(true)
 
 const scatterEraseRadiusModel = computed({
   get: () => scatterEraseRadius.value,
@@ -396,20 +477,20 @@ type RotationAction = {
 const rotationSections = [
   {
     id: 'vertical',
-    label: '垂直旋转',
+    label: 'Vertical Rotation',
     actions: [
-      { id: 'vertical-45', label: '垂直旋转45°', axis: 'x', degrees: 45 },
-      { id: 'vertical-90', label: '垂直旋转90°', axis: 'x', degrees: 90 },
-      { id: 'vertical-180', label: '垂直旋转180°', axis: 'x', degrees: 180 },
+      { id: 'vertical-45', label: 'Vertical Rotation 45°', axis: 'x', degrees: 45 },
+      { id: 'vertical-90', label: 'Vertical Rotation 90°', axis: 'x', degrees: 90 },
+      { id: 'vertical-180', label: 'Vertical Rotation 180°', axis: 'x', degrees: 180 },
     ],
   },
   {
     id: 'horizontal',
-    label: '水平旋转',
+    label: 'Horizontal Rotation',
     actions: [
-      { id: 'horizontal-45', label: '水平旋转45°', axis: 'y', degrees: 45 },
-      { id: 'horizontal-90', label: '水平旋转90°', axis: 'y', degrees: 90 },
-      { id: 'horizontal-180', label: '水平旋转180°', axis: 'y', degrees: 180 },
+      { id: 'horizontal-45', label: 'Horizontal Rotation 45°', axis: 'y', degrees: 45 },
+      { id: 'horizontal-90', label: 'Horizontal Rotation 90°', axis: 'y', degrees: 90 },
+      { id: 'horizontal-180', label: 'Horizontal Rotation 180°', axis: 'y', degrees: 180 },
     ],
   },
 ] satisfies Array<{ id: string; label: string; actions: RotationAction[] }>
@@ -432,6 +513,12 @@ watch(buildToolsDisabled, (disabled) => {
   }
   if (disabled && wallPresetMenuOpen.value) {
     wallPresetMenuOpen.value = false
+  }
+})
+
+watch(selectionCount, (count) => {
+  if (count === 0) {
+    alignMenuOpen.value = false
   }
 })
 
@@ -513,11 +600,6 @@ function handleRecenterGroupOrigin() {
   sceneStore.recenterGroupOrigin(node.id)
 }
 
-const alignButtons = [
-  { mode: 'axis-x', icon: 'mdi-axis-x-arrow', title: 'Align X Axis' },
-  { mode: 'axis-y', icon: 'mdi-axis-y-arrow', title: 'Align Y Axis' },
-  { mode: 'axis-z', icon: 'mdi-axis-z-arrow', title: 'Align Z Axis' },
-] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
 const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
@@ -535,9 +617,13 @@ const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildSh
       : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
 }))
 
+function toggleFixedPrimaryAsAnchor() {
+  fixedPrimaryAsAnchor.value = !fixedPrimaryAsAnchor.value
+}
 
-function emitAlign(mode: AlignMode) {
-  emit('align-selection', mode)
+function handleAlignCommand(command: AlignCommand | AlignMode) {
+  emit('align-selection', command)
+  alignMenuOpen.value = false
 }
 
 function handleBuildToolToggle(tool: BuildTool) {
@@ -619,6 +705,10 @@ function toggleGridVisibility() {
 
 function toggleAxesVisibility() {
   sceneStore.toggleViewportAxesVisible()
+}
+
+function toggleVertexSnap() {
+  sceneStore.toggleViewportVertexSnap()
 }
 
 function handleClearScatterMenuAction() {
@@ -763,6 +853,11 @@ function handleClearScatterMenuAction() {
 
 .scatter-erase-menu__divider {
   margin: 12px 0;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.align-menu__divider {
+  margin: 6px 0;
   border-color: rgba(255, 255, 255, 0.1);
 }
 

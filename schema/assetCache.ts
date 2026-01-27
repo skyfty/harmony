@@ -85,7 +85,6 @@ export class AssetCache {
 
   setMaxEntries(count: number): void {
     this.maxEntries = Math.max(0, count)
-    this.evictIfNeeded()
   }
 
   async storeArrayBuffer(assetId: string, arrayBuffer: ArrayBuffer, payload: {
@@ -108,7 +107,6 @@ export class AssetCache {
     entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
     entry.size = arrayBuffer.byteLength
     finalizeCachedEntry(entry)
-    this.evictIfNeeded(assetId)
     return entry
   }
 
@@ -127,7 +125,6 @@ export class AssetCache {
     entry.size = blob.size
     entry.blobUrl = createObjectUrl(blob)
     finalizeCachedEntry(entry)
-    this.evictIfNeeded(assetId)
     return entry
   }
 
