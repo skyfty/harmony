@@ -15,10 +15,10 @@ export const WALL_DEFAULT_SMOOTHING = 0.05
 export type WallCornerModelRule = {
   /** Asset id of the corner/joint model to be instanced. */
   assetId: string | null
-  /** Minimum supported corner angle (degrees, inclusive). */
-  minAngle: number
-  /** Maximum supported corner angle (degrees, inclusive). */
-  maxAngle: number
+  /** Target corner angle (degrees). Runtime picks the closest match within tolerance. */
+  angle: number
+  /** Tolerance range (degrees). Model is only selected if actual angle is within ±tolerance of target angle. */
+  tolerance: number
 }
 
 export interface WallComponentProps {
@@ -68,19 +68,22 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     return Math.max(0, Math.min(180, num))
   }
 
+  const normalizeTolerance = (value: unknown, fallback: number): number => {
+    const num = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(num)) {
+      return fallback
+    }
+    return Math.max(0, Math.min(90, num))
+  }
+
   const rawCornerModels = (props as WallComponentProps | undefined)?.cornerModels
   const cornerModels = Array.isArray(rawCornerModels)
     ? rawCornerModels
       .map((entry) => {
         const assetId = normalizeAssetId((entry as WallCornerModelRule | undefined)?.assetId)
-        let minAngle = normalizeAngle((entry as WallCornerModelRule | undefined)?.minAngle, 0)
-        let maxAngle = normalizeAngle((entry as WallCornerModelRule | undefined)?.maxAngle, 180)
-        if (minAngle > maxAngle) {
-          const swap = minAngle
-          minAngle = maxAngle
-          maxAngle = swap
-        }
-        return { assetId, minAngle, maxAngle } satisfies WallCornerModelRule
+        const angle = normalizeAngle((entry as WallCornerModelRule | undefined)?.angle, 90)
+        const tolerance = normalizeTolerance((entry as WallCornerModelRule | undefined)?.tolerance, 5)
+        return { assetId, angle, tolerance } satisfies WallCornerModelRule
       })
     : []
 
@@ -135,8 +138,8 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
         assetId: typeof entry?.assetId === 'string' ? entry.assetId : null,
-        minAngle: typeof entry?.minAngle === 'number' ? entry.minAngle : Number(entry?.minAngle),
-        maxAngle: typeof entry?.maxAngle === 'number' ? entry.maxAngle : Number(entry?.maxAngle),
+        angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
+        tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
       }))
       : [],
   }

@@ -102,16 +102,19 @@ function clampAngleDegrees(value: unknown, fallback: number): number {
   return Math.max(0, Math.min(180, num))
 }
 
+function clampTolerance(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return fallback
+  }
+  return Math.max(0, Math.min(90, num))
+}
+
 function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
   const assetId = typeof row?.assetId === 'string' && row.assetId.trim().length ? row.assetId : null
-  let minAngle = clampAngleDegrees(row?.minAngle, 0)
-  let maxAngle = clampAngleDegrees(row?.maxAngle, 180)
-  if (minAngle > maxAngle) {
-    const swap = minAngle
-    minAngle = maxAngle
-    maxAngle = swap
-  }
-  return { assetId, minAngle, maxAngle }
+  const angle = clampAngleDegrees((row as any)?.angle, 90)
+  const tolerance = clampTolerance((row as any)?.tolerance, 5)
+  return { assetId, angle, tolerance } as WallCornerModelRow
 }
 
 function commitCornerModels(next: WallCornerModelRow[]): void {
@@ -124,7 +127,7 @@ function commitCornerModels(next: WallCornerModelRow[]): void {
 }
 
 function addCornerModel(): void {
-  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, minAngle: 0, maxAngle: 180 })]
+  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, angle: 45, tolerance: 5 } as any)]
   commitCornerModels(next)
 }
 
@@ -856,7 +859,7 @@ function applyAirWallUpdate(rawValue: unknown) {
           </div>
 
           <div v-if="!cornerModels.length" class="wall-corner-empty">
-            <span class="hint-text">No corner overrides. Uses the default joint model.</span>
+            <span class="hint-text">No corner models configured. No corner instances will be generated.</span>
           </div>
 
           <div
@@ -886,45 +889,42 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
 
             <div class="wall-corner-fields">
-              <div class="wall-corner-asset-text">
-                <div class="asset-name">
-                  {{ resolveCornerModelAsset(entry.assetId)?.name ?? 'Select Corner Model' }}
-                </div>
-                <div class="asset-subtitle" v-if="resolveCornerModelAsset(entry.assetId)">
-                  {{ resolveCornerModelAsset(entry.assetId)!.id.slice(0, 8) }}
-                </div>
-                <div class="asset-subtitle" v-else>
-                  Uses angle range to match a corner
-                </div>
-              </div>
+      
 
               <div class="wall-corner-angle-fields">
-                <v-text-field
-                  density="compact"
-                  variant="underlined"
-                  type="number"
-                  label="Min (°)"
-                  :model-value="entry.minAngle"
-                  min="0"
-                  max="180"
-                  step="1"
-                  inputmode="decimal"
-                  @update:modelValue="(value) => updateCornerModel(index, { minAngle: Number(value) })"
-                  @blur="() => updateCornerModel(index, {})"
-                />
-                <v-text-field
-                  density="compact"
-                  variant="underlined"
-                  type="number"
-                  label="Max (°)"
-                  :model-value="entry.maxAngle"
-                  min="0"
-                  max="180"
-                  step="1"
-                  inputmode="decimal"
-                  @update:modelValue="(value) => updateCornerModel(index, { maxAngle: Number(value) })"
-                  @blur="() => updateCornerModel(index, {})"
-                />
+                <div class="wall-corner-angle-label">
+                  Target: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
+                </div>
+                <div class="wall-corner-angle-inputs">
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Angle (°)"
+                    :model-value="(entry as any).angle ?? 90"
+                    min="0"
+                    max="180"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { angle: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Tolerance (°)"
+                    :model-value="(entry as any).tolerance ?? 5"
+                    min="0"
+                    max="90"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1105,6 +1105,17 @@ function applyAirWallUpdate(rawValue: unknown) {
 }
 
 .wall-corner-angle-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wall-corner-angle-label {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.wall-corner-angle-inputs {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;

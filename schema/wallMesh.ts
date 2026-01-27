@@ -13,8 +13,8 @@ export type WallRenderAssetObjects = {
 
 export type WallCornerModelRule = {
   assetId: string | null
-  minAngle: number
-  maxAngle: number
+  angle: number
+  tolerance: number
 }
 
 export type WallRenderOptions = {
@@ -219,7 +219,7 @@ function pickWallCornerAsset(
   const complementDeg = 180 - angleDeg
 
   let best:
-    | { assetId: string; extraYawRadians: number; score: number; rangeWidth: number }
+    | { assetId: string; extraYawRadians: number; diff: number; preferredDirect: boolean; ruleAngle: number }
     | null = null
 
   for (const rule of rules) {
@@ -228,38 +228,44 @@ function pickWallCornerAsset(
       continue
     }
 
-    const rawMin = typeof rule.minAngle === 'number' ? rule.minAngle : Number((rule as any).minAngle)
-    const rawMax = typeof rule.maxAngle === 'number' ? rule.maxAngle : Number((rule as any).maxAngle)
-    const min = Number.isFinite(rawMin) ? Math.max(0, Math.min(180, rawMin)) : 0
-    const max = Number.isFinite(rawMax) ? Math.max(0, Math.min(180, rawMax)) : 180
-    const minAngle = Math.min(min, max)
-    const maxAngle = Math.max(min, max)
-    const center = (minAngle + maxAngle) * 0.5
-    const rangeWidth = Math.max(0, maxAngle - minAngle)
+    const rawAngle = typeof rule.angle === 'number' ? rule.angle : Number((rule as any).angle)
+    const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
+    const rawTolerance = typeof rule.tolerance === 'number' ? rule.tolerance : Number((rule as any).tolerance)
+    const tolerance = Number.isFinite(rawTolerance) ? Math.max(0, Math.min(90, rawTolerance)) : 5
 
-    const inDirect = angleDeg + 1e-6 >= minAngle && angleDeg - 1e-6 <= maxAngle
-    const inComplement = complementDeg + 1e-6 >= minAngle && complementDeg - 1e-6 <= maxAngle
-    if (!inDirect && !inComplement) {
+    const directDiff = Math.abs(angleDeg - ruleAngle)
+    const complementDiff = Math.abs(complementDeg - ruleAngle)
+
+    const useComplement = complementDiff + 1e-6 < directDiff
+    const diff = useComplement ? complementDiff : directDiff
+
+    // Only consider this rule if the difference is within tolerance
+    if (diff > tolerance + 1e-6) {
       continue
     }
 
-    const directScore = inDirect ? Math.abs(angleDeg - center) : Number.POSITIVE_INFINITY
-    const complementScore = inComplement ? Math.abs(complementDeg - center) : Number.POSITIVE_INFINITY
-
-    const useComplement = complementScore < directScore
-    const score = useComplement ? complementScore : directScore
     const extraYawRadians = useComplement ? Math.PI : 0
+    const preferredDirect = !useComplement
 
     if (!best) {
-      best = { assetId, extraYawRadians, score, rangeWidth }
+      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
       continue
     }
-    if (score + 1e-6 < best.score) {
-      best = { assetId, extraYawRadians, score, rangeWidth }
+
+    if (diff + 1e-6 < best.diff) {
+      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
       continue
     }
-    if (Math.abs(score - best.score) <= 1e-6 && rangeWidth + 1e-6 < best.rangeWidth) {
-      best = { assetId, extraYawRadians, score, rangeWidth }
+
+    // Tie-breaker: prefer direct match (no extra yaw) if diff ties.
+    if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect && !best.preferredDirect) {
+      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+      continue
+    }
+
+    // Final tie-breaker: lower target angle for determinism.
+    if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect === best.preferredDirect && ruleAngle + 1e-6 < best.ruleAngle) {
+      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
     }
   }
 

@@ -14575,17 +14575,17 @@ export const useSceneStore = defineStore('scene', {
             const entryB = arrB[i] as any
             const assetA = typeof entryA?.assetId === 'string' ? entryA.assetId : null
             const assetB = typeof entryB?.assetId === 'string' ? entryB.assetId : null
-            const minA = typeof entryA?.minAngle === 'number' ? entryA.minAngle : Number(entryA?.minAngle)
-            const minB = typeof entryB?.minAngle === 'number' ? entryB.minAngle : Number(entryB?.minAngle)
-            const maxA = typeof entryA?.maxAngle === 'number' ? entryA.maxAngle : Number(entryA?.maxAngle)
-            const maxB = typeof entryB?.maxAngle === 'number' ? entryB.maxAngle : Number(entryB?.maxAngle)
+            const angleA = typeof entryA?.angle === 'number' ? entryA.angle : Number(entryA?.angle)
+            const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
+            const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
+            const toleranceB = typeof entryB?.tolerance === 'number' ? entryB.tolerance : Number(entryB?.tolerance)
             if ((assetA ?? null) !== (assetB ?? null)) {
               return false
             }
-            if (!Number.isFinite(minA) || !Number.isFinite(minB) || Math.abs(minA - minB) > 1e-6) {
+            if (!Number.isFinite(angleA) || !Number.isFinite(angleB) || Math.abs(angleA - angleB) > 1e-6) {
               return false
             }
-            if (!Number.isFinite(maxA) || !Number.isFinite(maxB) || Math.abs(maxA - maxB) > 1e-6) {
+            if (!Number.isFinite(toleranceA) || !Number.isFinite(toleranceB) || Math.abs(toleranceA - toleranceB) > 1e-6) {
               return false
             }
           }
