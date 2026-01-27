@@ -3,14 +3,10 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 
 /**
  * Harmony wrapper around Three.js MapControls.
- * Use this class to centralize default parameters and extensions.
+ * Centralizes defaults and provides extension points.
  */
 export class CameraControlsMap extends MapControls {
-  /**
-   * @param {import('three').Camera} object
-   * @param {HTMLElement} domElement
-   */
-  constructor(object, domElement) {
+  constructor(object: THREE.Camera, domElement: HTMLElement) {
     super(object, domElement)
 
     // Defaults currently used by the editor viewport.
@@ -18,18 +14,20 @@ export class CameraControlsMap extends MapControls {
     this.maxDistance = 200
 
     // Smooth camera movement.
-    this.enableDamping = true
+    this.enableDamping = false
     this.dampingFactor = 0.08
 
     // Speeds.
     this.rotateSpeed = 0.6
     this.zoomSpeed = 0.9
     this.panSpeed = 1.0
-    this.keyPanSpeed = 7.0
+    // @ts-ignore
+    ;(this as any).keyPanSpeed = 7.0
 
     // Keyboard panning.
-    this.enableKeys = true
-    this.keys = {
+    ;(this as any).enableKeys = true
+    // @ts-ignore
+    ;(this as any).keys = {
       LEFT: 'ArrowLeft',
       UP: 'ArrowUp',
       RIGHT: 'ArrowRight',
@@ -37,7 +35,8 @@ export class CameraControlsMap extends MapControls {
     }
 
     // Touch gestures (map-style).
-    this.touches = {
+    // @ts-ignore
+    ;(this as any).touches = {
       ONE: THREE.TOUCH.PAN,
       TWO: THREE.TOUCH.DOLLY_ROTATE,
     }

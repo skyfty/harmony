@@ -365,11 +365,11 @@
 
       <v-btn
         :icon="controlsType === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
-        :color="controlsType === 'orbit' ? 'primary' : undefined"
-        :variant="controlsType === 'orbit' ? 'flat' : 'text'"
         density="compact"
         size="small"
         class="toolbar-button"
+        color="undefined"
+        variant="text"
         :title="
           controlsType === 'map'
             ? 'Camera Controls: Map (click to switch to Orbit)'
