@@ -4,12 +4,23 @@ import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 export type WallRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
-  jointObject?: THREE.Object3D | null
+  /**
+   * Corner/joint models keyed by assetId.
+   * Multiple assets are supported so walls can pick different models by angle.
+   */
+  cornerObjectsByAssetId?: Record<string, THREE.Object3D | null> | null
+}
+
+export type WallCornerModelRule = {
+  assetId: string | null
+  minAngle: number
+  maxAngle: number
 }
 
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
+  cornerModels?: WallCornerModelRule[]
 }
 
 const WALL_DEFAULT_COLOR = 0xcfd2d6
@@ -196,11 +207,77 @@ function computeWallBodyInstanceMatrices(definition: WallDynamicMesh, template: 
   return matrices
 }
 
-function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template: InstancedAssetTemplate): THREE.Matrix4[] {
-  const matrices: THREE.Matrix4[] = []
+function pickWallCornerAsset(
+  angleRadians: number,
+  rules: WallCornerModelRule[],
+): { assetId: string | null; extraYawRadians: number } {
+  if (!Number.isFinite(angleRadians)) {
+    return { assetId: null, extraYawRadians: 0 }
+  }
+
+  const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
+  const complementDeg = 180 - angleDeg
+
+  let best:
+    | { assetId: string; extraYawRadians: number; score: number; rangeWidth: number }
+    | null = null
+
+  for (const rule of rules) {
+    const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId.trim() : null
+    if (!assetId) {
+      continue
+    }
+
+    const rawMin = typeof rule.minAngle === 'number' ? rule.minAngle : Number((rule as any).minAngle)
+    const rawMax = typeof rule.maxAngle === 'number' ? rule.maxAngle : Number((rule as any).maxAngle)
+    const min = Number.isFinite(rawMin) ? Math.max(0, Math.min(180, rawMin)) : 0
+    const max = Number.isFinite(rawMax) ? Math.max(0, Math.min(180, rawMax)) : 180
+    const minAngle = Math.min(min, max)
+    const maxAngle = Math.max(min, max)
+    const center = (minAngle + maxAngle) * 0.5
+    const rangeWidth = Math.max(0, maxAngle - minAngle)
+
+    const inDirect = angleDeg + 1e-6 >= minAngle && angleDeg - 1e-6 <= maxAngle
+    const inComplement = complementDeg + 1e-6 >= minAngle && complementDeg - 1e-6 <= maxAngle
+    if (!inDirect && !inComplement) {
+      continue
+    }
+
+    const directScore = inDirect ? Math.abs(angleDeg - center) : Number.POSITIVE_INFINITY
+    const complementScore = inComplement ? Math.abs(complementDeg - center) : Number.POSITIVE_INFINITY
+
+    const useComplement = complementScore < directScore
+    const score = useComplement ? complementScore : directScore
+    const extraYawRadians = useComplement ? Math.PI : 0
+
+    if (!best) {
+      best = { assetId, extraYawRadians, score, rangeWidth }
+      continue
+    }
+    if (score + 1e-6 < best.score) {
+      best = { assetId, extraYawRadians, score, rangeWidth }
+      continue
+    }
+    if (Math.abs(score - best.score) <= 1e-6 && rangeWidth + 1e-6 < best.rangeWidth) {
+      best = { assetId, extraYawRadians, score, rangeWidth }
+    }
+  }
+
+  if (best) {
+    return { assetId: best.assetId, extraYawRadians: best.extraYawRadians }
+  }
+  return { assetId: null, extraYawRadians: 0 }
+}
+
+function computeWallCornerInstanceMatricesByAsset(
+  definition: WallDynamicMesh,
+  templatesByAssetId: Map<string, InstancedAssetTemplate>,
+  rules: WallCornerModelRule[],
+): Map<string, THREE.Matrix4[]> {
+  const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
   const segments = definition.segments ?? []
   if (segments.length < 2) {
-    return matrices
+    return matricesByAssetId
   }
 
   const start = new THREE.Vector3()
@@ -209,11 +286,26 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
   const outgoing = new THREE.Vector3()
   const bisector = new THREE.Vector3()
   const quat = new THREE.Quaternion()
+  const yawQuat = new THREE.Quaternion()
   const pos = new THREE.Vector3()
   const scale = new THREE.Vector3(1, 1, 1)
   const localMatrix = new THREE.Matrix4()
 
-  const buildCorner = (current: (typeof segments)[number], next: (typeof segments)[number], cornerX: number, cornerY: number, cornerZ: number) => {
+  const push = (assetId: string, matrix: THREE.Matrix4) => {
+    const bucket = matricesByAssetId.get(assetId) ?? []
+    if (!matricesByAssetId.has(assetId)) {
+      matricesByAssetId.set(assetId, bucket)
+    }
+    bucket.push(matrix)
+  }
+
+  const buildCorner = (
+    current: (typeof segments)[number],
+    next: (typeof segments)[number],
+    cornerX: number,
+    cornerY: number,
+    cornerZ: number,
+  ) => {
     start.set(current.start.x, current.start.y, current.start.z)
     end.set(current.end.x, current.end.y, current.end.z)
     incoming.subVectors(end, start)
@@ -236,16 +328,30 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
       return
     }
 
+    const selection = pickWallCornerAsset(angle, rules)
+    if (!selection.assetId) {
+      return
+    }
+    const template = templatesByAssetId.get(selection.assetId)
+    if (!template) {
+      return
+    }
+
     bisector.copy(incoming).add(outgoing)
     if (bisector.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
       bisector.copy(outgoing)
     }
 
     quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), bisector.normalize())
+    if (selection.extraYawRadians) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), selection.extraYawRadians)
+      quat.multiply(yawQuat)
+    }
+
     pos.set(cornerX, cornerY, cornerZ)
     localMatrix.compose(pos, quat, scale)
     localMatrix.multiply(template.meshToRoot)
-    matrices.push(new THREE.Matrix4().copy(localMatrix))
+    push(selection.assetId, new THREE.Matrix4().copy(localMatrix))
   }
 
   for (let i = 0; i < segments.length - 1; i += 1) {
@@ -263,7 +369,7 @@ function computeWallJointInstanceMatrices(definition: WallDynamicMesh, template:
     buildCorner(last, first, last.end.x, last.end.y, last.end.z)
   }
 
-  return matrices
+  return matricesByAssetId
 }
 
 function createWallMaterial(): THREE.MeshStandardMaterial {
@@ -683,7 +789,21 @@ function rebuildWallGroup(
   group.add(mesh)
 
   const bodyTemplate = assets.bodyObject ? extractInstancedAssetTemplate(assets.bodyObject) : null
-  const jointTemplate = assets.jointObject ? extractInstancedAssetTemplate(assets.jointObject) : null
+  const rawCornerMap = assets.cornerObjectsByAssetId ?? null
+  const cornerObjectsByAssetId = rawCornerMap && typeof rawCornerMap === 'object' ? rawCornerMap : null
+  const cornerTemplatesByAssetId = new Map<string, InstancedAssetTemplate>()
+  if (cornerObjectsByAssetId) {
+    Object.entries(cornerObjectsByAssetId).forEach(([assetId, object]) => {
+      const id = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!id || !object) {
+        return
+      }
+      const template = extractInstancedAssetTemplate(object)
+      if (template) {
+        cornerTemplatesByAssetId.set(id, template)
+      }
+    })
+  }
 
   if (bodyTemplate) {
     const localMatrices = computeWallBodyInstanceMatrices(definition, bodyTemplate)
@@ -700,11 +820,22 @@ function rebuildWallGroup(
     }
   }
 
-  if (jointTemplate) {
-    const localMatrices = computeWallJointInstanceMatrices(definition, jointTemplate)
-    if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(jointTemplate.geometry, jointTemplate.material, localMatrices.length)
-      instanced.name = 'WallJointInstances'
+  const cornerRules = options.cornerModels
+  if (cornerTemplatesByAssetId.size && Array.isArray(cornerRules) && cornerRules.length) {
+    const matricesByAssetId = computeWallCornerInstanceMatricesByAsset(
+      definition,
+      cornerTemplatesByAssetId,
+      cornerRules,
+    )
+    const sortedAssetIds = Array.from(matricesByAssetId.keys()).sort()
+    for (const assetId of sortedAssetIds) {
+      const template = cornerTemplatesByAssetId.get(assetId)
+      const localMatrices = matricesByAssetId.get(assetId) ?? []
+      if (!template || !localMatrices.length) {
+        continue
+      }
+      const instanced = new THREE.InstancedMesh(template.geometry, template.material, localMatrices.length)
+      instanced.name = `WallCornerInstances:${assetId}`
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
       for (let i = 0; i < localMatrices.length; i += 1) {

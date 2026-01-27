@@ -22,12 +22,28 @@ export async function buildWallMesh(
   const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
 
   const bodyObject = wallProps.bodyAssetId ? await deps.loadAssetMesh(wallProps.bodyAssetId) : null;
-  const jointObject = wallProps.jointAssetId ? await deps.loadAssetMesh(wallProps.jointAssetId) : null;
+
+  const cornerModels = Array.isArray((wallProps as any).cornerModels) ? (wallProps as any).cornerModels : []
+  const uniqueCornerAssetIds = Array.from(
+    new Set<string>(
+      cornerModels
+        .map((rule: any) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+        .filter((value: string) => value.length > 0),
+    ),
+  )
+
+  const cornerObjectsEntries = await Promise.all(
+    uniqueCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
+  )
+  const cornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
+  for (const [assetId, object] of cornerObjectsEntries) {
+    cornerObjectsByAssetId[assetId] = object
+  }
 
   const group = createWallRenderGroup(
     meshInfo,
-    { bodyObject, jointObject },
-    { smoothing: wallProps.smoothing },
+    { bodyObject, cornerObjectsByAssetId },
+    { smoothing: wallProps.smoothing, cornerModels },
   );
   group.name = node.name ?? (group.name || 'Wall');
 

@@ -260,18 +260,17 @@ export function createWallRenderer(options: WallRendererOptions) {
       | undefined
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const jointAssetId = wallComponent?.props?.jointAssetId ?? null
     const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
       : []
     const hasCornerAssets = cornerModels.some((entry) => typeof entry?.assetId === 'string' && entry.assetId.trim().length)
-    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId || hasCornerAssets)
+    const definition = node.dynamicMesh as WallDynamicMesh
+    const canHaveCornerJoints = hasCornerAssets && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
     }
-
-    const definition = node.dynamicMesh as WallDynamicMesh
     const bindings: WallDragBindingEntry[] = []
 
     if (bodyAssetId) {
@@ -289,10 +288,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
-    const jointBuckets = computeWallJointLocalMatricesByAsset(definition, {
-      cornerModels,
-      fallbackAssetId: jointAssetId,
-    })
+    const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
     if (jointBuckets.matricesByAssetId.size) {
       const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
       for (const assetId of sortedAssetIds) {
@@ -318,7 +314,7 @@ export function createWallRenderer(options: WallRendererOptions) {
             assetId: endCapAssetId,
             localMatrices,
             bindingIdPrefix: `wall-cap:${nodeId}:`,
-            useNodeIdForIndex0: !bodyAssetId && !jointAssetId && !jointBuckets.primaryAssetId,
+            useNodeIdForIndex0: !bodyAssetId && !jointBuckets.primaryAssetId,
           })
         }
       }
@@ -506,10 +502,9 @@ export function createWallRenderer(options: WallRendererOptions) {
   function pickWallCornerModel(
     angleRadians: number,
     rules: WallCornerModelRule[],
-    fallbackAssetId: string | null,
   ): { assetId: string | null; extraYawRadians: number } {
     if (!Number.isFinite(angleRadians)) {
-      return { assetId: fallbackAssetId, extraYawRadians: 0 }
+      return { assetId: null, extraYawRadians: 0 }
     }
 
     const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
@@ -567,12 +562,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (best) {
       return { assetId: best.assetId, extraYawRadians: best.extraYawRadians }
     }
-    return { assetId: fallbackAssetId, extraYawRadians: 0 }
+    return { assetId: null, extraYawRadians: 0 }
   }
 
   function computeWallJointLocalMatricesByAsset(
     definition: WallDynamicMesh,
-    options: { cornerModels?: WallCornerModelRule[]; fallbackAssetId?: string | null } = {},
+    options: { cornerModels?: WallCornerModelRule[] } = {},
   ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null } {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     let primaryAssetId: string | null = null
@@ -582,9 +577,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const rules = Array.isArray(options.cornerModels) ? options.cornerModels : []
-    const fallbackAssetId = typeof options.fallbackAssetId === 'string' && options.fallbackAssetId.trim().length
-      ? options.fallbackAssetId
-      : null
 
     const pushMatrix = (assetId: string, matrix: THREE.Matrix4) => {
       const bucket = matricesByAssetId.get(assetId) ?? []
@@ -624,7 +616,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         return
       }
 
-      const selection = pickWallCornerModel(angle, rules, fallbackAssetId)
+      const selection = pickWallCornerModel(angle, rules)
       if (!selection.assetId) {
         return
       }
@@ -832,7 +824,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const isAirWall = Boolean(wallComponent?.props?.isAirWall)
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const jointAssetId = wallComponent?.props?.jointAssetId ?? null
     const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
@@ -844,7 +835,9 @@ export function createWallRenderer(options: WallRendererOptions) {
           .filter((id) => Boolean(id)),
       ),
     ).sort()
-    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId || cornerAssetIds.length)
+    const definition = node.dynamicMesh as WallDynamicMesh
+    const canHaveCornerJoints = cornerAssetIds.length > 0 && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
 
     const userData = container.userData ?? (container.userData = {})
 
@@ -887,29 +880,14 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    container.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
-        return
-      }
-      if (child.name === 'WallMesh') {
-        mesh.visible = false
-      }
-    })
-
-
 
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = Boolean(bodyAssetId && !getCachedModelObject(bodyAssetId))
-    const needsJointLoad = Boolean(jointAssetId && !getCachedModelObject(jointAssetId))
     const needsCornerLoad = cornerAssetIds.some((id) => !getCachedModelObject(id))
     const needsCapLoad = Boolean(endCapAssetId && !getCachedModelObject(endCapAssetId))
 
     if (needsBodyLoad && bodyAssetId) {
       scheduleWallAssetLoad(bodyAssetId, node.id, signatureKey)
-    }
-    if (needsJointLoad && jointAssetId) {
-      scheduleWallAssetLoad(jointAssetId, node.id, signatureKey)
     }
     if (needsCornerLoad) {
       cornerAssetIds.forEach((assetId) => {
@@ -922,7 +900,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       scheduleWallAssetLoad(endCapAssetId, node.id, signatureKey)
     }
 
-    if (needsBodyLoad || needsJointLoad || needsCornerLoad || needsCapLoad) {
+    if (needsBodyLoad || needsCornerLoad || needsCapLoad) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -940,11 +918,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    // Assets are ready: switch to instanced rendering and remove the procedural wall group.
-    removeWallGroup(container)
-
-    const definition = node.dynamicMesh as WallDynamicMesh
-    const primaryAssetId = bodyAssetId ?? jointAssetId ?? (cornerAssetIds[0] ?? null) ?? endCapAssetId
+    // Assets are ready: attempt instanced rendering.
+  const primaryAssetId = bodyAssetId ?? (cornerAssetIds[0] ?? null) ?? endCapAssetId
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
@@ -976,10 +951,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     {
-      const jointBuckets = computeWallJointLocalMatricesByAsset(definition, {
-        cornerModels,
-        fallbackAssetId: jointAssetId,
-      })
+      const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
       if (jointBuckets.matricesByAssetId.size) {
         const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
         for (const assetId of sortedAssetIds) {
@@ -1009,30 +981,52 @@ export function createWallRenderer(options: WallRendererOptions) {
           hasBindings = true
         }
       }
-    }
 
-    if (endCapAssetId) {
-      const useNodeIdForIndex0 = !bodyAssetId && !jointAssetId && !cornerAssetIds.length
-      const group = getCachedModelObject(endCapAssetId)
-      if (group) {
-        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
-        if (localMatrices.length > 0) {
-          for (const localMatrix of localMatrices) {
-            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-            hasWallBounds = true
+      if (endCapAssetId) {
+        const useNodeIdForIndex0 = !bodyAssetId && !jointBuckets.primaryAssetId
+        const group = getCachedModelObject(endCapAssetId)
+        if (group) {
+          const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+          if (localMatrices.length > 0) {
+            for (const localMatrix of localMatrices) {
+              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+              hasWallBounds = true
+            }
+            syncInstancedModelCommittedLocalMatrices({
+              nodeId: node.id,
+              assetId: endCapAssetId,
+              object: container,
+              localMatrices,
+              bindingIdPrefix: `wall-cap:${node.id}:`,
+              useNodeIdForIndex0,
+            })
+            hasBindings = hasBindings || localMatrices.length > 0
           }
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId: endCapAssetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-cap:${node.id}:`,
-            useNodeIdForIndex0,
-          })
-          hasBindings = hasBindings || localMatrices.length > 0
         }
       }
     }
+
+    if (!hasBindings) {
+      // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      delete userData.instancedBounds
+      options.removeInstancedPickProxy(container)
+
+      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        node.dynamicMesh as WallDynamicMesh,
+        signatureKey,
+        { smoothing: resolveWallSmoothingFromNode(node) },
+      )
+      applyAirWallVisualToWallGroup(wallGroup, false)
+      return
+    }
+
+    // Instanced rendering is active: remove the procedural wall group.
+    removeWallGroup(container)
 
     if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
       userData.instancedBounds = {

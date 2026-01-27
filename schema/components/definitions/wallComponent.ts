@@ -32,7 +32,6 @@ export interface WallComponentProps {
    */
   isAirWall: boolean
   bodyAssetId?: string | null
-  jointAssetId?: string | null
   endCapAssetId?: string | null
   /**
    * Optional corner model overrides. At runtime the system will pick a model
@@ -95,7 +94,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     smoothing,
     isAirWall: normalizedIsAirWall,
     bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
-    jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
     endCapAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.endCapAssetId),
     cornerModels,
   }
@@ -110,7 +108,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       smoothing: WALL_DEFAULT_SMOOTHING,
       isAirWall: false,
       bodyAssetId: null,
-      jointAssetId: null,
       endCapAssetId: null,
       cornerModels: [],
     }
@@ -134,7 +131,6 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     smoothing: props.smoothing,
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
-    jointAssetId: props.jointAssetId ?? null,
     endCapAssetId: props.endCapAssetId ?? null,
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
@@ -209,7 +205,6 @@ export function createWallComponentState(
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
-    jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
     endCapAssetId: overrides?.endCapAssetId ?? defaults.endCapAssetId,
     cornerModels: overrides?.cornerModels ?? (defaults as WallComponentProps).cornerModels,
   })
