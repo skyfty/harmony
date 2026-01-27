@@ -61,7 +61,7 @@ const isUpdatingPrefab = ref(false)
 
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
-const placementTitle = computed(() => (floating.value ? '停靠到左侧' : '浮动显示'))
+const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float panel'))
 
 const openedIds = computed({
   get: () => sceneStore.getExpandedGroupIds(),
@@ -129,16 +129,16 @@ const visibilityToggleIcon = computed(() => {
 })
 const visibilityToggleTitle = computed(() => {
   if (!hasVisibilityToggleNodes.value) {
-    return '无可切换的节点（跳过系统节点）'
+    return 'No toggleable nodes (skips system nodes)'
   }
-  return areAllNodesVisible.value ? '隐藏所有节点（跳过系统节点）' : '显示所有节点（跳过系统节点）'
+  return areAllNodesVisible.value ? 'Hide all nodes (skips system nodes)' : 'Show all nodes (skips system nodes)'
 })
 const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item) => item.locked))
 const areAllNodesLocked = computed(
   () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item) => item.locked),
 )
-const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-open-variant-outline' : 'mdi-lock-outline'))
-const lockToggleTitle = computed(() => (areAllNodesLocked.value ? '解除全部锁定' : '锁定全部节点'))
+const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'))
+const lockToggleTitle = computed(() => (areAllNodesLocked.value ? 'Unlock all' : 'Lock all nodes'))
 
 const activeSceneNode = computed<SceneNode | null>(() => {
   const id = selectedNodeId.value
@@ -170,9 +170,9 @@ const groupToggleIcon = computed(() => {
 
 const groupToggleTitle = computed(() => {
   if (!selectedGroupId.value) {
-    return '展开/收起选中的组合'
+    return 'Expand/Collapse selected group'
   }
-  return selectedGroupExpanded.value ? '收起组合' : '展开组合'
+  return selectedGroupExpanded.value ? 'Collapse group' : 'Expand group'
 })
 
 function handleToggleSelectedGroupExpansion() {
@@ -530,7 +530,7 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
   await assetCacheStore.downloaProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     const reason = assetCacheStore.getError(asset.id)
-    throw new Error(reason ?? '模型资源尚未准备就绪')
+    throw new Error(reason ?? 'Model asset is not ready')
   }
 }
 
@@ -660,8 +660,8 @@ async function handleSavePrefab() {
   isSavingPrefab.value = true
   try {
     await sceneStore.saveNodePrefab(node.id)
-  } catch (error) {
-    console.error('保存预制件失败', error)
+    } catch (error) {
+    console.error('Failed to save prefab', error)
   } finally {
     isSavingPrefab.value = false
   }
@@ -682,8 +682,8 @@ async function handleUpdatePrefab() {
   isUpdatingPrefab.value = true
   try {
     await sceneStore.saveNodePrefab(node.id, { assetId })
-  } catch (error) {
-    console.error('更新预制件失败', error)
+    } catch (error) {
+    console.error('Failed to update prefab', error)
   } finally {
     isUpdatingPrefab.value = false
   }
@@ -1212,7 +1212,7 @@ function handleTreeDragLeave(event: DragEvent) {
           variant="text"
           density="compact"
           color="primary"
-          :title="'保存为预制件'"
+          :title="'Save as Prefab'"
           v-if="canSavePrefab"
           :disabled="isSavingPrefab"
           :loading="isSavingPrefab"
@@ -1223,7 +1223,7 @@ function handleTreeDragLeave(event: DragEvent) {
           variant="text"
           density="compact"
           color="primary"
-          :title="'更新预制件'"
+          :title="'Update Prefab'"
           :disabled="!canUpdatePrefab || isUpdatingPrefab"
           :loading="isUpdatingPrefab"
           @click="handleUpdatePrefab"
@@ -1331,7 +1331,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 class="selection-lock-btn"
                 :class="{ 'is-locked': item.locked }"
                 
-                :title="item.locked ? '解除禁止鼠标选择' : '禁止鼠标选择'"
+                :title="item.locked ? 'Enable mouse selection' : 'Disable mouse selection'"
                 @click.stop="toggleNodeSelectionLock(item.id)"
               />
             </div>
