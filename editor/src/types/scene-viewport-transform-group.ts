@@ -15,4 +15,7 @@ export interface TransformGroupEntry {
 export interface TransformGroupState {
   primaryId: string | null
   entries: Map<string, TransformGroupEntry>
+  initialGroupPivotWorldPosition: Vector3
+  initialGroupPivotWorldQuaternion: Quaternion
+  initialGroupPivotWorldScale: Vector3
 }
