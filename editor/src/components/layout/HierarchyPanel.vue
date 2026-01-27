@@ -271,7 +271,7 @@ const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
 
   const walk = (items: HierarchyTreeItem[], depth: number) => {
     for (const item of items) {
-      const isGroup = item.nodeType === 'Group'
+      const isGroup = item.nodeType === 'Group' && item.instanced !== true
       const hasChildren = isGroup && Boolean(item.children?.length)
       const expanded = hasChildren && openedSet.has(item.id)
       rows.push({ id: item.id, item, depth, isGroup, hasChildren, expanded })
@@ -1294,6 +1294,31 @@ function handleTreeDragOver(event: DragEvent) {
   }
 }
 
+function isDragEventOnNodeRow(event: DragEvent): boolean {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return false
+  }
+  // Any element inside the row label should be handled by the row handlers.
+  return Boolean(target.closest('.node-label'))
+}
+
+function handleVirtualListDragOverCapture(event: DragEvent) {
+  // Always keep edge auto-scroll responsive.
+  updateAutoScrollFromDragEvent(event)
+  if (isDragEventOnNodeRow(event)) {
+    return
+  }
+  handleTreeDragOver(event)
+}
+
+async function handleVirtualListDropCapture(event: DragEvent) {
+  if (isDragEventOnNodeRow(event)) {
+    return
+  }
+  await handleTreeDrop(event)
+}
+
 async function handleTreeDrop(event: DragEvent) {
   if (resolveMaterialAssetFromEvent(event)) {
     materialDropTargetId.value = null
@@ -1491,8 +1516,8 @@ function handleTreeDragLeave(event: DragEvent) {
           item-key="id"
           :item-height="30"
           class="hierarchy-virtual-list"
-          @dragover.capture.prevent="handleTreeDragOver"
-          @drop.capture.prevent="handleTreeDrop"
+          @dragover.capture="handleVirtualListDragOverCapture"
+          @drop.capture="handleVirtualListDropCapture"
           @dragleave.capture="handleTreeDragLeave"
         >
           <template #default="{ item: row }">

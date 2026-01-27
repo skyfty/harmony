@@ -4901,6 +4901,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     visible: node.visible ?? true,
     locked: node.locked ?? false,
     nodeType: node.nodeType,
+    instanced: !!node.userData?.instanced,
     lightType: node.light?.type,
     dynamicMeshType: node.dynamicMesh?.type,
     children: node.children?.map(toHierarchyItem),
