@@ -33,6 +33,7 @@ function getInitialFormState(): SceneExportOptions {
     includeExtras: props.initialOptions.includeExtras,
     rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
     lazyLoadMeshes: props.initialOptions.lazyLoadMeshes ?? true,
+    embedAssets: props.initialOptions.embedAssets ?? false,
     // Project export bundles are JSON-only.
     format: 'json',
   }
@@ -163,6 +164,13 @@ function handleConfirm() {
         </div>
 
         <div class="options-grid">
+          <v-checkbox
+            v-model="form.embedAssets"
+            :disabled="exporting"
+            label="Embed assets"
+            density="compact"
+            hide-details
+          />
           <v-checkbox
             v-model="form.includeLights"
             :disabled="exporting"

@@ -194,6 +194,7 @@ import type { ViewerOptions } from 'viewerjs'
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
 	format: 'json',
 	fileName: 'preview',
+	embedAssets: false,
 	includeLights: true,
 	includeHiddenNodes: true,
 	includeSkeletons: true,
