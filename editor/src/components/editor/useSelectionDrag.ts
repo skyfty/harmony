@@ -468,7 +468,11 @@ export function useSelectionDrag(
 
     const updates: TransformUpdatePayload[] = []
     const worldPosition = new THREE.Vector3()
+    const pivotPosition = new THREE.Vector3()
+    const originToPivotOffset = new THREE.Vector3()
     const worldOffset = new THREE.Vector3()
+    const pivotAfter = new THREE.Vector3()
+    const originAfter = new THREE.Vector3()
     const localPosition = new THREE.Vector3()
 
     for (const nodeId of topLevelIds) {
@@ -479,10 +483,24 @@ export function useSelectionDrag(
 
       targetObject.updateMatrixWorld(true)
       targetObject.getWorldPosition(worldPosition)
-      worldOffset.copy(worldPosition).sub(centroidWorld).applyQuaternion(rotateDeltaQuaternion)
-      worldPosition.copy(centroidWorld).add(worldOffset)
 
-      localPosition.copy(worldPosition)
+      // Use the object's transform pivot (PickProxy-aware) when available.
+      if (callbacks.computeTransformPivotWorld) {
+        callbacks.computeTransformPivotWorld(targetObject, pivotPosition)
+      } else {
+        pivotPosition.copy(worldPosition)
+      }
+
+      // Desired pivot position after rotating around the selection centroid.
+      worldOffset.copy(pivotPosition).sub(centroidWorld).applyQuaternion(rotateDeltaQuaternion)
+      pivotAfter.copy(centroidWorld).add(worldOffset)
+
+      // Keep the origin-to-pivot offset consistent under the same rotation, so instanced PickProxy pivots behave.
+      originToPivotOffset.copy(worldPosition).sub(pivotPosition)
+      originToPivotOffset.applyQuaternion(rotateDeltaQuaternion)
+      originAfter.copy(pivotAfter).add(originToPivotOffset)
+
+      localPosition.copy(originAfter)
       if (targetObject.parent) {
         targetObject.parent.worldToLocal(localPosition)
       }
@@ -494,7 +512,9 @@ export function useSelectionDrag(
 
       updates.push({
         id: nodeId,
-        position: localPosition,
+        // Clone the vector so each update has its own immutable snapshot.
+        // (Reusing a single Vector3 instance will make every node end up with the same final position.)
+        position: localPosition.clone(),
         rotation: toEulerLike(targetObject.rotation),
       })
     }
