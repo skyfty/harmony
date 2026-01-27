@@ -5779,10 +5779,10 @@ export async function calculateSceneResourceSummary(
       bytes = cacheEntry?.blob?.size ?? bytes
     }
 
-    if (bytes > 0) {
+    if (bytes > 0 || downloadUrl) {
       const entry: SceneResourceSummaryEntry = {
         assetId,
-        name:asset?.name ?? undefined,
+        name: asset?.name ?? undefined,
         type: asset?.type ?? undefined,
         bytes,
         embedded: false,
@@ -5791,8 +5791,10 @@ export async function calculateSceneResourceSummary(
       }
       summary.assets.push(entry)
       recordTextureAssetEntry(assetId, entry)
-      summary.totalBytes += bytes
-      summary.externalBytes += bytes
+      if (bytes > 0) {
+        summary.totalBytes += bytes
+        summary.externalBytes += bytes
+      }
       processed.add(assetId)
     } else {
       summary.unknownAssetIds?.push(assetId)
@@ -9767,6 +9769,7 @@ export const useSceneStore = defineStore('scene', {
         ;(target as any).visible = visible
       })
       this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['visibility'])
       commitSceneSnapshot(this)
     },
     toggleNodeVisibility(id: string) {
@@ -9797,7 +9800,70 @@ export const useSceneStore = defineStore('scene', {
         })
       })
       this.nodes = [...this.nodes]
+      // queue visibility patches for changed nodes so the runtime updates
+      changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
       commitSceneSnapshot(this)
+    },
+
+    setAllUserNodesVisibility(
+      visible: boolean,
+      options: {
+        fullSyncThreshold?: number
+      } = {},
+    ): { changedCount: number } {
+      const thresholdRaw = options.fullSyncThreshold
+      const fullSyncThreshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw as number)) : 200
+
+      const changedIds: string[] = []
+
+      const scan = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          const isSystemNode = node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID
+          if (!isSystemNode) {
+            const currentVisible = (node as any).visible ?? true
+            if (currentVisible !== visible) {
+              changedIds.push(node.id)
+            }
+          }
+
+          if (node.children?.length) {
+            scan(node.children)
+          }
+        })
+      }
+
+      scan(this.nodes)
+      if (!changedIds.length) {
+        return { changedCount: 0 }
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, visible: true })))
+
+      const changedSet = new Set(changedIds)
+      const apply = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (changedSet.has(node.id)) {
+            ;(node as any).visible = visible
+          }
+          if (node.children?.length) {
+            apply(node.children)
+          }
+        })
+      }
+
+      apply(this.nodes)
+      this.nodes = [...this.nodes]
+
+      if (changedIds.length > fullSyncThreshold) {
+        // Large batches: avoid generating a huge patch list.
+        // Queue a single structure patch so the viewport does a full sync.
+        this.queueSceneStructurePatch('bulkVisibility')
+      } else {
+        changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
+      }
+
+      commitSceneSnapshot(this)
+      return { changedCount: changedIds.length }
     },
     toggleSelectionVisibility(): boolean {
       const selection = [...this.selectedNodeIds]
@@ -9877,37 +9943,63 @@ export const useSceneStore = defineStore('scene', {
       const next = !this.isNodeSelectionLocked(id)
       this.setNodeSelectionLock(id, next)
     },
-    setAllNodesSelectionLock(locked: boolean) {
+    setAllNodesSelectionLock(
+      locked: boolean,
+      options: {
+        fullSyncThreshold?: number
+      } = {},
+    ) {
+      const thresholdRaw = options.fullSyncThreshold
+      const fullSyncThreshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw as number)) : 200
+
       const changedIds: string[] = []
+      const scan = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
+            const current = node.locked ?? false
+            if (current !== locked) {
+              changedIds.push(node.id)
+            }
+          }
+          if (node.children?.length) {
+            scan(node.children)
+          }
+        })
+      }
+
+      scan(this.nodes)
+      if (!changedIds.length) {
+        return
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
+
+      const changedSet = new Set(changedIds)
       const apply = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
-          const current = node.locked ?? false
-          if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
-            return
-          }
-          if (current !== locked) {
-            changedIds.push(node.id)
+          if (changedSet.has(node.id)) {
+            ;(node as any).locked = locked
           }
           if (node.children?.length) {
             apply(node.children)
           }
         })
       }
-      apply(this.nodes)
-      if (!changedIds.length) {
-        return
-      }
 
-      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, locked: true })))
-      changedIds.forEach((id) => {
-        visitNode(this.nodes, id, (node) => {
-          ;(node as any).locked = locked
-        })
-      })
+      apply(this.nodes)
+      this.nodes = [...this.nodes]
+
       if (locked && this.selectedNodeIds.length) {
         this.setSelection([])
       }
-      this.queueSceneStructurePatch('setAllNodesSelectionLock')
+
+      if (changedIds.length > fullSyncThreshold) {
+        // Large batches: prefer a single full sync in the viewport.
+        this.queueSceneStructurePatch('setAllNodesSelectionLock')
+      } else {
+        changedIds.forEach((id) => this.queueSceneNodePatch(id, ['lock']))
+      }
+
       commitSceneSnapshot(this)
     },
     toggleSelectionLock(): boolean {

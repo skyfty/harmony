@@ -61,7 +61,7 @@ const isUpdatingPrefab = ref(false)
 
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
-const placementTitle = computed(() => (floating.value ? '停靠到左侧' : '浮动显示'))
+const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float panel'))
 
 const openedIds = computed({
   get: () => sceneStore.getExpandedGroupIds(),
@@ -108,16 +108,37 @@ const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyIt
 const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
-const areAllNodesVisible = computed(() => flattenedHierarchyItems.value.every((item) => item.visible))
-const anyNodeHidden = computed(() => flattenedHierarchyItems.value.some((item) => !item.visible))
-const visibilityToggleIcon = computed(() => (areAllNodesVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'))
-const visibilityToggleTitle = computed(() => (areAllNodesVisible.value ? '隐藏所有节点' : '显示所有节点'))
+
+// Global visibility toggle: exclude system nodes and skip selection-locked nodes.
+const visibilityCandidates = computed(() =>
+  flattenedHierarchyItems.value.filter(
+    (item) => item.id !== GROUND_NODE_ID && item.id !== SKY_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
+  ),
+)
+const visibilityToggleItems = computed(() => visibilityCandidates.value)
+const hasVisibilityToggleNodes = computed(() => visibilityCandidates.value.length > 0)
+const areAllNodesVisible = computed(
+  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item) => item.visible),
+)
+const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item) => !item.visible))
+const visibilityToggleIcon = computed(() => {
+  if (!hasVisibilityToggleNodes.value) {
+    return 'mdi-eye-outline'
+  }
+  return areAllNodesVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
+})
+const visibilityToggleTitle = computed(() => {
+  if (!hasVisibilityToggleNodes.value) {
+    return 'No toggleable nodes (skips system nodes)'
+  }
+  return areAllNodesVisible.value ? 'Hide all nodes (skips system nodes)' : 'Show all nodes (skips system nodes)'
+})
 const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item) => item.locked))
 const areAllNodesLocked = computed(
   () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item) => item.locked),
 )
-const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-open-variant-outline' : 'mdi-lock-outline'))
-const lockToggleTitle = computed(() => (areAllNodesLocked.value ? '解除全部锁定' : '锁定全部节点'))
+const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'))
+const lockToggleTitle = computed(() => (areAllNodesLocked.value ? 'Unlock all' : 'Lock all nodes'))
 
 const activeSceneNode = computed<SceneNode | null>(() => {
   const id = selectedNodeId.value
@@ -149,9 +170,9 @@ const groupToggleIcon = computed(() => {
 
 const groupToggleTitle = computed(() => {
   if (!selectedGroupId.value) {
-    return '展开/收起选中的组合'
+    return 'Expand/Collapse selected group'
   }
-  return selectedGroupExpanded.value ? '收起组合' : '展开组合'
+  return selectedGroupExpanded.value ? 'Collapse group' : 'Expand group'
 })
 
 function handleToggleSelectedGroupExpansion() {
@@ -509,7 +530,7 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
   await assetCacheStore.downloaProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     const reason = assetCacheStore.getError(asset.id)
-    throw new Error(reason ?? '模型资源尚未准备就绪')
+    throw new Error(reason ?? 'Model asset is not ready')
   }
 }
 
@@ -639,8 +660,8 @@ async function handleSavePrefab() {
   isSavingPrefab.value = true
   try {
     await sceneStore.saveNodePrefab(node.id)
-  } catch (error) {
-    console.error('保存预制件失败', error)
+    } catch (error) {
+    console.error('Failed to save prefab', error)
   } finally {
     isSavingPrefab.value = false
   }
@@ -661,16 +682,20 @@ async function handleUpdatePrefab() {
   isUpdatingPrefab.value = true
   try {
     await sceneStore.saveNodePrefab(node.id, { assetId })
-  } catch (error) {
-    console.error('更新预制件失败', error)
+    } catch (error) {
+    console.error('Failed to update prefab', error)
   } finally {
     isUpdatingPrefab.value = false
   }
 }
 
 function handleToggleAllVisibility() {
-  const nextVisible = !areAllNodesVisible.value
-  sceneStore.setAllNodesVisibility(nextVisible)
+  if (!hasVisibilityToggleNodes.value) {
+    return
+  }
+  // Mixed state rule: if any eligible node is hidden -> show all; else hide all.
+  const nextVisible = anyNodeHidden.value ? true : false
+  sceneStore.setAllUserNodesVisibility(nextVisible)
 }
 
 function handleToggleAllSelectionLock() {
@@ -1187,7 +1212,7 @@ function handleTreeDragLeave(event: DragEvent) {
           variant="text"
           density="compact"
           color="primary"
-          :title="'保存为预制件'"
+          :title="'Save as Prefab'"
           v-if="canSavePrefab"
           :disabled="isSavingPrefab"
           :loading="isSavingPrefab"
@@ -1198,7 +1223,7 @@ function handleTreeDragLeave(event: DragEvent) {
           variant="text"
           density="compact"
           color="primary"
-          :title="'更新预制件'"
+          :title="'Update Prefab'"
           :disabled="!canUpdatePrefab || isUpdatingPrefab"
           :loading="isUpdatingPrefab"
           @click="handleUpdatePrefab"
@@ -1231,7 +1256,7 @@ function handleTreeDragLeave(event: DragEvent) {
           density="compact"
           size="small"
           :title="visibilityToggleTitle"
-          :disabled="!hasHierarchyNodes"
+          :disabled="!hasVisibilityToggleNodes"
           @click="handleToggleAllVisibility"
         />
         <v-btn
@@ -1294,7 +1319,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 density="compact"
                 size="26"
                 class="visibility-btn"
-                :class="{ 'is-hidden': !(item.visible ?? true) }"
+                :class="{ 'is-visible': (item.visible ?? true) }"
                 :title="(item.visible ?? true) ? 'Hide' : 'Show'"
                 @click.stop="toggleNodeVisibility(item.id)"
               />
@@ -1306,7 +1331,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 class="selection-lock-btn"
                 :class="{ 'is-locked': item.locked }"
                 
-                :title="item.locked ? '解除禁止鼠标选择' : '禁止鼠标选择'"
+                :title="item.locked ? 'Enable mouse selection' : 'Disable mouse selection'"
                 @click.stop="toggleNodeSelectionLock(item.id)"
               />
             </div>
@@ -1510,7 +1535,7 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .visibility-btn {
   margin-right: 0;
-  color: rgba(233, 236, 241, 0.72);
+  color: rgba(233, 236, 241, 0.58);
   transition: color 120ms ease;
 
   opacity: 0;
@@ -1527,6 +1552,13 @@ function handleTreeDragLeave(event: DragEvent) {
 }
 .visibility-btn.is-hidden {
   color: rgba(233, 236, 241, 0.38);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.visibility-btn.is-visible {
+  color: rgba(233, 236, 241, 0.9);
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
