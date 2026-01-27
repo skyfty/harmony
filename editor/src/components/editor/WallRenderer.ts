@@ -135,6 +135,35 @@ function resolveWallSmoothingFromNode(node: SceneNode): number {
   return clampWallProps(component.props ?? null).smoothing
 }
 
+function resolveWallEffectiveDefinition(
+  definition: WallDynamicMesh,
+  props: WallComponentProps | null,
+): WallDynamicMesh {
+  if (!props || !Array.isArray(definition.segments) || definition.segments.length === 0) {
+    return definition
+  }
+
+  const height = props.height
+  const width = props.width
+  const thickness = props.thickness
+
+  let changed = false
+  const nextSegments = definition.segments.map((segment) => {
+    const segAny = segment as any
+    if (segAny.height !== height || segAny.width !== width || segAny.thickness !== thickness) {
+      changed = true
+    }
+    return {
+      ...segment,
+      height,
+      width,
+      thickness,
+    } as any
+  })
+
+  return changed ? ({ type: 'Wall', segments: nextSegments } as WallDynamicMesh) : definition
+}
+
 const wallSyncPosHelper = new THREE.Vector3()
 const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
 const wallSyncBaseSizeHelper = new THREE.Vector3()
@@ -791,15 +820,19 @@ export function createWallRenderer(options: WallRendererOptions) {
     wallModelRequestCache.set(assetId, promise)
   }
 
-  function ensureWallGroup(container: THREE.Object3D, node: SceneNode, signatureKey: string): THREE.Group {
+  function ensureWallGroup(
+    container: THREE.Object3D,
+    node: SceneNode,
+    signatureKey: string,
+    wallDefinition: WallDynamicMesh,
+    smoothing: number,
+  ): THREE.Group {
     const userData = container.userData ?? (container.userData = {})
     let wallGroup = userData.wallGroup as THREE.Group | undefined
     if (wallGroup) {
       return wallGroup
     }
 
-    const wallDefinition = node.dynamicMesh as WallDynamicMesh
-    const smoothing = resolveWallSmoothingFromNode(node)
     wallGroup = createWallGroup(wallDefinition, { smoothing })
     wallGroup.userData.nodeId = node.id
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, { smoothing })
@@ -865,6 +898,9 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     const isAirWall = Boolean(wallComponent?.props?.isAirWall)
 
+    const wallProps = wallComponent ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined) : null
+    const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
+
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
@@ -878,6 +914,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       ),
     ).sort()
     const definition = node.dynamicMesh as WallDynamicMesh
+    const effectiveDefinition = resolveWallEffectiveDefinition(definition, wallProps)
     const canHaveCornerJoints = cornerAssetIds.length > 0 && definition.segments.length >= 2
     const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
 
@@ -890,13 +927,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
-        node.dynamicMesh as WallDynamicMesh,
+        effectiveDefinition,
         signatureKey,
-        { smoothing: resolveWallSmoothingFromNode(node) },
+        { smoothing },
       )
       applyAirWallVisualToWallGroup(wallGroup, true)
       return
@@ -908,13 +945,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
-        node.dynamicMesh as WallDynamicMesh,
+        effectiveDefinition,
         signatureKey,
-        { smoothing: resolveWallSmoothingFromNode(node) },
+        { smoothing },
       )
 
       // Editor-only visual: air walls are semi-transparent so they can be distinguished.
@@ -948,13 +985,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
-        node.dynamicMesh as WallDynamicMesh,
+        effectiveDefinition,
         signatureKey,
-        { smoothing: resolveWallSmoothingFromNode(node) },
+        { smoothing },
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return
@@ -1055,13 +1092,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       delete userData.instancedBounds
       options.removeInstancedPickProxy(container)
 
-      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      const wallGroup = ensureWallGroup(container, node, signatureKey, effectiveDefinition, smoothing)
       wallGroup.visible = true
       updateWallGroupIfNeeded(
         wallGroup,
-        node.dynamicMesh as WallDynamicMesh,
+        effectiveDefinition,
         signatureKey,
-        { smoothing: resolveWallSmoothingFromNode(node) },
+        { smoothing },
       )
       applyAirWallVisualToWallGroup(wallGroup, false)
       return
