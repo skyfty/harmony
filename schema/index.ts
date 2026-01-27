@@ -14,7 +14,7 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
 
-export { getDefaultUvDebugTexture, getDefaultGridDebugTexture, createUvDebugMaterial } from './debugTextures'
+export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
 export { TerrainScatterCategories } from './terrain-scatter'
 export type { TerrainScatterCategory } from './terrain-scatter'
