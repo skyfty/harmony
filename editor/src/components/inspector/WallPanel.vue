@@ -35,12 +35,9 @@ const isApplyingDimensions = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogTarget = ref<'body' | 'joint' | 'cap' | 'corner' | null>(null)
+const assetDialogTarget = ref<'body' | 'cap' | 'corner' | null>(null)
 const assetDialogCornerIndex = ref<number | null>(null)
 const assetDialogTitle = computed(() => {
-  if (assetDialogTarget.value === 'joint') {
-    return 'Select Wall Joint Asset'
-  }
   if (assetDialogTarget.value === 'cap') {
     return 'Select Wall End Cap Asset'
   }
@@ -66,28 +63,16 @@ const overwriteTargetFilename = ref<string | null>(null)
 
 
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
-const jointDropAreaRef = ref<HTMLElement | null>(null)
 const capDropAreaRef = ref<HTMLElement | null>(null)
 const bodyDropActive = ref(false)
-const jointDropActive = ref(false)
 const capDropActive = ref(false)
 const bodyDropProcessing = ref(false)
-const jointDropProcessing = ref(false)
 const capDropProcessing = ref(false)
 const bodyFeedbackMessage = ref<string | null>(null)
-const jointFeedbackMessage = ref<string | null>(null)
 const capFeedbackMessage = ref<string | null>(null)
 
 const bodyAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyAssetId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.getAsset(assetId) ?? null
-})
-
-const jointAsset = computed(() => {
-  const assetId = wallComponent.value?.props?.jointAssetId
   if (!assetId) {
     return null
   }
@@ -117,16 +102,19 @@ function clampAngleDegrees(value: unknown, fallback: number): number {
   return Math.max(0, Math.min(180, num))
 }
 
+function clampTolerance(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return fallback
+  }
+  return Math.max(0, Math.min(90, num))
+}
+
 function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
   const assetId = typeof row?.assetId === 'string' && row.assetId.trim().length ? row.assetId : null
-  let minAngle = clampAngleDegrees(row?.minAngle, 0)
-  let maxAngle = clampAngleDegrees(row?.maxAngle, 180)
-  if (minAngle > maxAngle) {
-    const swap = minAngle
-    minAngle = maxAngle
-    maxAngle = swap
-  }
-  return { assetId, minAngle, maxAngle }
+  const angle = clampAngleDegrees((row as any)?.angle, 90)
+  const tolerance = clampTolerance((row as any)?.tolerance, 5)
+  return { assetId, angle, tolerance } as WallCornerModelRow
 }
 
 function commitCornerModels(next: WallCornerModelRow[]): void {
@@ -139,7 +127,8 @@ function commitCornerModels(next: WallCornerModelRow[]): void {
 }
 
 function addCornerModel(): void {
-  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, minAngle: 0, maxAngle: 180 })]
+  // Corner model rules use interior angle semantics (straight = 180°).
+  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, angle: 90, tolerance: 5 } as any)]
   commitCornerModels(next)
 }
 
@@ -189,15 +178,12 @@ watch(
 
 watch(selectedNode, () => {
   bodyDropActive.value = false
-  jointDropActive.value = false
   capDropActive.value = false
   wallPresetDropActive.value = false
   bodyDropProcessing.value = false
-  jointDropProcessing.value = false
   capDropProcessing.value = false
   wallPresetFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
-  jointFeedbackMessage.value = null
   capFeedbackMessage.value = null
 })
 
@@ -373,14 +359,12 @@ function cancelOverwriteWallPreset(): void {
   overwriteTargetFilename.value = null
 }
 
-function openWallAssetDialog(target: 'body' | 'joint' | 'cap', event?: MouseEvent): void {
+function openWallAssetDialog(target: 'body' | 'cap', event?: MouseEvent): void {
   assetDialogTarget.value = target
   assetDialogSelectedId.value =
     target === 'body'
       ? wallComponent.value?.props?.bodyAssetId ?? ''
-      : target === 'joint'
-        ? wallComponent.value?.props?.jointAssetId ?? ''
-        : (wallComponent.value?.props?.endCapAssetId ?? '')
+      : (wallComponent.value?.props?.endCapAssetId ?? '')
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
@@ -405,9 +389,6 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     if (target === 'body') {
       bodyFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: null })
-    } else if (target === 'joint') {
-      jointFeedbackMessage.value = null
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: null })
     } else if (target === 'cap') {
       capFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: null } as any)
@@ -428,9 +409,6 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   if (target === 'body') {
     bodyFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: asset.id })
-  } else if (target === 'joint') {
-    jointFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: asset.id })
   } else if (target === 'cap') {
     capFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: asset.id } as any)
@@ -486,48 +464,6 @@ async function assignWallBodyAsset(event: DragEvent) {
     bodyFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
   } finally {
     bodyDropProcessing.value = false
-  }
-}
-
-async function assignWallJointAsset(event: DragEvent) {
-  event.preventDefault()
-  jointDropActive.value = false
-  jointFeedbackMessage.value = null
-
-  const nodeId = selectedNodeId.value
-  const component = wallComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-  if (jointDropProcessing.value) {
-    return
-  }
-
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
-    jointFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
-    return
-  }
-
-  const invalid = validateWallAssetId(assetId)
-  if (invalid) {
-    jointFeedbackMessage.value = invalid
-    return
-  }
-
-  if (assetId === wallComponent.value?.props?.jointAssetId) {
-    jointFeedbackMessage.value = 'This model is already assigned.'
-    return
-  }
-
-  jointDropProcessing.value = true
-  try {
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: assetId })
-  } catch (error) {
-    console.error('Failed to assign wall joint asset model', error)
-    jointFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
-  } finally {
-    jointDropProcessing.value = false
   }
 }
 
@@ -908,41 +844,9 @@ function applyAirWallUpdate(rawValue: unknown) {
           <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
         </div>
 
-        <div
-          class="asset-model-panel"
-          ref="jointDropAreaRef"
-          :class="{ 'is-active': jointDropActive, 'is-processing': jointDropProcessing }"
-          @dragenter.prevent="jointDropActive = true"
-          @dragover.prevent="jointDropActive = true"
-          @dragleave="(e) => { if (shouldDeactivateDropArea(jointDropAreaRef, e)) jointDropActive = false }"
-          @drop="assignWallJointAsset"
-        >
-          <div v-if="jointAsset" class="asset-summary">
-            <div
-              class="asset-thumbnail"
-              :style="jointAsset.thumbnail?.trim() ? { backgroundImage: `url(${jointAsset.thumbnail})` } : (jointAsset.previewColor ? { backgroundColor: jointAsset.previewColor } : undefined)"
-              @click.stop="openWallAssetDialog('joint', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">{{ jointAsset.name }}</div>
-              <div class="asset-subtitle">Wall joint model · {{ jointAsset.id.slice(0, 8) }}</div>
-            </div>
-          </div>
-          <div v-else class="asset-summary empty">
-            <div
-              class="asset-thumbnail placeholder"
-              @click.stop="openWallAssetDialog('joint', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">No wall joint model assigned</div>
-            </div>
-          </div>
-          <p v-if="jointFeedbackMessage" class="asset-feedback">{{ jointFeedbackMessage }}</p>
-        </div>
-
         <div class="wall-corner-models">
           <div class="wall-corner-header">
-            <div class="wall-corner-title">Corner Models (by angle)</div>
+            <div class="wall-corner-title">Corner Models</div>
             <v-btn
               size="small"
               density="compact"
@@ -956,7 +860,7 @@ function applyAirWallUpdate(rawValue: unknown) {
           </div>
 
           <div v-if="!cornerModels.length" class="wall-corner-empty">
-            <span class="hint-text">No corner overrides. Uses the default joint model.</span>
+            <span class="hint-text">No corner models configured. No corner instances will be generated.</span>
           </div>
 
           <div
@@ -986,45 +890,42 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
 
             <div class="wall-corner-fields">
-              <div class="wall-corner-asset-text">
-                <div class="asset-name">
-                  {{ resolveCornerModelAsset(entry.assetId)?.name ?? 'Select Corner Model' }}
-                </div>
-                <div class="asset-subtitle" v-if="resolveCornerModelAsset(entry.assetId)">
-                  {{ resolveCornerModelAsset(entry.assetId)!.id.slice(0, 8) }}
-                </div>
-                <div class="asset-subtitle" v-else>
-                  Uses angle range to match a corner
-                </div>
-              </div>
+      
 
               <div class="wall-corner-angle-fields">
-                <v-text-field
-                  density="compact"
-                  variant="underlined"
-                  type="number"
-                  label="Min (°)"
-                  :model-value="entry.minAngle"
-                  min="0"
-                  max="180"
-                  step="1"
-                  inputmode="decimal"
-                  @update:modelValue="(value) => updateCornerModel(index, { minAngle: Number(value) })"
-                  @blur="() => updateCornerModel(index, {})"
-                />
-                <v-text-field
-                  density="compact"
-                  variant="underlined"
-                  type="number"
-                  label="Max (°)"
-                  :model-value="entry.maxAngle"
-                  min="0"
-                  max="180"
-                  step="1"
-                  inputmode="decimal"
-                  @update:modelValue="(value) => updateCornerModel(index, { maxAngle: Number(value) })"
-                  @blur="() => updateCornerModel(index, {})"
-                />
+                <div class="wall-corner-angle-label">
+                  Interior: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
+                </div>
+                <div class="wall-corner-angle-inputs">
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Interior Angle (°)"
+                    :model-value="(entry as any).angle ?? 90"
+                    min="0"
+                    max="180"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { angle: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Tolerance (°)"
+                    :model-value="(entry as any).tolerance ?? 5"
+                    min="0"
+                    max="90"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1205,6 +1106,17 @@ function applyAirWallUpdate(rawValue: unknown) {
 }
 
 .wall-corner-angle-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wall-corner-angle-label {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.wall-corner-angle-inputs {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;

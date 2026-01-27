@@ -260,18 +260,17 @@ export function createWallRenderer(options: WallRendererOptions) {
       | undefined
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const jointAssetId = wallComponent?.props?.jointAssetId ?? null
     const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
       : []
     const hasCornerAssets = cornerModels.some((entry) => typeof entry?.assetId === 'string' && entry.assetId.trim().length)
-    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId || hasCornerAssets)
+    const definition = node.dynamicMesh as WallDynamicMesh
+    const canHaveCornerJoints = hasCornerAssets && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
     }
-
-    const definition = node.dynamicMesh as WallDynamicMesh
     const bindings: WallDragBindingEntry[] = []
 
     if (bodyAssetId) {
@@ -289,10 +288,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
-    const jointBuckets = computeWallJointLocalMatricesByAsset(definition, {
-      cornerModels,
-      fallbackAssetId: jointAssetId,
-    })
+    const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
     if (jointBuckets.matricesByAssetId.size) {
       const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
       for (const assetId of sortedAssetIds) {
@@ -318,7 +314,7 @@ export function createWallRenderer(options: WallRendererOptions) {
             assetId: endCapAssetId,
             localMatrices,
             bindingIdPrefix: `wall-cap:${nodeId}:`,
-            useNodeIdForIndex0: !bodyAssetId && !jointAssetId && !jointBuckets.primaryAssetId,
+            useNodeIdForIndex0: !bodyAssetId && !jointBuckets.primaryAssetId,
           })
         }
       }
@@ -506,17 +502,32 @@ export function createWallRenderer(options: WallRendererOptions) {
   function pickWallCornerModel(
     angleRadians: number,
     rules: WallCornerModelRule[],
-    fallbackAssetId: string | null,
   ): { assetId: string | null; extraYawRadians: number } {
     if (!Number.isFinite(angleRadians)) {
-      return { assetId: fallbackAssetId, extraYawRadians: 0 }
+      return { assetId: null, extraYawRadians: 0 }
     }
 
     const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
-    const complementDeg = 180 - angleDeg
+
+    // Special-case straight joints (interior angle ≈ 180°): if a 180° rule exists,
+    // always use it and ignore tolerance. Use a small radian epsilon.
+    const RAD_STRAIGHT_EPS = 1e-3
+    if (Math.abs(angleRadians - Math.PI) < RAD_STRAIGHT_EPS) {
+      for (const rule of rules) {
+        const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId : null
+        if (!assetId) {
+          continue
+        }
+        const rawAngle = typeof (rule as any).angle === 'number' ? (rule as any).angle : Number((rule as any).angle)
+        const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
+        if (ruleAngle >= 180 - 1e-6) {
+          return { assetId, extraYawRadians: 0 }
+        }
+      }
+    }
 
     let best:
-      | { assetId: string; extraYawRadians: number; score: number; rangeWidth: number }
+      | { assetId: string; diff: number; ruleAngle: number }
       | null = null
 
     for (const rule of rules) {
@@ -525,54 +536,43 @@ export function createWallRenderer(options: WallRendererOptions) {
         continue
       }
 
-      const rawMin = typeof rule.minAngle === 'number' ? rule.minAngle : Number((rule as any).minAngle)
-      const rawMax = typeof rule.maxAngle === 'number' ? rule.maxAngle : Number((rule as any).maxAngle)
-      const min = Number.isFinite(rawMin) ? Math.max(0, Math.min(180, rawMin)) : 0
-      const max = Number.isFinite(rawMax) ? Math.max(0, Math.min(180, rawMax)) : 180
-      const minAngle = Math.min(min, max)
-      const maxAngle = Math.max(min, max)
-      const center = (minAngle + maxAngle) * 0.5
-      const rangeWidth = Math.max(0, maxAngle - minAngle)
+      const rawAngle = typeof (rule as any).angle === 'number' ? (rule as any).angle : Number((rule as any).angle)
+      const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
+      const rawTolerance = typeof (rule as any).tolerance === 'number' ? (rule as any).tolerance : Number((rule as any).tolerance)
+      const tolerance = Number.isFinite(rawTolerance) ? Math.max(0, Math.min(90, rawTolerance)) : 5
 
-      const inDirect = angleDeg + 1e-6 >= minAngle && angleDeg - 1e-6 <= maxAngle
-      const inComplement = complementDeg + 1e-6 >= minAngle && complementDeg - 1e-6 <= maxAngle
+      const diff = Math.abs(angleDeg - ruleAngle)
 
-      if (!inDirect && !inComplement) {
+      // Only consider this rule if the difference is within tolerance.
+      // NOTE: We intentionally do NOT use supplement angle (180 - angle) matching.
+      if (diff > tolerance + 1e-6) {
         continue
       }
-
-      const directScore = inDirect ? Math.abs(angleDeg - center) : Number.POSITIVE_INFINITY
-      const complementScore = inComplement ? Math.abs(complementDeg - center) : Number.POSITIVE_INFINITY
-
-      const useComplement = complementScore < directScore
-      const score = useComplement ? complementScore : directScore
-      const extraYawRadians = useComplement ? Math.PI : 0
 
       if (!best) {
-        best = { assetId, extraYawRadians, score, rangeWidth }
+        best = { assetId, diff, ruleAngle }
         continue
       }
 
-      if (score + 1e-6 < best.score) {
-        best = { assetId, extraYawRadians, score, rangeWidth }
+      if (diff + 1e-6 < best.diff) {
+        best = { assetId, diff, ruleAngle }
         continue
       }
 
-      // Tie-breaker: prefer narrower ranges if score ties.
-      if (Math.abs(score - best.score) <= 1e-6 && rangeWidth + 1e-6 < best.rangeWidth) {
-        best = { assetId, extraYawRadians, score, rangeWidth }
+      if (Math.abs(diff - best.diff) <= 1e-6 && ruleAngle + 1e-6 < best.ruleAngle) {
+        best = { assetId, diff, ruleAngle }
       }
     }
 
     if (best) {
-      return { assetId: best.assetId, extraYawRadians: best.extraYawRadians }
+      return { assetId: best.assetId, extraYawRadians: 0 }
     }
-    return { assetId: fallbackAssetId, extraYawRadians: 0 }
+    return { assetId: null, extraYawRadians: 0 }
   }
 
   function computeWallJointLocalMatricesByAsset(
     definition: WallDynamicMesh,
-    options: { cornerModels?: WallCornerModelRule[]; fallbackAssetId?: string | null } = {},
+    options: { cornerModels?: WallCornerModelRule[] } = {},
   ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null } {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     let primaryAssetId: string | null = null
@@ -582,9 +582,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const rules = Array.isArray(options.cornerModels) ? options.cornerModels : []
-    const fallbackAssetId = typeof options.fallbackAssetId === 'string' && options.fallbackAssetId.trim().length
-      ? options.fallbackAssetId
-      : null
 
     const pushMatrix = (assetId: string, matrix: THREE.Matrix4) => {
       const bucket = matricesByAssetId.get(assetId) ?? []
@@ -602,47 +599,68 @@ export function createWallRenderer(options: WallRendererOptions) {
       next: WallDynamicMesh['segments'][number],
       corner: THREE.Vector3,
     ) => {
+      // 1) 计算当前段的入射向量（incoming）
+      //    - 将当前段的 start/end 写入临时向量（只取 XZ 平面）
       wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z)
       wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z)
       wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
+      // 忽略 Y 分量，使计算仅在 XZ 平面进行
       wallSyncIncomingHelper.y = 0
 
+      // 2) 计算下一段的出射向量（outgoing）
+      //    - 将下一段的 start/end 写入临时向量（只取 XZ 平面）
       wallSyncStartHelper.set(next.start.x, next.start.y, next.start.z)
       wallSyncEndHelper.set(next.end.x, next.end.y, next.end.z)
       wallSyncOutgoingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
       wallSyncOutgoingHelper.y = 0
 
+      // 3) 如果任一向量长度非常小（退化段）则放弃该拐角
       if (wallSyncIncomingHelper.lengthSq() < WALL_SYNC_EPSILON || wallSyncOutgoingHelper.lengthSq() < WALL_SYNC_EPSILON) {
         return
       }
+
+      // 4) 归一化向量以便计算角度与方向
       wallSyncIncomingHelper.normalize()
       wallSyncOutgoingHelper.normalize()
 
-      const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
-      const angle = Math.acos(dot)
-      if (!Number.isFinite(angle) || angle < 1e-3) {
+      // 5) 通过点积计算“内角”（straight = 180°）
+      //    - 转角: acos(incoming·outgoing)
+      //    - 内角: acos((-incoming)·outgoing) = π - 转角
+      const dotInterior = THREE.MathUtils.clamp(-wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
+      const angle = Math.acos(dotInterior)
+      // 如果角度不是有效数值，则不放置拐角模型
+      if (!Number.isFinite(angle)) {
         return
       }
 
-      const selection = pickWallCornerModel(angle, rules, fallbackAssetId)
+      // 6) 根据角度与用户定义的规则选择一个拐角模型
+      const selection = pickWallCornerModel(angle, rules)
       if (!selection.assetId) {
+        // 未匹配到任何规则时，跳过该拐角
         return
       }
 
-      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
+      // 7) 计算“内角”的角平分线（bisector）作为模型朝向的基准
+      //    - 如果两向量几乎反向（相加后接近 0），使用出射向量作为退化情况下的朝向
+      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
       if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
         wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
       }
 
+      // 8) 将平分线转换为四元数（模型局部 +Z 轴对准平分线）
       const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'z')
+      // 9) 如果规则指定了额外的偏航（绕 Y 旋转），将其应用到四元数上
       if (selection.extraYawRadians) {
         wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, selection.extraYawRadians)
         quat.multiply(wallSyncYawQuatHelper)
       }
 
+      // 10) 组成最终的局部变换矩阵：位置 = 拐角点，旋转 = 计算出的四元数，缩放 = 单位缩放
       wallSyncScaleHelper.set(1, 1, 1)
       wallSyncPosHelper.copy(corner)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+
+      // 11) 将计算出的矩阵打包并推入对应 assetId 的矩阵数组中
       pushMatrix(selection.assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 
@@ -807,12 +825,28 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function removeWallGroup(container: THREE.Object3D): void {
     const userData = container.userData ?? (container.userData = {})
+
+    // Be defensive: remove any procedural wall groups that might have been left behind.
+    // (e.g. after switching to instanced wall models)
+    const candidates = container.children.filter((child) => {
+      const group = child as THREE.Group
+      return Boolean(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')
+    }) as THREE.Group[]
+
     const wallGroup = userData.wallGroup as THREE.Group | undefined
-    if (!wallGroup) {
+    if (wallGroup && !candidates.includes(wallGroup)) {
+      candidates.push(wallGroup)
+    }
+
+    if (!candidates.length) {
       return
     }
-    disposeWallGroupResources(wallGroup)
-    wallGroup.removeFromParent()
+
+    for (const group of candidates) {
+      disposeWallGroupResources(group)
+      group.removeFromParent()
+    }
+
     delete userData.wallGroup
   }
 
@@ -832,7 +866,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const isAirWall = Boolean(wallComponent?.props?.isAirWall)
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const jointAssetId = wallComponent?.props?.jointAssetId ?? null
     const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
@@ -844,7 +877,9 @@ export function createWallRenderer(options: WallRendererOptions) {
           .filter((id) => Boolean(id)),
       ),
     ).sort()
-    const wantsInstancing = Boolean(bodyAssetId || jointAssetId || endCapAssetId || cornerAssetIds.length)
+    const definition = node.dynamicMesh as WallDynamicMesh
+    const canHaveCornerJoints = cornerAssetIds.length > 0 && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
 
     const userData = container.userData ?? (container.userData = {})
 
@@ -887,29 +922,14 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    container.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
-        return
-      }
-      if (child.name === 'WallMesh') {
-        mesh.visible = false
-      }
-    })
-
-
 
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = Boolean(bodyAssetId && !getCachedModelObject(bodyAssetId))
-    const needsJointLoad = Boolean(jointAssetId && !getCachedModelObject(jointAssetId))
     const needsCornerLoad = cornerAssetIds.some((id) => !getCachedModelObject(id))
     const needsCapLoad = Boolean(endCapAssetId && !getCachedModelObject(endCapAssetId))
 
     if (needsBodyLoad && bodyAssetId) {
       scheduleWallAssetLoad(bodyAssetId, node.id, signatureKey)
-    }
-    if (needsJointLoad && jointAssetId) {
-      scheduleWallAssetLoad(jointAssetId, node.id, signatureKey)
     }
     if (needsCornerLoad) {
       cornerAssetIds.forEach((assetId) => {
@@ -922,7 +942,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       scheduleWallAssetLoad(endCapAssetId, node.id, signatureKey)
     }
 
-    if (needsBodyLoad || needsJointLoad || needsCornerLoad || needsCapLoad) {
+    if (needsBodyLoad || needsCornerLoad || needsCapLoad) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -940,11 +960,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    // Assets are ready: switch to instanced rendering and remove the procedural wall group.
-    removeWallGroup(container)
-
-    const definition = node.dynamicMesh as WallDynamicMesh
-    const primaryAssetId = bodyAssetId ?? jointAssetId ?? (cornerAssetIds[0] ?? null) ?? endCapAssetId
+    // Assets are ready: attempt instanced rendering.
+  const primaryAssetId = bodyAssetId ?? (cornerAssetIds[0] ?? null) ?? endCapAssetId
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
@@ -976,10 +993,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     {
-      const jointBuckets = computeWallJointLocalMatricesByAsset(definition, {
-        cornerModels,
-        fallbackAssetId: jointAssetId,
-      })
+      const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
       if (jointBuckets.matricesByAssetId.size) {
         const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
         for (const assetId of sortedAssetIds) {
@@ -1009,30 +1023,52 @@ export function createWallRenderer(options: WallRendererOptions) {
           hasBindings = true
         }
       }
-    }
 
-    if (endCapAssetId) {
-      const useNodeIdForIndex0 = !bodyAssetId && !jointAssetId && !cornerAssetIds.length
-      const group = getCachedModelObject(endCapAssetId)
-      if (group) {
-        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
-        if (localMatrices.length > 0) {
-          for (const localMatrix of localMatrices) {
-            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
-            hasWallBounds = true
+      if (endCapAssetId) {
+        const useNodeIdForIndex0 = !bodyAssetId && !jointBuckets.primaryAssetId
+        const group = getCachedModelObject(endCapAssetId)
+        if (group) {
+          const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+          if (localMatrices.length > 0) {
+            for (const localMatrix of localMatrices) {
+              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+              hasWallBounds = true
+            }
+            syncInstancedModelCommittedLocalMatrices({
+              nodeId: node.id,
+              assetId: endCapAssetId,
+              object: container,
+              localMatrices,
+              bindingIdPrefix: `wall-cap:${node.id}:`,
+              useNodeIdForIndex0,
+            })
+            hasBindings = hasBindings || localMatrices.length > 0
           }
-          syncInstancedModelCommittedLocalMatrices({
-            nodeId: node.id,
-            assetId: endCapAssetId,
-            object: container,
-            localMatrices,
-            bindingIdPrefix: `wall-cap:${node.id}:`,
-            useNodeIdForIndex0,
-          })
-          hasBindings = hasBindings || localMatrices.length > 0
         }
       }
     }
+
+    if (!hasBindings) {
+      // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      delete userData.instancedBounds
+      options.removeInstancedPickProxy(container)
+
+      const wallGroup = ensureWallGroup(container, node, signatureKey)
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        node.dynamicMesh as WallDynamicMesh,
+        signatureKey,
+        { smoothing: resolveWallSmoothingFromNode(node) },
+      )
+      applyAirWallVisualToWallGroup(wallGroup, false)
+      return
+    }
+
+    // Instanced rendering is active: remove the procedural wall group.
+    removeWallGroup(container)
 
     if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
       userData.instancedBounds = {

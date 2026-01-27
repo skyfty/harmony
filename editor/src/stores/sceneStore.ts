@@ -916,7 +916,6 @@ function normalizeNodeComponents(
         smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
-        jointAssetId: (existingProps as { jointAssetId?: string | null }).jointAssetId ?? baseProps.jointAssetId,
         endCapAssetId: (existingProps as { endCapAssetId?: string | null }).endCapAssetId ?? baseProps.endCapAssetId,
         cornerModels,
       }),
@@ -11631,7 +11630,13 @@ export const useSceneStore = defineStore('scene', {
       const wallProps = clampWallProps(component.props ?? null)
       const dependencyAssetIds = Array.from(
         new Set(
-          [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
+          [
+            wallProps.bodyAssetId,
+            wallProps.endCapAssetId,
+            ...(((wallProps as any).cornerModels ?? []) as any[])
+              .map((rule) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+              .filter((value) => value.length > 0),
+          ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
         ),
@@ -11805,7 +11810,13 @@ export const useSceneStore = defineStore('scene', {
 
       const dependencyAssetIds = Array.from(
         new Set(
-          [wallProps.bodyAssetId, wallProps.jointAssetId, wallProps.endCapAssetId]
+          [
+            wallProps.bodyAssetId,
+            wallProps.endCapAssetId,
+            ...(((wallProps as any).cornerModels ?? []) as any[])
+              .map((rule) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+              .filter((value) => value.length > 0),
+          ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
             .filter((value) => value.length > 0),
         ),
@@ -11850,7 +11861,6 @@ export const useSceneStore = defineStore('scene', {
         smoothing: wallProps.smoothing,
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
-        jointAssetId: wallProps.jointAssetId ?? null,
         endCapAssetId: wallProps.endCapAssetId ?? null,
         cornerModels: (wallProps as any).cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)
@@ -13896,7 +13906,6 @@ export const useSceneStore = defineStore('scene', {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
       bodyAssetId?: string | null
-      jointAssetId?: string | null,
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
@@ -13938,11 +13947,8 @@ export const useSceneStore = defineStore('scene', {
             const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
               ? payload.bodyAssetId
               : null
-            const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
-              ? payload.jointAssetId
-              : null
-            if (bodyAssetId || jointAssetId) {
-              this.updateNodeComponentProps(desiredId, wallComponent.id, { bodyAssetId, jointAssetId })
+            if (bodyAssetId) {
+              this.updateNodeComponentProps(desiredId, wallComponent.id, { bodyAssetId })
             }
           }
           return findNodeById(this.nodes, desiredId)
@@ -13965,18 +13971,14 @@ export const useSceneStore = defineStore('scene', {
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
             : null
-          const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
-            ? payload.jointAssetId
-            : null
 
-          if (bodyAssetId || jointAssetId) {
+          if (bodyAssetId) {
             const component = node.components?.[WALL_COMPONENT_TYPE] as
               | SceneNodeComponentState<WallComponentProps>
               | undefined
             if (component) {
               this.updateNodeComponentProps(node.id, component.id, {
                 bodyAssetId,
-                jointAssetId,
               })
             }
           }
@@ -14559,7 +14561,6 @@ export const useSceneStore = defineStore('scene', {
         const currentProps = clampWallProps(component.props as WallComponentProps)
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
-        const hasJointAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'jointAssetId')
         const hasEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'endCapAssetId')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
@@ -14576,17 +14577,17 @@ export const useSceneStore = defineStore('scene', {
             const entryB = arrB[i] as any
             const assetA = typeof entryA?.assetId === 'string' ? entryA.assetId : null
             const assetB = typeof entryB?.assetId === 'string' ? entryB.assetId : null
-            const minA = typeof entryA?.minAngle === 'number' ? entryA.minAngle : Number(entryA?.minAngle)
-            const minB = typeof entryB?.minAngle === 'number' ? entryB.minAngle : Number(entryB?.minAngle)
-            const maxA = typeof entryA?.maxAngle === 'number' ? entryA.maxAngle : Number(entryA?.maxAngle)
-            const maxB = typeof entryB?.maxAngle === 'number' ? entryB.maxAngle : Number(entryB?.maxAngle)
+            const angleA = typeof entryA?.angle === 'number' ? entryA.angle : Number(entryA?.angle)
+            const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
+            const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
+            const toleranceB = typeof entryB?.tolerance === 'number' ? entryB.tolerance : Number(entryB?.tolerance)
             if ((assetA ?? null) !== (assetB ?? null)) {
               return false
             }
-            if (!Number.isFinite(minA) || !Number.isFinite(minB) || Math.abs(minA - minB) > 1e-6) {
+            if (!Number.isFinite(angleA) || !Number.isFinite(angleB) || Math.abs(angleA - angleB) > 1e-6) {
               return false
             }
-            if (!Number.isFinite(maxA) || !Number.isFinite(maxB) || Math.abs(maxA - maxB) > 1e-6) {
+            if (!Number.isFinite(toleranceA) || !Number.isFinite(toleranceB) || Math.abs(toleranceA - toleranceB) > 1e-6) {
               return false
             }
           }
@@ -14606,9 +14607,6 @@ export const useSceneStore = defineStore('scene', {
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
-          jointAssetId: hasJointAssetId
-            ? (typedPatch.jointAssetId as string | null | undefined)
-            : currentProps.jointAssetId,
           endCapAssetId: hasEndCapAssetId
             ? (typedPatch.endCapAssetId as string | null | undefined)
             : (currentProps as any).endCapAssetId,
@@ -14624,7 +14622,6 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
-          (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null) &&
           ((currentProps as any).endCapAssetId ?? null) === ((merged as any).endCapAssetId ?? null) &&
           cornerModelsEqual((currentProps as any).cornerModels, (merged as any).cornerModels)
         if (unchanged) {

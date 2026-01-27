@@ -245,8 +245,15 @@ class SceneGraphBuilder {
           if (props.bodyAssetId) {
             ids.add(props.bodyAssetId);
           }
-          if (props.jointAssetId) {
-            ids.add(props.jointAssetId);
+          if ((props as any).endCapAssetId) {
+            ids.add((props as any).endCapAssetId);
+          }
+          const cornerModels = Array.isArray((props as any).cornerModels) ? (props as any).cornerModels : []
+          for (const rule of cornerModels) {
+            const assetId = typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''
+            if (assetId) {
+              ids.add(assetId)
+            }
           }
         } else if (meshInfo?.type === 'Road') {
           const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
@@ -490,8 +497,15 @@ class SceneGraphBuilder {
         if (props.bodyAssetId) {
           ids.add(props.bodyAssetId);
         }
-        if (props.jointAssetId) {
-          ids.add(props.jointAssetId);
+        if ((props as any).endCapAssetId) {
+          ids.add((props as any).endCapAssetId);
+        }
+        const cornerModels = Array.isArray((props as any).cornerModels) ? (props as any).cornerModels : []
+        for (const rule of cornerModels) {
+          const assetId = typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''
+          if (assetId) {
+            ids.add(assetId)
+          }
         }
       }
       if (Array.isArray(node.children) && node.children.length) {

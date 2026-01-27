@@ -15,10 +15,14 @@ export const WALL_DEFAULT_SMOOTHING = 0.05
 export type WallCornerModelRule = {
   /** Asset id of the corner/joint model to be instanced. */
   assetId: string | null
-  /** Minimum supported corner angle (degrees, inclusive). */
-  minAngle: number
-  /** Maximum supported corner angle (degrees, inclusive). */
-  maxAngle: number
+  /**
+   * Target interior corner angle (degrees). Straight = 180°.
+   * Runtime picks the closest match within tolerance.
+   * Special-case: if the actual interior angle is straight (≈180°) and a 180° rule exists, it is used (tolerance is ignored).
+   */
+  angle: number
+  /** Tolerance range (degrees). Model is only selected if actual interior angle is within ±tolerance of target angle. */
+  tolerance: number
 }
 
 export interface WallComponentProps {
@@ -32,11 +36,10 @@ export interface WallComponentProps {
    */
   isAirWall: boolean
   bodyAssetId?: string | null
-  jointAssetId?: string | null
   endCapAssetId?: string | null
   /**
    * Optional corner model overrides. At runtime the system will pick a model
-   * based on the corner angle between adjacent wall segments.
+   * based on the interior corner angle between adjacent wall segments.
    */
   cornerModels?: WallCornerModelRule[]
 }
@@ -69,19 +72,22 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     return Math.max(0, Math.min(180, num))
   }
 
+  const normalizeTolerance = (value: unknown, fallback: number): number => {
+    const num = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(num)) {
+      return fallback
+    }
+    return Math.max(0, Math.min(90, num))
+  }
+
   const rawCornerModels = (props as WallComponentProps | undefined)?.cornerModels
   const cornerModels = Array.isArray(rawCornerModels)
     ? rawCornerModels
       .map((entry) => {
         const assetId = normalizeAssetId((entry as WallCornerModelRule | undefined)?.assetId)
-        let minAngle = normalizeAngle((entry as WallCornerModelRule | undefined)?.minAngle, 0)
-        let maxAngle = normalizeAngle((entry as WallCornerModelRule | undefined)?.maxAngle, 180)
-        if (minAngle > maxAngle) {
-          const swap = minAngle
-          minAngle = maxAngle
-          maxAngle = swap
-        }
-        return { assetId, minAngle, maxAngle } satisfies WallCornerModelRule
+        const angle = normalizeAngle((entry as WallCornerModelRule | undefined)?.angle, 90)
+        const tolerance = normalizeTolerance((entry as WallCornerModelRule | undefined)?.tolerance, 5)
+        return { assetId, angle, tolerance } satisfies WallCornerModelRule
       })
     : []
 
@@ -95,7 +101,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     smoothing,
     isAirWall: normalizedIsAirWall,
     bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
-    jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
     endCapAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.endCapAssetId),
     cornerModels,
   }
@@ -110,7 +115,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       smoothing: WALL_DEFAULT_SMOOTHING,
       isAirWall: false,
       bodyAssetId: null,
-      jointAssetId: null,
       endCapAssetId: null,
       cornerModels: [],
     }
@@ -134,13 +138,12 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     smoothing: props.smoothing,
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
-    jointAssetId: props.jointAssetId ?? null,
     endCapAssetId: props.endCapAssetId ?? null,
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
         assetId: typeof entry?.assetId === 'string' ? entry.assetId : null,
-        minAngle: typeof entry?.minAngle === 'number' ? entry.minAngle : Number(entry?.minAngle),
-        maxAngle: typeof entry?.maxAngle === 'number' ? entry.maxAngle : Number(entry?.maxAngle),
+        angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
+        tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
       }))
       : [],
   }
@@ -209,7 +212,6 @@ export function createWallComponentState(
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
-    jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
     endCapAssetId: overrides?.endCapAssetId ?? defaults.endCapAssetId,
     cornerModels: overrides?.cornerModels ?? (defaults as WallComponentProps).cornerModels,
   })

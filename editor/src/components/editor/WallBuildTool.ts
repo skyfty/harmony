@@ -31,7 +31,6 @@ export type WallBuildToolHandle = {
 
 export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
-  jointAssetId: string | null
   brushPresetAssetId: string | null
   brushPresetData: WallPresetData | null
 }
@@ -72,7 +71,6 @@ export function createWallBuildTool(options: {
       nodeId: null,
       dimensions: options.normalizeWallDimensionsForViewport({}),
       bodyAssetId: null,
-      jointAssetId: null,
       brushPresetAssetId: null,
       brushPresetData: null,
     }
@@ -165,7 +163,6 @@ export function createWallBuildTool(options: {
             | SceneNodeComponentState<WallComponentProps>
             | undefined
           target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-          target.jointAssetId = wallComponent?.props?.jointAssetId ?? null
           target.brushPresetAssetId = null
           target.brushPresetData = null
           hydrated = true
@@ -188,7 +185,6 @@ export function createWallBuildTool(options: {
             thickness: wallProps.thickness,
           })
           target.bodyAssetId = wallProps.bodyAssetId ?? null
-          target.jointAssetId = wallProps.jointAssetId ?? null
         }
       }
 
@@ -261,7 +257,6 @@ export function createWallBuildTool(options: {
         segments: segmentPayload,
         dimensions: session.dimensions,
         bodyAssetId: session.bodyAssetId,
-        jointAssetId: session.jointAssetId,
       })
       if (!created) {
         cancelDrag()
