@@ -13,6 +13,11 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
       return
     }
 
+ ;(mesh as any).material = createUvDebugMaterial({
+        tint: 0xffffff,
+        side: THREE.DoubleSide,
+      })
+      
     const rawMaterial = (mesh as any).material as THREE.Material | THREE.Material[] | null | undefined
     if (!rawMaterial || (Array.isArray(rawMaterial) && rawMaterial.length === 0)) {
       ;(mesh as any).material = createUvDebugMaterial({
@@ -21,7 +26,10 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
       })
       return
     }
-
+ ;(mesh as any).material = createUvDebugMaterial({
+        tint: 0xffffff,
+        side: THREE.DoubleSide,
+      })
     if (Array.isArray(rawMaterial)) {
       let changed = false
       const normalized = rawMaterial.map((material) => {
