@@ -9800,7 +9800,70 @@ export const useSceneStore = defineStore('scene', {
         })
       })
       this.nodes = [...this.nodes]
+      // queue visibility patches for changed nodes so the runtime updates
+      changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
       commitSceneSnapshot(this)
+    },
+
+    setAllUserNodesVisibility(
+      visible: boolean,
+      options: {
+        fullSyncThreshold?: number
+      } = {},
+    ): { changedCount: number } {
+      const thresholdRaw = options.fullSyncThreshold
+      const fullSyncThreshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw as number)) : 200
+
+      const changedIds: string[] = []
+
+      const scan = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          const isSystemNode = node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID
+          if (!isSystemNode) {
+            const currentVisible = (node as any).visible ?? true
+            if (currentVisible !== visible) {
+              changedIds.push(node.id)
+            }
+          }
+
+          if (node.children?.length) {
+            scan(node.children)
+          }
+        })
+      }
+
+      scan(this.nodes)
+      if (!changedIds.length) {
+        return { changedCount: 0 }
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, visible: true })))
+
+      const changedSet = new Set(changedIds)
+      const apply = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (changedSet.has(node.id)) {
+            ;(node as any).visible = visible
+          }
+          if (node.children?.length) {
+            apply(node.children)
+          }
+        })
+      }
+
+      apply(this.nodes)
+      this.nodes = [...this.nodes]
+
+      if (changedIds.length > fullSyncThreshold) {
+        // Large batches: avoid generating a huge patch list.
+        // Queue a single structure patch so the viewport does a full sync.
+        this.queueSceneStructurePatch('bulkVisibility')
+      } else {
+        changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
+      }
+
+      commitSceneSnapshot(this)
+      return { changedCount: changedIds.length }
     },
     toggleSelectionVisibility(): boolean {
       const selection = [...this.selectedNodeIds]

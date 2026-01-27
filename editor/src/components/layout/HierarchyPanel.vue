@@ -108,10 +108,31 @@ const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyIt
 const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
-const areAllNodesVisible = computed(() => flattenedHierarchyItems.value.every((item) => item.visible))
-const anyNodeHidden = computed(() => flattenedHierarchyItems.value.some((item) => !item.visible))
-const visibilityToggleIcon = computed(() => (areAllNodesVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'))
-const visibilityToggleTitle = computed(() => (areAllNodesVisible.value ? '隐藏所有节点' : '显示所有节点'))
+
+// Global visibility toggle: exclude system nodes and skip selection-locked nodes.
+const visibilityCandidates = computed(() =>
+  flattenedHierarchyItems.value.filter(
+    (item) => item.id !== GROUND_NODE_ID && item.id !== SKY_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
+  ),
+)
+const visibilityToggleItems = computed(() => visibilityCandidates.value)
+const hasVisibilityToggleNodes = computed(() => visibilityCandidates.value.length > 0)
+const areAllNodesVisible = computed(
+  () => hasVisibilityToggleNodes.value && visibilityToggleItems.value.every((item) => item.visible),
+)
+const anyNodeHidden = computed(() => visibilityToggleItems.value.some((item) => !item.visible))
+const visibilityToggleIcon = computed(() => {
+  if (!hasVisibilityToggleNodes.value) {
+    return 'mdi-eye-outline'
+  }
+  return areAllNodesVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
+})
+const visibilityToggleTitle = computed(() => {
+  if (!hasVisibilityToggleNodes.value) {
+    return '无可切换的节点（跳过系统节点）'
+  }
+  return areAllNodesVisible.value ? '隐藏所有节点（跳过系统节点）' : '显示所有节点（跳过系统节点）'
+})
 const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item) => item.locked))
 const areAllNodesLocked = computed(
   () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item) => item.locked),
@@ -669,8 +690,12 @@ async function handleUpdatePrefab() {
 }
 
 function handleToggleAllVisibility() {
-  const nextVisible = !areAllNodesVisible.value
-  sceneStore.setAllNodesVisibility(nextVisible)
+  if (!hasVisibilityToggleNodes.value) {
+    return
+  }
+  // Mixed state rule: if any eligible node is hidden -> show all; else hide all.
+  const nextVisible = anyNodeHidden.value ? true : false
+  sceneStore.setAllUserNodesVisibility(nextVisible)
 }
 
 function handleToggleAllSelectionLock() {
@@ -1231,7 +1256,7 @@ function handleTreeDragLeave(event: DragEvent) {
           density="compact"
           size="small"
           :title="visibilityToggleTitle"
-          :disabled="!hasHierarchyNodes"
+          :disabled="!hasVisibilityToggleNodes"
           @click="handleToggleAllVisibility"
         />
         <v-btn
