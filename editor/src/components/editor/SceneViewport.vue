@@ -342,15 +342,12 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
   }
 }, { flush: 'sync' })
 
-const groundTerrainScatterUpdatedAt = computed(() => {
+const groundTerrainScatterInstancesUpdatedAt = computed(() => {
   const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
   if (!ground || ground.dynamicMesh?.type !== 'Ground') {
     return null
   }
-  const snapshot = (ground.dynamicMesh as any).terrainScatter as { metadata?: { updatedAt?: unknown } } | null | undefined
-  const updatedAt = snapshot?.metadata?.updatedAt
-  const value = typeof updatedAt === 'number' ? updatedAt : Number(updatedAt)
-  return Number.isFinite(value) ? value : null
+  return (ground.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt
 })
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -4727,11 +4724,19 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
   }
 }
 
-async function restoreGroupdScatterGuarded(): Promise<void> {
+async function restoreGroundAllGuarded(): Promise<void> {
   const tokenSnapshot = sceneStore.sceneSwitchToken
   await restoreGroupdScatter()
   await restoreGroundPaint()
   // If a scene switch happened during restore, don't continue with any follow-up.
+  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
+    return
+  }
+}
+
+async function restoreGroundScatterGuarded(): Promise<void> {
+  const tokenSnapshot = sceneStore.sceneSwitchToken
+  await restoreGroupdScatter()
   if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
     return
   }
@@ -4752,12 +4757,12 @@ watch(isSceneReady, (ready) => {
   }
 
   syncSceneGraph()
-  void restoreGroupdScatterGuarded()
+  void restoreGroundAllGuarded()
 })
 
 // Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
 watch(
-  [isSceneReady, groundTerrainScatterUpdatedAt],
+  [isSceneReady, groundTerrainScatterInstancesUpdatedAt],
   ([ready, updatedAt], [prevReady, prevUpdatedAt]) => {
     if (!ready) {
       return
@@ -4768,7 +4773,7 @@ watch(
     if (prevReady && prevUpdatedAt === updatedAt) {
       return
     }
-    void restoreGroupdScatterGuarded()
+    void restoreGroundScatterGuarded()
   },
 )
 

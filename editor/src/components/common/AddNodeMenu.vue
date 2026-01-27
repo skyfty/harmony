@@ -1876,6 +1876,7 @@ async function handleConfirmGround() {
     columns,
     cellSize,
     heightMap: {},
+    terrainScatterInstancesUpdatedAt: Date.now(),
     generation: preset?.generation ? { ...preset.generation } : { mode: 'flat', noiseScale: 80, noiseAmplitude: 0 },
   }
 

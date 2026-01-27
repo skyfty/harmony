@@ -136,6 +136,7 @@ function detectManualEdits(definition: GroundDynamicMesh): boolean {
     columns: definition.columns,
     cellSize: definition.cellSize,
     heightMap: {},
+    terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
     generation: definition.generation ? { ...definition.generation } : null,
   }
   if (!scratch.generation) {
