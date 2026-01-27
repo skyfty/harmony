@@ -825,12 +825,28 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function removeWallGroup(container: THREE.Object3D): void {
     const userData = container.userData ?? (container.userData = {})
+
+    // Be defensive: remove any procedural wall groups that might have been left behind.
+    // (e.g. after switching to instanced wall models)
+    const candidates = container.children.filter((child) => {
+      const group = child as THREE.Group
+      return Boolean(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')
+    }) as THREE.Group[]
+
     const wallGroup = userData.wallGroup as THREE.Group | undefined
-    if (!wallGroup) {
+    if (wallGroup && !candidates.includes(wallGroup)) {
+      candidates.push(wallGroup)
+    }
+
+    if (!candidates.length) {
       return
     }
-    disposeWallGroupResources(wallGroup)
-    wallGroup.removeFromParent()
+
+    for (const group of candidates) {
+      disposeWallGroupResources(group)
+      group.removeFromParent()
+    }
+
     delete userData.wallGroup
   }
 
