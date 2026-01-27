@@ -508,10 +508,26 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
-    const complementDeg = 180 - angleDeg
+
+    // Special-case straight joints (interior angle ≈ 180°): if a 180° rule exists,
+    // always use it and ignore tolerance. Use a small radian epsilon.
+    const RAD_STRAIGHT_EPS = 1e-3
+    if (Math.abs(angleRadians - Math.PI) < RAD_STRAIGHT_EPS) {
+      for (const rule of rules) {
+        const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId : null
+        if (!assetId) {
+          continue
+        }
+        const rawAngle = typeof (rule as any).angle === 'number' ? (rule as any).angle : Number((rule as any).angle)
+        const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
+        if (ruleAngle >= 180 - 1e-6) {
+          return { assetId, extraYawRadians: 0 }
+        }
+      }
+    }
 
     let best:
-      | { assetId: string; extraYawRadians: number; diff: number; preferredDirect: boolean; ruleAngle: number }
+      | { assetId: string; diff: number; ruleAngle: number }
       | null = null
 
     for (const rule of rules) {
@@ -525,42 +541,31 @@ export function createWallRenderer(options: WallRendererOptions) {
       const rawTolerance = typeof (rule as any).tolerance === 'number' ? (rule as any).tolerance : Number((rule as any).tolerance)
       const tolerance = Number.isFinite(rawTolerance) ? Math.max(0, Math.min(90, rawTolerance)) : 5
 
-      const directDiff = Math.abs(angleDeg - ruleAngle)
-      const complementDiff = Math.abs(complementDeg - ruleAngle)
+      const diff = Math.abs(angleDeg - ruleAngle)
 
-      const useComplement = complementDiff + 1e-6 < directDiff
-      const diff = useComplement ? complementDiff : directDiff
-
-      // Only consider this rule if the difference is within tolerance
+      // Only consider this rule if the difference is within tolerance.
+      // NOTE: We intentionally do NOT use supplement angle (180 - angle) matching.
       if (diff > tolerance + 1e-6) {
         continue
       }
 
-      const extraYawRadians = useComplement ? Math.PI : 0
-      const preferredDirect = !useComplement
-
       if (!best) {
-        best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+        best = { assetId, diff, ruleAngle }
         continue
       }
 
       if (diff + 1e-6 < best.diff) {
-        best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+        best = { assetId, diff, ruleAngle }
         continue
       }
 
-      if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect && !best.preferredDirect) {
-        best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
-        continue
-      }
-
-      if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect === best.preferredDirect && ruleAngle + 1e-6 < best.ruleAngle) {
-        best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+      if (Math.abs(diff - best.diff) <= 1e-6 && ruleAngle + 1e-6 < best.ruleAngle) {
+        best = { assetId, diff, ruleAngle }
       }
     }
 
     if (best) {
-      return { assetId: best.assetId, extraYawRadians: best.extraYawRadians }
+      return { assetId: best.assetId, extraYawRadians: 0 }
     }
     return { assetId: null, extraYawRadians: 0 }
   }
@@ -594,47 +599,68 @@ export function createWallRenderer(options: WallRendererOptions) {
       next: WallDynamicMesh['segments'][number],
       corner: THREE.Vector3,
     ) => {
+      // 1) 计算当前段的入射向量（incoming）
+      //    - 将当前段的 start/end 写入临时向量（只取 XZ 平面）
       wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z)
       wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z)
       wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
+      // 忽略 Y 分量，使计算仅在 XZ 平面进行
       wallSyncIncomingHelper.y = 0
 
+      // 2) 计算下一段的出射向量（outgoing）
+      //    - 将下一段的 start/end 写入临时向量（只取 XZ 平面）
       wallSyncStartHelper.set(next.start.x, next.start.y, next.start.z)
       wallSyncEndHelper.set(next.end.x, next.end.y, next.end.z)
       wallSyncOutgoingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
       wallSyncOutgoingHelper.y = 0
 
+      // 3) 如果任一向量长度非常小（退化段）则放弃该拐角
       if (wallSyncIncomingHelper.lengthSq() < WALL_SYNC_EPSILON || wallSyncOutgoingHelper.lengthSq() < WALL_SYNC_EPSILON) {
         return
       }
+
+      // 4) 归一化向量以便计算角度与方向
       wallSyncIncomingHelper.normalize()
       wallSyncOutgoingHelper.normalize()
 
-      const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
-      const angle = Math.acos(dot)
-      if (!Number.isFinite(angle) || angle < 1e-3) {
+      // 5) 通过点积计算“内角”（straight = 180°）
+      //    - 转角: acos(incoming·outgoing)
+      //    - 内角: acos((-incoming)·outgoing) = π - 转角
+      const dotInterior = THREE.MathUtils.clamp(-wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
+      const angle = Math.acos(dotInterior)
+      // 如果角度不是有效数值，则不放置拐角模型
+      if (!Number.isFinite(angle)) {
         return
       }
 
+      // 6) 根据角度与用户定义的规则选择一个拐角模型
       const selection = pickWallCornerModel(angle, rules)
       if (!selection.assetId) {
+        // 未匹配到任何规则时，跳过该拐角
         return
       }
 
-      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
+      // 7) 计算“内角”的角平分线（bisector）作为模型朝向的基准
+      //    - 如果两向量几乎反向（相加后接近 0），使用出射向量作为退化情况下的朝向
+      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
       if (wallSyncBisectorHelper.lengthSq() < WALL_SYNC_EPSILON) {
         wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
       }
 
+      // 8) 将平分线转换为四元数（模型局部 +Z 轴对准平分线）
       const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'z')
+      // 9) 如果规则指定了额外的偏航（绕 Y 旋转），将其应用到四元数上
       if (selection.extraYawRadians) {
         wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, selection.extraYawRadians)
         quat.multiply(wallSyncYawQuatHelper)
       }
 
+      // 10) 组成最终的局部变换矩阵：位置 = 拐角点，旋转 = 计算出的四元数，缩放 = 单位缩放
       wallSyncScaleHelper.set(1, 1, 1)
       wallSyncPosHelper.copy(corner)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+
+      // 11) 将计算出的矩阵打包并推入对应 assetId 的矩阵数组中
       pushMatrix(selection.assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 

@@ -15,9 +15,13 @@ export const WALL_DEFAULT_SMOOTHING = 0.05
 export type WallCornerModelRule = {
   /** Asset id of the corner/joint model to be instanced. */
   assetId: string | null
-  /** Target corner angle (degrees). Runtime picks the closest match within tolerance. */
+  /**
+   * Target interior corner angle (degrees). Straight = 180°.
+   * Runtime picks the closest match within tolerance.
+   * Special-case: if the actual interior angle is straight (≈180°) and a 180° rule exists, it is used (tolerance is ignored).
+   */
   angle: number
-  /** Tolerance range (degrees). Model is only selected if actual angle is within ±tolerance of target angle. */
+  /** Tolerance range (degrees). Model is only selected if actual interior angle is within ±tolerance of target angle. */
   tolerance: number
 }
 
@@ -35,7 +39,7 @@ export interface WallComponentProps {
   endCapAssetId?: string | null
   /**
    * Optional corner model overrides. At runtime the system will pick a model
-   * based on the corner angle between adjacent wall segments.
+   * based on the interior corner angle between adjacent wall segments.
    */
   cornerModels?: WallCornerModelRule[]
 }

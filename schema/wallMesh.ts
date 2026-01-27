@@ -216,10 +216,24 @@ function pickWallCornerAsset(
   }
 
   const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
-  const complementDeg = 180 - angleDeg
+  // Special-case straight joints (interior angle ≈ 180°): if a 180° rule exists,
+  // always use it and ignore tolerance. Use the radian epsilon constant defined above.
+  if (Math.abs(angleRadians - Math.PI) < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
+    for (const rule of rules) {
+      const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId.trim() : null
+      if (!assetId) {
+        continue
+      }
+      const rawAngle = typeof rule.angle === 'number' ? rule.angle : Number((rule as any).angle)
+      const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
+      if (ruleAngle >= 180 - 1e-6) {
+        return { assetId, extraYawRadians: 0 }
+      }
+    }
+  }
 
   let best:
-    | { assetId: string; extraYawRadians: number; diff: number; preferredDirect: boolean; ruleAngle: number }
+    | { assetId: string; diff: number; ruleAngle: number }
     | null = null
 
   for (const rule of rules) {
@@ -233,44 +247,32 @@ function pickWallCornerAsset(
     const rawTolerance = typeof rule.tolerance === 'number' ? rule.tolerance : Number((rule as any).tolerance)
     const tolerance = Number.isFinite(rawTolerance) ? Math.max(0, Math.min(90, rawTolerance)) : 5
 
-    const directDiff = Math.abs(angleDeg - ruleAngle)
-    const complementDiff = Math.abs(complementDeg - ruleAngle)
+    const diff = Math.abs(angleDeg - ruleAngle)
 
-    const useComplement = complementDiff + 1e-6 < directDiff
-    const diff = useComplement ? complementDiff : directDiff
-
-    // Only consider this rule if the difference is within tolerance
+    // Only consider this rule if the difference is within tolerance.
+    // NOTE: We intentionally do NOT use supplement angle (180 - angle) matching.
     if (diff > tolerance + 1e-6) {
       continue
     }
 
-    const extraYawRadians = useComplement ? Math.PI : 0
-    const preferredDirect = !useComplement
-
     if (!best) {
-      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+      best = { assetId, diff, ruleAngle }
       continue
     }
 
     if (diff + 1e-6 < best.diff) {
-      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+      best = { assetId, diff, ruleAngle }
       continue
     }
 
-    // Tie-breaker: prefer direct match (no extra yaw) if diff ties.
-    if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect && !best.preferredDirect) {
-      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
-      continue
-    }
-
-    // Final tie-breaker: lower target angle for determinism.
-    if (Math.abs(diff - best.diff) <= 1e-6 && preferredDirect === best.preferredDirect && ruleAngle + 1e-6 < best.ruleAngle) {
-      best = { assetId, extraYawRadians, diff, preferredDirect, ruleAngle }
+    // Tie-breaker: lower target angle for determinism.
+    if (Math.abs(diff - best.diff) <= 1e-6 && ruleAngle + 1e-6 < best.ruleAngle) {
+      best = { assetId, diff, ruleAngle }
     }
   }
 
   if (best) {
-    return { assetId: best.assetId, extraYawRadians: best.extraYawRadians }
+    return { assetId: best.assetId, extraYawRadians: 0 }
   }
   return { assetId: null, extraYawRadians: 0 }
 }
@@ -328,9 +330,11 @@ function computeWallCornerInstanceMatricesByAsset(
     incoming.normalize()
     outgoing.normalize()
 
-    const dot = THREE.MathUtils.clamp(incoming.dot(outgoing), -1, 1)
-    const angle = Math.acos(dot)
-    if (!Number.isFinite(angle) || angle < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
+    // Use interior angle semantics (straight = 180°).
+    // interiorAngle = acos((-incoming)·outgoing) = π - acos(incoming·outgoing)
+    const dotInterior = THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1)
+    const angle = Math.acos(dotInterior)
+    if (!Number.isFinite(angle)) {
       return
     }
 
@@ -343,7 +347,7 @@ function computeWallCornerInstanceMatricesByAsset(
       return
     }
 
-    bisector.copy(incoming).add(outgoing)
+    bisector.copy(incoming).multiplyScalar(-1).add(outgoing)
     if (bisector.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
       bisector.copy(outgoing)
     }

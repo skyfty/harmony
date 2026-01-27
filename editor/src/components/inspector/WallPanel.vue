@@ -127,7 +127,8 @@ function commitCornerModels(next: WallCornerModelRow[]): void {
 }
 
 function addCornerModel(): void {
-  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, angle: 45, tolerance: 5 } as any)]
+  // Corner model rules use interior angle semantics (straight = 180°).
+  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, angle: 90, tolerance: 5 } as any)]
   commitCornerModels(next)
 }
 
@@ -845,7 +846,7 @@ function applyAirWallUpdate(rawValue: unknown) {
 
         <div class="wall-corner-models">
           <div class="wall-corner-header">
-            <div class="wall-corner-title">Corner Models (by angle)</div>
+            <div class="wall-corner-title">Corner Models</div>
             <v-btn
               size="small"
               density="compact"
@@ -893,14 +894,14 @@ function applyAirWallUpdate(rawValue: unknown) {
 
               <div class="wall-corner-angle-fields">
                 <div class="wall-corner-angle-label">
-                  Target: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
+                  Interior: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
                 </div>
                 <div class="wall-corner-angle-inputs">
                   <v-text-field
                     density="compact"
                     variant="underlined"
                     type="number"
-                    label="Angle (°)"
+                    label="Interior Angle (°)"
                     :model-value="(entry as any).angle ?? 90"
                     min="0"
                     max="180"
