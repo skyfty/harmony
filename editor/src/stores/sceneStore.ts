@@ -904,6 +904,10 @@ function normalizeNodeComponents(
     const baseProps = resolveWallComponentPropsFromMesh(node.dynamicMesh as WallDynamicMesh)
     const existing = normalized[WALL_COMPONENT_TYPE]
     const existingProps = (existing?.props ?? {}) as Partial<WallComponentProps>
+    const cornerModels = Array.isArray((existingProps as any).cornerModels)
+      ? (existingProps as any).cornerModels
+      : (Array.isArray((baseProps as any).cornerModels) ? (baseProps as any).cornerModels : [])
+
     const nextProps = cloneWallComponentProps(
       clampWallProps({
         height: (existing?.props as { height?: number })?.height ?? baseProps.height,
@@ -914,6 +918,7 @@ function normalizeNodeComponents(
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         jointAssetId: (existingProps as { jointAssetId?: string | null }).jointAssetId ?? baseProps.jointAssetId,
         endCapAssetId: (existingProps as { endCapAssetId?: string | null }).endCapAssetId ?? baseProps.endCapAssetId,
+        cornerModels,
       }),
     )
 
@@ -11847,6 +11852,7 @@ export const useSceneStore = defineStore('scene', {
         bodyAssetId: wallProps.bodyAssetId ?? null,
         jointAssetId: wallProps.jointAssetId ?? null,
         endCapAssetId: wallProps.endCapAssetId ?? null,
+        cornerModels: (wallProps as any).cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)
 
       return wallProps
@@ -14554,8 +14560,38 @@ export const useSceneStore = defineStore('scene', {
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasJointAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'jointAssetId')
+        const hasEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'endCapAssetId')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
+        const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
+
+        const cornerModelsEqual = (a: unknown, b: unknown): boolean => {
+          const arrA = Array.isArray(a) ? a : []
+          const arrB = Array.isArray(b) ? b : []
+          if (arrA.length !== arrB.length) {
+            return false
+          }
+          for (let i = 0; i < arrA.length; i += 1) {
+            const entryA = arrA[i] as any
+            const entryB = arrB[i] as any
+            const assetA = typeof entryA?.assetId === 'string' ? entryA.assetId : null
+            const assetB = typeof entryB?.assetId === 'string' ? entryB.assetId : null
+            const minA = typeof entryA?.minAngle === 'number' ? entryA.minAngle : Number(entryA?.minAngle)
+            const minB = typeof entryB?.minAngle === 'number' ? entryB.minAngle : Number(entryB?.minAngle)
+            const maxA = typeof entryA?.maxAngle === 'number' ? entryA.maxAngle : Number(entryA?.maxAngle)
+            const maxB = typeof entryB?.maxAngle === 'number' ? entryB.maxAngle : Number(entryB?.maxAngle)
+            if ((assetA ?? null) !== (assetB ?? null)) {
+              return false
+            }
+            if (!Number.isFinite(minA) || !Number.isFinite(minB) || Math.abs(minA - minB) > 1e-6) {
+              return false
+            }
+            if (!Number.isFinite(maxA) || !Number.isFinite(maxB) || Math.abs(maxA - maxB) > 1e-6) {
+              return false
+            }
+          }
+          return true
+        }
 
         const merged = clampWallProps({
           height: (typedPatch.height as number | undefined) ?? currentProps.height,
@@ -14573,6 +14609,12 @@ export const useSceneStore = defineStore('scene', {
           jointAssetId: hasJointAssetId
             ? (typedPatch.jointAssetId as string | null | undefined)
             : currentProps.jointAssetId,
+          endCapAssetId: hasEndCapAssetId
+            ? (typedPatch.endCapAssetId as string | null | undefined)
+            : (currentProps as any).endCapAssetId,
+          cornerModels: hasCornerModels
+            ? (typedPatch.cornerModels as any)
+            : (currentProps as any).cornerModels,
         })
 
         const unchanged =
@@ -14582,7 +14624,9 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
-          (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null)
+          (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null) &&
+          ((currentProps as any).endCapAssetId ?? null) === ((merged as any).endCapAssetId ?? null) &&
+          cornerModelsEqual((currentProps as any).cornerModels, (merged as any).cornerModels)
         if (unchanged) {
           return false
         }

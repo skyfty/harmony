@@ -35,13 +35,17 @@ const isApplyingDimensions = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogTarget = ref<'body' | 'joint' | 'cap' | null>(null)
+const assetDialogTarget = ref<'body' | 'joint' | 'cap' | 'corner' | null>(null)
+const assetDialogCornerIndex = ref<number | null>(null)
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'joint') {
     return 'Select Wall Joint Asset'
   }
   if (assetDialogTarget.value === 'cap') {
     return 'Select Wall End Cap Asset'
+  }
+  if (assetDialogTarget.value === 'corner') {
+    return 'Select Wall Corner Model'
   }
   return 'Select Wall Body Asset'
 })
@@ -91,12 +95,76 @@ const jointAsset = computed(() => {
 })
 
 const capAsset = computed(() => {
-  const assetId = (wallComponent.value?.props as any)?.endCapAssetId as string | null | undefined
+  const assetId = wallComponent.value?.props?.endCapAssetId
   if (!assetId) {
     return null
   }
   return sceneStore.getAsset(assetId) ?? null
 })
+
+type WallCornerModelRow = NonNullable<WallComponentProps['cornerModels']>[number]
+
+const cornerModels = computed<WallCornerModelRow[]>(() => {
+  const raw = wallComponent.value?.props?.cornerModels
+  return Array.isArray(raw) ? (raw as WallCornerModelRow[]) : []
+})
+
+function clampAngleDegrees(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return fallback
+  }
+  return Math.max(0, Math.min(180, num))
+}
+
+function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
+  const assetId = typeof row?.assetId === 'string' && row.assetId.trim().length ? row.assetId : null
+  let minAngle = clampAngleDegrees(row?.minAngle, 0)
+  let maxAngle = clampAngleDegrees(row?.maxAngle, 180)
+  if (minAngle > maxAngle) {
+    const swap = minAngle
+    minAngle = maxAngle
+    maxAngle = swap
+  }
+  return { assetId, minAngle, maxAngle }
+}
+
+function commitCornerModels(next: WallCornerModelRow[]): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { cornerModels: next } as any)
+}
+
+function addCornerModel(): void {
+  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, minAngle: 0, maxAngle: 180 })]
+  commitCornerModels(next)
+}
+
+function removeCornerModel(index: number): void {
+  const next = cornerModels.value.filter((_entry, i) => i !== index)
+  commitCornerModels(next)
+}
+
+function updateCornerModel(index: number, patch: Partial<WallCornerModelRow>): void {
+  const current = cornerModels.value[index]
+  const next = cornerModels.value.map((entry, i) => {
+    if (i !== index) {
+      return entry
+    }
+    return normalizeCornerModelRow({ ...current, ...patch })
+  })
+  commitCornerModels(next)
+}
+
+function resolveCornerModelAsset(assetId: string | null | undefined): ProjectAsset | null {
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+}
 
 watch(
   () => wallComponent.value?.props,
@@ -140,6 +208,7 @@ watch(assetDialogVisible, (open) => {
   assetDialogAnchor.value = null
   assetDialogSelectedId.value = ''
   assetDialogTarget.value = null
+  assetDialogCornerIndex.value = null
 })
 
 const smoothingDisplay = computed(() => `${Math.round(localSmoothing.value * 100)}%`)
@@ -311,7 +380,15 @@ function openWallAssetDialog(target: 'body' | 'joint' | 'cap', event?: MouseEven
       ? wallComponent.value?.props?.bodyAssetId ?? ''
       : target === 'joint'
         ? wallComponent.value?.props?.jointAssetId ?? ''
-        : ((wallComponent.value?.props as any)?.endCapAssetId ?? '')
+        : (wallComponent.value?.props?.endCapAssetId ?? '')
+  assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  assetDialogVisible.value = true
+}
+
+function openWallCornerModelDialog(index: number, event?: MouseEvent): void {
+  assetDialogTarget.value = 'corner'
+  assetDialogCornerIndex.value = index
+  assetDialogSelectedId.value = cornerModels.value[index]?.assetId ?? ''
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
@@ -331,9 +408,14 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     } else if (target === 'joint') {
       jointFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: null })
-    } else {
+    } else if (target === 'cap') {
       capFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: null } as any)
+    } else {
+      const index = assetDialogCornerIndex.value
+      if (typeof index === 'number' && index >= 0) {
+        updateCornerModel(index, { assetId: null })
+      }
     }
     assetDialogVisible.value = false
     return
@@ -349,9 +431,14 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   } else if (target === 'joint') {
     jointFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: asset.id })
-  } else {
+  } else if (target === 'cap') {
     capFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: asset.id } as any)
+  } else {
+    const index = assetDialogCornerIndex.value
+    if (typeof index === 'number' && index >= 0) {
+      updateCornerModel(index, { assetId: asset.id })
+    }
   }
   assetDialogVisible.value = false
 }
@@ -852,6 +939,105 @@ function applyAirWallUpdate(rawValue: unknown) {
           </div>
           <p v-if="jointFeedbackMessage" class="asset-feedback">{{ jointFeedbackMessage }}</p>
         </div>
+
+        <div class="wall-corner-models">
+          <div class="wall-corner-header">
+            <div class="wall-corner-title">Corner Models (by angle)</div>
+            <v-btn
+              size="small"
+              density="compact"
+              variant="text"
+              color="primary"
+              @click.stop="addCornerModel"
+              :disabled="!wallComponent"
+            >
+              Add
+            </v-btn>
+          </div>
+
+          <div v-if="!cornerModels.length" class="wall-corner-empty">
+            <span class="hint-text">No corner overrides. Uses the default joint model.</span>
+          </div>
+
+          <div
+            v-for="(entry, index) in cornerModels"
+            :key="`corner-${index}`"
+            class="wall-corner-row"
+          >
+            <div
+              class="wall-corner-asset"
+              @click.stop="openWallCornerModelDialog(index, $event)"
+            >
+              <template v-if="resolveCornerModelAsset(entry.assetId)">
+                <div
+                  class="asset-thumbnail"
+                  :style="(() => {
+                    const asset = resolveCornerModelAsset(entry.assetId)
+                    if (!asset) return undefined
+                    return asset.thumbnail?.trim()
+                      ? { backgroundImage: `url(${asset.thumbnail})` }
+                      : (asset.previewColor ? { backgroundColor: asset.previewColor } : undefined)
+                  })()"
+                />
+              </template>
+              <template v-else>
+                <div class="asset-thumbnail placeholder" />
+              </template>
+            </div>
+
+            <div class="wall-corner-fields">
+              <div class="wall-corner-asset-text">
+                <div class="asset-name">
+                  {{ resolveCornerModelAsset(entry.assetId)?.name ?? 'Select Corner Model' }}
+                </div>
+                <div class="asset-subtitle" v-if="resolveCornerModelAsset(entry.assetId)">
+                  {{ resolveCornerModelAsset(entry.assetId)!.id.slice(0, 8) }}
+                </div>
+                <div class="asset-subtitle" v-else>
+                  Uses angle range to match a corner
+                </div>
+              </div>
+
+              <div class="wall-corner-angle-fields">
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Min (°)"
+                  :model-value="entry.minAngle"
+                  min="0"
+                  max="180"
+                  step="1"
+                  inputmode="decimal"
+                  @update:modelValue="(value) => updateCornerModel(index, { minAngle: Number(value) })"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Max (°)"
+                  :model-value="entry.maxAngle"
+                  min="0"
+                  max="180"
+                  step="1"
+                  inputmode="decimal"
+                  @update:modelValue="(value) => updateCornerModel(index, { maxAngle: Number(value) })"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
+            </div>
+
+            <v-btn
+              icon="mdi-delete"
+              size="x-small"
+              density="compact"
+              variant="text"
+              @click.stop="removeCornerModel(index)"
+              :disabled="!wallComponent"
+            />
+          </div>
+        </div>
       </div>
 
       <AssetPickerDialog
@@ -967,6 +1153,61 @@ function applyAirWallUpdate(rawValue: unknown) {
   flex-direction: column;
   gap: 0.75rem;
   margin: 0.75rem 5px 0;
+}
+
+.wall-corner-models {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.wall-corner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wall-corner-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.wall-corner-empty {
+  padding: 0.25rem 0;
+}
+
+.wall-corner-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wall-corner-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.wall-corner-asset {
+  display: flex;
+  align-items: center;
+}
+
+.wall-corner-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.wall-corner-angle-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
 }
 
 .asset-model-panel {
