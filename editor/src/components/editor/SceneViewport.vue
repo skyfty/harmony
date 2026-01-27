@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
-import { OrbitControls } from '@/utils/OrbitControls.js'
+import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
+import { CameraControlsMap } from '@/utils/CameraControlsMap'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -627,7 +628,7 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let mapControls: OrbitControls | null = null
+let mapControls: CameraControlsOrbit | CameraControlsMap | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -4862,6 +4863,12 @@ function handleControlsChange() {
   terrainGridController.markCameraDirty()
 }
 
+const controlsType = ref<'map' | 'orbit'>('map')
+function toggleControlsType() {
+  controlsType.value = controlsType.value === 'map' ? 'orbit' : 'map'
+  applyCameraControlMode()
+}
+
 function applyCameraControlMode() {
   if (!camera || !canvasRef.value) {
     return
@@ -4877,20 +4884,15 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = new OrbitControls(camera, domElement)
+  mapControls = controlsType.value === 'map'
+    ? new CameraControlsMap(camera, domElement)
+    : new CameraControlsOrbit(camera, domElement)
   if (previousTarget) {
     mapControls.target.copy(previousTarget)
   } else {
     mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
   mapControls.enabled = previousEnabled
-  mapControls.minDistance = 2;
-  mapControls.maxDistance = 200;
-
-  // Explicitly map middle-button drag to pan (same as left-button pan).
-  // Tool modes will capture/stopPropagation on left; middle remains the primary camera-pan input.
-  mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN
-  mapControls.mouseButtons.MIDDLE = THREE.MOUSE.PAN
 
   mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
@@ -10179,6 +10181,7 @@ defineExpose<SceneViewportHandle>({
         :show-grid="gridVisible"
         :show-axes="axesVisible"
         :vertex-snap-enabled="vertexSnapMode === 'vertex'"
+        :controls-type="controlsType"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
@@ -10192,6 +10195,7 @@ defineExpose<SceneViewportHandle>({
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
+        @toggle-controls-type="toggleControlsType"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
