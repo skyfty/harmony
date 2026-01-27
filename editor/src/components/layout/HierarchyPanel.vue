@@ -1319,7 +1319,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 density="compact"
                 size="26"
                 class="visibility-btn"
-                :class="{ 'is-hidden': !(item.visible ?? true) }"
+                :class="{ 'is-visible': (item.visible ?? true) }"
                 :title="(item.visible ?? true) ? 'Hide' : 'Show'"
                 @click.stop="toggleNodeVisibility(item.id)"
               />
@@ -1535,7 +1535,7 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .visibility-btn {
   margin-right: 0;
-  color: rgba(233, 236, 241, 0.72);
+  color: rgba(233, 236, 241, 0.58);
   transition: color 120ms ease;
 
   opacity: 0;
@@ -1552,6 +1552,13 @@ function handleTreeDragLeave(event: DragEvent) {
 }
 .visibility-btn.is-hidden {
   color: rgba(233, 236, 241, 0.38);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.visibility-btn.is-visible {
+  color: rgba(233, 236, 241, 0.9);
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
