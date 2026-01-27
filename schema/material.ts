@@ -14,6 +14,7 @@ import type {
 import type { AssetCacheEntry } from './assetCache';
 import type ResourceCache from './ResourceCache';
 import { hashString, stableSerialize } from './stableSerialize';
+import { getDefaultUvDebugTexture } from './debugTextures';
 
 export interface SceneMaterialFactoryOptions {
   provider: ResourceCache;
@@ -298,6 +299,7 @@ export class SceneMaterialFactory {
   createDefaultMaterial(colorHex: string): THREE.Material {
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorHex),
+      map: getDefaultUvDebugTexture(),
       metalness: 0.2,
       roughness: 0.7,
     });
