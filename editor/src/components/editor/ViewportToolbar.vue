@@ -330,6 +330,17 @@
           </template>
         </v-list>
       </v-menu>
+      <v-btn
+        :icon="vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'"
+        :color="vertexSnapEnabled ? 'primary' : undefined"
+        :variant="vertexSnapEnabled ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Toggle Vertex Snap"
+        @click="toggleVertexSnap"
+      />
+
       <v-divider vertical />
       <v-btn
         :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
@@ -352,17 +363,7 @@
         @click="toggleAxesVisibility"
       />
 
-      <v-btn
-        :icon="vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'"
-        :color="vertexSnapEnabled ? 'primary' : undefined"
-        :variant="vertexSnapEnabled ? 'flat' : 'text'"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        title="Toggle Vertex Snap"
-        @click="toggleVertexSnap"
-      />
-
+      <v-divider vertical />
       <v-btn
         :icon="controlsType === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
         density="compact"
@@ -378,7 +379,6 @@
         @click="emit('toggle-controls-type')"
       />
 
-      <v-divider vertical />
       <v-btn
         icon="mdi-camera"
         density="compact"

@@ -9769,6 +9769,7 @@ export const useSceneStore = defineStore('scene', {
         ;(target as any).visible = visible
       })
       this.nodes = [...this.nodes]
+      this.queueSceneNodePatch(id, ['visibility'])
       commitSceneSnapshot(this)
     },
     toggleNodeVisibility(id: string) {
