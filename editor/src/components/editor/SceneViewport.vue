@@ -365,6 +365,14 @@ const objectMap = new Map<string, THREE.Object3D>()
 const instancedMeshes: THREE.InstancedMesh[] = []
 const rootGroup = new THREE.Group()
 rootGroup.name = 'SceneRoot'
+
+// TransformControls expects its attached object to be part of the scene graph.
+// For multi-selection transforms we attach to this editor-only pivot object (centroid).
+const selectionPivotObject = new THREE.Object3D()
+selectionPivotObject.name = 'SelectionPivot'
+selectionPivotObject.userData = { editorOnly: true, isSelectionPivot: true }
+rootGroup.add(selectionPivotObject)
+
 const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
@@ -2918,6 +2926,7 @@ const {
     updateSelectionHighlights,
     updatePlaceholderOverlayPositions,
     gizmoControlsUpdate: () => gizmoControls?.update(),
+    computeTransformPivotWorld,
     getVertexSnapDelta: ({ drag, event }) => {
       const active = vertexSnapMode.value === 'vertex' || event.shiftKey
       if (!active) {
@@ -3032,33 +3041,54 @@ function rotateActiveSelection(nodeId: string) {
     return
   }
 
-  const selectionIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+  const selectionIds = sceneStore.selectedNodeIds
+    .filter((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
   if (!selectionIds.includes(nodeId)) {
     selectionIds.push(nodeId)
   }
 
-  const updates: TransformUpdatePayload[] = []
+  const { parentMap } = buildHierarchyMaps()
+  const topLevelIds = filterTopLevelSelection(selectionIds, parentMap)
+  if (!topLevelIds.length) {
+    return
+  }
 
   const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0),
     RIGHT_CLICK_ROTATION_STEP,
   )
+
+  const centroidWorld = new THREE.Vector3()
   const pivotWorld = new THREE.Vector3()
+  let count = 0
+  for (const id of topLevelIds) {
+    const object = objectMap.get(id)
+    if (!object) {
+      continue
+    }
+    computeTransformPivotWorld(object, pivotWorld)
+    centroidWorld.add(pivotWorld)
+    count += 1
+  }
+  if (count <= 0) {
+    return
+  }
+  centroidWorld.multiplyScalar(1 / count)
+
+  const updates: TransformUpdatePayload[] = []
   const worldPosition = new THREE.Vector3()
   const worldOffset = new THREE.Vector3()
 
-  selectionIds.forEach((id) => {
+  for (const id of topLevelIds) {
     const object = objectMap.get(id)
     if (!object) {
-      return
+      continue
     }
-
-    computeTransformPivotWorld(object, pivotWorld)
 
     object.updateMatrixWorld(true)
     object.getWorldPosition(worldPosition)
-    worldOffset.copy(worldPosition).sub(pivotWorld).applyQuaternion(rotateDeltaQuaternion)
-    worldPosition.copy(pivotWorld).add(worldOffset)
+    worldOffset.copy(worldPosition).sub(centroidWorld).applyQuaternion(rotateDeltaQuaternion)
+    worldPosition.copy(centroidWorld).add(worldOffset)
 
     if (object.parent) {
       object.parent.updateMatrixWorld(true)
@@ -3068,6 +3098,8 @@ function rotateActiveSelection(nodeId: string) {
     object.quaternion.premultiply(rotateDeltaQuaternion)
     object.rotation.setFromQuaternion(object.quaternion)
     object.updateMatrixWorld(true)
+    syncInstancedTransform(object, true)
+    syncInstancedOutlineEntryTransform(id)
 
     updates.push({
       id,
@@ -3075,7 +3107,7 @@ function rotateActiveSelection(nodeId: string) {
       rotation: toEulerLike(object.rotation),
       scale: object.scale,
     })
-  })
+  }
 
   if (!updates.length) {
     return
@@ -3226,6 +3258,12 @@ const transformScaleFactor = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
+const transformPivotCurrentWorldQuaternion = new THREE.Quaternion()
+const transformPivotCurrentWorldScale = new THREE.Vector3(1, 1, 1)
+const transformParentWorldQuaternionHelper = new THREE.Quaternion()
+const transformParentWorldQuaternionInverseHelper = new THREE.Quaternion()
+const transformOffsetWorldHelper = new THREE.Vector3()
+const transformOffsetLocalHelper = new THREE.Vector3()
 const instancedPivotCenterLocalHelper = new THREE.Vector3()
 const instancedPivotWorldHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
@@ -3431,24 +3469,32 @@ function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
 }
 
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
-  const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
-  const relevantIds = new Set(selectedIds)
-  if (primaryId) {
-    relevantIds.add(primaryId)
+  const selectedIds = sceneStore.selectedNodeIds
+    .filter((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
+
+  if (primaryId && !sceneStore.isNodeSelectionLocked(primaryId) && !selectedIds.includes(primaryId)) {
+    selectedIds.push(primaryId)
   }
-  if (relevantIds.size === 0) {
+
+  if (!selectedIds.length) {
+    return null
+  }
+
+  const { parentMap } = buildHierarchyMaps()
+  const topLevelIds = filterTopLevelSelection(selectedIds, parentMap)
+  if (!topLevelIds.length) {
     return null
   }
 
   const entries = new Map<string, TransformGroupEntry>()
-  relevantIds.forEach((id) => {
+  for (const id of topLevelIds) {
     const object = objectMap.get(id)
     if (!object) {
-      return
+      continue
     }
     object.updateMatrixWorld(true)
-    const pivotWorld = new THREE.Vector3()
 
+    const pivotWorld = new THREE.Vector3()
     computeTransformPivotWorld(object, pivotWorld)
 
     const worldPosition = new THREE.Vector3()
@@ -3466,15 +3512,32 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
       initialWorldQuaternion: worldQuaternion,
       initialPivotWorldPosition: pivotWorld,
     })
-  })
+  }
 
   if (!entries.size) {
     return null
   }
 
+  // Group pivot: average of each entry's pivot (world).
+  const initialGroupPivotWorldPosition = new THREE.Vector3()
+  entries.forEach((entry) => initialGroupPivotWorldPosition.add(entry.initialPivotWorldPosition))
+  initialGroupPivotWorldPosition.multiplyScalar(1 / entries.size)
+
+  const attachedObject = transformControls?.object as THREE.Object3D | null
+  const initialGroupPivotWorldQuaternion = new THREE.Quaternion()
+  const initialGroupPivotWorldScale = new THREE.Vector3(1, 1, 1)
+  if (attachedObject) {
+    attachedObject.updateMatrixWorld(true)
+    attachedObject.getWorldQuaternion(initialGroupPivotWorldQuaternion)
+    attachedObject.getWorldScale(initialGroupPivotWorldScale)
+  }
+
   return {
     primaryId,
     entries,
+    initialGroupPivotWorldPosition,
+    initialGroupPivotWorldQuaternion,
+    initialGroupPivotWorldScale,
   }
 }
 
@@ -3485,10 +3548,13 @@ const draggingChangedHandler = (event: unknown) => {
   }
 
   const targetObject = transformControls?.object as THREE.Object3D | null
+  const isPivotTarget = Boolean((targetObject?.userData as any)?.isSelectionPivot)
+  const primaryId = sceneStore.selectedNodeId ?? null
+  const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
 
   if (!isSceneReady.value) {
     if (!value) {
-      updateGridHighlightFromObject(targetObject)
+      updateGridHighlightFromObject(primaryObject ?? targetObject)
     }
     return
   }
@@ -3503,14 +3569,11 @@ const draggingChangedHandler = (event: unknown) => {
       }
     }
     sceneStore.endTransformInteraction()
-    if (targetObject) {
-      const nodeId = (targetObject as THREE.Object3D | null)?.userData?.nodeId as string | undefined
-      if (nodeId) {
-        wallRenderer.endWallDrag(nodeId)
-      }
+    if (primaryId) {
+      wallRenderer.endWallDrag(primaryId)
     }
     transformGroupState = null
-    updateGridHighlightFromObject(targetObject)
+    updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
     if (pendingSceneGraphSync) {
       pendingSceneGraphSync = false
@@ -3522,22 +3585,19 @@ const draggingChangedHandler = (event: unknown) => {
     // Dragging begins
     hasTransformLastWorldPosition = false
     transformControlsDirty = false
-    const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
-    sceneStore.beginTransformInteraction(nodeId ?? null)
-    if (nodeId) {
-      wallRenderer.beginWallDrag(nodeId)
+    sceneStore.beginTransformInteraction(primaryId)
+    if (primaryId) {
+      wallRenderer.beginWallDrag(primaryId)
     }
-    transformGroupState = buildTransformGroupState(nodeId ?? null)
+    transformGroupState = buildTransformGroupState(primaryId)
     // Prime multi-binding caches before the first transform delta is applied.
     if (targetObject) {
-      primeInstancedTransform(targetObject)
+      primeInstancedTransform(isPivotTarget ? primaryObject : targetObject)
     }
     if (transformGroupState?.entries?.size) {
       transformGroupState.entries.forEach((entry) => primeInstancedTransform(entry.object))
     }
-    if (targetObject) {
-      updateGridHighlightFromObject(targetObject)
-    }
+    updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
   }
 }
@@ -8584,41 +8644,41 @@ function buildHierarchyMaps(): { nodeMap: Map<string, SceneNode>; parentMap: Map
 function handleTransformChange() {
   if (!transformControls || !isSceneReady.value) return
   const target = transformControls.object as THREE.Object3D | null
-  if (!target || !target.userData?.nodeId) {
+  if (!target) {
     return
   }
 
-  const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
-
+  const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot)
   const mode = transformControls.getMode()
-  const nodeId = target.userData.nodeId as string
   const isTranslateMode = mode === 'translate'
   const isActiveTranslateTool = props.activeTool === 'translate'
   const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
 
-  if (isTranslateMode && shouldSnapTranslate) {
-    // alignment hint visuals disabled
+  const nodeId = (target.userData?.nodeId as string | undefined) ?? null
+  const primaryId = sceneStore.selectedNodeId ?? nodeId
+  const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
+
+  // Single-select requires a real node id.
+  if (!isPivotTarget && !nodeId) {
+    return
+  }
+
+  // Only snap single-select local position (legacy behavior).
+  if (!isPivotTarget && nodeId && isTranslateMode && shouldSnapTranslate) {
     snapVectorToGridForNode(target.position, nodeId)
-  } else if (!isTranslateMode || !isActiveTranslateTool) {
-    // alignment hint visuals disabled
   }
 
   target.updateMatrixWorld(true)
   target.getWorldPosition(transformCurrentWorldPosition)
 
   const groupState = transformGroupState
+  const isGroupTransform = Boolean(groupState && groupState.entries.size > 1)
 
   if (isTranslateMode && isActiveTranslateTool) {
     transformMovementDelta.set(0, 0, 0)
     if (hasTransformLastWorldPosition) {
       transformMovementDelta.copy(transformCurrentWorldPosition).sub(transformLastWorldPosition)
     }
-
-    const faceSnapExcludedIds = new Set<string>([nodeId])
-    if (groupState && groupState.entries.size > 0) {
-      groupState.entries.forEach((entry) => faceSnapExcludedIds.add(entry.nodeId))
-    }
-
     // surface/face alignment snapping and hint visuals disabled
     target.updateMatrixWorld(true)
     target.getWorldPosition(transformCurrentWorldPosition)
@@ -8626,28 +8686,29 @@ function handleTransformChange() {
     hasTransformLastWorldPosition = false
   }
 
-  syncInstancedTransform(target, true)
-  // Instanced outline proxies cache per-instance world matrices.
-  // Keep them in sync during TransformControls dragging (e.g. instanced wall assets).
-  syncInstancedOutlineEntryTransform(nodeId)
-
-  // Keep pivot overrides in sync so the gizmo follows instanced PickProxy nodes while moving.
-  if (target.userData?.instancedPickProxy) {
-    updateTransformControlsPivotOverride(target)
+  // Keep instanced transforms in sync during dragging when transforming a real node.
+  if (!isPivotTarget && nodeId) {
+    syncInstancedTransform(target, true)
+    syncInstancedOutlineEntryTransform(nodeId)
+    if (target.userData?.instancedPickProxy) {
+      updateTransformControlsPivotOverride(target)
+    }
   }
 
   const updates: TransformUpdatePayload[] = []
-  const primaryEntry = groupState?.entries.get(nodeId)
 
-  if (groupState && primaryEntry) {
+  if (isGroupTransform && groupState) {
+    const pivotWorld = groupState.initialGroupPivotWorldPosition
+
+    // Current pivot transform comes from the attached object (selection pivot).
+    target.getWorldPosition(transformWorldPositionBuffer)
+    target.getWorldQuaternion(transformPivotCurrentWorldQuaternion)
+    target.getWorldScale(transformPivotCurrentWorldScale)
+
     switch (mode) {
       case 'translate': {
-        target.getWorldPosition(transformCurrentWorldPosition)
-        transformDeltaPosition.copy(transformCurrentWorldPosition).sub(primaryEntry.initialWorldPosition)
-        groupState.entries.forEach((entry, entryId) => {
-          if (entryId === nodeId) {
-            return
-          }
+        transformDeltaPosition.copy(transformWorldPositionBuffer).sub(pivotWorld)
+        groupState.entries.forEach((entry) => {
           transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
           if (shouldSnapTranslate) {
             snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
@@ -8668,14 +8729,31 @@ function handleTransformChange() {
         break
       }
       case 'rotate': {
-        transformQuaternionInverseHelper.copy(primaryEntry.initialQuaternion).invert()
-        transformQuaternionDelta.copy(target.quaternion).multiply(transformQuaternionInverseHelper)
-        groupState.entries.forEach((entry, entryId) => {
-          if (entryId === nodeId) {
-            return
+        transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
+        transformQuaternionDelta.copy(transformPivotCurrentWorldQuaternion).multiply(transformQuaternionInverseHelper)
+        groupState.entries.forEach((entry) => {
+          // Orbit position around pivot.
+          transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
+          transformOffsetWorldHelper.applyQuaternion(transformQuaternionDelta)
+          transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
+
+          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+          if (entry.parent) {
+            entry.parent.worldToLocal(transformLocalPositionHelper)
           }
-          transformQuaternionHelper.copy(entry.initialQuaternion)
+          entry.object.position.copy(transformLocalPositionHelper)
+
+          // Rotate orientation in world space, then convert to local.
+          transformQuaternionHelper.copy(entry.initialWorldQuaternion)
           transformQuaternionHelper.premultiply(transformQuaternionDelta)
+
+          if (entry.parent) {
+            entry.parent.updateMatrixWorld(true)
+            entry.parent.getWorldQuaternion(transformParentWorldQuaternionHelper)
+            transformParentWorldQuaternionInverseHelper.copy(transformParentWorldQuaternionHelper).invert()
+            transformQuaternionHelper.premultiply(transformParentWorldQuaternionInverseHelper)
+          }
+
           entry.object.quaternion.copy(transformQuaternionHelper)
           entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
           entry.object.updateMatrixWorld(true)
@@ -8683,67 +8761,40 @@ function handleTransformChange() {
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
 
-        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
-        if (!hasPivotOverride) {
-          computeTransformPivotWorld(target, instancedPivotWorldHelper)
-          transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-          if (transformDeltaPosition.lengthSq() > 1e-12) {
-            target.getWorldPosition(transformWorldPositionBuffer)
-            transformWorldPositionBuffer.add(transformDeltaPosition)
-            if (target.parent) {
-              target.parent.worldToLocal(transformWorldPositionBuffer)
-            }
-            target.position.copy(transformWorldPositionBuffer)
-            target.updateMatrixWorld(true)
-            syncInstancedTransform(target, true)
-            syncInstancedOutlineEntryTransform(nodeId)
-          }
-        }
-
         hasTransformLastWorldPosition = false
         break
       }
       case 'scale': {
+        const initialScale = groupState.initialGroupPivotWorldScale
         transformScaleFactor.set(1, 1, 1)
-        transformScaleFactor.x = primaryEntry.initialScale.x === 0
-          ? 1
-          : target.scale.x / primaryEntry.initialScale.x
-        transformScaleFactor.y = primaryEntry.initialScale.y === 0
-          ? 1
-          : target.scale.y / primaryEntry.initialScale.y
-        transformScaleFactor.z = primaryEntry.initialScale.z === 0
-          ? 1
-          : target.scale.z / primaryEntry.initialScale.z
-        groupState.entries.forEach((entry, entryId) => {
-          if (entryId === nodeId) {
-            return
-          }
+        transformScaleFactor.x = initialScale.x === 0 ? 1 : transformPivotCurrentWorldScale.x / initialScale.x
+        transformScaleFactor.y = initialScale.y === 0 ? 1 : transformPivotCurrentWorldScale.y / initialScale.y
+        transformScaleFactor.z = initialScale.z === 0 ? 1 : transformPivotCurrentWorldScale.z / initialScale.z
+
+        // Scale offsets in the pivot's orientation frame.
+        transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
+        groupState.entries.forEach((entry) => {
           entry.object.scale.set(
             entry.initialScale.x * transformScaleFactor.x,
             entry.initialScale.y * transformScaleFactor.y,
             entry.initialScale.z * transformScaleFactor.z,
           )
+
+          transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
+          transformOffsetLocalHelper.copy(transformOffsetWorldHelper).applyQuaternion(transformQuaternionInverseHelper)
+          transformOffsetLocalHelper.multiply(transformScaleFactor)
+          transformOffsetWorldHelper.copy(transformOffsetLocalHelper).applyQuaternion(groupState.initialGroupPivotWorldQuaternion)
+          transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
+
+          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+          if (entry.parent) {
+            entry.parent.worldToLocal(transformLocalPositionHelper)
+          }
+          entry.object.position.copy(transformLocalPositionHelper)
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
           syncInstancedOutlineEntryTransform(entry.nodeId)
         })
-
-        // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
-        if (!hasPivotOverride) {
-          computeTransformPivotWorld(target, instancedPivotWorldHelper)
-          transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-          if (transformDeltaPosition.lengthSq() > 1e-12) {
-            target.getWorldPosition(transformWorldPositionBuffer)
-            transformWorldPositionBuffer.add(transformDeltaPosition)
-            if (target.parent) {
-              target.parent.worldToLocal(transformWorldPositionBuffer)
-            }
-            target.position.copy(transformWorldPositionBuffer)
-            target.updateMatrixWorld(true)
-            syncInstancedTransform(target, true)
-            syncInstancedOutlineEntryTransform(nodeId)
-          }
-        }
 
         hasTransformLastWorldPosition = false
         break
@@ -8761,19 +8812,44 @@ function handleTransformChange() {
       })
     })
   } else {
+    // Single-select legacy path (includes instanced pivot compensation).
+    const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
+    const effectiveNodeId = nodeId!
+
     if (isTranslateMode && isActiveTranslateTool) {
       transformLastWorldPosition.copy(transformCurrentWorldPosition)
       hasTransformLastWorldPosition = true
     }
+
+    // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+    if ((mode === 'rotate' || mode === 'scale') && !hasPivotOverride) {
+      const primaryEntry = groupState?.entries.get(effectiveNodeId) ?? null
+      if (primaryEntry) {
+        computeTransformPivotWorld(target, instancedPivotWorldHelper)
+        transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+        if (transformDeltaPosition.lengthSq() > 1e-12) {
+          target.getWorldPosition(transformWorldPositionBuffer)
+          transformWorldPositionBuffer.add(transformDeltaPosition)
+          if (target.parent) {
+            target.parent.worldToLocal(transformWorldPositionBuffer)
+          }
+          target.position.copy(transformWorldPositionBuffer)
+          target.updateMatrixWorld(true)
+          syncInstancedTransform(target, true)
+          syncInstancedOutlineEntryTransform(effectiveNodeId)
+        }
+      }
+    }
+
     updates.push({
-      id: nodeId,
+      id: effectiveNodeId,
       position: target.position,
       rotation: toEulerLike(target.rotation),
       scale: target.scale,
     })
   }
 
-  updateGridHighlightFromObject(target)
+  updateGridHighlightFromObject((isGroupTransform ? primaryObject : target) ?? null)
   updateSelectionHighlights()
 
   if (!updates.length) {
@@ -8790,7 +8866,6 @@ function handleTransformChange() {
   }
 
   emitTransformUpdates(updates)
-
 }
 
 function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode) {
@@ -9977,20 +10052,77 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   return object
 }
 
-function applyTransformSpace(tool: EditorTool) {
+function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | null): void {
   if (!transformControls) {
     return
   }
-  const nextSpace = tool === 'rotate' ? 'world' : 'local'
+  const ids = collectTopLevelUnlockedSelectionIds(primaryId)
+  const isMulti = ids.length > 1
+  const nextSpace = isMulti ? 'world' : (tool === 'rotate' ? 'world' : 'local')
   transformControls.setSpace(nextSpace)
 }
 
+function collectTopLevelUnlockedSelectionIds(primaryId: string | null): string[] {
+  const selectedIds = sceneStore.selectedNodeIds
+    .filter((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
+
+  if (primaryId && !sceneStore.isNodeSelectionLocked(primaryId) && !selectedIds.includes(primaryId)) {
+    selectedIds.push(primaryId)
+  }
+
+  if (!selectedIds.length) {
+    return []
+  }
+
+  const { parentMap } = buildHierarchyMaps()
+  return filterTopLevelSelection(selectedIds, parentMap)
+}
+
+function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool): THREE.Vector3 | null {
+  const ids = collectTopLevelUnlockedSelectionIds(primaryId)
+  if (ids.length <= 1) {
+    return null
+  }
+
+  const centroidWorld = new THREE.Vector3()
+  let count = 0
+  const pivotWorld = new THREE.Vector3()
+  for (const id of ids) {
+    const object = objectMap.get(id)
+    if (!object) {
+      continue
+    }
+    computeTransformPivotWorld(object, pivotWorld)
+    centroidWorld.add(pivotWorld)
+    count += 1
+  }
+  if (count <= 0) {
+    return null
+  }
+  centroidWorld.multiplyScalar(1 / count)
+
+  // Place pivot under rootGroup.
+  rootGroup.updateMatrixWorld(true)
+  selectionPivotObject.position.copy(centroidWorld)
+  rootGroup.worldToLocal(selectionPivotObject.position)
+
+  // Multi-select pivot is always world-oriented.
+  void tool
+  selectionPivotObject.quaternion.identity()
+  selectionPivotObject.rotation.set(0, 0, 0)
+  selectionPivotObject.scale.set(1, 1, 1)
+  selectionPivotObject.updateMatrixWorld(true)
+
+  return centroidWorld
+}
+
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
-  const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
-  const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
+  const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
+  const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
+  const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
   updateOutlineSelectionTargets()
 
-  if (!nodeId || locked || !target) {
+  if (!primaryId || locked || !target) {
     updateGridHighlight(null)
   } else {
     updateGridHighlightFromObject(target)
@@ -9998,7 +10130,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
   if (!transformControls) return
 
-  if (!nodeId || locked) {
+  if (!primaryId || locked) {
     transformControls.detach()
     return
   }
@@ -10012,12 +10144,22 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     return
   }
   // 根据当前工具选择合适的变换坐标系
-  applyTransformSpace(tool)
+  applyTransformSpaceForSelection(tool, primaryId)
   transformControls.setMode(tool)
 
-  // For instanced tiling nodes, place the gizmo at the PickProxy-derived pivot.
-  updateTransformControlsPivotOverride(target)
+  // Multi-select: attach to centroid pivot so the gizmo axis is centered.
+  const centroidWorld = updateSelectionPivotObject(primaryId, tool)
+  if (centroidWorld) {
+    // Multi-select always uses world-space axis.
+    transformControls.setSpace('world')
+    transformControls.attach(selectionPivotObject)
+    // Keep grid highlight anchored to the primary object (not the pivot).
+    updateGridHighlightFromObject(target)
+    return
+  }
 
+  // Single-select: for instanced tiling nodes, place the gizmo at the PickProxy-derived pivot.
+  updateTransformControlsPivotOverride(target)
   transformControls.attach(target)
 }
 
@@ -10030,7 +10172,7 @@ function updateToolMode(tool: EditorTool) {
   if (tool === 'select') {
     transformControls.detach()
   } else {
-    applyTransformSpace(tool)
+    applyTransformSpaceForSelection(tool, sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
     transformControls.setMode(tool)
   }
 
@@ -10255,6 +10397,9 @@ watch(
 watch(
   () => sceneStore.selectedNodeIds.slice(),
   () => {
+    if (!transformControls?.dragging) {
+      attachSelection(props.selectedNodeId, props.activeTool)
+    }
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
     refreshEffectRuntimeTickers()

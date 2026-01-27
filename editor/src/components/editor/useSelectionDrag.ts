@@ -29,6 +29,7 @@ export function useSelectionDrag(
     updatePlaceholderOverlayPositions: () => void
     gizmoControlsUpdate: () => void
     getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
+    computeTransformPivotWorld?: (object: THREE.Object3D, out: THREE.Vector3) => void
   }
 ) {
   const sceneStore = useSceneStore()
@@ -440,7 +441,39 @@ export function useSelectionDrag(
       return
     }
 
+    const axisVector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, 0)
+    const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(axisVector, delta)
+
+    // Compute centroid in world space using per-object pivot when available.
+    const centroidWorld = new THREE.Vector3()
+    const pivotWorld = new THREE.Vector3()
+    let count = 0
+    for (const nodeId of topLevelIds) {
+      const targetObject = objectMap.get(nodeId)
+      if (!targetObject) {
+        continue
+      }
+      if (callbacks.computeTransformPivotWorld) {
+        callbacks.computeTransformPivotWorld(targetObject, pivotWorld)
+      } else {
+        targetObject.getWorldPosition(pivotWorld)
+      }
+      centroidWorld.add(pivotWorld)
+      count += 1
+    }
+    if (count <= 0) {
+      return
+    }
+    centroidWorld.multiplyScalar(1 / count)
+
     const updates: TransformUpdatePayload[] = []
+    const worldPosition = new THREE.Vector3()
+    const pivotPosition = new THREE.Vector3()
+    const originToPivotOffset = new THREE.Vector3()
+    const worldOffset = new THREE.Vector3()
+    const pivotAfter = new THREE.Vector3()
+    const originAfter = new THREE.Vector3()
+    const localPosition = new THREE.Vector3()
 
     for (const nodeId of topLevelIds) {
       const targetObject = objectMap.get(nodeId)
@@ -448,21 +481,41 @@ export function useSelectionDrag(
         continue
       }
 
-      const nextRotation = targetObject.rotation.clone()
-      if (axis === 'x') {
-        nextRotation.x += delta
-      } else if (axis === 'y') {
-        nextRotation.y += delta
+      targetObject.updateMatrixWorld(true)
+      targetObject.getWorldPosition(worldPosition)
+
+      // Use the object's transform pivot (PickProxy-aware) when available.
+      if (callbacks.computeTransformPivotWorld) {
+        callbacks.computeTransformPivotWorld(targetObject, pivotPosition)
       } else {
-        continue
+        pivotPosition.copy(worldPosition)
       }
 
-      targetObject.rotation.copy(nextRotation)
+      // Desired pivot position after rotating around the selection centroid.
+      worldOffset.copy(pivotPosition).sub(centroidWorld).applyQuaternion(rotateDeltaQuaternion)
+      pivotAfter.copy(centroidWorld).add(worldOffset)
+
+      // Keep the origin-to-pivot offset consistent under the same rotation, so instanced PickProxy pivots behave.
+      originToPivotOffset.copy(worldPosition).sub(pivotPosition)
+      originToPivotOffset.applyQuaternion(rotateDeltaQuaternion)
+      originAfter.copy(pivotAfter).add(originToPivotOffset)
+
+      localPosition.copy(originAfter)
+      if (targetObject.parent) {
+        targetObject.parent.worldToLocal(localPosition)
+      }
+      targetObject.position.copy(localPosition)
+      targetObject.quaternion.premultiply(rotateDeltaQuaternion)
+      targetObject.rotation.setFromQuaternion(targetObject.quaternion)
       targetObject.updateMatrixWorld(true)
+      callbacks.syncInstancedTransform(targetObject, true)
 
       updates.push({
         id: nodeId,
-        rotation: toEulerLike(nextRotation),
+        // Clone the vector so each update has its own immutable snapshot.
+        // (Reusing a single Vector3 instance will make every node end up with the same final position.)
+        position: localPosition.clone(),
+        rotation: toEulerLike(targetObject.rotation),
       })
     }
 
