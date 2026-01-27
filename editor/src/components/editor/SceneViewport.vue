@@ -1445,6 +1445,26 @@ vertexOverlayHintBeam.frustumCulled = false
 
 vertexOverlayGroup.add(vertexOverlayHintBeam)
 
+// Placement side-snap hint (shown during asset placement preview).
+const placementOverlayHintBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffc107,
+  transparent: true,
+  opacity: 0.75,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+})
+placementOverlayHintBeamMaterial.toneMapped = false
+const placementOverlayHintBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlayHintBeamMaterial)
+placementOverlayHintBeam.name = 'PlacementOverlayHintBeam'
+placementOverlayHintBeam.renderOrder = 19998
+placementOverlayHintBeam.visible = false
+placementOverlayHintBeam.frustumCulled = false
+;(placementOverlayHintBeam as any).raycast = () => {}
+
+vertexOverlayGroup.add(placementOverlayHintBeam)
+
 const vertexOverlayHintDirHelper = new THREE.Vector3()
 const vertexOverlayHintMidHelper = new THREE.Vector3()
 const vertexOverlayHintQuatHelper = new THREE.Quaternion()
@@ -1458,6 +1478,37 @@ let pendingVertexSnapResult: VertexSnapResult | null = null
 
 function clearVertexSnapMarkers() {
   vertexOverlayHintBeam.visible = false
+}
+
+const placementOverlayHintDirHelper = new THREE.Vector3()
+const placementOverlayHintMidHelper = new THREE.Vector3()
+const placementOverlayHintQuatHelper = new THREE.Quaternion()
+
+function clearPlacementSideSnapMarkers() {
+  placementOverlayHintBeam.visible = false
+}
+
+function updatePlacementSideSnapMarkers(result: VertexSnapResult | null) {
+  if (!result) {
+    clearPlacementSideSnapMarkers()
+    return
+  }
+
+  placementOverlayHintDirHelper.copy(result.targetWorld).sub(result.sourceWorld)
+  const len = placementOverlayHintDirHelper.length()
+  if (!Number.isFinite(len) || len <= 1e-6) {
+    clearPlacementSideSnapMarkers()
+    return
+  }
+
+  placementOverlayHintMidHelper.copy(result.sourceWorld).add(result.targetWorld).multiplyScalar(0.5)
+  placementOverlayHintDirHelper.multiplyScalar(1 / len)
+  placementOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, placementOverlayHintDirHelper)
+
+  placementOverlayHintBeam.position.copy(placementOverlayHintMidHelper)
+  placementOverlayHintBeam.quaternion.copy(placementOverlayHintQuatHelper)
+  placementOverlayHintBeam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
+  placementOverlayHintBeam.visible = true
 }
 
 function updateVertexSnapMarkers(result: VertexSnapResult | null) {
@@ -1497,6 +1548,20 @@ const updateVertexSnapHintPulse = (nowMs: number) => {
   const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
   vertexOverlayHintBeam.scale.x = radius
   vertexOverlayHintBeam.scale.z = radius
+}
+
+const updatePlacementSideSnapHintPulse = (nowMs: number) => {
+  if (!placementOverlayHintBeam.visible) {
+    return
+  }
+  const t = nowMs * 0.002
+  const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
+  const opacity = VERTEX_OVERLAY_HINT_BASE_OPACITY + VERTEX_OVERLAY_HINT_PULSE_OPACITY * pulse
+  placementOverlayHintBeamMaterial.opacity = opacity
+
+  const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
+  placementOverlayHintBeam.scale.x = radius
+  placementOverlayHintBeam.scale.z = radius
 }
 
 const groundEditor = createGroundEditor({
@@ -5786,6 +5851,7 @@ function animate() {
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   updateVertexSnapHintPulse(performance.now())
+  updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
   if (sky) {
@@ -6963,12 +7029,29 @@ function handlePointerMove(event: PointerEvent) {
         if (aligned) {
           dragPreviewGroup.position.copy(aligned)
           dragPreviewGroup.visible = true
+
+          const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+          const result = snapController.updatePlacementSideSnap({
+            event,
+            previewObject: dragPreviewGroup,
+            active: placementSnapActive,
+            pixelThresholdPx: vertexSnapThresholdPx.value,
+          })
+          updatePlacementSideSnapMarkers(result)
+        } else {
+          snapController.resetPlacementSideSnap()
+          clearPlacementSideSnapMarkers()
         }
       }
     }
   } catch (err) {
     // non-fatal: ensure we don't break pointer handling
     console.warn('Failed to update selection preview position', err)
+  }
+
+  if (!selectionPreviewActive || !dragPreview || isDragHovering.value) {
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
   }
 }
 
@@ -7159,6 +7242,11 @@ async function handlePointerUp(event: PointerEvent) {
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
+          const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+            ? snapController.consumePlacementSideSnapResult()
+            : null
+          clearPlacementSideSnapMarkers()
+
           const placement = computePointerDropPlacement(event)
           const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
           const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === session.assetId
@@ -7177,16 +7265,30 @@ async function handlePointerUp(event: PointerEvent) {
               return !selectedNode.children || selectedNode.children.length === 0
             })()
 
+            let spawnResult: { node: { id: string } } | null = null
+
             if (isEmptySelectedGroup && parentGroupId) {
-              await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint, {
+              spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint, {
                 rotation,
               })
             } else {
-              await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
+              spawnResult = await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
                 parentId: parentGroupId,
                 preserveWorldPosition: Boolean(parentGroupId),
                 rotation,
               })
+            }
+
+            const placedNodeId = spawnResult?.node?.id ?? null
+            if (placementSideSnap && placedNodeId && snapController.isNodeGeometryReady(placedNodeId)) {
+              const placedObject = objectMap.get(placedNodeId) ?? null
+              if (placedObject) {
+                placedObject.updateMatrixWorld(true)
+                const worldPos = new THREE.Vector3()
+                placedObject.getWorldPosition(worldPos)
+                worldPos.add(placementSideSnap.delta)
+                sceneStore.setNodeWorldPositionPositionOnly(placedNodeId, worldPos)
+              }
             }
           } catch (error) {
             console.warn('Failed to spawn asset from selection click', session.assetId, error)
@@ -7241,6 +7343,8 @@ async function handlePointerUp(event: PointerEvent) {
     // Ensure lightweight gesture state doesn't leak across interactions.
     pointerInteraction.clearIfPointer(event.pointerId)
     snapController.reset()
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
 
     if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
       middleClickSessionState = null
@@ -7258,7 +7362,9 @@ async function handlePointerUp(event: PointerEvent) {
 
 function handlePointerCancel(event: PointerEvent) {
   snapController.reset()
+  snapController.resetPlacementSideSnap()
   clearVertexSnapMarkers()
+  clearPlacementSideSnapMarkers()
   pendingVertexSnapResult = null
   pointerInteraction.clearIfPointer(event.pointerId)
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
@@ -8211,8 +8317,22 @@ function handleViewportDragOver(event: DragEvent) {
     if (aligned) {
       dragPreviewGroup.position.copy(aligned)
       dragPreviewGroup.visible = true
+
+      const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+      const result = snapController.updatePlacementSideSnap({
+        event,
+        previewObject: dragPreviewGroup,
+        active: placementSnapActive,
+        pixelThresholdPx: vertexSnapThresholdPx.value,
+      })
+      updatePlacementSideSnapMarkers(result)
+    } else {
+      snapController.resetPlacementSideSnap()
+      clearPlacementSideSnapMarkers()
     }
   } else {
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
     dragPreview.dispose()
   }
 }
@@ -8226,6 +8346,8 @@ function handleViewportDragLeave(event: DragEvent) {
   }
   isDragHovering.value = false
   updateGridHighlight(null)
+  snapController.resetPlacementSideSnap()
+  clearPlacementSideSnapMarkers()
   dragPreview.dispose()
   restoreGridHighlightForSelection()
 }
@@ -8235,12 +8357,14 @@ async function handleViewportDrop(event: DragEvent) {
   const info = resolveDragAsset(event)
   event.preventDefault()
   event.stopPropagation()
+  clearPlacementSideSnapMarkers()
   isDragHovering.value = false
   if (!info) {
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
+    snapController.resetPlacementSideSnap()
     return
   }
 
@@ -8254,6 +8378,7 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
+    snapController.resetPlacementSideSnap()
     return
   }
 
@@ -8265,6 +8390,7 @@ async function handleViewportDrop(event: DragEvent) {
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
+      snapController.resetPlacementSideSnap()
       return
     }
   }
@@ -8277,6 +8403,7 @@ async function handleViewportDrop(event: DragEvent) {
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
+      snapController.resetPlacementSideSnap()
       return
     }
     const applied = applyMaterialAssetToNode(target.nodeId, assetId)
@@ -8287,6 +8414,7 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
+    snapController.resetPlacementSideSnap()
     return
   }
 
@@ -8305,6 +8433,7 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
+    snapController.resetPlacementSideSnap()
     return
   }
 
@@ -8316,6 +8445,7 @@ async function handleViewportDrop(event: DragEvent) {
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
+      snapController.resetPlacementSideSnap()
       return
     }
     const applied = applyTextureAssetToNode(target.nodeId, assetId, asset?.name)
@@ -8326,8 +8456,13 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
+    snapController.resetPlacementSideSnap()
     return
   }
+
+  const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+    ? snapController.consumePlacementSideSnapResult()
+    : null
 
   const placement = computeDropPlacement(event)
   const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
@@ -8346,19 +8481,34 @@ async function handleViewportDrop(event: DragEvent) {
       return !selectedNode.children || selectedNode.children.length === 0
     })()
 
+    let spawnResult: { node: { id: string } } | null = null
+
     if (isEmptySelectedGroup && parentGroupId) {
-      await sceneStore.spawnAssetIntoEmptyGroupAtPosition(assetId, parentGroupId, spawnPoint)
+      spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtPosition(assetId, parentGroupId, spawnPoint)
     } else {
-      await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+      spawnResult = await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
         parentId: parentGroupId,
         preserveWorldPosition: Boolean(parentGroupId),
       })
+    }
+
+    const placedNodeId = spawnResult?.node?.id ?? null
+    if (placementSideSnap && placedNodeId && snapController.isNodeGeometryReady(placedNodeId)) {
+      const placedObject = objectMap.get(placedNodeId) ?? null
+      if (placedObject) {
+        placedObject.updateMatrixWorld(true)
+        const worldPos = new THREE.Vector3()
+        placedObject.getWorldPosition(worldPos)
+        worldPos.add(placementSideSnap.delta)
+        sceneStore.setNodeWorldPositionPositionOnly(placedNodeId, worldPos)
+      }
     }
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
+    snapController.resetPlacementSideSnap()
   }
   updateGridHighlight(null)
   restoreGridHighlightForSelection()
