@@ -2148,7 +2148,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterLayer = result
 		}
 		if (result) {
-			syncTerrainScatterSnapshotToScene(store)
+			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true })
 		}
 		return result
 	}
@@ -2250,7 +2250,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return Number.isFinite(updated) ? Number(updated) : null
 	}
 
-	function syncTerrainScatterSnapshotToScene(storeOverride?: TerrainScatterStore | null): void {
+	function syncTerrainScatterSnapshotToScene(
+		storeOverride?: TerrainScatterStore | null,
+		options: { bumpInstancesUpdatedAt?: boolean } = {},
+	): void {
 		const store = storeOverride ?? scatterStore
 		if (!store) {
 			return
@@ -2260,9 +2263,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 			return
 		}
+		const shouldBumpInstances = options.bumpInstancesUpdatedAt === true
 		const nextMesh: GroundDynamicMesh = {
 			...(groundNode.dynamicMesh as GroundDynamicMesh),
 			terrainScatter: snapshot,
+			terrainScatterInstancesUpdatedAt: shouldBumpInstances
+				? Date.now()
+				: (groundNode.dynamicMesh as GroundDynamicMesh).terrainScatterInstancesUpdatedAt,
 		}
 		groundNode.dynamicMesh = nextMesh
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)

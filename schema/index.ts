@@ -971,6 +971,7 @@ export interface GroundDynamicMesh {
   columns: number
   cellSize: number
   heightMap: GroundHeightMap
+  terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null
   generation?: GroundGenerationSettings | null

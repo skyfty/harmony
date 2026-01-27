@@ -69,6 +69,7 @@ const createGroundNode = (width: number, depth: number, color: string) => ({
     columns: Math.max(1, Math.round(width)),
     cellSize: 1,
     heightMap: {},
+    terrainScatterInstancesUpdatedAt: 0,
     textureDataUrl: null,
     textureName: null,
   },

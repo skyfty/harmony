@@ -638,6 +638,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
     const next = {
       ...(groundNode.dynamicMesh as any),
       terrainScatter: snapshot,
+      terrainScatterInstancesUpdatedAt: Date.now(),
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
   }
@@ -2003,6 +2004,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const next = {
       ...(finalGround.dynamicMesh as any),
       terrainScatter: snapshot,
+      terrainScatterInstancesUpdatedAt: Date.now(),
     }
     sceneStore.updateNodeDynamicMesh(finalGround.id, next)
   }

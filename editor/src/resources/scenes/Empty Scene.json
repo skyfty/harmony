@@ -64,6 +64,7 @@
         "columns": 100,
         "cellSize": 1,
         "heightMap": {},
+        "terrainScatterInstancesUpdatedAt": 0,
         "textureDataUrl": null,
         "textureName": null
       }
