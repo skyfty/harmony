@@ -363,6 +363,21 @@
         @click="toggleVertexSnap"
       />
 
+      <v-btn
+        :icon="controlsType === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
+        :color="controlsType === 'orbit' ? 'primary' : undefined"
+        :variant="controlsType === 'orbit' ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :title="
+          controlsType === 'map'
+            ? 'Camera Controls: Map (click to switch to Orbit)'
+            : 'Camera Controls: Orbit (click to switch to Map)'
+        "
+        @click="emit('toggle-controls-type')"
+      />
+
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -394,6 +409,7 @@ const props = withDefaults(
   showGrid: boolean
   showAxes: boolean
   vertexSnapEnabled?: boolean
+  controlsType?: 'map' | 'orbit'
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -410,11 +426,13 @@ const props = withDefaults(
   {
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
+    controlsType: 'map',
   },
 )
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
+  (event: 'toggle-controls-type'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
@@ -435,6 +453,7 @@ const {
   showGrid,
   showAxes,
   vertexSnapEnabled,
+  controlsType,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
