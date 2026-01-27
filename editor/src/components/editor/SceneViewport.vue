@@ -103,7 +103,8 @@ import {
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
-import {createPrimitiveMesh}  from '@harmony/schema'
+import { createUvDebugMaterial } from '@schema/debugTextures'
+import { createPrimitiveMesh } from '@harmony/schema'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -9513,6 +9514,48 @@ function ensureFallbackLighting() {
   }
 }
 
+function ensureUvDebugMaterialsForMissingMeshes(
+  root: THREE.Object3D,
+  options: { tint: THREE.ColorRepresentation; transparent?: boolean; opacity?: number },
+): void {
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh & { isMesh?: boolean }
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    const rawMaterial = (mesh as any).material as THREE.Material | THREE.Material[] | null | undefined
+    if (!rawMaterial || (Array.isArray(rawMaterial) && rawMaterial.length === 0)) {
+      ;(mesh as any).material = createUvDebugMaterial({
+        tint: options.tint,
+        transparent: options.transparent,
+        opacity: options.opacity,
+        side: THREE.DoubleSide,
+      })
+      return
+    }
+
+    if (Array.isArray(rawMaterial)) {
+      let changed = false
+      const next = rawMaterial.map((entry) => {
+        if (entry) {
+          return entry
+        }
+        changed = true
+        return createUvDebugMaterial({
+          tint: options.tint,
+          transparent: options.transparent,
+          opacity: options.opacity,
+          side: THREE.DoubleSide,
+        })
+      })
+      if (changed) {
+        ;(mesh as any).material = next
+      }
+    }
+  })
+}
+
 
 function resolveWarpGateProps(node: SceneNode): WarpGateComponentProps {
   const entry = node.components?.[WARP_GATE_COMPONENT_TYPE] as
@@ -9551,6 +9594,8 @@ function createWarpGatePlaceholderObject(node: SceneNode): THREE.Object3D {
   userData.warpGatePlaceholder = true
   const handle: WarpGatePlaceholderHandle = { controller }
   userData[WARP_GATE_PLACEHOLDER_KEY] = handle
+
+  ensureUvDebugMaterialsForMissingMeshes(root, { tint: 0xffffff })
 
   applyWarpGatePlaceholderState(root, node, props)
 
@@ -9631,6 +9676,8 @@ function createGuideboardPlaceholderObject(node: SceneNode): THREE.Object3D {
 
   const handle: GuideboardPlaceholderHandle = { controller }
   userData[GUIDEBOARD_PLACEHOLDER_KEY] = handle
+
+  ensureUvDebugMaterialsForMissingMeshes(root, { tint: 0xffffff })
 
   applyGuideboardPlaceholderState(root, node, props)
 
@@ -9801,8 +9848,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         containerData.usesRuntimeObject = true
       } else {
         const fallbackMaterial = node.isPlaceholder
-          ? new THREE.MeshBasicMaterial({ color: 0x4dd0e1, wireframe: true, opacity: 0.65, transparent: true })
-          : new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
+          ? createUvDebugMaterial({ tint: 0xa8e6ff, transparent: true, opacity: 0.75, side: THREE.DoubleSide, metalness: 0, roughness: 1 })
+          : createUvDebugMaterial({ tint: 0xffb3b3, transparent: false, opacity: 1, side: THREE.DoubleSide, metalness: 0, roughness: 1 })
         const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
         fallback.userData.nodeId = node.id
         container.add(fallback)

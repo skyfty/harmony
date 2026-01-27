@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 import type { AssetType } from './asset-types'
+import { createUvDebugMaterial } from './debugTextures'
 
 export const GROUND_NODE_ID = 'harmony:ground'
 export const SKY_NODE_ID = 'harmony:sky'
@@ -12,6 +13,8 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
+
+export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
 export { TerrainScatterCategories } from './terrain-scatter'
 export type { TerrainScatterCategory } from './terrain-scatter'
@@ -230,11 +233,10 @@ export function createPrimitiveGeometry(
 }
 
 function buildDefaultMaterial(color: THREE.ColorRepresentation, doubleSided?: boolean): THREE.Material {
-  const material = new THREE.MeshStandardMaterial({ color })
-  if (doubleSided) {
-    material.side = THREE.DoubleSide
-  }
-  return material
+  return createUvDebugMaterial({
+    tint: color,
+    side: doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+  })
 }
 
 export function createPrimitiveMesh(type: PrimitiveNodeLike, options?: PrimitiveMeshOptions): THREE.Mesh {

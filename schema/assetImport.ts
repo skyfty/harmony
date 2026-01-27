@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
+import { createUvDebugMaterial } from './debugTextures'
 
 export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
@@ -13,34 +14,82 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
     }
 
     const rawMaterial = (mesh as any).material as THREE.Material | THREE.Material[] | null | undefined
-    const materials = Array.isArray(rawMaterial) ? rawMaterial : rawMaterial ? [rawMaterial] : []
-    for (const material of materials) {
-      if (!material) {
-        continue
-      }
-
-      material.side = THREE.DoubleSide
-
-      const anyMaterial = material as any
-      const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
-      const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
-      const hasAlphaMap = Boolean(anyMaterial.alphaMap)
-      const hasMap = Boolean(anyMaterial.map)
-      const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
-      const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
-
-      const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
-      const mightNeedAlpha = hasAlphaMap || alphaTest > 0
-
-      if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
-        anyMaterial.transparent = false
-        if (typeof anyMaterial.depthWrite === 'boolean') {
-          anyMaterial.depthWrite = true
-        }
-      }
-
-      material.needsUpdate = true
+    if (!rawMaterial || (Array.isArray(rawMaterial) && rawMaterial.length === 0)) {
+      ;(mesh as any).material = createUvDebugMaterial({
+        tint: 0xffffff,
+        side: THREE.DoubleSide,
+      })
+      return
     }
+
+    if (Array.isArray(rawMaterial)) {
+      let changed = false
+      const normalized = rawMaterial.map((material) => {
+        if (!material) {
+          changed = true
+          return createUvDebugMaterial({
+            tint: 0xffffff,
+            side: THREE.DoubleSide,
+          })
+        }
+
+        material.side = THREE.DoubleSide
+
+        const anyMaterial = material as any
+        const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
+        const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
+        const hasAlphaMap = Boolean(anyMaterial.alphaMap)
+        const hasMap = Boolean(anyMaterial.map)
+        const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
+        const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
+
+        const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
+        const mightNeedAlpha = hasAlphaMap || alphaTest > 0
+
+        if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
+          anyMaterial.transparent = false
+          if (typeof anyMaterial.depthWrite === 'boolean') {
+            anyMaterial.depthWrite = true
+          }
+        }
+
+        material.needsUpdate = true
+        return material
+      })
+
+      if (changed) {
+        ;(mesh as any).material = normalized
+      }
+
+      return
+    }
+
+    const material = rawMaterial
+    if (!material) {
+      return
+    }
+
+    material.side = THREE.DoubleSide
+
+    const anyMaterial = material as any
+    const opacity = typeof anyMaterial.opacity === 'number' ? anyMaterial.opacity : 1
+    const alphaTest = typeof anyMaterial.alphaTest === 'number' ? anyMaterial.alphaTest : 0
+    const hasAlphaMap = Boolean(anyMaterial.alphaMap)
+    const hasMap = Boolean(anyMaterial.map)
+    const transmission = typeof anyMaterial.transmission === 'number' ? anyMaterial.transmission : 0
+    const thickness = typeof anyMaterial.thickness === 'number' ? anyMaterial.thickness : 0
+
+    const isActuallyTranslucent = opacity < 0.999 || transmission > 0 || thickness > 0
+    const mightNeedAlpha = hasAlphaMap || alphaTest > 0
+
+    if (anyMaterial.transparent === true && !isActuallyTranslucent && !mightNeedAlpha && !hasMap) {
+      anyMaterial.transparent = false
+      if (typeof anyMaterial.depthWrite === 'boolean') {
+        anyMaterial.depthWrite = true
+      }
+    }
+
+    material.needsUpdate = true
   })
 }
 
