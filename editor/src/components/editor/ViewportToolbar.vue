@@ -353,7 +353,7 @@
       />
 
       <v-btn
-        :icon="vertexSnapEnabled ? 'mdi-magnet' : 'mdi-magnet-off'"
+        :icon="vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'"
         :color="vertexSnapEnabled ? 'primary' : undefined"
         :variant="vertexSnapEnabled ? 'flat' : 'text'"
         density="compact"
