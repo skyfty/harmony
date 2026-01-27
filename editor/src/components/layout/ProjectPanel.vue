@@ -4,7 +4,7 @@ import AssetPanel from './AssetPanel.vue'
 import ConsolePanel from './ConsolePanel.vue'
 import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 
-defineProps<{
+const props = defineProps<{
   floating?: boolean
   captureViewportScreenshot?: () => Promise<Blob | null>
 }>()
@@ -49,8 +49,10 @@ function selectTab(tab: ProjectPanelTab): void {
   activeTab.value = tab
 }
 
-const placementIcon = computed(() => 'mdi-dock-window')
-const placementTitle = computed(() => 'Toggle placement')
+const floating = computed(() => props.floating ?? false)
+// Match HierarchyPanel: icon toggles when floating; title reflects action
+const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
+const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float panel'))
 </script>
 
 <template>
