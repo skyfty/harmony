@@ -4903,6 +4903,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     visible: node.visible ?? true,
     locked: node.locked ?? false,
     nodeType: node.nodeType,
+    instanced: !!node.userData?.instanced,
     lightType: node.light?.type,
     dynamicMeshType: node.dynamicMesh?.type,
     children: node.children?.map(toHierarchyItem),
@@ -7559,6 +7560,78 @@ function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
     }
   }
   return null
+}
+
+type SceneNodeIndex = {
+  structureVersion: number
+  nodeById: Map<string, SceneNode>
+  parentById: Map<string, string | null>
+}
+
+const sceneNodeIndex: SceneNodeIndex = {
+  structureVersion: -1,
+  nodeById: new Map(),
+  parentById: new Map(),
+}
+
+function rebuildSceneNodeIndex(nodes: SceneNode[]) {
+  sceneNodeIndex.nodeById.clear()
+  sceneNodeIndex.parentById.clear()
+
+  const stack: Array<{ node: SceneNode; parentId: string | null }> = []
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const node = nodes[i]
+    if (node) {
+      stack.push({ node, parentId: null })
+    }
+  }
+
+  while (stack.length) {
+    const entry = stack.pop()
+    if (!entry) {
+      continue
+    }
+    const { node, parentId } = entry
+    sceneNodeIndex.nodeById.set(node.id, node)
+    sceneNodeIndex.parentById.set(node.id, parentId)
+    const children = node.children
+    if (children?.length) {
+      for (let i = children.length - 1; i >= 0; i--) {
+        const child = children[i]
+        if (child) {
+          stack.push({ node: child, parentId: node.id })
+        }
+      }
+    }
+  }
+}
+
+function ensureSceneNodeIndex(store: { nodes: SceneNode[]; sceneGraphStructureVersion: number }) {
+  if (sceneNodeIndex.structureVersion === store.sceneGraphStructureVersion) {
+    return
+  }
+  rebuildSceneNodeIndex(store.nodes)
+  sceneNodeIndex.structureVersion = store.sceneGraphStructureVersion
+}
+
+function isDescendantByParentMap(ancestorId: string, maybeChildId: string): boolean {
+  if (!ancestorId || !maybeChildId) {
+    return false
+  }
+  if (ancestorId === maybeChildId) {
+    return true
+  }
+  if (!sceneNodeIndex.parentById.has(maybeChildId)) {
+    return false
+  }
+  let current = sceneNodeIndex.parentById.get(maybeChildId) ?? null
+  while (current) {
+    if (current === ancestorId) {
+      return true
+    }
+    current = sceneNodeIndex.parentById.get(current) ?? null
+  }
+  return false
 }
 
 function nodeContainsId(node: SceneNode, maybeChildId: string): boolean {
@@ -12658,15 +12731,43 @@ export const useSceneStore = defineStore('scene', {
 
     isDescendant(ancestorId: string, maybeChildId: string) {
       if (!ancestorId || !maybeChildId) return false
-      if (ancestorId === maybeChildId) return true
-      return isDescendantNode(this.nodes, ancestorId, maybeChildId)
+      ensureSceneNodeIndex(this)
+      return isDescendantByParentMap(ancestorId, maybeChildId)
     },
     nodeAllowsChildCreation(nodeId: string | null) {
       if (!nodeId) {
         return true
       }
-      const node = findNodeById(this.nodes, nodeId)
+      ensureSceneNodeIndex(this)
+      const node = sceneNodeIndex.nodeById.get(nodeId) ?? null
       return allowsChildNodes(node)
+    },
+
+    getNodeById(nodeId: string | null | undefined): SceneNode | null {
+      if (!nodeId) {
+        return null
+      }
+      ensureSceneNodeIndex(this)
+      return sceneNodeIndex.nodeById.get(nodeId) ?? null
+    },
+
+    getParentNodeId(nodeId: string | null | undefined): string | null {
+      if (!nodeId) {
+        return null
+      }
+      ensureSceneNodeIndex(this)
+      if (!sceneNodeIndex.parentById.has(nodeId)) {
+        return null
+      }
+      return sceneNodeIndex.parentById.get(nodeId) ?? null
+    },
+
+    isMultiuserNodeId(nodeId: string | null | undefined): boolean {
+      if (!nodeId) {
+        return false
+      }
+      const node = this.getNodeById(nodeId)
+      return isMultiuserNode(node)
     },
 
     moveNode(payload: {
