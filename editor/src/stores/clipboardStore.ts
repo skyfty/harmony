@@ -1,34 +1,51 @@
 import { defineStore } from 'pinia'
 import type { SceneClipboard } from '@harmony/schema'
 
-async function writeSystemClipboard(serialized: string): Promise<void> {
-  if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
-    return
-  }
+const VIRTUAL_CLIPBOARD_STORAGE_KEY = 'harmony:virtualClipboardText'
+
+function canUseLocalStorage(): boolean {
   try {
-    await navigator.clipboard.writeText(serialized)
-  } catch (error) {
-    console.warn('Failed to write prefab data to clipboard', error)
+    return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+  } catch {
+    return false
   }
 }
 
-async function readSystemClipboardText(): Promise<string | null> {
-  if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
-    return null
-  }
+function normalizeClipboardText(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized.length ? normalized : null
+}
+
+function readVirtualClipboardFromStorage(): string | null {
+  if (!canUseLocalStorage()) return null
   try {
-    const text = await navigator.clipboard.readText()
-    const normalized = text?.trim()
-    return normalized && normalized.length ? normalized : null
-  } catch (error) {
-    console.warn('Failed to read prefab data from clipboard', error)
+    return normalizeClipboardText(window.localStorage.getItem(VIRTUAL_CLIPBOARD_STORAGE_KEY))
+  } catch {
     return null
   }
 }
+
+function writeVirtualClipboardToStorage(value: string | null): void {
+  if (!canUseLocalStorage()) return
+  try {
+    if (value) {
+      window.localStorage.setItem(VIRTUAL_CLIPBOARD_STORAGE_KEY, value)
+    } else {
+      window.localStorage.removeItem(VIRTUAL_CLIPBOARD_STORAGE_KEY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+// Virtual clipboard (in-memory) to avoid browser clipboard permission issues.
+let virtualClipboardText: string | null = readVirtualClipboardFromStorage()
 
 export const useClipboardStore = defineStore('clipboard', {
   state: () => ({
     clipboard: null as SceneClipboard | null,
+    clipboardText: readVirtualClipboardFromStorage() as string | null,
+    persistClipboardText: true,
   }),
   actions: {
     setClipboard(payload: SceneClipboard | null) {
@@ -36,12 +53,34 @@ export const useClipboardStore = defineStore('clipboard', {
     },
     clearClipboard() {
       this.clipboard = null
+      this.clipboardText = null
+      virtualClipboardText = null
+      writeVirtualClipboardToStorage(null)
     },
+    setPersistClipboardText(enabled: boolean) {
+      this.persistClipboardText = Boolean(enabled)
+      if (!this.persistClipboardText) {
+        writeVirtualClipboardToStorage(null)
+      } else {
+        writeVirtualClipboardToStorage(virtualClipboardText ?? this.clipboardText)
+      }
+    },
+    writeText(serialized: string | null) {
+      const next = normalizeClipboardText(serialized)
+      virtualClipboardText = next
+      this.clipboardText = next
+      if (this.persistClipboardText) writeVirtualClipboardToStorage(next)
+    },
+    readText(): string | null {
+      return virtualClipboardText ?? this.clipboardText
+    },
+
+    // Backward-compatible aliases (no longer touch system clipboard).
     async writeSystem(serialized: string) {
-      await writeSystemClipboard(serialized)
+      this.writeText(serialized)
     },
     async readSystemText(): Promise<string | null> {
-      return await readSystemClipboardText()
+      return this.readText()
     },
   },
 })

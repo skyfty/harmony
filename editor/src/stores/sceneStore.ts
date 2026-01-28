@@ -15572,7 +15572,7 @@ export const useSceneStore = defineStore('scene', {
 
       const clipboardStore = useClipboardStore()
       clipboardStore.setClipboard({ entries, runtimeSnapshots, cut: false })
-      void clipboardStore.writeSystem(prefabPayload.serialized)
+      clipboardStore.writeText(prefabPayload.serialized)
       return true
     },
     cutNodes(nodeIds: string[]) {
@@ -15603,24 +15603,15 @@ export const useSceneStore = defineStore('scene', {
 
       const clipboardStore = useClipboardStore()
       clipboardStore.setClipboard({ entries, runtimeSnapshots, cut: true })
-      void clipboardStore.writeSystem(prefabPayload.serialized)
+      clipboardStore.writeText(prefabPayload.serialized)
 
       // Cut semantics: remove from scene immediately
       this.removeSceneNodes(topLevelIds)
       return true
     },
     async pasteClipboard(targetId?: string | null): Promise<boolean> {
-      if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') return false
-
-      let serialized: string
-      try {
-        serialized = await navigator.clipboard.readText()
-      } catch (error) {
-        console.warn('Failed to read clipboard', error)
-        return false
-      }
-
-      const normalized = serialized?.trim()
+      const clipboardStore = useClipboardStore()
+      const normalized = clipboardStore.readText()
       if (!normalized) return false
 
       let clipboardMeta: ClipboardMeta | null = null
@@ -15645,8 +15636,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (!prefab) return false
-
-      const clipboardStore = useClipboardStore()
       const clipboardSourceIds = (clipboardStore.clipboard?.entries ?? []).map((entry: any) => entry?.sourceId).filter((id: any) => typeof id === 'string') as string[]
 
       let parentId = typeof targetId === 'string' ? targetId.trim() : ''
