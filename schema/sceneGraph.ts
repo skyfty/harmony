@@ -245,14 +245,24 @@ class SceneGraphBuilder {
           if (props.bodyAssetId) {
             ids.add(props.bodyAssetId);
           }
-          if ((props as any).endCapAssetId) {
-            ids.add((props as any).endCapAssetId);
+          if (props.headAssetId) {
+            ids.add(props.headAssetId);
           }
-          const cornerModels = Array.isArray((props as any).cornerModels) ? (props as any).cornerModels : []
+          if (props.bodyEndCapAssetId) {
+            ids.add(props.bodyEndCapAssetId);
+          }
+          if (props.headEndCapAssetId) {
+            ids.add(props.headEndCapAssetId);
+          }
+          const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : []
           for (const rule of cornerModels) {
-            const assetId = typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''
-            if (assetId) {
-              ids.add(assetId)
+            const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : ''
+            if (bodyCornerAssetId) {
+              ids.add(bodyCornerAssetId)
+            }
+            const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''
+            if (headCornerAssetId) {
+              ids.add(headCornerAssetId)
             }
           }
         } else if (meshInfo?.type === 'Road') {
@@ -497,14 +507,24 @@ class SceneGraphBuilder {
         if (props.bodyAssetId) {
           ids.add(props.bodyAssetId);
         }
-        if ((props as any).endCapAssetId) {
-          ids.add((props as any).endCapAssetId);
+        if (props.headAssetId) {
+          ids.add(props.headAssetId);
         }
-        const cornerModels = Array.isArray((props as any).cornerModels) ? (props as any).cornerModels : []
+        if (props.bodyEndCapAssetId) {
+          ids.add(props.bodyEndCapAssetId);
+        }
+        if (props.headEndCapAssetId) {
+          ids.add(props.headEndCapAssetId);
+        }
+        const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : []
         for (const rule of cornerModels) {
-          const assetId = typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''
-          if (assetId) {
-            ids.add(assetId)
+          const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : ''
+          if (bodyCornerAssetId) {
+            ids.add(bodyCornerAssetId)
+          }
+          const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''
+          if (headCornerAssetId) {
+            ids.add(headCornerAssetId)
           }
         }
       }

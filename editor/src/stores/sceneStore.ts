@@ -916,7 +916,9 @@ function normalizeNodeComponents(
         smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
-        endCapAssetId: (existingProps as { endCapAssetId?: string | null }).endCapAssetId ?? baseProps.endCapAssetId,
+        headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,
+        bodyEndCapAssetId: (existingProps as { bodyEndCapAssetId?: string | null }).bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
+        headEndCapAssetId: (existingProps as { headEndCapAssetId?: string | null }).headEndCapAssetId ?? baseProps.headEndCapAssetId,
         cornerModels,
       }),
     )
@@ -11632,9 +11634,12 @@ export const useSceneStore = defineStore('scene', {
         new Set(
           [
             wallProps.bodyAssetId,
-            wallProps.endCapAssetId,
+            wallProps.headAssetId,
+            wallProps.bodyEndCapAssetId,
+            wallProps.headEndCapAssetId,
             ...(((wallProps as any).cornerModels ?? []) as any[])
-              .map((rule) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId])
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
           ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -11812,9 +11817,12 @@ export const useSceneStore = defineStore('scene', {
         new Set(
           [
             wallProps.bodyAssetId,
-            wallProps.endCapAssetId,
+            wallProps.headAssetId,
+            wallProps.bodyEndCapAssetId,
+            wallProps.headEndCapAssetId,
             ...(((wallProps as any).cornerModels ?? []) as any[])
-              .map((rule) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId])
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
           ]
             .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -11861,8 +11869,10 @@ export const useSceneStore = defineStore('scene', {
         smoothing: wallProps.smoothing,
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
-        endCapAssetId: wallProps.endCapAssetId ?? null,
-        cornerModels: (wallProps as any).cornerModels ?? [],
+        headAssetId: wallProps.headAssetId ?? null,
+        bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
+        headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
+        cornerModels: wallProps.cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)
 
       return wallProps
@@ -14561,7 +14571,9 @@ export const useSceneStore = defineStore('scene', {
         const currentProps = clampWallProps(component.props as WallComponentProps)
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
-        const hasEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'endCapAssetId')
+        const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
+        const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
+        const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
@@ -14575,13 +14587,18 @@ export const useSceneStore = defineStore('scene', {
           for (let i = 0; i < arrA.length; i += 1) {
             const entryA = arrA[i] as any
             const entryB = arrB[i] as any
-            const assetA = typeof entryA?.assetId === 'string' ? entryA.assetId : null
-            const assetB = typeof entryB?.assetId === 'string' ? entryB.assetId : null
+            const bodyAssetA = typeof entryA?.bodyAssetId === 'string' ? entryA.bodyAssetId : null
+            const bodyAssetB = typeof entryB?.bodyAssetId === 'string' ? entryB.bodyAssetId : null
+            const headAssetA = typeof entryA?.headAssetId === 'string' ? entryA.headAssetId : null
+            const headAssetB = typeof entryB?.headAssetId === 'string' ? entryB.headAssetId : null
             const angleA = typeof entryA?.angle === 'number' ? entryA.angle : Number(entryA?.angle)
             const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
             const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
             const toleranceB = typeof entryB?.tolerance === 'number' ? entryB.tolerance : Number(entryB?.tolerance)
-            if ((assetA ?? null) !== (assetB ?? null)) {
+            if ((bodyAssetA ?? null) !== (bodyAssetB ?? null)) {
+              return false
+            }
+            if ((headAssetA ?? null) !== (headAssetB ?? null)) {
               return false
             }
             if (!Number.isFinite(angleA) || !Number.isFinite(angleB) || Math.abs(angleA - angleB) > 1e-6) {
@@ -14607,12 +14624,18 @@ export const useSceneStore = defineStore('scene', {
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
-          endCapAssetId: hasEndCapAssetId
-            ? (typedPatch.endCapAssetId as string | null | undefined)
-            : (currentProps as any).endCapAssetId,
+          headAssetId: hasHeadAssetId
+            ? (typedPatch.headAssetId as string | null | undefined)
+            : currentProps.headAssetId,
+          bodyEndCapAssetId: hasBodyEndCapAssetId
+            ? (typedPatch.bodyEndCapAssetId as string | null | undefined)
+            : currentProps.bodyEndCapAssetId,
+          headEndCapAssetId: hasHeadEndCapAssetId
+            ? (typedPatch.headEndCapAssetId as string | null | undefined)
+            : currentProps.headEndCapAssetId,
           cornerModels: hasCornerModels
             ? (typedPatch.cornerModels as any)
-            : (currentProps as any).cornerModels,
+            : currentProps.cornerModels,
         })
 
         const unchanged =
@@ -14622,8 +14645,10 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
-          ((currentProps as any).endCapAssetId ?? null) === ((merged as any).endCapAssetId ?? null) &&
-          cornerModelsEqual((currentProps as any).cornerModels, (merged as any).cornerModels)
+          (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
+          (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
+          (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&
+          cornerModelsEqual(currentProps.cornerModels, merged.cornerModels)
         if (unchanged) {
           return false
         }

@@ -166,7 +166,6 @@ function resolveWallEffectiveDefinition(
 
 const wallSyncPosHelper = new THREE.Vector3()
 const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
-const wallSyncBaseSizeHelper = new THREE.Vector3()
 const wallSyncStartHelper = new THREE.Vector3()
 const wallSyncEndHelper = new THREE.Vector3()
 const wallSyncLocalStartHelper = new THREE.Vector3()
@@ -289,14 +288,17 @@ export function createWallRenderer(options: WallRendererOptions) {
       | undefined
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
+    const headAssetId = wallComponent?.props?.headAssetId ?? null
+    const bodyEndCapAssetId = wallComponent?.props?.bodyEndCapAssetId ?? null
+    const headEndCapAssetId = wallComponent?.props?.headEndCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
       : []
-    const hasCornerAssets = cornerModels.some((entry) => typeof entry?.assetId === 'string' && entry.assetId.trim().length)
+    const hasBodyCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.bodyAssetId === 'string' && (entry as any).bodyAssetId.trim().length)
+    const hasHeadCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.headAssetId === 'string' && (entry as any).headAssetId.trim().length)
     const definition = node.dynamicMesh as WallDynamicMesh
-    const canHaveCornerJoints = hasCornerAssets && definition.segments.length >= 2
-    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
+    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets) && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
     }
@@ -305,7 +307,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (bodyAssetId) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
-        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox)
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'body')
         if (localMatrices.length > 0) {
           bindings.push({
             assetId: bodyAssetId,
@@ -317,8 +319,42 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
-    const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
-    if (jointBuckets.matricesByAssetId.size) {
+    if (headAssetId) {
+      const group = getCachedModelObject(headAssetId)
+      if (group) {
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'head')
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: headAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-head:${nodeId}:`,
+            useNodeIdForIndex0: false,
+          })
+        }
+      }
+    }
+
+    const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
+      const group = getCachedModelObject(assetId)
+      return group?.boundingBox ?? null
+    }
+
+    const bodyJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      cornerModels,
+      mode: 'body',
+      getAssetBounds: getBoundsFromCache,
+    })
+    const headJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      cornerModels,
+      mode: 'head',
+      getAssetBounds: getBoundsFromCache,
+    })
+    const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId
+
+    for (const jointBuckets of [bodyJointBuckets, headJointBuckets] as const) {
+      if (!jointBuckets.matricesByAssetId.size) {
+        continue
+      }
       const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
       for (const assetId of sortedAssetIds) {
         const localMatrices = jointBuckets.matricesByAssetId.get(assetId) ?? []
@@ -328,22 +364,37 @@ export function createWallRenderer(options: WallRendererOptions) {
         bindings.push({
           assetId,
           localMatrices,
-          bindingIdPrefix: `wall-joint:${nodeId}:${assetId}:`,
-          useNodeIdForIndex0: !bodyAssetId && assetId === jointBuckets.primaryAssetId,
+          bindingIdPrefix: `wall-joint-${jointBuckets.mode}:${nodeId}:${assetId}:`,
+          useNodeIdForIndex0: !bodyAssetId && assetId === primaryCornerAssetId,
         })
       }
     }
 
-    if (endCapAssetId) {
-      const group = getCachedModelObject(endCapAssetId)
+    if (bodyEndCapAssetId) {
+      const group = getCachedModelObject(bodyEndCapAssetId)
       if (group) {
-        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox, 'body')
         if (localMatrices.length > 0) {
           bindings.push({
-            assetId: endCapAssetId,
+            assetId: bodyEndCapAssetId,
             localMatrices,
-            bindingIdPrefix: `wall-cap:${nodeId}:`,
-            useNodeIdForIndex0: !bodyAssetId && !jointBuckets.primaryAssetId,
+            bindingIdPrefix: `wall-cap-body:${nodeId}:`,
+            useNodeIdForIndex0: !bodyAssetId && !primaryCornerAssetId,
+          })
+        }
+      }
+    }
+
+    if (headEndCapAssetId) {
+      const group = getCachedModelObject(headEndCapAssetId)
+      if (group) {
+        const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox, 'head')
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: headEndCapAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-cap-head:${nodeId}:`,
+            useNodeIdForIndex0: false,
           })
         }
       }
@@ -462,44 +513,40 @@ export function createWallRenderer(options: WallRendererOptions) {
     })
   }
 
-  function computeWallBodyLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
+  function computeWallBodyLocalMatrices(
+    definition: WallDynamicMesh,
+    bounds: THREE.Box3,
+    mode: 'body' | 'head',
+  ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
-    const baseSize = bounds.getSize(wallSyncBaseSizeHelper)
+    if (!definition.segments.length) {
+      return matrices
+    }
+
+    const tileLengthLocal = Math.max(WALL_SYNC_MIN_TILE_LENGTH, Math.abs(bounds.max.z - bounds.min.z))
+    const minAlongAxis = bounds.min.z
+    const maxAlongAxis = bounds.max.z
+
+    const templateHeight = resolveWallModelHeight(bounds)
+    const minY = bounds.min.y
 
     definition.segments.forEach((segment) => {
       wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
       wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
       wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
       wallSyncLocalDirHelper.y = 0
-
       const lengthLocal = wallSyncLocalDirHelper.length()
       if (lengthLocal <= WALL_SYNC_EPSILON) {
         return
       }
 
-      // Convention: model local +Z is the "along-wall" axis.
-      const baseAxisForQuaternion: 'z' = 'z'
-      const tileLengthLocal = Math.max(WALL_SYNC_MIN_TILE_LENGTH, Math.abs(baseSize.z))
-      if (tileLengthLocal <= WALL_SYNC_EPSILON) {
-        return
-      }
-
-      const minAlongAxis = bounds.min.z
-      const maxAlongAxis = bounds.max.z
-
       wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
 
-      // Strict endpoint coverage without scaling tiles:
-      // - Place tiles starting from the segment start.
-      // - Place the last tile so its max-face aligns exactly with the segment end.
-      // This may create overlap near the end, but never overshoots.
-      if (lengthLocal < tileLengthLocal - WALL_SYNC_EPSILON) {
-        return
-      }
-
       const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
+      const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
 
-      const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, baseAxisForQuaternion)
+      const bodyHeight = resolveWallBodyHeightForSegment(segment)
+      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
 
       for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
         if (instanceIndex === instanceCount - 1) {
@@ -517,7 +564,13 @@ export function createWallRenderer(options: WallRendererOptions) {
           wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
         }
 
-        wallSyncScaleHelper.set(1, 1, 1)
+        const baselineY = wallSyncPosHelper.y
+        const posY = mode === 'body'
+          ? (baselineY - scaleY * minY)
+          : (baselineY + bodyHeight - minY)
+        wallSyncPosHelper.y = posY
+
+        wallSyncScaleHelper.set(1, scaleY, 1)
         wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
         matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
       }
@@ -528,9 +581,38 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   type WallCornerModelRule = NonNullable<WallComponentProps['cornerModels']>[number]
 
+  type WallCornerPickRule = {
+    assetId: string | null
+    angle?: unknown
+    tolerance?: unknown
+  }
+
+  function resolveWallBodyHeightForSegment(segment: WallDynamicMesh['segments'][number]): number {
+    const raw = typeof (segment as any)?.height === 'number' ? (segment as any).height : Number((segment as any)?.height)
+    if (!Number.isFinite(raw)) {
+      return 1
+    }
+    return Math.max(0.001, raw)
+  }
+
+  function resolveWallModelHeight(bounds: THREE.Box3): number {
+    return Math.max(1e-6, bounds.max.y - bounds.min.y)
+  }
+
+  function buildWallCornerPickRules(rules: WallCornerModelRule[], mode: 'body' | 'head'): WallCornerPickRule[] {
+    return rules.map((rule) => {
+      const assetId = mode === 'body' ? ((rule as any)?.bodyAssetId ?? null) : ((rule as any)?.headAssetId ?? null)
+      return {
+        assetId: typeof assetId === 'string' ? assetId : null,
+        angle: (rule as any)?.angle,
+        tolerance: (rule as any)?.tolerance,
+      }
+    })
+  }
+
   function pickWallCornerModel(
     angleRadians: number,
-    rules: WallCornerModelRule[],
+    rules: WallCornerPickRule[],
   ): { assetId: string | null; extraYawRadians: number } {
     if (!Number.isFinite(angleRadians)) {
       return { assetId: null, extraYawRadians: 0 }
@@ -601,16 +683,17 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function computeWallJointLocalMatricesByAsset(
     definition: WallDynamicMesh,
-    options: { cornerModels?: WallCornerModelRule[] } = {},
-  ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null } {
+    options: { cornerModels?: WallCornerModelRule[]; mode: 'body' | 'head'; getAssetBounds: (assetId: string) => THREE.Box3 | null },
+  ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null; mode: 'body' | 'head' } {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     let primaryAssetId: string | null = null
 
     if (definition.segments.length < 2) {
-      return { matricesByAssetId, primaryAssetId }
+      return { matricesByAssetId, primaryAssetId, mode: options.mode }
     }
 
-    const rules = Array.isArray(options.cornerModels) ? options.cornerModels : []
+    const rulesSource = Array.isArray(options.cornerModels) ? options.cornerModels : []
+    const rules = buildWallCornerPickRules(rulesSource, options.mode)
 
     const pushMatrix = (assetId: string, matrix: THREE.Matrix4) => {
       const bucket = matricesByAssetId.get(assetId) ?? []
@@ -669,6 +752,16 @@ export function createWallRenderer(options: WallRendererOptions) {
         return
       }
 
+      const bounds = options.getAssetBounds(selection.assetId)
+      const bodyHeight = resolveWallBodyHeightForSegment(current)
+      const templateHeight = bounds ? resolveWallModelHeight(bounds) : 1
+      const minY = bounds ? bounds.min.y : 0
+      const scaleY = options.mode === 'body' ? (bodyHeight / templateHeight) : 1
+      const baselineY = corner.y
+      const posY = options.mode === 'body'
+        ? (baselineY - scaleY * minY)
+        : (baselineY + bodyHeight - minY)
+
       // 7) 计算“内角”的角平分线（bisector）作为模型朝向的基准
       //    - 如果两向量几乎反向（相加后接近 0），使用出射向量作为退化情况下的朝向
       wallSyncBisectorHelper.copy(wallSyncIncomingHelper).multiplyScalar(-1).add(wallSyncOutgoingHelper)
@@ -685,8 +778,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
 
       // 10) 组成最终的局部变换矩阵：位置 = 拐角点，旋转 = 计算出的四元数，缩放 = 单位缩放
-      wallSyncScaleHelper.set(1, 1, 1)
-      wallSyncPosHelper.copy(corner)
+      wallSyncScaleHelper.set(1, scaleY, 1)
+      wallSyncPosHelper.set(corner.x, posY, corner.z)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
 
       // 11) 将计算出的矩阵打包并推入对应 assetId 的矩阵数组中
@@ -711,10 +804,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       buildCorner(last, first, wallSyncPosHelper)
     }
 
-    return { matricesByAssetId, primaryAssetId }
+    return { matricesByAssetId, primaryAssetId, mode: options.mode }
   }
 
-  function computeWallEndCapLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
+  function computeWallEndCapLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3, mode: 'body' | 'head'): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
     if (!definition.segments.length) {
       return matrices
@@ -731,6 +824,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const minAlongAxis = bounds.min.z
+    const templateHeight = resolveWallModelHeight(bounds)
+    const minY = bounds.min.y
 
     const findDirectionForSegment = (segment: WallDynamicMesh['segments'][number] | null, fallback: THREE.Vector3): THREE.Vector3 => {
       if (!segment) {
@@ -746,13 +841,19 @@ export function createWallRenderer(options: WallRendererOptions) {
     // Start cap points outward: opposite of the first segment direction.
     const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
     if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
+      const bodyHeight = resolveWallBodyHeightForSegment(firstSeg)
+      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
       const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
       wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
-      wallSyncPosHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
+      const baselineY = firstSeg.start.y
+      const posY = mode === 'body'
+        ? (baselineY - scaleY * minY)
+        : (baselineY + bodyHeight - minY)
+      wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-      wallSyncScaleHelper.set(1, 1, 1)
+      wallSyncScaleHelper.set(1, scaleY, 1)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
       matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
@@ -760,19 +861,26 @@ export function createWallRenderer(options: WallRendererOptions) {
     // End cap points outward: along the last segment direction.
     const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
     if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
+      const bodyHeight = resolveWallBodyHeightForSegment(lastSeg)
+      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
       wallSyncLocalDirHelper.copy(lastDir)
       const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
       wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
       wallSyncLocalOffsetHelper.applyQuaternion(quat)
-      wallSyncPosHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
+      const baselineY = lastSeg.end.y
+      const posY = mode === 'body'
+        ? (baselineY - scaleY * minY)
+        : (baselineY + bodyHeight - minY)
+      wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
       wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-      wallSyncScaleHelper.set(1, 1, 1)
+      wallSyncScaleHelper.set(1, scaleY, 1)
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
       matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 
     return matrices
   }
+
 
   function scheduleWallAssetLoad(assetId: string, nodeId: string, signatureKey: string) {
     // Track all wall nodes waiting on this asset so we can resync them once.
@@ -902,21 +1010,30 @@ export function createWallRenderer(options: WallRendererOptions) {
     const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-    const endCapAssetId = wallComponent?.props?.endCapAssetId ?? null
+    const headAssetId = wallComponent?.props?.headAssetId ?? null
+    const bodyEndCapAssetId = wallComponent?.props?.bodyEndCapAssetId ?? null
+    const headEndCapAssetId = wallComponent?.props?.headEndCapAssetId ?? null
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
       : []
-    const cornerAssetIds = Array.from(
+    const bodyCornerAssetIds = Array.from(
       new Set(
         cornerModels
-          .map((entry) => (typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''))
+          .map((entry) => (typeof (entry as any)?.bodyAssetId === 'string' ? (entry as any).bodyAssetId.trim() : ''))
+          .filter((id) => Boolean(id)),
+      ),
+    ).sort()
+    const headCornerAssetIds = Array.from(
+      new Set(
+        cornerModels
+          .map((entry) => (typeof (entry as any)?.headAssetId === 'string' ? (entry as any).headAssetId.trim() : ''))
           .filter((id) => Boolean(id)),
       ),
     ).sort()
     const definition = node.dynamicMesh as WallDynamicMesh
     const effectiveDefinition = resolveWallEffectiveDefinition(definition, wallProps)
-    const canHaveCornerJoints = cornerAssetIds.length > 0 && definition.segments.length >= 2
-    const wantsInstancing = Boolean(bodyAssetId || endCapAssetId || canHaveCornerJoints)
+    const canHaveCornerJoints = (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0) && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints)
 
     const userData = container.userData ?? (container.userData = {})
 
@@ -962,24 +1079,40 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = Boolean(bodyAssetId && !getCachedModelObject(bodyAssetId))
-    const needsCornerLoad = cornerAssetIds.some((id) => !getCachedModelObject(id))
-    const needsCapLoad = Boolean(endCapAssetId && !getCachedModelObject(endCapAssetId))
+    const needsHeadLoad = Boolean(headAssetId && !getCachedModelObject(headAssetId))
+    const needsBodyCornerLoad = bodyCornerAssetIds.some((id) => !getCachedModelObject(id))
+    const needsHeadCornerLoad = headCornerAssetIds.some((id) => !getCachedModelObject(id))
+    const needsBodyCapLoad = Boolean(bodyEndCapAssetId && !getCachedModelObject(bodyEndCapAssetId))
+    const needsHeadCapLoad = Boolean(headEndCapAssetId && !getCachedModelObject(headEndCapAssetId))
 
     if (needsBodyLoad && bodyAssetId) {
       scheduleWallAssetLoad(bodyAssetId, node.id, signatureKey)
     }
-    if (needsCornerLoad) {
-      cornerAssetIds.forEach((assetId) => {
+    if (needsHeadLoad && headAssetId) {
+      scheduleWallAssetLoad(headAssetId, node.id, signatureKey)
+    }
+    if (needsBodyCornerLoad) {
+      bodyCornerAssetIds.forEach((assetId) => {
         if (!getCachedModelObject(assetId)) {
           scheduleWallAssetLoad(assetId, node.id, signatureKey)
         }
       })
     }
-    if (needsCapLoad && endCapAssetId) {
-      scheduleWallAssetLoad(endCapAssetId, node.id, signatureKey)
+    if (needsHeadCornerLoad) {
+      headCornerAssetIds.forEach((assetId) => {
+        if (!getCachedModelObject(assetId)) {
+          scheduleWallAssetLoad(assetId, node.id, signatureKey)
+        }
+      })
+    }
+    if (needsBodyCapLoad && bodyEndCapAssetId) {
+      scheduleWallAssetLoad(bodyEndCapAssetId, node.id, signatureKey)
+    }
+    if (needsHeadCapLoad && headEndCapAssetId) {
+      scheduleWallAssetLoad(headEndCapAssetId, node.id, signatureKey)
     }
 
-    if (needsBodyLoad || needsCornerLoad || needsCapLoad) {
+    if (needsBodyLoad || needsHeadLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsBodyCapLoad || needsHeadCapLoad) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -998,7 +1131,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     // Assets are ready: attempt instanced rendering.
-  const primaryAssetId = bodyAssetId ?? (cornerAssetIds[0] ?? null) ?? endCapAssetId
+    const primaryAssetId = bodyAssetId
+      ?? headAssetId
+      ?? (bodyCornerAssetIds[0] ?? null)
+      ?? (headCornerAssetIds[0] ?? null)
+      ?? bodyEndCapAssetId
+      ?? headEndCapAssetId
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
@@ -1010,7 +1148,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (bodyAssetId) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
-        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox)
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'body')
         if (localMatrices.length > 0) {
           for (const localMatrix of localMatrices) {
             expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
@@ -1029,9 +1167,50 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
+    if (headAssetId) {
+      const group = getCachedModelObject(headAssetId)
+      if (group) {
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'head')
+        if (localMatrices.length > 0) {
+          for (const localMatrix of localMatrices) {
+            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+            hasWallBounds = true
+          }
+          syncInstancedModelCommittedLocalMatrices({
+            nodeId: node.id,
+            assetId: headAssetId,
+            object: container,
+            localMatrices,
+            bindingIdPrefix: `wall-head:${node.id}:`,
+            useNodeIdForIndex0: false,
+          })
+          hasBindings = true
+        }
+      }
+    }
+
     {
-      const jointBuckets = computeWallJointLocalMatricesByAsset(definition, { cornerModels })
-      if (jointBuckets.matricesByAssetId.size) {
+      const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
+        const group = getCachedModelObject(assetId)
+        return group?.boundingBox ?? null
+      }
+
+      const bodyJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+        cornerModels,
+        mode: 'body',
+        getAssetBounds: getBoundsFromCache,
+      })
+      const headJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+        cornerModels,
+        mode: 'head',
+        getAssetBounds: getBoundsFromCache,
+      })
+      const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId
+
+      for (const jointBuckets of [bodyJointBuckets, headJointBuckets] as const) {
+        if (!jointBuckets.matricesByAssetId.size) {
+          continue
+        }
         const sortedAssetIds = Array.from(jointBuckets.matricesByAssetId.keys()).sort()
         for (const assetId of sortedAssetIds) {
           const localMatrices = jointBuckets.matricesByAssetId.get(assetId) ?? []
@@ -1047,25 +1226,24 @@ export function createWallRenderer(options: WallRendererOptions) {
             }
           }
 
-          // If there is no body asset, map index 0 to nodeId so pick-proxy and transform behavior stays consistent.
-          const useNodeIdForIndex0 = !bodyAssetId && assetId === jointBuckets.primaryAssetId
+          const useNodeIdForIndex0 = !bodyAssetId && assetId === primaryCornerAssetId
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
             assetId,
             object: container,
             localMatrices,
-            bindingIdPrefix: `wall-joint:${node.id}:${assetId}:`,
+            bindingIdPrefix: `wall-joint-${jointBuckets.mode}:${node.id}:${assetId}:`,
             useNodeIdForIndex0,
           })
           hasBindings = true
         }
       }
 
-      if (endCapAssetId) {
-        const useNodeIdForIndex0 = !bodyAssetId && !jointBuckets.primaryAssetId
-        const group = getCachedModelObject(endCapAssetId)
+      if (bodyEndCapAssetId) {
+        const useNodeIdForIndex0 = !bodyAssetId && !primaryCornerAssetId
+        const group = getCachedModelObject(bodyEndCapAssetId)
         if (group) {
-          const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox)
+          const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox, 'body')
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
               expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
@@ -1073,11 +1251,33 @@ export function createWallRenderer(options: WallRendererOptions) {
             }
             syncInstancedModelCommittedLocalMatrices({
               nodeId: node.id,
-              assetId: endCapAssetId,
+              assetId: bodyEndCapAssetId,
               object: container,
               localMatrices,
-              bindingIdPrefix: `wall-cap:${node.id}:`,
+              bindingIdPrefix: `wall-cap-body:${node.id}:`,
               useNodeIdForIndex0,
+            })
+            hasBindings = hasBindings || localMatrices.length > 0
+          }
+        }
+      }
+
+      if (headEndCapAssetId) {
+        const group = getCachedModelObject(headEndCapAssetId)
+        if (group) {
+          const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox, 'head')
+          if (localMatrices.length > 0) {
+            for (const localMatrix of localMatrices) {
+              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+              hasWallBounds = true
+            }
+            syncInstancedModelCommittedLocalMatrices({
+              nodeId: node.id,
+              assetId: headEndCapAssetId,
+              object: container,
+              localMatrices,
+              bindingIdPrefix: `wall-cap-head:${node.id}:`,
+              useNodeIdForIndex0: false,
             })
             hasBindings = hasBindings || localMatrices.length > 0
           }

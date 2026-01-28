@@ -22,27 +22,59 @@ export async function buildWallMesh(
   const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
 
   const bodyObject = wallProps.bodyAssetId ? await deps.loadAssetMesh(wallProps.bodyAssetId) : null;
+  const headObject = bodyObject && wallProps.headAssetId ? await deps.loadAssetMesh(wallProps.headAssetId) : null;
 
-  const cornerModels = Array.isArray((wallProps as any).cornerModels) ? (wallProps as any).cornerModels : []
-  const uniqueCornerAssetIds = Array.from(
+  const bodyEndCapObject = bodyObject && wallProps.bodyEndCapAssetId
+    ? await deps.loadAssetMesh(wallProps.bodyEndCapAssetId)
+    : null;
+  const headEndCapObject = bodyEndCapObject && wallProps.headEndCapAssetId
+    ? await deps.loadAssetMesh(wallProps.headEndCapAssetId)
+    : null;
+
+  const cornerModels = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
+
+  const uniqueBodyCornerAssetIds = Array.from(
     new Set<string>(
       cornerModels
-        .map((rule: any) => (typeof rule?.assetId === 'string' ? rule.assetId.trim() : ''))
+        .map((rule: any) => (typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : ''))
+        .filter((value: string) => value.length > 0),
+    ),
+  )
+  const uniqueHeadCornerAssetIds = Array.from(
+    new Set<string>(
+      cornerModels
+        .map((rule: any) => (typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''))
         .filter((value: string) => value.length > 0),
     ),
   )
 
-  const cornerObjectsEntries = await Promise.all(
-    uniqueCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
+  const bodyCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
+  const headCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
+
+  const bodyCornerObjectsEntries = await Promise.all(
+    uniqueBodyCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
   )
-  const cornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
-  for (const [assetId, object] of cornerObjectsEntries) {
-    cornerObjectsByAssetId[assetId] = object
+  for (const [assetId, object] of bodyCornerObjectsEntries) {
+    bodyCornerObjectsByAssetId[assetId] = object
+  }
+
+  const headCornerObjectsEntries = await Promise.all(
+    uniqueHeadCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
+  )
+  for (const [assetId, object] of headCornerObjectsEntries) {
+    headCornerObjectsByAssetId[assetId] = object
   }
 
   const group = createWallRenderGroup(
     meshInfo,
-    { bodyObject, cornerObjectsByAssetId },
+    {
+      bodyObject,
+      headObject,
+      bodyEndCapObject,
+      headEndCapObject,
+      bodyCornerObjectsByAssetId,
+      headCornerObjectsByAssetId,
+    },
     { smoothing: wallProps.smoothing, cornerModels },
   );
   group.name = node.name ?? (group.name || 'Wall');

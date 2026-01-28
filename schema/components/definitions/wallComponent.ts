@@ -13,8 +13,10 @@ export const WALL_MIN_THICKNESS = 0.05
 export const WALL_DEFAULT_SMOOTHING = 0.05
 
 export type WallCornerModelRule = {
-  /** Asset id of the corner/joint model to be instanced. */
-  assetId: string | null
+  /** Asset id of the lower wall body corner/joint model to be instanced. */
+  bodyAssetId: string | null
+  /** Asset id of the upper wall head corner/joint model to be instanced. */
+  headAssetId: string | null
   /**
    * Target interior corner angle (degrees). Straight = 180°.
    * Runtime picks the closest match within tolerance.
@@ -35,8 +37,14 @@ export interface WallComponentProps {
    * The mesh structure should still exist for rigidbody collision generation.
    */
   isAirWall: boolean
+  /** Lower wall body model asset id (required to enable model mode). */
   bodyAssetId?: string | null
-  endCapAssetId?: string | null
+  /** Upper wall head model asset id (optional; only valid when bodyAssetId is set). */
+  headAssetId?: string | null
+  /** Lower wall end-cap model asset id (optional; only valid when bodyAssetId is set; not used for closed loops). */
+  bodyEndCapAssetId?: string | null
+  /** Upper wall head end-cap model asset id (optional; only valid when bodyEndCapAssetId is set; not used for closed loops). */
+  headEndCapAssetId?: string | null
   /**
    * Optional corner model overrides. At runtime the system will pick a model
    * based on the interior corner angle between adjacent wall segments.
@@ -84,15 +92,30 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const cornerModels = Array.isArray(rawCornerModels)
     ? rawCornerModels
       .map((entry) => {
-        const assetId = normalizeAssetId((entry as WallCornerModelRule | undefined)?.assetId)
+        const bodyAssetId = normalizeAssetId((entry as WallCornerModelRule | undefined)?.bodyAssetId)
+        const headAssetId = bodyAssetId
+          ? normalizeAssetId((entry as WallCornerModelRule | undefined)?.headAssetId)
+          : null
         const angle = normalizeAngle((entry as WallCornerModelRule | undefined)?.angle, 90)
         const tolerance = normalizeTolerance((entry as WallCornerModelRule | undefined)?.tolerance, 5)
-        return { assetId, angle, tolerance } satisfies WallCornerModelRule
+        return { bodyAssetId, headAssetId, angle, tolerance } satisfies WallCornerModelRule
       })
     : []
 
   const isAirWall = (props as WallComponentProps | undefined)?.isAirWall
   const normalizedIsAirWall = Boolean(isAirWall)
+
+  const bodyAssetId = normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId)
+  const headAssetId = bodyAssetId
+    ? normalizeAssetId((props as WallComponentProps | undefined)?.headAssetId)
+    : null
+
+  const bodyEndCapAssetId = bodyAssetId
+    ? normalizeAssetId((props as WallComponentProps | undefined)?.bodyEndCapAssetId)
+    : null
+  const headEndCapAssetId = bodyEndCapAssetId
+    ? normalizeAssetId((props as WallComponentProps | undefined)?.headEndCapAssetId)
+    : null
 
   return {
     height,
@@ -100,8 +123,10 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     thickness,
     smoothing,
     isAirWall: normalizedIsAirWall,
-    bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
-    endCapAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.endCapAssetId),
+    bodyAssetId,
+    headAssetId,
+    bodyEndCapAssetId,
+    headEndCapAssetId,
     cornerModels,
   }
 }
@@ -115,7 +140,9 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       smoothing: WALL_DEFAULT_SMOOTHING,
       isAirWall: false,
       bodyAssetId: null,
-      endCapAssetId: null,
+      headAssetId: null,
+      bodyEndCapAssetId: null,
+      headEndCapAssetId: null,
       cornerModels: [],
     }
   }
@@ -138,10 +165,13 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     smoothing: props.smoothing,
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
-    endCapAssetId: props.endCapAssetId ?? null,
+    headAssetId: props.headAssetId ?? null,
+    bodyEndCapAssetId: props.bodyEndCapAssetId ?? null,
+    headEndCapAssetId: props.headEndCapAssetId ?? null,
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
-        assetId: typeof entry?.assetId === 'string' ? entry.assetId : null,
+        bodyAssetId: typeof entry?.bodyAssetId === 'string' ? entry.bodyAssetId : null,
+        headAssetId: typeof entry?.headAssetId === 'string' ? entry.headAssetId : null,
         angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
         tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
       }))
@@ -212,7 +242,9 @@ export function createWallComponentState(
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
-    endCapAssetId: overrides?.endCapAssetId ?? defaults.endCapAssetId,
+    headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
+    bodyEndCapAssetId: overrides?.bodyEndCapAssetId ?? defaults.bodyEndCapAssetId,
+    headEndCapAssetId: overrides?.headEndCapAssetId ?? defaults.headEndCapAssetId,
     cornerModels: overrides?.cornerModels ?? (defaults as WallComponentProps).cornerModels,
   })
   return {

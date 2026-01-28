@@ -35,16 +35,17 @@ const isApplyingDimensions = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogTarget = ref<'body' | 'cap' | 'corner' | null>(null)
+type WallAssetDialogTarget = 'body' | 'head' | 'bodyCap' | 'headCap' | 'cornerBody' | 'cornerHead'
+const assetDialogTarget = ref<WallAssetDialogTarget | null>(null)
 const assetDialogCornerIndex = ref<number | null>(null)
 const assetDialogTitle = computed(() => {
-  if (assetDialogTarget.value === 'cap') {
-    return 'Select Wall End Cap Asset'
-  }
-  if (assetDialogTarget.value === 'corner') {
-    return 'Select Wall Corner Model'
-  }
-  return 'Select Wall Body Asset'
+  if (assetDialogTarget.value === 'body') return 'Select Wall Body Asset'
+  if (assetDialogTarget.value === 'head') return 'Select Wall Head Asset'
+  if (assetDialogTarget.value === 'bodyCap') return 'Select Wall End Cap (Body) Asset'
+  if (assetDialogTarget.value === 'headCap') return 'Select Wall End Cap (Head) Asset'
+  if (assetDialogTarget.value === 'cornerBody') return 'Select Wall Corner Model (Body)'
+  if (assetDialogTarget.value === 'cornerHead') return 'Select Wall Corner Model (Head)'
+  return 'Select Wall Asset'
 })
 
 const wallComponent = computed(
@@ -64,12 +65,20 @@ const overwriteTargetFilename = ref<string | null>(null)
 
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
 const capDropAreaRef = ref<HTMLElement | null>(null)
+const headDropAreaRef = ref<HTMLElement | null>(null)
+const headCapDropAreaRef = ref<HTMLElement | null>(null)
 const bodyDropActive = ref(false)
 const capDropActive = ref(false)
+const headDropActive = ref(false)
+const headCapDropActive = ref(false)
 const bodyDropProcessing = ref(false)
 const capDropProcessing = ref(false)
+const headDropProcessing = ref(false)
+const headCapDropProcessing = ref(false)
 const bodyFeedbackMessage = ref<string | null>(null)
 const capFeedbackMessage = ref<string | null>(null)
+const headFeedbackMessage = ref<string | null>(null)
+const headCapFeedbackMessage = ref<string | null>(null)
 
 const bodyAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyAssetId
@@ -79,8 +88,24 @@ const bodyAsset = computed(() => {
   return sceneStore.getAsset(assetId) ?? null
 })
 
-const capAsset = computed(() => {
-  const assetId = wallComponent.value?.props?.endCapAssetId
+const headAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.headAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const bodyCapAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.bodyEndCapAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const headCapAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.headEndCapAssetId
   if (!assetId) {
     return null
   }
@@ -111,10 +136,15 @@ function clampTolerance(value: unknown, fallback: number): number {
 }
 
 function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
-  const assetId = typeof row?.assetId === 'string' && row.assetId.trim().length ? row.assetId : null
+  const bodyAssetId = typeof (row as any)?.bodyAssetId === 'string' && (row as any).bodyAssetId.trim().length
+    ? (row as any).bodyAssetId
+    : null
+  const headAssetId = typeof (row as any)?.headAssetId === 'string' && (row as any).headAssetId.trim().length
+    ? (row as any).headAssetId
+    : null
   const angle = clampAngleDegrees((row as any)?.angle, 90)
   const tolerance = clampTolerance((row as any)?.tolerance, 5)
-  return { assetId, angle, tolerance } as WallCornerModelRow
+  return { bodyAssetId, headAssetId, angle, tolerance } as WallCornerModelRow
 }
 
 function commitCornerModels(next: WallCornerModelRow[]): void {
@@ -128,7 +158,7 @@ function commitCornerModels(next: WallCornerModelRow[]): void {
 
 function addCornerModel(): void {
   // Corner model rules use interior angle semantics (straight = 180°).
-  const next = [...cornerModels.value, normalizeCornerModelRow({ assetId: null, angle: 90, tolerance: 5 } as any)]
+  const next = [...cornerModels.value, normalizeCornerModelRow({ bodyAssetId: null, headAssetId: null, angle: 90, tolerance: 5 } as any)]
   commitCornerModels(next)
 }
 
@@ -179,12 +209,18 @@ watch(
 watch(selectedNode, () => {
   bodyDropActive.value = false
   capDropActive.value = false
+  headDropActive.value = false
+  headCapDropActive.value = false
   wallPresetDropActive.value = false
   bodyDropProcessing.value = false
   capDropProcessing.value = false
+  headDropProcessing.value = false
+  headCapDropProcessing.value = false
   wallPresetFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
   capFeedbackMessage.value = null
+  headFeedbackMessage.value = null
+  headCapFeedbackMessage.value = null
 })
 
 watch(assetDialogVisible, (open) => {
@@ -359,20 +395,25 @@ function cancelOverwriteWallPreset(): void {
   overwriteTargetFilename.value = null
 }
 
-function openWallAssetDialog(target: 'body' | 'cap', event?: MouseEvent): void {
+function openWallAssetDialog(target: WallAssetDialogTarget, event?: MouseEvent): void {
   assetDialogTarget.value = target
-  assetDialogSelectedId.value =
-    target === 'body'
-      ? wallComponent.value?.props?.bodyAssetId ?? ''
-      : (wallComponent.value?.props?.endCapAssetId ?? '')
+  assetDialogSelectedId.value = (() => {
+    if (target === 'body') return wallComponent.value?.props?.bodyAssetId ?? ''
+    if (target === 'head') return wallComponent.value?.props?.headAssetId ?? ''
+    if (target === 'bodyCap') return wallComponent.value?.props?.bodyEndCapAssetId ?? ''
+    if (target === 'headCap') return wallComponent.value?.props?.headEndCapAssetId ?? ''
+    return ''
+  })()
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
 
-function openWallCornerModelDialog(index: number, event?: MouseEvent): void {
-  assetDialogTarget.value = 'corner'
+function openWallCornerModelDialog(index: number, mode: 'body' | 'head', event?: MouseEvent): void {
+  assetDialogTarget.value = mode === 'body' ? 'cornerBody' : 'cornerHead'
   assetDialogCornerIndex.value = index
-  assetDialogSelectedId.value = cornerModels.value[index]?.assetId ?? ''
+  assetDialogSelectedId.value = mode === 'body'
+    ? (cornerModels.value[index] as any)?.bodyAssetId ?? ''
+    : (cornerModels.value[index] as any)?.headAssetId ?? ''
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
@@ -389,13 +430,23 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     if (target === 'body') {
       bodyFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: null })
-    } else if (target === 'cap') {
+    } else if (target === 'head') {
+      headFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: null } as any)
+    } else if (target === 'bodyCap') {
       capFeedbackMessage.value = null
-      sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: null } as any)
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: null } as any)
+    } else if (target === 'headCap') {
+      headCapFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: null } as any)
     } else {
       const index = assetDialogCornerIndex.value
       if (typeof index === 'number' && index >= 0) {
-        updateCornerModel(index, { assetId: null })
+        if (target === 'cornerBody') {
+          updateCornerModel(index, { bodyAssetId: null } as any)
+        } else {
+          updateCornerModel(index, { headAssetId: null } as any)
+        }
       }
     }
     assetDialogVisible.value = false
@@ -409,13 +460,23 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   if (target === 'body') {
     bodyFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: asset.id })
-  } else if (target === 'cap') {
+  } else if (target === 'head') {
+    headFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: asset.id } as any)
+  } else if (target === 'bodyCap') {
     capFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: asset.id } as any)
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: asset.id } as any)
+  } else if (target === 'headCap') {
+    headCapFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: asset.id } as any)
   } else {
     const index = assetDialogCornerIndex.value
     if (typeof index === 'number' && index >= 0) {
-      updateCornerModel(index, { assetId: asset.id })
+      if (target === 'cornerBody') {
+        updateCornerModel(index, { bodyAssetId: asset.id } as any)
+      } else {
+        updateCornerModel(index, { headAssetId: asset.id } as any)
+      }
     }
   }
   assetDialogVisible.value = false
@@ -425,87 +486,104 @@ function handleWallAssetDialogCancel(): void {
   assetDialogVisible.value = false
 }
 
-async function assignWallBodyAsset(event: DragEvent) {
+async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'bodyCap' | 'headCap') {
   event.preventDefault()
-  bodyDropActive.value = false
-  bodyFeedbackMessage.value = null
+
+  if (target === 'body') {
+    bodyDropActive.value = false
+    bodyFeedbackMessage.value = null
+  } else if (target === 'head') {
+    headDropActive.value = false
+    headFeedbackMessage.value = null
+  } else if (target === 'bodyCap') {
+    capDropActive.value = false
+    capFeedbackMessage.value = null
+  } else {
+    headCapDropActive.value = false
+    headCapFeedbackMessage.value = null
+  }
 
   const nodeId = selectedNodeId.value
   const component = wallComponent.value
   if (!nodeId || !component) {
     return
   }
-  if (bodyDropProcessing.value) {
+
+  if (target === 'head' && !component.props?.bodyAssetId) {
+    headFeedbackMessage.value = 'Assign a wall body model first.'
+    return
+  }
+  if (target === 'headCap' && !component.props?.bodyEndCapAssetId) {
+    headCapFeedbackMessage.value = 'Assign a body end cap first.'
+    return
+  }
+
+  const processing = target === 'body'
+    ? bodyDropProcessing
+    : target === 'head'
+      ? headDropProcessing
+      : target === 'bodyCap'
+        ? capDropProcessing
+        : headCapDropProcessing
+  if (processing.value) {
     return
   }
 
   const assetId = resolveDragAssetId(event)
   if (!assetId) {
-    bodyFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
+    const message = 'Drag a model asset from the Asset Panel.'
+    if (target === 'body') bodyFeedbackMessage.value = message
+    else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'bodyCap') capFeedbackMessage.value = message
+    else headCapFeedbackMessage.value = message
     return
   }
 
   const invalid = validateWallAssetId(assetId)
   if (invalid) {
-    bodyFeedbackMessage.value = invalid
+    if (target === 'body') bodyFeedbackMessage.value = invalid
+    else if (target === 'head') headFeedbackMessage.value = invalid
+    else if (target === 'bodyCap') capFeedbackMessage.value = invalid
+    else headCapFeedbackMessage.value = invalid
     return
   }
 
-  if (assetId === wallComponent.value?.props?.bodyAssetId) {
-    bodyFeedbackMessage.value = 'This model is already assigned.'
+  const currentId = target === 'body'
+    ? component.props?.bodyAssetId
+    : target === 'head'
+      ? (component.props as any)?.headAssetId
+      : target === 'bodyCap'
+        ? (component.props as any)?.bodyEndCapAssetId
+        : (component.props as any)?.headEndCapAssetId
+  if (assetId === currentId) {
+    const message = 'This model is already assigned.'
+    if (target === 'body') bodyFeedbackMessage.value = message
+    else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'bodyCap') capFeedbackMessage.value = message
+    else headCapFeedbackMessage.value = message
     return
   }
 
-  bodyDropProcessing.value = true
+  processing.value = true
   try {
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
+    if (target === 'body') {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
+    } else if (target === 'head') {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: assetId } as any)
+    } else if (target === 'bodyCap') {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: assetId } as any)
+    } else {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: assetId } as any)
+    }
   } catch (error) {
-    console.error('Failed to assign wall body asset model', error)
-    bodyFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
+    console.error('Failed to assign wall asset model', error)
+    const message = (error as Error).message ?? 'Failed to assign the model asset.'
+    if (target === 'body') bodyFeedbackMessage.value = message
+    else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'bodyCap') capFeedbackMessage.value = message
+    else headCapFeedbackMessage.value = message
   } finally {
-    bodyDropProcessing.value = false
-  }
-}
-
-async function assignWallCapAsset(event: DragEvent) {
-  event.preventDefault()
-  capDropActive.value = false
-  capFeedbackMessage.value = null
-
-  const nodeId = selectedNodeId.value
-  const component = wallComponent.value
-  if (!nodeId || !component) {
-    return
-  }
-  if (capDropProcessing.value) {
-    return
-  }
-
-  const assetId = resolveDragAssetId(event)
-  if (!assetId) {
-    capFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
-    return
-  }
-
-  const invalid = validateWallAssetId(assetId)
-  if (invalid) {
-    capFeedbackMessage.value = invalid
-    return
-  }
-
-  if (assetId === (wallComponent.value?.props as any)?.endCapAssetId) {
-    capFeedbackMessage.value = 'This model is already assigned.'
-    return
-  }
-
-  capDropProcessing.value = true
-  try {
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { endCapAssetId: assetId } as any)
-  } catch (error) {
-    console.error('Failed to assign wall end cap asset model', error)
-    capFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
-  } finally {
-    capDropProcessing.value = false
+    processing.value = false
   }
 }
 
@@ -779,70 +857,149 @@ function applyAirWallUpdate(rawValue: unknown) {
         </div>
 
         <div class="wall-asset-section">
-        <div
-          class="asset-model-panel"
-          ref="bodyDropAreaRef"
-          :class="{ 'is-active': bodyDropActive, 'is-processing': bodyDropProcessing }"
-          @dragenter.prevent="bodyDropActive = true"
-          @dragover.prevent="bodyDropActive = true"
-          @dragleave="(e) => { if (shouldDeactivateDropArea(bodyDropAreaRef, e)) bodyDropActive = false }"
-          @drop="assignWallBodyAsset"
-        >
-          <div v-if="bodyAsset" class="asset-summary">
-            <div
-              class="asset-thumbnail"
-              :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
-              @click.stop="openWallAssetDialog('body', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">{{ bodyAsset.name }}</div>
-              <div class="asset-subtitle">Wall body model · {{ bodyAsset.id.slice(0, 8) }}</div>
-            </div>
-          </div>
-          <div v-else class="asset-summary empty">
-            <div
-              class="asset-thumbnail placeholder"
-              @click.stop="openWallAssetDialog('body', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">No wall body model assigned</div>
-            </div>
-          </div>
-          <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
-        </div>
+          <div class="asset-model-panel">
+            <div class="asset-pair-grid">
+              <div
+                class="asset-pair-item"
+                ref="bodyDropAreaRef"
+                :class="{ 'is-active': bodyDropActive, 'is-processing': bodyDropProcessing }"
+                @dragenter.prevent="bodyDropActive = true"
+                @dragover.prevent="bodyDropActive = true"
+                @dragleave="(e) => { if (shouldDeactivateDropArea(bodyDropAreaRef, e)) bodyDropActive = false }"
+                @drop="(e) => assignWallAsset(e, 'body')"
+              >
+                <div class="asset-pair-label">Body</div>
+                <div v-if="bodyAsset" class="asset-summary">
+                  <div
+                    class="asset-thumbnail"
+                    :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
+                    @click.stop="openWallAssetDialog('body', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">{{ bodyAsset.name }}</div>
+                    <div class="asset-subtitle">Wall body · {{ bodyAsset.id.slice(0, 8) }}</div>
+                  </div>
+                </div>
+                <div v-else class="asset-summary empty">
+                  <div
+                    class="asset-thumbnail placeholder"
+                    @click.stop="openWallAssetDialog('body', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">Select Body Asset</div>
+                    <div class="asset-subtitle">Drag model/mesh here</div>
+                  </div>
+                </div>
+                <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
+              </div>
 
-        <div
-          class="asset-model-panel"
-          ref="capDropAreaRef"
-          :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
-          @dragenter.prevent="capDropActive = true"
-          @dragover.prevent="capDropActive = true"
-          @dragleave="(e) => { if (shouldDeactivateDropArea(capDropAreaRef, e)) capDropActive = false }"
-          @drop="assignWallCapAsset"
-        >
-          <div v-if="capAsset" class="asset-summary">
-            <div
-              class="asset-thumbnail"
-              :style="capAsset.thumbnail?.trim() ? { backgroundImage: `url(${capAsset.thumbnail})` } : (capAsset.previewColor ? { backgroundColor: capAsset.previewColor } : undefined)"
-              @click.stop="openWallAssetDialog('cap', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">{{ capAsset.name }}</div>
-              <div class="asset-subtitle">Wall end cap model · {{ capAsset.id.slice(0, 8) }}</div>
+              <div
+                class="asset-pair-item"
+                ref="headDropAreaRef"
+                :class="{ 'is-active': headDropActive, 'is-processing': headDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+                @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
+                @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
+                @dragleave="(e) => { if (shouldDeactivateDropArea(headDropAreaRef, e)) headDropActive = false }"
+                @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'head') }"
+              >
+                <div class="asset-pair-label">Head</div>
+                <div v-if="headAsset" class="asset-summary">
+                  <div
+                    class="asset-thumbnail"
+                    :style="headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined)"
+                    @click.stop="openWallAssetDialog('head', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">{{ headAsset.name }}</div>
+                    <div class="asset-subtitle">Wall head · {{ headAsset.id.slice(0, 8) }}</div>
+                  </div>
+                </div>
+                <div v-else class="asset-summary empty">
+                  <div
+                    class="asset-thumbnail placeholder"
+                    @click.stop="() => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', $event) }"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">Select Head Asset</div>
+                    <div class="asset-subtitle">Optional</div>
+                  </div>
+                </div>
+                <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
+              </div>
             </div>
           </div>
-          <div v-else class="asset-summary empty">
-            <div
-              class="asset-thumbnail placeholder"
-              @click.stop="openWallAssetDialog('cap', $event)"
-            />
-            <div class="asset-text">
-              <div class="asset-name">Select End Cap Asset</div>
-              <div class="asset-subtitle">Drag model/mesh here</div>
+
+          <div class="asset-model-panel">
+            <div class="asset-pair-grid">
+              <div
+                class="asset-pair-item"
+                ref="capDropAreaRef"
+                :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
+                @dragenter.prevent="capDropActive = true"
+                @dragover.prevent="capDropActive = true"
+                @dragleave="(e) => { if (shouldDeactivateDropArea(capDropAreaRef, e)) capDropActive = false }"
+                @drop="(e) => assignWallAsset(e, 'bodyCap')"
+              >
+                <div class="asset-pair-label">End Cap (Body)</div>
+                <div v-if="bodyCapAsset" class="asset-summary">
+                  <div
+                    class="asset-thumbnail"
+                    :style="bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined)"
+                    @click.stop="openWallAssetDialog('bodyCap', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">{{ bodyCapAsset.name }}</div>
+                    <div class="asset-subtitle">Body cap · {{ bodyCapAsset.id.slice(0, 8) }}</div>
+                  </div>
+                </div>
+                <div v-else class="asset-summary empty">
+                  <div
+                    class="asset-thumbnail placeholder"
+                    @click.stop="openWallAssetDialog('bodyCap', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">Select Body End Cap</div>
+                    <div class="asset-subtitle">Optional</div>
+                  </div>
+                </div>
+                <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
+              </div>
+
+              <div
+                class="asset-pair-item"
+                ref="headCapDropAreaRef"
+                :class="{ 'is-active': headCapDropActive, 'is-processing': headCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
+                @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
+                @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
+                @dragleave="(e) => { if (shouldDeactivateDropArea(headCapDropAreaRef, e)) headCapDropActive = false }"
+                @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'headCap') }"
+              >
+                <div class="asset-pair-label">End Cap (Head)</div>
+                <div v-if="headCapAsset" class="asset-summary">
+                  <div
+                    class="asset-thumbnail"
+                    :style="headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined)"
+                    @click.stop="openWallAssetDialog('headCap', $event)"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">{{ headCapAsset.name }}</div>
+                    <div class="asset-subtitle">Head cap · {{ headCapAsset.id.slice(0, 8) }}</div>
+                  </div>
+                </div>
+                <div v-else class="asset-summary empty">
+                  <div
+                    class="asset-thumbnail placeholder"
+                    @click.stop="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', $event) }"
+                  />
+                  <div class="asset-text">
+                    <div class="asset-name">Select Head End Cap</div>
+                    <div class="asset-subtitle">Optional</div>
+                  </div>
+                </div>
+                <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
+              </div>
             </div>
           </div>
-          <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
-        </div>
 
         <div class="wall-corner-models">
           <div class="wall-corner-header">
@@ -868,25 +1025,49 @@ function applyAirWallUpdate(rawValue: unknown) {
             :key="`corner-${index}`"
             class="wall-corner-row"
           >
-            <div
-              class="wall-corner-asset"
-              @click.stop="openWallCornerModelDialog(index, $event)"
-            >
-              <template v-if="resolveCornerModelAsset(entry.assetId)">
-                <div
-                  class="asset-thumbnail"
-                  :style="(() => {
-                    const asset = resolveCornerModelAsset(entry.assetId)
-                    if (!asset) return undefined
-                    return asset.thumbnail?.trim()
-                      ? { backgroundImage: `url(${asset.thumbnail})` }
-                      : (asset.previewColor ? { backgroundColor: asset.previewColor } : undefined)
-                  })()"
-                />
-              </template>
-              <template v-else>
-                <div class="asset-thumbnail placeholder" />
-              </template>
+            <div class="wall-corner-assets">
+              <div
+                class="wall-corner-asset"
+                @click.stop="openWallCornerModelDialog(index, 'body', $event)"
+              >
+                <template v-if="resolveCornerModelAsset((entry as any).bodyAssetId)">
+                  <div
+                    class="asset-thumbnail"
+                    :style="(() => {
+                      const asset = resolveCornerModelAsset((entry as any).bodyAssetId)
+                      if (!asset) return undefined
+                      return asset.thumbnail?.trim()
+                        ? { backgroundImage: `url(${asset.thumbnail})` }
+                        : (asset.previewColor ? { backgroundColor: asset.previewColor } : undefined)
+                    })()"
+                  />
+                </template>
+                <template v-else>
+                  <div class="asset-thumbnail placeholder" />
+                </template>
+              </div>
+
+              <div
+                class="wall-corner-asset"
+                :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+                @click.stop="() => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'head', $event) }"
+              >
+                <template v-if="resolveCornerModelAsset((entry as any).headAssetId)">
+                  <div
+                    class="asset-thumbnail"
+                    :style="(() => {
+                      const asset = resolveCornerModelAsset((entry as any).headAssetId)
+                      if (!asset) return undefined
+                      return asset.thumbnail?.trim()
+                        ? { backgroundImage: `url(${asset.thumbnail})` }
+                        : (asset.previewColor ? { backgroundColor: asset.previewColor } : undefined)
+                    })()"
+                  />
+                </template>
+                <template v-else>
+                  <div class="asset-thumbnail placeholder" />
+                </template>
+              </div>
             </div>
 
             <div class="wall-corner-fields">
@@ -1094,9 +1275,57 @@ function applyAirWallUpdate(rawValue: unknown) {
   padding-top: 0;
 }
 
+.wall-corner-assets {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .wall-corner-asset {
   display: flex;
   align-items: center;
+}
+
+.wall-corner-asset.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.asset-pair-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.asset-pair-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.6rem;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.asset-pair-item.is-active {
+  border-color: rgba(110, 231, 183, 0.8);
+  background-color: rgba(110, 231, 183, 0.08);
+}
+
+.asset-pair-item.is-processing {
+  opacity: 0.85;
+}
+
+.asset-pair-item.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.asset-pair-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
 }
 
 .wall-corner-fields {
