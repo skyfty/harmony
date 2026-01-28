@@ -4113,6 +4113,62 @@ function computeWorldAabbBottomAlignedPoint(
   return dragPreviewAlignedPointHelper.clone()
 }
 
+function computeSpawnPointForSelectionClick(
+  event: PointerEvent,
+  assetId: string,
+  placementSideSnap: VertexSnapResult | null,
+): THREE.Vector3 {
+  const placement = computePointerDropPlacement(event)
+  const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+  const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === assetId
+  const spawnPoint = canUsePreviewBounds
+    ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
+    : basePoint
+  if (placementSideSnap) {
+    spawnPoint.add(placementSideSnap.delta)
+  }
+  return spawnPoint
+}
+
+function isUserCreatedEmptyGroupForPlacement(selectedId: string | null, parentGroupId: string | null): boolean {
+  if (!selectedId || parentGroupId !== selectedId) return false
+  const { nodeMap } = buildHierarchyMaps()
+  const selectedNode = nodeMap.get(selectedId)
+  if (!selectedNode || selectedNode.nodeType !== 'Group') return false
+
+  // Many model assets can be represented as a Group node (e.g. instancing).
+  // Only treat *user-created* empty groups as placement containers.
+  // If the group is backed by an asset, never apply the empty-group placement behavior.
+  if (typeof (selectedNode as any).sourceAssetId === 'string' && (selectedNode as any).sourceAssetId.trim().length > 0) {
+    return false
+  }
+  return !selectedNode.children || selectedNode.children.length === 0
+}
+
+async function spawnAssetFromSelectionClick(params: {
+  assetId: string
+  spawnPoint: THREE.Vector3
+  rotation: THREE.Vector3
+  parentGroupId: string | null
+  selectedId: string | null
+}): Promise<void> {
+  const { assetId, spawnPoint, rotation, parentGroupId, selectedId } = params
+  const isEmptySelectedGroup = isUserCreatedEmptyGroupForPlacement(selectedId, parentGroupId)
+
+  if (isEmptySelectedGroup && parentGroupId) {
+    await sceneStore.spawnAssetIntoEmptyGroupAtPosition(assetId, parentGroupId, spawnPoint, {
+      rotation,
+    })
+    return
+  }
+
+  await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+    parentId: parentGroupId,
+    preserveWorldPosition: Boolean(parentGroupId),
+    rotation,
+  })
+}
+
 // Selection-based asset preview state: when a mesh/model/prefab is selected
 let selectionPreviewActive = false
 let selectionPreviewAssetId: string | null = null
@@ -7633,67 +7689,17 @@ async function handlePointerUp(event: PointerEvent) {
           // 清除提示标记，确保 UI 不再显示旧的吸附提示
           clearPlacementSideSnapMarkers()
 
-          // 计算鼠标/指针在放置时落在场景上的候选位置（优先地面/物体表面，否则平面回退）
-          const placement = computePointerDropPlacement(event)
-          // 从放置命中计算用于预览/生成的基准点；若未命中则使用原点作为后备
-          const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
-
-          // 如果正在使用预览物体的包围盒对齐（例如在资产面板中预览同一资产），则使用包围盒底部对齐点作为生成点
-          const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === session.assetId
-          const spawnPoint = canUsePreviewBounds
-            ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
-            : basePoint
-
-          // 解析是否存在一个被选中的组节点作为放置父级（如果用户选择了空组则可能将物体放入该组）
-          const parentGroupId = resolveSelectedGroupDropParent()
-          // 放置时应用的初始旋转（Y 轴以预览 yaw 角为准）
-          const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
-            const selectedId = props.selectedNodeId
-            // 判断当前选中的节点是否为“用户创建的空组”，仅在该情况下才启用特殊的放入空组逻辑
-            const isEmptySelectedGroup = (() => {
-              if (!selectedId || parentGroupId !== selectedId) return false
-              const { nodeMap } = buildHierarchyMaps()
-              const selectedNode = nodeMap.get(selectedId)
-              if (!selectedNode || selectedNode.nodeType !== 'Group') return false
-
-              // 注意：许多模型资产本身也会以 Group 表示（例如实例化导出的 Group），
-              // 我们只希望将用户显式创建的“空组”视作放置容器；若该组是由 asset 产生的，禁止此行为。
-              if (typeof (selectedNode as any).sourceAssetId === 'string' && (selectedNode as any).sourceAssetId.trim().length > 0) {
-                return false
-              }
-              return !selectedNode.children || selectedNode.children.length === 0
-            })()
-
-            let spawnResult: { node: { id: string } } | null = null
-
-            // 如果目标是空组并且有 parentGroupId，则使用专门的接口将资产“放入”该空组并确保世界坐标对齐
-            if (isEmptySelectedGroup && parentGroupId) {
-              spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint, {
-                rotation,
-              })
-            } else {
-              // 否则使用通用的 spawn 接口，可以指定 parentId 和是否保持世界坐标
-              spawnResult = await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
-                parentId: parentGroupId,
-                preserveWorldPosition: Boolean(parentGroupId),
-                rotation,
-              })
-            }
-
-            // spawn 后尝试应用之前消费到的放置吸附偏移（如果存在且放置后的节点几何体已就绪）
-            const placedNodeId = spawnResult?.node?.id ?? null
-            if (placementSideSnap && placedNodeId && snapController.isNodeGeometryReady(placedNodeId)) {
-              const placedObject = objectMap.get(placedNodeId) ?? null
-              if (placedObject) {
-                // 获取放置对象的世界位置，添加吸附偏移量，并通过 store 更新节点的世界坐标（仅位置）
-                placedObject.updateMatrixWorld(true)
-                const worldPos = new THREE.Vector3()
-                placedObject.getWorldPosition(worldPos)
-                worldPos.add(placementSideSnap.delta)
-                sceneStore.setNodeWorldPositionPositionOnly(placedNodeId, worldPos)
-              }
-            }
+            const spawnPoint = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
+            const parentGroupId = resolveSelectedGroupDropParent()
+            const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
+            await spawnAssetFromSelectionClick({
+              assetId: session.assetId,
+              spawnPoint,
+              rotation,
+              parentGroupId,
+              selectedId: props.selectedNodeId ?? null,
+            })
           } catch (error) {
             console.warn('Failed to spawn asset from selection click', session.assetId, error)
           }
@@ -8896,9 +8902,12 @@ async function handleViewportDrop(event: DragEvent) {
   const placement = computeDropPlacement(event)
   const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
   const canUsePreviewBounds = Boolean(dragPreviewGroup.children && dragPreviewGroup.children.length > 0)
-  const spawnPoint = canUsePreviewBounds
+  let spawnPoint = canUsePreviewBounds
     ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
     : basePoint
+  if (placementSideSnap) {
+    spawnPoint.add(placementSideSnap.delta)
+  }
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
@@ -8920,18 +8929,7 @@ async function handleViewportDrop(event: DragEvent) {
         preserveWorldPosition: Boolean(parentGroupId),
       })
     }
-
-    const placedNodeId = spawnResult?.node?.id ?? null
-    if (placementSideSnap && placedNodeId && snapController.isNodeGeometryReady(placedNodeId)) {
-      const placedObject = objectMap.get(placedNodeId) ?? null
-      if (placedObject) {
-        placedObject.updateMatrixWorld(true)
-        const worldPos = new THREE.Vector3()
-        placedObject.getWorldPosition(worldPos)
-        worldPos.add(placementSideSnap.delta)
-        sceneStore.setNodeWorldPositionPositionOnly(placedNodeId, worldPos)
-      }
-    }
+    void spawnResult
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
