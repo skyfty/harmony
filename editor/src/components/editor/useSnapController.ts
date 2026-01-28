@@ -83,8 +83,6 @@ export type PlacementSideSnapQuery = {
 }
 
 export function useSnapController(options: UseSnapControllerOptions) {
-  // Debugging: enable verbose logs to trace instanced picking and vertex candidates.
-  const DEBUG_SNAP = true
   const pixelThreshold = (typeof options.pixelThreshold === 'number' && Number.isFinite(options.pixelThreshold))
     ? options.pixelThreshold
     : 12
@@ -244,19 +242,6 @@ export function useSnapController(options: UseSnapControllerOptions) {
           ? query.pixelThresholdPx
           : pixelThreshold
 
-    if (DEBUG_SNAP) {
-      try {
-        console.debug('[snap] update query', {
-          active: query.active,
-          selectedNodeId: query.selectedNodeId,
-          threshold,
-          sourceExists: !!activeSource,
-        })
-      } catch (err) {
-        // swallow
-      }
-    }
-
     const sourceThreshold = Math.min(
       Math.max(Math.round(threshold * sourceAcquireMultiplier), sourceAcquireMinPx),
       sourceAcquireMaxPx,
@@ -321,7 +306,6 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
       const chosen = sourceCandidate ?? instancedSourceCandidate
       if (!chosen) {
-        if (DEBUG_SNAP) console.debug('[snap] no source candidate for selectedObject', selectedNodeId)
         activeSource = null
         return null
       }
@@ -671,11 +655,6 @@ export function useSnapController(options: UseSnapControllerOptions) {
     }
 
     let best: SnapSourceCandidate | null = null
-    if (DEBUG_SNAP) {
-      try {
-        console.debug('[snap] scanning object vertices', { object: object.name ?? object.uuid })
-      } catch (err) {}
-    }
 
     object.traverse((child) => {
       const mesh = child as THREE.Mesh
@@ -723,11 +702,6 @@ export function useSnapController(options: UseSnapControllerOptions) {
             worldPosition: vertexWorldHelper.clone(),
             screenDistance: distance,
             vertexIndex: i,
-          }
-          if (DEBUG_SNAP) {
-            try {
-              console.debug('[snap] candidate vertex', { mesh: mesh.uuid, vertexIndex: i, distance })
-            } catch (err) {}
           }
         }
       }
