@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   useSceneStore,
@@ -64,6 +64,19 @@ let dragHoverRaf: number | null = null
 let pendingDragHover: { targetId: string | null; position: HierarchyDropPosition | null } | null = null
 
 const treeContainerRef = ref<HTMLElement | null>(null)
+
+const scrollbarGutterPx = ref(0)
+let scrollbarResizeObserver: ResizeObserver | null = null
+
+function measureHierarchyScrollbarGutter() {
+  const container = getHierarchyScrollContainer()
+  if (!container) {
+    scrollbarGutterPx.value = 0
+    return
+  }
+  const gutter = container.offsetWidth - container.clientWidth
+  scrollbarGutterPx.value = gutter > 0 ? gutter : 0
+}
 
 let autoScrollRaf: number | null = null
 let autoScrollVelocity = 0
@@ -213,6 +226,26 @@ onBeforeUnmount(() => {
   pendingDragHover = null
 
   stopAutoScroll()
+
+  if (scrollbarResizeObserver) {
+    scrollbarResizeObserver.disconnect()
+    scrollbarResizeObserver = null
+  }
+  window.removeEventListener('resize', measureHierarchyScrollbarGutter)
+})
+
+onMounted(async () => {
+  await nextTick()
+  measureHierarchyScrollbarGutter()
+  window.addEventListener('resize', measureHierarchyScrollbarGutter, { passive: true })
+
+  const container = getHierarchyScrollContainer()
+  if (container && typeof ResizeObserver !== 'undefined') {
+    scrollbarResizeObserver = new ResizeObserver(() => {
+      measureHierarchyScrollbarGutter()
+    })
+    scrollbarResizeObserver.observe(container)
+  }
 })
 const panelRef = ref<HTMLDivElement | null>(null)
 void panelRef
@@ -284,6 +317,16 @@ const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
   walk(hierarchyItems.value, 0)
   return rows
 })
+
+watch(
+  () => visibleHierarchyRows.value.length,
+  async () => {
+    // When rows change, overflow/scrollbar can appear/disappear.
+    await nextTick()
+    measureHierarchyScrollbarGutter()
+  },
+  { flush: 'post' },
+)
 
 // Global visibility toggle: exclude system nodes and skip selection-locked nodes.
 const visibilityCandidates = computed(() =>
@@ -1430,7 +1473,7 @@ function handleTreeDragLeave(event: DragEvent) {
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
-    <div class="panel-body hierarchy-body">
+    <div class="panel-body hierarchy-body" :style="{ '--hierarchy-scrollbar-gutter': `${scrollbarGutterPx}px` }">
       <v-toolbar density="compact" class="tree-toolbar" height="40px">
         <AddNodeMenu>
           <template #activator="{ props }">
@@ -1629,7 +1672,9 @@ function handleTreeDragLeave(event: DragEvent) {
     grid-auto-flow: column;
     grid-gap: 10px;
     display: inline-grid;
-    margin-right: 1px;
+  /* Keep toolbar right controls aligned with row trailing controls even when
+     the virtual list shows a vertical scrollbar (which shrinks content width). */
+  margin-right: calc(1px + var(--hierarchy-scrollbar-gutter, 0px));
 }
 
 .panel-body {
@@ -1678,6 +1723,9 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .hierarchy-virtual-list {
   height: 100%;
+  /* Reserve a stable scrollbar gutter so row content doesn't "jump" when the
+     scrollbar appears/disappears. */
+  scrollbar-gutter: stable;
 }
 
 .tree-container {
@@ -1695,6 +1743,7 @@ function handleTreeDragLeave(event: DragEvent) {
 .hierarchy-row {
   min-height: 30px;
   padding-inline: 0px;
+  position: relative;
 }
 
 .node-label {
@@ -1722,12 +1771,6 @@ function handleTreeDragLeave(event: DragEvent) {
   white-space: nowrap;
   text-overflow: ellipsis;
   margin-left: 2px;
-}
-
-.hierarchy-row {
-  min-height: 30px;
-  padding-inline: 0px;
-  position: relative;
 }
 
 .group-expander-btn {
