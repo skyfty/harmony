@@ -7683,7 +7683,10 @@ async function handlePointerUp(event: PointerEvent) {
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
           // 如果当前启用了顶点吸附模式并且工具处于选择模式，则尝试消费一次放置侧吸附结果
           // `consumePlacementSideSnapResult()` 会返回当前预览时计算好的吸附信息并将其内部状态标记为已消费
-          const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+          // Only enable post-spawn placement-side snap when user holds Shift AND
+          // vertex snap is enabled in the viewport toolbar (i.e. snap mode === 'vertex').
+          // This avoids interfering with normal placement workflows.
+          const placementSideSnap = (event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
             ? snapController.consumePlacementSideSnapResult()
             : null
           // 清除提示标记，确保 UI 不再显示旧的吸附提示
@@ -8895,7 +8898,8 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+  // Only apply placement-side snap on drop if Shift is held and vertex snap is enabled
+  const placementSideSnap = (event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
     ? snapController.consumePlacementSideSnapResult()
     : null
 
