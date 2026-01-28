@@ -4075,21 +4075,41 @@ function computeWorldAabbBottomAlignedPoint(
     return null
   }
 
+  // 如果没有预览根节点或其没有子对象，无法计算包围盒底部对齐点
   if (!previewRoot.children || previewRoot.children.length === 0) {
     return null
   }
 
+  // 确保预览对象的世界变换是最新的（更新 matrixWorld）
+  // 第一个参数 true 表示更新 localMatrix，第二个参数 true 表示更新 worldMatrix
   previewRoot.updateWorldMatrix(true, true)
+
+  // 计算预览对象在世界空间下的轴对齐包围盒，并将结果写入预先分配的辅助变量
+  // 这样我们可以得到包围盒的 min/max，以便找到模型在世界空间中的底部 y 值
   setBoundingBoxFromObject(previewRoot, dragPreviewBoundingBoxHelper)
+
+  // 如果包围盒为空（例如 geometry 丢失或没有可见几何体），则无法对齐
   if (dragPreviewBoundingBoxHelper.isEmpty()) {
     return null
   }
 
+  // 获取预览根节点在世界空间中的原点位置（通常是 object 的 position 转换后的 world 坐标）
+  // 这一步用于计算包围盒的 min 相对于对象原点的偏移量
   previewRoot.getWorldPosition(dragPreviewWorldPositionHelper)
+
+  // 计算包围盒底部（min.y）相对于对象世界原点的垂直偏移量
+  // bottomOffsetFromOriginY = (包围盒底部的世界 y) - (对象世界原点的 y)
+  // 注意：这里是包围盒 min 的 y 减去对象 world position 的 y，可能为负值或正值，取决于模型原点的位置
   const bottomOffsetFromOriginY = dragPreviewBoundingBoxHelper.min.y - dragPreviewWorldPositionHelper.y
 
+  // 将传入的基准点（通常是鼠标在地面上的点）复制到辅助向量
   dragPreviewAlignedPointHelper.copy(basePoint)
+
+  // 将基准点的 y 调整为对齐后的 y 值：基准点 y 减去包围盒底部相对于对象原点的偏移
+  // 这样得到的点表示：当把预览对象的世界原点放到该点时，对象的包围盒底部将落在原来的基准点 y 上
   dragPreviewAlignedPointHelper.y = basePoint.y - bottomOffsetFromOriginY
+
+  // 返回一个新的 Vector3 副本，避免外部修改内部缓冲向量
   return dragPreviewAlignedPointHelper.clone()
 }
 
@@ -7593,39 +7613,52 @@ async function handlePointerUp(event: PointerEvent) {
       return
     }
 
-    // Asset panel selection: left click places the selected model/mesh/prefab at cursor.
-    // Dragging should pan the camera and must not place assets.
+    // 资产面板放置：左键点击时在光标位置放置当前选中的模型/网格/预制件。
+    // 注意：如果发生拖动（拖拽移动），应当触发摄像机平移而不是放置资产，因此此处仅在点击未移动时处理放置。
     if (event.button === 0 && assetPlacementClickSessionState?.pointerId === event.pointerId) {
       const session = assetPlacementClickSessionState
+      // 清除会话状态（click 处理一次后即无效）
       assetPlacementClickSessionState = null
 
+      // 仅在点击未发生拖动时继续（防止误触放置）
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
+        // 仅对 model/mesh/prefab 类型资产执行放置逻辑
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
+          // 如果当前启用了顶点吸附模式并且工具处于选择模式，则尝试消费一次放置侧吸附结果
+          // `consumePlacementSideSnapResult()` 会返回当前预览时计算好的吸附信息并将其内部状态标记为已消费
           const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
             ? snapController.consumePlacementSideSnapResult()
             : null
+          // 清除提示标记，确保 UI 不再显示旧的吸附提示
           clearPlacementSideSnapMarkers()
 
+          // 计算鼠标/指针在放置时落在场景上的候选位置（优先地面/物体表面，否则平面回退）
           const placement = computePointerDropPlacement(event)
+          // 从放置命中计算用于预览/生成的基准点；若未命中则使用原点作为后备
           const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+
+          // 如果正在使用预览物体的包围盒对齐（例如在资产面板中预览同一资产），则使用包围盒底部对齐点作为生成点
           const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === session.assetId
           const spawnPoint = canUsePreviewBounds
             ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
             : basePoint
+
+          // 解析是否存在一个被选中的组节点作为放置父级（如果用户选择了空组则可能将物体放入该组）
           const parentGroupId = resolveSelectedGroupDropParent()
+          // 放置时应用的初始旋转（Y 轴以预览 yaw 角为准）
           const rotation = new THREE.Vector3(0, placementPreviewYaw, 0)
           try {
             const selectedId = props.selectedNodeId
+            // 判断当前选中的节点是否为“用户创建的空组”，仅在该情况下才启用特殊的放入空组逻辑
             const isEmptySelectedGroup = (() => {
               if (!selectedId || parentGroupId !== selectedId) return false
               const { nodeMap } = buildHierarchyMaps()
               const selectedNode = nodeMap.get(selectedId)
               if (!selectedNode || selectedNode.nodeType !== 'Group') return false
 
-              // Many model assets can be represented as a Group node (e.g. instancing).
-              // Only treat *user-created* empty groups as placement containers.
-              // If the group is backed by an asset, never apply the empty-group placement behavior.
+              // 注意：许多模型资产本身也会以 Group 表示（例如实例化导出的 Group），
+              // 我们只希望将用户显式创建的“空组”视作放置容器；若该组是由 asset 产生的，禁止此行为。
               if (typeof (selectedNode as any).sourceAssetId === 'string' && (selectedNode as any).sourceAssetId.trim().length > 0) {
                 return false
               }
@@ -7634,11 +7667,13 @@ async function handlePointerUp(event: PointerEvent) {
 
             let spawnResult: { node: { id: string } } | null = null
 
+            // 如果目标是空组并且有 parentGroupId，则使用专门的接口将资产“放入”该空组并确保世界坐标对齐
             if (isEmptySelectedGroup && parentGroupId) {
               spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtPosition(session.assetId, parentGroupId, spawnPoint, {
                 rotation,
               })
             } else {
+              // 否则使用通用的 spawn 接口，可以指定 parentId 和是否保持世界坐标
               spawnResult = await sceneStore.spawnAssetAtPosition(session.assetId, spawnPoint, {
                 parentId: parentGroupId,
                 preserveWorldPosition: Boolean(parentGroupId),
@@ -7646,10 +7681,12 @@ async function handlePointerUp(event: PointerEvent) {
               })
             }
 
+            // spawn 后尝试应用之前消费到的放置吸附偏移（如果存在且放置后的节点几何体已就绪）
             const placedNodeId = spawnResult?.node?.id ?? null
             if (placementSideSnap && placedNodeId && snapController.isNodeGeometryReady(placedNodeId)) {
               const placedObject = objectMap.get(placedNodeId) ?? null
               if (placedObject) {
+                // 获取放置对象的世界位置，添加吸附偏移量，并通过 store 更新节点的世界坐标（仅位置）
                 placedObject.updateMatrixWorld(true)
                 const worldPos = new THREE.Vector3()
                 placedObject.getWorldPosition(worldPos)
