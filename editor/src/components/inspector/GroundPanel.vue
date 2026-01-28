@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import { useTerrainStore } from '@/stores/terrainStore'
+import { useTerrainStore,SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
 import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings, GroundSculptOperation } from '@harmony/schema'
 import { applyGroundGeneration } from '@schema/groundMesh'
 import TerrainSculptPanel from './TerrainSculptPanel.vue'
@@ -12,7 +12,6 @@ import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import type { ProjectAsset } from '@/types/project-asset'
-import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()

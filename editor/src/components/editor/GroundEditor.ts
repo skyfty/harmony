@@ -39,11 +39,12 @@ import {
 	buildScatterNodeId,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
-import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 import type { BuildTool } from '@/types/build-tool'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
+import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
+
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'

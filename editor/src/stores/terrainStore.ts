@@ -5,9 +5,9 @@ import type { GroundSculptOperation } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
-import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
 
 export type GroundPanelTab = 'terrain' | 'paint' | TerrainScatterCategory
+export const SCATTER_BRUSH_RADIUS_MAX = 20 as const
 
 export const useTerrainStore = defineStore('terrain', () => {
   const brushRadius = ref(3)

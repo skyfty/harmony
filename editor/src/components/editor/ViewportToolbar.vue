@@ -403,7 +403,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { FLOOR_BUILD_SHAPE_LABELS } from '@/types/floor-build-shape'
-import { SCATTER_BRUSH_RADIUS_MAX } from '@/constants/terrainScatter'
+import { SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
 
 const props = withDefaults(
   defineProps<{

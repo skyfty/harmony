@@ -266,12 +266,98 @@ const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
 const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float panel'))
 
+const searchQuery = ref('')
+const isSearchVisible = ref(false)
+const searchFieldRef = ref<unknown>(null)
+
 const openedIds = computed({
   get: () => sceneStore.getExpandedGroupIds(),
   set: (next: string[]) => {
     sceneStore.syncGroupExpansionState(next, { captureHistory: false })
   },
 })
+
+const normalizedSearchQuery = computed(() => {
+  const raw = searchQuery.value ?? ''
+  return raw.trim().toLowerCase()
+})
+const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+
+function focusSearchField() {
+  nextTick(() => {
+    const instance = searchFieldRef.value as any
+    if (instance?.focus && typeof instance.focus === 'function') {
+      instance.focus()
+      return
+    }
+    const el = instance?.$el as HTMLElement | undefined
+    const input = el?.querySelector?.('input') as HTMLInputElement | null
+    input?.focus()
+  })
+}
+
+function focusTreeContainer() {
+  nextTick(() => {
+    treeContainerRef.value?.focus?.()
+  })
+}
+
+function showSearchAndFocus() {
+  isSearchVisible.value = true
+  focusSearchField()
+}
+
+function clearAndHideSearch() {
+  searchQuery.value = ''
+  isSearchVisible.value = false
+  focusTreeContainer()
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+  const tag = target.tagName.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+    return true
+  }
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
+
+function handleTreeContainerKeydown(event: KeyboardEvent) {
+  if (isEditableElement(event.target)) {
+    return
+  }
+
+  if ((isSearchVisible.value || isSearchActive.value) && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    clearAndHideSearch()
+    return
+  }
+
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+
+  if (event.key.length === 1) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!isSearchVisible.value) {
+      isSearchVisible.value = true
+    }
+    searchQuery.value = `${searchQuery.value ?? ''}${event.key}`
+    focusSearchField()
+  }
+}
+
+function handleSearchFieldKeydown(event: KeyboardEvent) {
+  if ((isSearchVisible.value || isSearchActive.value) && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    clearAndHideSearch()
+  }
+}
 
 
 function areSameSelection(a: string[], b: string[]): boolean {
@@ -293,6 +379,12 @@ watch(draggingAssetId, (value) => {
 
 const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyItems.value))
 const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
+const rangeOrderNodeIds = computed(() => {
+  if (isSearchActive.value) {
+    return visibleHierarchyRows.value.map((row) => row.id)
+  }
+  return allNodeIds.value
+})
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
 
@@ -305,6 +397,45 @@ type VisibleHierarchyRow = {
   expanded: boolean
 }
 
+function filterHierarchyItemsForSearch(items: HierarchyTreeItem[], query: string): HierarchyTreeItem[] {
+  if (!query) {
+    return items
+  }
+
+  const walk = (source: HierarchyTreeItem[]): HierarchyTreeItem[] => {
+    const next: HierarchyTreeItem[] = []
+    for (const item of source) {
+      const name = (item.name ?? '').toString().toLowerCase()
+      const isMatch = name.includes(query)
+      const children = Array.isArray(item.children) ? item.children : []
+      const filteredChildren = children.length ? walk(children) : []
+      const include = isMatch || filteredChildren.length > 0
+      if (!include) {
+        continue
+      }
+      if (children.length || filteredChildren.length) {
+        next.push({
+          ...item,
+          children: filteredChildren,
+        })
+      } else {
+        next.push(item)
+      }
+    }
+    return next
+  }
+
+  return walk(items)
+}
+
+const hierarchyItemsForView = computed(() => {
+  const query = normalizedSearchQuery.value
+  if (!query) {
+    return hierarchyItems.value
+  }
+  return filterHierarchyItemsForSearch(hierarchyItems.value, query)
+})
+
 const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
   const openedSet = new Set(openedIds.value)
   const rows: VisibleHierarchyRow[] = []
@@ -313,7 +444,7 @@ const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
     for (const item of items) {
       const isGroup = item.nodeType === 'Group' && item.instanced !== true
       const hasChildren = isGroup && Boolean(item.children?.length)
-      const expanded = hasChildren && openedSet.has(item.id)
+      const expanded = hasChildren && (isSearchActive.value ? true : openedSet.has(item.id))
       rows.push({ id: item.id, item, depth, isGroup, hasChildren, expanded })
       if (hasChildren && expanded) {
         walk(item.children ?? [], depth + 1)
@@ -321,7 +452,7 @@ const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
     }
   }
 
-  walk(hierarchyItems.value, 0)
+  walk(hierarchyItemsForView.value, 0)
   return rows
 })
 
@@ -925,11 +1056,12 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
 
   if (isRangeSelect) {
     const anchorId = selectionAnchorId.value
-    const anchorIndex = anchorId ? allNodeIds.value.indexOf(anchorId) : -1
-    const targetIndex = allNodeIds.value.indexOf(nodeId)
+    const order = rangeOrderNodeIds.value
+    const anchorIndex = anchorId ? order.indexOf(anchorId) : -1
+    const targetIndex = order.indexOf(nodeId)
     if (anchorIndex !== -1 && targetIndex !== -1) {
       const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
-      const rangeIds = allNodeIds.value.slice(start, end + 1)
+      const rangeIds = order.slice(start, end + 1)
       const base = isToggle ? currentSelection : []
       nextSelection = Array.from(new Set([...base, ...rangeIds]))
     } else {
@@ -1458,6 +1590,14 @@ function handleTreeDragLeave(event: DragEvent) {
   }
 }
 
+function handleSearchIconClick() {
+  if (isSearchVisible.value) {
+    clearAndHideSearch()
+  } else {
+    showSearchAndFocus()
+  }
+}
+
 </script>
 
 <template>
@@ -1469,6 +1609,13 @@ function handleTreeDragLeave(event: DragEvent) {
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
 
       <v-spacer />
+      <v-btn
+        icon='mdi-magnify'
+        size="small"
+        variant="text"
+        :title="isSearchVisible ? 'Close search' : 'Search nodes'"
+        @click="handleSearchIconClick"
+      />
       <v-btn
         class="placement-toggle"
         variant="text"
@@ -1559,10 +1706,26 @@ function handleTreeDragLeave(event: DragEvent) {
         </div>
 
       </v-toolbar>
+      <div v-if="isSearchVisible" class="tree-search">
+        <v-text-field
+          ref="searchFieldRef"
+          v-model="searchQuery"
+          density="compact"
+          variant="solo"
+          hide-details
+          clearable
+          single-line
+          placeholder="Search nodes"
+          prepend-inner-icon="mdi-magnify"
+          @keydown="handleSearchFieldKeydown"
+        />
+      </div>
       <div
         class="tree-container"
         :class="rootDropClasses"
         ref="treeContainerRef"
+        tabindex="0"
+        @keydown.capture="handleTreeContainerKeydown"
         @dragover="handleTreeDragOver"
         @drop="handleTreeDrop"
         @dragleave="handleTreeDragLeave"
@@ -1599,7 +1762,7 @@ function handleTreeDragLeave(event: DragEvent) {
                   density="compact"
                   size="24"
                   class="group-expander-btn"
-                  :disabled="!row.hasChildren"
+                  :disabled="!row.hasChildren || isSearchActive"
                   @click.stop="sceneStore.toggleGroupExpansion(row.id, { captureHistory: false })"
                 />
 
@@ -1704,6 +1867,14 @@ function handleTreeDragLeave(event: DragEvent) {
   gap: 2px;
 }
 
+.tree-search {
+  margin-right: calc(1px + var(--hierarchy-scrollbar-gutter, 0px));
+}
+
+.tree-search :deep(.v-field) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .global-toggle-btn {
   color: rgba(233, 236, 241, 0.64);
   transition: color 120ms ease;
@@ -1741,6 +1912,13 @@ function handleTreeDragLeave(event: DragEvent) {
   overflow-x: hidden;
   overflow-y: hidden;
   border-radius: 6px;
+}
+
+/* Remove focus ring applied when the container is programmatically focused */
+.tree-container:focus,
+.tree-container:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .tree-container.root-drop-active {
