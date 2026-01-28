@@ -915,8 +915,9 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
           </div>
 
-          <div class="asset-model-panel">
-            <div class="asset-pair-grid">
+          <div class="asset-model-panel asset-model-panel--no-border">
+            <div class="asset-pair-panel">
+              <div class="asset-pair-grid">
               <div
                 class="asset-pair-item"
                 ref="capDropAreaRef"
@@ -933,20 +934,12 @@ function applyAirWallUpdate(rawValue: unknown) {
                     :style="bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined)"
                     @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
                   />
-                  <div class="asset-text">
-                    <div class="asset-name">{{ bodyCapAsset.name }}</div>
-                    <div class="asset-subtitle">Body cap · {{ bodyCapAsset.id.slice(0, 8) }}</div>
-                  </div>
                 </div>
                 <div v-else class="asset-summary empty">
                   <div
                     class="asset-thumbnail placeholder"
                     @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
                   />
-                  <div class="asset-text">
-                    <div class="asset-name">Select Body End Cap</div>
-                    <div class="asset-subtitle">Optional</div>
-                  </div>
                 </div>
                 <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
               </div>
@@ -967,22 +960,15 @@ function applyAirWallUpdate(rawValue: unknown) {
                     :style="headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined)"
                     @click.stop="(e) => openWallAssetDialog('headCap', e)"
                   />
-                  <div class="asset-text">
-                    <div class="asset-name">{{ headCapAsset.name }}</div>
-                    <div class="asset-subtitle">Head cap · {{ headCapAsset.id.slice(0, 8) }}</div>
-                  </div>
                 </div>
                 <div v-else class="asset-summary empty">
                   <div
                     class="asset-thumbnail placeholder"
                     @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
                   />
-                  <div class="asset-text">
-                    <div class="asset-name">Select Head End Cap</div>
-                    <div class="asset-subtitle">Optional</div>
-                  </div>
                 </div>
                 <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
+              </div>
               </div>
             </div>
           </div>
