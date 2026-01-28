@@ -10,8 +10,9 @@ export class CameraControlsMap extends MapControls {
     super(object, domElement)
 
     // Defaults currently used by the editor viewport.
-    this.minDistance = 2
-    this.maxDistance = 200
+    // SceneViewport will further refine these dynamically based on focused bounds.
+    this.minDistance = 0.2
+    this.maxDistance = 50000
 
     // Smooth camera movement.
     this.enableDamping = false

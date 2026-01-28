@@ -1311,6 +1311,7 @@ type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () =>
 const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 let isApplyingCameraState = false
+let lastCameraFocusRadius: number | null = null
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
 const isDragHovering = ref(false)
@@ -5170,6 +5171,8 @@ function resetCameraView() {
   camera.updateProjectionMatrix()
 
   mapControls.target.copy(target)
+  lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
+  syncControlsConstraintsAndSpeeds()
   mapControls.update()
   isApplyingCameraState = false
 
@@ -5227,22 +5230,115 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
 
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
   mapControls.target.set(state.target.x, clampedTargetY, state.target.z)
+  // Keep a best-effort scale hint so clip planes/controls stay usable even without an explicit focus action.
+  lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
+  syncControlsConstraintsAndSpeeds()
   mapControls.update()
   gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
 }
 
-function applyCameraFocus(target: THREE.Vector3, sizeEstimate: number): boolean {
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function computeRadiusUsed(radius: number | null | undefined, fallbackDistance?: number): number {
+  const fallback = typeof fallbackDistance === 'number' && Number.isFinite(fallbackDistance)
+    ? Math.max(fallbackDistance / 10, 0.25)
+    : 1
+  const raw = radius ?? fallback
+  return clampNumber(Math.max(raw, 0.001), 0.25, 20000)
+}
+
+function computeFitDistanceForSphere(params: {
+  camera: THREE.PerspectiveCamera
+  radius: number
+  margin?: number
+}): number {
+  const { camera, radius, margin = 1.35 } = params
+  const fovV = THREE.MathUtils.degToRad(camera.fov)
+  const aspect = Math.max(camera.aspect || 1, 1e-6)
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect)
+  const dv = radius / Math.tan(Math.max(fovV / 2, 1e-6))
+  const dh = radius / Math.tan(Math.max(fovH / 2, 1e-6))
+  return Math.max(dv, dh) * margin
+}
+
+function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: number | null }) {
+  if (!camera) return
+  const distance = camera.position.distanceTo(params.target)
+  const radiusUsed = computeRadiusUsed(params.radiusHint, distance)
+
+  // Keep near/far in a reasonable ratio for depth precision across tiny assets and huge scenes.
+  const near = Math.max(0.005, Math.min(radiusUsed * 0.5, distance / 50))
+  const far = Math.max(200, distance + radiusUsed * 50, radiusUsed * 2000)
+
+  if (camera instanceof THREE.PerspectiveCamera) {
+    if (camera.near !== near || camera.far !== far) {
+      camera.near = near
+      camera.far = far
+      camera.updateProjectionMatrix()
+    }
+  }
+}
+
+function syncControlsConstraintsAndSpeeds() {
+  if (!camera || !mapControls) return
+
+  const target = mapControls.target
+  const distance = camera.position.distanceTo(target)
+  const radiusUsed = computeRadiusUsed(lastCameraFocusRadius, distance)
+  const mode = sceneStore.viewportSettings.cameraControlMode
+
+  // Prevent mode switch from clamping the current distance (no surprise jumps).
+  const minDistanceBase = mode === 'map'
+    ? clampNumber(radiusUsed * 0.2, 0.2, 50)
+    : clampNumber(radiusUsed * 0.02, 0.02, 10)
+  const maxDistanceBase = mode === 'map'
+    ? clampNumber(Math.max(radiusUsed * 2000, 5000), 200, 200000)
+    : clampNumber(Math.max(radiusUsed * 2000, 500), 50, 200000)
+
+  mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.95))
+  mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
+
+  // Scale input sensitivity down as the camera gets far from the focused object.
+  const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
+  const speedScale = clampNumber(1 / Math.sqrt(Math.max(normalizedDistance, 1)), 0.15, 1)
+
+  mapControls.rotateSpeed = 0.6 * speedScale
+  mapControls.zoomSpeed = 0.9 * speedScale
+  mapControls.panSpeed = 1.0 * speedScale
+  // @ts-ignore
+  ;(mapControls as any).keyPanSpeed = 7.0 * speedScale
+
+  syncCameraClipPlanes({ target, radiusHint: radiusUsed })
+}
+
+function applyCameraFocus(target: THREE.Vector3, radiusEstimate: number): boolean {
   if (!camera || !mapControls) {
     return false
   }
 
-  sizeEstimate = Math.max(sizeEstimate, 0.5)
+  const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
+  const focusTarget = new THREE.Vector3(target.x, clampedTargetY, target.z)
+  const radiusUsed = computeRadiusUsed(radiusEstimate)
 
-  const distance = Math.max(sizeEstimate * 2.75, 6)
-  const height = Math.max(sizeEstimate * 1.6, 4)
-  const offset = new THREE.Vector3(distance, height, distance)
-  const newPosition = target.clone().add(offset)
+  lastCameraFocusRadius = radiusUsed
+
+  const mode = sceneStore.viewportSettings.cameraControlMode
+  const perspective = camera instanceof THREE.PerspectiveCamera ? camera : null
+
+  let desiredDistance = mode === 'map'
+    ? (perspective ? computeFitDistanceForSphere({ camera: perspective, radius: radiusUsed, margin: 1.35 }) : radiusUsed * 3)
+    : radiusUsed * 1.6
+
+  // Avoid ending up inside the target or too close to navigate.
+  desiredDistance = Math.max(desiredDistance, mode === 'map' ? radiusUsed * 2 : radiusUsed * 1.2, 0.8)
+
+  const direction = mode === 'map'
+    ? new THREE.Vector3(1, 1.1, 1).normalize()
+    : new THREE.Vector3(1, 0.65, 1).normalize()
+  const newPosition = focusTarget.clone().addScaledVector(direction, desiredDistance)
 
   isApplyingCameraState = true
   camera.position.copy(newPosition)
@@ -5250,8 +5346,8 @@ function applyCameraFocus(target: THREE.Vector3, sizeEstimate: number): boolean 
     camera.position.y = MIN_CAMERA_HEIGHT
   }
 
-  const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
-  mapControls.target.set(target.x, clampedTargetY, target.z)
+  mapControls.target.copy(focusTarget)
+  syncControlsConstraintsAndSpeeds()
   mapControls.update()
   isApplyingCameraState = false
 
@@ -5320,16 +5416,15 @@ function focusCameraOnSelection(nodeIds: string[]): boolean {
   }
 
   combinedBox.getCenter(target)
-  const size = new THREE.Vector3()
-  combinedBox.getSize(size)
-  const sizeEstimate = Math.max(size.x, size.y, size.z)
-  return applyCameraFocus(target, sizeEstimate)
+  const sphere = new THREE.Sphere()
+  combinedBox.getBoundingSphere(sphere)
+  return applyCameraFocus(target, sphere.radius)
 }
 
 
 function focusCameraOnNode(nodeId: string): boolean {
   const target = new THREE.Vector3()
-  let sizeEstimate = 1
+  let radiusEstimate = 1
 
   const object = objectMap.get(nodeId)
   if (object) {
@@ -5337,9 +5432,9 @@ function focusCameraOnNode(nodeId: string): boolean {
     const box = setBoundingBoxFromObject(object, new THREE.Box3())
     if (!box.isEmpty()) {
       box.getCenter(target)
-      const boxSize = new THREE.Vector3()
-      box.getSize(boxSize)
-      sizeEstimate = Math.max(boxSize.x, boxSize.y, boxSize.z)
+      const sphere = new THREE.Sphere()
+      box.getBoundingSphere(sphere)
+      radiusEstimate = sphere.radius
     } else {
       object.getWorldPosition(target)
     }
@@ -5349,15 +5444,17 @@ function focusCameraOnNode(nodeId: string): boolean {
       return false
     }
     target.set(node.position.x, node.position.y, node.position.z)
-    sizeEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
+    const scaleEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
+    radiusEstimate = scaleEstimate * 0.5
   }
 
-  return applyCameraFocus(target, sizeEstimate)
+  return applyCameraFocus(target, radiusEstimate)
 }
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
 
+  syncControlsConstraintsAndSpeeds()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
 }
@@ -5388,6 +5485,12 @@ function applyCameraControlMode() {
     mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
   mapControls.enabled = previousEnabled
+
+  // Apply scale-aware limits/speeds without changing current camera distance.
+  if (!lastCameraFocusRadius) {
+    lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(mapControls.target) / 10)
+  }
+  syncControlsConstraintsAndSpeeds()
 
   mapControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
@@ -5551,7 +5654,7 @@ function initScene() {
     void applyEnvironmentSettingsToScene(initialEnvironment)
   }
 
-  perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
+  perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 5000)
   perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
