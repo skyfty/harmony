@@ -206,7 +206,7 @@ import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
-import { useSnapController, type VertexSnapResult } from '@/components/editor/useSnapController'
+import { useSnapController, type VertexSnapResult, type PlacementSnapResult } from '@/components/editor/useSnapController'
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
@@ -1280,7 +1280,7 @@ const snapController = useSnapController({
   isNodeLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
   isObjectWorldVisible,
   pixelThreshold: 12,
-  enablePlacementSideSnap: false,
+  enablePlacementSideSnap: true,
 })
 
 protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
@@ -1452,25 +1452,43 @@ vertexOverlayHintBeam.frustumCulled = false
 
 vertexOverlayGroup.add(vertexOverlayHintBeam)
 
-// Placement side-snap hint (shown during asset placement preview).
-const placementOverlayHintBeamMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffc107,
+// Placement side-snap hints (shown during asset placement preview).
+const placementOverlayBestBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0x00e5ff,
   transparent: true,
-  opacity: 0.75,
+  opacity: 0.8,
   depthTest: false,
   depthWrite: false,
   blending: THREE.AdditiveBlending,
   side: THREE.DoubleSide,
 })
-placementOverlayHintBeamMaterial.toneMapped = false
-const placementOverlayHintBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlayHintBeamMaterial)
-placementOverlayHintBeam.name = 'PlacementOverlayHintBeam'
-placementOverlayHintBeam.renderOrder = 19998
-placementOverlayHintBeam.visible = false
-placementOverlayHintBeam.frustumCulled = false
-;(placementOverlayHintBeam as any).raycast = () => {}
+placementOverlayBestBeamMaterial.toneMapped = false
+const placementOverlayBestBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlayBestBeamMaterial)
+placementOverlayBestBeam.name = 'PlacementOverlayBestBeam'
+placementOverlayBestBeam.renderOrder = 19998
+placementOverlayBestBeam.visible = false
+placementOverlayBestBeam.frustumCulled = false
+;(placementOverlayBestBeam as any).raycast = () => {}
 
-vertexOverlayGroup.add(placementOverlayHintBeam)
+const placementOverlaySecondaryBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffc107,
+  transparent: true,
+  opacity: 0.5,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+})
+placementOverlaySecondaryBeamMaterial.toneMapped = false
+const placementOverlaySecondaryBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlaySecondaryBeamMaterial)
+placementOverlaySecondaryBeam.name = 'PlacementOverlaySecondaryBeam'
+placementOverlaySecondaryBeam.renderOrder = 19997
+placementOverlaySecondaryBeam.visible = false
+placementOverlaySecondaryBeam.frustumCulled = false
+;(placementOverlaySecondaryBeam as any).raycast = () => {}
+
+vertexOverlayGroup.add(placementOverlayBestBeam)
+vertexOverlayGroup.add(placementOverlaySecondaryBeam)
 
 const vertexOverlayHintDirHelper = new THREE.Vector3()
 const vertexOverlayHintMidHelper = new THREE.Vector3()
@@ -1492,30 +1510,45 @@ const placementOverlayHintMidHelper = new THREE.Vector3()
 const placementOverlayHintQuatHelper = new THREE.Quaternion()
 
 function clearPlacementSideSnapMarkers() {
-  placementOverlayHintBeam.visible = false
+  placementOverlayBestBeam.visible = false
+  placementOverlaySecondaryBeam.visible = false
 }
 
-function updatePlacementSideSnapMarkers(result: VertexSnapResult | null) {
-  if (!result) {
+function updatePlacementSideSnapMarkers(result: PlacementSnapResult | null) {
+  if (!result || result.candidates.length === 0) {
     clearPlacementSideSnapMarkers()
     return
   }
 
-  placementOverlayHintDirHelper.copy(result.targetWorld).sub(result.sourceWorld)
-  const len = placementOverlayHintDirHelper.length()
-  if (!Number.isFinite(len) || len <= 1e-6) {
+  const [best, secondary] = result.candidates
+  if (!best) {
     clearPlacementSideSnapMarkers()
     return
   }
+  const applyBeam = (beam: THREE.Mesh, snap: VertexSnapResult) => {
+    placementOverlayHintDirHelper.copy(snap.targetWorld).sub(snap.sourceWorld)
+    const len = placementOverlayHintDirHelper.length()
+    if (!Number.isFinite(len) || len <= 1e-6) {
+      beam.visible = false
+      return
+    }
 
-  placementOverlayHintMidHelper.copy(result.sourceWorld).add(result.targetWorld).multiplyScalar(0.5)
-  placementOverlayHintDirHelper.multiplyScalar(1 / len)
-  placementOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, placementOverlayHintDirHelper)
+    placementOverlayHintMidHelper.copy(snap.sourceWorld).add(snap.targetWorld).multiplyScalar(0.5)
+    placementOverlayHintDirHelper.multiplyScalar(1 / len)
+    placementOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, placementOverlayHintDirHelper)
 
-  placementOverlayHintBeam.position.copy(placementOverlayHintMidHelper)
-  placementOverlayHintBeam.quaternion.copy(placementOverlayHintQuatHelper)
-  placementOverlayHintBeam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
-  placementOverlayHintBeam.visible = true
+    beam.position.copy(placementOverlayHintMidHelper)
+    beam.quaternion.copy(placementOverlayHintQuatHelper)
+    beam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
+    beam.visible = true
+  }
+
+  applyBeam(placementOverlayBestBeam, best)
+  if (secondary) {
+    applyBeam(placementOverlaySecondaryBeam, secondary)
+  } else {
+    placementOverlaySecondaryBeam.visible = false
+  }
 }
 
 function updateVertexSnapMarkers(result: VertexSnapResult | null) {
@@ -1558,17 +1591,21 @@ const updateVertexSnapHintPulse = (nowMs: number) => {
 }
 
 const updatePlacementSideSnapHintPulse = (nowMs: number) => {
-  if (!placementOverlayHintBeam.visible) {
-    return
-  }
   const t = nowMs * 0.002
   const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
-  const opacity = VERTEX_OVERLAY_HINT_BASE_OPACITY + VERTEX_OVERLAY_HINT_PULSE_OPACITY * pulse
-  placementOverlayHintBeamMaterial.opacity = opacity
-
   const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
-  placementOverlayHintBeam.scale.x = radius
-  placementOverlayHintBeam.scale.z = radius
+
+  if (placementOverlayBestBeam.visible) {
+    placementOverlayBestBeamMaterial.opacity = 0.8 + 0.2 * pulse
+    placementOverlayBestBeam.scale.x = radius
+    placementOverlayBestBeam.scale.z = radius
+  }
+
+  if (placementOverlaySecondaryBeam.visible) {
+    placementOverlaySecondaryBeamMaterial.opacity = 0.4 + 0.15 * pulse
+    placementOverlaySecondaryBeam.scale.x = radius
+    placementOverlaySecondaryBeam.scale.z = radius
+  }
 }
 
 const groundEditor = createGroundEditor({
@@ -7177,6 +7214,7 @@ function handlePointerMove(event: PointerEvent) {
             previewObject: dragPreviewGroup,
             active: placementSnapActive,
             pixelThresholdPx: vertexSnapThresholdPx.value,
+            excludeNodeIds: new Set([GROUND_NODE_ID]),
           })
           updatePlacementSideSnapMarkers(result)
         } else {
@@ -8482,6 +8520,7 @@ function handleViewportDragOver(event: DragEvent) {
         previewObject: dragPreviewGroup,
         active: placementSnapActive,
         pixelThresholdPx: vertexSnapThresholdPx.value,
+        excludeNodeIds: new Set([GROUND_NODE_ID]),
       })
       updatePlacementSideSnapMarkers(result)
     } else {
