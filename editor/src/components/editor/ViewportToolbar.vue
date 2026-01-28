@@ -365,18 +365,18 @@
 
       <v-divider vertical />
       <v-btn
-        :icon="controlsType === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
+        :icon="cameraControlMode === 'map' ? 'mdi-map' : 'mdi-rotate-3d-variant'"
         density="compact"
         size="small"
         class="toolbar-button"
         color="undefined"
         variant="text"
         :title="
-          controlsType === 'map'
+          cameraControlMode === 'map'
             ? 'Camera Controls: Map (click to switch to Orbit)'
             : 'Camera Controls: Orbit (click to switch to Map)'
         "
-        @click="emit('toggle-controls-type')"
+        @click="toggleCameraControlMode"
       />
 
       <v-btn
@@ -396,6 +396,7 @@
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import type { CameraControlMode } from '@harmony/schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -409,7 +410,6 @@ const props = withDefaults(
   showGrid: boolean
   showAxes: boolean
   vertexSnapEnabled?: boolean
-  controlsType?: 'map' | 'orbit'
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -426,13 +426,11 @@ const props = withDefaults(
   {
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
-    controlsType: 'map',
   },
 )
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
-  (event: 'toggle-controls-type'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
@@ -453,7 +451,6 @@ const {
   showGrid,
   showAxes,
   vertexSnapEnabled,
-  controlsType,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
@@ -468,6 +465,13 @@ const {
   floorBuildShape,
 } = toRefs(props)
 const sceneStore = useSceneStore()
+
+const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControlMode)
+
+function toggleCameraControlMode() {
+  const next: CameraControlMode = cameraControlMode.value === 'map' ? 'orbit' : 'map'
+  sceneStore.setCameraControlMode(next)
+}
 
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const activeNode = computed(() => sceneStore.selectedNode)

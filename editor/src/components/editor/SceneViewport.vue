@@ -5057,16 +5057,12 @@ function handleControlsChange() {
   terrainGridController.markCameraDirty()
 }
 
-const controlsType = ref<'map' | 'orbit'>('map')
-function toggleControlsType() {
-  controlsType.value = controlsType.value === 'map' ? 'orbit' : 'map'
-  applyCameraControlMode()
-}
-
 function applyCameraControlMode() {
   if (!camera || !canvasRef.value) {
     return
   }
+
+  const cameraControlMode = sceneStore.viewportSettings.cameraControlMode
 
   const previousControls = mapControls
   const previousTarget = previousControls ? previousControls.target.clone() : null
@@ -5078,7 +5074,7 @@ function applyCameraControlMode() {
   }
 
   const domElement = canvasRef.value
-  mapControls = controlsType.value === 'map'
+  mapControls = cameraControlMode === 'map'
     ? new CameraControlsMap(camera, domElement)
     : new CameraControlsOrbit(camera, domElement)
   if (previousTarget) {
@@ -5099,6 +5095,13 @@ function applyCameraControlMode() {
   gizmoControls?.cameraUpdate()
 
 }
+
+watch(
+  () => sceneStore.viewportSettings.cameraControlMode,
+  () => {
+    applyCameraControlMode()
+  },
+)
 
 function ensureStatsPanel() {
   if (!props.showStats) {
@@ -10610,7 +10613,6 @@ defineExpose<SceneViewportHandle>({
         :show-grid="gridVisible"
         :show-axes="axesVisible"
         :vertex-snap-enabled="vertexSnapMode === 'vertex'"
-        :controls-type="controlsType"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
@@ -10624,7 +10626,6 @@ defineExpose<SceneViewportHandle>({
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
-        @toggle-controls-type="toggleControlsType"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
