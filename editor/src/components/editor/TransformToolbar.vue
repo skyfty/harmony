@@ -23,7 +23,7 @@ function handleToolSelect(tool: TransformToolDefinition) {
 function toolTitle(tool: TransformToolDefinition): string {
   const base = `${tool.label} (${tool.key.replace('Key', '')})`
   if (tool.value === 'translate') {
-    return `${base} — hold Shift to snap, hold V for surface snap`
+    return `${base} — hold Shift to snap, hold V to temporarily select for placement snap`
   }
   return base
 }
