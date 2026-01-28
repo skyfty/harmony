@@ -1358,6 +1358,21 @@ const buildToolCursorClass = computed(() => {
 const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
+const placementShiftHintVisible = computed(() =>
+  vertexSnapMode.value === 'vertex' && (selectionPreviewActive || isDragHovering.value))
+const placementShiftHintPos = ref({ x: 0, y: 0 })
+const placementShiftHintOffset = { x: 12, y: 12 }
+
+function updatePlacementShiftHintPosition(event: MouseEvent | PointerEvent | DragEvent): void {
+  const surface = surfaceRef.value
+  if (!surface) {
+    return
+  }
+  const rect = surface.getBoundingClientRect()
+  const x = event.clientX - rect.left + placementShiftHintOffset.x
+  const y = event.clientY - rect.top + placementShiftHintOffset.y
+  placementShiftHintPos.value = { x, y }
+}
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
@@ -7076,6 +7091,7 @@ async function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   // surface snap pointer updates removed (alignment hint disabled)
+  updatePlacementShiftHintPosition(event)
   lastPointerClientX = event.clientX
   lastPointerClientY = event.clientY
   lastPointerType = event.pointerType
@@ -7410,7 +7426,8 @@ async function handlePointerUp(event: PointerEvent) {
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
-          const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+          const shouldAutoSnap = event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+          const placementSideSnap = shouldAutoSnap
             ? snapController.consumePlacementSideSnapResult()
             : null
           clearPlacementSideSnapMarkers()
@@ -8404,6 +8421,7 @@ function handleViewportDragEnter(event: DragEvent) {
 
 function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
+  updatePlacementShiftHintPosition(event)
   const info = resolveDragAsset(event)
   const asset = info?.asset ?? null
   if (asset?.type === 'material') {
@@ -8657,7 +8675,8 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  const placementSideSnap = (vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+  const shouldAutoSnap = event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+  const placementSideSnap = shouldAutoSnap
     ? snapController.consumePlacementSideSnapResult()
     : null
 
@@ -10698,6 +10717,13 @@ defineExpose<SceneViewportHandle>({
           @cancel-delete="handlePlaceholderCancelDelete"
         />
       </div>
+      <div
+        v-if="placementShiftHintVisible"
+        class="placement-shift-hint"
+        :style="{ left: `${placementShiftHintPos.x}px`, top: `${placementShiftHintPos.y}px` }"
+      >
+        按住 Shift 以放置后自动吸附
+      </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
         </div>
@@ -10805,6 +10831,20 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   z-index: 6;
   font-size: 12px;
+}
+
+.placement-shift-hint {
+  position: absolute;
+  z-index: 7;
+  pointer-events: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(12, 15, 21, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
 }
 
 .drop-overlay {
