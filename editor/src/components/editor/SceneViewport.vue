@@ -3263,6 +3263,80 @@ function deactivateAltOverride() {
   }
 }
 
+function isAssetPlacementActiveForOverride(): boolean {
+  return Boolean(
+    isDragHovering.value ||
+    sceneStore.draggingAssetId ||
+    assetPlacementClickSessionState ||
+    selectionPreviewActive
+  )
+}
+
+function activateVOverride() {
+  if (isVOverrideActive) {
+    return
+  }
+  if (!isAssetPlacementActiveForOverride()) {
+    return
+  }
+  if (isAltOverrideActive) {
+    return
+  }
+  isVOverrideActive = true
+  vOverrideSnapshotTool = props.activeTool ?? null
+  if (props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+}
+
+function deactivateVOverride() {
+  if (!isVOverrideActive) {
+    return
+  }
+  isVOverrideActive = false
+  const snapshot = vOverrideSnapshotTool
+  vOverrideSnapshotTool = null
+  if (isAltOverrideActive) {
+    return
+  }
+  if (snapshot && props.activeTool !== snapshot) {
+    emit('changeTool', snapshot)
+  }
+}
+
+function handleVOverrideKeyDown(event: KeyboardEvent) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.code !== 'KeyV') {
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  if (props.previewActive) {
+    return
+  }
+  activateVOverride()
+}
+
+function handleVOverrideKeyUp(event: KeyboardEvent) {
+  if (event.code !== 'KeyV') {
+    return
+  }
+  deactivateVOverride()
+}
+
+function handleVOverrideBlur() {
+  deactivateVOverride()
+}
+
 function handleAltOverrideKeyDown(event: KeyboardEvent) {
   if (event.defaultPrevented) {
     return
@@ -3956,12 +4030,14 @@ let isGroundSelectionOrbitDisabled = false
 let orbitDisableCount = 0
 let isOrbitControlOverrideActive = false
 let isAltOverrideActive = false
+let isVOverrideActive = false
 type AltOverrideSnapshot = {
   transformTool: EditorTool | null
   wallBuildActive: boolean
   groundSelectionActive: boolean
 }
 let toolOverrideSnapshot: AltOverrideSnapshot | null = null
+let vOverrideSnapshotTool: EditorTool | null = null
 
 function disposeObjectResources(object: THREE.Object3D) {
   const placeholderHandle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
@@ -4074,6 +4150,54 @@ function hideSelectionHoverPreview(): void {
   dragPreviewGroup.visible = false
   snapController.resetPlacementSideSnap()
   clearPlacementSideSnapMarkers()
+}
+
+function cancelAssetPlacementInteraction(): boolean {
+  let cancelled = false
+
+  if (isVOverrideActive) {
+    deactivateVOverride()
+    cancelled = true
+  }
+
+  if (isDragHovering.value) {
+    isDragHovering.value = false
+    cancelled = true
+  }
+
+  if (assetPlacementClickSessionState) {
+    assetPlacementClickSessionState = null
+    cancelled = true
+  }
+
+  if (selectionPreviewActive || selectionPreviewAssetId) {
+    selectionPreviewActive = false
+    selectionPreviewAssetId = null
+    placementPreviewYaw = 0
+    dragPreviewGroup.rotation.set(0, 0, 0)
+    dragPreview.dispose()
+    cancelled = true
+  }
+
+  if (sceneStore.selectedAssetId) {
+    sceneStore.selectAsset(null)
+    if (uiStore.activeSelectionContext === 'asset-panel') {
+      uiStore.setActiveSelectionContext(null)
+    }
+    cancelled = true
+  }
+
+  if (cancelled) {
+    stopSelectionPreviewVisibilityMonitor()
+    dragPreview.setPosition(null)
+    dragPreviewGroup.visible = false
+    updateGridHighlight(null)
+    snapController.resetPlacementSideSnap()
+    clearPlacementSideSnapMarkers()
+    restoreGridHighlightForSelection()
+  }
+
+  return cancelled
 }
 
 function ensureSelectionPreviewVisibilityMonitor(): void {
@@ -5047,34 +5171,9 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   isApplyingCameraState = false
 }
 
-
-function focusCameraOnNode(nodeId: string): boolean {
+function applyCameraFocus(target: THREE.Vector3, sizeEstimate: number): boolean {
   if (!camera || !mapControls) {
     return false
-  }
-
-  const target = new THREE.Vector3()
-  let sizeEstimate = 1
-
-  const object = objectMap.get(nodeId)
-  if (object) {
-    object.updateWorldMatrix(true, true)
-    const box = setBoundingBoxFromObject(object, new THREE.Box3())
-    if (!box.isEmpty()) {
-      box.getCenter(target)
-      const boxSize = new THREE.Vector3()
-      box.getSize(boxSize)
-      sizeEstimate = Math.max(boxSize.x, boxSize.y, boxSize.z)
-    } else {
-      object.getWorldPosition(target)
-    }
-  } else {
-    const node = findSceneNode(props.sceneNodes, nodeId)
-    if (!node) {
-      return false
-    }
-    target.set(node.position.x, node.position.y, node.position.z)
-    sizeEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
   }
 
   sizeEstimate = Math.max(sizeEstimate, 0.5)
@@ -5099,7 +5198,100 @@ function focusCameraOnNode(nodeId: string): boolean {
     perspectiveCamera.position.copy(camera.position)
     perspectiveCamera.quaternion.copy(camera.quaternion)
   }
+
   return true
+}
+
+function focusCameraOnSelection(nodeIds: string[]): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const focusIds = nodeIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+  if (focusIds.length === 0) {
+    return false
+  }
+
+  const target = new THREE.Vector3()
+  const combinedBox = new THREE.Box3()
+  let hasBounds = false
+  const tempBox = new THREE.Box3()
+  const tempVector = new THREE.Vector3()
+
+  for (const nodeId of focusIds) {
+    const object = objectMap.get(nodeId)
+    if (object) {
+      object.updateWorldMatrix(true, true)
+      const box = setBoundingBoxFromObject(object, tempBox)
+      if (!box.isEmpty()) {
+        if (!hasBounds) {
+          combinedBox.copy(box)
+          hasBounds = true
+        } else {
+          combinedBox.union(box)
+        }
+        continue
+      }
+      object.getWorldPosition(tempVector)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
+    const node = findSceneNode(props.sceneNodes, nodeId) ?? findSceneNode(sceneStore.nodes, nodeId)
+    if (node) {
+      tempVector.set(node.position.x, node.position.y, node.position.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+    }
+  }
+
+  if (!hasBounds || combinedBox.isEmpty()) {
+    return false
+  }
+
+  combinedBox.getCenter(target)
+  const size = new THREE.Vector3()
+  combinedBox.getSize(size)
+  const sizeEstimate = Math.max(size.x, size.y, size.z)
+  return applyCameraFocus(target, sizeEstimate)
+}
+
+
+function focusCameraOnNode(nodeId: string): boolean {
+  const target = new THREE.Vector3()
+  let sizeEstimate = 1
+
+  const object = objectMap.get(nodeId)
+  if (object) {
+    object.updateWorldMatrix(true, true)
+    const box = setBoundingBoxFromObject(object, new THREE.Box3())
+    if (!box.isEmpty()) {
+      box.getCenter(target)
+      const boxSize = new THREE.Vector3()
+      box.getSize(boxSize)
+      sizeEstimate = Math.max(boxSize.x, boxSize.y, boxSize.z)
+    } else {
+      object.getWorldPosition(target)
+    }
+  } else {
+    const node = findSceneNode(props.sceneNodes, nodeId)
+    if (!node) {
+      return false
+    }
+    target.set(node.position.x, node.position.y, node.position.z)
+    sizeEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
+  }
+
+  return applyCameraFocus(target, sizeEstimate)
 }
 
 function handleControlsChange() {
@@ -7553,6 +7745,7 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  deactivateVOverride()
   // Ensure any selection-hover preview is hidden when pointer is cancelled.
   stopSelectionPreviewVisibilityMonitor()
   dragPreview.setPosition(null)
@@ -8559,6 +8752,7 @@ function handleViewportDragLeave(event: DragEvent) {
   if (surface && related && surface.contains(related)) {
     return
   }
+  deactivateVOverride()
   isDragHovering.value = false
   updateGridHighlight(null)
   snapController.resetPlacementSideSnap()
@@ -8572,6 +8766,7 @@ async function handleViewportDrop(event: DragEvent) {
   const info = resolveDragAsset(event)
   event.preventDefault()
   event.stopPropagation()
+  deactivateVOverride()
   clearPlacementSideSnapMarkers()
   isDragHovering.value = false
   if (!info) {
@@ -10352,12 +10547,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
-        if (sceneStore.selectedAssetId) {
-          sceneStore.selectAsset(null)
-          if (uiStore.activeSelectionContext === 'asset-panel') {
-            uiStore.setActiveSelectionContext(null)
-          }
-          assetPlacementClickSessionState = null
+        if (cancelAssetPlacementInteraction()) {
           handled = true
         }
         if (scatterEraseModeActive.value) {
@@ -10374,6 +10564,19 @@ function handleViewportShortcut(event: KeyboardEvent) {
           handled = true
         }
         break
+      case 'KeyF': {
+        const focusIds = [...new Set([
+          ...sceneStore.selectedNodeIds,
+          props.selectedNodeId ?? null,
+        ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+        if (focusIds.length > 0) {
+          if (!focusCameraOnSelection(focusIds) && focusIds[0]) {
+            sceneStore.requestCameraFocus(focusIds[0])
+          }
+          handled = true
+        }
+        break
+      }
       default: {
         const tool = transformToolKeyMap.get(event.code)
         if (tool) {
@@ -10401,6 +10604,9 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.addEventListener('keydown', handleVOverrideKeyDown, { capture: true })
+  window.addEventListener('keyup', handleVOverrideKeyUp, { capture: true })
+  window.addEventListener('blur', handleVOverrideBlur, { capture: true })
   // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
@@ -10427,6 +10633,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.removeEventListener('keydown', handleVOverrideKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleVOverrideKeyUp, { capture: true })
+  window.removeEventListener('blur', handleVOverrideBlur, { capture: true })
   // face/surface snap controller event handlers removed
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
