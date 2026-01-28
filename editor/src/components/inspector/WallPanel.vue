@@ -857,74 +857,60 @@ function applyAirWallUpdate(rawValue: unknown) {
         </div>
 
         <div class="wall-asset-section">
-          <div class="asset-model-panel">
-            <div class="asset-pair-grid">
-              <div
-                class="asset-pair-item"
-                ref="bodyDropAreaRef"
-                :class="{ 'is-active': bodyDropActive, 'is-processing': bodyDropProcessing }"
-                @dragenter.prevent="bodyDropActive = true"
-                @dragover.prevent="bodyDropActive = true"
-                @dragleave="(e) => { if (shouldDeactivateDropArea(bodyDropAreaRef, e)) bodyDropActive = false }"
-                @drop="(e) => assignWallAsset(e, 'body')"
-              >
-                <div class="asset-pair-label">Body</div>
-                <div v-if="bodyAsset" class="asset-summary">
-                  <div
-                    class="asset-thumbnail"
-                    :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
-                    @click.stop="openWallAssetDialog('body', $event)"
-                  />
-                  <div class="asset-text">
-                    <div class="asset-name">{{ bodyAsset.name }}</div>
-                    <div class="asset-subtitle">Wall body · {{ bodyAsset.id.slice(0, 8) }}</div>
+          <div class="asset-model-panel asset-model-panel--no-border">
+            <div class="asset-pair-panel">
+              <div class="asset-pair-grid">
+                <div
+                  class="asset-pair-item"
+                  ref="bodyDropAreaRef"
+                  :class="{ 'is-active': bodyDropActive, 'is-processing': bodyDropProcessing }"
+                  @dragenter.prevent="bodyDropActive = true"
+                  @dragover.prevent="bodyDropActive = true"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(bodyDropAreaRef, e)) bodyDropActive = false }"
+                  @drop="(e) => assignWallAsset(e, 'body')"
+                >
+                  <div class="asset-pair-label">Body</div>
+                  <div v-if="bodyAsset" class="asset-summary">
+                    <div
+                      class="asset-thumbnail"
+                      :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
+                      @click.stop="(e) => openWallAssetDialog('body', e)"
+                    />
                   </div>
-                </div>
-                <div v-else class="asset-summary empty">
-                  <div
-                    class="asset-thumbnail placeholder"
-                    @click.stop="openWallAssetDialog('body', $event)"
-                  />
-                  <div class="asset-text">
-                    <div class="asset-name">Select Body Asset</div>
-                    <div class="asset-subtitle">Drag model/mesh here</div>
+                  <div v-else class="asset-summary empty">
+                    <div
+                      class="asset-thumbnail placeholder"
+                      @click.stop="(e) => openWallAssetDialog('body', e)"
+                    />
                   </div>
+                  <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
                 </div>
-                <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
-              </div>
 
-              <div
-                class="asset-pair-item"
-                ref="headDropAreaRef"
-                :class="{ 'is-active': headDropActive, 'is-processing': headDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
-                @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
-                @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
-                @dragleave="(e) => { if (shouldDeactivateDropArea(headDropAreaRef, e)) headDropActive = false }"
-                @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'head') }"
-              >
-                <div class="asset-pair-label">Head</div>
-                <div v-if="headAsset" class="asset-summary">
-                  <div
-                    class="asset-thumbnail"
-                    :style="headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined)"
-                    @click.stop="openWallAssetDialog('head', $event)"
-                  />
-                  <div class="asset-text">
-                    <div class="asset-name">{{ headAsset.name }}</div>
-                    <div class="asset-subtitle">Wall head · {{ headAsset.id.slice(0, 8) }}</div>
+                <div
+                  class="asset-pair-item"
+                  ref="headDropAreaRef"
+                  :class="{ 'is-active': headDropActive, 'is-processing': headDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
+                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; headDropActive = true }"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(headDropAreaRef, e)) headDropActive = false }"
+                  @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'head') }"
+                >
+                  <div class="asset-pair-label">Head</div>
+                  <div v-if="headAsset" class="asset-summary">
+                    <div
+                      class="asset-thumbnail"
+                      :style="headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined)"
+                      @click.stop="(e) => openWallAssetDialog('head', e)"
+                    />
                   </div>
-                </div>
-                <div v-else class="asset-summary empty">
-                  <div
-                    class="asset-thumbnail placeholder"
-                    @click.stop="() => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', $event) }"
-                  />
-                  <div class="asset-text">
-                    <div class="asset-name">Select Head Asset</div>
-                    <div class="asset-subtitle">Optional</div>
+                  <div v-else class="asset-summary empty">
+                    <div
+                      class="asset-thumbnail placeholder"
+                      @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', e) }"
+                    />
                   </div>
+                  <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
                 </div>
-                <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
               </div>
             </div>
           </div>
@@ -945,7 +931,7 @@ function applyAirWallUpdate(rawValue: unknown) {
                   <div
                     class="asset-thumbnail"
                     :style="bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined)"
-                    @click.stop="openWallAssetDialog('bodyCap', $event)"
+                    @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
                   />
                   <div class="asset-text">
                     <div class="asset-name">{{ bodyCapAsset.name }}</div>
@@ -955,7 +941,7 @@ function applyAirWallUpdate(rawValue: unknown) {
                 <div v-else class="asset-summary empty">
                   <div
                     class="asset-thumbnail placeholder"
-                    @click.stop="openWallAssetDialog('bodyCap', $event)"
+                    @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
                   />
                   <div class="asset-text">
                     <div class="asset-name">Select Body End Cap</div>
@@ -979,7 +965,7 @@ function applyAirWallUpdate(rawValue: unknown) {
                   <div
                     class="asset-thumbnail"
                     :style="headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined)"
-                    @click.stop="openWallAssetDialog('headCap', $event)"
+                    @click.stop="(e) => openWallAssetDialog('headCap', e)"
                   />
                   <div class="asset-text">
                     <div class="asset-name">{{ headCapAsset.name }}</div>
@@ -989,7 +975,7 @@ function applyAirWallUpdate(rawValue: unknown) {
                 <div v-else class="asset-summary empty">
                   <div
                     class="asset-thumbnail placeholder"
-                    @click.stop="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', $event) }"
+                    @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
                   />
                   <div class="asset-text">
                     <div class="asset-name">Select Head End Cap</div>
@@ -1001,6 +987,7 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
           </div>
 
+        <div class="corner-models-panel">
         <div class="wall-corner-models">
           <div class="wall-corner-header">
             <div class="wall-corner-title">Corner Models</div>
@@ -1028,7 +1015,7 @@ function applyAirWallUpdate(rawValue: unknown) {
             <div class="wall-corner-assets">
               <div
                 class="wall-corner-asset"
-                @click.stop="openWallCornerModelDialog(index, 'body', $event)"
+                @click.stop="(e) => openWallCornerModelDialog(index, 'body', e)"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).bodyAssetId)">
                   <div
@@ -1050,7 +1037,7 @@ function applyAirWallUpdate(rawValue: unknown) {
               <div
                 class="wall-corner-asset"
                 :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
-                @click.stop="() => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'head', $event) }"
+                @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'head', e) }"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).headAssetId)">
                   <div
@@ -1071,8 +1058,6 @@ function applyAirWallUpdate(rawValue: unknown) {
             </div>
 
             <div class="wall-corner-fields">
-      
-
               <div class="wall-corner-angle-fields">
                 <div class="wall-corner-angle-label">
                   Interior: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
@@ -1119,6 +1104,7 @@ function applyAirWallUpdate(rawValue: unknown) {
               :disabled="!wallComponent"
             />
           </div>
+        </div>
         </div>
       </div>
 
@@ -1208,6 +1194,52 @@ function applyAirWallUpdate(rawValue: unknown) {
 .wall-panel-placeholder {
   color: rgba(233, 236, 241, 0.65);
   font-size: 0.85rem;
+}
+
+.asset-pair-panel, .corner-models-panel {
+  border: 1px solid rgba(255,255,255,0.04);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 0.5rem;
+}
+.asset-pair-panel summary, .corner-models-panel summary {
+  list-style: none;
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.asset-pair-grid {
+  display: flex;
+  gap: 8px;
+}
+.asset-pair-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 120px;
+  position: relative;
+}
+.wall-corner-assets {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.asset-pair-panel {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding-top: 12px;
+  margin-bottom: 8px;
+}
+
+.asset-pair-label {
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: transparent;
+  padding: 0 6px;
+  color: rgba(233,236,241,0.9);
 }
 
 .wall-panel-header {
@@ -1369,6 +1401,12 @@ function applyAirWallUpdate(rawValue: unknown) {
 .asset-model-panel.is-processing {
   border-color: rgba(59, 130, 246, 0.9);
   background-color: rgba(59, 130, 246, 0.08);
+}
+
+.asset-model-panel--no-border {
+  border: none;
+  padding: 0;
+  background: transparent;
 }
 
 .asset-summary {
