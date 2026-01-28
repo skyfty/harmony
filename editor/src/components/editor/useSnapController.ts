@@ -154,6 +154,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
   const placementInverseMatrixHelper = new THREE.Matrix4()
   const placementLocalBoundsHelper = new THREE.Box3()
   const placementVertexIndexSet = new Set<number>()
+  const bvhCache = new WeakMap<THREE.BufferGeometry, MeshBVH>()
 
   const instancedRaycaster = new THREE.Raycaster()
   const pointerNdc = new THREE.Vector2()
@@ -224,10 +225,21 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
   function ensureGeometryBvh(geometry: THREE.BufferGeometry): MeshBVH {
     const anyGeometry = geometry as unknown as { boundsTree?: MeshBVH }
-    if (!anyGeometry.boundsTree) {
-      anyGeometry.boundsTree = new MeshBVH(geometry)
+    if (anyGeometry.boundsTree) {
+      bvhCache.set(geometry, anyGeometry.boundsTree)
+      return anyGeometry.boundsTree
     }
-    return anyGeometry.boundsTree
+
+    const cached = bvhCache.get(geometry)
+    if (cached) {
+      anyGeometry.boundsTree = cached
+      return cached
+    }
+
+    const built = new MeshBVH(geometry)
+    anyGeometry.boundsTree = built
+    bvhCache.set(geometry, built)
+    return built
   }
 
   function collectCandidateVertexIndicesFromBvh(
