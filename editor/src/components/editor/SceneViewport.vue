@@ -1280,6 +1280,7 @@ const snapController = useSnapController({
   isNodeLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
   isObjectWorldVisible,
   pixelThreshold: 12,
+  enablePlacementSideSnap: false,
 })
 
 protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
@@ -7388,6 +7389,13 @@ async function handlePointerUp(event: PointerEvent) {
               const { nodeMap } = buildHierarchyMaps()
               const selectedNode = nodeMap.get(selectedId)
               if (!selectedNode || selectedNode.nodeType !== 'Group') return false
+
+              // Many model assets can be represented as a Group node (e.g. instancing).
+              // Only treat *user-created* empty groups as placement containers.
+              // If the group is backed by an asset, never apply the empty-group placement behavior.
+              if (typeof (selectedNode as any).sourceAssetId === 'string' && (selectedNode as any).sourceAssetId.trim().length > 0) {
+                return false
+              }
               return !selectedNode.children || selectedNode.children.length === 0
             })()
 

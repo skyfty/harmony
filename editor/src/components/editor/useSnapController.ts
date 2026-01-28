@@ -63,6 +63,10 @@ export type UseSnapControllerOptions = {
   isObjectWorldVisible: (object: THREE.Object3D | null) => boolean
   isNodeLocked?: (nodeId: string) => boolean
   pixelThreshold?: number
+
+  // Placement-time snap (preview placement) is currently experimental.
+  // Keep it opt-in so unfinished behavior can't affect asset placement state.
+  enablePlacementSideSnap?: boolean
 }
 
 export type SnapQuery = {
@@ -86,6 +90,8 @@ export function useSnapController(options: UseSnapControllerOptions) {
   const pixelThreshold = (typeof options.pixelThreshold === 'number' && Number.isFinite(options.pixelThreshold))
     ? options.pixelThreshold
     : 12
+
+  const enablePlacementSideSnap = options.enablePlacementSideSnap === true
   const releaseMultiplier = 1.5
   // Source vertex acquisition should be easier than target snapping.
   // Users expect to "grab" a corner vertex even when the pointer is near it,
@@ -412,6 +418,11 @@ export function useSnapController(options: UseSnapControllerOptions) {
   }
 
   const updatePlacementSideSnap = (query: PlacementSideSnapQuery): VertexSnapResult | null => {
+    if (!enablePlacementSideSnap) {
+      resetPlacementSideSnap()
+      return null
+    }
+
     const threshold = typeof query.pixelThresholdPx === 'number' && Number.isFinite(query.pixelThresholdPx)
       ? query.pixelThresholdPx
       : pixelThreshold
@@ -545,6 +556,10 @@ export function useSnapController(options: UseSnapControllerOptions) {
   }
 
   const consumePlacementSideSnapResult = (): VertexSnapResult | null => {
+    if (!enablePlacementSideSnap) {
+      resetPlacementSideSnap()
+      return null
+    }
     const result = placementSideSnapResult
     resetPlacementSideSnap()
     return result
