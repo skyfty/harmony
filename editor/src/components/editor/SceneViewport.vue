@@ -7344,6 +7344,7 @@ async function handlePointerUp(event: PointerEvent) {
       rotateActiveSelection,
       sceneSelectedNodeId: sceneStore.selectedNodeId ?? null,
       selectedNodeIdProp: props.selectedNodeId ?? null,
+      selectedNodeIds: sceneStore.selectedNodeIds,
       sceneStoreIsNodeSelectionLocked: (nodeId) => sceneStore.isNodeSelectionLocked(nodeId),
       sceneStoreIsDescendant: (ancestorId, nodeId) => sceneStore.isDescendant(ancestorId, nodeId),
       findSceneNode,

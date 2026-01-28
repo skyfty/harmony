@@ -10,6 +10,42 @@ type SelectionHit = {
   point: THREE.Vector3
 }
 
+function resolveDragAnchorIdForHit(
+  hitNodeId: string,
+  selectedNodeIds: string[],
+  isDescendant: (ancestorId: string, nodeId: string) => boolean,
+): string | null {
+  if (selectedNodeIds.includes(hitNodeId)) {
+    return hitNodeId
+  }
+
+  const candidates = selectedNodeIds.filter((selectedId) => isDescendant(selectedId, hitNodeId))
+  if (!candidates.length) {
+    return null
+  }
+  if (candidates.length === 1) {
+    return candidates[0]!
+  }
+
+  // Prefer the closest selected ancestor (deepest in the hierarchy).
+  // Approximate depth by choosing the candidate that has the most other candidates as ancestors.
+  let best = candidates[0]!
+  let bestScore = -1
+  for (const candidate of candidates) {
+    let score = 0
+    for (const other of candidates) {
+      if (other !== candidate && isDescendant(other, candidate)) {
+        score += 1
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score
+      best = candidate
+    }
+  }
+  return best
+}
+
 export async function handlePointerDownSelection(
   event: PointerEvent,
   ctx: {
@@ -137,7 +173,11 @@ export async function handlePointerDownSelection(
 
   if (button === 0 && ctx.activeTool === 'select') {
     if (dragHit && currentPrimaryId && dragHit.nodeId !== currentPrimaryId) {
-      if (ctx.isDescendant(currentPrimaryId, dragHit.nodeId)) {
+      const hitIsSelected = ctx.selectedNodeIds.includes(dragHit.nodeId)
+      const primaryNode = ctx.findSceneNode(ctx.nodes, currentPrimaryId)
+      const allowPrimaryGroupDescendantRedirect = Boolean(primaryNode?.nodeType === 'Group')
+
+      if (!hitIsSelected && allowPrimaryGroupDescendantRedirect && ctx.isDescendant(currentPrimaryId, dragHit.nodeId)) {
         const primaryObject = ctx.objectMap.get(currentPrimaryId)
         if (primaryObject) {
           const worldPoint = dragHit.point.clone()
@@ -157,12 +197,29 @@ export async function handlePointerDownSelection(
 
   const activeTransformAxis = button === 0 && ctx.activeTool !== 'select' ? (ctx.transformControlsAxis ?? null) : null
 
+  // Option B: allow starting a selection drag by grabbing any selected node.
+  // If a selected Group is an ancestor of the hit node, treat that Group as the drag anchor.
+  if (button === 0 && ctx.activeTool === 'select' && dragHit) {
+    const resolvedAnchorId = resolveDragAnchorIdForHit(dragHit.nodeId, ctx.selectedNodeIds, ctx.isDescendant)
+    if (resolvedAnchorId && resolvedAnchorId !== dragHit.nodeId) {
+      const anchorObject = ctx.objectMap.get(resolvedAnchorId) ?? null
+      if (anchorObject) {
+        const worldPoint = dragHit.point.clone()
+        dragHit = {
+          nodeId: resolvedAnchorId,
+          object: anchorObject,
+          point: worldPoint,
+        }
+      }
+    }
+  }
+
   const selectionDrag =
     button === 0 &&
     ctx.activeTool === 'select' &&
     dragHit &&
-    currentPrimaryId &&
-    dragHit.nodeId === currentPrimaryId
+    !ctx.isNodeSelectionLocked(dragHit.nodeId) &&
+    (ctx.selectedNodeIds.includes(dragHit.nodeId) || dragHit.nodeId === currentPrimaryId)
       ? ctx.createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
       : null
 

@@ -3,6 +3,47 @@ import type { SceneNode } from '@harmony/schema'
 import type { PointerUpResult } from './types'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 
+function resolveRotateAnchorIdForHit(
+  hitNodeId: string,
+  selectedNodeIds: string[],
+  findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null,
+  sceneNodes: SceneNode[],
+  isDescendant: (ancestorId: string, nodeId: string) => boolean,
+): string | null {
+  if (selectedNodeIds.includes(hitNodeId)) {
+    return hitNodeId
+  }
+
+  const candidates = selectedNodeIds.filter((selectedId) => {
+    const selectedNode = findSceneNode(sceneNodes, selectedId)
+    return Boolean(selectedNode?.nodeType === 'Group' && isDescendant(selectedId, hitNodeId))
+  })
+
+  if (!candidates.length) {
+    return null
+  }
+  if (candidates.length === 1) {
+    return candidates[0]!
+  }
+
+  // Prefer the closest selected group ancestor.
+  let best = candidates[0]!
+  let bestScore = -1
+  for (const candidate of candidates) {
+    let score = 0
+    for (const other of candidates) {
+      if (other !== candidate && isDescendant(other, candidate)) {
+        score += 1
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score
+      best = candidate
+    }
+  }
+  return best
+}
+
 export function handlePointerUpSelection(
   event: PointerEvent,
   ctx: {
@@ -24,6 +65,7 @@ export function handlePointerUpSelection(
 
     sceneSelectedNodeId: string | null
     selectedNodeIdProp: string | null
+    selectedNodeIds: string[]
     sceneStoreIsNodeSelectionLocked: (nodeId: string) => boolean
     sceneStoreIsDescendant: (ancestorId: string, nodeId: string) => boolean
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -68,21 +110,31 @@ export function handlePointerUpSelection(
     if (!trackingState.moved) {
       if (ctx.activeTool === 'select') {
         const primaryId = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
-        if (primaryId && !ctx.sceneStoreIsNodeSelectionLocked(primaryId)) {
+        const unlockedSelected = ctx.selectedNodeIds.filter((id) => !ctx.sceneStoreIsNodeSelectionLocked(id))
+        const selectionForRotate = unlockedSelected.slice()
+        if (primaryId && !ctx.sceneStoreIsNodeSelectionLocked(primaryId) && !selectionForRotate.includes(primaryId)) {
+          selectionForRotate.push(primaryId)
+        }
+
+        if (selectionForRotate.length) {
           let hit = ctx.pickNodeAtPointer(event) ?? trackingState.hitResult
           if (!hit) {
             hit = ctx.pickActiveSelectionBoundingBoxHit(event)
           }
 
-          const primaryNode = ctx.findSceneNode(ctx.sceneNodes, primaryId)
-          const hitMatchesPrimary = Boolean(
-            hit &&
-              (hit.nodeId === primaryId ||
-                (primaryNode?.nodeType === 'Group' && ctx.sceneStoreIsDescendant(primaryId, hit.nodeId))),
-          )
+          const hitNodeId = hit?.nodeId as string | undefined
+          const anchorId = hitNodeId
+            ? resolveRotateAnchorIdForHit(
+                hitNodeId,
+                selectionForRotate,
+                ctx.findSceneNode,
+                ctx.sceneNodes,
+                ctx.sceneStoreIsDescendant,
+              )
+            : null
 
-          if (hitMatchesPrimary) {
-            ctx.rotateActiveSelection(primaryId)
+          if (anchorId) {
+            ctx.rotateActiveSelection(anchorId)
             return {
               handled: true,
               preventDefault: true,
