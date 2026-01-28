@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
+import { MeshBVH } from 'three-mesh-bvh'
 
 export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
@@ -117,6 +118,31 @@ export function prepareImportedObject(object: THREE.Object3D) {
   }
 }
 
+function buildObjectBvh(object: THREE.Object3D): void {
+  object.traverse((child: THREE.Object3D) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+    if (!geometry || !geometry.getAttribute('position')) {
+      return
+    }
+
+    const anyGeometry = geometry as unknown as { boundsTree?: MeshBVH }
+    if (anyGeometry.boundsTree) {
+      return
+    }
+
+    try {
+      anyGeometry.boundsTree = new MeshBVH(geometry)
+    } catch (_error) {
+      // 忽略 BVH 构建失败，避免影响模型加载
+    }
+  })
+}
+
 export async function loadObjectFromFile(
   file: File,
   extensionOrOptions?: string | LoadObjectOptions,
@@ -146,6 +172,7 @@ export async function loadObjectFromFile(
       const object = payload as THREE.Object3D
       prepareImportedObject(object)
       normalizeImportedMeshMaterials(object)
+      buildObjectBvh(object)
       resolve(object)
     }
 

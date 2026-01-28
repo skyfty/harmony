@@ -3588,11 +3588,6 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
   }
 }
 
-type LegacyViewportSettings = SceneViewportSettings & {
-  skybox?: Partial<SceneSkyboxSettings> | null
-  shadowsEnabled?: boolean
-}
-
 function cloneSceneSkybox(settings?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null): SceneSkyboxSettings {
   if (!settings) {
     return cloneSkyboxSettings(defaultSkyboxSettings)
@@ -3604,20 +3599,12 @@ function normalizeShadowsEnabledInput(value: unknown): boolean {
   return typeof value === 'boolean' ? value : defaultShadowsEnabled
 }
 
-function resolveDocumentSkybox(document: { skybox?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null; viewportSettings?: SceneViewportSettings | LegacyViewportSettings | null }): SceneSkyboxSettings {
-  const legacyViewport = document.viewportSettings as LegacyViewportSettings | null | undefined
-  const candidate = document.skybox ?? legacyViewport?.skybox ?? null
-  return cloneSceneSkybox(candidate)
+function resolveDocumentSkybox(document: { skybox?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null }): SceneSkyboxSettings {
+  return cloneSceneSkybox(document.skybox ?? null)
 }
 
-function resolveDocumentShadowsEnabled(document: { shadowsEnabled?: boolean | null; viewportSettings?: SceneViewportSettings | LegacyViewportSettings | null }): boolean {
-  const legacyViewport = document.viewportSettings as LegacyViewportSettings | null | undefined
-  const candidate = typeof document.shadowsEnabled === 'boolean'
-    ? document.shadowsEnabled
-    : typeof legacyViewport?.shadowsEnabled === 'boolean'
-      ? legacyViewport!.shadowsEnabled
-      : undefined
-  return normalizeShadowsEnabledInput(candidate)
+function resolveDocumentShadowsEnabled(document: { shadowsEnabled?: boolean | null }): boolean {
+  return normalizeShadowsEnabledInput(document.shadowsEnabled)
 }
 
 function skyboxSettingsEqual(a: SceneSkyboxSettings, b: SceneSkyboxSettings): boolean {
@@ -6456,12 +6443,12 @@ function normalizeCameraStateInput(value: unknown): SceneCameraState | undefined
   }
 }
 
-function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportSettings> & Partial<LegacyViewportSettings>) | undefined {
+function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSettings> | undefined {
   if (!isPlainObject(value)) {
     return undefined
   }
-  const input = value as unknown as LegacyViewportSettings
-  const normalized: Partial<SceneViewportSettings> & Partial<LegacyViewportSettings> = {}
+  const input = value as unknown as SceneViewportSettings
+  const normalized: Partial<SceneViewportSettings> = {}
   if (typeof input.showGrid === 'boolean') {
     normalized.showGrid = input.showGrid
   }
@@ -6479,12 +6466,6 @@ function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportS
   }
   if (typeof (input as any).snapThresholdPx === 'number' || typeof (input as any).snapThresholdPx === 'string') {
     normalized.snapThresholdPx = normalizeSnapThresholdPx((input as any).snapThresholdPx)
-  }
-  if (input.skybox && isPlainObject(input.skybox)) {
-    normalized.skybox = input.skybox as Partial<SceneSkyboxSettings>
-  }
-  if (typeof input.shadowsEnabled === 'boolean') {
-    normalized.shadowsEnabled = input.shadowsEnabled
   }
   return normalized
 }
@@ -7313,9 +7294,8 @@ function createSceneDocument(
   if (options.resourceSummary) {
     resourceSummary = options.resourceSummary
   }
-  const legacyViewport = options.viewportSettings as LegacyViewportSettings | undefined
-  const skybox = cloneSceneSkybox(options.skybox ?? legacyViewport?.skybox ?? null)
-  const shadowsEnabled = normalizeShadowsEnabledInput(options.shadowsEnabled ?? legacyViewport?.shadowsEnabled)
+  const skybox = cloneSceneSkybox(options.skybox ?? null)
+  const shadowsEnabled = normalizeShadowsEnabledInput(options.shadowsEnabled)
   const viewportSettings = cloneViewportSettings(options.viewportSettings)
   const panelVisibility = normalizePanelVisibilityState(options.panelVisibility)
   const panelPlacement = normalizePanelPlacementStateInput(options.panelPlacement)
