@@ -90,7 +90,14 @@ function findFirstScrollableDescendant(root: HTMLElement): HTMLElement | null {
   const preferredSelectors = ['.v-virtual-scroll', '.v-virtual-scroll__container']
   for (const selector of preferredSelectors) {
     const el = root.querySelector<HTMLElement>(selector)
-    if (el && el.scrollHeight > el.clientHeight + 1) {
+    if (!el) continue
+
+    // Prefer Vuetify's virtual scroll container even before it overflows.
+    // We rely on its layout (e.g. `scrollbar-gutter: stable`) to keep the
+    // header controls aligned with row trailing controls from the initial render.
+    const style = window.getComputedStyle(el)
+    const overflowY = style.overflowY
+    if (selector === '.v-virtual-scroll' || overflowY === 'auto' || overflowY === 'scroll') {
       return el
     }
   }
