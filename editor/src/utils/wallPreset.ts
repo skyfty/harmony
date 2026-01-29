@@ -5,6 +5,55 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
+export const WALL_PRESET_FORMAT_VERSION = 1
+
+export type StrictWallPresetCornerModelRule = {
+  bodyAssetId: string | null
+  headAssetId: string | null
+  angle: number
+  tolerance: number
+}
+
+export type StrictWallPresetWallProps = {
+  height: number
+  width: number
+  thickness: number
+  smoothing: number
+  isAirWall: boolean
+  bodyAssetId: string | null
+  headAssetId: string | null
+  bodyEndCapAssetId: string | null
+  headEndCapAssetId: string | null
+  cornerModels: StrictWallPresetCornerModelRule[]
+}
+
+export type WallPresetMaterialPatch = {
+  /** Node material slot id (SceneNodeMaterial.id). Provided as record key; repeated here for clarity in devtools. */
+  id?: string
+  /** Shared material id if this slot references a shared material definition. */
+  materialId: string | null
+  /** Optional local display name override. */
+  name?: string
+  /** Material type override. */
+  type?: string
+  /** Only used for local materials (materialId === null). */
+  props?: Record<string, unknown>
+}
+
+export type WallPresetData = {
+  kind: 'wall-preset'
+  formatVersion: number
+  name: string
+  wallProps: StrictWallPresetWallProps
+  /** Order of node material slots to apply (SceneNodeMaterial.id). */
+  materialOrder: string[]
+  /** Patches keyed by SceneNodeMaterial.id. */
+  materialPatches: Record<string, WallPresetMaterialPatch>
+  /** Optional dependency helpers (validated by sceneStore). */
+  assetIndex?: unknown
+  packageAssetMap?: unknown
+}
+
 export function buildWallPresetFilename(name: string): string {
   const normalized = normalizeName(name) || 'Wall Preset'
   const sanitized = normalized

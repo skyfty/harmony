@@ -124,7 +124,7 @@ export type ConvertPlanningToSceneOptions = {
     applyWallPresetToNode?: (
       nodeId: string,
       assetId: string,
-      presetData?: { prefab: unknown; wallProps: Record<string, unknown> }
+      presetData?: import('@/utils/wallPreset').WallPresetData
     ) => Promise<Record<string, unknown>>
   }
   planningData: PlanningSceneData
@@ -1857,7 +1857,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
       // Attempt to load a layer-scoped wall preset (only once per layer)
-      let layerWallPreset: { prefab: unknown; wallProps: Record<string, unknown> } | null = null
+      let layerWallPreset: import('@/utils/wallPreset').WallPresetData | null = null
       let layerWallPresetId: string | null = null
       try {
         const rawLayers = (planningData as any)?.layers

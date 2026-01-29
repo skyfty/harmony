@@ -8,9 +8,7 @@ import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSeg
 import { GRID_MAJOR_SPACING, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
 import { findSceneNode } from './sceneUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
-import type { NodePrefabData } from '@/types/node-prefab'
-
-type WallPresetData = { prefab: NodePrefabData; wallProps: WallComponentProps }
+import type { WallPresetData } from '@/utils/wallPreset'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null

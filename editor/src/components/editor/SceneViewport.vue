@@ -188,7 +188,6 @@ import {
   clampGuideRouteComponentProps,
 } from '@schema/components'
 
-import type { NodePrefabData } from '@/types/node-prefab'
 import type {
   ViewPointComponentProps,
   DisplayBoardComponentProps,
@@ -2502,7 +2501,7 @@ const wallBuildTool = createWallBuildTool({
   }),
 })
 
-type WallPresetData = { prefab: NodePrefabData; wallProps: WallComponentProps }
+type WallPresetData = import('@/utils/wallPreset').WallPresetData
 
 const wallPresetDialogOpen = ref(false)
 const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
