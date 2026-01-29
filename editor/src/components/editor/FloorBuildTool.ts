@@ -5,6 +5,7 @@ import type { Vector3Like } from '@harmony/schema'
 import { createFloorPreviewRenderer, type FloorPreviewSession } from './FloorPreviewRenderer'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { FloorPresetData } from '@/utils/floorPreset'
 
 export type FloorBuildToolHandle = {
   getSession: () => FloorPreviewSession | null
@@ -38,6 +39,7 @@ export function createFloorBuildTool(options: {
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   isAltOverrideActive: () => boolean
+  getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
   const previewRenderer = createFloorPreviewRenderer({ rootGroup: options.rootGroup })
@@ -192,6 +194,18 @@ export function createFloorBuildTool(options: {
 
     if (created) {
       options.sceneStore.selectNode(created.id)
+
+      const brush = options.getFloorBrush?.()
+      const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
+        ? brush.presetAssetId.trim()
+        : null
+      if (presetAssetId) {
+        void options.sceneStore
+          .applyFloorPresetToNode(created.id, presetAssetId, brush?.presetData ?? null)
+          .catch((error: unknown) => {
+            console.warn('Failed to apply floor preset brush', presetAssetId, error)
+          })
+      }
     }
 
     clearSession(true)
@@ -213,6 +227,18 @@ export function createFloorBuildTool(options: {
 
     if (created) {
       options.sceneStore.selectNode(created.id)
+
+      const brush = options.getFloorBrush?.()
+      const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
+        ? brush.presetAssetId.trim()
+        : null
+      if (presetAssetId) {
+        void options.sceneStore
+          .applyFloorPresetToNode(created.id, presetAssetId, brush?.presetData ?? null)
+          .catch((error: unknown) => {
+            console.warn('Failed to apply floor preset brush', presetAssetId, error)
+          })
+      }
     }
 
     clearSession(true)

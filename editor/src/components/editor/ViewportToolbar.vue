@@ -76,14 +76,49 @@
           </template>
           <v-list density="compact" class="wall-preset-menu">
             <div class="wall-preset-menu__card">
-              <AssetPickerList
-                :active="true"
-                assetType="prefab"
-                :extensions="['wall']"
-                :thumbnailSize="30"
-                :showSearch="true"
-                @update:asset="handleWallPresetSelect"
-              />
+              <v-tabs
+                v-model="wallPresetMenuTab"
+                density="compact"
+                class="wall-preset-menu__tabs"
+              >
+                <v-tab value="wall">Wall</v-tab>
+                <v-tab value="floor">Floor</v-tab>
+              </v-tabs>
+
+              <v-window v-model="wallPresetMenuTab" class="wall-preset-menu__window">
+                <v-window-item value="wall">
+                  <AssetPickerList
+                    :active="true"
+                    assetType="prefab"
+                    :extensions="['wall']"
+                    :thumbnailSize="30"
+                    :showSearch="true"
+                    @update:asset="handleWallPresetSelect"
+                  />
+                </v-window-item>
+
+                <v-window-item value="floor">
+                  <div class="wall-preset-menu__actions">
+                    <v-btn
+                      density="compact"
+                      size="small"
+                      variant="text"
+                      title="Clear Floor Brush Preset"
+                      @click="() => handleFloorPresetSelect(null)"
+                    >
+                      Clear
+                    </v-btn>
+                  </div>
+                  <AssetPickerList
+                    :active="true"
+                    assetType="prefab"
+                    :extensions="['floor']"
+                    :thumbnailSize="30"
+                    :showSearch="true"
+                    @update:asset="handleFloorPresetSelect"
+                  />
+                </v-window-item>
+              </v-window>
             </div>
           </v-list>
         </v-menu>
@@ -438,6 +473,7 @@ const emit = defineEmits<{
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
   (event: 'select-wall-preset', asset: any): void
+  (event: 'select-floor-preset', asset: any): void
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
@@ -478,6 +514,7 @@ const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
 const wallPresetMenuOpen = ref(false)
+const wallPresetMenuTab = ref<'wall' | 'floor'>('wall')
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
 
@@ -679,12 +716,19 @@ function handleWallPresetContextMenu(event: MouseEvent) {
     return
   }
   // Open the in-toolbar wall preset menu
+  wallPresetMenuTab.value = 'wall'
   wallPresetMenuOpen.value = true
 }
 
 function handleWallPresetSelect(asset: any) {
   // propagate selection to parent; parent will handle activating the wall tool
   emit('select-wall-preset', asset)
+  wallPresetMenuOpen.value = false
+}
+
+function handleFloorPresetSelect(asset: any) {
+  // propagate selection to parent; parent will handle storing brush + activating the floor tool
+  emit('select-floor-preset', asset)
   wallPresetMenuOpen.value = false
 }
 
@@ -841,6 +885,20 @@ function handleClearScatterMenuAction() {
   -webkit-backdrop-filter: blur(14px) saturate(120%);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+.wall-preset-menu__tabs {
+  margin-bottom: 4px;
+}
+
+.wall-preset-menu__window {
+  padding-top: 2px;
+}
+
+.wall-preset-menu__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px 6px;
 }
 
 /* Wall preset picker: fixed 4-column grid (72x72 tiles) and fixed scroll height. */

@@ -2502,12 +2502,17 @@ const wallBuildTool = createWallBuildTool({
 })
 
 type WallPresetData = import('@/utils/wallPreset').WallPresetData
+type FloorPresetData = import('@/utils/floorPreset').FloorPresetData
 
 const wallPresetDialogOpen = ref(false)
 const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const wallBrushPresetAssetId = ref<string | null>(null)
 const wallBrushPresetData = ref<WallPresetData | null>(null)
 let wallBrushPresetLoadToken = 0
+
+const floorBrushPresetAssetId = ref<string | null>(null)
+const floorBrushPresetData = ref<FloorPresetData | null>(null)
+let floorBrushPresetLoadToken = 0
 
 function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false
@@ -2524,6 +2529,16 @@ function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
 function handleWallPresetDialogCancel(): void {
   wallPresetDialogOpen.value = false
   wallPresetDialogAnchor.value = null
+}
+
+function handleFloorPresetDialogUpdate(asset: ProjectAsset | null): void {
+  floorBrushPresetAssetId.value = asset?.id ?? null
+  // If a floor preset was selected, clear any current selection and
+  // immediately activate the floor build tool so the user can begin building.
+  if (asset && asset.id) {
+    sceneStore.setSelection([])
+    handleBuildToolChange('floor')
+  }
 }
 
 watch(wallBrushPresetAssetId, (assetId) => {
@@ -2550,6 +2565,33 @@ watch(wallBrushPresetAssetId, (assetId) => {
       }
       console.warn('Failed to load wall preset for brush', id, error)
       wallBrushPresetData.value = null
+    })
+})
+
+watch(floorBrushPresetAssetId, (assetId) => {
+  const id = typeof assetId === 'string' ? assetId.trim() : ''
+  floorBrushPresetLoadToken += 1
+  const token = floorBrushPresetLoadToken
+
+  if (!id) {
+    floorBrushPresetData.value = null
+    return
+  }
+
+  void sceneStore
+    .loadFloorPreset(id)
+    .then((data) => {
+      if (token !== floorBrushPresetLoadToken) {
+        return
+      }
+      floorBrushPresetData.value = data as FloorPresetData
+    })
+    .catch((error) => {
+      if (token !== floorBrushPresetLoadToken) {
+        return
+      }
+      console.warn('Failed to load floor preset for brush', id, error)
+      floorBrushPresetData.value = null
     })
 })
 
@@ -2589,6 +2631,10 @@ const floorBuildTool = createFloorBuildTool({
   raycastGroundPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
   isAltOverrideActive: () => isAltOverrideActive,
+  getFloorBrush: () => ({
+    presetAssetId: floorBrushPresetAssetId.value,
+    presetData: floorBrushPresetData.value,
+  }),
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -11055,6 +11101,7 @@ defineExpose<SceneViewportHandle>({
         @capture-screenshot="handleCaptureScreenshot"
         @change-build-tool="handleBuildToolChange"
         @select-wall-preset="handleWallPresetDialogUpdate"
+        @select-floor-preset="handleFloorPresetDialogUpdate"
         @toggle-scatter-erase="toggleScatterEraseMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
