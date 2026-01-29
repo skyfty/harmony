@@ -169,17 +169,14 @@ import {
   type BehaviorPrefabData,
 } from '@/utils/behaviorPrefab'
 import {
-  buildLodPresetFilename,
-  deserializeLodPreset,
-  serializeLodPreset,
   type LodPresetData,
-  type LodPresetAssetReference,
 } from '@/utils/lodPreset'
+import { createLodPresetActions } from './lodPresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
 import { createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
-import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
+import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -285,7 +282,6 @@ import {
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
-  clampLodComponentProps,
   type LodComponentProps,
 } from '@schema/components'
 
@@ -577,6 +573,18 @@ const floorPresetActions = createFloorPresetActions({
   isPackageAssetMap,
 })
 
+const lodPresetActions = createLodPresetActions({
+  LOD_PRESET_PREVIEW_COLOR,
+  findNodeById,
+})
+
+const floorHelpers = createSceneStoreFloorHelpers({
+  createFloorNodeMaterials,
+  createNodeMaterial,
+  getRuntimeObject,
+  updateFloorGroup,
+})
+
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 
 
@@ -806,57 +814,7 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   return sceneNodeTypeSupportsMaterials(type)
 }
 
-function ensureFloorMaterialConvention(node: SceneNode): { materialsChanged: boolean; meshChanged: boolean } {
-  if (node.dynamicMesh?.type !== 'Floor') {
-    return { materialsChanged: false, meshChanged: false }
-  }
-
-  const currentMaterials = Array.isArray(node.materials) ? node.materials : []
-  let nextMaterials = currentMaterials
-
-  if (!currentMaterials.length) {
-    nextMaterials = createFloorNodeMaterials({ topBottomName: 'TopBottom', sideName: 'Side' })
-  } else if (currentMaterials.length === 1) {
-    const first = currentMaterials[0]!
-    const sideMaterial = createNodeMaterial(first.materialId ?? null, first, {
-      name: 'Side',
-      type: first.type,
-    })
-    nextMaterials = [first, sideMaterial]
-  }
-
-  const materialsChanged = nextMaterials !== currentMaterials
-  if (materialsChanged) {
-    node.materials = nextMaterials
-  }
-
-  const mesh = node.dynamicMesh as any
-  const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
-  const materialIds = nextMaterials.map((m) => m.id)
-
-  const topFallback = nextMaterials[0]?.id ?? null
-  const sideFallback = nextMaterials[1]?.id ?? topFallback
-
-  let topId = normalizeId(mesh.topBottomMaterialConfigId) ?? topFallback
-  if (topId && !materialIds.includes(topId)) {
-    topId = topFallback
-  }
-  let sideId = normalizeId(mesh.sideMaterialConfigId) ?? sideFallback ?? topId
-  if (sideId && !materialIds.includes(sideId)) {
-    sideId = sideFallback
-  }
-
-  const meshChanged = mesh.topBottomMaterialConfigId !== topId || mesh.sideMaterialConfigId !== sideId
-  if (meshChanged) {
-    node.dynamicMesh = {
-      ...mesh,
-      topBottomMaterialConfigId: topId,
-      sideMaterialConfigId: sideId,
-    }
-  }
-
-  return { materialsChanged, meshChanged }
-}
+// Floor helper functions moved to ./sceneStoreFloor.ts
 
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
   const map: MaterialTextureMap = {}
@@ -1702,79 +1660,7 @@ function buildRoadDynamicMeshFromWorldPoints(
   return { center, definition }
 }
 
-function buildFloorWorldPoints(points: Vector3Like[]): Vector3[] {
-  const out: Vector3[] = []
-  points.forEach((p) => {
-    if (!p) {
-      return
-    }
-    const x = Number(p.x)
-    const z = Number(p.z)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-      return
-    }
-    const vec = new Vector3(x, 0, z)
-    const prev = out[out.length - 1]
-    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
-      return
-    }
-    out.push(vec)
-  })
-
-  // Drop a closing point if it repeats the first.
-  if (out.length >= 3) {
-    const first = out[0]!
-    const last = out[out.length - 1]!
-    if (first.distanceToSquared(last) <= 1e-10) {
-      out.pop()
-    }
-  }
-
-  return out
-}
-
-function computeFloorCenter(points: Vector3[]): Vector3 {
-  const min = new Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
-  const max = new Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
-
-  points.forEach((p) => {
-    min.x = Math.min(min.x, p.x)
-    min.z = Math.min(min.z, p.z)
-    max.x = Math.max(max.x, p.x)
-    max.z = Math.max(max.z, p.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return new Vector3(0, 0, 0)
-  }
-
-  return new Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
-}
-
-function buildFloorDynamicMeshFromWorldPoints(
-  points: Vector3Like[],
-): { center: Vector3; definition: FloorDynamicMesh } | null {
-  const worldPoints = buildFloorWorldPoints(points)
-  if (worldPoints.length < 3) {
-    return null
-  }
-
-  const center = computeFloorCenter(worldPoints)
-  // Preserve world Z in local space; geometry no longer flips Z.
-  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
-
-  const definition: FloorDynamicMesh = {
-    type: 'Floor',
-    vertices,
-    topBottomMaterialConfigId: null,
-    sideMaterialConfigId: null,
-    smooth: FLOOR_DEFAULT_SMOOTH,
-    thickness: FLOOR_DEFAULT_THICKNESS,
-    sideUvScale: { x: FLOOR_DEFAULT_SIDE_UV_SCALE.x, y: FLOOR_DEFAULT_SIDE_UV_SCALE.y },
-  }
-
-  return { center, definition }
-}
+// Floor dynamic mesh builders moved to ./sceneStoreFloor.ts
 
 function applyDisplayBoardComponentPropsToNode(
   node: SceneNode,
@@ -1832,47 +1718,7 @@ function refreshDisplayBoardGeometry(node: SceneNode | null | undefined): void {
   applyDisplayBoardComponentPropsToNode(node, componentState.props as DisplayBoardComponentProps)
 }
 
-function applyFloorComponentPropsToNode(node: SceneNode, props: FloorComponentProps): boolean {
-  if (node.dynamicMesh?.type !== 'Floor') {
-    return false
-  }
-  const normalized = clampFloorComponentProps(props)
-  const currentSmooth = Number.isFinite(node.dynamicMesh.smooth ?? Number.NaN)
-    ? (node.dynamicMesh.smooth as number)
-    : FLOOR_DEFAULT_SMOOTH
-  const currentThickness = Number.isFinite((node.dynamicMesh as any).thickness)
-    ? Number((node.dynamicMesh as any).thickness)
-    : FLOOR_DEFAULT_THICKNESS
-  const currentSideU = Number.isFinite((node.dynamicMesh as any).sideUvScale?.x)
-    ? Number((node.dynamicMesh as any).sideUvScale.x)
-    : FLOOR_DEFAULT_SIDE_UV_SCALE.x
-  const currentSideV = Number.isFinite((node.dynamicMesh as any).sideUvScale?.y)
-    ? Number((node.dynamicMesh as any).sideUvScale.y)
-    : FLOOR_DEFAULT_SIDE_UV_SCALE.y
-
-  const unchanged =
-    Math.abs(currentSmooth - normalized.smooth) <= 1e-6 &&
-    Math.abs(currentThickness - normalized.thickness) <= 1e-6 &&
-    Math.abs(currentSideU - normalized.sideUvScale.x) <= 1e-6 &&
-    Math.abs(currentSideV - normalized.sideUvScale.y) <= 1e-6
-  if (unchanged) {
-    return false
-  }
-
-  const nextMesh: FloorDynamicMesh = {
-    ...node.dynamicMesh,
-    smooth: normalized.smooth,
-    thickness: normalized.thickness,
-    sideUvScale: { x: normalized.sideUvScale.x, y: normalized.sideUvScale.y },
-  }
-  node.dynamicMesh = nextMesh
-
-  const runtime = getRuntimeObject(node.id)
-  if (runtime) {
-    updateFloorGroup(runtime, nextMesh)
-  }
-  return true
-}
+// Floor component application moved to ./sceneStoreFloor.ts
 
 const DISPLAY_BOARD_GEOMETRY_EPSILON = 1e-4
 
@@ -9421,7 +9267,7 @@ export const useSceneStore = defineStore('scene', {
           }
           removed = true
 
-          const { meshChanged } = ensureFloorMaterialConvention(node)
+          const { meshChanged } = floorHelpers.ensureFloorMaterialConvention(node)
           if (meshChanged) {
             requiresDynamicMeshPatch = true
           }
@@ -9560,7 +9406,7 @@ export const useSceneStore = defineStore('scene', {
           return
         }
         node.materials = clones
-        const { meshChanged } = ensureFloorMaterialConvention(node)
+        const { meshChanged } = floorHelpers.ensureFloorMaterialConvention(node)
         if (meshChanged) {
           requiresDynamicMeshPatch = true
         }
@@ -11612,74 +11458,7 @@ export const useSceneStore = defineStore('scene', {
       props: LodComponentProps
       select?: boolean
     }): Promise<ProjectAsset> {
-      const name = typeof payload.name === 'string' ? payload.name : ''
-      const props = clampLodComponentProps(payload.props)
-      const assetCache = useAssetCacheStore()
-      const referencedModelIds = Array.from(
-        new Set(
-          props.levels
-            .map((level) => (typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''))
-            .filter((id) => Boolean(id)),
-        ),
-      )
-
-      const assetRefs = referencedModelIds
-        .map<LodPresetAssetReference | null>((assetId) => {
-          const asset = this.getAsset(assetId)
-          if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
-            return null
-          }
-          const entry = assetCache.getEntry(assetId)
-          const candidates = [entry?.downloadUrl, asset.downloadUrl, asset.description]
-          const downloadUrl = candidates.find((candidate) => typeof candidate === 'string' && /^https?:\/\//i.test(candidate))
-          const ref: LodPresetAssetReference = {
-            assetId,
-            type: asset.type,
-            name: asset.name,
-            downloadUrl: downloadUrl ?? null,
-            description: asset.description ?? null,
-            filename: entry?.filename ?? null,
-            thumbnail: asset.thumbnail ?? null,
-          }
-          return ref
-        })
-        .filter((ref): ref is LodPresetAssetReference => ref !== null)
-
-      const serialized = serializeLodPreset({ name, props, assetRefs })
-      const assetId = generateUuid()
-      const fileName = buildLodPresetFilename(name)
-      const blob = new Blob([serialized], { type: 'application/json' })
-      await assetCache.storeAssetBlob(assetId, {
-        blob,
-        mimeType: 'application/json',
-        filename: fileName,
-      })
-
-      const projectAsset: ProjectAsset = {
-        id: assetId,
-        name: name?.trim().length ? name.trim() : 'LOD Preset',
-        type: 'prefab',
-        downloadUrl: assetId,
-        previewColor: LOD_PRESET_PREVIEW_COLOR,
-        thumbnail: null,
-        description: fileName,
-        gleaned: true,
-        extension: extractExtension(fileName) ?? null,
-      }
-
-      const categoryId = determineAssetCategoryId(projectAsset)
-      const registered = this.registerAsset(projectAsset, {
-        categoryId,
-        source: { type: 'local' },
-        commitOptions: { updateNodes: false },
-      })
-
-      if (payload.select !== false) {
-        this.setActiveDirectory(categoryId)
-        this.selectAsset(registered.id)
-      }
-
-      return registered
+      return lodPresetActions.saveLodPreset(this as any, payload)
     },
 
     findWallPresetAssetByFilename(filename: string): ProjectAsset | null {
@@ -11741,120 +11520,11 @@ export const useSceneStore = defineStore('scene', {
     },
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('LOD 预设资源不存在')
-      }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非 LOD 预设')
-      }
-
-      const assetCache = useAssetCacheStore()
-      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
-      if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
-      }
-      if (!entry || !entry.blob) {
-        throw new Error('无法加载 LOD 预设数据')
-      }
-
-      assetCache.touch(assetId)
-      const text = await entry.blob.text()
-      const preset = deserializeLodPreset(text)
-
-      const refs = Array.isArray(preset.assetRefs) ? preset.assetRefs : []
-      if (refs.length) {
-        // Best-effort: ensure referenced model assets exist in this project, and trigger download if possible.
-        refs.forEach((ref) => {
-          if (!ref?.assetId || this.getAsset(ref.assetId)) {
-            return
-          }
-          if (ref.type !== 'model' && ref.type !== 'mesh') {
-            return
-          }
-
-          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
-            ? ref.downloadUrl
-            : ''
-
-          const projectAsset: ProjectAsset = {
-            id: ref.assetId,
-            name: (typeof ref.name === 'string' && ref.name.trim().length) ? ref.name.trim() : `LOD Ref ${ref.assetId}`,
-            type: ref.type,
-            downloadUrl: remoteUrl,
-            previewColor: SERVER_ASSET_PREVIEW_COLORS[ref.type],
-            thumbnail: ref.thumbnail ?? null,
-            description: ref.description ?? (ref.filename ?? undefined),
-            gleaned: true,
-            extension: extractExtension(ref.filename ?? ref.description ?? remoteUrl) ?? null,
-          }
-
-          this.registerAsset(projectAsset, {
-            categoryId: determineAssetCategoryId(projectAsset),
-            source: { type: 'url' },
-            commitOptions: { updateNodes: false },
-          })
-        })
-
-        refs.forEach((ref) => {
-          if (!ref?.assetId) {
-            return
-          }
-          const remoteUrl = typeof ref.downloadUrl === 'string' && /^https?:\/\//i.test(ref.downloadUrl)
-            ? ref.downloadUrl
-            : ''
-          if (!remoteUrl) {
-            return
-          }
-          if (assetCache.hasCache(ref.assetId) || assetCache.isDownloading(ref.assetId)) {
-            return
-          }
-          const asset = this.getAsset(ref.assetId)
-          if (!asset) {
-            return
-          }
-          void assetCache.downloaProjectAsset(asset).catch((error) => {
-            console.warn('[SceneStore] Failed to download referenced LOD model asset', ref.assetId, error)
-          })
-        })
-      }
-
-      return preset
+      return lodPresetActions.loadLodPreset(this as any, assetId)
     },
 
     async applyLodPresetToNode(nodeId: string, assetId: string): Promise<LodPresetData> {
-      const node = findNodeById(this.nodes, nodeId)
-      if (!node) {
-        throw new Error('节点不存在或已被移除')
-      }
-
-      const preset = await this.loadLodPreset(assetId)
-
-        if (!node.components?.[LOD_COMPONENT_TYPE]) {
-        const result = this.addNodeComponent<typeof LOD_COMPONENT_TYPE>(nodeId, LOD_COMPONENT_TYPE)
-        if (!result) {
-          throw new Error('无法为节点添加 LOD 组件')
-        }
-      }
-
-      const refreshedNode = findNodeById(this.nodes, nodeId)
-      const lodComponent = refreshedNode?.components?.[LOD_COMPONENT_TYPE] as
-        | SceneNodeComponentState<LodComponentProps>
-        | undefined
-      if (!lodComponent) {
-        throw new Error('LOD 组件不可用')
-      }
-
-      this.updateNodeComponentProps(
-        nodeId,
-        lodComponent.id,
-        preset.props as unknown as Partial<Record<string, unknown>>,
-      )
-      return preset
+      return lodPresetActions.applyLodPresetToNode(this as any, nodeId, assetId)
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
       const asset = this.getAsset(assetId)
@@ -13997,7 +13667,7 @@ export const useSceneStore = defineStore('scene', {
       name?: string,
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
-      const build = buildFloorDynamicMeshFromWorldPoints(payload.points)
+      const build = floorHelpers.buildFloorDynamicMeshFromWorldPoints(payload.points)
       if (!build) {
         return null
       }
@@ -14064,7 +13734,7 @@ export const useSceneStore = defineStore('scene', {
           let materialsChanged = false
           let meshChanged = false
           visitNode(this.nodes, desiredId, (node) => {
-            const result = ensureFloorMaterialConvention(node)
+            const result = floorHelpers.ensureFloorMaterialConvention(node)
             materialsChanged ||= result.materialsChanged
             meshChanged ||= result.meshChanged
           })
@@ -14349,7 +14019,7 @@ export const useSceneStore = defineStore('scene', {
               componentState.props as unknown as DisplayBoardComponentProps,
             )
           } else if (componentState.type === FLOOR_COMPONENT_TYPE) {
-            applyFloorComponentPropsToNode(node, componentState.props as FloorComponentProps)
+            floorHelpers.applyFloorComponentPropsToNode(node, componentState.props as FloorComponentProps)
           }else if (componentState.type === ROAD_COMPONENT_TYPE) {
             const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
             applyRoadComponentPropsToNode(node, componentState.props as RoadComponentProps, groundNode)
@@ -14779,7 +14449,7 @@ export const useSceneStore = defineStore('scene', {
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {
           applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
         } else if (currentType === FLOOR_COMPONENT_TYPE) {
-          applyFloorComponentPropsToNode(node, nextProps as FloorComponentProps)
+          floorHelpers.applyFloorComponentPropsToNode(node, nextProps as FloorComponentProps)
         }
       })
 
