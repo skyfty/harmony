@@ -98,7 +98,7 @@ const behaviorDetailsActive = ref(false)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
-const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
+const placementTitle = computed(() => (floating.value ? 'Dock to right' : 'Float panel'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
@@ -626,8 +626,13 @@ watch(
           </div>
           </v-expansion-panels>
         </div>
-        <div v-else class="placeholder-text">
-          Select an object to inspect its properties.
+        <div v-else class="placeholder">
+          <div class="placeholder-inner">
+            <v-icon color="primary" size="48">mdi-magnify</v-icon>
+            <div class="placeholder-title">No object selected</div>
+            <div class="placeholder-subtitle">Select an object in the scene to view and edit its properties.</div>
+            <div class="placeholder-hint">Tip: press V to switch to the selection tool.</div>
+          </div>
         </div>
     </div>
   </v-card>
@@ -782,5 +787,42 @@ watch(
 
 .menu-list :deep(.v-list-item:hover) {
   background-color: rgba(255, 255, 255, 0.08);
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.placeholder-inner {
+  text-align: center;
+  color: rgba(233, 236, 241, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.placeholder-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #e9ecf1;
+}
+
+.placeholder-subtitle {
+  font-size: 0.86rem;
+  color: rgba(233, 236, 241, 0.72);
+}
+
+.placeholder-hint {
+  font-size: 0.78rem;
+  color: rgba(233, 236, 241, 0.6);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-top: 6px;
 }
 </style>
