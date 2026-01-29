@@ -176,7 +176,9 @@ import {
   type LodPresetAssetReference,
 } from '@/utils/lodPreset'
 import { type WallPresetData } from '@/utils/wallPreset'
+import { type FloorPresetData } from '@/utils/floorPreset'
 import { createWallPresetActions } from './wallPresetActions'
+import { createFloorPresetActions } from './floorPresetActions'
 import { SERVER_ASSET_PREVIEW_COLORS } from '@/api/serverAssetTypes'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
@@ -532,10 +534,31 @@ const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const WALL_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
+const FLOOR_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 const wallPresetActions = createWallPresetActions({
   WALL_PRESET_PREVIEW_COLOR,
+  generateUuid,
+  normalizePrefabName,
+  findNodeById,
+  nodeSupportsMaterials,
+  extractMaterialProps,
+  materialUpdateToProps,
+  mergeMaterialProps,
+  createMaterialProps,
+  createNodeMaterial,
+  DEFAULT_SCENE_MATERIAL_TYPE,
+  buildAssetIndexSubsetForPrefab,
+  buildPackageAssetMapSubsetForPrefab,
+  mergeAssetIndexEntries,
+  mergePackageAssetMapEntries,
+  isAssetIndex,
+  isPackageAssetMap,
+})
+
+const floorPresetActions = createFloorPresetActions({
+  FLOOR_PRESET_PREVIEW_COLOR,
   generateUuid,
   normalizePrefabName,
   findNodeById,
@@ -11686,6 +11709,35 @@ export const useSceneStore = defineStore('scene', {
 
     async applyWallPresetToSelectedWall(assetId: string): Promise<void> {
       await wallPresetActions.applyWallPresetToSelectedWall(this as any, assetId)
+    },
+
+    findFloorPresetAssetByFilename(filename: string): ProjectAsset | null {
+      return floorPresetActions.findFloorPresetAssetByFilename(this as any, filename)
+    },
+
+    async saveFloorPreset(payload: {
+      name: string
+      nodeId?: string | null
+      assetId?: string | null
+      select?: boolean
+    }): Promise<ProjectAsset> {
+      return floorPresetActions.saveFloorPreset(this as any, payload)
+    },
+
+    async loadFloorPreset(assetId: string): Promise<FloorPresetData> {
+      return floorPresetActions.loadFloorPreset(this as any, assetId)
+    },
+
+    async applyFloorPresetToNode(
+      nodeId: string,
+      assetId: string,
+      presetData?: FloorPresetData | null,
+    ): Promise<FloorComponentProps> {
+      return floorPresetActions.applyFloorPresetToNode(this as any, nodeId, assetId, presetData)
+    },
+
+    async applyFloorPresetToSelectedFloor(assetId: string): Promise<void> {
+      await floorPresetActions.applyFloorPresetToSelectedFloor(this as any, assetId)
     },
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {

@@ -13,6 +13,7 @@ export interface AssetCategoryDefinition {
     | 'behaviors'
     | 'prefabs'
     | 'wallPresets'
+    | 'floorPresets'
     | 'videos'
     | 'hdri'
     | 'others'
@@ -81,6 +82,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-wall-presets`,
     label: 'Wall Presets',
     extensions: ['.wall'],
+  },
+  {
+    key: 'floorPresets',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-floor-presets`,
+    label: 'Floor Presets',
+    extensions: ['.floor'],
   },
   {
     key: 'videos',
