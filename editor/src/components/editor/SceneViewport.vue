@@ -2646,7 +2646,6 @@ function handleSelectFloorBuildShape(shape: FloorBuildShape) {
   // Switching shapes should start from a clean slate.
   floorBuildTool.cancel()
   floorBuildShape.value = shape
-  floorShapeMenuOpen.value = false
 
   // Selecting a shape explicitly activates the floor build tool.
   // Match toolbar behavior: entering a build tool clears selection.

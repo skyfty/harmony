@@ -548,27 +548,50 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
 
       store.updateNodeComponentProps(nodeId, floorComponent.id, preset.floorProps as unknown as Partial<Record<string, unknown>>)
 
-      // Apply node material patches (match by SceneNodeMaterial.id; preserve existing tail slots).
+      // Apply node material patches (merge into existing TopBottom/Side materials by name; do not duplicate).
+      // This ensures dropping a .floor preset updates the current floor appearance without clobbering unrelated materials.
       const target = deps.findNodeById(store.nodes, nodeId)
       if (target && deps.nodeSupportsMaterials(target)) {
+        const TOP_BOTTOM_NAME = 'TopBottom'
+        const SIDE_NAME = 'Side'
+        const normalizeName = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
+
         const existing = Array.isArray(target.materials) ? (target.materials as SceneNodeMaterial[]) : []
-        const existingById = new Map(existing.map((entry) => [entry.id, entry]))
-        const order = Array.isArray(preset.materialOrder) ? preset.materialOrder : []
-        const orderSet = new Set(order)
 
-        const nextMaterials: SceneNodeMaterial[] = []
-        for (const materialSlotId of order) {
-          const slotId = typeof materialSlotId === 'string' ? materialSlotId.trim() : ''
-          if (!slotId) {
-            continue
-          }
-          const patch = preset.materialPatches?.[slotId]
-          if (!patch) {
-            throw new Error(`地板预设缺少材质槽 patch: ${slotId}`)
+        const ensureSlot = (
+          desiredName: string,
+          fallbackIndex: number,
+          options: { avoidId?: string | null } = {},
+        ): SceneNodeMaterial => {
+          const desired = normalizeName(desiredName)
+          const avoidId = typeof options.avoidId === 'string' && options.avoidId.trim().length ? options.avoidId.trim() : null
+
+          const byName = existing.find((entry) => normalizeName((entry as any).name) === desired && (!avoidId || entry.id !== avoidId))
+          if (byName) {
+            return byName
           }
 
-          const base = existingById.get(slotId) ?? null
+          const byIndex = existing[fallbackIndex]
+          if (byIndex && (!avoidId || byIndex.id !== avoidId)) {
+            return byIndex
+          }
+
+          const created = deps.createNodeMaterial(null, deps.createMaterialProps(), {
+            id: deps.generateUuid(),
+            name: desiredName,
+            type: deps.DEFAULT_SCENE_MATERIAL_TYPE,
+          })
+          existing.push(created)
+          return created
+        }
+
+        const applyPatchToSlot = (
+          slot: SceneNodeMaterial,
+          desiredName: string,
+          patch: FloorPresetMaterialPatch,
+        ): SceneNodeMaterial => {
           const sharedMaterialId = patch.materialId === null ? null : normalizeOptionalAssetId(patch.materialId)
+          const patchName = typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : desiredName
 
           if (sharedMaterialId) {
             const shared = store.materials.find((entry) => entry.id === sharedMaterialId) ?? null
@@ -576,65 +599,66 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
               throw new Error(`地板预设引用的共享材质不存在: ${sharedMaterialId}`)
             }
             if (patch.props && Object.keys(patch.props).length) {
-              throw new Error(`地板预设试图修改共享材质 props: ${slotId}`)
+              throw new Error(`地板预设试图修改共享材质 props: ${slot.id}`)
             }
-            nextMaterials.push(
-              deps.createNodeMaterial(shared.id, shared, {
-                id: slotId,
-                name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : shared.name,
-                type: (shared as any).type,
-              }),
-            )
-            continue
+            return deps.createNodeMaterial(shared.id, shared, {
+              id: slot.id,
+              name: patchName,
+              type: (shared as any).type,
+            })
           }
 
-          const baseEntry = base
-            ? base.materialId
-              ? deps.createNodeMaterial(null, deps.extractMaterialProps(base), { id: base.id, name: base.name, type: (base as any).type })
-              : base
-            : deps.createNodeMaterial(null, deps.createMaterialProps(), {
-                id: slotId,
-                name: typeof patch.name === 'string' && patch.name.trim().length ? patch.name.trim() : `Material ${nextMaterials.length + 1}`,
-                type: typeof patch.type === 'string' && patch.type.trim().length ? (patch.type as any) : deps.DEFAULT_SCENE_MATERIAL_TYPE,
-              })
-
+          const baseProps = deps.extractMaterialProps(slot)
           const overrides = patch.props ? deps.materialUpdateToProps(patch.props as any) : {}
-          const mergedProps = patch.props ? deps.mergeMaterialProps(baseEntry as any, overrides) : deps.extractMaterialProps(baseEntry as any)
-          nextMaterials.push(
-            deps.createNodeMaterial(null, mergedProps, {
-              id: slotId,
-              name:
-                typeof patch.name === 'string' && patch.name.trim().length
-                  ? patch.name.trim()
-                  : typeof (baseEntry as any).name === 'string' && (baseEntry as any).name.trim().length
-                    ? (baseEntry as any).name
-                    : `Material ${nextMaterials.length + 1}`,
-              type:
-                typeof patch.type === 'string' && patch.type.trim().length
-                  ? (patch.type as any)
-                  : (baseEntry as any).type,
-            }),
-          )
+          const mergedProps = patch.props ? deps.mergeMaterialProps(baseProps as any, overrides) : baseProps
+
+          return deps.createNodeMaterial(null, mergedProps, {
+            id: slot.id,
+            name: patchName,
+            type:
+              typeof patch.type === 'string' && patch.type.trim().length
+                ? (patch.type as any)
+                : (slot as any).type ?? deps.DEFAULT_SCENE_MATERIAL_TYPE,
+          })
         }
 
-        // Preserve existing tail slots not mentioned in the preset.
-        for (const entry of existing) {
-          if (!orderSet.has(entry.id)) {
-            nextMaterials.push(entry)
-          }
+        const presetTopSlotId = preset.materialConfig.topBottomMaterialConfigId
+        const presetSideSlotId = preset.materialConfig.sideMaterialConfigId
+        const topPatch = preset.materialPatches?.[presetTopSlotId]
+        const sidePatch = preset.materialPatches?.[presetSideSlotId]
+        if (!topPatch || !sidePatch) {
+          throw new Error('地板预设缺少 TopBottom/Side 材质槽 patch')
         }
+
+        const topSlot = ensureSlot(TOP_BOTTOM_NAME, 0)
+        const sideSlot = ensureSlot(SIDE_NAME, 1, { avoidId: topSlot.id })
+
+        const updatedTop = applyPatchToSlot(topSlot, TOP_BOTTOM_NAME, topPatch)
+        const updatedSide = applyPatchToSlot(sideSlot, SIDE_NAME, sidePatch)
+
+        // Replace in-place (by id), keep unrelated materials, and drop duplicate TopBottom/Side entries.
+        const replacements = new Map<string, SceneNodeMaterial>([
+          [updatedTop.id, updatedTop],
+          [updatedSide.id, updatedSide],
+        ])
+        const nextMaterials = existing
+          .map((entry) => replacements.get(entry.id) ?? entry)
+          .filter((entry) => {
+            const name = normalizeName((entry as any).name)
+            if (name === normalizeName(TOP_BOTTOM_NAME) && entry.id !== updatedTop.id) {
+              return false
+            }
+            if (name === normalizeName(SIDE_NAME) && entry.id !== updatedSide.id) {
+              return false
+            }
+            return true
+          })
 
         if (nextMaterials.length) {
           store.setNodeMaterials(nodeId, nextMaterials)
         }
 
-        // Force override floor material config ids.
-        const topBottomMaterialConfigId = preset.materialConfig.topBottomMaterialConfigId
-        const sideMaterialConfigId = preset.materialConfig.sideMaterialConfigId
-        if (!orderSet.has(topBottomMaterialConfigId) || !orderSet.has(sideMaterialConfigId)) {
-          throw new Error('地板预设 materialConfig 与材质槽列表不一致')
-        }
-
+        // Force override floor material config ids to the updated slots.
         const refreshedAfterMaterials = deps.findNodeById(store.nodes, nodeId)
         const mesh = refreshedAfterMaterials?.dynamicMesh?.type === 'Floor' ? (refreshedAfterMaterials.dynamicMesh as any) : null
         if (!mesh) {
@@ -643,8 +667,8 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
 
         store.updateNodeDynamicMesh(nodeId, {
           ...mesh,
-          topBottomMaterialConfigId,
-          sideMaterialConfigId,
+          topBottomMaterialConfigId: updatedTop.id,
+          sideMaterialConfigId: updatedSide.id,
         })
       }
 

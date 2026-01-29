@@ -10,7 +10,8 @@
           location="bottom"
           :offset="6"
           :open-on-click="false"
-          @update:modelValue="(value) => emit('update:floor-shape-menu-open', value)"
+          :close-on-content-click="false"
+          @update:modelValue="handleFloorShapeMenuModelUpdate"
         >
           <template #activator="{ props: menuProps }">
             <v-btn
@@ -41,7 +42,7 @@
                     size="small"
                     variant="text"
                     :title="shape.label"
-                    :class="shape.id === floorBuildShape ? 'floor-shape-selected' : ''"
+                    :class="['floor-shape-btn', shape.id === floorBuildShape ? 'floor-shape-selected' : '']"
                   >
                     <span v-html="shape.svg" />
                   </v-btn>
@@ -70,7 +71,7 @@
           :offset="6"
           :open-on-click="false"
           :close-on-content-click="false"
-          @update:modelValue="(value) => (wallPresetMenuOpen = value)"
+          @update:modelValue="handleWallPresetMenuModelUpdate"
         >
           <template #activator="{ props: menuProps }">
             <v-btn
@@ -553,6 +554,18 @@ watch(buildToolsDisabled, (disabled) => {
   }
 })
 
+watch(floorShapeMenuOpen, (open) => {
+  if (open && wallPresetMenuOpen.value) {
+    wallPresetMenuOpen.value = false
+  }
+})
+
+watch(wallPresetMenuOpen, (open) => {
+  if (open && floorShapeMenuOpen.value) {
+    emit('update:floor-shape-menu-open', false)
+  }
+})
+
 watch(selectionCount, (count) => {
   if (count === 0) {
     alignMenuOpen.value = false
@@ -693,7 +706,16 @@ function handleWallPresetContextMenu(event: MouseEvent) {
     return
   }
   // Open the in-toolbar wall preset menu
+  emit('update:floor-shape-menu-open', false)
   wallPresetMenuOpen.value = true
+}
+
+function handleWallPresetMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  wallPresetMenuOpen.value = open
+  if (open) {
+    emit('update:floor-shape-menu-open', false)
+  }
 }
 
 function handleWallPresetSelect(asset: any) {
@@ -705,7 +727,6 @@ function handleWallPresetSelect(asset: any) {
 function handleFloorPresetSelect(asset: any) {
   // propagate selection to parent; parent will handle storing brush + activating the floor tool
   emit('select-floor-preset', asset)
-  emit('update:floor-shape-menu-open', false)
 }
 
 function handleFloorShapeContextMenu(event: MouseEvent) {
@@ -715,7 +736,16 @@ function handleFloorShapeContextMenu(event: MouseEvent) {
     return
   }
   // Right-click on floor tool only opens the shape menu; it does not auto-switch tools.
+  wallPresetMenuOpen.value = false
   emit('update:floor-shape-menu-open', true)
+}
+
+function handleFloorShapeMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    wallPresetMenuOpen.value = false
+  }
+  emit('update:floor-shape-menu-open', open)
 }
 
 function handleFloorShapeSelect(shape: FloorBuildShape) {
@@ -724,7 +754,6 @@ function handleFloorShapeSelect(shape: FloorBuildShape) {
     return
   }
   emit('select-floor-build-shape', shape)
-  emit('update:floor-shape-menu-open', false)
 }
 
 function handleScatterEraseButtonClick() {
@@ -915,17 +944,42 @@ function handleClearScatterMenuAction() {
 }
 
 .floor-shape-grid {
-  display: flex;
-  gap: 8px;
-  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 6px 6px 2px;
 }
 .floor-shape-item {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  padding: 0 !important;
+  min-height: unset !important;
+}
+
+.floor-shape-item :deep(.v-list-item__content) {
+  padding: 0 !important;
+}
+
+.floor-shape-item :deep(.v-list-item__spacer) {
+  display: none;
+}
+
+.floor-shape-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.floor-shape-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 .floor-shape-selected {
   color: #4dd0e1;
+  background: rgba(77, 208, 225, 0.12);
+  border-color: rgba(77, 208, 225, 0.28);
 }
 .floor-shape-item span svg {
   display: block;
@@ -987,9 +1041,10 @@ function handleClearScatterMenuAction() {
   margin: 6px 0;
   border-color: rgba(255, 255, 255, 0.1);
 }
-.v-menu > .v-overlay__content > .v-card, .v-menu > .v-overlay__content > .v-sheet, .v-menu > .v-overlay__content > .v-list {
-    background: rgba(18, 22, 28, 0.4);
-    overflow: auto;
-    height: 100%;
+.v-menu > .v-overlay__content > .v-card,
+.v-menu > .v-overlay__content > .v-sheet,
+.v-menu > .v-overlay__content > .v-list {
+  background: rgba(18, 22, 28, 0.4);
+  overflow: auto;
 }
 </style>
