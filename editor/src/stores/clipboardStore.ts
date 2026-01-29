@@ -45,7 +45,7 @@ export const useClipboardStore = defineStore('clipboard', {
   state: () => ({
     clipboard: null as SceneClipboard | null,
     clipboardText: readVirtualClipboardFromStorage() as string | null,
-    persistClipboardText: true,
+    persistClipboardText: false,
   }),
   actions: {
     setClipboard(payload: SceneClipboard | null) {

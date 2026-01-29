@@ -777,6 +777,38 @@ function handleClearScatterMenuAction() {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
+.align-menu {
+  min-width: 280px;
+  padding: 6px;
+  /* Frosted glass shell */
+  background: rgba(18, 22, 28, 0.4) !important;
+  background-color: rgba(18, 22, 28, 0.4) !important;
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.align-menu :deep(.v-list-item) {
+  background: transparent !important;
+}
+
+.rotation-menu {
+  min-width: 260px;
+  padding: 6px;
+  /* Frosted glass shell */
+  background: rgba(18, 22, 28, 0.4) !important;
+  background-color: rgba(18, 22, 28, 0.4) !important;
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.rotation-menu :deep(.v-list-item) {
+  background: transparent !important;
+}
+
 .floor-shape-menu {
   min-width: 220px;
   padding: 6px;
@@ -789,8 +821,9 @@ function handleClearScatterMenuAction() {
 }
 
 .wall-preset-menu {
-  min-width: 280px;
-  padding: 6px;
+  width: 352px;
+  max-width: min(352px, 90vw);
+  padding: 3px;
   /* Frosted glass shell */
   background: rgba(18, 22, 28, 0.4);
   backdrop-filter: blur(14px) saturate(120%);
@@ -800,14 +833,30 @@ function handleClearScatterMenuAction() {
 }
 
 .wall-preset-menu__card {
-  border-radius: 12px;
-  padding: 8px;
+  border-radius: 1px;
+  padding: 3px;
   /* Frosted glass */
   background: rgba(18, 22, 28, 0.44);
   backdrop-filter: blur(14px) saturate(120%);
   -webkit-backdrop-filter: blur(14px) saturate(120%);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+/* Wall preset picker: fixed 4-column grid (72x72 tiles) and fixed scroll height. */
+.wall-preset-menu__card :deep(.asset-picker-list__body) {
+  height: 360px;
+}
+
+.wall-preset-menu__card :deep(.asset-picker-list__grid) {
+  grid-template-columns: repeat(4, 72px) !important;
+  grid-auto-rows: 72px;
+}
+
+.wall-preset-menu__card :deep(.asset-picker-list__tile) {
+  width: 72px;
+  height: 72px;
+  aspect-ratio: auto;
 }
 
 .floor-shape-grid {
@@ -883,5 +932,9 @@ function handleClearScatterMenuAction() {
   margin: 6px 0;
   border-color: rgba(255, 255, 255, 0.1);
 }
-
+.v-menu > .v-overlay__content > .v-card, .v-menu > .v-overlay__content > .v-sheet, .v-menu > .v-overlay__content > .v-list {
+    background: rgba(18, 22, 28, 0.4);
+    overflow: auto;
+    height: 100%;
+}
 </style>

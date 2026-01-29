@@ -3186,11 +3186,14 @@ function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<strin
     if (!node) {
       continue;
     }
-    if (node.sourceAssetId) {
-      if (!map.has(node.sourceAssetId)) {
-        map.set(node.sourceAssetId, []);
+    const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
+    const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null;
+    const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null);
+    if (resolvedAssetId) {
+      if (!map.has(resolvedAssetId)) {
+        map.set(resolvedAssetId, []);
       }
-      map.get(node.sourceAssetId)!.push(node);
+      map.get(resolvedAssetId)!.push(node);
     }
     if (Array.isArray(node.children) && node.children.length) {
       stack.push(...node.children);

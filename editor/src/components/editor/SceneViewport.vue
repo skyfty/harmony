@@ -514,17 +514,27 @@ function applyInstanceLayoutVisibilityAndAssetBinding(object: THREE.Object3D, no
   const active = Boolean(layout && layout.mode === 'grid' && templateAssetId)
 
   if (active && templateAssetId) {
-    if (!userData.__harmonyInstanceLayoutInjectedInstancedAssetId) {
+    const wasInjected = Boolean(userData.__harmonyInstanceLayoutInjectedInstancedAssetId)
+    if (!wasInjected) {
       userData.__harmonyInstanceLayoutPreviousInstancedAssetId = userData.instancedAssetId
       userData.__harmonyInstanceLayoutInjectedInstancedAssetId = true
+      // Default to rendering the template asset until LOD (or other systems) switch it.
+      userData.instancedAssetId = templateAssetId
     }
-    userData.instancedAssetId = templateAssetId
+    userData.__harmonyInstanceLayoutTemplateAssetId = templateAssetId
 
-    const cached = getCachedModelObject(templateAssetId)
+    const currentAssetId = typeof userData.instancedAssetId === 'string' ? userData.instancedAssetId.trim() : ''
+    if (!currentAssetId) {
+      userData.instancedAssetId = templateAssetId
+    }
+
+    const activeAssetId = typeof userData.instancedAssetId === 'string' ? userData.instancedAssetId : templateAssetId
+
+    const cached = getCachedModelObject(activeAssetId)
     if (!cached) {
-      void ensureModelObjectCached(templateAssetId)
+      void ensureModelObjectCached(activeAssetId)
     } else {
-      ensureInstancedMeshesRegistered(templateAssetId)
+      ensureInstancedMeshesRegistered(activeAssetId)
     }
 
     if (!userData.__harmonyInstanceLayoutHiddenMesh) {
@@ -553,6 +563,7 @@ function applyInstanceLayoutVisibilityAndAssetBinding(object: THREE.Object3D, no
       }
       delete userData.__harmonyInstanceLayoutInjectedInstancedAssetId
       delete userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+      delete userData.__harmonyInstanceLayoutTemplateAssetId
       delete userData.__harmonyInstanceLayoutCache
       clearInstanceLayoutMatrixCacheForNode(node.id)
       // Release any layout-authored bindings.
@@ -2651,11 +2662,11 @@ const {
         const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
         if (layout && layout.mode === 'grid') {
           const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)
-          if (templateAssetId && templateAssetId === assetId) {
+          if (templateAssetId) {
             syncInstanceLayoutInstancedMatrices({
               nodeId,
               object,
-              assetId,
+              assetId: typeof assetId === 'string' ? assetId : templateAssetId,
               layout,
               baseMatrixWorld: baseMatrix,
             })
@@ -2732,14 +2743,15 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
 
 function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
   const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+  const baseAssetId = (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null) ?? (node.sourceAssetId ?? null)
   if (!component) {
-    return (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null)
+    return baseAssetId
   }
 
   const props = clampLodComponentProps(component.props)
   const levels = props.levels
   if (!levels.length) {
-    return node.sourceAssetId ?? null
+    return baseAssetId
   }
   object.getWorldPosition(instancedCullingWorldPosition)
   const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
@@ -2753,7 +2765,7 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): stri
     }
   }
 
-  return chosen?.modelAssetId ?? node.sourceAssetId ?? null
+  return chosen?.modelAssetId ?? baseAssetId
 }
 
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
@@ -2826,11 +2838,6 @@ function updateInstancedCullingAndLod(): void {
       return
     }
 
-    const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
-    if (layout && layout.mode === 'grid') {
-      return
-    }
-
     const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
     if (!component || !component.enabled) {
       return
@@ -2868,6 +2875,9 @@ function updateInstancedCullingAndLod(): void {
     if (!node) {
       return
     }
+
+    const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+    const isGridInstanceLayout = Boolean(layout && layout.mode === 'grid')
     const isVisible = visibleIds.has(nodeId)
     if (!isVisible) {
       object.userData.__harmonyCulled = true
@@ -2882,9 +2892,33 @@ function updateInstancedCullingAndLod(): void {
     }
     const currentAssetId = object.userData.instancedAssetId as string | undefined
     if (currentAssetId !== desiredAssetId) {
+      if (isGridInstanceLayout) {
+        const bindings = getModelInstanceBindingsForNode(nodeId)
+        bindings.forEach((binding) => {
+          releaseModelInstanceBinding(binding.bindingId)
+          instanceLayoutMatrixCache.delete(binding.bindingId)
+        })
+        clearInstanceLayoutMatrixCacheForNode(nodeId)
+        if (object.userData) {
+          delete object.userData.__harmonyInstanceLayoutCache
+        }
+        object.userData = {
+          ...(object.userData ?? {}),
+          instancedAssetId: desiredAssetId,
+        }
+        void ensureModelObjectCached(desiredAssetId)
+        syncInstancedTransform(object)
+        return
+      }
+
       applyInstancedLodSwitch(nodeId, object, desiredAssetId)
       return
     }
+    if (isGridInstanceLayout) {
+      syncInstancedTransform(object)
+      return
+    }
+
     const binding = allocateModelInstance(desiredAssetId, nodeId)
     if (!binding) {
       void ensureModelObjectCached(desiredAssetId)

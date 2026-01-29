@@ -2166,7 +2166,10 @@ function resolveLodComponent(
 }
 
 function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
-	const baseAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+	const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
+	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null
+	const baseAssetId = resolveInstanceLayoutTemplateAssetId(layout, sourceAssetId)
 	const component = resolveLodComponent(node)
 	if (!component) {
 		return baseAssetId
