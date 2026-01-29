@@ -11098,6 +11098,8 @@ defineExpose<SceneViewportHandle>({
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :floor-build-shape="floorBuildShape"
+        :floor-preset-asset-id="floorBrushPresetAssetId ?? ''"
+        :wall-preset-asset-id="wallBrushPresetAssetId ?? ''"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"

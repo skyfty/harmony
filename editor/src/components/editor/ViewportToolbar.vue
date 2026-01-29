@@ -56,6 +56,7 @@
                   :active="true"
                   assetType="prefab"
                   :extensions="['floor']"
+                  :asset-id="floorPresetAssetId"
                   :thumbnailSize="30"
                   :showSearch="true"
                   @update:asset="handleFloorPresetSelect"
@@ -94,6 +95,7 @@
                 :active="true"
                 assetType="prefab"
                 :extensions="['wall']"
+                :asset-id="wallPresetAssetId"
                 :thumbnailSize="30"
                 :showSearch="true"
                 @update:asset="handleWallPresetSelect"
@@ -435,6 +437,8 @@ const props = withDefaults(
   scatterEraseMenuOpen: boolean
   floorShapeMenuOpen: boolean
   floorBuildShape: FloorBuildShape
+  floorPresetAssetId?: string
+  wallPresetAssetId?: string
   }>(),
   {
     buildToolsDisabled: false,
@@ -477,6 +481,8 @@ const {
   scatterEraseMenuOpen,
   floorShapeMenuOpen,
   floorBuildShape,
+  floorPresetAssetId,
+  wallPresetAssetId,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -801,11 +807,12 @@ function handleClearScatterMenuAction() {
   flex-direction: row;
   align-items: center;
   gap: 4px;
-  background-color: rgba(18, 21, 26, 0.64);
+  background-color: rgba(18, 21, 26, 0.72);
   border-radius: 12px;
-  padding: 6px 8px;
+  padding: 8px;
+  gap: 4px;
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(77, 208, 225, 0.25);
+  border: 1px solid rgba(77, 208, 225, 0.24);
 }
 
 .toolbar-button {
