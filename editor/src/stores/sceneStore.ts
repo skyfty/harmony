@@ -13437,6 +13437,7 @@ export const useSceneStore = defineStore('scene', {
       parentId?: string | null
       snapToGrid?: boolean
       editorFlags?: SceneNodeEditorFlags
+      appendToParentEnd?: boolean
     }): Promise<SceneNode | null> {
       if (!payload.object && !payload.asset) {
         throw new Error('addModelNode requires either an object or an asset')
@@ -13590,6 +13591,14 @@ export const useSceneStore = defineStore('scene', {
 
       if (node && canUseInstancing && modelGroup) {
         applyInstancedRuntimeToNode(node, modelGroup)
+      }
+
+      // If caller requested the new node be appended to the end of its parent
+      // (useful for drag/drop into the root), reorder the root list so the
+      // newly created node appears at the end instead of the default prepend.
+      if (node && payload.appendToParentEnd === true && targetParentId === null) {
+        this.nodes = [...this.nodes.filter((n) => n.id !== node.id), node]
+        commitSceneSnapshot(this)
       }
 
       return node

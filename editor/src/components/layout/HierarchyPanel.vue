@@ -894,7 +894,7 @@ async function handleAssetDropOnRoot(asset: ProjectAsset): Promise<void> {
     }
     if (asset.type === 'model') {
       await ensureModelAssetCached(asset)
-      const node = await sceneStore.addModelNode({ asset })
+      const node = await sceneStore.addModelNode({ asset, appendToParentEnd: true })
       if (!node) {
         console.warn('Failed to add model asset to hierarchy root', asset.id)
       }
