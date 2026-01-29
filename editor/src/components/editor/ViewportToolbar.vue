@@ -168,7 +168,6 @@
         variant="text"
         class="toolbar-button"
         title="Save as Prefab"
-        v-if="canSavePrefab"
         :disabled="!canSavePrefab || isSavingPrefab"
         @click="handleSavePrefab"
       />
@@ -818,61 +817,26 @@ function handleClearScatterMenuAction() {
 .scatter-erase-menu {
   min-width: 220px;
   padding: 6px;
-  /* Frosted glass shell */
-  background: rgba(18, 22, 28, 0.4);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 .align-menu {
   min-width: 280px;
   padding: 6px;
-  /* Frosted glass shell */
-  background: rgba(18, 22, 28, 0.4) !important;
-  background-color: rgba(18, 22, 28, 0.4) !important;
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-}
-
-.align-menu :deep(.v-list-item) {
-  background: transparent !important;
 }
 
 .rotation-menu {
   min-width: 260px;
   padding: 6px;
-  /* Frosted glass shell */
-  background: rgba(18, 22, 28, 0.4) !important;
-  background-color: rgba(18, 22, 28, 0.4) !important;
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-}
-
-.rotation-menu :deep(.v-list-item) {
-  background: transparent !important;
 }
 
 .floor-shape-menu {
   width: 352px;
   max-width: min(352px, 90vw);
   padding: 6px;
-  /* Frosted glass shell */
-  background: rgba(18, 22, 28, 0.4);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 .floor-shape-menu__divider {
   margin: 10px 0;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .floor-preset-menu__header {
@@ -908,23 +872,11 @@ function handleClearScatterMenuAction() {
   width: 352px;
   max-width: min(352px, 90vw);
   padding: 3px;
-  /* Frosted glass shell */
-  background: rgba(18, 22, 28, 0.4);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 .wall-shape-menu__card {
   border-radius: 1px;
   padding: 3px;
-  /* Frosted glass */
-  background: rgba(18, 22, 28, 0.44);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
 }
 
 /* Wall preset picker: fixed 4-column grid (72x72 tiles) and fixed scroll height. */
@@ -988,23 +940,11 @@ function handleClearScatterMenuAction() {
 .floor-shape-menu__card {
   border-radius: 12px;
   padding: 8px;
-  /* Frosted glass */
-  background: rgba(20, 24, 32, 0.42);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
 }
 
 .scatter-erase-menu__card {
   border-radius: 14px;
   padding: 10px;
-  /* Frosted glass */
-  background: rgba(16, 20, 26, 0.5);
-  backdrop-filter: blur(16px) saturate(115%);
-  -webkit-backdrop-filter: blur(16px) saturate(115%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.36);
 }
 
 .scatter-erase-menu__slider {
@@ -1034,17 +974,9 @@ function handleClearScatterMenuAction() {
 
 .scatter-erase-menu__divider {
   margin: 12px 0;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .align-menu__divider {
   margin: 6px 0;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-.v-menu > .v-overlay__content > .v-card,
-.v-menu > .v-overlay__content > .v-sheet,
-.v-menu > .v-overlay__content > .v-list {
-  background: rgba(18, 22, 28, 0.4);
-  overflow: auto;
 }
 </style>
