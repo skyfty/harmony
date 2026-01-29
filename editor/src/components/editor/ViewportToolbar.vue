@@ -47,6 +47,19 @@
                   </v-btn>
                 </v-list-item>
               </div>
+
+              <v-divider class="floor-shape-menu__divider" />
+
+              <div class="floor-preset-menu__list">
+                <AssetPickerList
+                  :active="true"
+                  assetType="prefab"
+                  :extensions="['floor']"
+                  :thumbnailSize="30"
+                  :showSearch="true"
+                  @update:asset="handleFloorPresetSelect"
+                />
+              </div>
             </div>
           </v-list>
         </v-menu>
@@ -74,51 +87,16 @@
               @contextmenu.prevent.stop="handleWallPresetContextMenu"
             />
           </template>
-          <v-list density="compact" class="wall-preset-menu">
-            <div class="wall-preset-menu__card">
-              <v-tabs
-                v-model="wallPresetMenuTab"
-                density="compact"
-                class="wall-preset-menu__tabs"
-              >
-                <v-tab value="wall">Wall</v-tab>
-                <v-tab value="floor">Floor</v-tab>
-              </v-tabs>
-
-              <v-window v-model="wallPresetMenuTab" class="wall-preset-menu__window">
-                <v-window-item value="wall">
-                  <AssetPickerList
-                    :active="true"
-                    assetType="prefab"
-                    :extensions="['wall']"
-                    :thumbnailSize="30"
-                    :showSearch="true"
-                    @update:asset="handleWallPresetSelect"
-                  />
-                </v-window-item>
-
-                <v-window-item value="floor">
-                  <div class="wall-preset-menu__actions">
-                    <v-btn
-                      density="compact"
-                      size="small"
-                      variant="text"
-                      title="Clear Floor Brush Preset"
-                      @click="() => handleFloorPresetSelect(null)"
-                    >
-                      Clear
-                    </v-btn>
-                  </div>
-                  <AssetPickerList
-                    :active="true"
-                    assetType="prefab"
-                    :extensions="['floor']"
-                    :thumbnailSize="30"
-                    :showSearch="true"
-                    @update:asset="handleFloorPresetSelect"
-                  />
-                </v-window-item>
-              </v-window>
+          <v-list density="compact" class="wall-shape-menu">
+            <div class="wall-shape-menu__card">
+              <AssetPickerList
+                :active="true"
+                assetType="prefab"
+                :extensions="['wall']"
+                :thumbnailSize="30"
+                :showSearch="true"
+                @update:asset="handleWallPresetSelect"
+              />
             </div>
           </v-list>
         </v-menu>
@@ -514,7 +492,6 @@ const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
 const wallPresetMenuOpen = ref(false)
-const wallPresetMenuTab = ref<'wall' | 'floor'>('wall')
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
 
@@ -716,7 +693,6 @@ function handleWallPresetContextMenu(event: MouseEvent) {
     return
   }
   // Open the in-toolbar wall preset menu
-  wallPresetMenuTab.value = 'wall'
   wallPresetMenuOpen.value = true
 }
 
@@ -729,7 +705,7 @@ function handleWallPresetSelect(asset: any) {
 function handleFloorPresetSelect(asset: any) {
   // propagate selection to parent; parent will handle storing brush + activating the floor tool
   emit('select-floor-preset', asset)
-  wallPresetMenuOpen.value = false
+  emit('update:floor-shape-menu-open', false)
 }
 
 function handleFloorShapeContextMenu(event: MouseEvent) {
@@ -854,7 +830,8 @@ function handleClearScatterMenuAction() {
 }
 
 .floor-shape-menu {
-  min-width: 220px;
+  width: 352px;
+  max-width: min(352px, 90vw);
   padding: 6px;
   /* Frosted glass shell */
   background: rgba(18, 22, 28, 0.4);
@@ -864,7 +841,41 @@ function handleClearScatterMenuAction() {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
-.wall-preset-menu {
+.floor-shape-menu__divider {
+  margin: 10px 0;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.floor-preset-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 6px;
+}
+
+.floor-preset-menu__title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Floor preset picker: match wall preset picker layout. */
+.floor-preset-menu__list :deep(.asset-picker-list__body) {
+  height: 360px;
+}
+
+.floor-preset-menu__list :deep(.asset-picker-list__grid) {
+  grid-template-columns: repeat(4, 72px) !important;
+  grid-auto-rows: 72px;
+}
+
+.floor-preset-menu__list :deep(.asset-picker-list__tile) {
+  width: 72px;
+  height: 72px;
+  aspect-ratio: auto;
+}
+
+.wall-shape-menu {
   width: 352px;
   max-width: min(352px, 90vw);
   padding: 3px;
@@ -876,7 +887,7 @@ function handleClearScatterMenuAction() {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
-.wall-preset-menu__card {
+.wall-shape-menu__card {
   border-radius: 1px;
   padding: 3px;
   /* Frosted glass */
@@ -887,31 +898,17 @@ function handleClearScatterMenuAction() {
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
 }
 
-.wall-preset-menu__tabs {
-  margin-bottom: 4px;
-}
-
-.wall-preset-menu__window {
-  padding-top: 2px;
-}
-
-.wall-preset-menu__actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 2px 4px 6px;
-}
-
 /* Wall preset picker: fixed 4-column grid (72x72 tiles) and fixed scroll height. */
-.wall-preset-menu__card :deep(.asset-picker-list__body) {
+.wall-shape-menu__card :deep(.asset-picker-list__body) {
   height: 360px;
 }
 
-.wall-preset-menu__card :deep(.asset-picker-list__grid) {
+.wall-shape-menu__card :deep(.asset-picker-list__grid) {
   grid-template-columns: repeat(4, 72px) !important;
   grid-auto-rows: 72px;
 }
 
-.wall-preset-menu__card :deep(.asset-picker-list__tile) {
+.wall-shape-menu__card :deep(.asset-picker-list__tile) {
   width: 72px;
   height: 72px;
   aspect-ratio: auto;
