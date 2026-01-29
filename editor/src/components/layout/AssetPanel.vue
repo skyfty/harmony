@@ -1109,14 +1109,17 @@ watch(categoryTree, () => {
   }
 })
 
-const searchQuery = ref('')
+const searchQuery = ref<string | null>('')
 const searchResults = ref<ProjectAsset[]>([])
 const searchLoaded = ref(false)
 const searchLoading = ref(false)
 const SEARCH_DEBOUNCE_DELAY = 320
 let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 
-const normalizedSearchQuery = computed(() => searchQuery.value.trim())
+const isSearchVisible = ref(false)
+const searchFieldRef = ref<unknown>(null)
+
+const normalizedSearchQuery = computed(() => (searchQuery.value ?? '').trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
 
@@ -2160,6 +2163,79 @@ function handleSearchClear() {
   searchLoading.value = false
 }
 
+function focusSearchField() {
+  void Promise.resolve().then(() => {
+    const instance = searchFieldRef.value as any
+    if (instance?.focus && typeof instance.focus === 'function') {
+      instance.focus()
+      return
+    }
+    const el = instance?.$el as HTMLElement | undefined
+    const input = el?.querySelector?.('input') as HTMLInputElement | null
+    input?.focus()
+  })
+}
+
+function focusGalleryRoot() {
+  void Promise.resolve().then(() => {
+    galleryRoot.value?.focus?.()
+  })
+}
+
+function showSearchAndFocus() {
+  isSearchVisible.value = true
+  focusSearchField()
+}
+
+function clearAndHideSearch() {
+  handleSearchClear()
+  isSearchVisible.value = false
+  focusGalleryRoot()
+}
+
+function handleSearchIconClick() {
+  if (isSearchVisible.value) {
+    clearAndHideSearch()
+  } else {
+    showSearchAndFocus()
+  }
+}
+
+function handleGalleryKeydown(event: KeyboardEvent) {
+  if (isEditableElement(event.target)) {
+    return
+  }
+
+  if ((isSearchVisible.value || isSearchActive.value) && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    clearAndHideSearch()
+    return
+  }
+
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+
+  if (event.key.length === 1) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!isSearchVisible.value) {
+      isSearchVisible.value = true
+    }
+    searchQuery.value = `${searchQuery.value ?? ''}${event.key}`
+    focusSearchField()
+  }
+}
+
+function handleSearchFieldKeydown(event: KeyboardEvent) {
+  if ((isSearchVisible.value || isSearchActive.value) && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    clearAndHideSearch()
+  }
+}
+
 function assetIcon(type: ProjectAsset['type']) {
   return iconForAssetType(type)
 }
@@ -2333,6 +2409,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           ref="galleryRoot"
           class="project-gallery"
           :class="{ 'is-drop-target': dropOverlayVisible }"
+          tabindex="0"
+          @keydown.capture="handleGalleryKeydown"
           @dragenter="handleGalleryDragEnter"
           @dragover="handleGalleryDragOver"
           @dragleave="handleGalleryDragLeave"
@@ -2370,20 +2448,12 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
             />
             <v-divider vertical class="mx-1" />
             <div class="project-toolbar__search">
-              <v-text-field
-                v-model="searchQuery"
-                :loading="searchLoading"
-                append-inner-icon="mdi-magnify"
+              <v-btn
+                icon='mdi-magnify'
+                variant="text"
                 density="compact"
-                label="Search..."
-                variant="solo"
-                hide-details
-                single-line
-                clearable
-                style="max-width: 350px;"
-                @keydown.enter.stop.prevent="searchAsset"
-                @click:append-inner="searchAsset"
-                @click:clear="handleSearchClear"
+                :title="isSearchVisible ? 'Close search' : 'Search assets'"
+                @click="handleSearchIconClick"
               />
               <AssetFilterControl
                 v-model="tagFilterPanelOpen"
@@ -2407,6 +2477,22 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
             </div>
             <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
           </v-toolbar>
+          <div v-if="isSearchVisible" class="project-gallery-search">
+            <v-text-field
+              ref="searchFieldRef"
+              v-model="searchQuery"
+              :loading="searchLoading"
+              density="compact"
+              variant="solo"
+              hide-details
+              clearable
+              single-line
+              placeholder="Search assets"
+              prepend-inner-icon="mdi-magnify"
+              @keydown="handleSearchFieldKeydown"
+              @click:clear="handleSearchClear"
+            />
+          </div>
           <div class="category-breadcrumbs">
             <div class="category-breadcrumbs__path">
               <template v-for="(crumb, index) in categoryBreadcrumbs" :key="crumb.id ?? ('root-' + index)">
@@ -2642,6 +2728,21 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .project-gallery-scroll {
   flex: 1;
   overflow-y: auto;
+}
+
+/* Gallery is focusable (for type-to-search); remove default focus ring. */
+.project-gallery:focus,
+.project-gallery:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.project-gallery-search {
+  padding: 6px 8px;
+}
+
+.project-gallery-search :deep(.v-field) {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .project-toolbar__search {
