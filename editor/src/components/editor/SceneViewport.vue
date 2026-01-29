@@ -7442,6 +7442,13 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // If the floor shape/preset menu is open, close it when the user starts drawing in the viewport.
+  // Keep the menu open for rapid selection, but once the user clicks the canvas to place points,
+  // it should dismiss to avoid blocking the view.
+  if (event.button === 0 && activeBuildTool.value === 'floor' && floorShapeMenuOpen.value) {
+    floorShapeMenuOpen.value = false
+  }
+
   const tools = handlePointerDownTools(event, {
     activeBuildTool: activeBuildTool.value,
     isAltOverrideActive,
