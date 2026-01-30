@@ -68,6 +68,90 @@ export function projectPointToLineXZ(
   return { distSq: dx * dx + dz * dz, t }
 }
 
+function snapRepairSegmentToExistingEndpoints(
+  segments: any[],
+  repair: {
+    start: { x: number; y: number; z: number }
+    end: { x: number; y: number; z: number }
+    center: { x: number; y: number; z: number }
+  },
+  options: { snapTolSq?: number } = {},
+): { start: any; end: any } {
+  const snapTolSq = Number.isFinite(options.snapTolSq) ? Number(options.snapTolSq) : 1e-4
+
+  const sx = Number(repair.start?.x)
+  const sz = Number(repair.start?.z)
+  const ex = Number(repair.end?.x)
+  const ez = Number(repair.end?.z)
+  const cx = Number(repair.center?.x)
+  const cz = Number(repair.center?.z)
+
+  if (!Number.isFinite(sx + sz + ex + ez + cx + cz)) {
+    return { start: repair.start, end: repair.end }
+  }
+
+  const dx = ex - sx
+  const dz = ez - sz
+  const lenSq = dx * dx + dz * dz
+  if (!Number.isFinite(lenSq) || lenSq <= 1e-12) {
+    return { start: repair.start, end: repair.end }
+  }
+
+  const len = Math.sqrt(lenSq)
+  if (!Number.isFinite(len) || len <= 1e-6) {
+    return { start: repair.start, end: repair.end }
+  }
+
+  const ux = dx / len
+  const uz = dz / len
+  const half = len * 0.5
+
+  let bestStart: any = null
+  let bestEnd: any = null
+
+  const consider = (p: any) => {
+    const px = Number(p?.x)
+    const pz = Number(p?.z)
+    if (!Number.isFinite(px + pz)) {
+      return
+    }
+    const s = (px - cx) * ux + (pz - cz) * uz
+    if (s < -half - 1e-3 || s > half + 1e-3) {
+      return
+    }
+
+    const projX = cx + ux * s
+    const projZ = cz + uz * s
+    const ddx = px - projX
+    const ddz = pz - projZ
+    const distSq = ddx * ddx + ddz * ddz
+    if (!Number.isFinite(distSq) || distSq > snapTolSq) {
+      return
+    }
+
+    if (s <= 0) {
+      if (!bestStart || s > bestStart.s || (Math.abs(s - bestStart.s) < 1e-9 && distSq < bestStart.distSq)) {
+        bestStart = { point: p, s, distSq }
+      }
+    } else {
+      if (!bestEnd || s < bestEnd.s || (Math.abs(s - bestEnd.s) < 1e-9 && distSq < bestEnd.distSq)) {
+        bestEnd = { point: p, s, distSq }
+      }
+    }
+  }
+
+  for (const seg of segments) {
+    if (!seg) continue
+    consider(seg.start)
+    consider(seg.end)
+  }
+
+  return {
+    start: bestStart?.point ?? repair.start,
+    end: bestEnd?.point ?? repair.end,
+  }
+}
+
 function mergeAdjacentWallSegments(segments: any[]): any[] {
   const eps = 1e-6
 
@@ -206,11 +290,17 @@ export function computeWallRepairUnitSegmentForLocalPoint(
   const start = { x: centerX - ux * half, y: centerY, z: centerZ - uz * half }
   const end = { x: centerX + ux * half, y: centerY, z: centerZ + uz * half }
 
+  const snapped = snapRepairSegmentToExistingEndpoints(segments, {
+    start,
+    end,
+    center: { x: centerX, y: centerY, z: centerZ },
+  })
+
   return {
     bestIndex,
     distSq: bestDistSq,
-    start,
-    end,
+    start: snapped.start,
+    end: snapped.end,
     center: { x: centerX, y: centerY, z: centerZ },
   }
 }

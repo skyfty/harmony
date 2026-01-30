@@ -512,7 +512,7 @@ const scatterEraseRadiusModel = computed({
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
 
 const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
-const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Wall Repair (Hold Shift)' : 'Scatter Erase'))
+const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Shift)' : 'Scatter Erase'))
 
 type RotationAxis = 'x' | 'y'
 

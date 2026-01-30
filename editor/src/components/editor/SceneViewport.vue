@@ -431,6 +431,70 @@ type InstanceLayoutMatrixCacheEntry = {
 
 const instanceLayoutMatrixCache = new Map<string, InstanceLayoutMatrixCacheEntry>()
 
+function findNearestInstanceLayoutGridIndexAtWorldPoint(params: {
+  object: THREE.Object3D
+  layout: ReturnType<typeof clampSceneNodeInstanceLayout>
+  hitWorld: THREE.Vector3
+  maxDistanceWorld: number
+}): number | null {
+  const { object, layout, hitWorld } = params
+  if (!layout || layout.mode !== 'grid') {
+    return null
+  }
+
+  const desiredCount = getInstanceLayoutCount(layout)
+  if (desiredCount <= 1) {
+    return null
+  }
+
+  object.updateWorldMatrix(true, true)
+  const userData = object.userData as any
+  const locals = (userData?.__harmonyInstanceLayoutCache?.locals as THREE.Matrix4[] | undefined) ?? null
+  if (!Array.isArray(locals) || !locals.length) {
+    return null
+  }
+
+  const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
+  const localHit = hitWorld.clone().applyMatrix4(inv)
+
+  const tempPosLocal = new THREE.Vector3()
+  const tempPosWorld = new THREE.Vector3()
+  const maxDist = Math.max(0.01, Number.isFinite(params.maxDistanceWorld) ? params.maxDistanceWorld : 0)
+  const maxDistSq = maxDist * maxDist
+
+  let bestIndex: number | null = null
+  let bestDistSq = Number.POSITIVE_INFINITY
+
+  const limit = Math.min(desiredCount, locals.length)
+  for (let index = 1; index < limit; index += 1) {
+    const localMatrix = locals[index]
+    if (!localMatrix) {
+      continue
+    }
+    tempPosLocal.setFromMatrixPosition(localMatrix)
+    const distSq = tempPosLocal.distanceToSquared(localHit)
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq
+      bestIndex = index
+    }
+  }
+
+  if (bestIndex === null) {
+    return null
+  }
+
+  // Guard against snapping to a far-away instance when the cursor is outside the grid.
+  const bestLocal = locals[bestIndex]
+  if (bestLocal) {
+    tempPosWorld.setFromMatrixPosition(bestLocal).applyMatrix4(object.matrixWorld)
+    if (tempPosWorld.distanceToSquared(hitWorld) > maxDistSq) {
+      return null
+    }
+  }
+
+  return bestIndex
+}
+
 function buildModelInstanceBindingKey(binding: { slots: Array<{ mesh: THREE.InstancedMesh; index: number }> }): string {
   return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
 }
@@ -1400,7 +1464,11 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
-const wallRepairModeActive = computed(() => scatterEraseModeActive.value && selectedNodeIsWall.value && scatterEraseRestoreModifierActive.value)
+// Shift modifier in scatter-erase mode means "repair/restore".
+// - Walls: repair a segment (hammer)
+// - InstanceLayout: restore erased instances
+const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
+const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
@@ -1549,7 +1617,16 @@ const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.015
 const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
 const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
 
-const WALL_ERASE_UNIT_LENGTH_M = 0.5
+const WALL_ERASE_UNIT_LENGTH_FALLBACK_M = 0.5
+
+const wallEraseUnitLengthM = computed(() => {
+  const value = Number(scatterEraseRadius.value)
+  if (!Number.isFinite(value)) {
+    return WALL_ERASE_UNIT_LENGTH_FALLBACK_M
+  }
+  // Avoid degenerate intervals.
+  return Math.max(1e-3, Math.abs(value))
+})
 
 // Wall erase hover uses the same visual language as InstanceLayout erase hover:
 // cyan for erase, green for restore; depthTest off so it's always readable.
@@ -1629,8 +1706,10 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   let previewHeight = 0
   let previewWidth = 0
 
+  const unitLenM = wallEraseUnitLengthM.value
+
   if (isRepair) {
-    const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+    const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
     if (!repair) {
       clearWallEraseHoverHighlight()
       return false
@@ -1649,7 +1728,7 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
       previewWidth = Math.max(0, w)
     }
   } else {
-    const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+    const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
     if (!interval) {
       clearWallEraseHoverHighlight()
       return false
@@ -2044,7 +2123,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
 
-  // When a wall node is selected, show a 0.5m erase interval preview on that wall.
+  // When a wall node is selected, show an erase/repair preview on that wall.
   // Procedural walls are not necessarily part of instanced pick targets.
   if (selectedNodeIsWall.value) {
     if (repairHoverGroup.visible) {
@@ -2161,6 +2240,78 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     // Hover visuals are rendered directly; no need to feed outline selection targets.
 
     return true
+  }
+
+  // InstanceLayout grid restore: erased instances are not raycastable, so when Shift is held
+  // we snap to the nearest grid index under the cursor (selected node only).
+  if (scatterEraseRestoreModifierActive.value) {
+    const selectedNodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (!selectedNodeId) {
+      if (repairHoverGroup.visible) {
+        clearRepairHoverHighlight(true)
+      }
+      return false
+    }
+    const selectedNode = selectedNodeId ? findSceneNode(sceneStore.nodes, selectedNodeId) : null
+    if (selectedNode && (selectedNode as any).instanceLayout) {
+      const layout = clampSceneNodeInstanceLayout((selectedNode as any).instanceLayout)
+      const object = selectedNodeId ? (objectMap.get(selectedNodeId) ?? null) : null
+      if (object && layout.mode === 'grid') {
+        const planeHit = new THREE.Vector3()
+        if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+          const index = findNearestInstanceLayoutGridIndexAtWorldPoint({
+            object,
+            layout,
+            hitWorld: planeHit,
+            maxDistanceWorld: Math.max(0.25, Number(scatterEraseRadius.value) || 0.25),
+          })
+
+          const userData = object.userData as any
+          const locals = (userData?.__harmonyInstanceLayoutCache?.locals as THREE.Matrix4[] | undefined) ?? null
+          const templateMesh = (userData?.__harmonyInstanceLayoutHiddenMesh as THREE.Mesh | undefined) ?? null
+
+          if (typeof index === 'number' && index >= 1 && Array.isArray(locals) && locals[index] && templateMesh?.isMesh) {
+            const key = `instance-layout-restore:${selectedNodeId}`
+            const hoverMaterial = instancedHoverRestoreMaterial
+
+            let proxy = repairHoverProxies.get(key)
+            if (!proxy) {
+              const created = new THREE.Mesh(templateMesh.geometry, hoverMaterial)
+              created.renderOrder = 1000
+              created.matrixAutoUpdate = false
+              repairHoverProxies.set(key, created)
+              repairHoverGroup.add(created)
+              proxy = created
+            } else {
+              if (proxy.geometry !== templateMesh.geometry) {
+                proxy.geometry = templateMesh.geometry
+              }
+              if (proxy.material !== hoverMaterial) {
+                proxy.material = hoverMaterial
+              }
+              proxy.renderOrder = 1000
+              proxy.matrixAutoUpdate = false
+              if (proxy.parent !== repairHoverGroup) {
+                repairHoverGroup.add(proxy)
+              }
+            }
+
+            object.updateWorldMatrix(true, true)
+            proxy.matrix.copy(object.matrixWorld).multiply(locals[index] as THREE.Matrix4)
+            proxy.visible = true
+
+            repairHoverProxies.forEach((other, otherKey) => {
+              if (otherKey !== key) {
+                other.visible = false
+              }
+            })
+
+            repairHoverGroup.visible = true
+            return true
+          }
+        }
+      }
+    }
   }
 
   if (repairHoverGroup.visible) {
@@ -2339,8 +2490,10 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
+      const unitLenM = wallEraseUnitLengthM.value
+
       if (wallRepairModeActive.value) {
-        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
         if (!repair) {
           return false
         }
@@ -2375,7 +2528,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         const nextMesh = { ...(node as any).dynamicMesh, segments: patched }
         sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
       } else {
-        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
         if (!interval) {
           return false
         }
@@ -2488,25 +2641,26 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
 
       const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
+      const unitLenM = wallEraseUnitLengthM.value
 
       let key = `${selectedWallId}:wall:hit`
       if (wallRepairModeActive.value) {
-        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
         if (!repair) {
           return { handled: false, erasedKey: null }
         }
         // Quantize in local space to avoid spamming the same spot during drag.
-        const q = Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M * 0.5)
+        const q = Math.max(1e-6, unitLenM * 0.5)
         const bx = Math.round(repair.center.x / q)
         const bz = Math.round(repair.center.z / q)
         key = `${selectedWallId}:wall:repair:${bx}:${bz}`
       } else {
-        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
         if (!interval) {
           return { handled: false, erasedKey: null }
         }
         // Bucket key aligned to chain-origin grid.
-        const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M))
+        const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, unitLenM))
         key = `${selectedWallId}:wall:${interval.chain.startIndex}-${interval.chain.endIndex}:${bucket}`
       }
       if (options?.skipKey && key === options.skipKey) {
@@ -2546,6 +2700,41 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     const handled = eraseInstancedBinding(nodeId, bindingId, intersection.point ? (intersection.point as THREE.Vector3) : null)
     clearRepairHoverHighlight(true)
     return { handled, erasedKey: key }
+  }
+
+  // InstanceLayout grid restore: erased instances are not raycastable, so allow Shift-click
+  // to restore the nearest grid index for the selected node.
+  if (scatterEraseRestoreModifierActive.value) {
+    const selectedNodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (!selectedNodeId) {
+      return { handled: false, erasedKey: null }
+    }
+    const selectedNode = selectedNodeId ? findSceneNode(sceneStore.nodes, selectedNodeId) : null
+    if (selectedNode && (selectedNode as any).instanceLayout) {
+      const layout = clampSceneNodeInstanceLayout((selectedNode as any).instanceLayout)
+      const object = selectedNodeId ? (objectMap.get(selectedNodeId) ?? null) : null
+      if (object && layout.mode === 'grid') {
+        const planeHit = new THREE.Vector3()
+        if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+          const index = findNearestInstanceLayoutGridIndexAtWorldPoint({
+            object,
+            layout,
+            hitWorld: planeHit,
+            maxDistanceWorld: Math.max(0.25, Number(scatterEraseRadius.value) || 0.25),
+          })
+          if (typeof index === 'number' && index >= 1) {
+            const bindingId = getInstanceLayoutBindingId(selectedNodeId, index)
+            const key = `${selectedNodeId}:instance-layout:${index}`
+            if (options?.skipKey && key === options.skipKey) {
+              return { handled: false, erasedKey: null }
+            }
+            const handled = eraseInstancedBinding(selectedNodeId, bindingId, planeHit)
+            clearRepairHoverHighlight(true)
+            return { handled, erasedKey: handled ? key : null }
+          }
+        }
+      }
+    }
   }
 
   return { handled: false, erasedKey: null }
@@ -11670,7 +11859,7 @@ defineExpose<SceneViewportHandle>({
         :can-erase-scatter="canUseScatterEraseTool"
         :canClearAllScatterInstances="selectedNodeIsGround"
         :scatter-erase-mode-active="scatterEraseModeActive"
-        :scatter-erase-repair-active="wallRepairModeActive"
+        :scatter-erase-repair-active="scatterRepairModifierActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
@@ -11723,9 +11912,8 @@ defineExpose<SceneViewportHandle>({
           'viewport-canvas',
           buildToolCursorClass,
           {
-            'cursor-scatter-hammer': wallRepairModeActive,
-            'cursor-scatter-erase': scatterEraseModeActive && !wallRepairModeActive && !scatterEraseRestoreModifierActive,
-            'cursor-scatter-restore': scatterEraseModeActive && !wallRepairModeActive && scatterEraseRestoreModifierActive,
+            'cursor-scatter-hammer': scatterRepairModifierActive,
+            'cursor-scatter-erase': scatterEraseModeActive && !scatterRepairModifierActive,
           },
         ]"
       />
