@@ -273,14 +273,14 @@
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
-            icon="mdi-broom"
+            :icon="scatterEraseButtonIcon"
             density="compact"
             size="small"
             class="toolbar-button"
             :color="scatterEraseModeActive ? 'primary' : undefined"
             :variant="scatterEraseModeActive ? 'flat' : 'text'"
             :disabled="!canEraseScatterEffective"
-            title="Scatter Erase"
+            :title="scatterEraseButtonTitle"
             @click="handleScatterEraseButtonClick"
             @contextmenu.prevent.stop="handleScatterEraseContextMenu"
           />
@@ -294,9 +294,9 @@
               </div>
               <v-slider
                 v-model="scatterEraseRadiusModel"
-                :min="0.1"
+                :min="0.5"
                 :max="SCATTER_BRUSH_RADIUS_MAX"
-                :step="0.1"
+                :step="0.5"
                 density="compact"
                 track-color="rgba(255,255,255,0.25)"
                 color="primary"
@@ -433,6 +433,7 @@ const props = withDefaults(
   activeBuildTool: BuildTool | null
   buildToolsDisabled?: boolean
   scatterEraseModeActive: boolean
+  scatterEraseRepairActive?: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
   floorShapeMenuOpen: boolean
@@ -443,6 +444,7 @@ const props = withDefaults(
   {
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
+    scatterEraseRepairActive: false,
   },
 )
 
@@ -475,6 +477,7 @@ const {
   canEraseScatter,
   canClearAllScatterInstances,
   scatterEraseModeActive,
+  scatterEraseRepairActive,
   activeBuildTool,
   buildToolsDisabled,
   scatterEraseRadius,
@@ -507,6 +510,9 @@ const scatterEraseRadiusModel = computed({
 })
 
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
+
+const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
+const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Wall Repair (Hold Shift)' : 'Scatter Erase'))
 
 type RotationAxis = 'x' | 'y'
 

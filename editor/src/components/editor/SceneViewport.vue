@@ -147,8 +147,10 @@ import { useTerrainGridController } from './useTerrainGridController'
 import { createWallBuildTool } from './WallBuildTool'
 import {
   computeWallEraseUnitIntervalAlignedForLocalPoint,
+  computeWallRepairUnitSegmentForLocalPoint,
   getWallLocalPointAtChainDistance,
   applyEraseIntervalToSegments,
+  insertWallRepairSegmentIntoSegments,
   segmentLengthXZ,
 } from './wallSegmentUtils'
 import { createRoadBuildTool } from './RoadBuildTool'
@@ -1398,6 +1400,7 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
+const wallRepairModeActive = computed(() => scatterEraseModeActive.value && selectedNodeIsWall.value && scatterEraseRestoreModifierActive.value)
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
@@ -1620,29 +1623,88 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
   const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
-  const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
-  if (!interval) {
+  const isRepair = wallRepairModeActive.value
+  let worldA: THREE.Vector3 | null = null
+  let worldB: THREE.Vector3 | null = null
+  let previewHeight = 0
+  let previewWidth = 0
+
+  if (isRepair) {
+    const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+    if (!repair) {
+      clearWallEraseHoverHighlight()
+      return false
+    }
+
+    worldA = new THREE.Vector3(repair.start.x, repair.start.y, repair.start.z).applyMatrix4(object.matrixWorld)
+    worldB = new THREE.Vector3(repair.end.x, repair.end.y, repair.end.z).applyMatrix4(object.matrixWorld)
+
+    const nearest = segments[repair.bestIndex] ?? null
+    const h = Number((nearest as any)?.height)
+    const w = Number((nearest as any)?.width)
+    if (Number.isFinite(h)) {
+      previewHeight = Math.max(0, h)
+    }
+    if (Number.isFinite(w)) {
+      previewWidth = Math.max(0, w)
+    }
+  } else {
+    const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+    if (!interval) {
+      clearWallEraseHoverHighlight()
+      return false
+    }
+
+    const localA = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeStart)
+    const localB = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeEnd)
+    if (!localA || !localB) {
+      clearWallEraseHoverHighlight()
+      return false
+    }
+
+    worldA = new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(object.matrixWorld)
+    worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
+
+    const eps = 1e-6
+    let cursor = 0
+    for (let i = interval.chain.startIndex; i <= interval.chain.endIndex; i += 1) {
+      const seg = segments[i]
+      if (!seg) {
+        continue
+      }
+      const segLen = segmentLengthXZ(seg)
+      const segStart = cursor
+      const segEnd = cursor + segLen
+      cursor = segEnd
+      if (!Number.isFinite(segLen) || segLen <= eps) {
+        continue
+      }
+      if (segEnd <= interval.rangeStart + eps || segStart >= interval.rangeEnd - eps) {
+        continue
+      }
+      const h = Number((seg as any)?.height)
+      const w = Number((seg as any)?.width)
+      if (Number.isFinite(h)) {
+        previewHeight = Math.max(previewHeight, h)
+      }
+      if (Number.isFinite(w)) {
+        previewWidth = Math.max(previewWidth, w)
+      }
+    }
+  }
+
+  if (!worldA || !worldB) {
     clearWallEraseHoverHighlight()
     return false
   }
 
-  const localA = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeStart)
-  const localB = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeEnd)
-  if (!localA || !localB) {
-    clearWallEraseHoverHighlight()
-    return false
-  }
-
-  const worldA = new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(object.matrixWorld)
-  const worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
-
-  // Match InstanceLayout erase hover color scheme.
-  const hoverFillMaterial = scatterEraseRestoreModifierActive.value ? instancedHoverRestoreMaterial : instancedHoverMaterial
+  // Visual language: cyan for erase, amber for wall repair.
+  const hoverFillMaterial = isRepair ? instancedHoverRestoreMaterial : instancedHoverMaterial
   if (wallEraseHoverFill.material !== hoverFillMaterial) {
     wallEraseHoverFill.material = hoverFillMaterial
   }
   wallEraseHoverFill.material.opacity = 0.65
-  wallEraseHoverEdgeMaterial.color.set(scatterEraseRestoreModifierActive.value ? 0x43a047 : 0x4dd0e1)
+  wallEraseHoverEdgeMaterial.color.set(isRepair ? 0xffc107 : 0x4dd0e1)
 
   wallEraseHoverDirHelper.copy(worldB).sub(worldA)
   // Walls are vertical; force direction to XZ so the overlay doesn't tilt.
@@ -1657,34 +1719,6 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   wallEraseHoverDirHelper.multiplyScalar(1 / len)
 
   // Determine a representative wall height/width for the highlight volume.
-  let previewHeight = 0
-  let previewWidth = 0
-  const eps = 1e-6
-  let cursor = 0
-  for (let i = interval.chain.startIndex; i <= interval.chain.endIndex; i += 1) {
-    const seg = segments[i]
-    if (!seg) {
-      continue
-    }
-    const segLen = segmentLengthXZ(seg)
-    const segStart = cursor
-    const segEnd = cursor + segLen
-    cursor = segEnd
-    if (!Number.isFinite(segLen) || segLen <= eps) {
-      continue
-    }
-    if (segEnd <= interval.rangeStart + eps || segStart >= interval.rangeEnd - eps) {
-      continue
-    }
-    const h = Number((seg as any)?.height)
-    const w = Number((seg as any)?.width)
-    if (Number.isFinite(h)) {
-      previewHeight = Math.max(previewHeight, h)
-    }
-    if (Number.isFinite(w)) {
-      previewWidth = Math.max(previewWidth, w)
-    }
-  }
   if (!Number.isFinite(previewHeight) || previewHeight <= 0) {
     previewHeight = WALL_DEFAULT_HEIGHT
   }
@@ -2037,6 +2071,14 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       return true
     }
 
+    if (wallRepairModeActive.value) {
+      const planeHit = new THREE.Vector3()
+      if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+        updateWallEraseHoverHighlight(selectedWallId, planeHit)
+        return true
+      }
+    }
+
     clearWallEraseHoverHighlight()
     return false
   }
@@ -2287,24 +2329,62 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
     return eraseContinuousInstance(nodeId, bindingId)
   }
 
-  // Wall dynamic mesh: erase a segment interval by splitting WallDynamicMesh.segments.
-  // The erase interval is a fixed 0.5m segment centered at the hit position (±0.25m),
-  // defined in arc-length along the hit chain.
+  // Wall dynamic mesh: erase or repair a 0.5m segment.
+  // - erase: remove a snapped 0.5m interval along the hit chain
+  // - repair (Shift): add back a 0.5m segment centered at the pointer position
   if ((node as any).dynamicMesh?.type === 'Wall' && hitPointWorld) {
     const object = objectMap.get(nodeId) ?? null
     const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
     if (object && segments.length) {
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
-      const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
-      if (!interval) {
-        return false
-      }
 
-      const { chain, rangeStart, rangeEnd } = interval
-      const merged = applyEraseIntervalToSegments(segments, chain, rangeStart, rangeEnd)
-      const nextMesh = { ...(node as any).dynamicMesh, segments: merged }
-      sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+      if (wallRepairModeActive.value) {
+        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        if (!repair) {
+          return false
+        }
+
+        const wallComponent = (node as any).components?.[WALL_COMPONENT_TYPE] as
+          | SceneNodeComponentState<WallComponentProps>
+          | undefined
+        const fallbackProps = clampWallProps(wallComponent?.props ?? null)
+        const nearest = segments[repair.bestIndex] ?? null
+
+        const height = Number.isFinite(Number((nearest as any)?.height))
+          ? Number((nearest as any).height)
+          : fallbackProps.height
+        const width = Number.isFinite(Number((nearest as any)?.width))
+          ? Number((nearest as any).width)
+          : fallbackProps.width
+        const thickness = Number.isFinite(Number((nearest as any)?.thickness))
+          ? Number((nearest as any).thickness)
+          : fallbackProps.thickness
+
+        const base = nearest ? { ...(nearest as any) } : ({} as any)
+        const patchSeg = {
+          ...base,
+          start: repair.start,
+          end: repair.end,
+          height,
+          width,
+          thickness,
+        }
+
+        const patched = insertWallRepairSegmentIntoSegments(segments, patchSeg, { preferredIndex: repair.bestIndex })
+        const nextMesh = { ...(node as any).dynamicMesh, segments: patched }
+        sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+      } else {
+        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        if (!interval) {
+          return false
+        }
+
+        const { chain, rangeStart, rangeEnd } = interval
+        const merged = applyEraseIntervalToSegments(segments, chain, rangeStart, rangeEnd)
+        const nextMesh = { ...(node as any).dynamicMesh, segments: merged }
+        sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+      }
 
       clearRepairHoverHighlight(true)
       updateOutlineSelectionTargets()
@@ -2392,25 +2472,48 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
       const wallHits = raycaster.intersectObject(wallObject, true)
       wallHits.sort((a, b) => a.distance - b.distance)
       const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
-      if (!first?.point) {
+
+      const hitPointWorld = first?.point
+        ? (first.point as THREE.Vector3)
+        : wallRepairModeActive.value
+          ? (() => {
+              const planeHit = new THREE.Vector3()
+              return raycaster.ray.intersectPlane(groundPlane, planeHit) ? planeHit : null
+            })()
+          : null
+
+      if (!hitPointWorld) {
         return { handled: false, erasedKey: null }
       }
 
       const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
-      const localPoint = (first.point as THREE.Vector3).clone().applyMatrix4(inv)
-      const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
-      if (!interval) {
-        return { handled: false, erasedKey: null }
-      }
+      const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
-      // Bucket key aligned to chain-origin grid.
-      const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M))
-      const key = `${selectedWallId}:wall:${interval.chain.startIndex}-${interval.chain.endIndex}:${bucket}`
+      let key = `${selectedWallId}:wall:hit`
+      if (wallRepairModeActive.value) {
+        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        if (!repair) {
+          return { handled: false, erasedKey: null }
+        }
+        // Quantize in local space to avoid spamming the same spot during drag.
+        const q = Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M * 0.5)
+        const bx = Math.round(repair.center.x / q)
+        const bz = Math.round(repair.center.z / q)
+        key = `${selectedWallId}:wall:repair:${bx}:${bz}`
+      } else {
+        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+        if (!interval) {
+          return { handled: false, erasedKey: null }
+        }
+        // Bucket key aligned to chain-origin grid.
+        const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M))
+        key = `${selectedWallId}:wall:${interval.chain.startIndex}-${interval.chain.endIndex}:${bucket}`
+      }
       if (options?.skipKey && key === options.skipKey) {
         return { handled: false, erasedKey: null }
       }
 
-      const handled = eraseInstancedBinding(selectedWallId, selectedWallId, first.point as THREE.Vector3)
+      const handled = eraseInstancedBinding(selectedWallId, selectedWallId, hitPointWorld)
       return { handled, erasedKey: handled ? key : null }
     }
   }
@@ -11567,6 +11670,7 @@ defineExpose<SceneViewportHandle>({
         :can-erase-scatter="canUseScatterEraseTool"
         :canClearAllScatterInstances="selectedNodeIsGround"
         :scatter-erase-mode-active="scatterEraseModeActive"
+        :scatter-erase-repair-active="wallRepairModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
@@ -11619,8 +11723,9 @@ defineExpose<SceneViewportHandle>({
           'viewport-canvas',
           buildToolCursorClass,
           {
-            'cursor-scatter-erase': scatterEraseModeActive && !scatterEraseRestoreModifierActive,
-            'cursor-scatter-restore': scatterEraseModeActive && scatterEraseRestoreModifierActive,
+            'cursor-scatter-hammer': wallRepairModeActive,
+            'cursor-scatter-erase': scatterEraseModeActive && !wallRepairModeActive && !scatterEraseRestoreModifierActive,
+            'cursor-scatter-restore': scatterEraseModeActive && !wallRepairModeActive && scatterEraseRestoreModifierActive,
           },
         ]"
       />
@@ -11772,6 +11877,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-scatter-restore,
 .viewport-canvas.cursor-scatter-restore:active {
   cursor: url('/cursors/scatter-restore.svg') 4 20, crosshair !important;
+}
+
+.viewport-canvas.cursor-scatter-hammer,
+.viewport-canvas.cursor-scatter-hammer:active {
+  cursor: url('/cursors/scatter-hammer.svg') 4 20, crosshair !important;
 }
 
 .protagonist-preview {
