@@ -35,5 +35,7 @@ export class CameraControlsOrbit extends OrbitControls {
       RIGHT: 'ArrowRight',
       BOTTOM: 'ArrowDown',
     }
+
+    this.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE
   }
 }

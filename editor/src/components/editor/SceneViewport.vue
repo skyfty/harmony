@@ -1595,7 +1595,7 @@ const vertexOverlayHintMarkerGeometry = new THREE.SphereGeometry(1, 18, 12)
 const vertexOverlayHintSourceMarkerMaterial = new THREE.MeshBasicMaterial({
   color: 0xffffff,
   transparent: true,
-  opacity: 0.9,
+  opacity: 0.35,
   depthTest: false,
   depthWrite: false,
   blending: THREE.NormalBlending,
@@ -1605,7 +1605,7 @@ vertexOverlayHintSourceMarkerMaterial.toneMapped = false
 const vertexOverlayHintTargetMarkerMaterial = new THREE.MeshBasicMaterial({
   color: 0x00e5ff,
   transparent: true,
-  opacity: 0.95,
+  opacity: 0.4,
   depthTest: false,
   depthWrite: false,
   blending: THREE.AdditiveBlending,
@@ -1635,7 +1635,7 @@ vertexOverlayGroup.add(vertexOverlayHintTargetMarker)
 const placementOverlayBestBeamMaterial = new THREE.MeshBasicMaterial({
   color: 0x00e5ff,
   transparent: true,
-  opacity: 0.8,
+  opacity: 0.28,
   depthTest: false,
   depthWrite: false,
   blending: THREE.AdditiveBlending,
@@ -1646,7 +1646,7 @@ placementOverlayBestBeamMaterial.toneMapped = false
 const placementOverlayBestBeamOutlineMaterial = new THREE.MeshBasicMaterial({
   color: 0x000000,
   transparent: true,
-  opacity: 0.22,
+  opacity: 0.06,
   depthTest: false,
   depthWrite: false,
   blending: THREE.NormalBlending,
@@ -1671,7 +1671,7 @@ placementOverlayBestBeam.frustumCulled = false
 const placementOverlaySecondaryBeamMaterial = new THREE.MeshBasicMaterial({
   color: 0xffc107,
   transparent: true,
-  opacity: 0.5,
+  opacity: 0.18,
   depthTest: false,
   depthWrite: false,
   blending: THREE.AdditiveBlending,
@@ -1682,7 +1682,7 @@ placementOverlaySecondaryBeamMaterial.toneMapped = false
 const placementOverlaySecondaryBeamOutlineMaterial = new THREE.MeshBasicMaterial({
   color: 0x000000,
   transparent: true,
-  opacity: 0.18,
+  opacity: 0.05,
   depthTest: false,
   depthWrite: false,
   blending: THREE.NormalBlending,
@@ -1747,12 +1747,12 @@ const vertexOverlayHintDirHelper = new THREE.Vector3()
 const vertexOverlayHintMidHelper = new THREE.Vector3()
 const vertexOverlayHintQuatHelper = new THREE.Quaternion()
 // Bigger + outlined so it stays readable across scenes.
-const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.12
-const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.045
-const VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER = 2.1
-const VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER = 3.0
-const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.75
-const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.2
+const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.04
+const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.01
+const VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER = 1.6
+const VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER = 1.6
+const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.22
+const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.06
 
 const WALL_ERASE_UNIT_LENGTH_FALLBACK_M = 0.5
 
@@ -2141,7 +2141,7 @@ const updatePlacementSideSnapHintPulse = (nowMs: number) => {
   const markerRadius = radius * VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER
 
   if (placementOverlayBestBeam.visible) {
-    placementOverlayBestBeamMaterial.opacity = 0.8 + 0.2 * pulse
+    placementOverlayBestBeamMaterial.opacity = 0.28 + 0.06 * pulse
     placementOverlayBestBeam.scale.x = radius
     placementOverlayBestBeam.scale.z = radius
     placementOverlayBestBeamOutline.scale.x = outlineRadius
@@ -2151,7 +2151,7 @@ const updatePlacementSideSnapHintPulse = (nowMs: number) => {
   }
 
   if (placementOverlaySecondaryBeam.visible) {
-    placementOverlaySecondaryBeamMaterial.opacity = 0.4 + 0.15 * pulse
+    placementOverlaySecondaryBeamMaterial.opacity = 0.18 + 0.04 * pulse
     placementOverlaySecondaryBeam.scale.x = radius
     placementOverlaySecondaryBeam.scale.z = radius
     placementOverlaySecondaryBeamOutline.scale.x = outlineRadius
