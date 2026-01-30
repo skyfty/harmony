@@ -410,9 +410,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <div v-if="!loading && !filteredAssets.length" class="asset-picker-list__empty">
-        No assets match the criteria
-      </div>
     </div>
   </div>
 </template>

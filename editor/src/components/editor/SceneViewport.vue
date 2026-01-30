@@ -2128,7 +2128,14 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         return normalizeGaps(out)
       }
 
-      const distSqPointToSegmentXZ = (px: number, pz: number, ax: number, az: number, bx: number, bz: number): number => {
+      const projectPointToSegmentXZ = (
+        px: number,
+        pz: number,
+        ax: number,
+        az: number,
+        bx: number,
+        bz: number,
+      ): { distSq: number; t: number } => {
         const abx = bx - ax
         const abz = bz - az
         const apx = px - ax
@@ -2137,7 +2144,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         if (!Number.isFinite(abLenSq) || abLenSq <= 1e-12) {
           const dx = px - ax
           const dz = pz - az
-          return dx * dx + dz * dz
+          return { distSq: dx * dx + dz * dz, t: 0 }
         }
         let t = (apx * abx + apz * abz) / abLenSq
         if (t < 0) t = 0
@@ -2146,13 +2153,14 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         const cz = az + abz * t
         const dx = px - cx
         const dz = pz - cz
-        return dx * dx + dz * dz
+        return { distSq: dx * dx + dz * dz, t }
       }
 
       let bestIndex = -1
       let bestDistSq = Number.POSITIVE_INFINITY
       let bestSegStartDist = 0
       let bestSegEndDist = 0
+      let bestT = 0
       let cursorDist = 0
       for (let i = 0; i < segments.length; i += 1) {
         const seg = segments[i]
@@ -2169,10 +2177,11 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         const dx = bx - ax
         const dz = bz - az
         const segLen = Math.sqrt(dx * dx + dz * dz)
-        const d2 = distSqPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
-        if (d2 < bestDistSq) {
-          bestDistSq = d2
+        const projected = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+        if (projected.distSq < bestDistSq) {
+          bestDistSq = projected.distSq
           bestIndex = i
+          bestT = projected.t
           bestSegStartDist = cursorDist
           bestSegEndDist = cursorDist + (Number.isFinite(segLen) ? segLen : 0)
         }
@@ -2181,9 +2190,21 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
       }
 
       if (bestIndex >= 0) {
-        const rangeStart = Math.min(bestSegStartDist, bestSegEndDist)
-        const rangeEnd = Math.max(bestSegStartDist, bestSegEndDist)
-        if (rangeEnd - rangeStart > 1e-9) {
+        const segStart = Math.min(bestSegStartDist, bestSegEndDist)
+        const segEnd = Math.max(bestSegStartDist, bestSegEndDist)
+        const segLen = Math.max(0, segEnd - segStart)
+        const wallTotalLen = Math.max(0, cursorDist)
+
+        // Use the erase brush radius to remove a local range around the hit point.
+        // This makes the tool behave like "erase some tiles" instead of removing a whole segment.
+        const rawRadius = (scatterEraseRadius as any)?.value
+        const radius = typeof rawRadius === 'number' && Number.isFinite(rawRadius) ? Math.max(0, rawRadius) : 0.5
+        const hitDist = segStart + Math.max(0, Math.min(1, bestT)) * segLen
+
+        const rangeStart = Math.max(0, hitDist - radius)
+        const rangeEnd = Math.min(wallTotalLen, hitDist + radius)
+
+        if (rangeEnd - rangeStart > 1e-6) {
           const currentGaps = normalizeGaps((node as any).dynamicMesh?.gapRanges)
           const nextGaps = scatterEraseRestoreModifierActive.value
             ? subtractGap(currentGaps, { start: rangeStart, end: rangeEnd })

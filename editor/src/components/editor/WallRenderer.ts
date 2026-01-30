@@ -993,11 +993,23 @@ export function createWallRenderer(options: WallRendererOptions) {
   }
 
   function syncWallContainer(container: THREE.Object3D, node: SceneNode, signatureKey: string): void {
+    // ============================
+    // 该函数职责（重要）：
+    // - 根据 SceneNode 上的 wall 组件配置、动态网格数据、以及模型资源是否已就绪，
+    //   决定当前 wall 的渲染方式：
+    //   1) 纯程序生成的墙体（procedural wallGroup）
+    //   2) 基于模型资源的实例化渲染（instanced models: body/head/corner/caps）
+    // - 在资源未加载完成时，使用程序墙体作为“可视回退”，避免编辑器里出现空白。
+    // - 维护与拾取（pick）相关的代理对象：实例化模式下启用 pick proxy；否则移除。
+    // - 同步 / 清理 instanced 实例与 bounds 缓存（用于拾取/框选等）。
+    // ============================
     if (node.dynamicMesh?.type !== 'Wall') {
       return
     }
 
     if (isWallDragActive(node.id)) {
+      // 拖拽过程中会走一套“临时实例矩阵”的实时更新逻辑（见 syncWallDragInstancedMatrices）。
+      // 为避免拖拽手感抖动/覆盖临时状态，这里直接跳过常规同步。
       return
     }
 
@@ -1005,15 +1017,28 @@ export function createWallRenderer(options: WallRendererOptions) {
       | SceneNodeComponentState<WallComponentProps>
       | undefined
 
+    // 空气墙（AirWall）：编辑器里通常需要“可区分、半透明”的视觉提示。
+    // 同时它不应该实例化加载/渲染各种模型资源（否则会变成实心墙体的模型）。
     const isAirWall = Boolean(wallComponent?.props?.isAirWall)
 
-    const wallProps = wallComponent ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined) : null
+    // 统一规整 wall props（clampWallProps 会负责缺省值/范围约束）。
+    // smoothing 同时用于：
+    // - 程序墙体的几何平滑（createWallGroup/updateWallGroup）
+    // - 动态网格签名（signature）用于判断是否需要重建/更新几何。
+    const wallProps = wallComponent
+      ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
+      : null
     const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
 
+    // 各类实例化模型资源：
+    // - body/head：沿墙段平铺的主体模型（可以按段高度进行 Y 方向缩放）。
+    // - endCaps：首尾端盖（仅非闭合路径时才会放置）。
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const headAssetId = wallComponent?.props?.headAssetId ?? null
     const bodyEndCapAssetId = wallComponent?.props?.bodyEndCapAssetId ?? null
     const headEndCapAssetId = wallComponent?.props?.headEndCapAssetId ?? null
+    // 拐角模型规则：根据相邻墙段形成的“内角”在规则表中匹配对应模型。
+    // 规则既可以配置 body 的拐角模型，也可以配置 head 的拐角模型。
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
       ? wallComponent!.props!.cornerModels!
       : []
@@ -1031,14 +1056,31 @@ export function createWallRenderer(options: WallRendererOptions) {
           .filter((id) => Boolean(id)),
       ),
     ).sort()
+    // definition：节点当前的 wall 动态网格（由用户编辑/运行时生成）。
+    // effectiveDefinition：在渲染前，将 wall props（width/height/thickness）覆盖到每段 segment 上，
+    // 以保证程序墙体与实例化计算使用一致的尺寸数据。
     const definition = node.dynamicMesh as WallDynamicMesh
     const effectiveDefinition = resolveWallEffectiveDefinition(definition, wallProps)
-    const canHaveCornerJoints = (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0) && definition.segments.length >= 2
-    const wantsInstancing = Boolean(bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints)
+
+    // 拐角 joint 需要至少两段才可能存在。
+    const canHaveCornerJoints =
+      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0) && definition.segments.length >= 2
+
+    // wantsInstancing：只要配置了任何一种实例化相关资源（body/head/caps/corners），
+    // 就尝试走实例化渲染（资源未就绪时会回退到程序墙体）。
+    const wantsInstancing = Boolean(
+      bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints,
+    )
 
     const userData = container.userData ?? (container.userData = {})
 
-    // Air walls should not render instanced assets. Keep procedural wall visible for editor feedback.
+    // ============================
+    // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）
+    // ============================
+    // 设计意图：空气墙用于“碰撞/导航/逻辑”而非真实墙体外观。
+    // 因此：
+    // - 不渲染任何实例化模型
+    // - 始终保留程序墙体，且以半透明方式显示
     if (isAirWall) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
@@ -1057,6 +1099,9 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    // ============================
+    // 2) 完全不需要实例化：使用程序墙体
+    // ============================
     if (!wantsInstancing) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
@@ -1077,7 +1122,9 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-
+    // ============================
+    // 3) 需要实例化：先检查资源是否就绪
+    // ============================
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = Boolean(bodyAssetId && !getCachedModelObject(bodyAssetId))
     const needsHeadLoad = Boolean(headAssetId && !getCachedModelObject(headAssetId))
@@ -1113,6 +1160,11 @@ export function createWallRenderer(options: WallRendererOptions) {
       scheduleWallAssetLoad(headEndCapAssetId, node.id, signatureKey)
     }
 
+    // 任何一种资源还没进入缓存（getCachedModelObject 为空）就认为“未就绪”。
+    // 这里的策略是：
+    // - 触发对应资源的异步加载（scheduleWallAssetLoad）
+    // - 立即回退到程序墙体，让用户可见并可继续编辑
+    // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
     if (needsBodyLoad || needsHeadLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsBodyCapLoad || needsHeadCapLoad) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
@@ -1131,7 +1183,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    // Assets are ready: attempt instanced rendering.
+    // ============================
+    // 4) 资源已就绪：进入实例化渲染
+    // ============================
+    // primaryAssetId 用于标记“本节点当前的实例化主资源”，便于调试/拾取代理/缓存。
     const primaryAssetId = bodyAssetId
       ?? headAssetId
       ?? (bodyCornerAssetIds[0] ?? null)
@@ -1141,20 +1196,28 @@ export function createWallRenderer(options: WallRendererOptions) {
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
+    // 计算实例化整体 bounds（用于编辑器拾取/框选等）。
+    // 这里会将每个实例的局部包围盒（模型 boundingBox）通过 localMatrix 变换后并入大 bbox。
     wallInstancedBoundsBox.makeEmpty()
     let hasWallBounds = false
 
+    // hasBindings：只要至少生成了一组实例化绑定（body/head/corner/caps 任意一种），
+    // 就认为实例化渲染“有效”。如果没有任何绑定，说明实例化并不适用（例如：
+    // 只有 cornerModels 但墙段不足/规则未命中等），需要回退显示程序墙体。
     let hasBindings = false
 
     if (bodyAssetId) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
+        // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
         const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'body')
         if (localMatrices.length > 0) {
+          // bounds 合并：将每个实例的变换 bbox 并入整体 bbox。
           for (const localMatrix of localMatrices) {
             expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
             hasWallBounds = true
           }
+          // 将局部矩阵提交给 continuousInstancedModel（底层会生成/更新实例化绑定）。
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
             assetId: bodyAssetId,
@@ -1171,6 +1234,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (headAssetId) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
+        // head：通常用于墙顶装饰/压顶，沿墙段铺设。
         const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox, 'head')
         if (localMatrices.length > 0) {
           for (const localMatrix of localMatrices) {
@@ -1191,6 +1255,9 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     {
+      // corner joints（拐角件）与端盖：
+      // - 按 assetId 分桶生成 localMatrices（同一种拐角模型可能出现多次）。
+      // - primaryCornerAssetId 主要用于“没有 bodyAssetId 时，选哪一个实例使用 nodeId 作为 index0”。
       const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
         const group = getCachedModelObject(assetId)
         return group?.boundingBox ?? null
@@ -1228,6 +1295,7 @@ export function createWallRenderer(options: WallRendererOptions) {
           }
 
           const useNodeIdForIndex0 = !bodyAssetId && assetId === primaryCornerAssetId
+          // 对每一种拐角模型分别提交实例化矩阵。
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
             assetId,
@@ -1241,6 +1309,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
 
       if (bodyEndCapAssetId) {
+        // body 端盖：仅在非闭合路径时才会生成矩阵（computeWallEndCapLocalMatrices 内部判断）。
         const useNodeIdForIndex0 = !bodyAssetId && !primaryCornerAssetId
         const group = getCachedModelObject(bodyEndCapAssetId)
         if (group) {
@@ -1264,6 +1333,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
 
       if (headEndCapAssetId) {
+        // head 端盖：同上。
         const group = getCachedModelObject(headEndCapAssetId)
         if (group) {
           const localMatrices = computeWallEndCapLocalMatrices(definition, group.boundingBox, 'head')
@@ -1286,6 +1356,12 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
+    // ============================
+    // 5) 没有任何绑定：实例化不适用 → 回退程序墙体
+    // ============================
+    // 例如：
+    // - 只有 cornerModels 但规则未命中/段数不足
+    // - 动态网格退化（段长度≈0 导致矩阵为空）
     if (!hasBindings) {
       // No instanced geometry applicable (e.g. single segment w/ only corner models): keep procedural wall visible.
       releaseModelInstancesForNode(node.id)
@@ -1305,9 +1381,13 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
-    // Instanced rendering is active: remove the procedural wall group.
+    // ============================
+    // 6) 实例化生效：移除程序墙体，更新 bounds 与 pick proxy
+    // ============================
+    // 注意：这里移除的是“程序生成的 wallGroup”，不是模型资源实例。
     removeWallGroup(container)
 
+    // 将 bounds 写入 userData，供外部（拾取、框选、Gizmo 等）快速读取。
     if (hasWallBounds && !wallInstancedBoundsBox.isEmpty()) {
       userData.instancedBounds = {
         min: [wallInstancedBoundsBox.min.x, wallInstancedBoundsBox.min.y, wallInstancedBoundsBox.min.z],
@@ -1318,6 +1398,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     if (hasBindings) {
+      // 有实例化绑定时，确保 pick proxy 存在（用于命中测试/选中）。
       options.ensureInstancedPickProxy(container, node)
     } else {
       options.removeInstancedPickProxy(container)
