@@ -16,6 +16,7 @@ export class CameraControlsOrbit extends OrbitControls {
     // Smooth camera movement.
     this.enableDamping = false
     this.dampingFactor = 0.08
+    this.zoomToCursor = true
 
 
     // Speeds.
