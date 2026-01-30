@@ -6276,7 +6276,10 @@ function syncControlsConstraintsAndSpeeds() {
     ? clampNumber(Math.max(radiusUsed * 2000, 5000), 200, 200000)
     : clampNumber(Math.max(radiusUsed * 2000, 500), 50, 200000)
 
-  mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.95))
+  // Relax the inward clamp so repeated dolly-in doesn't immediately get blocked.
+  // Use a smaller fraction of the current distance (instead of 0.95) so there's
+  // a meaningful inward range before hitting the minimum constraint.
+  mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
   mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
 
   // Scale input sensitivity down as the camera gets far from the focused object.
