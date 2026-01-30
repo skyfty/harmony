@@ -1,0 +1,257 @@
+import * as THREE from 'three'
+
+export type WallChainRange = { startIndex: number; endIndex: number }
+
+export function distanceSqXZ(ax: number, az: number, bx: number, bz: number): number {
+  const dx = ax - bx
+  const dz = az - bz
+  return dx * dx + dz * dz
+}
+
+export function projectPointToSegmentXZ(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+): { distSq: number; t: number } {
+  const abx = bx - ax
+  const abz = bz - az
+  const apx = px - ax
+  const apz = pz - az
+  const abLenSq = abx * abx + abz * abz
+  if (!Number.isFinite(abLenSq) || abLenSq <= 1e-12) {
+    const dx = px - ax
+    const dz = pz - az
+    return { distSq: dx * dx + dz * dz, t: 0 }
+  }
+  let t = (apx * abx + apz * abz) / abLenSq
+  if (t < 0) t = 0
+  if (t > 1) t = 1
+  const cx = ax + abx * t
+  const cz = az + abz * t
+  const dx = px - cx
+  const dz = pz - cz
+  return { distSq: dx * dx + dz * dz, t }
+}
+
+export function segmentLengthXZ(seg: any): number {
+  const ax = Number(seg?.start?.x)
+  const az = Number(seg?.start?.z)
+  const bx = Number(seg?.end?.x)
+  const bz = Number(seg?.end?.z)
+  if (!Number.isFinite(ax + az + bx + bz)) {
+    return 0
+  }
+  const dx = bx - ax
+  const dz = bz - az
+  const len = Math.sqrt(dx * dx + dz * dz)
+  return Number.isFinite(len) ? len : 0
+}
+
+export function interpolatePoint(a: any, b: any, t: number) {
+  return {
+    x: Number(a?.x) + (Number(b?.x) - Number(a?.x)) * t,
+    y: Number(a?.y) + (Number(b?.y) - Number(a?.y)) * t,
+    z: Number(a?.z) + (Number(b?.z) - Number(a?.z)) * t,
+  }
+}
+
+export function splitWallSegmentsIntoChains(segments: any[]): WallChainRange[] {
+  const chains: WallChainRange[] = []
+  let startIndex = 0
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]
+    if (!seg) {
+      continue
+    }
+    const prev = i > startIndex ? segments[i - 1] : null
+    if (prev) {
+      const distSq = distanceSqXZ(
+        Number((prev as any)?.end?.x),
+        Number((prev as any)?.end?.z),
+        Number((seg as any)?.start?.x),
+        Number((seg as any)?.start?.z),
+      )
+      if (!Number.isFinite(distSq) || distSq > 1e-8) {
+        chains.push({ startIndex, endIndex: i - 1 })
+        startIndex = i
+      }
+    }
+  }
+  chains.push({ startIndex, endIndex: Math.max(startIndex, segments.length - 1) })
+  return chains
+}
+
+export function computeWallEraseIntervalForLocalPoint(
+  segments: any[],
+  localPoint: THREE.Vector3,
+  halfLenM: number,
+): { chain: WallChainRange; rangeStart: number; rangeEnd: number; chainTotalLen: number } | null {
+  let bestIndex = -1
+  let bestDistSq = Number.POSITIVE_INFINITY
+  let bestT = 0
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const ax = Number(seg.start?.x)
+    const az = Number(seg.start?.z)
+    const bx = Number(seg.end?.x)
+    const bz = Number(seg.end?.z)
+    if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
+      continue
+    }
+    const projected = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+    if (projected.distSq < bestDistSq) {
+      bestDistSq = projected.distSq
+      bestIndex = i
+      bestT = projected.t
+    }
+  }
+
+  if (bestIndex < 0) {
+    return null
+  }
+
+  const chains = splitWallSegmentsIntoChains(segments)
+  const chain = chains.find((c) => bestIndex >= c.startIndex && bestIndex <= c.endIndex) ?? null
+  if (!chain) {
+    return null
+  }
+
+  let chainCursorDist = 0
+  let segStartDist = 0
+  let segEndDist = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    const len = seg ? segmentLengthXZ(seg) : 0
+    const start = chainCursorDist
+    const end = chainCursorDist + len
+    if (i === bestIndex) {
+      segStartDist = start
+      segEndDist = end
+      break
+    }
+    chainCursorDist = end
+  }
+
+  let chainTotalLen = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    chainTotalLen += segments[i] ? segmentLengthXZ(segments[i]) : 0
+  }
+
+  const segLen = Math.max(0, segEndDist - segStartDist)
+  const hitDist = segStartDist + Math.max(0, Math.min(1, bestT)) * segLen
+  const rangeStart = Math.max(0, hitDist - halfLenM)
+  const rangeEnd = Math.min(chainTotalLen, hitDist + halfLenM)
+
+  if (rangeEnd - rangeStart <= 1e-6) {
+    return null
+  }
+
+  return { chain, rangeStart, rangeEnd, chainTotalLen }
+}
+
+export function getWallLocalPointAtChainDistance(
+  segments: any[],
+  chain: WallChainRange,
+  dist: number,
+): { x: number; y: number; z: number } | null {
+  const target = Math.max(0, dist)
+  let cursor = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const len = segmentLengthXZ(seg)
+    const segStart = cursor
+    const segEnd = cursor + len
+    if (len > 1e-6 && target <= segEnd + 1e-6) {
+      const t = Math.max(0, Math.min(1, (target - segStart) / len))
+      return interpolatePoint(seg.start, seg.end, t)
+    }
+    cursor = segEnd
+  }
+  const last = segments[chain.endIndex]
+  if (last) {
+    return { x: Number(last.end?.x), y: Number(last.end?.y), z: Number(last.end?.z) }
+  }
+  return null
+}
+
+export function applyEraseIntervalToSegments(
+  segments: any[],
+  chain: WallChainRange,
+  rangeStart: number,
+  rangeEnd: number,
+): any[] {
+  const nextSegments: any[] = []
+  const eps = 1e-6
+
+  // Copy segments before the chain.
+  for (let i = 0; i < chain.startIndex; i += 1) {
+    nextSegments.push(segments[i])
+  }
+
+  // Split segments within the chain by the erase interval.
+  let cursor = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const len = segmentLengthXZ(seg)
+    const segStart = cursor
+    const segEnd = cursor + len
+    cursor = segEnd
+    if (!Number.isFinite(len) || len <= eps) continue
+    const overlapStart = Math.max(segStart, rangeStart)
+    const overlapEnd = Math.min(segEnd, rangeEnd)
+    if (overlapEnd <= overlapStart + eps) {
+      nextSegments.push(seg)
+      continue
+    }
+    if (overlapStart > segStart + eps) {
+      const t1 = (overlapStart - segStart) / len
+      nextSegments.push({ ...seg, start: interpolatePoint(seg.start, seg.end, 0), end: interpolatePoint(seg.start, seg.end, t1) })
+    }
+    if (overlapEnd < segEnd - eps) {
+      const t0 = (overlapEnd - segStart) / len
+      nextSegments.push({ ...seg, start: interpolatePoint(seg.start, seg.end, t0), end: interpolatePoint(seg.start, seg.end, 1) })
+    }
+  }
+
+  // Copy segments after the chain.
+  for (let i = chain.endIndex + 1; i < segments.length; i += 1) {
+    nextSegments.push(segments[i])
+  }
+
+  // Merge adjacent, contiguous segments to keep the list minimal.
+  const merged: any[] = []
+  for (const seg of nextSegments) {
+    const current = seg
+    const prev = merged[merged.length - 1]
+    if (!prev) {
+      merged.push(current)
+      continue
+    }
+    const prevLen = segmentLengthXZ(prev)
+    const curLen = segmentLengthXZ(current)
+    if (prevLen <= eps) {
+      merged.pop()
+      merged.push(current)
+      continue
+    }
+    if (curLen <= eps) {
+      continue
+    }
+    const contSq = distanceSqXZ(Number(prev?.end?.x), Number(prev?.end?.z), Number(current?.start?.x), Number(current?.start?.z))
+    const sameProps = Number(prev?.height) === Number(current?.height) && Number(prev?.width) === Number(current?.width) && Number(prev?.thickness) === Number(current?.thickness)
+    if (Number.isFinite(contSq) && contSq <= 1e-8 && sameProps) {
+      merged[merged.length - 1] = { ...prev, end: current.end }
+      continue
+    }
+    merged.push(current)
+  }
+
+  return merged
+}
