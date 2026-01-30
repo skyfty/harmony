@@ -53,11 +53,6 @@ const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
 
 type WallSegment = WallDynamicMesh['segments'] extends Array<infer T> ? T : never
 
-type WallGapRange = {
-  start: number
-  end: number
-}
-
 function wallDistanceSqXZ(a: { x: number; z: number }, b: { x: number; z: number }): number {
   const dx = a.x - b.x
   const dz = a.z - b.z
@@ -71,157 +66,26 @@ function wallSegmentLengthXZ(segment: WallSegment): number {
   return Number.isFinite(len) ? len : 0
 }
 
-function normalizeWallGapRanges(raw: unknown, totalLength: number): WallGapRange[] {
-  const rangesRaw = Array.isArray(raw) ? raw : []
-  const normalized: WallGapRange[] = []
-
-  for (const entry of rangesRaw) {
-    const startRaw = Number((entry as any)?.start)
-    const endRaw = Number((entry as any)?.end)
-    if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
-      continue
-    }
-
-    let start = Math.max(0, startRaw)
-    let end = Math.max(0, endRaw)
-    if (end < start) {
-      const tmp = start
-      start = end
-      end = tmp
-    }
-
-    if (totalLength > 0) {
-      start = Math.min(totalLength, start)
-      end = Math.min(totalLength, end)
-    }
-
-    if (end - start <= WALL_EPSILON) {
-      continue
-    }
-
-    normalized.push({ start, end })
-  }
-
-  normalized.sort((a, b) => a.start - b.start)
-
-  // Merge overlaps for determinism.
-  const merged: WallGapRange[] = []
-  for (const range of normalized) {
-    const prev = merged[merged.length - 1]
-    if (!prev) {
-      merged.push({ ...range })
-      continue
-    }
-    if (range.start <= prev.end + WALL_EPSILON) {
-      prev.end = Math.max(prev.end, range.end)
-      continue
-    }
-    merged.push({ ...range })
-  }
-
-  return merged
-}
-
-function interpolateWallPoint(
-  a: { x: number; y: number; z: number },
-  b: { x: number; y: number; z: number },
-  t: number,
-) {
-  return {
-    x: a.x + (b.x - a.x) * t,
-    y: a.y + (b.y - a.y) * t,
-    z: a.z + (b.z - a.z) * t,
-  }
-}
-
-function buildWallVisibleChainDefinitions(definition: WallDynamicMesh): WallDynamicMesh[] {
+function buildWallChainDefinitions(definition: WallDynamicMesh): WallDynamicMesh[] {
   const rawSegments = Array.isArray(definition.segments) ? (definition.segments as WallSegment[]) : []
   if (!rawSegments.length) {
     return []
   }
 
-  const lengths = rawSegments.map(wallSegmentLengthXZ)
-  const totalLength = lengths.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0)
-  const gaps = normalizeWallGapRanges((definition as any).gapRanges, totalLength)
-  if (!gaps.length) {
-    return [definition]
-  }
-
-  const visibleSegments: WallSegment[] = []
-  let cursor = 0
-  let gapIndex = 0
-
-  for (let i = 0; i < rawSegments.length; i += 1) {
-    const segment = rawSegments[i]!
-    const len = lengths[i] ?? 0
-    const segStart = cursor
-    const segEnd = cursor + len
-    cursor = segEnd
-
+  // NOTE: Walls are allowed to be discontinuous. Split the polyline into open chains
+  // whenever the previous end does not connect to the next start.
+  const chains: WallSegment[][] = []
+  let current: WallSegment[] = []
+  for (const seg of rawSegments) {
+    const len = wallSegmentLengthXZ(seg)
     if (len <= WALL_EPSILON) {
       continue
     }
-
-    // Advance gap index to first gap that may overlap this segment.
-    while (gapIndex < gaps.length && gaps[gapIndex]!.end <= segStart + WALL_EPSILON) {
-      gapIndex += 1
-    }
-
-    const overlaps: WallGapRange[] = []
-    for (let j = gapIndex; j < gaps.length; j += 1) {
-      const gap = gaps[j]!
-      if (gap.start >= segEnd - WALL_EPSILON) {
-        break
-      }
-      if (gap.end <= segStart + WALL_EPSILON) {
-        continue
-      }
-      overlaps.push(gap)
-    }
-
-    if (!overlaps.length) {
-      visibleSegments.push(segment)
-      continue
-    }
-
-    let localCursor = segStart
-    for (const gap of overlaps) {
-      const a = Math.max(segStart, gap.start)
-      const b = Math.min(segEnd, gap.end)
-      if (a - localCursor > WALL_EPSILON) {
-        const t0 = (localCursor - segStart) / len
-        const t1 = (a - segStart) / len
-        visibleSegments.push({
-          ...(segment as any),
-          start: interpolateWallPoint(segment.start as any, segment.end as any, t0),
-          end: interpolateWallPoint(segment.start as any, segment.end as any, t1),
-        } as WallSegment)
-      }
-      localCursor = Math.max(localCursor, b)
-      if (segEnd - localCursor <= WALL_EPSILON) {
-        break
-      }
-    }
-    if (segEnd - localCursor > WALL_EPSILON) {
-      const t0 = (localCursor - segStart) / len
-      visibleSegments.push({
-        ...(segment as any),
-        start: interpolateWallPoint(segment.start as any, segment.end as any, t0),
-        end: interpolateWallPoint(segment.start as any, segment.end as any, 1),
-      } as WallSegment)
-    }
-  }
-
-  if (!visibleSegments.length) {
-    return []
-  }
-
-  const chains: WallSegment[][] = []
-  let current: WallSegment[] = []
-  for (const seg of visibleSegments) {
     const prev = current[current.length - 1]
     if (prev && wallDistanceSqXZ(prev.end as any, seg.start as any) > WALL_EPSILON) {
-      chains.push(current)
+      if (current.length) {
+        chains.push(current)
+      }
       current = []
     }
     current.push(seg)
@@ -1068,7 +932,7 @@ function rebuildWallGroup(
 ) {
   clearGroupContent(group)
 
-  const chainDefinitions = buildWallVisibleChainDefinitions(definition)
+  const chainDefinitions = buildWallChainDefinitions(definition)
   if (!chainDefinitions.length) {
     return
   }

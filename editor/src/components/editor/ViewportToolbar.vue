@@ -279,7 +279,7 @@
             class="toolbar-button"
             :color="scatterEraseModeActive ? 'primary' : undefined"
             :variant="scatterEraseModeActive ? 'flat' : 'text'"
-            :disabled="!canEraseScatter"
+            :disabled="!canEraseScatterEffective"
             title="Scatter Erase"
             @click="handleScatterEraseButtonClick"
             @contextmenu.prevent.stop="handleScatterEraseContextMenu"
@@ -550,6 +550,23 @@ watch(canEraseScatter, (enabled) => {
   }
 })
 
+const canEraseScatterEffective = computed(() => {
+  // Enable scatter erase either when parent allows it, or when the active node is a Wall dynamic mesh.
+  try {
+    const node = activeNode.value as any
+    const isWall = Boolean(node && node.dynamicMesh && (node.dynamicMesh as any).type === 'Wall')
+    return Boolean(canEraseScatter.value) || isWall
+  } catch (_e) {
+    return Boolean(canEraseScatter.value)
+  }
+})
+
+watch(canEraseScatterEffective, (enabled) => {
+  if (!enabled) {
+    emit('update:scatter-erase-menu-open', false)
+  }
+})
+
 watch(buildToolsDisabled, (disabled) => {
   if (disabled && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
@@ -770,7 +787,7 @@ function handleScatterEraseButtonClick() {
 function handleScatterEraseContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
-  if (!canEraseScatter.value) {
+  if (!canEraseScatterEffective.value) {
     return
   }
   emit('update:scatter-erase-menu-open', true)

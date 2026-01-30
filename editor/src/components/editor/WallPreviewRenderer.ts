@@ -135,7 +135,6 @@ function buildWallPreviewDefinition(
       width: normalized.width,
       thickness: normalized.thickness,
     })),
-    gapRanges: [],
   }
 
   return { center, definition }

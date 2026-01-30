@@ -89,7 +89,6 @@ export function computeWallDynamicMeshSignature(
 ): string {
   const serialized = stableSerialize({
     segments: definition.segments ?? [],
-    gapRanges: (definition as any).gapRanges ?? [],
     smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
   })
   return hashString(serialized)
@@ -211,6 +210,32 @@ function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
   const dz = a.z - b.z
   return dx * dx + dz * dz
+}
+
+function splitWallSegmentsIntoChains(segments: WallDynamicMesh['segments']): WallDynamicMesh['segments'][] {
+  const chains: WallDynamicMesh['segments'][] = []
+  let current: WallDynamicMesh['segments'] = []
+
+  for (const seg of segments) {
+    const prev = current[current.length - 1]
+    if (prev) {
+      wallSyncStartHelper.set(prev.end.x, prev.end.y, prev.end.z)
+      wallSyncEndHelper.set(seg.start.x, seg.start.y, seg.start.z)
+      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > 1e-8) {
+        if (current.length) {
+          chains.push(current)
+        }
+        current = []
+      }
+    }
+    current.push(seg)
+  }
+
+  if (current.length) {
+    chains.push(current)
+  }
+
+  return chains
 }
 
 function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z' = 'x'): THREE.Quaternion {
@@ -787,22 +812,28 @@ export function createWallRenderer(options: WallRendererOptions) {
       pushMatrix(selection.assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 
-    for (let i = 0; i < definition.segments.length - 1; i += 1) {
-      const current = definition.segments[i]!
-      const next = definition.segments[i + 1]!
+    const chains = splitWallSegmentsIntoChains(definition.segments)
+    for (const chain of chains) {
+      for (let i = 0; i < chain.length - 1; i += 1) {
+        const current = chain[i]!
+        const next = chain[i + 1]!
 
-      wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
-      buildCorner(current, next, wallSyncPosHelper)
-    }
+        wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
+        buildCorner(current, next, wallSyncPosHelper)
+      }
 
-    // Closed loop: add corner for last -> first.
-    const first = definition.segments[0]!
-    const last = definition.segments[definition.segments.length - 1]!
-    wallSyncStartHelper.set(first.start.x, first.start.y, first.start.z)
-    wallSyncEndHelper.set(last.end.x, last.end.y, last.end.z)
-    if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
-      wallSyncPosHelper.copy(wallSyncEndHelper)
-      buildCorner(last, first, wallSyncPosHelper)
+      // Closed loop (within this chain): add corner for last -> first.
+      const first = chain[0]
+      const last = chain[chain.length - 1]
+      if (!first || !last) {
+        continue
+      }
+      wallSyncStartHelper.set(first.start.x, first.start.y, first.start.z)
+      wallSyncEndHelper.set(last.end.x, last.end.y, last.end.z)
+      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
+        wallSyncPosHelper.copy(wallSyncEndHelper)
+        buildCorner(last, first, wallSyncPosHelper)
+      }
     }
 
     return { matricesByAssetId, primaryAssetId, mode: options.mode }
@@ -814,15 +845,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       return matrices
     }
 
-    // Determine if the path is closed: first.start == last.end (XZ plane).
-    const firstSeg = definition.segments[0]!
-    const lastSeg = definition.segments[definition.segments.length - 1]!
-    wallSyncStartHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
-    wallSyncEndHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
-    const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8
-    if (closed) {
-      return matrices
-    }
+    const chains = splitWallSegmentsIntoChains(definition.segments)
 
     const minAlongAxis = bounds.min.z
     const templateHeight = resolveWallModelHeight(bounds)
@@ -839,44 +862,60 @@ export function createWallRenderer(options: WallRendererOptions) {
       return fallback.normalize()
     }
 
-    // Start cap points outward: opposite of the first segment direction.
-    const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
-    if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const bodyHeight = resolveWallBodyHeightForSegment(firstSeg)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-      wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
-      const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
-      wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
-      wallSyncLocalOffsetHelper.applyQuaternion(quat)
-      const baselineY = firstSeg.start.y
-      const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
-        : (baselineY + bodyHeight - minY)
-      wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
-      wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-      wallSyncScaleHelper.set(1, scaleY, 1)
-      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-      matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
-    }
+    for (const chain of chains) {
+      if (!chain.length) {
+        continue
+      }
 
-    // End cap points outward: along the last segment direction.
-    const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
-    if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
-      const bodyHeight = resolveWallBodyHeightForSegment(lastSeg)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-      wallSyncLocalDirHelper.copy(lastDir)
-      const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
-      wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
-      wallSyncLocalOffsetHelper.applyQuaternion(quat)
-      const baselineY = lastSeg.end.y
-      const posY = mode === 'body'
-        ? (baselineY - scaleY * minY)
-        : (baselineY + bodyHeight - minY)
-      wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
-      wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-      wallSyncScaleHelper.set(1, scaleY, 1)
-      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-      matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      // Determine if this chain is closed: first.start == last.end (XZ plane).
+      const firstSeg = chain[0]!
+      const lastSeg = chain[chain.length - 1]!
+      wallSyncStartHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
+      wallSyncEndHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
+      const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8
+      if (closed) {
+        continue
+      }
+
+      // Start cap points outward: opposite of the first segment direction.
+      const firstDir = findDirectionForSegment(firstSeg, wallSyncLocalUnitDirHelper)
+      if (firstDir.lengthSq() > WALL_SYNC_EPSILON) {
+        const bodyHeight = resolveWallBodyHeightForSegment(firstSeg)
+        const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+        wallSyncLocalDirHelper.copy(firstDir).multiplyScalar(-1)
+        const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
+        wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
+        wallSyncLocalOffsetHelper.applyQuaternion(quat)
+        const baselineY = firstSeg.start.y
+        const posY = mode === 'body'
+          ? (baselineY - scaleY * minY)
+          : (baselineY + bodyHeight - minY)
+        wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
+        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+        wallSyncScaleHelper.set(1, scaleY, 1)
+        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+        matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      }
+
+      // End cap points outward: along the last segment direction.
+      const lastDir = findDirectionForSegment(lastSeg, wallSyncLocalUnitDirHelper)
+      if (lastDir.lengthSq() > WALL_SYNC_EPSILON) {
+        const bodyHeight = resolveWallBodyHeightForSegment(lastSeg)
+        const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
+        wallSyncLocalDirHelper.copy(lastDir)
+        const quat = wallDirectionToQuaternion(wallSyncLocalDirHelper, 'z')
+        wallSyncLocalOffsetHelper.set(0, 0, minAlongAxis)
+        wallSyncLocalOffsetHelper.applyQuaternion(quat)
+        const baselineY = lastSeg.end.y
+        const posY = mode === 'body'
+          ? (baselineY - scaleY * minY)
+          : (baselineY + bodyHeight - minY)
+        wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
+        wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
+        wallSyncScaleHelper.set(1, scaleY, 1)
+        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+        matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      }
     }
 
     return matrices

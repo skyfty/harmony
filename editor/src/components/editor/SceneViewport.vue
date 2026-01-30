@@ -1391,6 +1391,7 @@ const scatterEraseModeActive = ref(false)
 const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
+const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
@@ -1443,7 +1444,7 @@ const hasInstancedMeshes = computed(() => {
   return instancedMeshes.some((mesh) => mesh.visible && mesh.count > 0)
 })
 
-const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || hasInstancedMeshes.value)
+const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || selectedNodeIsWall.value || hasInstancedMeshes.value)
 
 const wallRenderer = createWallRenderer({
   assetCacheStore,
@@ -1539,11 +1540,273 @@ const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.015
 const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
 const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
 
+const WALL_ERASE_UNIT_LENGTH_M = 0.5
+const WALL_ERASE_HALF_LENGTH_M = WALL_ERASE_UNIT_LENGTH_M * 0.5
+
+const wallEraseHoverBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff5252,
+  transparent: true,
+  opacity: 0.75,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+})
+wallEraseHoverBeamMaterial.toneMapped = false
+
+const wallEraseHoverBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, wallEraseHoverBeamMaterial)
+wallEraseHoverBeam.name = 'WallEraseHoverBeam'
+wallEraseHoverBeam.renderOrder = 19996
+wallEraseHoverBeam.visible = false
+wallEraseHoverBeam.frustumCulled = false
+;(wallEraseHoverBeam as any).raycast = () => {}
+
+vertexOverlayGroup.add(wallEraseHoverBeam)
+
 
 let pendingVertexSnapResult: VertexSnapResult | null = null
 
 function clearVertexSnapMarkers() {
   vertexOverlayHintBeam.visible = false
+}
+
+function clearWallEraseHoverHighlight() {
+  wallEraseHoverBeam.visible = false
+}
+
+type WallChainRange = { startIndex: number; endIndex: number }
+
+function distanceSqXZ(ax: number, az: number, bx: number, bz: number): number {
+  const dx = ax - bx
+  const dz = az - bz
+  return dx * dx + dz * dz
+}
+
+function projectPointToSegmentXZ(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+): { distSq: number; t: number } {
+  const abx = bx - ax
+  const abz = bz - az
+  const apx = px - ax
+  const apz = pz - az
+  const abLenSq = abx * abx + abz * abz
+  if (!Number.isFinite(abLenSq) || abLenSq <= 1e-12) {
+    const dx = px - ax
+    const dz = pz - az
+    return { distSq: dx * dx + dz * dz, t: 0 }
+  }
+  let t = (apx * abx + apz * abz) / abLenSq
+  if (t < 0) t = 0
+  if (t > 1) t = 1
+  const cx = ax + abx * t
+  const cz = az + abz * t
+  const dx = px - cx
+  const dz = pz - cz
+  return { distSq: dx * dx + dz * dz, t }
+}
+
+function segmentLengthXZ(seg: any): number {
+  const ax = Number(seg?.start?.x)
+  const az = Number(seg?.start?.z)
+  const bx = Number(seg?.end?.x)
+  const bz = Number(seg?.end?.z)
+  if (!Number.isFinite(ax + az + bx + bz)) {
+    return 0
+  }
+  const dx = bx - ax
+  const dz = bz - az
+  const len = Math.sqrt(dx * dx + dz * dz)
+  return Number.isFinite(len) ? len : 0
+}
+
+function interpolatePoint(a: any, b: any, t: number) {
+  return {
+    x: Number(a?.x) + (Number(b?.x) - Number(a?.x)) * t,
+    y: Number(a?.y) + (Number(b?.y) - Number(a?.y)) * t,
+    z: Number(a?.z) + (Number(b?.z) - Number(a?.z)) * t,
+  }
+}
+
+function splitWallSegmentsIntoChains(segments: any[]): WallChainRange[] {
+  const chains: WallChainRange[] = []
+  let startIndex = 0
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]
+    if (!seg) {
+      continue
+    }
+    const prev = i > startIndex ? segments[i - 1] : null
+    if (prev) {
+      const distSq = distanceSqXZ(
+        Number((prev as any)?.end?.x),
+        Number((prev as any)?.end?.z),
+        Number((seg as any)?.start?.x),
+        Number((seg as any)?.start?.z),
+      )
+      if (!Number.isFinite(distSq) || distSq > 1e-8) {
+        chains.push({ startIndex, endIndex: i - 1 })
+        startIndex = i
+      }
+    }
+  }
+  chains.push({ startIndex, endIndex: Math.max(startIndex, segments.length - 1) })
+  return chains
+}
+
+function computeWallEraseIntervalForLocalPoint(
+  segments: any[],
+  localPoint: THREE.Vector3,
+  halfLenM: number,
+): { chain: WallChainRange; rangeStart: number; rangeEnd: number; chainTotalLen: number } | null {
+  let bestIndex = -1
+  let bestDistSq = Number.POSITIVE_INFINITY
+  let bestT = 0
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const ax = Number(seg.start?.x)
+    const az = Number(seg.start?.z)
+    const bx = Number(seg.end?.x)
+    const bz = Number(seg.end?.z)
+    if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
+      continue
+    }
+    const projected = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+    if (projected.distSq < bestDistSq) {
+      bestDistSq = projected.distSq
+      bestIndex = i
+      bestT = projected.t
+    }
+  }
+
+  if (bestIndex < 0) {
+    return null
+  }
+
+  const chains = splitWallSegmentsIntoChains(segments)
+  const chain = chains.find((c) => bestIndex >= c.startIndex && bestIndex <= c.endIndex) ?? null
+  if (!chain) {
+    return null
+  }
+
+  let chainCursorDist = 0
+  let segStartDist = 0
+  let segEndDist = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    const len = seg ? segmentLengthXZ(seg) : 0
+    const start = chainCursorDist
+    const end = chainCursorDist + len
+    if (i === bestIndex) {
+      segStartDist = start
+      segEndDist = end
+      break
+    }
+    chainCursorDist = end
+  }
+
+  let chainTotalLen = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    chainTotalLen += segments[i] ? segmentLengthXZ(segments[i]) : 0
+  }
+
+  const segLen = Math.max(0, segEndDist - segStartDist)
+  const hitDist = segStartDist + Math.max(0, Math.min(1, bestT)) * segLen
+  const rangeStart = Math.max(0, hitDist - halfLenM)
+  const rangeEnd = Math.min(chainTotalLen, hitDist + halfLenM)
+
+  if (rangeEnd - rangeStart <= 1e-6) {
+    return null
+  }
+
+  return { chain, rangeStart, rangeEnd, chainTotalLen }
+}
+
+function getWallLocalPointAtChainDistance(
+  segments: any[],
+  chain: WallChainRange,
+  dist: number,
+): { x: number; y: number; z: number } | null {
+  const target = Math.max(0, dist)
+  let cursor = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const len = segmentLengthXZ(seg)
+    const segStart = cursor
+    const segEnd = cursor + len
+    if (len > 1e-6 && target <= segEnd + 1e-6) {
+      const t = Math.max(0, Math.min(1, (target - segStart) / len))
+      return interpolatePoint(seg.start, seg.end, t)
+    }
+    cursor = segEnd
+  }
+  const last = segments[chain.endIndex]
+  if (last) {
+    return { x: Number(last.end?.x), y: Number(last.end?.y), z: Number(last.end?.z) }
+  }
+  return null
+}
+
+const wallEraseHoverDirHelper = new THREE.Vector3()
+const wallEraseHoverMidHelper = new THREE.Vector3()
+const wallEraseHoverQuatHelper = new THREE.Quaternion()
+
+function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.Vector3): boolean {
+  const object = objectMap.get(hitNodeId) ?? null
+  const node = findSceneNode(sceneStore.nodes, hitNodeId)
+  if (!object || !node || (node as any).dynamicMesh?.type !== 'Wall') {
+    clearWallEraseHoverHighlight()
+    return false
+  }
+
+  const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
+  if (!segments.length) {
+    clearWallEraseHoverHighlight()
+    return false
+  }
+
+  const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
+  const localPoint = hitPointWorld.clone().applyMatrix4(inv)
+
+  const interval = computeWallEraseIntervalForLocalPoint(segments, localPoint, WALL_ERASE_HALF_LENGTH_M)
+  if (!interval) {
+    clearWallEraseHoverHighlight()
+    return false
+  }
+
+  const localA = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeStart)
+  const localB = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeEnd)
+  if (!localA || !localB) {
+    clearWallEraseHoverHighlight()
+    return false
+  }
+
+  const worldA = new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(object.matrixWorld)
+  const worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
+
+  wallEraseHoverDirHelper.copy(worldB).sub(worldA)
+  const len = wallEraseHoverDirHelper.length()
+  if (!Number.isFinite(len) || len <= 1e-6) {
+    clearWallEraseHoverHighlight()
+    return false
+  }
+
+  wallEraseHoverMidHelper.copy(worldA).add(worldB).multiplyScalar(0.5)
+  wallEraseHoverDirHelper.multiplyScalar(1 / len)
+  wallEraseHoverQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, wallEraseHoverDirHelper)
+
+  wallEraseHoverBeam.position.copy(wallEraseHoverMidHelper)
+  wallEraseHoverBeam.quaternion.copy(wallEraseHoverQuatHelper)
+  wallEraseHoverBeam.scale.set(0.05, len, 0.05)
+  wallEraseHoverBeam.visible = true
+  return true
 }
 
 const placementOverlayHintDirHelper = new THREE.Vector3()
@@ -1719,10 +1982,20 @@ function exitScatterEraseMode() {
   pointerInteraction.clearIfKind('repairClick')
   instancedEraseDragState = null
   clearRepairHoverHighlight(true)
+  clearWallEraseHoverHighlight()
   cancelGroundEditorScatterErase()
   cancelGroundEditorScatterPlacement()
   scatterEraseMenuOpen.value = false
 }
+
+watch(
+  () => [scatterEraseModeActive.value, selectedNodeIsWall.value] as const,
+  ([active, isWall]) => {
+    if (!active || !isWall) {
+      clearWallEraseHoverHighlight()
+    }
+  },
+)
 
 function toggleScatterEraseMode() {
   if (!canUseScatterEraseTool.value) {
@@ -1802,6 +2075,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     if (repairHoverGroup.visible) {
       clearRepairHoverHighlight(true)
     }
+    clearWallEraseHoverHighlight()
     return false
   }
 
@@ -1825,6 +2099,37 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
   const pickTargets = collectInstancedPickTargets()
   const intersections = raycaster.intersectObjects(pickTargets, false)
   intersections.sort((a, b) => a.distance - b.distance)
+
+  // When a wall node is selected, show a 0.5m erase interval preview on that wall.
+  // This is more precise than highlighting instanced tiles.
+  if (selectedNodeIsWall.value) {
+    if (repairHoverGroup.visible) {
+      clearRepairHoverHighlight(true)
+    }
+    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (!selectedWallId) {
+      clearWallEraseHoverHighlight()
+      return false
+    }
+
+    for (const intersection of intersections) {
+      const mesh = intersection.object as THREE.InstancedMesh
+      if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+        continue
+      }
+      const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+      if (!nodeId || nodeId !== selectedWallId) {
+        continue
+      }
+      if (intersection.point) {
+        updateWallEraseHoverHighlight(selectedWallId, intersection.point as THREE.Vector3)
+        return true
+      }
+    }
+
+    clearWallEraseHoverHighlight()
+    return false
+  }
 
   for (const intersection of intersections) {
     if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
@@ -2054,179 +2359,136 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
     }
   }
 
-  // Wall dynamic mesh: erase = add a gapRange for the nearest wall segment (no confirmation).
-  // Shift = restore (subtract from gapRanges).
+  // Continuous instanced models: remove single instance from continuous sequences.
+  const continuous = Boolean(getContinuousInstancedModelUserData(node))
+  if (continuous) {
+    return eraseContinuousInstance(nodeId, bindingId)
+  }
+
+  // Wall dynamic mesh: erase a segment interval by splitting WallDynamicMesh.segments.
+  // The erase interval is a fixed 0.5m segment centered at the hit position (±0.25m),
+  // defined in arc-length along the hit chain.
   if ((node as any).dynamicMesh?.type === 'Wall' && hitPointWorld) {
     const object = objectMap.get(nodeId) ?? null
     const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
     if (object && segments.length) {
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
-
-      const normalizeGaps = (raw: unknown): Array<{ start: number; end: number }> => {
-        const rangesRaw = Array.isArray(raw) ? raw : []
-        const normalized: Array<{ start: number; end: number }> = []
-        for (const entry of rangesRaw) {
-          const startRaw = Number((entry as any)?.start)
-          const endRaw = Number((entry as any)?.end)
-          if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
-            continue
-          }
-          let start = Math.max(0, startRaw)
-          let end = Math.max(0, endRaw)
-          if (end < start) {
-            const tmp = start
-            start = end
-            end = tmp
-          }
-          if (end - start <= 1e-9) {
-            continue
-          }
-          normalized.push({ start, end })
-        }
-        normalized.sort((a, b) => a.start - b.start)
-        const merged: Array<{ start: number; end: number }> = []
-        for (const range of normalized) {
-          const prev = merged[merged.length - 1]
-          if (!prev) {
-            merged.push({ ...range })
-            continue
-          }
-          if (range.start <= prev.end + 1e-6) {
-            prev.end = Math.max(prev.end, range.end)
-            continue
-          }
-          merged.push({ ...range })
-        }
-        return merged
+      const interval = computeWallEraseIntervalForLocalPoint(segments, localPoint, WALL_ERASE_HALF_LENGTH_M)
+      if (!interval) {
+        return false
       }
 
-      const unionGap = (gaps: Array<{ start: number; end: number }>, range: { start: number; end: number }) => {
-        return normalizeGaps([...gaps, range])
+      const { chain, rangeStart, rangeEnd } = interval
+      const nextSegments: any[] = []
+
+      // Copy segments before the chain.
+      for (let i = 0; i < chain.startIndex; i += 1) {
+        nextSegments.push(segments[i])
       }
 
-      const subtractGap = (
-        gaps: Array<{ start: number; end: number }>,
-        remove: { start: number; end: number },
-      ): Array<{ start: number; end: number }> => {
-        const out: Array<{ start: number; end: number }> = []
-        for (const gap of gaps) {
-          // No overlap
-          if (remove.end <= gap.start + 1e-6 || remove.start >= gap.end - 1e-6) {
-            out.push(gap)
-            continue
-          }
-          // Left remainder
-          if (remove.start > gap.start + 1e-6) {
-            out.push({ start: gap.start, end: Math.max(gap.start, remove.start) })
-          }
-          // Right remainder
-          if (remove.end < gap.end - 1e-6) {
-            out.push({ start: Math.min(gap.end, remove.end), end: gap.end })
-          }
-        }
-        return normalizeGaps(out)
-      }
-
-      const projectPointToSegmentXZ = (
-        px: number,
-        pz: number,
-        ax: number,
-        az: number,
-        bx: number,
-        bz: number,
-      ): { distSq: number; t: number } => {
-        const abx = bx - ax
-        const abz = bz - az
-        const apx = px - ax
-        const apz = pz - az
-        const abLenSq = abx * abx + abz * abz
-        if (!Number.isFinite(abLenSq) || abLenSq <= 1e-12) {
-          const dx = px - ax
-          const dz = pz - az
-          return { distSq: dx * dx + dz * dz, t: 0 }
-        }
-        let t = (apx * abx + apz * abz) / abLenSq
-        if (t < 0) t = 0
-        if (t > 1) t = 1
-        const cx = ax + abx * t
-        const cz = az + abz * t
-        const dx = px - cx
-        const dz = pz - cz
-        return { distSq: dx * dx + dz * dz, t }
-      }
-
-      let bestIndex = -1
-      let bestDistSq = Number.POSITIVE_INFINITY
-      let bestSegStartDist = 0
-      let bestSegEndDist = 0
-      let bestT = 0
-      let cursorDist = 0
-      for (let i = 0; i < segments.length; i += 1) {
+      // Split segments within the chain by the erase interval.
+      let cursor = 0
+      const eps = 1e-6
+      for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
         const seg = segments[i]
-        if (!seg) continue
-        const ax = Number(seg.start?.x)
-        const az = Number(seg.start?.z)
-        const bx = Number(seg.end?.x)
-        const bz = Number(seg.end?.z)
-        if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
-          // Still advance cursor by an estimated length if possible.
-          cursorDist += 0
+        if (!seg) {
           continue
         }
-        const dx = bx - ax
-        const dz = bz - az
-        const segLen = Math.sqrt(dx * dx + dz * dz)
-        const projected = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
-        if (projected.distSq < bestDistSq) {
-          bestDistSq = projected.distSq
-          bestIndex = i
-          bestT = projected.t
-          bestSegStartDist = cursorDist
-          bestSegEndDist = cursorDist + (Number.isFinite(segLen) ? segLen : 0)
+        const len = segmentLengthXZ(seg)
+        const segStart = cursor
+        const segEnd = cursor + len
+        cursor = segEnd
+
+        if (!Number.isFinite(len) || len <= eps) {
+          continue
         }
 
-        cursorDist += Number.isFinite(segLen) ? segLen : 0
-      }
-
-      if (bestIndex >= 0) {
-        const segStart = Math.min(bestSegStartDist, bestSegEndDist)
-        const segEnd = Math.max(bestSegStartDist, bestSegEndDist)
-        const segLen = Math.max(0, segEnd - segStart)
-        const wallTotalLen = Math.max(0, cursorDist)
-
-        // Use the erase brush radius to remove a local range around the hit point.
-        // This makes the tool behave like "erase some tiles" instead of removing a whole segment.
-        const rawRadius = (scatterEraseRadius as any)?.value
-        const radius = typeof rawRadius === 'number' && Number.isFinite(rawRadius) ? Math.max(0, rawRadius) : 0.5
-        const hitDist = segStart + Math.max(0, Math.min(1, bestT)) * segLen
-
-        const rangeStart = Math.max(0, hitDist - radius)
-        const rangeEnd = Math.min(wallTotalLen, hitDist + radius)
-
-        if (rangeEnd - rangeStart > 1e-6) {
-          const currentGaps = normalizeGaps((node as any).dynamicMesh?.gapRanges)
-          const nextGaps = scatterEraseRestoreModifierActive.value
-            ? subtractGap(currentGaps, { start: rangeStart, end: rangeEnd })
-            : unionGap(currentGaps, { start: rangeStart, end: rangeEnd })
-
-          const nextMesh = { ...(node as any).dynamicMesh, gapRanges: nextGaps }
-          sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+        const overlapStart = Math.max(segStart, rangeStart)
+        const overlapEnd = Math.min(segEnd, rangeEnd)
+        if (overlapEnd <= overlapStart + eps) {
+          nextSegments.push(seg)
+          continue
         }
 
-        clearRepairHoverHighlight(true)
-        updateOutlineSelectionTargets()
-        updateSelectionHighlights()
-        updatePlaceholderOverlayPositions()
-        return true
+        // Left remainder.
+        if (overlapStart > segStart + eps) {
+          const t0 = 0
+          const t1 = (overlapStart - segStart) / len
+          nextSegments.push({
+            ...seg,
+            start: interpolatePoint(seg.start, seg.end, t0),
+            end: interpolatePoint(seg.start, seg.end, t1),
+          })
+        }
+
+        // Right remainder.
+        if (overlapEnd < segEnd - eps) {
+          const t0 = (overlapEnd - segStart) / len
+          const t1 = 1
+          nextSegments.push({
+            ...seg,
+            start: interpolatePoint(seg.start, seg.end, t0),
+            end: interpolatePoint(seg.start, seg.end, t1),
+          })
+        }
       }
+
+      // Copy segments after the chain.
+      for (let i = chain.endIndex + 1; i < segments.length; i += 1) {
+        nextSegments.push(segments[i])
+      }
+
+      // Merge adjacent, contiguous segments to keep the list minimal.
+      const merged: any[] = []
+      for (const seg of nextSegments) {
+        const current = seg
+        const prev = merged[merged.length - 1]
+        if (!prev) {
+          merged.push(current)
+          continue
+        }
+
+        const prevLen = segmentLengthXZ(prev)
+        const curLen = segmentLengthXZ(current)
+        if (prevLen <= eps) {
+          merged.pop()
+          merged.push(current)
+          continue
+        }
+        if (curLen <= eps) {
+          continue
+        }
+
+        const contSq = distanceSqXZ(
+          Number(prev?.end?.x),
+          Number(prev?.end?.z),
+          Number(current?.start?.x),
+          Number(current?.start?.z),
+        )
+        const sameProps =
+          Number(prev?.height) === Number(current?.height)
+          && Number(prev?.width) === Number(current?.width)
+          && Number(prev?.thickness) === Number(current?.thickness)
+
+        if (Number.isFinite(contSq) && contSq <= 1e-8 && sameProps) {
+          merged[merged.length - 1] = { ...prev, end: current.end }
+          continue
+        }
+        merged.push(current)
+      }
+
+      const nextMesh = { ...(node as any).dynamicMesh, segments: merged }
+      sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+
+      clearRepairHoverHighlight(true)
+      updateOutlineSelectionTargets()
+      updateSelectionHighlights()
+      updatePlaceholderOverlayPositions()
+      return true
     }
   }
 
-  const continuous = Boolean(getContinuousInstancedModelUserData(node))
-  if (continuous) {
-    return eraseContinuousInstance(nodeId, bindingId)
-  }
   // Non-continuous instanced scene nodes represent a single instanced binding.
   // Removing the node is the correct erase operation.
   sceneStore.removeSceneNodes([nodeId])

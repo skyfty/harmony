@@ -375,132 +375,7 @@ function resolveWallShape(params: {
 		return null
 	}
 
-	type WallGapRange = { start: number; end: number }
-	const normalizeWallGapRanges = (raw: unknown, totalLength: number): WallGapRange[] => {
-		const rangesRaw = Array.isArray(raw) ? raw : []
-		const normalized: WallGapRange[] = []
-		for (const entry of rangesRaw) {
-			const startRaw = Number((entry as any)?.start)
-			const endRaw = Number((entry as any)?.end)
-			if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
-				continue
-			}
-			let start = Math.max(0, startRaw)
-			let end = Math.max(0, endRaw)
-			if (end < start) {
-				const tmp = start
-				start = end
-				end = tmp
-			}
-			if (totalLength > 0) {
-				start = Math.min(totalLength, start)
-				end = Math.min(totalLength, end)
-			}
-			if (end - start <= 1e-6) {
-				continue
-			}
-			normalized.push({ start, end })
-		}
-		normalized.sort((a, b) => a.start - b.start)
-		const merged: WallGapRange[] = []
-		for (const range of normalized) {
-			const prev = merged[merged.length - 1]
-			if (!prev) {
-				merged.push({ ...range })
-				continue
-			}
-			if (range.start <= prev.end + 1e-6) {
-				prev.end = Math.max(prev.end, range.end)
-				continue
-			}
-			merged.push({ ...range })
-		}
-		return merged
-	}
-
-	const segmentLengthXZ = (segment: any): number => {
-		const dx = Number(segment?.end?.x) - Number(segment?.start?.x)
-		const dz = Number(segment?.end?.z) - Number(segment?.start?.z)
-		const len = Math.sqrt(dx * dx + dz * dz)
-		return Number.isFinite(len) ? len : 0
-	}
-
-	const interpolatePoint = (a: any, b: any, t: number) => ({
-		x: Number(a?.x) + (Number(b?.x) - Number(a?.x)) * t,
-		y: Number(a?.y) + (Number(b?.y) - Number(a?.y)) * t,
-		z: Number(a?.z) + (Number(b?.z) - Number(a?.z)) * t,
-	})
-
-	const lengths = rawSegments.map(segmentLengthXZ)
-	const totalLength = lengths.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0)
-	const gaps = normalizeWallGapRanges((definition as any).gapRanges, totalLength)
-
-	// Apply gaps by splitting segments into visible pieces.
-	const visibleSegments: any[] = []
-	if (gaps.length) {
-		let cursor = 0
-		let gapIndex = 0
-		for (let i = 0; i < rawSegments.length; i += 1) {
-			const seg = rawSegments[i]!
-			const len = lengths[i] ?? 0
-			const segStart = cursor
-			const segEnd = cursor + len
-			cursor = segEnd
-			if (!Number.isFinite(len) || len <= 1e-6) {
-				continue
-			}
-			while (gapIndex < gaps.length && gaps[gapIndex]!.end <= segStart + 1e-6) {
-				gapIndex += 1
-			}
-			const overlaps: WallGapRange[] = []
-			for (let j = gapIndex; j < gaps.length; j += 1) {
-				const gap = gaps[j]!
-				if (gap.start >= segEnd - 1e-6) {
-					break
-				}
-				if (gap.end <= segStart + 1e-6) {
-					continue
-				}
-				overlaps.push(gap)
-			}
-			if (!overlaps.length) {
-				visibleSegments.push(seg)
-				continue
-			}
-			let localCursor = segStart
-			for (const gap of overlaps) {
-				const a = Math.max(segStart, gap.start)
-				const b = Math.min(segEnd, gap.end)
-				if (a - localCursor > 1e-6) {
-					const t0 = (localCursor - segStart) / len
-					const t1 = (a - segStart) / len
-					visibleSegments.push({
-						...seg,
-						start: interpolatePoint(seg.start, seg.end, t0),
-						end: interpolatePoint(seg.start, seg.end, t1),
-					})
-				}
-				localCursor = Math.max(localCursor, b)
-				if (segEnd - localCursor <= 1e-6) {
-					break
-				}
-			}
-			if (segEnd - localCursor > 1e-6) {
-				const t0 = (localCursor - segStart) / len
-				visibleSegments.push({
-					...seg,
-					start: interpolatePoint(seg.start, seg.end, t0),
-					end: interpolatePoint(seg.start, seg.end, 1),
-				})
-			}
-		}
-	} else {
-		visibleSegments.push(...rawSegments)
-	}
-	if (!visibleSegments.length) {
-		cache.delete(nodeId)
-		return null
-	}
+	const visibleSegments: any[] = rawSegments
 
 	// Signature for caching: quantize to reduce float jitter.
 	const cached = cache.get(nodeId)
@@ -526,15 +401,7 @@ function resolveWallShape(params: {
 			fnv(q | 0)
 		}
 	}
-	for (const gap of gaps) {
-		const a = Number(gap.start)
-		const b = Number(gap.end)
-		const qa = Number.isFinite(a) ? Math.round(a * quantize) : 0
-		const qb = Number.isFinite(b) ? Math.round(b * quantize) : 0
-		fnv(qa | 0)
-		fnv(qb | 0)
-	}
-	const signature = `s:${rawSegments.length}:g:${gaps.length}:${hash.toString(16)}`
+	const signature = `s:${rawSegments.length}:${hash.toString(16)}`
 	if (cached && cached.signature === signature) {
 		return cached
 	}
