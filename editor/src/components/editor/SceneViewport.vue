@@ -405,6 +405,15 @@ const instancedHoverMaterial = new THREE.MeshBasicMaterial({
 })
 instancedHoverMaterial.toneMapped = false
 
+const instancedHoverRestoreMaterial = new THREE.MeshBasicMaterial({
+  color: 0x43a047,
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedHoverRestoreMaterial.toneMapped = false
+
 const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
 
 type InstanceLayoutMatrixCacheEntry = {
@@ -600,8 +609,14 @@ function syncInstanceLayoutInstancedMatrices(params: {
   ensureInstancedMeshesRegistered(assetId)
 
   const desiredCount = getInstanceLayoutCount(layout)
+  const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
+    ? new Set<number>((layout as any).erasedIndices as number[])
+    : null
   const desiredBindingIds = new Set<string>()
   for (let index = 0; index < desiredCount; index += 1) {
+    if (erased?.has(index)) {
+      continue
+    }
     desiredBindingIds.add(getInstanceLayoutBindingId(nodeId, index))
   }
 
@@ -1373,6 +1388,7 @@ const buildToolCursorClass = computed(() => {
   return null
 })
 const scatterEraseModeActive = ref(false)
+const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 
@@ -1789,6 +1805,8 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     return false
   }
 
+  scatterEraseRestoreModifierActive.value = Boolean(event.shiftKey)
+
   if (!canvasRef.value || !camera) {
     clearRepairHoverHighlight(false)
     return false
@@ -1831,6 +1849,8 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       continue
     }
 
+    const hoverMaterial = scatterEraseRestoreModifierActive.value ? instancedHoverRestoreMaterial : instancedHoverMaterial
+
     const activeHandles = new Set<string>()
     binding.slots.forEach((slot) => {
       const proxyKey = slot.handleId
@@ -1838,7 +1858,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       let proxy = repairHoverProxies.get(proxyKey)
       if (!proxy) {
         const created = createInstancedOutlineProxy(slot.mesh)
-        created.material = instancedHoverMaterial
+        created.material = hoverMaterial
         created.renderOrder = 1000
         repairHoverProxies.set(proxyKey, created)
         repairHoverGroup.add(created)
@@ -1847,8 +1867,8 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
         if (proxy.geometry !== slot.mesh.geometry) {
           proxy.geometry = slot.mesh.geometry
         }
-        if (proxy.material !== instancedHoverMaterial) {
-          proxy.material = instancedHoverMaterial
+        if (proxy.material !== hoverMaterial) {
+          proxy.material = hoverMaterial
         }
         proxy.renderOrder = 1000
         if (proxy.parent !== repairHoverGroup) {
@@ -1996,10 +2016,190 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   return true
 }
 
-function eraseInstancedBinding(nodeId: string, bindingId: string): boolean {
+function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?: THREE.Vector3 | null): boolean {
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!node) {
     return false
+  }
+
+  // InstanceLayout grid: erase/restore a single instance index instead of removing the whole node.
+  if ((node as any).instanceLayout) {
+    const layout = clampSceneNodeInstanceLayout((node as any).instanceLayout)
+    if (layout.mode === 'grid') {
+      const prefix = `${nodeId}:instance:`
+      const index = bindingId === nodeId
+        ? 0
+        : bindingId.startsWith(prefix)
+          ? Number.parseInt(bindingId.slice(prefix.length), 10)
+          : NaN
+
+      const maxCount = getInstanceLayoutCount(layout)
+      // Reserve index 0 (node binding) and ignore invalid indices.
+      if (Number.isFinite(index) && index >= 1 && index < maxCount) {
+        const current = Array.isArray(layout.erasedIndices) ? layout.erasedIndices : []
+        const set = new Set<number>(current)
+        if (scatterEraseRestoreModifierActive.value) {
+          set.delete(index)
+        } else {
+          set.add(index)
+        }
+        const nextLayout = { ...layout, erasedIndices: Array.from(set.values()).sort((a, b) => a - b) }
+        sceneStore.updateNodeInstanceLayout(nodeId, nextLayout)
+        clearRepairHoverHighlight(true)
+        updateOutlineSelectionTargets()
+        updateSelectionHighlights()
+        updatePlaceholderOverlayPositions()
+        return true
+      }
+    }
+  }
+
+  // Wall dynamic mesh: erase = add a gapRange for the nearest wall segment (no confirmation).
+  // Shift = restore (subtract from gapRanges).
+  if ((node as any).dynamicMesh?.type === 'Wall' && hitPointWorld) {
+    const object = objectMap.get(nodeId) ?? null
+    const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
+    if (object && segments.length) {
+      const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
+      const localPoint = hitPointWorld.clone().applyMatrix4(inv)
+
+      const normalizeGaps = (raw: unknown): Array<{ start: number; end: number }> => {
+        const rangesRaw = Array.isArray(raw) ? raw : []
+        const normalized: Array<{ start: number; end: number }> = []
+        for (const entry of rangesRaw) {
+          const startRaw = Number((entry as any)?.start)
+          const endRaw = Number((entry as any)?.end)
+          if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
+            continue
+          }
+          let start = Math.max(0, startRaw)
+          let end = Math.max(0, endRaw)
+          if (end < start) {
+            const tmp = start
+            start = end
+            end = tmp
+          }
+          if (end - start <= 1e-9) {
+            continue
+          }
+          normalized.push({ start, end })
+        }
+        normalized.sort((a, b) => a.start - b.start)
+        const merged: Array<{ start: number; end: number }> = []
+        for (const range of normalized) {
+          const prev = merged[merged.length - 1]
+          if (!prev) {
+            merged.push({ ...range })
+            continue
+          }
+          if (range.start <= prev.end + 1e-6) {
+            prev.end = Math.max(prev.end, range.end)
+            continue
+          }
+          merged.push({ ...range })
+        }
+        return merged
+      }
+
+      const unionGap = (gaps: Array<{ start: number; end: number }>, range: { start: number; end: number }) => {
+        return normalizeGaps([...gaps, range])
+      }
+
+      const subtractGap = (
+        gaps: Array<{ start: number; end: number }>,
+        remove: { start: number; end: number },
+      ): Array<{ start: number; end: number }> => {
+        const out: Array<{ start: number; end: number }> = []
+        for (const gap of gaps) {
+          // No overlap
+          if (remove.end <= gap.start + 1e-6 || remove.start >= gap.end - 1e-6) {
+            out.push(gap)
+            continue
+          }
+          // Left remainder
+          if (remove.start > gap.start + 1e-6) {
+            out.push({ start: gap.start, end: Math.max(gap.start, remove.start) })
+          }
+          // Right remainder
+          if (remove.end < gap.end - 1e-6) {
+            out.push({ start: Math.min(gap.end, remove.end), end: gap.end })
+          }
+        }
+        return normalizeGaps(out)
+      }
+
+      const distSqPointToSegmentXZ = (px: number, pz: number, ax: number, az: number, bx: number, bz: number): number => {
+        const abx = bx - ax
+        const abz = bz - az
+        const apx = px - ax
+        const apz = pz - az
+        const abLenSq = abx * abx + abz * abz
+        if (!Number.isFinite(abLenSq) || abLenSq <= 1e-12) {
+          const dx = px - ax
+          const dz = pz - az
+          return dx * dx + dz * dz
+        }
+        let t = (apx * abx + apz * abz) / abLenSq
+        if (t < 0) t = 0
+        if (t > 1) t = 1
+        const cx = ax + abx * t
+        const cz = az + abz * t
+        const dx = px - cx
+        const dz = pz - cz
+        return dx * dx + dz * dz
+      }
+
+      let bestIndex = -1
+      let bestDistSq = Number.POSITIVE_INFINITY
+      let bestSegStartDist = 0
+      let bestSegEndDist = 0
+      let cursorDist = 0
+      for (let i = 0; i < segments.length; i += 1) {
+        const seg = segments[i]
+        if (!seg) continue
+        const ax = Number(seg.start?.x)
+        const az = Number(seg.start?.z)
+        const bx = Number(seg.end?.x)
+        const bz = Number(seg.end?.z)
+        if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
+          // Still advance cursor by an estimated length if possible.
+          cursorDist += 0
+          continue
+        }
+        const dx = bx - ax
+        const dz = bz - az
+        const segLen = Math.sqrt(dx * dx + dz * dz)
+        const d2 = distSqPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+        if (d2 < bestDistSq) {
+          bestDistSq = d2
+          bestIndex = i
+          bestSegStartDist = cursorDist
+          bestSegEndDist = cursorDist + (Number.isFinite(segLen) ? segLen : 0)
+        }
+
+        cursorDist += Number.isFinite(segLen) ? segLen : 0
+      }
+
+      if (bestIndex >= 0) {
+        const rangeStart = Math.min(bestSegStartDist, bestSegEndDist)
+        const rangeEnd = Math.max(bestSegStartDist, bestSegEndDist)
+        if (rangeEnd - rangeStart > 1e-9) {
+          const currentGaps = normalizeGaps((node as any).dynamicMesh?.gapRanges)
+          const nextGaps = scatterEraseRestoreModifierActive.value
+            ? subtractGap(currentGaps, { start: rangeStart, end: rangeEnd })
+            : unionGap(currentGaps, { start: rangeStart, end: rangeEnd })
+
+          const nextMesh = { ...(node as any).dynamicMesh, gapRanges: nextGaps }
+          sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+        }
+
+        clearRepairHoverHighlight(true)
+        updateOutlineSelectionTargets()
+        updateSelectionHighlights()
+        updatePlaceholderOverlayPositions()
+        return true
+      }
+    }
   }
 
   const continuous = Boolean(getContinuousInstancedModelUserData(node))
@@ -2067,6 +2267,8 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     return { handled: false, erasedKey: null }
   }
 
+  scatterEraseRestoreModifierActive.value = Boolean(event.shiftKey)
+
   const pickTargets = collectInstancedPickTargets()
   const intersections = raycaster.intersectObjects(pickTargets, false)
   intersections.sort((a, b) => a.distance - b.distance)
@@ -2092,7 +2294,7 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     if (options?.skipKey && key === options.skipKey) {
       return { handled: false, erasedKey: null }
     }
-    const handled = eraseInstancedBinding(nodeId, bindingId)
+    const handled = eraseInstancedBinding(nodeId, bindingId, intersection.point ? (intersection.point as THREE.Vector3) : null)
     clearRepairHoverHighlight(true)
     return { handled, erasedKey: key }
   }
@@ -2834,18 +3036,41 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
     return
   }
 
+  const node = resolveSceneNodeById(nodeId)
+  const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
+  const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : ({ mode: 'single', templateAssetId: null } as const)
+  const desiredCount = getInstanceLayoutCount(layout)
+  const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
+    ? new Set<number>((layout as any).erasedIndices as number[])
+    : null
+
   releaseModelInstance(nodeId)
   const binding = allocateModelInstance(assetId, nodeId)
   if (!binding) {
     return
   }
 
+  for (let index = 1; index < desiredCount; index += 1) {
+    if (erased?.has(index)) {
+      continue
+    }
+    const bindingId = getInstanceLayoutBindingId(nodeId, index)
+    const extra = allocateModelInstanceBinding(assetId, bindingId, nodeId)
+    if (!extra) {
+      releaseModelInstance(nodeId)
+      return
+    }
+  }
+
+  const layoutBounds = computeInstanceLayoutLocalBoundingBox(layout as any, cached.boundingBox) ?? cached.boundingBox
+  layoutBounds.getBoundingSphere(instancedCullingSphere)
+
   object.userData = {
     ...(object.userData ?? {}),
     instancedAssetId: assetId,
-    instancedBounds: serializeBoundingBox(cached.boundingBox),
+    instancedBounds: serializeBoundingBox(layoutBounds),
   }
-  object.userData.__harmonyInstancedRadius = cached.radius
+  object.userData.__harmonyInstancedRadius = instancedCullingSphere.radius
   object.userData.__harmonyCulled = false
   syncInstancedTransform(object)
 }
@@ -10820,6 +11045,25 @@ function handleViewportShortcut(event: KeyboardEvent) {
   }
 }
 
+function handleScatterEraseRestoreKeyDown(event: KeyboardEvent) {
+  if (!shouldHandleViewportShortcut(event)) return
+  if (!scatterEraseModeActive.value) return
+  if (event.key === 'Shift') {
+    scatterEraseRestoreModifierActive.value = true
+  }
+}
+
+function handleScatterEraseRestoreKeyUp(event: KeyboardEvent) {
+  if (!scatterEraseModeActive.value) return
+  if (event.key === 'Shift') {
+    scatterEraseRestoreModifierActive.value = false
+  }
+}
+
+function handleScatterEraseRestoreBlur() {
+  scatterEraseRestoreModifierActive.value = false
+}
+
 onMounted(() => {
   initScene()
   updateToolMode(props.activeTool)
@@ -10827,6 +11071,9 @@ onMounted(() => {
   updateOutlineSelectionTargets()
   updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
+  window.addEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
+  window.addEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
+  window.addEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
@@ -10856,6 +11103,9 @@ onBeforeUnmount(() => {
   disposeScene()
   disposeCachedTextures()
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
+  window.removeEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
+  window.removeEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
@@ -11190,7 +11440,10 @@ defineExpose<SceneViewportHandle>({
         :class="[
           'viewport-canvas',
           buildToolCursorClass,
-          { 'cursor-scatter-erase': scatterEraseModeActive },
+          {
+            'cursor-scatter-erase': scatterEraseModeActive && !scatterEraseRestoreModifierActive,
+            'cursor-scatter-restore': scatterEraseModeActive && scatterEraseRestoreModifierActive,
+          },
         ]"
       />
     </div>
@@ -11336,6 +11589,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-scatter-erase,
 .viewport-canvas.cursor-scatter-erase:active {
   cursor: url('/cursors/scatter-erase.svg') 4 20, crosshair !important;
+}
+
+.viewport-canvas.cursor-scatter-restore,
+.viewport-canvas.cursor-scatter-restore:active {
+  cursor: url('/cursors/scatter-restore.svg') 4 20, crosshair !important;
 }
 
 .protagonist-preview {

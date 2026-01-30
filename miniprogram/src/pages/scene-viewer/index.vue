@@ -8108,6 +8108,69 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
+type WallGapRange = { start: number; end: number };
+
+function normalizeWallGapRanges(raw: unknown): WallGapRange[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const ranges: WallGapRange[] = [];
+  for (const entry of raw) {
+    const candidate = entry as WallGapRange | null;
+    const start = candidate?.start;
+    const end = candidate?.end;
+    if (typeof start !== 'number' || typeof end !== 'number') {
+      continue;
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      continue;
+    }
+    const clampedStart = Math.max(0, start);
+    const clampedEnd = Math.max(0, end);
+    if (clampedEnd <= clampedStart) {
+      continue;
+    }
+    ranges.push({ start: clampedStart, end: clampedEnd });
+  }
+  if (ranges.length <= 1) {
+    return ranges;
+  }
+  ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: WallGapRange[] = [];
+  let current = ranges[0];
+  for (let i = 1; i < ranges.length; i += 1) {
+    const next = ranges[i];
+    if (next.start <= current.end) {
+      current = { start: current.start, end: Math.max(current.end, next.end) };
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+  merged.push(current);
+  return merged;
+}
+
+function ensureWallGapRangesForDocument(document: SceneJsonExportDocument | null | undefined): void {
+  if (!document || !Array.isArray(document.nodes)) {
+    return;
+  }
+  const stack: SceneNode[] = [...document.nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const mesh = (node as unknown as { dynamicMesh?: any }).dynamicMesh;
+    if (mesh && typeof mesh === 'object' && mesh.type === 'Wall') {
+      mesh.gapRanges = normalizeWallGapRanges(mesh.gapRanges);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+}
+
 let projectSceneSwitchToken = 0;
 
 async function switchToProjectScene(sceneId: string): Promise<void> {
@@ -8465,6 +8528,8 @@ async function startRenderIfReady() {
   if (!previewPayload.value || !canvasResult) {
     return;
   }
+
+  ensureWallGapRangesForDocument(previewPayload.value.document);
 
   if (initializing) {
     // A newer payload arrived while we're initializing. Cancel the current init and restart after it settles.

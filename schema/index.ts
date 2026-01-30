@@ -988,6 +988,17 @@ export type WallSegment = {
   thickness: number
 }
 
+/**
+ * A gap interval along the wall polyline distance (meters).
+ * Used to represent door/window openings without permanently deleting control segments.
+ */
+export type WallGapRange = {
+  /** Start distance along the wall path (inclusive). */
+  start: number
+  /** End distance along the wall path (exclusive). Must be >= start. */
+  end: number
+}
+
 export interface WallDynamicMesh {
   type: 'Wall'
   /**
@@ -995,6 +1006,12 @@ export interface WallDynamicMesh {
    * Each entry stores start and end positions in world space relative to the wall origin.
    */
   segments: WallSegment[]
+
+  /**
+   * Sparse list of removed intervals along the wall path distance (meters).
+   * Rendering/colliders should omit geometry covered by these ranges.
+   */
+  gapRanges: WallGapRange[]
 }
 
 export type RoadVertex2D = [number, number]

@@ -110,6 +110,7 @@ function commitLayout(): void {
           forwardLocal: localForward.value,
           upLocal: localUp.value,
           rollDegrees: localRollDegrees.value,
+          erasedIndices: [],
         }
 
   // Clamp/sanitize once more before writing to the scene.

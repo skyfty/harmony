@@ -34,5 +34,8 @@ export class CameraControlsOrbit extends OrbitControls {
       RIGHT: 'ArrowRight',
       BOTTOM: 'ArrowDown',
     }
+
+    this.mouseButtons.LEFT = THREE.MOUSE.PAN
+    this.mouseButtons.MIDDLE = THREE.MOUSE.PAN
   }
 }

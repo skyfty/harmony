@@ -41,10 +41,5 @@ export class CameraControlsMap extends MapControls {
       ONE: THREE.TOUCH.PAN,
       TWO: THREE.TOUCH.DOLLY_ROTATE,
     }
-
-    // Explicitly map middle-button drag to pan (same as left-button pan).
-    // Tool modes will capture/stopPropagation on left; middle remains the primary camera-pan input.
-    this.mouseButtons.LEFT = THREE.MOUSE.PAN
-    this.mouseButtons.MIDDLE = THREE.MOUSE.PAN
   }
 }

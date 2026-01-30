@@ -1562,6 +1562,7 @@ function buildWallDynamicMeshFromWorldSegments(
   const definition: WallDynamicMesh = {
     type: 'Wall',
     segments: dynamicSegments,
+    gapRanges: [],
   }
 
   return { center, definition }
@@ -1935,6 +1936,7 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
     return next
   })
   node.dynamicMesh = {
+    ...(node.dynamicMesh as any),
     type: 'Wall',
     segments: nextSegments,
   }
@@ -2024,6 +2026,31 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
       return cloneGroundDynamicMesh({ ...(mesh as GroundDynamicMesh), type })
     case 'Wall': {
       const wallMesh = mesh as WallDynamicMesh
+
+      const normalizeGapRange = (value: unknown): { start: number; end: number } | null => {
+        const startRaw = Number((value as any)?.start)
+        const endRaw = Number((value as any)?.end)
+        if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
+          return null
+        }
+        let start = Math.max(0, startRaw)
+        let end = Math.max(0, endRaw)
+        if (end < start) {
+          const tmp = start
+          start = end
+          end = tmp
+        }
+        if (end - start <= 1e-9) {
+          return null
+        }
+        return { start, end }
+      }
+
+      const gapRanges = (Array.isArray((wallMesh as any).gapRanges) ? ((wallMesh as any).gapRanges as unknown[]) : [])
+        .map(normalizeGapRange)
+        .filter((entry): entry is { start: number; end: number } => !!entry)
+        .sort((a, b) => a.start - b.start)
+
       return {
         type: 'Wall',
         segments: wallMesh.segments.map((segment) => ({
@@ -2035,6 +2062,7 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
             : DEFAULT_WALL_WIDTH,
           thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
         })),
+        gapRanges,
       }
     }
     case 'Road': {
@@ -9124,7 +9152,14 @@ export const useSceneStore = defineStore('scene', {
         updatedMeshType === 'Floor' ||
         updatedMeshType === 'Ground'
       ) {
-        this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+        const queued = this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+
+        // `SceneViewport` applies pending patches only when `sceneNodePropertyVersion` bumps.
+        // If an identical patch is already pending, `queueSceneNodePatch` returns false and would not bump,
+        // causing runtime-visible edits (e.g. wall gapRanges erase) to appear stale until another change happens.
+        if (!queued) {
+          this.bumpSceneNodePropertyVersion()
+        }
       }
       commitSceneSnapshot(this)
     },

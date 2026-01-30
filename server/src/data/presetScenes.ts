@@ -200,6 +200,7 @@ const createWallNode = (
   dynamicMesh: {
     type: 'Wall',
     segments: createRectangleWallSegments(options.width, options.depth, options.height, options.thickness),
+    gapRanges: [],
   },
 })
 
@@ -229,6 +230,7 @@ const createStraightWallNode = (
         thickness: options.thickness,
       },
     ],
+    gapRanges: [],
   },
 })
 

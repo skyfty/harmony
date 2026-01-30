@@ -2241,6 +2241,9 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
 	const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
 	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 	const desiredCount = getInstanceLayoutCount(layout)
+	const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
+		? new Set<number>((layout as any).erasedIndices as number[])
+		: null
 
 	releaseModelInstance(nodeId)
 	const baseBinding = allocateModelInstance(assetId, nodeId)
@@ -2248,6 +2251,9 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
 		return
 	}
 	for (let i = 1; i < desiredCount; i += 1) {
+		if (erased?.has(i)) {
+			continue
+		}
 		const bindingId = getInstanceLayoutBindingId(nodeId, i)
 		const binding = allocateModelInstanceBinding(assetId, bindingId, nodeId)
 		if (!binding) {

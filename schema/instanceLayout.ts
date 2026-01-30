@@ -51,6 +51,12 @@ export interface SceneNodeInstanceLayoutGrid extends SceneNodeInstanceLayoutBase
 
   /** Only for basisMode='vector': extra roll around forward axis (degrees). */
   rollDegrees: number
+
+  /**
+   * Sparse list of erased instance indices for grid mode.
+   * Note: index 0 (the base node binding) is reserved and cannot be erased.
+   */
+  erasedIndices: number[]
 }
 
 export type SceneNodeInstanceLayout = SceneNodeInstanceLayoutSingle | SceneNodeInstanceLayoutGrid
@@ -81,6 +87,29 @@ function normalizeTemplateAssetId(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function clampErasedIndices(value: unknown, maxCount: number): number[] {
+  if (!Array.isArray(value) || maxCount <= 1) {
+    return []
+  }
+  const seen = new Set<number>()
+  for (const entry of value) {
+    const raw = typeof entry === 'number' ? entry : Number(entry)
+    if (!Number.isFinite(raw)) {
+      continue
+    }
+    const index = Math.floor(raw)
+    // Reserve index 0 for the base node binding.
+    if (index < 1 || index >= maxCount) {
+      continue
+    }
+    seen.add(index)
+    if (seen.size >= INSTANCE_LAYOUT_MAX_INSTANCES) {
+      break
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a - b)
+}
+
 export function clampSceneNodeInstanceLayout(raw: unknown): SceneNodeInstanceLayout {
   const source = raw as Partial<SceneNodeInstanceLayout> | null | undefined
   const modeRaw = typeof (source as any)?.mode === 'string' ? String((source as any).mode) : 'single'
@@ -99,12 +128,22 @@ export function clampSceneNodeInstanceLayout(raw: unknown): SceneNodeInstanceLay
     ? (source as any).rollDegrees
     : INSTANCE_LAYOUT_DEFAULT_ROLL_DEGREES
 
+  const countX = clampCount((source as any)?.countX)
+  const countY = clampCount((source as any)?.countY)
+  const countZ = clampCount((source as any)?.countZ)
+  const rawCount = countX * countY * countZ
+  const maxCount = !Number.isFinite(rawCount) || rawCount <= 0
+    ? 1
+    : Math.max(1, Math.min(INSTANCE_LAYOUT_MAX_INSTANCES, Math.floor(rawCount)))
+
+  const erasedIndices = clampErasedIndices((source as any)?.erasedIndices, maxCount)
+
   return {
     mode: 'grid',
     templateAssetId,
-    countX: clampCount((source as any)?.countX),
-    countY: clampCount((source as any)?.countY),
-    countZ: clampCount((source as any)?.countZ),
+    countX,
+    countY,
+    countZ,
     spacingX: clampSpacing((source as any)?.spacingX),
     spacingY: clampSpacing((source as any)?.spacingY),
     spacingZ: clampSpacing((source as any)?.spacingZ),
@@ -112,6 +151,7 @@ export function clampSceneNodeInstanceLayout(raw: unknown): SceneNodeInstanceLay
     forwardLocal: clampVec3((source as any)?.forwardLocal, INSTANCE_LAYOUT_DEFAULT_FORWARD),
     upLocal: clampVec3((source as any)?.upLocal, INSTANCE_LAYOUT_DEFAULT_UP),
     rollDegrees: rollDegreesRaw,
+    erasedIndices,
   }
 }
 
@@ -150,12 +190,13 @@ export function buildInstanceLayoutSignature(
   if (layout.mode === 'single') {
     return `${templateAssetId}|single`
   }
+  const erased = `erased:${layout.erasedIndices.join(',')}`
   const basis = [layout.basisMode, `${layout.forwardLocal.x},${layout.forwardLocal.y},${layout.forwardLocal.z}`, `${layout.upLocal.x},${layout.upLocal.y},${layout.upLocal.z}`, `${layout.rollDegrees}`].join(':')
   const counts = `${layout.countX},${layout.countY},${layout.countZ}`
   const spacing = `${layout.spacingX},${layout.spacingY},${layout.spacingZ}`
   const ex = extents ? `${extents.x},${extents.y},${extents.z}` : 'noextents'
   // NOTE: grid layouts are centered around the node origin.
-  return `${templateAssetId}|grid|centered|${counts}|${spacing}|${basis}|${ex}`
+  return `${templateAssetId}|grid|centered|${counts}|${spacing}|${basis}|${erased}|${ex}`
 }
 
 export function computeInstanceLayoutGridCenterOffsetLocal(
@@ -362,15 +403,24 @@ export function forEachInstanceWorldMatrix(params: {
   // Reuse cached locals if signature matches.
   const locals = cache && cache.signature === signature ? cache.locals : localMatrices
 
+  const erased = layout.mode === 'grid' && layout.erasedIndices.length
+    ? new Set<number>(layout.erasedIndices)
+    : null
+
   const temp = new Matrix4()
+  let activeCount = 0
   for (let index = 0; index < count; index += 1) {
+    if (erased?.has(index)) {
+      continue
+    }
     const local = locals[index]
     if (!local) {
       continue
     }
     temp.multiplyMatrices(baseMatrixWorld, local)
     onMatrix(getInstanceLayoutBindingId(nodeId, index), temp, index)
+    activeCount += 1
   }
 
-  return { signature, instanceCount: count, locals }
+  return { signature, instanceCount: activeCount, locals }
 }

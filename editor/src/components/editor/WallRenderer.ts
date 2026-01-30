@@ -89,6 +89,7 @@ export function computeWallDynamicMeshSignature(
 ): string {
   const serialized = stableSerialize({
     segments: definition.segments ?? [],
+    gapRanges: (definition as any).gapRanges ?? [],
     smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
   })
   return hashString(serialized)
@@ -161,7 +162,7 @@ function resolveWallEffectiveDefinition(
     } as any
   })
 
-  return changed ? ({ type: 'Wall', segments: nextSegments } as WallDynamicMesh) : definition
+  return changed ? ({ ...(definition as any), type: 'Wall', segments: nextSegments } as WallDynamicMesh) : definition
 }
 
 const wallSyncPosHelper = new THREE.Vector3()

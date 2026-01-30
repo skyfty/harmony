@@ -51,6 +51,188 @@ const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
 
+type WallSegment = WallDynamicMesh['segments'] extends Array<infer T> ? T : never
+
+type WallGapRange = {
+  start: number
+  end: number
+}
+
+function wallDistanceSqXZ(a: { x: number; z: number }, b: { x: number; z: number }): number {
+  const dx = a.x - b.x
+  const dz = a.z - b.z
+  return dx * dx + dz * dz
+}
+
+function wallSegmentLengthXZ(segment: WallSegment): number {
+  const dx = Number((segment as any).end?.x) - Number((segment as any).start?.x)
+  const dz = Number((segment as any).end?.z) - Number((segment as any).start?.z)
+  const len = Math.sqrt(dx * dx + dz * dz)
+  return Number.isFinite(len) ? len : 0
+}
+
+function normalizeWallGapRanges(raw: unknown, totalLength: number): WallGapRange[] {
+  const rangesRaw = Array.isArray(raw) ? raw : []
+  const normalized: WallGapRange[] = []
+
+  for (const entry of rangesRaw) {
+    const startRaw = Number((entry as any)?.start)
+    const endRaw = Number((entry as any)?.end)
+    if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) {
+      continue
+    }
+
+    let start = Math.max(0, startRaw)
+    let end = Math.max(0, endRaw)
+    if (end < start) {
+      const tmp = start
+      start = end
+      end = tmp
+    }
+
+    if (totalLength > 0) {
+      start = Math.min(totalLength, start)
+      end = Math.min(totalLength, end)
+    }
+
+    if (end - start <= WALL_EPSILON) {
+      continue
+    }
+
+    normalized.push({ start, end })
+  }
+
+  normalized.sort((a, b) => a.start - b.start)
+
+  // Merge overlaps for determinism.
+  const merged: WallGapRange[] = []
+  for (const range of normalized) {
+    const prev = merged[merged.length - 1]
+    if (!prev) {
+      merged.push({ ...range })
+      continue
+    }
+    if (range.start <= prev.end + WALL_EPSILON) {
+      prev.end = Math.max(prev.end, range.end)
+      continue
+    }
+    merged.push({ ...range })
+  }
+
+  return merged
+}
+
+function interpolateWallPoint(
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+  t: number,
+) {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+  }
+}
+
+function buildWallVisibleChainDefinitions(definition: WallDynamicMesh): WallDynamicMesh[] {
+  const rawSegments = Array.isArray(definition.segments) ? (definition.segments as WallSegment[]) : []
+  if (!rawSegments.length) {
+    return []
+  }
+
+  const lengths = rawSegments.map(wallSegmentLengthXZ)
+  const totalLength = lengths.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0)
+  const gaps = normalizeWallGapRanges((definition as any).gapRanges, totalLength)
+  if (!gaps.length) {
+    return [definition]
+  }
+
+  const visibleSegments: WallSegment[] = []
+  let cursor = 0
+  let gapIndex = 0
+
+  for (let i = 0; i < rawSegments.length; i += 1) {
+    const segment = rawSegments[i]!
+    const len = lengths[i] ?? 0
+    const segStart = cursor
+    const segEnd = cursor + len
+    cursor = segEnd
+
+    if (len <= WALL_EPSILON) {
+      continue
+    }
+
+    // Advance gap index to first gap that may overlap this segment.
+    while (gapIndex < gaps.length && gaps[gapIndex]!.end <= segStart + WALL_EPSILON) {
+      gapIndex += 1
+    }
+
+    const overlaps: WallGapRange[] = []
+    for (let j = gapIndex; j < gaps.length; j += 1) {
+      const gap = gaps[j]!
+      if (gap.start >= segEnd - WALL_EPSILON) {
+        break
+      }
+      if (gap.end <= segStart + WALL_EPSILON) {
+        continue
+      }
+      overlaps.push(gap)
+    }
+
+    if (!overlaps.length) {
+      visibleSegments.push(segment)
+      continue
+    }
+
+    let localCursor = segStart
+    for (const gap of overlaps) {
+      const a = Math.max(segStart, gap.start)
+      const b = Math.min(segEnd, gap.end)
+      if (a - localCursor > WALL_EPSILON) {
+        const t0 = (localCursor - segStart) / len
+        const t1 = (a - segStart) / len
+        visibleSegments.push({
+          ...(segment as any),
+          start: interpolateWallPoint(segment.start as any, segment.end as any, t0),
+          end: interpolateWallPoint(segment.start as any, segment.end as any, t1),
+        } as WallSegment)
+      }
+      localCursor = Math.max(localCursor, b)
+      if (segEnd - localCursor <= WALL_EPSILON) {
+        break
+      }
+    }
+    if (segEnd - localCursor > WALL_EPSILON) {
+      const t0 = (localCursor - segStart) / len
+      visibleSegments.push({
+        ...(segment as any),
+        start: interpolateWallPoint(segment.start as any, segment.end as any, t0),
+        end: interpolateWallPoint(segment.start as any, segment.end as any, 1),
+      } as WallSegment)
+    }
+  }
+
+  if (!visibleSegments.length) {
+    return []
+  }
+
+  const chains: WallSegment[][] = []
+  let current: WallSegment[] = []
+  for (const seg of visibleSegments) {
+    const prev = current[current.length - 1]
+    if (prev && wallDistanceSqXZ(prev.end as any, seg.start as any) > WALL_EPSILON) {
+      chains.push(current)
+      current = []
+    }
+    current.push(seg)
+  }
+  if (current.length) {
+    chains.push(current)
+  }
+
+  return chains.map((segments) => ({ ...(definition as any), segments } as WallDynamicMesh))
+}
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -886,8 +1068,8 @@ function rebuildWallGroup(
 ) {
   clearGroupContent(group)
 
-  const path = collectWallPath(definition)
-  if (!path) {
+  const chainDefinitions = buildWallVisibleChainDefinitions(definition)
+  if (!chainDefinitions.length) {
     return
   }
 
@@ -918,7 +1100,16 @@ function rebuildWallGroup(
   const headHeightExtra = headTemplate ? Math.max(0, headTemplate.baseSize.y) : 0
   const totalHeight = bodyHeight + headHeightExtra
 
-    const smoothing = normalizeWallSmoothing(options.smoothing)
+  const smoothing = normalizeWallSmoothing(options.smoothing)
+  const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
+
+  for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
+    const chainDef = chainDefinitions[chainIndex]!
+    const path = collectWallPath(chainDef)
+    if (!path) {
+      continue
+    }
+
     let centers: THREE.Vector3[]
     if (smoothing <= WALL_EPSILON) {
       // Default: keep corners sharp and avoid extra triangles on long straight runs.
@@ -929,16 +1120,16 @@ function rebuildWallGroup(
     }
 
     const geometry = buildWallGeometryFromPoints(centers, width, totalHeight, path.closed)
-  if (!geometry) {
-    return
-  }
+    if (!geometry) {
+      continue
+    }
 
-  const mesh = new THREE.Mesh(geometry, createWallMaterial())
-  mesh.name = 'WallMesh'
-  mesh.userData.dynamicMeshType = 'Wall'
-  const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
-  mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
-  group.add(mesh)
+    const mesh = new THREE.Mesh(geometry, createWallMaterial())
+    mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
+    mesh.userData.dynamicMeshType = 'Wall'
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+    group.add(mesh)
+  }
 
   const rawBodyCornerMap = assets.bodyCornerObjectsByAssetId ?? null
   const bodyCornerObjectsByAssetId = rawBodyCornerMap && typeof rawBodyCornerMap === 'object' ? rawBodyCornerMap : null
@@ -973,7 +1164,7 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate) {
-    const localMatrices = computeWallAlongAxisInstanceMatrices(definition, bodyTemplate, 'body')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body'))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyInstances'
@@ -988,7 +1179,7 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate && headTemplate) {
-    const localMatrices = computeWallAlongAxisInstanceMatrices(definition, headTemplate, 'head')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head'))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headTemplate.geometry, headTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadInstances'
@@ -1002,8 +1193,8 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && bodyEndCapTemplate && !path.closed) {
-    const localMatrices = computeWallEndCapInstanceMatrices(definition, bodyEndCapTemplate, 'body')
+  if (bodyTemplate && bodyEndCapTemplate) {
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, bodyEndCapTemplate, 'body'))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyEndCapTemplate.geometry, bodyEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyEndCapInstances'
@@ -1017,8 +1208,8 @@ function rebuildWallGroup(
     }
   }
 
-  if (bodyTemplate && bodyEndCapTemplate && headEndCapTemplate && !path.closed) {
-    const localMatrices = computeWallEndCapInstanceMatrices(definition, headEndCapTemplate, 'head')
+  if (bodyTemplate && bodyEndCapTemplate && headEndCapTemplate) {
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, headEndCapTemplate, 'head'))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headEndCapTemplate.geometry, headEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadEndCapInstances'
@@ -1040,12 +1231,17 @@ function rebuildWallGroup(
       tolerance: rule.tolerance,
     }))
 
-    const matricesByAssetId = computeWallCornerInstanceMatricesByAsset(
-      definition,
-      bodyCornerTemplatesByAssetId,
-      pickRules,
-      'body',
-    )
+    const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
+    for (const chainDef of chainDefinitions) {
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef, bodyCornerTemplatesByAssetId, pickRules, 'body')
+      for (const [assetId, mats] of local.entries()) {
+        const bucket = matricesByAssetId.get(assetId) ?? []
+        if (!matricesByAssetId.has(assetId)) {
+          matricesByAssetId.set(assetId, bucket)
+        }
+        bucket.push(...mats)
+      }
+    }
     const sortedAssetIds = Array.from(matricesByAssetId.keys()).sort()
     for (const assetId of sortedAssetIds) {
       const template = bodyCornerTemplatesByAssetId.get(assetId)
@@ -1072,12 +1268,17 @@ function rebuildWallGroup(
       tolerance: rule.tolerance,
     }))
 
-    const matricesByAssetId = computeWallCornerInstanceMatricesByAsset(
-      definition,
-      headCornerTemplatesByAssetId,
-      pickRules,
-      'head',
-    )
+    const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
+    for (const chainDef of chainDefinitions) {
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef, headCornerTemplatesByAssetId, pickRules, 'head')
+      for (const [assetId, mats] of local.entries()) {
+        const bucket = matricesByAssetId.get(assetId) ?? []
+        if (!matricesByAssetId.has(assetId)) {
+          matricesByAssetId.set(assetId, bucket)
+        }
+        bucket.push(...mats)
+      }
+    }
     const sortedAssetIds = Array.from(matricesByAssetId.keys()).sort()
     for (const assetId of sortedAssetIds) {
       const template = headCornerTemplatesByAssetId.get(assetId)
