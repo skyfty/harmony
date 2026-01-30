@@ -11,6 +11,9 @@ import {
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import { isFloorPresetFilename } from '@/utils/floorPreset'
+import { isWallPresetFilename } from '@/utils/wallPreset'
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ResourceCategory } from '@/types/resource-category'
 import { fetchResourceCategories } from '@/api/resourceAssets'
@@ -327,6 +330,7 @@ function handleProjectSplitResized(event: SplitpanesResizedEvent) {
 
 async function selectAsset(asset: ProjectAsset) {
   const uiStore = useUiStore()
+  const buildToolsStore = useBuildToolsStore()
   // For model-like assets, ensure the asset is downloaded/cached before selecting
   if (MODEL_ASSET_TYPES.has(asset.type)) {
     const prepared = prepareAssetForOperations(asset)
@@ -342,6 +346,31 @@ async function selectAsset(asset: ProjectAsset) {
     sceneStore.selectAsset(prepared.id)
     uiStore.setActiveSelectionContext('asset-panel')
     return
+  }
+
+  // If a wall/floor prefab preset is selected, immediately activate the corresponding
+  // build tool and apply the preset. This intentionally switches context from asset-panel
+  // to build-tool so the user can edit directly in the viewport.
+  if (asset.type === 'prefab') {
+    const extension = typeof asset.extension === 'string' ? asset.extension.trim().toLowerCase() : ''
+    const filename = asset.description ?? asset.name
+    const isWallPreset = extension === 'wall' || isWallPresetFilename(filename)
+    const isFloorPreset = extension === 'floor' || isFloorPresetFilename(filename)
+    if (isWallPreset || isFloorPreset) {
+      sceneStore.selectAsset(asset.id)
+      sceneStore.setSelection([])
+
+      const activated = isWallPreset
+        ? buildToolsStore.setWallBrushPresetAssetId(asset.id, { activate: true })
+        : buildToolsStore.setFloorBrushPresetAssetId(asset.id, { activate: true })
+
+      if (activated) {
+        uiStore.setActiveSelectionContext(`build-tool:${isWallPreset ? 'wall' : 'floor'}`)
+      } else {
+        uiStore.setActiveSelectionContext('asset-panel')
+      }
+      return
+    }
   }
 
   sceneStore.selectAsset(asset.id)

@@ -70,6 +70,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1350,8 +1351,13 @@ const canDropSelection = computed(() =>
 )
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
-const activeBuildTool = ref<BuildTool | null>(null)
-const floorBuildShape = ref<FloorBuildShape>('polygon')
+const buildToolsStore = useBuildToolsStore()
+const {
+  activeBuildTool,
+  floorBuildShape,
+  wallBrushPresetAssetId,
+  floorBrushPresetAssetId,
+} = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
@@ -1372,6 +1378,14 @@ const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
+
+watch(
+  buildToolsDisabled,
+  (disabled) => {
+    buildToolsStore.setBuildToolsDisabled(disabled)
+  },
+  { immediate: true },
+)
 
 // Watch UI selection context and cancel/clear active build tool when another
 // module becomes active. This enforces mutual exclusion between build tools and
@@ -2506,23 +2520,23 @@ type FloorPresetData = import('@/utils/floorPreset').FloorPresetData
 
 const wallPresetDialogOpen = ref(false)
 const wallPresetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const wallBrushPresetAssetId = ref<string | null>(null)
 const wallBrushPresetData = ref<WallPresetData | null>(null)
 let wallBrushPresetLoadToken = 0
 
-const floorBrushPresetAssetId = ref<string | null>(null)
 const floorBrushPresetData = ref<FloorPresetData | null>(null)
 let floorBrushPresetLoadToken = 0
 
 function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false
   wallPresetDialogAnchor.value = null
-  wallBrushPresetAssetId.value = asset?.id ?? null
   // If a wall preset was selected, clear any current selection and
   // immediately activate the wall build tool so the user can begin building.
-  if (asset && asset.id) {
+  const assetId = asset?.id ?? null
+  if (assetId) {
     sceneStore.setSelection([])
-    handleBuildToolChange('wall')
+    buildToolsStore.setWallBrushPresetAssetId(assetId, { activate: true })
+  } else {
+    buildToolsStore.setWallBrushPresetAssetId(null)
   }
 }
 
@@ -2532,12 +2546,14 @@ function handleWallPresetDialogCancel(): void {
 }
 
 function handleFloorPresetDialogUpdate(asset: ProjectAsset | null): void {
-  floorBrushPresetAssetId.value = asset?.id ?? null
   // If a floor preset was selected, clear any current selection and
   // immediately activate the floor build tool so the user can begin building.
-  if (asset && asset.id) {
+  const assetId = asset?.id ?? null
+  if (assetId) {
     sceneStore.setSelection([])
-    handleBuildToolChange('floor')
+    buildToolsStore.setFloorBrushPresetAssetId(assetId, { activate: true })
+  } else {
+    buildToolsStore.setFloorBrushPresetAssetId(null)
   }
 }
 
@@ -2645,12 +2661,11 @@ function handleFloorShapeMenuOpen(value: boolean) {
 function handleSelectFloorBuildShape(shape: FloorBuildShape) {
   // Switching shapes should start from a clean slate.
   floorBuildTool.cancel()
-  floorBuildShape.value = shape
+  buildToolsStore.setFloorBuildShape(shape, { activate: true })
 
   // Selecting a shape explicitly activates the floor build tool.
   // Match toolbar behavior: entering a build tool clears selection.
   sceneStore.setSelection([])
-  handleBuildToolChange('floor')
 }
 
 
@@ -8223,7 +8238,10 @@ function handleBuildToolChange(tool: BuildTool | null) {
     cancelGroundEditorScatterPlacement()
     terrainStore.setGroundPanelTab('terrain')
   }
-  activeBuildTool.value = tool
+  const accepted = buildToolsStore.setActiveBuildTool(tool)
+  if (!accepted) {
+    return
+  }
   if (tool) {
     uiStore.setActiveSelectionContext(`build-tool:${tool}`)
   } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
@@ -11000,8 +11018,23 @@ watch(
   }
 )
 
-watch(activeBuildTool, (tool) => {
+watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
+
+  // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
+  if (tool === 'ground') {
+    exitScatterEraseMode()
+    cancelGroundEditorScatterPlacement()
+    terrainStore.setGroundPanelTab('terrain')
+  }
+
+  if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool) && tool !== previous) {
+    // Preserve the last selected transform tool so we can restore it when exiting build via right double click.
+    if (props.activeTool !== 'select') {
+      transformToolBeforeBuild = props.activeTool
+    }
+  }
+
   if (!isBuildToolBlockedDuringGroundSculptConfig(tool)) {
     buildToolRightClickCandidate = null
     pointerInteraction.clearIfKind('buildToolRightClick')
@@ -11011,6 +11044,18 @@ watch(activeBuildTool, (tool) => {
   }
   if (tool !== 'road') {
     roadBuildTool.cancel()
+  }
+  if (tool !== 'floor') {
+    floorBuildTool.cancel()
+  }
+
+  const desiredContext = tool ? `build-tool:${tool}` : null
+  if (desiredContext) {
+    if (uiStore.activeSelectionContext !== desiredContext) {
+      uiStore.setActiveSelectionContext(desiredContext)
+    }
+  } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
+    uiStore.setActiveSelectionContext(null)
   }
 })
 
