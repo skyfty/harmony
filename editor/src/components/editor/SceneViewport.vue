@@ -1562,6 +1562,27 @@ const vertexOverlayHintBeamMaterial = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
 })
 vertexOverlayHintBeamMaterial.toneMapped = false
+
+// Add a slightly thicker "outline" beam behind the additive beam so it remains readable
+// on bright backgrounds.
+const vertexOverlayHintBeamOutlineMaterial = new THREE.MeshBasicMaterial({
+  color: 0x000000,
+  transparent: true,
+  opacity: 0.25,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  side: THREE.DoubleSide,
+})
+vertexOverlayHintBeamOutlineMaterial.toneMapped = false
+
+const vertexOverlayHintBeamOutline = new THREE.Mesh(vertexOverlayHintBeamGeometry, vertexOverlayHintBeamOutlineMaterial)
+vertexOverlayHintBeamOutline.name = 'VertexOverlayHintBeamOutline'
+vertexOverlayHintBeamOutline.renderOrder = 19998
+vertexOverlayHintBeamOutline.visible = false
+vertexOverlayHintBeamOutline.frustumCulled = false
+;(vertexOverlayHintBeamOutline as any).raycast = () => {}
+
 const vertexOverlayHintBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, vertexOverlayHintBeamMaterial)
 vertexOverlayHintBeam.name = 'VertexOverlayHintBeam'
 vertexOverlayHintBeam.renderOrder = 19999
@@ -1569,7 +1590,46 @@ vertexOverlayHintBeam.visible = false
 vertexOverlayHintBeam.frustumCulled = false
 ;(vertexOverlayHintBeam as any).raycast = () => {}
 
+// Endpoint markers help readability when the beam is short.
+const vertexOverlayHintMarkerGeometry = new THREE.SphereGeometry(1, 18, 12)
+const vertexOverlayHintSourceMarkerMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.9,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+})
+vertexOverlayHintSourceMarkerMaterial.toneMapped = false
+
+const vertexOverlayHintTargetMarkerMaterial = new THREE.MeshBasicMaterial({
+  color: 0x00e5ff,
+  transparent: true,
+  opacity: 0.95,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+})
+vertexOverlayHintTargetMarkerMaterial.toneMapped = false
+
+const vertexOverlayHintSourceMarker = new THREE.Mesh(vertexOverlayHintMarkerGeometry, vertexOverlayHintSourceMarkerMaterial)
+vertexOverlayHintSourceMarker.name = 'VertexOverlayHintSourceMarker'
+vertexOverlayHintSourceMarker.renderOrder = 19999
+vertexOverlayHintSourceMarker.visible = false
+vertexOverlayHintSourceMarker.frustumCulled = false
+;(vertexOverlayHintSourceMarker as any).raycast = () => {}
+
+const vertexOverlayHintTargetMarker = new THREE.Mesh(vertexOverlayHintMarkerGeometry, vertexOverlayHintTargetMarkerMaterial)
+vertexOverlayHintTargetMarker.name = 'VertexOverlayHintTargetMarker'
+vertexOverlayHintTargetMarker.renderOrder = 19999
+vertexOverlayHintTargetMarker.visible = false
+vertexOverlayHintTargetMarker.frustumCulled = false
+;(vertexOverlayHintTargetMarker as any).raycast = () => {}
+
+vertexOverlayGroup.add(vertexOverlayHintBeamOutline)
 vertexOverlayGroup.add(vertexOverlayHintBeam)
+vertexOverlayGroup.add(vertexOverlayHintSourceMarker)
+vertexOverlayGroup.add(vertexOverlayHintTargetMarker)
 
 // Placement side-snap hints (shown during asset placement preview).
 const placementOverlayBestBeamMaterial = new THREE.MeshBasicMaterial({
@@ -1582,6 +1642,25 @@ const placementOverlayBestBeamMaterial = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
 })
 placementOverlayBestBeamMaterial.toneMapped = false
+
+const placementOverlayBestBeamOutlineMaterial = new THREE.MeshBasicMaterial({
+  color: 0x000000,
+  transparent: true,
+  opacity: 0.22,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  side: THREE.DoubleSide,
+})
+placementOverlayBestBeamOutlineMaterial.toneMapped = false
+
+const placementOverlayBestBeamOutline = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlayBestBeamOutlineMaterial)
+placementOverlayBestBeamOutline.name = 'PlacementOverlayBestBeamOutline'
+placementOverlayBestBeamOutline.renderOrder = 19997
+placementOverlayBestBeamOutline.visible = false
+placementOverlayBestBeamOutline.frustumCulled = false
+;(placementOverlayBestBeamOutline as any).raycast = () => {}
+
 const placementOverlayBestBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlayBestBeamMaterial)
 placementOverlayBestBeam.name = 'PlacementOverlayBestBeam'
 placementOverlayBestBeam.renderOrder = 19998
@@ -1599,6 +1678,25 @@ const placementOverlaySecondaryBeamMaterial = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
 })
 placementOverlaySecondaryBeamMaterial.toneMapped = false
+
+const placementOverlaySecondaryBeamOutlineMaterial = new THREE.MeshBasicMaterial({
+  color: 0x000000,
+  transparent: true,
+  opacity: 0.18,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  side: THREE.DoubleSide,
+})
+placementOverlaySecondaryBeamOutlineMaterial.toneMapped = false
+
+const placementOverlaySecondaryBeamOutline = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlaySecondaryBeamOutlineMaterial)
+placementOverlaySecondaryBeamOutline.name = 'PlacementOverlaySecondaryBeamOutline'
+placementOverlaySecondaryBeamOutline.renderOrder = 19996
+placementOverlaySecondaryBeamOutline.visible = false
+placementOverlaySecondaryBeamOutline.frustumCulled = false
+;(placementOverlaySecondaryBeamOutline as any).raycast = () => {}
+
 const placementOverlaySecondaryBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, placementOverlaySecondaryBeamMaterial)
 placementOverlaySecondaryBeam.name = 'PlacementOverlaySecondaryBeam'
 placementOverlaySecondaryBeam.renderOrder = 19997
@@ -1606,16 +1704,55 @@ placementOverlaySecondaryBeam.visible = false
 placementOverlaySecondaryBeam.frustumCulled = false
 ;(placementOverlaySecondaryBeam as any).raycast = () => {}
 
+// Placement markers (best + secondary).
+const placementOverlayMarkerGeometry = vertexOverlayHintMarkerGeometry
+const placementOverlayBestSourceMarker = new THREE.Mesh(placementOverlayMarkerGeometry, vertexOverlayHintSourceMarkerMaterial)
+placementOverlayBestSourceMarker.name = 'PlacementOverlayBestSourceMarker'
+placementOverlayBestSourceMarker.renderOrder = 19998
+placementOverlayBestSourceMarker.visible = false
+placementOverlayBestSourceMarker.frustumCulled = false
+;(placementOverlayBestSourceMarker as any).raycast = () => {}
+
+const placementOverlayBestTargetMarker = new THREE.Mesh(placementOverlayMarkerGeometry, vertexOverlayHintTargetMarkerMaterial)
+placementOverlayBestTargetMarker.name = 'PlacementOverlayBestTargetMarker'
+placementOverlayBestTargetMarker.renderOrder = 19998
+placementOverlayBestTargetMarker.visible = false
+placementOverlayBestTargetMarker.frustumCulled = false
+;(placementOverlayBestTargetMarker as any).raycast = () => {}
+
+const placementOverlaySecondarySourceMarker = new THREE.Mesh(placementOverlayMarkerGeometry, vertexOverlayHintSourceMarkerMaterial)
+placementOverlaySecondarySourceMarker.name = 'PlacementOverlaySecondarySourceMarker'
+placementOverlaySecondarySourceMarker.renderOrder = 19997
+placementOverlaySecondarySourceMarker.visible = false
+placementOverlaySecondarySourceMarker.frustumCulled = false
+;(placementOverlaySecondarySourceMarker as any).raycast = () => {}
+
+const placementOverlaySecondaryTargetMarker = new THREE.Mesh(placementOverlayMarkerGeometry, vertexOverlayHintTargetMarkerMaterial)
+placementOverlaySecondaryTargetMarker.name = 'PlacementOverlaySecondaryTargetMarker'
+placementOverlaySecondaryTargetMarker.renderOrder = 19997
+placementOverlaySecondaryTargetMarker.visible = false
+placementOverlaySecondaryTargetMarker.frustumCulled = false
+;(placementOverlaySecondaryTargetMarker as any).raycast = () => {}
+
+vertexOverlayGroup.add(placementOverlayBestBeamOutline)
 vertexOverlayGroup.add(placementOverlayBestBeam)
+vertexOverlayGroup.add(placementOverlaySecondaryBeamOutline)
 vertexOverlayGroup.add(placementOverlaySecondaryBeam)
+vertexOverlayGroup.add(placementOverlayBestSourceMarker)
+vertexOverlayGroup.add(placementOverlayBestTargetMarker)
+vertexOverlayGroup.add(placementOverlaySecondarySourceMarker)
+vertexOverlayGroup.add(placementOverlaySecondaryTargetMarker)
 
 const vertexOverlayHintDirHelper = new THREE.Vector3()
 const vertexOverlayHintMidHelper = new THREE.Vector3()
 const vertexOverlayHintQuatHelper = new THREE.Quaternion()
-const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.06
-const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.015
-const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
-const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
+// Bigger + outlined so it stays readable across scenes.
+const VERTEX_OVERLAY_HINT_BASE_RADIUS = 0.12
+const VERTEX_OVERLAY_HINT_PULSE_RADIUS = 0.045
+const VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER = 2.1
+const VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER = 3.0
+const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.75
+const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.2
 
 const WALL_ERASE_UNIT_LENGTH_FALLBACK_M = 0.5
 
@@ -1668,7 +1805,10 @@ vertexOverlayGroup.add(wallEraseHoverGroup)
 let pendingVertexSnapResult: VertexSnapResult | null = null
 
 function clearVertexSnapMarkers() {
+  vertexOverlayHintBeamOutline.visible = false
   vertexOverlayHintBeam.visible = false
+  vertexOverlayHintSourceMarker.visible = false
+  vertexOverlayHintTargetMarker.visible = false
 }
 
 function clearWallEraseHoverHighlight() {
@@ -1841,8 +1981,14 @@ const placementOverlayHintMidHelper = new THREE.Vector3()
 const placementOverlayHintQuatHelper = new THREE.Quaternion()
 
 function clearPlacementSideSnapMarkers() {
+  placementOverlayBestBeamOutline.visible = false
   placementOverlayBestBeam.visible = false
+  placementOverlaySecondaryBeamOutline.visible = false
   placementOverlaySecondaryBeam.visible = false
+  placementOverlayBestSourceMarker.visible = false
+  placementOverlayBestTargetMarker.visible = false
+  placementOverlaySecondarySourceMarker.visible = false
+  placementOverlaySecondaryTargetMarker.visible = false
 }
 
 function updatePlacementSideSnapMarkers(result: PlacementSnapResult | null) {
@@ -1856,11 +2002,20 @@ function updatePlacementSideSnapMarkers(result: PlacementSnapResult | null) {
     clearPlacementSideSnapMarkers()
     return
   }
-  const applyBeam = (beam: THREE.Mesh, snap: VertexSnapResult) => {
+  const applyBeam = (
+    beam: THREE.Mesh,
+    beamOutline: THREE.Mesh,
+    sourceMarker: THREE.Mesh,
+    targetMarker: THREE.Mesh,
+    snap: VertexSnapResult,
+  ) => {
     placementOverlayHintDirHelper.copy(snap.targetWorld).sub(snap.sourceWorld)
     const len = placementOverlayHintDirHelper.length()
     if (!Number.isFinite(len) || len <= 1e-6) {
       beam.visible = false
+      beamOutline.visible = false
+      sourceMarker.visible = false
+      targetMarker.visible = false
       return
     }
 
@@ -1872,13 +2027,45 @@ function updatePlacementSideSnapMarkers(result: PlacementSnapResult | null) {
     beam.quaternion.copy(placementOverlayHintQuatHelper)
     beam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
     beam.visible = true
+
+    beamOutline.position.copy(placementOverlayHintMidHelper)
+    beamOutline.quaternion.copy(placementOverlayHintQuatHelper)
+    beamOutline.scale.set(
+      VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER,
+      len,
+      VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER,
+    )
+    beamOutline.visible = true
+
+    const markerRadius = VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER
+    sourceMarker.position.copy(snap.sourceWorld)
+    sourceMarker.scale.setScalar(markerRadius)
+    sourceMarker.visible = true
+    targetMarker.position.copy(snap.targetWorld)
+    targetMarker.scale.setScalar(markerRadius)
+    targetMarker.visible = true
   }
 
-  applyBeam(placementOverlayBestBeam, best)
+  applyBeam(
+    placementOverlayBestBeam,
+    placementOverlayBestBeamOutline,
+    placementOverlayBestSourceMarker,
+    placementOverlayBestTargetMarker,
+    best,
+  )
   if (secondary) {
-    applyBeam(placementOverlaySecondaryBeam, secondary)
+    applyBeam(
+      placementOverlaySecondaryBeam,
+      placementOverlaySecondaryBeamOutline,
+      placementOverlaySecondarySourceMarker,
+      placementOverlaySecondaryTargetMarker,
+      secondary,
+    )
   } else {
+    placementOverlaySecondaryBeamOutline.visible = false
     placementOverlaySecondaryBeam.visible = false
+    placementOverlaySecondarySourceMarker.visible = false
+    placementOverlaySecondaryTargetMarker.visible = false
   }
 }
 
@@ -1899,11 +2086,28 @@ function updateVertexSnapMarkers(result: VertexSnapResult | null) {
   vertexOverlayHintDirHelper.multiplyScalar(1 / len)
   vertexOverlayHintQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, vertexOverlayHintDirHelper)
 
+  vertexOverlayHintBeamOutline.position.copy(vertexOverlayHintMidHelper)
+  vertexOverlayHintBeamOutline.quaternion.copy(vertexOverlayHintQuatHelper)
+  vertexOverlayHintBeamOutline.scale.set(
+    VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER,
+    len,
+    VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER,
+  )
+  vertexOverlayHintBeamOutline.visible = true
+
   vertexOverlayHintBeam.position.copy(vertexOverlayHintMidHelper)
   vertexOverlayHintBeam.quaternion.copy(vertexOverlayHintQuatHelper)
   // CylinderGeometry is unit height along +Y; scale Y to length.
   vertexOverlayHintBeam.scale.set(VERTEX_OVERLAY_HINT_BASE_RADIUS, len, VERTEX_OVERLAY_HINT_BASE_RADIUS)
   vertexOverlayHintBeam.visible = true
+
+  const markerRadius = VERTEX_OVERLAY_HINT_BASE_RADIUS * VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER
+  vertexOverlayHintSourceMarker.position.copy(result.sourceWorld)
+  vertexOverlayHintSourceMarker.scale.setScalar(markerRadius)
+  vertexOverlayHintSourceMarker.visible = true
+  vertexOverlayHintTargetMarker.position.copy(result.targetWorld)
+  vertexOverlayHintTargetMarker.scale.setScalar(markerRadius)
+  vertexOverlayHintTargetMarker.visible = true
 }
 
 const updateVertexSnapHintPulse = (nowMs: number) => {
@@ -1919,23 +2123,41 @@ const updateVertexSnapHintPulse = (nowMs: number) => {
   const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
   vertexOverlayHintBeam.scale.x = radius
   vertexOverlayHintBeam.scale.z = radius
+
+  const outlineRadius = radius * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER
+  vertexOverlayHintBeamOutline.scale.x = outlineRadius
+  vertexOverlayHintBeamOutline.scale.z = outlineRadius
+
+  const markerRadius = radius * VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER
+  vertexOverlayHintSourceMarker.scale.setScalar(markerRadius)
+  vertexOverlayHintTargetMarker.scale.setScalar(markerRadius)
 }
 
 const updatePlacementSideSnapHintPulse = (nowMs: number) => {
   const t = nowMs * 0.002
   const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2)
   const radius = VERTEX_OVERLAY_HINT_BASE_RADIUS + VERTEX_OVERLAY_HINT_PULSE_RADIUS * pulse
+  const outlineRadius = radius * VERTEX_OVERLAY_HINT_OUTLINE_RADIUS_MULTIPLIER
+  const markerRadius = radius * VERTEX_OVERLAY_HINT_MARKER_RADIUS_MULTIPLIER
 
   if (placementOverlayBestBeam.visible) {
     placementOverlayBestBeamMaterial.opacity = 0.8 + 0.2 * pulse
     placementOverlayBestBeam.scale.x = radius
     placementOverlayBestBeam.scale.z = radius
+    placementOverlayBestBeamOutline.scale.x = outlineRadius
+    placementOverlayBestBeamOutline.scale.z = outlineRadius
+    placementOverlayBestSourceMarker.scale.setScalar(markerRadius)
+    placementOverlayBestTargetMarker.scale.setScalar(markerRadius)
   }
 
   if (placementOverlaySecondaryBeam.visible) {
     placementOverlaySecondaryBeamMaterial.opacity = 0.4 + 0.15 * pulse
     placementOverlaySecondaryBeam.scale.x = radius
     placementOverlaySecondaryBeam.scale.z = radius
+    placementOverlaySecondaryBeamOutline.scale.x = outlineRadius
+    placementOverlaySecondaryBeamOutline.scale.z = outlineRadius
+    placementOverlaySecondarySourceMarker.scale.setScalar(markerRadius)
+    placementOverlaySecondaryTargetMarker.scale.setScalar(markerRadius)
   }
 }
 

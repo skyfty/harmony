@@ -14,7 +14,7 @@ export class CameraControlsOrbit extends OrbitControls {
     // this.maxDistance = 200
 
     // Smooth camera movement.
-    this.enableDamping = true
+    this.enableDamping = false
     this.dampingFactor = 0.08
 
 
@@ -34,8 +34,5 @@ export class CameraControlsOrbit extends OrbitControls {
       RIGHT: 'ArrowRight',
       BOTTOM: 'ArrowDown',
     }
-
-    this.mouseButtons.LEFT = THREE.MOUSE.PAN
-    this.mouseButtons.MIDDLE = THREE.MOUSE.PAN
   }
 }
