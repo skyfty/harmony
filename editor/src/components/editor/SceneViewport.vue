@@ -11765,7 +11765,9 @@ onMounted(() => {
   attachSelection(props.selectedNodeId)
   updateOutlineSelectionTargets()
   updateSelectionHighlights()
-  window.addEventListener('keyup', handleViewportShortcut, { capture: true })
+    // Viewport shortcuts should trigger on keydown (avoid double-trigger on keyup,
+    // and make framing/escape feel immediate).
+    window.addEventListener('keydown', handleViewportShortcut, { capture: true })
   window.addEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.addEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.addEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
@@ -11797,7 +11799,7 @@ onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
   disposeCachedTextures()
-  window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
+  window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
   window.removeEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.removeEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.removeEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
