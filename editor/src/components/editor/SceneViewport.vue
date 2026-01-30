@@ -149,6 +149,7 @@ import {
   computeWallEraseIntervalForLocalPoint,
   getWallLocalPointAtChainDistance,
   applyEraseIntervalToSegments,
+  segmentLengthXZ,
 } from './wallSegmentUtils'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
@@ -1548,25 +1549,41 @@ const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
 const WALL_ERASE_UNIT_LENGTH_M = 0.5
 const WALL_ERASE_HALF_LENGTH_M = WALL_ERASE_UNIT_LENGTH_M * 0.5
 
-const wallEraseHoverBeamMaterial = new THREE.MeshBasicMaterial({
-  color: 0xff5252,
+// Wall erase hover uses the same visual language as InstanceLayout erase hover:
+// cyan for erase, green for restore; depthTest off so it's always readable.
+const wallEraseHoverEdgeMaterial = new THREE.LineBasicMaterial({
+  color: 0x4dd0e1,
   transparent: true,
-  opacity: 0.75,
+  opacity: 0.95,
   depthTest: false,
   depthWrite: false,
-  blending: THREE.AdditiveBlending,
-  side: THREE.DoubleSide,
 })
-wallEraseHoverBeamMaterial.toneMapped = false
+wallEraseHoverEdgeMaterial.toneMapped = false
 
-const wallEraseHoverBeam = new THREE.Mesh(vertexOverlayHintBeamGeometry, wallEraseHoverBeamMaterial)
-wallEraseHoverBeam.name = 'WallEraseHoverBeam'
-wallEraseHoverBeam.renderOrder = 19996
-wallEraseHoverBeam.visible = false
-wallEraseHoverBeam.frustumCulled = false
-;(wallEraseHoverBeam as any).raycast = () => {}
+const wallEraseHoverBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
+const wallEraseHoverEdgesGeometry = new THREE.EdgesGeometry(wallEraseHoverBoxGeometry)
 
-vertexOverlayGroup.add(wallEraseHoverBeam)
+const wallEraseHoverGroup = new THREE.Group()
+wallEraseHoverGroup.name = 'WallEraseHover'
+wallEraseHoverGroup.renderOrder = 19996
+wallEraseHoverGroup.visible = false
+wallEraseHoverGroup.frustumCulled = false
+
+const wallEraseHoverFill = new THREE.Mesh(wallEraseHoverBoxGeometry, instancedHoverMaterial)
+wallEraseHoverFill.name = 'WallEraseHoverFill'
+wallEraseHoverFill.renderOrder = 19996
+wallEraseHoverFill.frustumCulled = false
+;(wallEraseHoverFill as any).raycast = () => {}
+
+const wallEraseHoverEdges = new THREE.LineSegments(wallEraseHoverEdgesGeometry, wallEraseHoverEdgeMaterial)
+wallEraseHoverEdges.name = 'WallEraseHoverEdges'
+wallEraseHoverEdges.renderOrder = 19997
+wallEraseHoverEdges.frustumCulled = false
+;(wallEraseHoverEdges as any).raycast = () => {}
+
+wallEraseHoverGroup.add(wallEraseHoverFill)
+wallEraseHoverGroup.add(wallEraseHoverEdges)
+vertexOverlayGroup.add(wallEraseHoverGroup)
 
 
 let pendingVertexSnapResult: VertexSnapResult | null = null
@@ -1576,12 +1593,16 @@ function clearVertexSnapMarkers() {
 }
 
 function clearWallEraseHoverHighlight() {
-  wallEraseHoverBeam.visible = false
+  wallEraseHoverGroup.visible = false
 }
 
 const wallEraseHoverDirHelper = new THREE.Vector3()
 const wallEraseHoverMidHelper = new THREE.Vector3()
-const wallEraseHoverQuatHelper = new THREE.Quaternion()
+const wallEraseHoverUpHelper = new THREE.Vector3()
+const wallEraseHoverBasisXHelper = new THREE.Vector3()
+const wallEraseHoverBasisYHelper = new THREE.Vector3()
+const wallEraseHoverBasisZHelper = new THREE.Vector3()
+const wallEraseHoverMatHelper = new THREE.Matrix4()
 
 function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.Vector3): boolean {
   const object = objectMap.get(hitNodeId) ?? null
@@ -1616,7 +1637,17 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   const worldA = new THREE.Vector3(localA.x, localA.y, localA.z).applyMatrix4(object.matrixWorld)
   const worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
 
+  // Match InstanceLayout erase hover color scheme.
+  const hoverFillMaterial = scatterEraseRestoreModifierActive.value ? instancedHoverRestoreMaterial : instancedHoverMaterial
+  if (wallEraseHoverFill.material !== hoverFillMaterial) {
+    wallEraseHoverFill.material = hoverFillMaterial
+  }
+  wallEraseHoverFill.material.opacity = 0.65
+  wallEraseHoverEdgeMaterial.color.set(scatterEraseRestoreModifierActive.value ? 0x43a047 : 0x4dd0e1)
+
   wallEraseHoverDirHelper.copy(worldB).sub(worldA)
+  // Walls are vertical; force direction to XZ so the overlay doesn't tilt.
+  wallEraseHoverDirHelper.y = 0
   const len = wallEraseHoverDirHelper.length()
   if (!Number.isFinite(len) || len <= 1e-6) {
     clearWallEraseHoverHighlight()
@@ -1625,12 +1656,71 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
 
   wallEraseHoverMidHelper.copy(worldA).add(worldB).multiplyScalar(0.5)
   wallEraseHoverDirHelper.multiplyScalar(1 / len)
-  wallEraseHoverQuatHelper.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, wallEraseHoverDirHelper)
 
-  wallEraseHoverBeam.position.copy(wallEraseHoverMidHelper)
-  wallEraseHoverBeam.quaternion.copy(wallEraseHoverQuatHelper)
-  wallEraseHoverBeam.scale.set(0.05, len, 0.05)
-  wallEraseHoverBeam.visible = true
+  // Determine a representative wall height/width for the highlight volume.
+  let previewHeight = 0
+  let previewWidth = 0
+  const eps = 1e-6
+  let cursor = 0
+  for (let i = interval.chain.startIndex; i <= interval.chain.endIndex; i += 1) {
+    const seg = segments[i]
+    if (!seg) {
+      continue
+    }
+    const segLen = segmentLengthXZ(seg)
+    const segStart = cursor
+    const segEnd = cursor + segLen
+    cursor = segEnd
+    if (!Number.isFinite(segLen) || segLen <= eps) {
+      continue
+    }
+    if (segEnd <= interval.rangeStart + eps || segStart >= interval.rangeEnd - eps) {
+      continue
+    }
+    const h = Number((seg as any)?.height)
+    const w = Number((seg as any)?.width)
+    if (Number.isFinite(h)) {
+      previewHeight = Math.max(previewHeight, h)
+    }
+    if (Number.isFinite(w)) {
+      previewWidth = Math.max(previewWidth, w)
+    }
+  }
+  if (!Number.isFinite(previewHeight) || previewHeight <= 0) {
+    previewHeight = WALL_DEFAULT_HEIGHT
+  }
+  if (!Number.isFinite(previewWidth) || previewWidth <= 0) {
+    previewWidth = WALL_DEFAULT_WIDTH
+  }
+
+  // Slight padding so it reads clearly.
+  const padW = Math.max(0.03, previewWidth * 0.15)
+  const padH = Math.max(0.05, previewHeight * 0.03)
+  const boxWidth = previewWidth + padW
+  const boxHeight = previewHeight + padH
+
+  // Build an orientation where +Z follows the wall direction and +Y is world up.
+  wallEraseHoverUpHelper.set(0, 1, 0)
+  wallEraseHoverBasisZHelper.copy(wallEraseHoverDirHelper)
+  wallEraseHoverBasisXHelper.crossVectors(wallEraseHoverUpHelper, wallEraseHoverBasisZHelper)
+  if (wallEraseHoverBasisXHelper.lengthSq() <= 1e-10) {
+    wallEraseHoverBasisXHelper.set(1, 0, 0)
+  } else {
+    wallEraseHoverBasisXHelper.normalize()
+  }
+  wallEraseHoverBasisYHelper.crossVectors(wallEraseHoverBasisZHelper, wallEraseHoverBasisXHelper)
+  if (wallEraseHoverBasisYHelper.lengthSq() <= 1e-10) {
+    wallEraseHoverBasisYHelper.set(0, 1, 0)
+  } else {
+    wallEraseHoverBasisYHelper.normalize()
+  }
+  wallEraseHoverMatHelper.makeBasis(wallEraseHoverBasisXHelper, wallEraseHoverBasisYHelper, wallEraseHoverBasisZHelper)
+  wallEraseHoverGroup.quaternion.setFromRotationMatrix(wallEraseHoverMatHelper)
+
+  // Lift center to cover the full wall height above the base polyline.
+  wallEraseHoverGroup.position.copy(wallEraseHoverMidHelper).addScaledVector(wallEraseHoverBasisYHelper, boxHeight * 0.5)
+  wallEraseHoverGroup.scale.set(boxWidth, boxHeight, len)
+  wallEraseHoverGroup.visible = true
   return true
 }
 
