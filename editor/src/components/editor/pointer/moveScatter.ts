@@ -19,7 +19,7 @@ export function handlePointerMoveScatter(
     pointerInteractionUpdateMoved: (event: PointerEvent) => void
   },
 ): PointerMoveResult | null {
-  if (ctx.scatterEraseModeActive && ctx.hasInstancedMeshes) {
+  if (ctx.scatterEraseModeActive) {
     ctx.updateRepairHoverHighlight(event)
 
     if (ctx.instancedEraseDragState && ctx.instancedEraseDragState.pointerId === event.pointerId) {

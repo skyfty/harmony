@@ -146,7 +146,7 @@ import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
 import { createWallBuildTool } from './WallBuildTool'
 import {
-  computeWallEraseIntervalForLocalPoint,
+  computeWallEraseUnitIntervalAlignedForLocalPoint,
   getWallLocalPointAtChainDistance,
   applyEraseIntervalToSegments,
   segmentLengthXZ,
@@ -1547,7 +1547,6 @@ const VERTEX_OVERLAY_HINT_BASE_OPACITY = 0.55
 const VERTEX_OVERLAY_HINT_PULSE_OPACITY = 0.25
 
 const WALL_ERASE_UNIT_LENGTH_M = 0.5
-const WALL_ERASE_HALF_LENGTH_M = WALL_ERASE_UNIT_LENGTH_M * 0.5
 
 // Wall erase hover uses the same visual language as InstanceLayout erase hover:
 // cyan for erase, green for restore; depthTest off so it's always readable.
@@ -1621,7 +1620,7 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
   const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
-  const interval = computeWallEraseIntervalForLocalPoint(segments, localPoint, WALL_ERASE_HALF_LENGTH_M)
+  const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
   if (!interval) {
     clearWallEraseHoverHighlight()
     return false
@@ -2297,7 +2296,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
     if (object && segments.length) {
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
-      const interval = computeWallEraseIntervalForLocalPoint(segments, localPoint, WALL_ERASE_HALF_LENGTH_M)
+      const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
       if (!interval) {
         return false
       }
@@ -2377,6 +2376,44 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
   }
 
   scatterEraseRestoreModifierActive.value = Boolean(event.shiftKey)
+
+  // Selected wall: erase by raycasting the wall object itself (supports procedural walls)
+  // and generate a per-interval key so drag erase doesn't spam the same spot.
+  if (selectedNodeIsWall.value) {
+    const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    const wallObject = selectedWallId ? (objectMap.get(selectedWallId) ?? null) : null
+    const wallNode = selectedWallId ? findSceneNode(sceneStore.nodes, selectedWallId) : null
+    const segments = wallNode && (wallNode as any).dynamicMesh?.type === 'Wall'
+      ? (Array.isArray((wallNode as any).dynamicMesh?.segments) ? ((wallNode as any).dynamicMesh.segments as any[]) : [])
+      : []
+
+    if (selectedWallId && wallObject && segments.length) {
+      wallObject.updateWorldMatrix(true, true)
+      const wallHits = raycaster.intersectObject(wallObject, true)
+      wallHits.sort((a, b) => a.distance - b.distance)
+      const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
+      if (!first?.point) {
+        return { handled: false, erasedKey: null }
+      }
+
+      const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
+      const localPoint = (first.point as THREE.Vector3).clone().applyMatrix4(inv)
+      const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, WALL_ERASE_UNIT_LENGTH_M)
+      if (!interval) {
+        return { handled: false, erasedKey: null }
+      }
+
+      // Bucket key aligned to chain-origin grid.
+      const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, WALL_ERASE_UNIT_LENGTH_M))
+      const key = `${selectedWallId}:wall:${interval.chain.startIndex}-${interval.chain.endIndex}:${bucket}`
+      if (options?.skipKey && key === options.skipKey) {
+        return { handled: false, erasedKey: null }
+      }
+
+      const handled = eraseInstancedBinding(selectedWallId, selectedWallId, first.point as THREE.Vector3)
+      return { handled, erasedKey: handled ? key : null }
+    }
+  }
 
   const pickTargets = collectInstancedPickTargets()
   const intersections = raycaster.intersectObjects(pickTargets, false)

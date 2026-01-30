@@ -154,6 +154,81 @@ export function computeWallEraseIntervalForLocalPoint(
   return { chain, rangeStart, rangeEnd, chainTotalLen }
 }
 
+export function computeWallEraseUnitIntervalAlignedForLocalPoint(
+  segments: any[],
+  localPoint: THREE.Vector3,
+  unitLenM: number,
+): { chain: WallChainRange; rangeStart: number; rangeEnd: number; chainTotalLen: number } | null {
+  const unit = Math.max(1e-6, Number(unitLenM))
+
+  let bestIndex = -1
+  let bestDistSq = Number.POSITIVE_INFINITY
+  let bestT = 0
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]
+    if (!seg) continue
+    const ax = Number(seg.start?.x)
+    const az = Number(seg.start?.z)
+    const bx = Number(seg.end?.x)
+    const bz = Number(seg.end?.z)
+    if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
+      continue
+    }
+    const projected = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+    if (projected.distSq < bestDistSq) {
+      bestDistSq = projected.distSq
+      bestIndex = i
+      bestT = projected.t
+    }
+  }
+
+  if (bestIndex < 0) {
+    return null
+  }
+
+  const chains = splitWallSegmentsIntoChains(segments)
+  const chain = chains.find((c) => bestIndex >= c.startIndex && bestIndex <= c.endIndex) ?? null
+  if (!chain) {
+    return null
+  }
+
+  let chainCursorDist = 0
+  let segStartDist = 0
+  let segEndDist = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    const seg = segments[i]
+    const len = seg ? segmentLengthXZ(seg) : 0
+    const start = chainCursorDist
+    const end = chainCursorDist + len
+    if (i === bestIndex) {
+      segStartDist = start
+      segEndDist = end
+      break
+    }
+    chainCursorDist = end
+  }
+
+  let chainTotalLen = 0
+  for (let i = chain.startIndex; i <= chain.endIndex; i += 1) {
+    chainTotalLen += segments[i] ? segmentLengthXZ(segments[i]) : 0
+  }
+
+  const segLen = Math.max(0, segEndDist - segStartDist)
+  const hitDist = segStartDist + Math.max(0, Math.min(1, bestT)) * segLen
+
+  // Snap to chain-origin grid: [k*unit, (k+1)*unit]
+  const k = Math.floor(hitDist / unit)
+  const rangeStart = Math.max(0, Math.min(chainTotalLen, k * unit))
+  const rangeEnd = Math.min(chainTotalLen, rangeStart + unit)
+
+  if (rangeEnd - rangeStart <= 1e-6) {
+    return null
+  }
+
+  return { chain, rangeStart, rangeEnd, chainTotalLen }
+}
+
 export function getWallLocalPointAtChainDistance(
   segments: any[],
   chain: WallChainRange,
@@ -225,6 +300,32 @@ export function applyEraseIntervalToSegments(
     nextSegments.push(segments[i])
   }
 
+  const areColinearXZ = (a: any, b: any): boolean => {
+    const ax = Number(a?.start?.x)
+    const az = Number(a?.start?.z)
+    const bx = Number(a?.end?.x)
+    const bz = Number(a?.end?.z)
+    const cx = Number(b?.start?.x)
+    const cz = Number(b?.start?.z)
+    const dx = Number(b?.end?.x)
+    const dz = Number(b?.end?.z)
+    if (!Number.isFinite(ax + az + bx + bz + cx + cz + dx + dz)) {
+      return false
+    }
+
+    const v0x = bx - ax
+    const v0z = bz - az
+    const v1x = dx - cx
+    const v1z = dz - cz
+    const l0 = Math.sqrt(v0x * v0x + v0z * v0z)
+    const l1 = Math.sqrt(v1x * v1x + v1z * v1z)
+    if (!Number.isFinite(l0) || !Number.isFinite(l1) || l0 <= 1e-6 || l1 <= 1e-6) {
+      return false
+    }
+    const dot = (v0x / l0) * (v1x / l1) + (v0z / l0) * (v1z / l1)
+    return Number.isFinite(dot) && dot >= 0.9999
+  }
+
   // Merge adjacent, contiguous segments to keep the list minimal.
   const merged: any[] = []
   for (const seg of nextSegments) {
@@ -244,9 +345,17 @@ export function applyEraseIntervalToSegments(
     if (curLen <= eps) {
       continue
     }
-    const contSq = distanceSqXZ(Number(prev?.end?.x), Number(prev?.end?.z), Number(current?.start?.x), Number(current?.start?.z))
-    const sameProps = Number(prev?.height) === Number(current?.height) && Number(prev?.width) === Number(current?.width) && Number(prev?.thickness) === Number(current?.thickness)
-    if (Number.isFinite(contSq) && contSq <= 1e-8 && sameProps) {
+    const contSq = distanceSqXZ(
+      Number(prev?.end?.x),
+      Number(prev?.end?.z),
+      Number(current?.start?.x),
+      Number(current?.start?.z),
+    )
+    const sameProps =
+      Number(prev?.height) === Number(current?.height) &&
+      Number(prev?.width) === Number(current?.width) &&
+      Number(prev?.thickness) === Number(current?.thickness)
+    if (Number.isFinite(contSq) && contSq <= 1e-8 && sameProps && areColinearXZ(prev, current)) {
       merged[merged.length - 1] = { ...prev, end: current.end }
       continue
     }
