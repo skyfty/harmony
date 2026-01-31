@@ -1367,7 +1367,10 @@ const {
   pointer,
   rootGroup,
   instancedMeshGroup,
-  objectMap
+  objectMap,
+  {
+    getInstancedPickTargets: collectInstancedPickTargets,
+  }
 )
 
 const snapController = useSnapController({

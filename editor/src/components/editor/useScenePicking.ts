@@ -12,9 +12,36 @@ export function useScenePicking(
   pointer: THREE.Vector2,
   rootGroup: THREE.Group,
   instancedMeshGroup: THREE.Group,
-  objectMap: Map<string, THREE.Object3D>
+  objectMap: Map<string, THREE.Object3D>,
+  options?: {
+    getInstancedPickTargets?: () => THREE.Object3D[]
+  }
 ) {
   const sceneStore = useSceneStore()
+
+  function isPickProxyObject(object: THREE.Object3D | null): boolean {
+    let current: THREE.Object3D | null = object
+    while (current) {
+      const userData = current.userData as Record<string, unknown> | undefined
+      if (userData?.instancedPickProxy === true) {
+        return true
+      }
+      current = current.parent ?? null
+    }
+    return false
+  }
+
+  function isEditorOnlyObject(object: THREE.Object3D | null): boolean {
+    let current: THREE.Object3D | null = object
+    while (current) {
+      const userData = current.userData as Record<string, unknown> | undefined
+      if (userData?.editorOnly === true) {
+        return true
+      }
+      current = current.parent ?? null
+    }
+    return false
+  }
 
   function resolveRoadSegmentIndexFromObject(object: THREE.Object3D | null): number | null {
     let current: THREE.Object3D | null = object
@@ -76,7 +103,18 @@ export function useScenePicking(
     rootGroup.updateWorldMatrix(true, true)
     instancedMeshGroup.updateWorldMatrix(true, true)
 
-    const pickTargets: THREE.Object3D[] = [...rootGroup.children]
+    const pickTargets: THREE.Object3D[] = []
+    const seenTargets = new Set<THREE.Object3D>()
+
+    const addTarget = (candidate: THREE.Object3D | null | undefined) => {
+      if (!candidate || seenTargets.has(candidate)) {
+        return
+      }
+      pickTargets.push(candidate)
+      seenTargets.add(candidate)
+    }
+
+    rootGroup.children.forEach((child) => addTarget(child))
 
     const addInstancedPickTarget = (candidate: THREE.Object3D) => {
       const mesh = candidate as THREE.InstancedMesh
@@ -87,7 +125,7 @@ export function useScenePicking(
         return
       }
       mesh.updateWorldMatrix(true, false)
-      pickTargets.push(mesh)
+      addTarget(mesh)
     }
 
     instancedMeshGroup.children.forEach((child) => {
@@ -95,6 +133,14 @@ export function useScenePicking(
         addInstancedPickTarget(child)
       }
     })
+
+    const extraInstancedTargets = options?.getInstancedPickTargets?.() ?? []
+    for (const candidate of extraInstancedTargets) {
+      if (!candidate) {
+        continue
+      }
+      addInstancedPickTarget(candidate)
+    }
 
     const intersections = raycaster.intersectObjects(pickTargets, recursive)
     intersections.sort((a, b) => a.distance - b.distance)
@@ -127,7 +173,12 @@ export function useScenePicking(
     raycaster.setFromCamera(pointer, camera.value)
     const intersections = collectSceneIntersections()
 
+    let fallbackProxyHit: NodeHitResult | null = null
+
     for (const intersection of intersections) {
+      if (!intersection?.point) {
+        continue
+      }
       const nodeId = resolveNodeIdFromIntersection(intersection)
       if (!nodeId) {
         continue
@@ -146,16 +197,30 @@ export function useScenePicking(
         continue
       }
 
+      if (isEditorOnlyObject(intersection.object as THREE.Object3D)) {
+        continue
+      }
+
       const roadSegmentIndex = resolveRoadSegmentIndexFromIntersection(intersection)
-      return {
+
+      const hit: NodeHitResult = {
         nodeId,
         object: baseObject,
         point: intersection.point.clone(),
         roadSegmentIndex,
       }
+
+      if (isPickProxyObject(intersection.object as THREE.Object3D)) {
+        if (!fallbackProxyHit) {
+          fallbackProxyHit = hit
+        }
+        continue
+      }
+
+      return hit
     }
 
-    return null
+    return fallbackProxyHit
   }
 
   function projectPointerToPlane(event: PointerEvent, plane: THREE.Plane): THREE.Vector3 | null {
