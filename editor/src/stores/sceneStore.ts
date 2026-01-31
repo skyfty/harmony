@@ -8902,7 +8902,16 @@ export const useSceneStore = defineStore('scene', {
       visitNode(this.nodes, payload.id, (node) => {
         node.position = cloneVector(payload.position)
         node.rotation = cloneVector(payload.rotation)
-        node.scale = cloneVector(payload.scale)
+        const wantsMirror = (node as any).mirror === 'horizontal' || (node as any).mirror === 'vertical'
+        const rawScale = payload.scale
+        const hasNegative = (rawScale?.x ?? 0) < 0 || (rawScale?.y ?? 0) < 0 || (rawScale?.z ?? 0) < 0
+        node.scale = wantsMirror || hasNegative
+          ? {
+              x: Math.abs(rawScale?.x ?? 1),
+              y: Math.abs(rawScale?.y ?? 1),
+              z: Math.abs(rawScale?.z ?? 1),
+            }
+          : cloneVector(payload.scale)
       })
       this.queueSceneNodePatch(payload.id, ['transform'])
       if (scaleChanged) {
@@ -8943,7 +8952,18 @@ export const useSceneStore = defineStore('scene', {
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
-        if (payload.scale) node.scale = cloneVector(payload.scale)
+        if (payload.scale) {
+          const wantsMirror = (node as any).mirror === 'horizontal' || (node as any).mirror === 'vertical'
+          const rawScale = payload.scale
+          const hasNegative = (rawScale?.x ?? 0) < 0 || (rawScale?.y ?? 0) < 0 || (rawScale?.z ?? 0) < 0
+          node.scale = wantsMirror || hasNegative
+            ? {
+                x: Math.abs(rawScale?.x ?? 1),
+                y: Math.abs(rawScale?.y ?? 1),
+                z: Math.abs(rawScale?.z ?? 1),
+              }
+            : cloneVector(payload.scale)
+        }
       })
       this.queueSceneNodePatch(payload.id, ['transform'])
       if (scaleChanged) {
