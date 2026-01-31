@@ -1052,6 +1052,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       return
     }
 
+    // 实例化矩阵提交依赖 container.matrixWorld；确保其在本次同步前已更新。
+    // 这对“首次进入场景 / 刚挂载到父节点”的场景尤其关键。
+    container.updateMatrixWorld(true)
+
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
       | SceneNodeComponentState<WallComponentProps>
       | undefined

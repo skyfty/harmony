@@ -10500,6 +10500,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     if (bodyAssetId && !getCachedModelObject(bodyAssetId)) {
       void ensureModelObjectCached(bodyAssetId)
     }
+    object.updateMatrixWorld(true)
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
 
   } else if (node.dynamicMesh?.type === 'Floor') {
@@ -10898,6 +10899,7 @@ function reconcileNode(node: SceneNode, parent: THREE.Object3D, encountered: Set
     if (object.parent !== parent) {
       parent.add(object)
     }
+    updateNodeObject(object, node)
   } else{
     if (object.parent !== parent) {
       parent.add(object)
@@ -11350,16 +11352,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = 'Ground'
     } else if (node.dynamicMesh?.type === 'Wall') {
       containerData.dynamicMeshType = 'Wall'
-
-      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
-        | SceneNodeComponentState<WallComponentProps>
-        | undefined
-      const wallProps = clampWallProps(wallComponent?.props as Partial<WallComponentProps> | null | undefined)
-      const bodyAssetId = wallProps.bodyAssetId ?? null
-      if (bodyAssetId && !getCachedModelObject(bodyAssetId)) {
-        void ensureModelObjectCached(bodyAssetId)
-      }
-      wallRenderer.syncWallContainer(container, node, DYNAMIC_MESH_SIGNATURE_KEY)
     } else if (node.dynamicMesh?.type === 'Road') {
       containerData.dynamicMeshType = 'Road'
       const roadDefinition = node.dynamicMesh as RoadDynamicMesh
