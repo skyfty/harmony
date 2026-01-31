@@ -93,6 +93,8 @@ export {
 
 export * from './assetTypeConversion'
 
+export * from './mirror'
+
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 

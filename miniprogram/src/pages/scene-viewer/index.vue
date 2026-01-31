@@ -458,6 +458,7 @@ import {
   type GroundDynamicMesh,
   type Vector3Like,
 } from '@schema/index';
+import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror';
 import { ComponentManager } from '@schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@schema/multiuserContext';
 import {
@@ -5233,7 +5234,6 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
   object.traverse(handleTarget);
 }
 
-
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
   const skipTransformSync = Boolean(autoTour) && !vehicleInstances.has(node.id);
@@ -5247,20 +5247,10 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
       object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
     }
   }
-  if (node.scale) {
-    const baseX = typeof node.scale.x === 'number' ? node.scale.x : 1;
-    const baseY = typeof node.scale.y === 'number' ? node.scale.y : 1;
-    const baseZ = typeof node.scale.z === 'number' ? node.scale.z : 1;
-    let scaleX = Math.abs(baseX);
-    let scaleY = Math.abs(baseY);
-    const scaleZ = Math.abs(baseZ);
-    if (node.mirror === 'horizontal') {
-      scaleX *= -1;
-    } else if (node.mirror === 'vertical') {
-      scaleY *= -1;
-    }
-    object.scale.set(scaleX, scaleY, scaleZ);
-  }
+  applyMirroredScaleToObject(object, node.scale ?? null, node.mirror);
+  // Mirror uses negative scale sign which flips triangle winding; ensure mirrored nodes
+  // render correctly by flipping material.side (Front<->Back) on a cloned variant.
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical');
   if (object.userData?.instancedAssetId) {
     syncContinuousInstancedModelCommitted({
       node,
@@ -5288,6 +5278,8 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
     object.visible = true;
   }
   applyMaterialOverrides(object, node.materials, materialOverrideOptions);
+  // Material overrides may replace materials; re-apply mirror fix after overrides.
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical');
   updateBehaviorVisibility(node.id, object.visible);
 }
 

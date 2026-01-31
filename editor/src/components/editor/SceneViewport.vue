@@ -106,6 +106,7 @@ import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending 
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
+import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@harmony/schema'
 
 
@@ -5961,6 +5962,38 @@ function handleMirrorSelection(payload: { mode: 'horizontal' | 'vertical' }) {
   }
   // Pivot-centered mirror: only toggle node.mirror and keep node.position unchanged.
   sceneStore.updateSelectionMirror(payload.mode)
+
+  // When a transform tool is active, TransformControls may not immediately recompute
+  // its gizmo axis after a mirror (negative scale sign) is applied. Re-attach the
+  // selection once the node patches have been applied so the gizmo matches the
+  // mirrored transform state without requiring tool reactivation.
+  if (!transformControls) {
+    return
+  }
+  const activeTool = props.activeTool
+  if (activeTool !== 'translate' && activeTool !== 'rotate' && activeTool !== 'scale') {
+    return
+  }
+  if (transformControls.dragging || sceneStore.activeTransformNodeId) {
+    return
+  }
+
+  // Apply the mirror patch immediately so runtime objects have updated scale signs.
+  if (!shouldDeferSceneGraphSync()) {
+    applyPendingScenePatches()
+  }
+
+  // Force a detach/attach cycle to refresh gizmo axes.
+  const selectedId = props.selectedNodeId ?? sceneStore.selectedNodeId ?? null
+  transformControls.detach()
+
+  // Re-apply mode + space explicitly (in case state is cached by the gizmo).
+  transformControls.enabled = true
+  applyTransformSpaceForSelection(activeTool, selectedId)
+  transformControls.setMode(activeTool)
+
+  attachSelection(selectedId, activeTool)
+  transformControls.getHelper().updateMatrixWorld(true)
 }
 
 function createScreenshotFileName(): string {
@@ -10477,20 +10510,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
-  {
-    const baseX = typeof node.scale?.x === 'number' ? node.scale.x : 1
-    const baseY = typeof node.scale?.y === 'number' ? node.scale.y : 1
-    const baseZ = typeof node.scale?.z === 'number' ? node.scale.z : 1
-    let scaleX = Math.abs(baseX)
-    let scaleY = Math.abs(baseY)
-    const scaleZ = Math.abs(baseZ)
-    if (node.mirror === 'horizontal') {
-      scaleX *= -1
-    } else if (node.mirror === 'vertical') {
-      scaleY *= -1
-    }
-    object.scale.set(scaleX, scaleY, scaleZ)
-  }
+  applyMirroredScaleToObject(object, node.scale ?? null, node.mirror)
+
+  // Mirror uses negative scale sign, which flips triangle winding. Use a DoubleSide
+  // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical')
+
   object.visible = node.visible ?? true
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
