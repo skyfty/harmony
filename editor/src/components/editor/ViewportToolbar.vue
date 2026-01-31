@@ -360,16 +360,18 @@
             />
           </template>
           <v-list density="compact" class="rotation-menu">
-            <v-list-item
-              title="Horizontal Mirror"
-              prepend-icon="mdi-flip-horizontal"
-              @click="handleMirrorAction('horizontal')"
-            />
-            <v-list-item
-              title="Vertical Mirror"
-              prepend-icon="mdi-flip-vertical"
-              @click="handleMirrorAction('vertical')"
-            />
+            <v-list-item :active="activeMirrorMode === 'horizontal'" @click="handleMirrorAction('horizontal')">
+              <template #prepend>
+                <v-icon>mdi-flip-horizontal</v-icon>
+              </template>
+              <v-list-item-title>Horizontal Mirror</v-list-item-title>
+            </v-list-item>
+            <v-list-item :active="activeMirrorMode === 'vertical'" @click="handleMirrorAction('vertical')">
+              <template #prepend>
+                <v-icon>mdi-flip-vertical</v-icon>
+              </template>
+              <v-list-item-title>Vertical Mirror</v-list-item-title>
+            </v-list-item>
           </v-list>
         </v-menu>
       <v-btn
@@ -604,6 +606,12 @@ const canEraseScatterEffective = computed(() => {
   } catch (_e) {
     return Boolean(canEraseScatter.value)
   }
+})
+
+const activeMirrorMode = computed<MirrorMode | null>(() => {
+  const node = activeNode.value as any
+  const m = node?.mirror
+  return m === 'horizontal' || m === 'vertical' ? m : null
 })
 
 watch(canEraseScatterEffective, (enabled) => {

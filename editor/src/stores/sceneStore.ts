@@ -8982,16 +8982,17 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const changedIds: string[] = []
+      // Determine which nodes actually change state (toggle behavior).
       normalized.forEach((id) => {
         const node = findNodeById(this.nodes, id)
         if (!node) {
           return
         }
         const existing = (node as any).mirror as unknown
-        if (existing === mode) {
-          return
+        // We will toggle: if existing === mode => remove mirror, else set to mode
+        if (existing === mode || existing === undefined || existing === null || existing !== mode) {
+          changedIds.push(id)
         }
-        changedIds.push(id)
       })
 
       if (!changedIds.length) {
@@ -9002,7 +9003,15 @@ export const useSceneStore = defineStore('scene', {
 
       changedIds.forEach((id) => {
         visitNode(this.nodes, id, (node) => {
-          ;(node as any).mirror = mode
+          const existing = (node as any).mirror as unknown
+          if (existing === mode) {
+            // toggle off
+            if ('mirror' in (node as any)) {
+              delete (node as any).mirror
+            }
+          } else {
+            ;(node as any).mirror = mode
+          }
         })
         this.queueSceneNodePatch(id, ['mirror'])
       })
