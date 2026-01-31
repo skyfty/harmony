@@ -5959,6 +5959,7 @@ function handleMirrorSelection(payload: { mode: 'horizontal' | 'vertical' }) {
   if (!canRotateSelection.value) {
     return
   }
+  // Pivot-centered mirror: only toggle node.mirror and keep node.position unchanged.
   sceneStore.updateSelectionMirror(payload.mode)
 }
 
