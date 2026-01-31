@@ -5250,7 +5250,7 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   applyMirroredScaleToObject(object, node.scale ?? null, node.mirror);
   // Mirror uses negative scale sign which flips triangle winding; ensure mirrored nodes
   // render correctly by flipping material.side (Front<->Back) on a cloned variant.
-  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical');
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror);
   if (object.userData?.instancedAssetId) {
     syncContinuousInstancedModelCommitted({
       node,
@@ -5279,7 +5279,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   }
   applyMaterialOverrides(object, node.materials, materialOverrideOptions);
   // Material overrides may replace materials; re-apply mirror fix after overrides.
-  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical');
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror);
   updateBehaviorVisibility(node.id, object.visible);
 }
 

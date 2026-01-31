@@ -19,6 +19,13 @@ export function useScenePicking(
 ) {
   const sceneStore = useSceneStore()
 
+  const DEFAULT_MAX_PICK_DISTANCE = 100
+  function getMaxPickDistance(): number {
+    const raw = (globalThis as any).__HARMONY_PICK_MAX_DISTANCE__
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_PICK_DISTANCE
+  }
+
   function isPickProxyObject(object: THREE.Object3D | null): boolean {
     let current: THREE.Object3D | null = object
     while (current) {
@@ -142,8 +149,11 @@ export function useScenePicking(
       addInstancedPickTarget(candidate)
     }
 
-    const intersections = raycaster.intersectObjects(pickTargets, recursive)
+    let intersections = raycaster.intersectObjects(pickTargets, recursive)
     intersections.sort((a, b) => a.distance - b.distance)
+    // filter by configured max pick distance (distance is from the ray origin)
+    const maxD = getMaxPickDistance()
+    intersections = intersections.filter((it) => typeof it.distance === 'number' ? it.distance <= maxD : true)
     return intersections
   }
 

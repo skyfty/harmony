@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { cloneGeometryForMirroredInstance } from '@schema/mirror'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
@@ -384,6 +385,13 @@ const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
+
+const PICK_MAX_DISTANCE_DEFAULT = 100
+function getPickMaxDistance() {
+  const raw = (window as any).__HARMONY_PICK_MAX_DISTANCE__
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : PICK_MAX_DISTANCE_DEFAULT
+}
 let protagonistInitialVisibilityCapture: ProtagonistInitialVisibilityCapture | null = null
 
 const instancedOutlineManager = createInstancedOutlineManager({ outlineGroup: instancedOutlineGroup })
@@ -425,6 +433,8 @@ const instancedHoverRestoreMaterial = new THREE.MeshBasicMaterial({
 instancedHoverRestoreMaterial.toneMapped = false
 
 const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
+
+// Debug bounds visualization removed
 
 type InstanceLayoutMatrixCacheEntry = {
   bindingKey: string
@@ -3037,6 +3047,7 @@ let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
 
 let pointerTrackingState: PointerTrackingState | null = null
+// debugHoverHit removed
 
 type MiddleClickSessionState = {
   pointerId: number
@@ -3921,6 +3932,17 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
   const intersection = raycaster.ray.intersectBox(selectionDragBoundingBox, selectionDragIntersectionHelper)
   if (!intersection) {
     return null
+  }
+
+  // enforce max pick distance
+  try {
+    const camPos = camera.position
+    const dist = camPos.distanceTo(intersection)
+    if (dist > getPickMaxDistance()) {
+      return null
+    }
+  } catch (e) {
+    // if camera not available fall through
   }
 
   return {
@@ -7515,6 +7537,7 @@ function animate() {
     prof.buildingLabels = (prof.buildingLabels ?? 0) + (performance.now() - t0_labels)
   }
   const t0_render = performance.now()
+  // debug bounds update removed
   renderViewportFrame()
   prof.render = performance.now() - t0_render
   const t0_gizmoRender = performance.now()
@@ -7655,6 +7678,7 @@ function disposeScene() {
     sceneStore.clearNodeHighlightRequest(sceneStore.nodeHighlightTargetId)
   }
   releaseGroundMeshCache()
+  // debug helpers removed earlier
   scene = null
   camera = null
   perspectiveCamera = null
@@ -8542,6 +8566,8 @@ function handlePointerMove(event: PointerEvent) {
   lastPointerClientX = event.clientX
   lastPointerClientY = event.clientY
   lastPointerType = event.pointerType
+
+  // (debug hover capture removed)
 
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
     const dx = event.clientX - middleClickSessionState.startX
@@ -10510,11 +10536,35 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+
+
   applyMirroredScaleToObject(object, node.scale ?? null, node.mirror)
+
+  // InstancedMesh: for mirrored instance, clone geometry and flip tangent.w
+  if ((object as any).isInstancedMesh) {
+    const mesh = object as THREE.InstancedMesh
+    if (node.mirror === 'horizontal' || node.mirror === 'vertical') {
+      // Only clone if not already mirrored (avoid repeated clones)
+      if (!mesh.userData.__harmonyMirroredGeometry) {
+        const clonedGeom = cloneGeometryForMirroredInstance(mesh.geometry, node.mirror)
+        mesh.geometry = clonedGeom
+        mesh.userData.__harmonyMirroredGeometry = true
+      }
+    } else if (mesh.userData.__harmonyMirroredGeometry && !node.mirror) {
+      // Restore original geometry if mirror is removed
+      if (mesh.userData.__harmonyOriginalGeometry) {
+        mesh.geometry = mesh.userData.__harmonyOriginalGeometry
+        delete mesh.userData.__harmonyMirroredGeometry
+      }
+    } else if (!mesh.userData.__harmonyOriginalGeometry) {
+      // Cache original geometry for restoration
+      mesh.userData.__harmonyOriginalGeometry = mesh.geometry
+    }
+  }
 
   // Mirror uses negative scale sign, which flips triangle winding. Use a DoubleSide
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
-  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical')
+  syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
   object.visible = node.visible ?? true
   if (object.userData?.instancedAssetId) {

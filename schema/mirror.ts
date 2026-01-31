@@ -1,3 +1,21 @@
+/**
+ * Clone geometry for mirrored instance (for InstancedMesh).
+ * Returns a new BufferGeometry with tangent.w flipped if present.
+ */
+export function cloneGeometryForMirroredInstance(geometry: THREE.BufferGeometry, mirror?: MirrorMode): THREE.BufferGeometry {
+  const cloned = geometry.clone()
+  // Flip tangent.w if present
+  const tang = cloned.attributes && (cloned.attributes as any).tangent
+  if (tang && tang.itemSize === 4) {
+    const arr = tang.array as any
+    for (let i = 3; i < arr.length; i += 4) {
+      arr[i] = -arr[i]
+    }
+    tang.needsUpdate = true
+  }
+  // Optionally: flip normals if needed (not usually required for mirror)
+  return cloned
+}
 import * as THREE from 'three'
 
 export type MirrorMode = 'horizontal' | 'vertical' | null | undefined
@@ -85,7 +103,49 @@ function syncMirroredMaterialSide(
   }
 }
 
-export function syncMirroredMeshMaterials(root: THREE.Object3D, mirrored: boolean): void {
+export const MIRROR_TANGENTS_FLAG = '__harmonyMirrorTangentsFlipped'
+
+function flipTangentWOnGeometryIfNeeded(geometry: THREE.BufferGeometry): boolean {
+  const tang = geometry.attributes && (geometry.attributes as any).tangent
+  if (!tang || !(tang.itemSize === 4)) {
+    return false
+  }
+  const arr = tang.array as any
+  // w is the 4th component of tangent (index 3,7,11...)
+  for (let i = 3; i < arr.length; i += 4) {
+    arr[i] = -arr[i]
+  }
+  tang.needsUpdate = true
+  return true
+}
+
+function adjustMaterialNormalScales(material: THREE.Material | THREE.Material[] | null | undefined, mirror?: MirrorMode): void {
+  if (!material) return
+  const applyToMat = (m: any) => {
+    if (!m) return
+    try {
+      if (mirror === 'horizontal') {
+        if (m.normalScale) m.normalScale.x = -m.normalScale.x
+        if (m.clearcoatNormalScale) m.clearcoatNormalScale.x = -m.clearcoatNormalScale.x
+      } else if (mirror === 'vertical') {
+        if (m.normalScale) m.normalScale.y = -m.normalScale.y
+        if (m.clearcoatNormalScale) m.clearcoatNormalScale.y = -m.clearcoatNormalScale.y
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (Array.isArray(material)) {
+    for (let i = 0; i < material.length; i += 1) {
+      applyToMat(material[i])
+    }
+    return
+  }
+  applyToMat(material as any)
+}
+
+export function syncMirroredMeshMaterials(root: THREE.Object3D, mirrored: boolean, mirror?: MirrorMode): void {
   root.traverse((child) => {
     const mesh = child as unknown as THREE.Mesh
     if (!(mesh as any)?.isMesh) {
@@ -109,13 +169,36 @@ export function syncMirroredMeshMaterials(root: THREE.Object3D, mirrored: boolea
       }
 
       syncMirroredMaterialSide(state.original, state.mirrored)
+      // Adjust normal-like scales on the cloned/mirrored material to correct normal-map X/Y flipping
+      adjustMaterialNormalScales(state.mirrored, mirror)
+
       userData[MIRROR_MATERIAL_STATE_KEY] = state
       mesh.material = state.mirrored as any
+
+      // Fix geometry tangents handedness if present. Track via userData so we can revert.
+      const geom = (mesh as any).geometry as THREE.BufferGeometry | undefined
+      if (geom) {
+        const flipped = flipTangentWOnGeometryIfNeeded(geom)
+        if (flipped) {
+          userData[MIRROR_TANGENTS_FLAG] = true
+        }
+      }
+
       return
     }
 
+    // restoring original material
     if (existing) {
       mesh.material = existing.original as any
+    }
+
+    // If we previously flipped tangents for this mesh, flip them back
+    const geom = (mesh as any).geometry as THREE.BufferGeometry | undefined
+    if (geom && userData[MIRROR_TANGENTS_FLAG]) {
+      const flippedBack = flipTangentWOnGeometryIfNeeded(geom)
+      if (flippedBack) {
+        delete userData[MIRROR_TANGENTS_FLAG]
+      }
     }
   })
 }
