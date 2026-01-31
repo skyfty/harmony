@@ -688,6 +688,12 @@ export interface SceneNode {
   rotation: Vector3Like;
   scale: Vector3Like;
   /**
+   * Mirror transform to apply at render time.
+   * - 'horizontal' mirrors across the YZ plane (flip world X).
+   * - 'vertical' mirrors across the XZ plane (flip world Y).
+   */
+  mirror?: 'horizontal' | 'vertical' | null;
+  /**
    * Controls whether this node shows a selection highlight in the editor.
    * Defaults to true when omitted, except Ground nodes default to false.
    */

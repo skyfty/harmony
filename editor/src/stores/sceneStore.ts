@@ -620,6 +620,7 @@ export type ScenePatchField =
   | 'light'
   | 'runtime'
   | 'userData'
+  | 'mirror'
   | 'instanceLayout'
   | 'name'
   | 'groupExpanded'
@@ -6628,6 +6629,7 @@ type NodeBasicsHistoryRequest = {
   visible?: boolean
   locked?: boolean
   userData?: boolean
+  mirror?: boolean
 }
 
 function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHistoryRequest[]): SceneHistoryEntry {
@@ -6657,6 +6659,10 @@ function createNodeBasicsHistoryEntry(store: SceneState, requests: NodeBasicsHis
     if (request.userData) {
       const raw = (node as any).userData
       snapshot.userData = raw && isPlainRecord(raw) ? (clonePlainRecord(raw) ?? null) : null
+    }
+    if (request.mirror) {
+      const raw = (node as any).mirror
+      snapshot.mirror = typeof raw === 'string' ? raw : null
     }
 
     // Avoid writing empty snapshots.
@@ -6928,6 +6934,7 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
           visible: hasOwn(snapshot, 'visible'),
           locked: hasOwn(snapshot, 'locked'),
           userData: hasOwn(snapshot, 'userData'),
+          mirror: hasOwn(snapshot, 'mirror'),
         }
       })
       return createNodeBasicsHistoryEntry(store, requests)
@@ -7022,6 +7029,16 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
           if (hasOwn(snapshot, 'userData')) {
             const raw = snapshot.userData
             ;(node as any).userData = raw && isPlainRecord(raw) ? (clonePlainRecord(raw) ?? null) : null
+          }
+          if (hasOwn(snapshot, 'mirror')) {
+            const raw = (snapshot as any).mirror
+            if (raw === null) {
+              if ('mirror' in (node as any)) {
+                delete (node as any).mirror
+              }
+            } else if (raw === 'horizontal' || raw === 'vertical') {
+              ;(node as any).mirror = raw
+            }
           }
         })
       })
@@ -8953,6 +8970,43 @@ export const useSceneStore = defineStore('scene', {
         }
       })
       this.queueSceneNodePatch(nodeId, ['userData'])
+      commitSceneSnapshot(this)
+    },
+
+    updateSelectionMirror(mode: 'horizontal' | 'vertical') {
+      const normalized = Array.isArray(this.selectedNodeIds)
+        ? this.selectedNodeIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+      if (!normalized.length) {
+        return
+      }
+
+      const changedIds: string[] = []
+      normalized.forEach((id) => {
+        const node = findNodeById(this.nodes, id)
+        if (!node) {
+          return
+        }
+        const existing = (node as any).mirror as unknown
+        if (existing === mode) {
+          return
+        }
+        changedIds.push(id)
+      })
+
+      if (!changedIds.length) {
+        return
+      }
+
+      this.captureNodeBasicsHistorySnapshot(changedIds.map((id) => ({ id, mirror: true })))
+
+      changedIds.forEach((id) => {
+        visitNode(this.nodes, id, (node) => {
+          ;(node as any).mirror = mode
+        })
+        this.queueSceneNodePatch(id, ['mirror'])
+      })
+
       commitSceneSnapshot(this)
     },
 

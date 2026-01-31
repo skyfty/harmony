@@ -5955,6 +5955,13 @@ function handleRotateSelection(options: SelectionRotationOptions) {
   rotateSelection(options)
 }
 
+function handleMirrorSelection(payload: { mode: 'horizontal' | 'vertical' }) {
+  if (!canRotateSelection.value) {
+    return
+  }
+  sceneStore.updateSelectionMirror(payload.mode)
+}
+
 function createScreenshotFileName(): string {
   const sceneName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const normalized = sceneName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
@@ -10469,7 +10476,20 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
-  object.scale.set(node.scale.x, node.scale.y, node.scale.z)
+  {
+    const baseX = typeof node.scale?.x === 'number' ? node.scale.x : 1
+    const baseY = typeof node.scale?.y === 'number' ? node.scale.y : 1
+    const baseZ = typeof node.scale?.z === 'number' ? node.scale.z : 1
+    let scaleX = Math.abs(baseX)
+    let scaleY = Math.abs(baseY)
+    const scaleZ = Math.abs(baseZ)
+    if (node.mirror === 'horizontal') {
+      scaleX *= -1
+    } else if (node.mirror === 'vertical') {
+      scaleY *= -1
+    }
+    object.scale.set(scaleX, scaleY, scaleZ)
+  }
   object.visible = node.visible ?? true
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
@@ -12106,6 +12126,7 @@ defineExpose<SceneViewportHandle>({
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
+        :can-mirror-selection="canRotateSelection"
         :can-erase-scatter="canUseScatterEraseTool"
         :canClearAllScatterInstances="selectedNodeIsGround"
         :scatter-erase-mode-active="scatterEraseModeActive"
@@ -12122,6 +12143,7 @@ defineExpose<SceneViewportHandle>({
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
+        @mirror-selection="handleMirrorSelection"
         @capture-screenshot="handleCaptureScreenshot"
         @change-build-tool="handleBuildToolChange"
         @select-wall-preset="handleWallPresetDialogUpdate"

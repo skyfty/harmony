@@ -345,6 +345,33 @@
           </template>
         </v-list>
       </v-menu>
+        <v-menu v-model="mirrorMenuOpen" location="bottom" :offset="8">
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              icon="mdi-mirror-rectangle"
+              density="compact"
+              size="small"
+              color="undefined"
+              variant="text"
+              class="toolbar-button"
+              title="Mirror"
+              :disabled="!canMirrorSelection"
+            />
+          </template>
+          <v-list density="compact" class="rotation-menu">
+            <v-list-item
+              title="Horizontal Mirror"
+              prepend-icon="mdi-flip-horizontal"
+              @click="handleMirrorAction('horizontal')"
+            />
+            <v-list-item
+              title="Vertical Mirror"
+              prepend-icon="mdi-flip-vertical"
+              @click="handleMirrorAction('vertical')"
+            />
+          </v-list>
+        </v-menu>
       <v-btn
         :icon="vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'"
         :color="vertexSnapEnabled ? 'primary' : undefined"
@@ -428,6 +455,7 @@ const props = withDefaults(
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
+  canMirrorSelection: boolean
   canEraseScatter: boolean
   canClearAllScatterInstances: boolean
   activeBuildTool: BuildTool | null
@@ -453,6 +481,7 @@ const emit = defineEmits<{
   (event: 'drop-to-ground'): void
   (event: 'align-selection', command: AlignCommand | AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
+  (event: 'mirror-selection', payload: { mode: MirrorMode }): void
   (event: 'capture-screenshot'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'open-wall-preset-picker', anchor: { x: number; y: number }): void
@@ -474,6 +503,7 @@ const {
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
+  canMirrorSelection,
   canEraseScatter,
   canClearAllScatterInstances,
   scatterEraseModeActive,
@@ -500,6 +530,7 @@ const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.s
 const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
+const mirrorMenuOpen = ref(false)
 const wallPresetMenuOpen = ref(false)
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
@@ -515,6 +546,8 @@ const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 
 const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Shift)' : 'Scatter Erase'))
 
 type RotationAxis = 'x' | 'y'
+
+type MirrorMode = 'horizontal' | 'vertical'
 
 type RotationAction = {
   id: string
@@ -547,6 +580,12 @@ const rotationSections = [
 watch(canRotateSelection, (enabled) => {
   if (!enabled && rotationMenuOpen.value) {
     rotationMenuOpen.value = false
+  }
+})
+
+watch(canMirrorSelection, (enabled) => {
+  if (!enabled && mirrorMenuOpen.value) {
+    mirrorMenuOpen.value = false
   }
 })
 
@@ -607,6 +646,15 @@ function handleRotationAction(action: RotationAction) {
   }
   emit('rotate-selection', { axis: action.axis, degrees: action.degrees })
   rotationMenuOpen.value = false
+}
+
+function handleMirrorAction(mode: MirrorMode) {
+  if (!canMirrorSelection.value) {
+    mirrorMenuOpen.value = false
+    return
+  }
+  emit('mirror-selection', { mode })
+  mirrorMenuOpen.value = false
 }
 
 const canSavePrefab = computed(() => {

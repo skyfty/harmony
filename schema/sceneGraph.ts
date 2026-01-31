@@ -1254,7 +1254,22 @@ class SceneGraphBuilder {
       object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
     }
     if (node.scale) {
-      object.scale.set(node.scale.x, node.scale.y, node.scale.z);
+      const baseX = typeof node.scale.x === 'number' ? node.scale.x : 1;
+      const baseY = typeof node.scale.y === 'number' ? node.scale.y : 1;
+      const baseZ = typeof node.scale.z === 'number' ? node.scale.z : 1;
+
+      let scaleX = Math.abs(baseX);
+      let scaleY = Math.abs(baseY);
+      const scaleZ = Math.abs(baseZ);
+
+      // Editor semantics: horizontal = world X, vertical = world Y.
+      if (node.mirror === 'horizontal') {
+        scaleX *= -1;
+      } else if (node.mirror === 'vertical') {
+        scaleY *= -1;
+      }
+
+      object.scale.set(scaleX, scaleY, scaleZ);
     }
   }
 
