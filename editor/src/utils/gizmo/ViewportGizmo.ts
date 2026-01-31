@@ -32,12 +32,21 @@ import type {
 } from "./types";
 import { GIZMO_EPSILON, GIZMO_TURN_RATE } from "./utils/constants";
 import { updateBackground } from "./utils/updateBackground";
-import type { OrbitControls } from "three/examples/jsm/Addons.js";
 import { optionsFallback } from "./utils/optionsFallback";
 import { clamp } from "three/src/math/MathUtils.js";
 import { axesObjects } from "./utils/axesObjects";
 import { axisHover } from "./utils/axisHover";
 import type { WebGPURenderer } from "three/webgpu";
+
+type CameraControlsEventName = "start" | "end" | "change";
+
+type CameraControlsWithTarget = {
+  enabled: boolean;
+  target: Vector3;
+  update: () => void;
+  addEventListener: (type: CameraControlsEventName, listener: (...args: any[]) => void) => void;
+  removeEventListener: (type: CameraControlsEventName, listener: (...args: any[]) => void) => void;
+};
 
 export type { GizmoOptions, ViewportGizmoEventMap, GizmoAxisOptions };
 
@@ -110,7 +119,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
   private _pointerStart = new Vector2();
   private _focus: GizmoAxisObject | null = null;
   private _placement!: GizmoOptionsFallback["placement"];
-  private _controls?: OrbitControls;
+  private _controls?: CameraControlsWithTarget;
   private _controlsListeners?: {
     start: () => void;
     end: () => void;
@@ -377,7 +386,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
    *
    * @param controls - The scene's {@link https://threejs.org/docs/#examples/en/controls/OrbitControls OrbitControls}
    */
-  attachControls(controls: OrbitControls) {
+  attachControls(controls: CameraControlsWithTarget) {
     this.detachControls();
 
     this.target = controls.target;

@@ -42,6 +42,23 @@ function clearLogs(): void {
   consoleStore.clear()
 }
 
+function downloadLogs(): void {
+  const lines = filteredEntries.value.map((entry) => {
+    return `${formatTimestamp(entry.timestamp)} [${entry.level.toUpperCase()}] ${entry.message}`
+  })
+  const content = lines.join('\n')
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const filename = `console-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 function formatTimestamp(value: number): string {
   return timeFormatter.format(new Date(value))
 }
@@ -80,6 +97,16 @@ onMounted(() => {
         </v-btn>
       </div>
       <v-spacer />
+      <v-btn
+        class="console-toolbar__download"
+        variant="text"
+        size="small"
+        color="primary"
+        @click="downloadLogs"
+      >
+        <v-icon icon="mdi-download" size="18" />
+        Download
+      </v-btn>
       <v-btn
         class="console-toolbar__clear"
         variant="text"
@@ -170,6 +197,13 @@ onMounted(() => {
 }
 
 .console-toolbar__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+}
+
+.console-toolbar__download {
   display: inline-flex;
   align-items: center;
   gap: 6px;

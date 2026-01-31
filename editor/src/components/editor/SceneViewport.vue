@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
+import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
@@ -732,7 +733,7 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let mapControls: CameraControlsOrbit | CameraControlsMap | null = null
+let mapControls: CameraControlsOrbit | CameraControlsTrackball | CameraControlsMap | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
@@ -3305,6 +3306,11 @@ function isBuildToolBlockedDuringGroundSculptConfig(
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
 }
+
+// Camera controls debug (DEV only): set `window.__HARMONY_CAMERA_CONTROLS_DEBUG__ = true` in DevTools.
+// Removed camera controls debug logging.
+
+// Removed handleViewportWheelDebug
 
 function maybeCancelBuildToolOnRightDoubleClick(event: PointerEvent): boolean {
   if (event.button !== 2) {
@@ -6292,6 +6298,22 @@ function syncControlsConstraintsAndSpeeds() {
   // @ts-ignore
   ;(mapControls as any).keyPanSpeed = 7.0 * speedScale
 
+  // debug logs removed
+
+  // When users report wheel stops working, it's often because controls are disabled
+  // or distance hits a clamp. Surface both conditions quickly.
+  if (!mapControls.enabled) {
+    // debug logs removed
+  } else {
+    const eps = 1e-6
+    if (distance <= mapControls.minDistance + eps) {
+      // debug logs removed
+    }
+    if (distance >= mapControls.maxDistance - eps) {
+      // debug logs removed
+    }
+  }
+
   syncCameraClipPlanes({ target, radiusHint: radiusUsed })
 }
 
@@ -6434,7 +6456,6 @@ function focusCameraOnNode(nodeId: string): boolean {
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
-
   syncControlsConstraintsAndSpeeds()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
@@ -6466,6 +6487,8 @@ function applyCameraControlMode() {
     mapControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
   mapControls.enabled = previousEnabled
+
+  // debug logs removed
 
   // Apply scale-aware limits/speeds without changing current camera distance.
   if (!lastCameraFocusRadius) {
@@ -6666,6 +6689,7 @@ function initScene() {
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
   canvasRef.value.addEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
   canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
+  // Wheel debug removed.
   if (typeof window !== 'undefined') {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
@@ -6685,6 +6709,9 @@ function initScene() {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
     }
+    // TrackballControls relies on a cached DOMRect for correct pointer math.
+    // Calling this is safe for other controls (it will no-op if not present).
+    ;(mapControls as any)?.handleResize?.()
     gizmoControls?.update()
   })
   resizeObserver.observe(viewportEl.value)
@@ -7478,6 +7505,7 @@ function disposeScene() {
     canvasRef.value.removeEventListener('pointerdown', handlePointerDown, { capture: true })
     canvasRef.value.removeEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
     canvasRef.value.removeEventListener('contextmenu', handleViewportContextMenu)
+    // Wheel debug listener removed.
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointermove', handlePointerMove)
