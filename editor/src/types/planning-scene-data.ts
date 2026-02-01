@@ -12,6 +12,10 @@ export interface PlanningPolygonData {
   points: PlanningPoint[]
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
+  /** Optional; wall preset prefab asset id (.wall). When set, overrides the layer default. */
+  wallPresetAssetId?: string | null
+  /** Optional; floor preset prefab asset id (.floor). When set, overrides the layer default. */
+  floorPresetAssetId?: string | null
 }
 
 export interface PlanningPolylineData {
@@ -27,6 +31,8 @@ export interface PlanningPolylineData {
   cornerSmoothness?: number
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
+  /** Optional; wall preset prefab asset id (.wall). When set, overrides the layer default. */
+  wallPresetAssetId?: string | null
 }
 
 export interface PlanningImageData {
@@ -63,6 +69,8 @@ export interface PlanningLayerState {
   roadSmoothing?: number
   /** Optional; controls how smooth floor corners should be when converting. */
   floorSmooth?: number
+  /** Optional; floor preset prefab asset id (expects .floor). */
+  floorPresetAssetId?: string | null
   /** Optional; currently used by wall layers. */
   wallHeightMeters?: number
   /** Optional; currently used by wall layers. */

@@ -121,10 +121,17 @@ export type ConvertPlanningToSceneOptions = {
     setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; }) => Promise<void>
     registerAsset: (asset: ProjectAsset) => Promise<void>
+    loadWallPreset?: (assetId: string) => Promise<import('@/utils/wallPreset').WallPresetData>
     applyWallPresetToNode?: (
       nodeId: string,
       assetId: string,
       presetData?: import('@/utils/wallPreset').WallPresetData
+    ) => Promise<Record<string, unknown>>
+    loadFloorPreset?: (assetId: string) => Promise<import('@/utils/floorPreset').FloorPresetData>
+    applyFloorPresetToNode?: (
+      nodeId: string,
+      assetId: string,
+      presetData?: import('@/utils/floorPreset').FloorPresetData | null
     ) => Promise<Record<string, unknown>>
   }
   planningData: PlanningSceneData
@@ -778,6 +785,22 @@ function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, lay
   return 0.1
 }
 
+function resolveLayerPresetAssetId(
+  planningData: PlanningSceneData,
+  layerId: string,
+  key: 'wallPresetAssetId' | 'floorPresetAssetId',
+): string | null {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const val = found?.[key]
+    if (typeof val === 'string' && val.trim().length) {
+      return val.trim()
+    }
+  }
+  return null
+}
+
 function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers
   if (Array.isArray(raw)) {
@@ -1349,6 +1372,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+      const layerFloorPresetId = resolveLayerPresetAssetId(planningData, layerId, 'floorPresetAssetId')
+      const floorPresetCache = new Map<string, import('@/utils/floorPreset').FloorPresetData>()
       for (const poly of group.polygons) {
         updateProgressForUnit(`Converting floor: ${poly.name?.trim() || poly.id}`)
         const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
@@ -1377,6 +1402,30 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           position: 'inside',
           recenterSkipGroupIds: [root.id],
         })
+
+        const featurePresetRaw = (poly as any)?.floorPresetAssetId
+        const featureFloorPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
+          ? featurePresetRaw.trim()
+          : null
+        const effectiveFloorPresetId = featureFloorPresetId ?? layerFloorPresetId
+
+        if (effectiveFloorPresetId && sceneStore.applyFloorPresetToNode) {
+          try {
+            let presetData = floorPresetCache.get(effectiveFloorPresetId)
+            if (!presetData) {
+              const loader = sceneStore.loadFloorPreset ?? (sceneStore as any).loadFloorPreset
+              if (typeof loader !== 'function') {
+                throw new Error('loadFloorPreset is not available on sceneStore')
+              }
+              const loaded: import('@/utils/floorPreset').FloorPresetData = await loader(effectiveFloorPresetId)
+              presetData = loaded
+              floorPresetCache.set(effectiveFloorPresetId, loaded)
+            }
+            await sceneStore.applyFloorPresetToNode(floorNode.id, effectiveFloorPresetId, presetData)
+          } catch (err) {
+            console.warn('Failed to apply floor preset during planning conversion', floorNode.id, effectiveFloorPresetId, err)
+          }
+        }
 
         const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
         if (floorComponent?.id) {
@@ -1856,29 +1905,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
-      // Attempt to load a layer-scoped wall preset (only once per layer)
-      let layerWallPreset: import('@/utils/wallPreset').WallPresetData | null = null
-      let layerWallPresetId: string | null = null
-      try {
-        const rawLayers = (planningData as any)?.layers
-        if (Array.isArray(rawLayers)) {
-          const found = rawLayers.find((item: any) => item && item.id === layerId)
-          const presetId = found?.wallPresetAssetId
-          if (typeof presetId === 'string' && presetId.trim().length) {
-            layerWallPresetId = presetId.trim()
-            try {
-              layerWallPreset = await (sceneStore as any).loadWallPreset(layerWallPresetId)
-            } catch (err) {
-              console.warn('Failed to load wall preset for planning layer', layerId, presetId, err)
-              layerWallPreset = null
-              layerWallPresetId = null
-            }
-          }
-        }
-      } catch (err) {
-        layerWallPreset = null
-        layerWallPresetId = null
-      }
+      const layerWallPresetId = resolveLayerPresetAssetId(planningData, layerId, 'wallPresetAssetId')
+      const wallPresetCache = new Map<string, import('@/utils/wallPreset').WallPresetData>()
 
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
@@ -1907,15 +1935,31 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
-            if (layerWallPresetId && sceneStore.applyWallPresetToNode) {
+            const featurePresetRaw = (line as any)?.wallPresetAssetId
+            const featureWallPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
+              ? featurePresetRaw.trim()
+              : null
+            const effectiveWallPresetId = featureWallPresetId ?? layerWallPresetId
+
+            if (effectiveWallPresetId && sceneStore.applyWallPresetToNode) {
               try {
+                let presetData = wallPresetCache.get(effectiveWallPresetId)
+                if (!presetData) {
+                  const loader = sceneStore.loadWallPreset ?? (sceneStore as any).loadWallPreset
+                  if (typeof loader !== 'function') {
+                    throw new Error('loadWallPreset is not available on sceneStore')
+                  }
+                  const loaded: import('@/utils/wallPreset').WallPresetData = await loader(effectiveWallPresetId)
+                  presetData = loaded
+                  wallPresetCache.set(effectiveWallPresetId, loaded)
+                }
                 await sceneStore.applyWallPresetToNode(
                   wall.id,
-                  layerWallPresetId,
-                  layerWallPreset ? layerWallPreset : undefined,
+                  effectiveWallPresetId,
+                  presetData,
                 )
               } catch (err) {
-                console.warn('Failed to apply wall preset during planning conversion', wall.id, err)
+                console.warn('Failed to apply wall preset during planning conversion', wall.id, effectiveWallPresetId, err)
               }
             }
 
@@ -1961,15 +2005,31 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             sceneStore.setNodeLocked(wall.id, true)
             ensureStaticRigidbody(sceneStore, wall)
 
-            if (layerWallPresetId && sceneStore.applyWallPresetToNode) {
+            const featurePresetRaw = (poly as any)?.wallPresetAssetId
+            const featureWallPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
+              ? featurePresetRaw.trim()
+              : null
+            const effectiveWallPresetId = featureWallPresetId ?? layerWallPresetId
+
+            if (effectiveWallPresetId && sceneStore.applyWallPresetToNode) {
               try {
+                let presetData = wallPresetCache.get(effectiveWallPresetId)
+                if (!presetData) {
+                  const loader = sceneStore.loadWallPreset ?? (sceneStore as any).loadWallPreset
+                  if (typeof loader !== 'function') {
+                    throw new Error('loadWallPreset is not available on sceneStore')
+                  }
+                  const loaded: import('@/utils/wallPreset').WallPresetData = await loader(effectiveWallPresetId)
+                  presetData = loaded
+                  wallPresetCache.set(effectiveWallPresetId, loaded)
+                }
                 await sceneStore.applyWallPresetToNode(
                   wall.id,
-                  layerWallPresetId,
-                  layerWallPreset ? layerWallPreset : undefined,
+                  effectiveWallPresetId,
+                  presetData,
                 )
               } catch (err) {
-                console.warn('Failed to apply wall preset during planning conversion', wall.id, err)
+                console.warn('Failed to apply wall preset during planning conversion', wall.id, effectiveWallPresetId, err)
               }
             }
 

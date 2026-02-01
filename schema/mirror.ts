@@ -3,6 +3,7 @@
  * Returns a new BufferGeometry with tangent.w flipped if present.
  */
 export function cloneGeometryForMirroredInstance(geometry: THREE.BufferGeometry, mirror?: MirrorMode): THREE.BufferGeometry {
+  void mirror
   const cloned = geometry.clone()
   // Flip tangent.w if present
   const tang = cloned.attributes && (cloned.attributes as any).tangent

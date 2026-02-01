@@ -18,6 +18,7 @@ import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
 import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { isWallPresetFilename } from '@/utils/wallPreset'
+import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
@@ -116,6 +117,8 @@ interface PlanningLayer {
   wallThicknessMeters?: number
   /** Wall preset prefab asset id (.wall). Only used when kind === 'wall'. */
   wallPresetAssetId?: string | null
+  /** Floor preset prefab asset id (.floor). Only used when kind === 'floor'. */
+  floorPresetAssetId?: string | null
 }
 
 interface PlanningPoint {
@@ -163,6 +166,10 @@ interface PlanningPolygon {
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
+  /** Wall preset prefab asset id (.wall). When set, overrides the layer default. */
+  wallPresetAssetId?: string | null
+  /** Floor preset prefab asset id (.floor). When set, overrides the layer default. */
+  floorPresetAssetId?: string | null
   /** Placed building models (only meaningful for building layer) */
   placedModels?: PlacedModel[]
 }
@@ -179,6 +186,8 @@ interface PlanningPolyline {
   cornerSmoothness?: number
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
+  /** Wall preset prefab asset id (.wall). When set, overrides the layer default. */
+  wallPresetAssetId?: string | null
 }
 
 type ScatterTarget =
@@ -274,7 +283,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadLaneLines: false, roadSmoothing: 0.09 },
   { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
-  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
+  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1, floorPresetAssetId: null },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
   { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
   { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15, wallPresetAssetId: null },
@@ -1363,6 +1372,7 @@ function buildPlanningSnapshot() {
         roadSmoothing: layer.roadSmoothing,
       waterSmoothing: layer.waterSmoothing,
       floorSmooth: layer.floorSmooth,
+      floorPresetAssetId: layer.floorPresetAssetId ?? null,
       wallHeightMeters: layer.wallHeightMeters,
       wallThicknessMeters: layer.wallThicknessMeters,
       wallPresetAssetId: layer.wallPresetAssetId ?? null,
@@ -1378,6 +1388,8 @@ function buildPlanningSnapshot() {
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
       airWallEnabled: poly.airWallEnabled ? true : undefined,
+      wallPresetAssetId: poly.wallPresetAssetId ?? null,
+      floorPresetAssetId: poly.floorPresetAssetId ?? null,
       scatter: poly.scatter
         ? (() => {
           const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
@@ -1405,6 +1417,7 @@ function buildPlanningSnapshot() {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
+      wallPresetAssetId: line.wallPresetAssetId ?? null,
       waypoints: getLayerKind(line.layerId) === 'guide-route'
         ? (Array.isArray(line.waypoints)
           ? line.waypoints.map((w) => ({
@@ -1720,6 +1733,10 @@ function loadPlanningFromScene() {
               typeof (raw as any).wallPresetAssetId === 'string'
                 ? (String((raw as any).wallPresetAssetId).trim() || null)
                 : null,
+            floorPresetAssetId:
+              typeof (raw as any).floorPresetAssetId === 'string'
+                ? (String((raw as any).floorPresetAssetId).trim() || null)
+                : null,
             floorSmooth:
               typeof (raw as any).floorSmooth === 'number'
                 ? Number((raw as any).floorSmooth)
@@ -1771,6 +1788,14 @@ function loadPlanningFromScene() {
       layerId: (poly as any).layerId,
       points: Array.isArray((poly as any).points) ? (poly as any).points.map((p: any) => ({ x: p.x, y: p.y })) : [],
       airWallEnabled: Boolean((poly as any).airWallEnabled),
+      wallPresetAssetId:
+        typeof (poly as any).wallPresetAssetId === 'string'
+          ? (String((poly as any).wallPresetAssetId).trim() || null)
+          : null,
+      floorPresetAssetId:
+        typeof (poly as any).floorPresetAssetId === 'string'
+          ? (String((poly as any).floorPresetAssetId).trim() || null)
+          : null,
       scatter: normalizeScatterAssignment((poly as Record<string, unknown>).scatter),
     }))
     : []
@@ -1821,6 +1846,10 @@ function loadPlanningFromScene() {
         layerId: (line as any).layerId,
         points,
         waypoints,
+        wallPresetAssetId:
+          typeof (line as any).wallPresetAssetId === 'string'
+            ? (String((line as any).wallPresetAssetId).trim() || null)
+            : null,
         cornerSmoothness: getLayerKind(line.layerId) === 'wall'
           ? clampWallCornerSmoothness((line as any).cornerSmoothness)
           : undefined,
@@ -2281,6 +2310,104 @@ const floorSmoothModel = computed({
   },
 })
 
+// Floor preset selection (layer-scoped)
+const floorPresetAssetIdModel = computed<string>({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'floor') return ''
+    return typeof layer.floorPresetAssetId === 'string' ? layer.floorPresetAssetId.trim() : ''
+  },
+  set: (value: string) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'floor') return
+    const next = typeof value === 'string' ? value.trim() : ''
+    layer.floorPresetAssetId = next.length ? next : null
+    markPlanningDirty()
+  },
+})
+
+function handleFloorPresetAssetChange(asset: ProjectAsset | null) {
+  if (propertyPanelDisabled.value) return
+  const layer = selectedScatterTarget.value?.layer
+  if (!layer || layer.kind !== 'floor') return
+
+  if (!asset) {
+    layer.floorPresetAssetId = null
+    markPlanningDirty()
+    return
+  }
+
+  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
+  if (!id) {
+    layer.floorPresetAssetId = null
+    markPlanningDirty()
+    return
+  }
+
+  const filename = asset.description ?? asset.name ?? null
+  if (!isFloorPresetFilename(filename)) {
+    return
+  }
+
+  layer.floorPresetAssetId = id
+  markPlanningDirty()
+}
+
+// Floor preset selection (feature-scoped override)
+const floorFeaturePresetOverridden = computed<boolean>(() => {
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'floor') return false
+  const override = (target.shape as any)?.floorPresetAssetId
+  return typeof override === 'string' && override.trim().length > 0
+})
+
+const floorFeaturePresetAssetIdEffective = computed<string>(() => {
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'floor') return ''
+  const override = (target.shape as any)?.floorPresetAssetId
+  if (typeof override === 'string' && override.trim().length) return override.trim()
+  const layer = target.layer
+  return typeof layer.floorPresetAssetId === 'string' ? layer.floorPresetAssetId.trim() : ''
+})
+
+function clearFloorFeaturePresetOverride() {
+  if (propertyPanelDisabled.value) return
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'floor') return
+  const shape = target.shape as any
+  delete shape.floorPresetAssetId
+  markPlanningDirty()
+}
+
+function handleFloorFeaturePresetAssetChange(asset: ProjectAsset | null) {
+  if (propertyPanelDisabled.value) return
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'floor') return
+
+  const shape = target.shape as any
+  if (!asset) {
+    delete shape.floorPresetAssetId
+    markPlanningDirty()
+    return
+  }
+
+  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
+  if (!id) {
+    delete shape.floorPresetAssetId
+    markPlanningDirty()
+    return
+  }
+
+  const filename = asset.description ?? asset.name ?? null
+  if (!isFloorPresetFilename(filename)) {
+    return
+  }
+
+  shape.floorPresetAssetId = id
+  markPlanningDirty()
+}
+
 const wallHeightMetersModel = computed({
   get: () => {
     const layer = selectedScatterTarget.value?.layer
@@ -2349,6 +2476,60 @@ const wallPresetAssetIdModel = computed<string>({
     markPlanningDirty()
   },
 })
+
+// Wall preset selection (feature-scoped override)
+const wallFeaturePresetOverridden = computed<boolean>(() => {
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'wall') return false
+  const override = (target.shape as any)?.wallPresetAssetId
+  return typeof override === 'string' && override.trim().length > 0
+})
+
+const wallFeaturePresetAssetIdEffective = computed<string>(() => {
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'wall') return ''
+  const override = (target.shape as any)?.wallPresetAssetId
+  if (typeof override === 'string' && override.trim().length) return override.trim()
+  const layer = target.layer
+  return typeof layer.wallPresetAssetId === 'string' ? layer.wallPresetAssetId.trim() : ''
+})
+
+function clearWallFeaturePresetOverride() {
+  if (propertyPanelDisabled.value) return
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'wall') return
+  const shape = target.shape as any
+  delete shape.wallPresetAssetId
+  markPlanningDirty()
+}
+
+function handleWallFeaturePresetAssetChange(asset: ProjectAsset | null) {
+  if (propertyPanelDisabled.value) return
+  const target = selectedScatterTarget.value
+  if (!target || target.layer?.kind !== 'wall') return
+
+  const shape = target.shape as any
+  if (!asset) {
+    delete shape.wallPresetAssetId
+    markPlanningDirty()
+    return
+  }
+
+  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
+  if (!id) {
+    delete shape.wallPresetAssetId
+    markPlanningDirty()
+    return
+  }
+
+  const filename = asset.description ?? asset.name ?? null
+  if (!isWallPresetFilename(filename)) {
+    return
+  }
+
+  shape.wallPresetAssetId = id
+  markPlanningDirty()
+}
 
 function handleWallPresetAssetChange(asset: ProjectAsset | null) {
   if (propertyPanelDisabled.value) return
@@ -6774,6 +6955,49 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-else-if="propertyPanelLayerKind === 'floor'">
+              <div class="property-panel__block">
+                <div class="property-panel__spacing-title">Floor preset</div>
+                <div
+                  class="property-panel__floor-preset"
+                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
+                >
+                  <AssetPickerList
+                    :active="dialogOpen && propertyPanelLayerKind === 'floor'"
+                    :asset-id="floorFeaturePresetAssetIdEffective"
+                    asset-type="prefab"
+                    :extensions="['floor']"
+                    @update:asset="handleFloorFeaturePresetAssetChange"
+                  />
+                </div>
+                <div class="property-panel__preset-actions">
+                  <v-btn
+                    density="compact"
+                    size="small"
+                    variant="text"
+                    :disabled="propertyPanelDisabled || !floorFeaturePresetOverridden"
+                    @click="clearFloorFeaturePresetOverride"
+                  >
+                    Use Layer Default
+                  </v-btn>
+                </div>
+              </div>
+
+              <div class="property-panel__block">
+                <div class="property-panel__spacing-title">Layer floor preset</div>
+                <div
+                  class="property-panel__floor-preset"
+                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
+                >
+                  <AssetPickerList
+                    :active="dialogOpen && propertyPanelLayerKind === 'floor'"
+                    :asset-id="floorPresetAssetIdModel"
+                    asset-type="prefab"
+                    :extensions="['floor']"
+                    @update:asset="handleFloorPresetAssetChange"
+                  />
+                </div>
+              </div>
+
               <div class="property-panel__density">
                 <div class="property-panel__density-title">Floor smoothing</div>
                 <div class="property-panel__density-row">
@@ -6834,6 +7058,31 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="property-panel__spacing-title">Wall preset</div>
+                <div
+                  class="property-panel__wall-preset"
+                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
+                >
+                  <AssetPickerList
+                    :active="dialogOpen && propertyPanelLayerKind === 'wall'"
+                    :asset-id="wallFeaturePresetAssetIdEffective"
+                    asset-type="prefab"
+                    :extensions="['wall']"
+                    @update:asset="handleWallFeaturePresetAssetChange"
+                  />
+                </div>
+                <div class="property-panel__preset-actions">
+                  <v-btn
+                    density="compact"
+                    size="small"
+                    variant="text"
+                    :disabled="propertyPanelDisabled || !wallFeaturePresetOverridden"
+                    @click="clearWallFeaturePresetOverride"
+                  >
+                    Use Layer Default
+                  </v-btn>
+                </div>
+
+                <div class="property-panel__spacing-title">Layer wall preset</div>
                 <div
                   class="property-panel__wall-preset"
                   :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
@@ -7726,6 +7975,16 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.property-panel__floor-preset {
+  width: 100%;
+}
+
+.property-panel__preset-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 .property-panel__wall-preset :deep(.asset-picker-list__body) {
   min-height: 170px;
   max-height: 260px;
@@ -7733,6 +7992,16 @@ onBeforeUnmount(() => {
 }
 
 .property-panel__wall-preset :deep(.asset-picker-list__grid) {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.property-panel__floor-preset :deep(.asset-picker-list__body) {
+  min-height: 170px;
+  max-height: 260px;
+  padding: 8px 10px;
+}
+
+.property-panel__floor-preset :deep(.asset-picker-list__grid) {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
 }
 </style>
