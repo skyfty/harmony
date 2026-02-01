@@ -21,6 +21,7 @@ import { isWallPresetFilename } from '@/utils/wallPreset'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
+import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -1932,12 +1933,38 @@ function scheduleRafFlush() {
           clientY: pendingLineHoverClient.y,
         } as MouseEvent)
         const previousHover = lineDraftHoverPoint.value
+
+        // Compute previous vertex (the point before the anchor) for relative-angle snapping
+        let candidateHover = nextHover
+        try {
+          let prevPoint: PlanningPoint | null = null
+          if (line && Array.isArray(line.points) && line.points.length >= 2) {
+            if (lineDraft.value?.continuation?.direction === 'prepend') {
+              prevPoint = line.points.length >= 2 ? line.points[1] ?? null : null
+            } else {
+              prevPoint = line.points.length >= 2 ? line.points[line.points.length - 2] ?? null : null
+            }
+          }
+          if (prevPoint) {
+            candidateHover = snapCandidatePointToAnglesRelative(
+              anchor,
+              nextHover,
+              prevPoint,
+              [10, 30, 45, 60, 90, 135, 180],
+              5,
+            )
+          }
+        } catch (e) {
+          // Fall back to raw hover on unexpected errors
+          candidateHover = nextHover
+        }
+
         if (
           !previousHover
-          || Math.abs(previousHover.x - nextHover.x) > 0.0001
-          || Math.abs(previousHover.y - nextHover.y) > 0.0001
+          || Math.abs(previousHover.x - candidateHover.x) > 0.0001
+          || Math.abs(previousHover.y - candidateHover.y) > 0.0001
         ) {
-          lineDraftHoverPoint.value = nextHover
+          lineDraftHoverPoint.value = candidateHover
         }
       }
       pendingLineHoverClient = null
