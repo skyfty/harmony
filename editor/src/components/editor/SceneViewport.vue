@@ -132,6 +132,7 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
   updateGroundChunks,
@@ -1457,10 +1458,12 @@ const buildToolsStore = useBuildToolsStore()
 const {
   activeBuildTool,
   floorBuildShape,
+  wallBuildShape,
   wallBrushPresetAssetId,
   floorBrushPresetAssetId,
 } = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
+const wallShapeMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'wall') {
@@ -3385,6 +3388,7 @@ const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 
 const wallBuildTool = createWallBuildTool({
   activeBuildTool,
+  wallBuildShape,
   sceneStore,
   pointerInteraction,
   rootGroup,
@@ -3541,12 +3545,25 @@ function handleFloorShapeMenuOpen(value: boolean) {
   floorShapeMenuOpen.value = Boolean(value)
 }
 
+function handleWallShapeMenuOpen(value: boolean) {
+  wallShapeMenuOpen.value = Boolean(value)
+}
+
 function handleSelectFloorBuildShape(shape: FloorBuildShape) {
   // Switching shapes should start from a clean slate.
   floorBuildTool.cancel()
   buildToolsStore.setFloorBuildShape(shape, { activate: true })
 
   // Selecting a shape explicitly activates the floor build tool.
+  // Match toolbar behavior: entering a build tool clears selection.
+  sceneStore.setSelection([])
+}
+
+function handleSelectWallBuildShape(shape: WallBuildShape) {
+  // Switching shapes should start from a clean slate.
+  wallBuildTool.cancel()
+  buildToolsStore.setWallBuildShape(shape, { activate: true })
+
   // Match toolbar behavior: entering a build tool clears selection.
   sceneStore.setSelection([])
 }
@@ -12210,9 +12227,11 @@ defineExpose<SceneViewportHandle>({
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
+        :wall-shape-menu-open="wallShapeMenuOpen"
         :floor-build-shape="floorBuildShape"
-        :floor-preset-asset-id="floorBrushPresetAssetId ?? ''"
-        :wall-preset-asset-id="wallBrushPresetAssetId ?? ''"
+        :wall-build-shape="wallBuildShape"
+        :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
+        :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
@@ -12229,7 +12248,9 @@ defineExpose<SceneViewportHandle>({
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
+            @update:wall-shape-menu-open="handleWallShapeMenuOpen"
           @select-floor-build-shape="handleSelectFloorBuildShape"
+            @select-wall-build-shape="handleSelectWallBuildShape"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>

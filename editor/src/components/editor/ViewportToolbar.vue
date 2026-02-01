@@ -56,7 +56,7 @@
                   :active="true"
                   assetType="prefab"
                   :extensions="['floor']"
-                  :asset-id="floorPresetAssetId"
+                  :asset-id="floorBrushPresetAssetId"
                   :thumbnailSize="30"
                   :showSearch="true"
                   @update:asset="handleFloorPresetSelect"
@@ -67,12 +67,12 @@
         </v-menu>
         <v-menu
           v-else-if="tool.id === 'wall'"
-          :model-value="wallPresetMenuOpen"
+          :model-value="wallShapeMenuOpen"
           location="bottom"
           :offset="6"
           :open-on-click="false"
           :close-on-content-click="false"
-          @update:modelValue="handleWallPresetMenuModelUpdate"
+          @update:modelValue="handleWallShapeMenuModelUpdate"
         >
           <template #activator="{ props: menuProps }">
             <v-btn
@@ -86,16 +86,37 @@
               :title="tool.label"
               :disabled="buildToolsDisabled"
               @click="handleBuildToolToggle(tool.id)"
-              @contextmenu.prevent.stop="handleWallPresetContextMenu"
+              @contextmenu.prevent.stop="handleWallShapeContextMenu"
             />
           </template>
           <v-list density="compact" class="wall-shape-menu">
             <div class="wall-shape-menu__card">
+              <div class="floor-shape-grid">
+                <v-list-item
+                  v-for="shape in wallShapeOptions"
+                  :key="shape.id"
+                  class="floor-shape-item"
+                  @click="() => handleWallShapeSelect(shape.id)"
+                >
+                  <v-btn
+                    density="compact"
+                    size="small"
+                    variant="text"
+                    :title="shape.label"
+                    :class="['floor-shape-btn', shape.id === wallBuildShape ? 'floor-shape-selected' : '']"
+                  >
+                    <span v-html="shape.svg" />
+                  </v-btn>
+                </v-list-item>
+              </div>
+
+              <v-divider class="floor-shape-menu__divider" />
+
               <AssetPickerList
                 :active="true"
                 assetType="prefab"
                 :extensions="['wall']"
-                :asset-id="wallPresetAssetId"
+                :asset-id="wallBrushPresetAssetId"
                 :thumbnailSize="30"
                 :showSearch="true"
                 @update:asset="handleWallPresetSelect"
@@ -447,6 +468,8 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { FLOOR_BUILD_SHAPE_LABELS } from '@/types/floor-build-shape'
+import type { WallBuildShape } from '@/types/wall-build-shape'
+import { WALL_BUILD_SHAPE_LABELS } from '@/types/wall-build-shape'
 import { SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
 
 const props = withDefaults(
@@ -467,9 +490,11 @@ const props = withDefaults(
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
   floorShapeMenuOpen: boolean
+  wallShapeMenuOpen: boolean
   floorBuildShape: FloorBuildShape
-  floorPresetAssetId?: string
-  wallPresetAssetId?: string
+  wallBuildShape: WallBuildShape
+  floorBrushPresetAssetId?: string
+  wallBrushPresetAssetId?: string
   }>(),
   {
     buildToolsDisabled: false,
@@ -494,8 +519,9 @@ const emit = defineEmits<{
   (event: 'clear-all-scatter-instances'): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
+  (event: 'update:wall-shape-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
-  (event: 'update:wall-preset-menu-open', value: boolean): void
+  (event: 'select-wall-build-shape', shape: WallBuildShape): void
 }>()
 
 const {
@@ -515,9 +541,11 @@ const {
   scatterEraseRadius,
   scatterEraseMenuOpen,
   floorShapeMenuOpen,
+  wallShapeMenuOpen,
   floorBuildShape,
-  floorPresetAssetId,
-  wallPresetAssetId,
+  wallBuildShape,
+  floorBrushPresetAssetId,
+  wallBrushPresetAssetId,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -533,7 +561,6 @@ const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
 const mirrorMenuOpen = ref(false)
-const wallPresetMenuOpen = ref(false)
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
 
@@ -624,18 +651,18 @@ watch(buildToolsDisabled, (disabled) => {
   if (disabled && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
   }
-  if (disabled && wallPresetMenuOpen.value) {
-    wallPresetMenuOpen.value = false
+  if (disabled && wallShapeMenuOpen.value) {
+    emit('update:wall-shape-menu-open', false)
   }
 })
 
 watch(floorShapeMenuOpen, (open) => {
-  if (open && wallPresetMenuOpen.value) {
-    wallPresetMenuOpen.value = false
+  if (open && wallShapeMenuOpen.value) {
+    emit('update:wall-shape-menu-open', false)
   }
 })
 
-watch(wallPresetMenuOpen, (open) => {
+watch(wallShapeMenuOpen, (open) => {
   if (open && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
   }
@@ -751,6 +778,17 @@ const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildSh
       : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
 }))
 
+const wallShapeOptions = (Object.keys(WALL_BUILD_SHAPE_LABELS) as WallBuildShape[]).map((id) => ({
+  id,
+  label: WALL_BUILD_SHAPE_LABELS[id],
+  svg:
+    id === 'polygon'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
+      : id === 'rectangle'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
+}))
+
 function toggleFixedPrimaryAsAnchor() {
   fixedPrimaryAsAnchor.value = !fixedPrimaryAsAnchor.value
 }
@@ -783,29 +821,37 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
   return
 }
 
-function handleWallPresetContextMenu(event: MouseEvent) {
+function handleWallShapeContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
   if (buildToolsDisabled.value) {
     return
   }
-  // Open the in-toolbar wall preset menu
+  // Right-click on wall tool only opens the shape menu; it does not auto-switch tools.
   emit('update:floor-shape-menu-open', false)
-  wallPresetMenuOpen.value = true
+  emit('update:wall-shape-menu-open', true)
 }
 
-function handleWallPresetMenuModelUpdate(value: boolean) {
+function handleWallShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
-  wallPresetMenuOpen.value = open
   if (open) {
     emit('update:floor-shape-menu-open', false)
   }
+  emit('update:wall-shape-menu-open', open)
 }
 
 function handleWallPresetSelect(asset: any) {
   // propagate selection to parent; parent will handle activating the wall tool
   emit('select-wall-preset', asset)
-  wallPresetMenuOpen.value = false
+  emit('update:wall-shape-menu-open', false)
+}
+
+function handleWallShapeSelect(shape: WallBuildShape) {
+  if (buildToolsDisabled.value) {
+    emit('update:wall-shape-menu-open', false)
+    return
+  }
+  emit('select-wall-build-shape', shape)
 }
 
 function handleFloorPresetSelect(asset: any) {
@@ -820,14 +866,14 @@ function handleFloorShapeContextMenu(event: MouseEvent) {
     return
   }
   // Right-click on floor tool only opens the shape menu; it does not auto-switch tools.
-  wallPresetMenuOpen.value = false
+  emit('update:wall-shape-menu-open', false)
   emit('update:floor-shape-menu-open', true)
 }
 
 function handleFloorShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
-    wallPresetMenuOpen.value = false
+    emit('update:wall-shape-menu-open', false)
   }
   emit('update:floor-shape-menu-open', open)
 }

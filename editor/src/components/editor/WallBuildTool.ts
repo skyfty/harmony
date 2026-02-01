@@ -9,6 +9,7 @@ import { GRID_MAJOR_SPACING, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
 import { findSceneNode } from './sceneUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -31,10 +32,17 @@ export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
   brushPresetAssetId: string | null
   brushPresetData: WallPresetData | null
+  shapeDraft: {
+    kind: Exclude<WallBuildShape, 'polygon'>
+    pointerId: number
+    start: THREE.Vector3
+    end: THREE.Vector3
+  } | null
 }
 
 export function createWallBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
+  wallBuildShape: Ref<WallBuildShape>
   sceneStore: ReturnType<typeof useSceneStore>
   pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
@@ -57,6 +65,8 @@ export function createWallBuildTool(options: {
 
   let session: WallBuildToolSession | null = null
 
+  const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'polygon'
+
   const ensureSession = (): WallBuildToolSession => {
     if (session) {
       return session
@@ -71,6 +81,7 @@ export function createWallBuildTool(options: {
       bodyAssetId: null,
       brushPresetAssetId: null,
       brushPresetData: null,
+      shapeDraft: null,
     }
     return session
   }
@@ -217,6 +228,189 @@ export function createWallBuildTool(options: {
     current.dragStart = startPoint.clone()
     current.dragEnd = startPoint.clone()
     previewRenderer.markDirty()
+  }
+
+  const cancelShapeDraft = () => {
+    if (!session) {
+      return
+    }
+    if (!session.shapeDraft) {
+      return
+    }
+    session.shapeDraft = null
+    session.segments = []
+    previewRenderer.markDirty()
+  }
+
+  const beginShapeDraft = (kind: Exclude<WallBuildShape, 'polygon'>, event: PointerEvent): boolean => {
+    if (session?.shapeDraft) {
+      return false
+    }
+    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+      return false
+    }
+
+    const rawPointer = groundPointerHelper.clone()
+    const start = options.snapPoint(rawPointer.clone())
+    const end = kind === 'circle' ? rawPointer.clone() : start.clone()
+
+    const current = ensureSession()
+    hydrateFromSelection(current)
+    current.dragStart = null
+    current.dragEnd = null
+    current.nodeId = null
+    current.shapeDraft = {
+      kind,
+      pointerId: event.pointerId,
+      start: start.clone(),
+      end: end.clone(),
+    }
+    current.segments = []
+    previewRenderer.markDirty()
+    return true
+  }
+
+  const computeAdaptiveCircleSegments = (radius: number): number => {
+    if (!Number.isFinite(radius) || radius <= 0) {
+      return 0
+    }
+    const targetSegmentLength = GRID_MAJOR_SPACING * 0.5
+    const perimeter = 2 * Math.PI * radius
+    const estimate = Math.ceil(perimeter / Math.max(targetSegmentLength, 1e-4))
+    return Math.min(256, Math.max(12, estimate))
+  }
+
+  const buildRectangleSegments = (start: THREE.Vector3, end: THREE.Vector3): WallPreviewSegment[] => {
+    const minX = Math.min(start.x, end.x)
+    const maxX = Math.max(start.x, end.x)
+    const minZ = Math.min(start.z, end.z)
+    const maxZ = Math.max(start.z, end.z)
+    const y = start.y
+    if (Math.abs(maxX - minX) < 1e-4 || Math.abs(maxZ - minZ) < 1e-4) {
+      return []
+    }
+    const p1 = new THREE.Vector3(minX, y, minZ)
+    const p2 = new THREE.Vector3(maxX, y, minZ)
+    const p3 = new THREE.Vector3(maxX, y, maxZ)
+    const p4 = new THREE.Vector3(minX, y, maxZ)
+    return [
+      { start: p1, end: p2 },
+      { start: p2, end: p3 },
+      { start: p3, end: p4 },
+      { start: p4, end: p1 },
+    ]
+  }
+
+  const buildCircleSegments = (center: THREE.Vector3, radiusEnd: THREE.Vector3): WallPreviewSegment[] => {
+    const dx = radiusEnd.x - center.x
+    const dz = radiusEnd.z - center.z
+    const radius = Math.hypot(dx, dz)
+    if (!Number.isFinite(radius) || radius < 1e-4) {
+      return []
+    }
+
+    const segments = computeAdaptiveCircleSegments(radius)
+    if (segments < 3) {
+      return []
+    }
+
+    const points: THREE.Vector3[] = []
+    for (let i = 0; i < segments; i += 1) {
+      const t = (i / segments) * Math.PI * 2
+      points.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
+    }
+
+    const result: WallPreviewSegment[] = []
+    for (let i = 0; i < points.length; i += 1) {
+      const a = points[i]!
+      const b = points[(i + 1) % points.length]!
+      result.push({ start: a, end: b })
+    }
+    return result
+  }
+
+  const updateShapeDraft = (event: PointerEvent): boolean => {
+    if (!session?.shapeDraft) {
+      return false
+    }
+    if (options.isAltOverrideActive()) {
+      return false
+    }
+    if (session.shapeDraft.pointerId !== event.pointerId) {
+      return false
+    }
+    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+      return false
+    }
+
+    const rawPointer = groundPointerHelper.clone()
+    const kind = session.shapeDraft.kind
+    const start = session.shapeDraft.start.clone()
+    const end = kind === 'circle' ? rawPointer.clone() : options.snapPoint(rawPointer.clone())
+
+    const previousEnd = session.shapeDraft.end
+    if (previousEnd.equals(end)) {
+      return false
+    }
+    session.shapeDraft.end.copy(end)
+
+    session.segments = kind === 'rectangle'
+      ? buildRectangleSegments(start, end)
+      : buildCircleSegments(start, end)
+
+    previewRenderer.markDirty()
+    return true
+  }
+
+  const commitShapeDraft = (): boolean => {
+    if (!session?.shapeDraft) {
+      return false
+    }
+
+    const kind = session.shapeDraft.kind
+    const start = session.shapeDraft.start.clone()
+    const end = kind === 'circle'
+      ? session.shapeDraft.end.clone()
+      : options.snapPoint(session.shapeDraft.end.clone())
+
+    const segments = kind === 'rectangle'
+      ? buildRectangleSegments(start, end)
+      : buildCircleSegments(start, end)
+
+    if (!segments.length) {
+      cancelShapeDraft()
+      clearSession(true)
+      return false
+    }
+
+    const segmentPayload = segments.map((entry) => ({
+      start: entry.start.clone(),
+      end: entry.end.clone(),
+    }))
+
+    const shouldApplyBrushPreset = !!session.brushPresetAssetId
+
+    const created = options.sceneStore.createWallNode({
+      segments: segmentPayload,
+      dimensions: session.dimensions,
+      bodyAssetId: session.bodyAssetId,
+    })
+    if (!created) {
+      cancelShapeDraft()
+      clearSession(true)
+      return false
+    }
+
+    if (shouldApplyBrushPreset && session.brushPresetAssetId) {
+      void options.sceneStore
+        .applyWallPresetToNode(created.id, session.brushPresetAssetId, session.brushPresetData)
+        .catch((error: unknown) => {
+          console.warn('Failed to apply wall preset brush', session?.brushPresetAssetId, error)
+        })
+    }
+
+    clearSession(true)
+    return true
   }
 
   const cancelDrag = () => {
@@ -377,11 +571,28 @@ export function createWallBuildTool(options: {
       if (options.activeBuildTool.value !== 'wall') {
         return false
       }
+      const shape = getShape()
+      if (shape !== 'polygon') {
+        const event = _event
+        if (event.button === 0 && !options.isAltOverrideActive()) {
+          // Floor-like behavior: start a drag session for rectangle/circle.
+          beginShapeDraft(shape, event)
+        }
+      }
       return false
     },
 
     handlePointerMove: (event: PointerEvent) => {
       if (options.activeBuildTool.value !== 'wall') {
+        return false
+      }
+
+      if (session?.shapeDraft) {
+        const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+        if (!isCameraNavActive) {
+          updateShapeDraft(event)
+          return true
+        }
         return false
       }
 
@@ -405,7 +616,17 @@ export function createWallBuildTool(options: {
         if (options.isAltOverrideActive()) {
           return false
         }
-        const handled = handlePlacementClick(event)
+        const shape = getShape()
+        const handled = shape === 'polygon'
+          ? handlePlacementClick(event)
+          : (() => {
+            const hadDraft = Boolean(session?.shapeDraft)
+            if (hadDraft) {
+              commitShapeDraft()
+              return true
+            }
+            return false
+          })()
         if (handled) {
           event.preventDefault()
           event.stopPropagation()
@@ -422,7 +643,14 @@ export function createWallBuildTool(options: {
         if (active?.kind === 'buildToolRightClick' && active.pointerId === event.pointerId) {
           const clickWasDrag = active.moved || options.pointerInteraction.ensureMoved(event)
           if (!clickWasDrag && session) {
-            finalize()
+            const shape = getShape()
+            if (shape === 'polygon') {
+              finalize()
+              } else if (session.shapeDraft) {
+                // Align with Floor: right click cancels rectangle/circle drafts.
+                cancelShapeDraft()
+                clearSession(true)
+            }
             event.preventDefault()
             event.stopPropagation()
             event.stopImmediatePropagation()
@@ -444,6 +672,7 @@ export function createWallBuildTool(options: {
       if (!session) {
         return false
       }
+      cancelShapeDraft()
       cancelDrag()
       event.preventDefault()
       event.stopPropagation()
@@ -455,6 +684,7 @@ export function createWallBuildTool(options: {
       if (!session) {
         return false
       }
+      cancelShapeDraft()
       cancelDrag()
       clearSession(true)
       return true

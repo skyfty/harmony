@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 
 type BlockedBuildTool = 'wall' | 'road' | 'floor'
 
@@ -13,6 +14,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const activeBuildTool = ref<BuildTool | null>(null)
   const wallBrushPresetAssetId = ref<string | null>(null)
   const floorBrushPresetAssetId = ref<string | null>(null)
+  const wallBuildShape = ref<WallBuildShape>('polygon')
   const floorBuildShape = ref<FloorBuildShape>('polygon')
 
   // This is a UI gate (e.g. ground sculpt config mode). It should block *activating* build tools,
@@ -62,10 +64,19 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     return true
   }
 
+  function setWallBuildShape(shape: WallBuildShape, options: { activate?: boolean } = {}): boolean {
+    wallBuildShape.value = shape
+    if (options.activate) {
+      return setActiveBuildTool('wall')
+    }
+    return true
+  }
+
   return {
     activeBuildTool,
     wallBrushPresetAssetId,
     floorBrushPresetAssetId,
+    wallBuildShape,
     floorBuildShape,
     buildToolsDisabled,
     setBuildToolsDisabled,
@@ -73,5 +84,6 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     setWallBrushPresetAssetId,
     setFloorBrushPresetAssetId,
     setFloorBuildShape,
+    setWallBuildShape,
   }
 })
