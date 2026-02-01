@@ -785,21 +785,7 @@ function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, lay
   return 0.1
 }
 
-function resolveLayerPresetAssetId(
-  planningData: PlanningSceneData,
-  layerId: string,
-  key: 'wallPresetAssetId' | 'floorPresetAssetId',
-): string | null {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const val = found?.[key]
-    if (typeof val === 'string' && val.trim().length) {
-      return val.trim()
-    }
-  }
-  return null
-}
+// (removed helper: no layer-scoped preset lookup required)
 
 function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers
@@ -1372,7 +1358,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      const layerFloorPresetId = resolveLayerPresetAssetId(planningData, layerId, 'floorPresetAssetId')
+      // No layer-scoped floor presets: only per-feature floorPresetAssetId is used.
+      const layerFloorPresetId: string | null = null
       const floorPresetCache = new Map<string, import('@/utils/floorPreset').FloorPresetData>()
       for (const poly of group.polygons) {
         updateProgressForUnit(`Converting floor: ${poly.name?.trim() || poly.id}`)
@@ -1905,7 +1892,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
       const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
-      const layerWallPresetId = resolveLayerPresetAssetId(planningData, layerId, 'wallPresetAssetId')
+      // No layer-scoped wall presets: only per-feature wallPresetAssetId is used.
+      const layerWallPresetId: string | null = null
       const wallPresetCache = new Map<string, import('@/utils/wallPreset').WallPresetData>()
 
       for (const line of group.polylines) {
