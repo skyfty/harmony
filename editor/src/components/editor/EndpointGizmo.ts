@@ -24,6 +24,7 @@ export type EndpointGizmoBuildOptions = {
   depthTest?: boolean
   depthWrite?: boolean
   opacity?: number
+  centerColor?: number
 }
 
 const DEFAULT_AXIS_ENABLED: Record<EndpointGizmoAxis, boolean> = { x: true, y: true, z: true }
@@ -126,7 +127,12 @@ export function createEndpointGizmoObject(options?: EndpointGizmoBuildOptions): 
   const depthWrite = options?.depthWrite ?? false
   const opacity = typeof options?.opacity === 'number' ? THREE.MathUtils.clamp(options.opacity, 0.1, 1) : 0.9
 
-  const materials = createEndpointGizmoMaterials({ opacity, depthTest, depthWrite })
+  const materials = createEndpointGizmoMaterials({
+    opacity,
+    depthTest,
+    depthWrite,
+    centerColor: typeof options?.centerColor === 'number' ? options.centerColor : undefined,
+  })
 
   const root = new THREE.Group()
   root.userData.endpointGizmoRoot = true
@@ -225,6 +231,15 @@ export function createEndpointGizmoObject(options?: EndpointGizmoBuildOptions): 
     makeArrow('z', 1)
     if (showNegativeAxes) makeArrow('z', -1)
   }
+
+  // Endpoint gizmos are editor-only interaction handles.
+  // They should not inherit node material overrides (tinting, textures, etc),
+  // otherwise they can become the same color as the edited node and lose visibility.
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh?.isMesh) return
+    mesh.userData.overrideMaterial = true
+  })
 
   const disposed = { value: false }
   const stateMap = new Map<EndpointGizmoPart, EndpointGizmoState>()

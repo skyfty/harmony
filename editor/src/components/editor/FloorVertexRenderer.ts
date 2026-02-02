@@ -232,6 +232,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
           depthTest: false,
           depthWrite: false,
           opacity: 0.9,
+          centerColor: FLOOR_VERTEX_HANDLE_COLOR,
         })
 
         const handle = gizmo.root
@@ -253,14 +254,6 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
           mesh.userData.isFloorVertexHandle = true
           mesh.userData.nodeId = selectedNodeId
           mesh.userData.floorVertexIndex = index
-
-          if (mesh.userData?.endpointGizmoPart === 'center') {
-            const mat = mesh.material as THREE.MeshStandardMaterial
-            if (mat && (mat as any).isMaterial) {
-              mat.color.setHex(FLOOR_VERTEX_HANDLE_COLOR)
-              mat.emissive.setHex(FLOOR_VERTEX_HANDLE_COLOR)
-            }
-          }
         })
 
         group.add(handle)
