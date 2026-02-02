@@ -20,6 +20,7 @@ import {
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import {
@@ -1089,6 +1090,305 @@ function upsertPlanningScatterLayer(
   })
 }
 
+const TERRAIN_VERTEX_COUNT_LIMIT = 512 * 512
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function falloffWeight(falloff: unknown, t: number): number {
+  const clamped = Math.min(1, Math.max(0, t))
+  const mode = typeof falloff === 'string' ? falloff : 'cosine'
+  switch (mode) {
+    case 'linear':
+      return 1 - clamped
+    case 'smoothstep': {
+      const s = clamped * clamped * (3 - 2 * clamped)
+      return 1 - s
+    }
+    case 'cosine':
+    default:
+      return Math.cos(clamped * (Math.PI / 2))
+  }
+}
+
+function groundVertexKey(row: number, column: number): string {
+  return `${row}:${column}`
+}
+
+function setAbsoluteOverride(
+  groundDefinition: GroundDynamicMesh,
+  map: Record<string, number>,
+  row: number,
+  column: number,
+  nextHeight: number,
+) {
+  const key = groundVertexKey(row, column)
+  const baseHeight = computeGroundBaseHeightAtVertex(groundDefinition, row, column)
+  let rounded = round2(nextHeight)
+  let baseRounded = round2(baseHeight)
+  if (Object.is(rounded, -0)) rounded = 0
+  if (Object.is(baseRounded, -0)) baseRounded = 0
+  if (rounded === baseRounded) {
+    delete map[key]
+    return
+  }
+  map[key] = rounded
+}
+
+function pointToGridIndex(value: number, cellSize: number, halfSize: number, maxIndex: number): number {
+  const idx = Math.round((value + halfSize) / Math.max(1e-6, cellSize))
+  return Math.max(0, Math.min(maxIndex, idx))
+}
+
+function distancePointToSegment2D(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+): number {
+  const abx = bx - ax
+  const abz = bz - az
+  const apx = px - ax
+  const apz = pz - az
+  const abLenSq = abx * abx + abz * abz
+  if (abLenSq <= 1e-12) {
+    const dx = px - ax
+    const dz = pz - az
+    return Math.sqrt(dx * dx + dz * dz)
+  }
+  const t = Math.max(0, Math.min(1, (apx * abx + apz * abz) / abLenSq))
+  const cx = ax + abx * t
+  const cz = az + abz * t
+  const dx = px - cx
+  const dz = pz - cz
+  return Math.sqrt(dx * dx + dz * dz)
+}
+
+function normalizeNoiseSettings(raw: any) {
+  const enabled = Boolean(raw?.enabled)
+  const mode = typeof raw?.mode === 'string' ? raw.mode : 'perlin'
+  const seed = Number.isFinite(Number(raw?.seed)) ? Math.floor(Number(raw.seed)) : undefined
+  const noiseScale = Number.isFinite(Number(raw?.noiseScale)) ? Math.max(1, Number(raw.noiseScale)) : 40
+  const noiseAmplitude = Number.isFinite(Number(raw?.noiseAmplitude)) ? Math.max(0, Number(raw.noiseAmplitude)) : 0
+  const noiseStrength = Number.isFinite(Number(raw?.noiseStrength)) ? Math.max(0, Number(raw.noiseStrength)) : 1
+  const detailScale = Number.isFinite(Number(raw?.detailScale)) ? Math.max(0.1, Number(raw.detailScale)) : undefined
+  const detailAmplitude = Number.isFinite(Number(raw?.detailAmplitude)) ? Math.max(0, Number(raw.detailAmplitude)) : undefined
+  const edgeFalloff = Number.isFinite(Number(raw?.edgeFalloff)) ? Math.max(0, Number(raw.edgeFalloff)) : undefined
+  return { enabled, mode, seed, noiseScale, noiseAmplitude, noiseStrength, detailScale, detailAmplitude, edgeFalloff }
+}
+
+function applyPlanningTerrainToGround(options: {
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore']
+  planningData: PlanningSceneData
+  planningUnitsToMeters: number
+  groundNode: SceneNode
+  groundDefinition: GroundDynamicMesh
+  groundWidth: number
+  groundDepth: number
+}) {
+  const { sceneStore, planningData, planningUnitsToMeters, groundNode, groundDefinition, groundWidth, groundDepth } = options
+  const terrain = (planningData as any)?.terrain as any
+  if (!terrain || typeof terrain !== 'object') {
+    return { definition: groundDefinition, limited: false }
+  }
+
+  const cellSize = Number(terrain?.grid?.cellSize ?? groundDefinition.cellSize ?? 1)
+  const clampedCellSize = Number.isFinite(cellSize) && cellSize >= 0.1 ? cellSize : 1
+  const columns = Math.max(1, Math.round(groundWidth / Math.max(1e-6, clampedCellSize)))
+  const rows = Math.max(1, Math.round(groundDepth / Math.max(1e-6, clampedCellSize)))
+  const vertexCount = (rows + 1) * (columns + 1)
+  const limited = vertexCount > TERRAIN_VERTEX_COUNT_LIMIT
+
+  const noise = normalizeNoiseSettings(terrain?.noise)
+  const noiseEnabled = noise.enabled && !limited
+
+  const nextDefinition: GroundDynamicMesh = {
+    ...groundDefinition,
+    width: groundWidth,
+    depth: groundDepth,
+    cellSize: clampedCellSize,
+    columns,
+    rows,
+    generation: noiseEnabled
+      ? {
+        seed: noise.seed,
+        mode: noise.mode,
+        noiseScale: noise.noiseScale,
+        noiseAmplitude: noise.noiseAmplitude,
+        noiseStrength: noise.noiseStrength,
+        detailScale: noise.detailScale,
+        detailAmplitude: noise.detailAmplitude,
+        edgeFalloff: noise.edgeFalloff,
+      }
+      : {
+        seed: noise.seed,
+        mode: 'flat',
+        noiseScale: noise.noiseScale,
+        noiseAmplitude: 0,
+        noiseStrength: 0,
+      },
+    // Height overrides remain sparse absolute overrides on top of procedural base.
+    heightMap: {},
+    hasManualEdits: false,
+  }
+
+  const halfWidth = groundWidth * 0.5
+  const halfDepth = groundDepth * 0.5
+
+  const heightMap: Record<string, number> = {}
+
+  const controlPoints: Array<any> = Array.isArray(terrain?.controlPoints) ? terrain.controlPoints : []
+  controlPoints
+    .slice()
+    .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
+    .forEach((cp) => {
+      const x = Number(cp?.x) * planningUnitsToMeters
+      const y = Number(cp?.y) * planningUnitsToMeters
+      const radius = Number(cp?.radius)
+      const targetHeight = Number(cp?.height)
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0 || !Number.isFinite(targetHeight)) {
+        return
+      }
+      const localX = x - halfWidth
+      const localZ = y - halfDepth
+
+      const minCol = pointToGridIndex(localX - radius, clampedCellSize, halfWidth, columns)
+      const maxCol = pointToGridIndex(localX + radius, clampedCellSize, halfWidth, columns)
+      const minRow = pointToGridIndex(localZ - radius, clampedCellSize, halfDepth, rows)
+      const maxRow = pointToGridIndex(localZ + radius, clampedCellSize, halfDepth, rows)
+
+      for (let row = minRow; row <= maxRow; row += 1) {
+        const vz = -halfDepth + row * clampedCellSize
+        for (let col = minCol; col <= maxCol; col += 1) {
+          const vx = -halfWidth + col * clampedCellSize
+          const dx = vx - localX
+          const dz = vz - localZ
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist > radius) continue
+          const w = falloffWeight(cp?.falloff, dist / Math.max(1e-6, radius))
+          if (w <= 0) continue
+
+          const key = groundVertexKey(row, col)
+          const base = computeGroundBaseHeightAtVertex(nextDefinition, row, col)
+          const current = typeof heightMap[key] === 'number' ? heightMap[key]! : base
+          const nextHeight = current + (targetHeight - current) * w
+          setAbsoluteOverride(nextDefinition, heightMap, row, col, nextHeight)
+        }
+      }
+    })
+
+  const lines: Array<any> = Array.isArray(terrain?.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+  lines
+    .slice()
+    .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
+    .forEach((line) => {
+      const kind = line?.kind === 'ridge' || line?.kind === 'valley' ? line.kind : null
+      const width = Number(line?.width)
+      const strength = Number(line?.strength)
+      const pointsRaw = Array.isArray(line?.points) ? line.points : null
+      if (!kind || !Number.isFinite(width) || width <= 0 || !Number.isFinite(strength) || !pointsRaw || pointsRaw.length < 2) {
+        return
+      }
+      const points = pointsRaw
+        .map((p: any) => {
+          const x = Number(p?.x) * planningUnitsToMeters
+          const y = Number(p?.y) * planningUnitsToMeters
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+          return { x: x - halfWidth, z: y - halfDepth }
+        })
+        .filter((p: any) => !!p)
+      if (points.length < 2) return
+
+      // Bounding box in local space expanded by width
+      let minX = Number.POSITIVE_INFINITY
+      let maxX = Number.NEGATIVE_INFINITY
+      let minZ = Number.POSITIVE_INFINITY
+      let maxZ = Number.NEGATIVE_INFINITY
+      for (const p of points) {
+        minX = Math.min(minX, p.x)
+        maxX = Math.max(maxX, p.x)
+        minZ = Math.min(minZ, p.z)
+        maxZ = Math.max(maxZ, p.z)
+      }
+      minX -= width
+      maxX += width
+      minZ -= width
+      maxZ += width
+
+      const minCol = pointToGridIndex(minX, clampedCellSize, halfWidth, columns)
+      const maxCol = pointToGridIndex(maxX, clampedCellSize, halfWidth, columns)
+      const minRow = pointToGridIndex(minZ, clampedCellSize, halfDepth, rows)
+      const maxRow = pointToGridIndex(maxZ, clampedCellSize, halfDepth, rows)
+      const sign = kind === 'ridge' ? 1 : -1
+
+      for (let row = minRow; row <= maxRow; row += 1) {
+        const vz = -halfDepth + row * clampedCellSize
+        for (let col = minCol; col <= maxCol; col += 1) {
+          const vx = -halfWidth + col * clampedCellSize
+
+          let minDist = Number.POSITIVE_INFINITY
+          for (let i = 0; i < points.length - 1; i += 1) {
+            const a = points[i]!
+            const b = points[i + 1]!
+            const d = distancePointToSegment2D(vx, vz, a.x, a.z, b.x, b.z)
+            if (d < minDist) minDist = d
+            if (minDist <= 0) break
+          }
+          if (!Number.isFinite(minDist) || minDist > width) continue
+          const w = falloffWeight(line?.profile, minDist / Math.max(1e-6, width))
+          if (w <= 0) continue
+
+          const key = groundVertexKey(row, col)
+          const base = computeGroundBaseHeightAtVertex(nextDefinition, row, col)
+          const current = typeof heightMap[key] === 'number' ? heightMap[key]! : base
+          const nextHeight = current + sign * strength * w
+          setAbsoluteOverride(nextDefinition, heightMap, row, col, nextHeight)
+        }
+      }
+    })
+
+  // A: absolute brush overrides (always highest priority, applied last).
+  const overrideCells = terrain?.overrides?.version === 1 && terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
+    ? (terrain.overrides.cells as Record<string, unknown>)
+    : null
+  if (overrideCells) {
+    for (const [key, raw] of Object.entries(overrideCells)) {
+      const height = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(height)) continue
+      const parts = String(key).split(':')
+      if (parts.length !== 2) continue
+      const row = Number(parts[0])
+      const col = Number(parts[1])
+      if (!Number.isFinite(row) || !Number.isFinite(col)) continue
+      const rowInt = Math.trunc(row)
+      const colInt = Math.trunc(col)
+      if (rowInt < 0 || rowInt > rows || colInt < 0 || colInt > columns) continue
+      heightMap[groundVertexKey(rowInt, colInt)] = round2(height)
+    }
+  }
+
+  nextDefinition.heightMap = heightMap
+  nextDefinition.hasManualEdits = Object.keys(heightMap).length > 0
+
+  sceneStore.updateNodeDynamicMesh(groundNode.id, nextDefinition as any)
+
+  // Keep planningData budget current (useful for UI if planningData is reused).
+  try {
+    ;(planningData as any).terrain = {
+      ...(planningData as any).terrain,
+      mode: limited ? 'limited' : 'normal',
+      budget: { vertexCount, expectedKeys: Object.keys(heightMap).length, limited },
+    }
+  } catch {
+    // ignore
+  }
+
+  return { definition: nextDefinition, limited }
+}
+
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options
   const assetCacheStore = useAssetCacheStore()
@@ -1177,7 +1477,20 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundNode = findGroundNode(sceneStore.nodes)
   const groundNodeId = groundNode?.id ?? 'ground'
   const groundDynamicMesh = groundNode?.dynamicMesh
-  const groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
+  let groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
+
+  if (groundNode && groundDefinition) {
+    const applied = applyPlanningTerrainToGround({
+      sceneStore,
+      planningData,
+      planningUnitsToMeters,
+      groundNode,
+      groundDefinition,
+      groundWidth,
+      groundDepth,
+    })
+    groundDefinition = applied.definition
+  }
 
   const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
   const store = ensureScatterStore(groundNodeId, (groundDynamicMesh as any)?.terrainScatter)

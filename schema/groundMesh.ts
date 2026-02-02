@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from '@harmony/schema'
 
 import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
+import { computeGroundBaseHeightAtVertex, normalizeGroundGenerationSettings } from './groundGeneration'
 
 const textureLoader = new THREE.TextureLoader()
 
@@ -108,47 +109,6 @@ function createPerlinNoise(seed?: number) {
   }
 }
 
-type VoronoiPoint = { x: number; z: number }
-
-function createVoronoiNoise(seed?: number) {
-  const random = seed === undefined ? Math.random : createSeededRandom(Math.floor(seed))
-  const cache = new Map<string, VoronoiPoint>()
-  const getPoint = (cellX: number, cellZ: number): VoronoiPoint => {
-    const key = `${cellX}:${cellZ}`
-    let point = cache.get(key)
-    if (!point) {
-      point = {
-        x: cellX + random(),
-        z: cellZ + random(),
-      }
-      cache.set(key, point)
-    }
-    return point
-  }
-
-  return (x: number, z: number) => {
-    const cellX = Math.floor(x)
-    const cellZ = Math.floor(z)
-    let minDistance = Number.POSITIVE_INFINITY
-    for (let ix = cellX - 1; ix <= cellX + 1; ix += 1) {
-      for (let iz = cellZ - 1; iz <= cellZ + 1; iz += 1) {
-        const feature = getPoint(ix, iz)
-        const dx = feature.x - x
-        const dz = feature.z - z
-        const distance = Math.sqrt(dx * dx + dz * dz)
-        if (distance < minDistance) {
-          minDistance = distance
-        }
-      }
-    }
-    if (!Number.isFinite(minDistance)) {
-      return 0
-    }
-    const normalized = Math.max(0, Math.min(1, minDistance))
-    return 1 - normalized
-  }
-}
-
 function groundVertexKey(row: number, column: number): string {
   return `${row}:${column}`
 }
@@ -201,19 +161,6 @@ function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
   return Math.max(80, Math.min(2000, Math.min(DEFAULT_GROUND_CHUNK_RADIUS_METERS, halfDiagonal)))
 }
 
-function setHeightMapValue(map: GroundHeightMap, key: string, value: number): void {
-  // Keep the height map sparse by skipping zero-height entries.
-  let rounded = Math.round(value * 100) / 100
-  if (Object.is(rounded, -0)) {
-    rounded = 0
-  }
-  if (rounded === 0) {
-    delete map[key]
-    return
-  }
-  map[key] = rounded
-}
-
 function clampVertexIndex(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -229,7 +176,25 @@ function clampVertexIndex(value: number, max: number): number {
 
 function getVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
   const key = groundVertexKey(row, column)
-  return definition.heightMap[key] ?? 0
+  const raw = definition.heightMap[key]
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw
+  }
+  return computeGroundBaseHeightAtVertex(definition, row, column)
+}
+
+function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+  const key = groundVertexKey(row, column)
+  const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
+  let rounded = Math.round(value * 100) / 100
+  let baseRounded = Math.round(baseHeight * 100) / 100
+  if (Object.is(rounded, -0)) rounded = 0
+  if (Object.is(baseRounded, -0)) baseRounded = 0
+  if (rounded === baseRounded) {
+    delete map[key]
+    return
+  }
+  map[key] = rounded
 }
 
 function sampleNeighborAverage(
@@ -303,8 +268,7 @@ function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometr
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const key = groundVertexKey(row, column)
-      const height = definition.heightMap[key] ?? 0
+      const height = getVertexHeight(definition, row, column)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -374,8 +338,7 @@ function buildGroundChunkGeometry(definition: GroundDynamicMesh, spec: GroundChu
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const key = groundVertexKey(row, column)
-      const height = definition.heightMap[key] ?? 0
+      const height = getVertexHeight(definition, row, column)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -528,112 +491,14 @@ function disposeChunk(runtime: GroundChunkRuntime): void {
 
 const sculptNoise = createPerlinNoise(911)
 
-function normalizeGroundGenerationSettings(settings: GroundGenerationSettings): GroundGenerationSettings {
-  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
-  const normalizedScale = clamp(Math.abs(settings.noiseScale ?? 40), 1, 10000)
-  const normalizedAmplitude = clamp(Math.abs(settings.noiseAmplitude ?? 0), 0, 500)
-  const normalizedStrength = clamp(Number.isFinite(settings.noiseStrength ?? 1) ? Math.abs(settings.noiseStrength ?? 1) : 1, 0, 10)
-  const detailScale = settings.detailScale && settings.detailScale > 0 ? settings.detailScale : undefined
-  const detailAmplitude = settings.detailAmplitude && settings.detailAmplitude > 0 ? settings.detailAmplitude : undefined
-  const edgeFalloff = typeof settings.edgeFalloff === 'number' && Number.isFinite(settings.edgeFalloff)
-    ? Math.max(0, settings.edgeFalloff)
-    : undefined
-  const normalized: GroundGenerationSettings = {
-    seed: typeof settings.seed === 'number' && Number.isFinite(settings.seed)
-      ? Math.floor(settings.seed)
-      : undefined,
-    noiseScale: normalizedScale,
-    noiseAmplitude: normalizedAmplitude,
-    noiseStrength: normalizedStrength,
-    detailScale,
-    detailAmplitude,
-    chunkSize: settings.chunkSize,
-    chunkResolution: settings.chunkResolution,
-    worldWidth: settings.worldWidth,
-    worldDepth: settings.worldDepth,
-    edgeFalloff,
-    mode: settings.mode ?? 'perlin',
-  }
-  return normalized
-}
-
 export function applyGroundGeneration(
   definition: GroundDynamicMesh,
   settings: GroundGenerationSettings,
 ): GroundGenerationSettings {
   const normalized = normalizeGroundGenerationSettings(settings)
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
-  const cellSize = definition.cellSize
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const heightMap: GroundHeightMap = {}
-  const strength = normalized.noiseStrength ?? 1
-
-  if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
-    definition.heightMap = heightMap
-    definition.generation = normalized
-    return normalized
-  }
-
-  const baseNoise = createPerlinNoise(normalized.seed ?? 1337)
-  const useDetail = Boolean(normalized.detailAmplitude && normalized.detailScale)
-  const detailNoise = useDetail ? createPerlinNoise((normalized.seed ?? 1337) + 97) : null
-  const mainScale = Math.max(0.001, normalized.noiseScale)
-  const detailScale = Math.max(0.001, normalized.detailScale ?? normalized.noiseScale * 0.5)
-  const detailAmplitude = normalized.detailAmplitude ?? 0
-  const voronoiNoise = normalized.mode === 'voronoi' ? createVoronoiNoise((normalized.seed ?? 1337) + 211) : null
-  const simplePhase = (normalized.seed ?? 0) * 0.137
-
-  const sampleBaseValue = (x: number, z: number): number => {
-    const u = x / mainScale
-    const v = z / mainScale
-    switch (normalized.mode) {
-      case 'simple': {
-        const wave = Math.sin(u * 0.6 + simplePhase) * 0.65 + Math.cos(v * 0.35 + simplePhase) * 0.45
-        return Math.max(-1, Math.min(1, wave))
-      }
-      case 'ridge': {
-        const raw = baseNoise(u, v, 0.5)
-        const ridged = 1 - Math.abs(raw)
-        const shaped = ridged * ridged
-        return shaped * 2 - 1
-      }
-      case 'voronoi': {
-        const worley = voronoiNoise ? voronoiNoise(u, v) : 0
-        return worley * 2 - 1
-      }
-      case 'flat':
-        return 0
-      case 'perlin':
-      default:
-        return baseNoise(u, v, 0.5)
-    }
-  }
-
-  for (let row = 0; row <= rows; row += 1) {
-    const z = -halfDepth + row * cellSize
-    for (let column = 0; column <= columns; column += 1) {
-      const x = -halfWidth + column * cellSize
-      const key = groundVertexKey(row, column)
-      let height = sampleBaseValue(x, z) * normalized.noiseAmplitude
-      if (useDetail && detailNoise) {
-        height += detailNoise(x / detailScale, z / detailScale, 0.5) * detailAmplitude
-      }
-      height *= strength
-      if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
-        const nx = (column / columns) * 2 - 1
-        const nz = (row / rows) * 2 - 1
-        const edge = Math.max(Math.abs(nx), Math.abs(nz))
-        const falloff = Math.pow(1 - Math.min(1, edge), normalized.edgeFalloff)
-        height *= falloff
-      }
-      setHeightMapValue(heightMap, key, height)
-    }
-  }
-
-  definition.heightMap = heightMap
   definition.generation = normalized
+  // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
+  definition.heightMap = {}
   definition.hasManualEdits = false
   return normalized
 }
@@ -716,8 +581,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
             const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
             influence *= 1.0 + noiseVal * 0.1
 
-            const key = groundVertexKey(row, col)
-            const currentHeight = heightMap[key] ?? 0
+            const currentHeight = getVertexHeight(definition, row, col)
             let nextHeight = currentHeight
 
             if (operation === 'smooth') {
@@ -738,7 +602,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               nextHeight = currentHeight + offset
             }
 
-            setHeightMapValue(heightMap, key, nextHeight)
+            setHeightOverrideValue(definition, heightMap, row, col, nextHeight)
             modified = true
           }
       }
@@ -768,11 +632,10 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
           if (smoothingFactor <= 0) {
             continue
           }
-          const key = groundVertexKey(row, col)
-          const currentHeight = heightMap[key] ?? 0
+          const currentHeight = getVertexHeight(definition, row, col)
           const average = sampleNeighborAverage(definition, row, col, rows, columns)
           const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
-          setHeightMapValue(heightMap, key, smoothedHeight)
+          setHeightOverrideValue(definition, heightMap, row, col, smoothedHeight)
           modified = true
         }
       }
@@ -808,8 +671,7 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const key = groundVertexKey(row, column)
-      const height = definition.heightMap[key] ?? 0
+      const height = getVertexHeight(definition, row, column)
 
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
@@ -935,8 +797,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundD
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const key = groundVertexKey(row, column)
-      const height = definition.heightMap[key] ?? 0
+      const height = getVertexHeight(definition, row, column)
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
       vertexIndex += 1
@@ -982,8 +843,7 @@ function updateChunkGeometryRegion(
       const x = -halfWidth + column * cellSize
       const localColumn = column - spec.startColumn
       const vertexIndex = localRow * vertexColumns + localColumn
-      const key = groundVertexKey(row, column)
-      const height = definition.heightMap[key] ?? 0
+      const height = getVertexHeight(definition, row, column)
       positionAttr.setXYZ(vertexIndex, x, height, z)
     }
   }

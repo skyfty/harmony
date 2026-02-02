@@ -7362,11 +7362,34 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
 }
 
 function isPlanningDataEmpty(data: PlanningSceneData): boolean {
+  const terrain = (data as any)?.terrain as any
+  const terrainHasContent = (() => {
+    if (!terrain || typeof terrain !== 'object') return false
+    const noiseEnabled = Boolean(terrain?.noise?.enabled)
+    const controlPoints = Array.isArray(terrain?.controlPoints) ? terrain.controlPoints : []
+    const ridgeValleyLines = Array.isArray(terrain?.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+    const overrideCells = terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
+      ? Object.keys(terrain.overrides.cells).length
+      : 0
+
+    // If noise is enabled but settings effectively produce flat output, treat it as empty.
+    const noiseAmplitude = Number(terrain?.noise?.noiseAmplitude)
+    const noiseStrength = Number(terrain?.noise?.noiseStrength)
+    const noiseMode = typeof terrain?.noise?.mode === 'string' ? terrain.noise.mode : ''
+    const noiseProducesAnyHeight = noiseEnabled
+      && (noiseMode !== 'flat')
+      && (Number.isFinite(noiseAmplitude) ? noiseAmplitude !== 0 : true)
+      && (Number.isFinite(noiseStrength) ? noiseStrength !== 0 : true)
+
+    return noiseProducesAnyHeight || controlPoints.length > 0 || ridgeValleyLines.length > 0 || overrideCells > 0
+  })()
+
   return (
     (!data.images || data.images.length === 0)
     && (!data.polygons || data.polygons.length === 0)
     && (!data.polylines || data.polylines.length === 0)
     && (!data.guides || data.guides.length === 0)
+    && !terrainHasContent
   )
 }
 

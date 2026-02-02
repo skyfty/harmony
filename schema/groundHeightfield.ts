@@ -1,5 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from '@harmony/schema'
 import type { RigidbodyPhysicsShape } from './components'
+import { computeGroundBaseHeightAtVertex } from './groundGeneration'
 
 export type GroundHeightfieldData = {
   matrix: number[][]
@@ -157,7 +158,9 @@ export function computeGroundHeightfieldChunkHash(
       const sourceColumn = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
       const key = `${sourceRow}:${sourceColumn}`
       const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
+      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
+        ? rawHeight
+        : computeGroundBaseHeightAtVertex(mesh, sourceRow, sourceColumn)
       const height = baseHeight * scaleY
       const normalized = Math.round(height * 1000)
       hash = (hash * 31 + normalized) >>> 0
@@ -251,7 +254,9 @@ export function buildGroundHeightfieldChunkData(
       const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
       const key = `${sourceRowVertex}:${sourceColumnVertex}`
       const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
+      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
+        ? rawHeight
+        : computeGroundBaseHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
       columnValues.push(baseHeight * scaleY)
     }
     matrix.push(columnValues)
@@ -308,7 +313,9 @@ export function buildGroundHeightfieldData(
     for (let row = pointsZ - 1; row >= 0; row -= 1) {
       const key = `${row}:${column}`
       const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
+      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
+        ? rawHeight
+        : computeGroundBaseHeightAtVertex(mesh, row, column)
       const height = baseHeight * scaleY
       columnValues.push(height)
       const normalized = Math.round(height * 1000)

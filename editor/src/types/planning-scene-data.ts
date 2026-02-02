@@ -88,9 +88,83 @@ export interface PlanningSceneData {
   viewTransform?: { scale: number; offset: { x: number; y: number } }
   /** Optional reference guides (axis-aligned) in world meters. */
   guides?: PlanningGuideData[]
+  /** Optional terrain planning payload (procedural + structural). */
+  terrain?: PlanningTerrainData
   polygons: PlanningPolygonData[]
   polylines: PlanningPolylineData[]
   images: PlanningImageData[]
+}
+
+export type PlanningTerrainMode = 'normal' | 'limited'
+
+export type PlanningTerrainNoiseMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
+
+export interface PlanningTerrainNoiseSettings {
+  enabled: boolean
+  seed?: number
+  mode?: PlanningTerrainNoiseMode
+  noiseScale?: number
+  noiseAmplitude?: number
+  noiseStrength?: number
+  detailScale?: number
+  detailAmplitude?: number
+  edgeFalloff?: number
+}
+
+export type PlanningTerrainFalloff = 'linear' | 'smoothstep' | 'cosine'
+
+export interface PlanningTerrainControlPoint {
+  id: string
+  name?: string
+  x: number
+  y: number
+  radius: number
+  /** Absolute target height in meters. */
+  height: number
+  falloff?: PlanningTerrainFalloff
+}
+
+export type PlanningTerrainLineKind = 'ridge' | 'valley'
+
+export interface PlanningTerrainRidgeValleyLine {
+  id: string
+  name?: string
+  kind: PlanningTerrainLineKind
+  points: PlanningPoint[]
+  /** Influence half-width in meters. */
+  width: number
+  /** Height delta amplitude in meters (ridge: +, valley: -). */
+  strength: number
+  profile?: PlanningTerrainFalloff
+}
+
+export interface PlanningTerrainAbsoluteOverrides {
+  version: 1
+  /** Absolute height overrides keyed by "row:col". */
+  cells: Record<string, number>
+}
+
+export interface PlanningTerrainBudget {
+  vertexCount: number
+  expectedKeys: number
+  limited: boolean
+}
+
+export interface PlanningTerrainGridSettings {
+  /** Fixed grid cell size in meters. */
+  cellSize: number
+}
+
+export interface PlanningTerrainData {
+  version: 1
+  mode?: PlanningTerrainMode
+  grid?: PlanningTerrainGridSettings
+  noise?: PlanningTerrainNoiseSettings
+  controlPoints?: PlanningTerrainControlPoint[]
+  ridgeValleyLines?: PlanningTerrainRidgeValleyLine[]
+  /** Reserved for future 2D brush edits; defaults to absolute overrides. */
+  overrides?: PlanningTerrainAbsoluteOverrides
+  budget?: PlanningTerrainBudget
 }
 
 export type PlanningGuideAxis = 'x' | 'y'

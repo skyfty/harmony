@@ -24,6 +24,15 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 
+import type {
+  PlanningTerrainData,
+  PlanningTerrainBudget,
+  PlanningTerrainControlPoint,
+  PlanningTerrainFalloff,
+  PlanningTerrainNoiseMode,
+  PlanningTerrainRidgeValleyLine,
+} from '@/types/planning-scene-data'
+
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -78,7 +87,7 @@ async function ensureModelBoundsCachedForAsset(asset: ProjectAsset): Promise<voi
   }
 }
 
-type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
+type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker' | 'terrain-brush'
 type LayerKind = 'terrain' | 'building' | 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water'
 
 const layerKindLabels: Record<LayerKind, string> = {
@@ -92,7 +101,7 @@ const layerKindLabels: Record<LayerKind, string> = {
   water: 'Water',
 }
 
-const addableLayerKinds: LayerKind[] = ['road', 'guide-route', 'floor', 'water', 'green', 'wall', 'building']
+const addableLayerKinds: LayerKind[] = ['terrain', 'road', 'guide-route', 'floor', 'water', 'green', 'wall', 'building']
 
 interface PlanningLayer {
   id: string
@@ -235,6 +244,7 @@ type DragState =
   | { type: 'idle' }
   | { type: 'rectangle'; pointerId: number; start: PlanningPoint; current: PlanningPoint; layerId: string }
   | { type: 'pan'; pointerId: number; origin: { x: number; y: number }; offset: { x: number; y: number } }
+  | { type: 'terrain-brush'; pointerId: number; mode: 'paint' | 'erase' }
   | { type: 'move-polygon'; pointerId: number; polygonId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | { type: 'move-polyline'; pointerId: number; lineId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | {
@@ -280,6 +290,7 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
+  { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#90A4AE', locked: false },
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadLaneLines: false, roadSmoothing: 0.09 },
   { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
@@ -321,6 +332,126 @@ const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const planningGuides = ref<PlanningGuide[]>([])
 const guideDraft = ref<PlanningGuide | null>(null)
+
+const TERRAIN_VERTEX_COUNT_LIMIT = 512 * 512
+
+const terrainBrush = reactive({
+  radiusMeters: 3,
+  heightMeters: 2,
+  mode: 'paint' as 'paint' | 'erase',
+})
+
+const terrainBrushHoverPoint = ref<PlanningPoint | null>(null)
+let pendingTerrainBrushHoverClient: { x: number; y: number } | null = null
+let pendingTerrainBrushPaintClient: { x: number; y: number; pointerId: number } | null = null
+
+function clampTerrainBrushRadius(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return 3
+  return Math.min(100, Math.max(0.25, num))
+}
+
+function clampTerrainBrushHeight(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return 0
+  return Math.max(-1000, Math.min(1000, num))
+}
+
+function getTerrainGridSpec(terrain: PlanningTerrainData) {
+  const cellSize = Number(terrain?.grid?.cellSize ?? 1)
+  const width = sceneGroundSize.value.width
+  const depth = sceneGroundSize.value.height
+  const safeCellSize = Number.isFinite(cellSize) && cellSize >= 0.1 ? cellSize : 1
+  const columns = Math.max(1, Math.round(width / Math.max(1e-6, safeCellSize)))
+  const rows = Math.max(1, Math.round(depth / Math.max(1e-6, safeCellSize)))
+  return { cellSize: safeCellSize, width, depth, columns, rows }
+}
+
+function terrainVertexKey(row: number, col: number): string {
+  return `${row}:${col}`
+}
+
+function applyTerrainBrushAt(worldPoint: PlanningPoint, mode: 'paint' | 'erase') {
+  const layer = activeLayer.value
+  if (!layer || layer.kind !== 'terrain' || layer.locked) return
+  if (!isPointInsideCanvas(worldPoint)) return
+
+  const terrain = planningTerrain.value
+  if (!terrain.overrides || terrain.overrides.version !== 1) {
+    terrain.overrides = { version: 1, cells: {} }
+  }
+  if (!terrain.overrides.cells || typeof terrain.overrides.cells !== 'object') {
+    terrain.overrides.cells = {}
+  }
+
+  const { cellSize, width, depth, columns, rows } = getTerrainGridSpec(terrain)
+  const radius = clampTerrainBrushRadius(terrainBrush.radiusMeters)
+  const targetHeight = clampTerrainBrushHeight(terrainBrush.heightMeters)
+
+  const minCol = Math.max(0, Math.min(columns, Math.floor((worldPoint.x - radius) / cellSize)))
+  const maxCol = Math.max(0, Math.min(columns, Math.ceil((worldPoint.x + radius) / cellSize)))
+  const minRow = Math.max(0, Math.min(rows, Math.floor((worldPoint.y - radius) / cellSize)))
+  const maxRow = Math.max(0, Math.min(rows, Math.ceil((worldPoint.y + radius) / cellSize)))
+
+  const cells = terrain.overrides.cells as Record<string, number>
+  let changed = false
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const vy = row * cellSize
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const vx = col * cellSize
+      const dx = vx - worldPoint.x
+      const dy = vy - worldPoint.y
+      if (dx * dx + dy * dy > radius * radius) continue
+
+      const key = terrainVertexKey(row, col)
+      if (mode === 'erase') {
+        if (key in cells) {
+          delete cells[key]
+          changed = true
+        }
+      } else {
+        if (cells[key] !== targetHeight) {
+          cells[key] = targetHeight
+          changed = true
+        }
+      }
+    }
+  }
+
+  // Keep stage bounds coherent (not strictly required, but prevents odd configs)
+  void width
+  void depth
+
+  if (changed) {
+    markPlanningDirty()
+  }
+}
+
+function createDefaultPlanningTerrain(): PlanningTerrainData {
+  return {
+    version: 1,
+    mode: 'normal',
+    grid: { cellSize: 1 },
+    noise: {
+      enabled: false,
+      seed: 1337,
+      mode: 'perlin',
+      noiseScale: 40,
+      noiseAmplitude: 4,
+      noiseStrength: 1,
+      detailScale: 20,
+      detailAmplitude: 0,
+      edgeFalloff: 0,
+    },
+    controlPoints: [],
+    ridgeValleyLines: [],
+    overrides: { version: 1, cells: {} },
+    budget: { vertexCount: 0, expectedKeys: 0, limited: false },
+  }
+}
+
+const planningTerrain = ref<PlanningTerrainData>(createDefaultPlanningTerrain())
 // Temporary guides that follow the mouse (not added to the persistent guides list)
 const hoverGuideX = ref<PlanningGuide | null>(null)
 const hoverGuideY = ref<PlanningGuide | null>(null)
@@ -348,6 +479,9 @@ const currentTool = ref<PlanningTool>('select')
 // Dynamic cursor style for editor canvas
 const editorCursorStyle = computed(() => {
   if (['rectangle', 'lasso', 'line'].includes(currentTool.value)) {
+    return { cursor: 'crosshair' }
+  }
+  if (currentTool.value === 'terrain-brush') {
     return { cursor: 'crosshair' }
   }
   if (currentTool.value === 'select') {
@@ -1356,6 +1490,84 @@ function handleRulerGuideDrag(event: RulerGuideDragEvent) {
   }
 }
 
+function estimateTerrainExpectedKeys(terrain: PlanningTerrainData, cellSizeMeters: number): number {
+  const cellSize = Number.isFinite(cellSizeMeters) && cellSizeMeters > 1e-6 ? cellSizeMeters : 1
+  const areaPerVertex = Math.max(1e-6, cellSize * cellSize)
+
+  let estimate = 0
+
+  const controlPoints = Array.isArray(terrain.controlPoints) ? terrain.controlPoints : []
+  for (const cp of controlPoints) {
+    const radius = Number(cp?.radius)
+    if (!Number.isFinite(radius) || radius <= 0) continue
+    estimate += (Math.PI * radius * radius) / areaPerVertex
+  }
+
+  const lines = Array.isArray(terrain.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+  for (const line of lines) {
+    const width = Number(line?.width)
+    if (!Number.isFinite(width) || width <= 0) continue
+    const length = polylineLength(Array.isArray(line.points) ? line.points : [])
+    if (!Number.isFinite(length) || length <= 0) continue
+    estimate += (length * (width * 2)) / areaPerVertex
+  }
+
+  // Overrides (future A brush) are already in cells; count them as-is.
+  const overrideCells = terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
+    ? Object.keys(terrain.overrides.cells).length
+    : 0
+  estimate += overrideCells
+
+  return Math.max(0, Math.round(estimate))
+}
+
+function computeTerrainBudget(terrain: PlanningTerrainData): PlanningTerrainBudget {
+  const cellSize = Number(terrain?.grid?.cellSize ?? 1)
+  const width = sceneGroundSize.value.width
+  const depth = sceneGroundSize.value.height
+  const columns = Math.max(1, Math.round(width / Math.max(1e-6, cellSize)))
+  const rows = Math.max(1, Math.round(depth / Math.max(1e-6, cellSize)))
+  const vertexCount = (rows + 1) * (columns + 1)
+  const expectedKeys = estimateTerrainExpectedKeys(terrain, cellSize)
+  const limited = vertexCount > TERRAIN_VERTEX_COUNT_LIMIT
+  return { vertexCount, expectedKeys, limited }
+}
+
+function isTerrainEmptyForSnapshot(terrain: PlanningTerrainData | null | undefined): boolean {
+  if (!terrain || typeof terrain !== 'object') return true
+
+  const controlPoints = Array.isArray(terrain.controlPoints) ? terrain.controlPoints : []
+  const ridgeValleyLines = Array.isArray(terrain.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+  const overrideCells = terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
+    ? Object.keys(terrain.overrides.cells).length
+    : 0
+
+  const noiseEnabled = Boolean(terrain?.noise?.enabled)
+  const noiseAmplitude = Number(terrain?.noise?.noiseAmplitude)
+  const noiseStrength = Number(terrain?.noise?.noiseStrength)
+  const noiseMode = typeof terrain?.noise?.mode === 'string' ? terrain.noise.mode : ''
+  const noiseProducesAnyHeight = noiseEnabled
+    && noiseMode !== 'flat'
+    && (Number.isFinite(noiseAmplitude) ? noiseAmplitude !== 0 : true)
+    && (Number.isFinite(noiseStrength) ? noiseStrength !== 0 : true)
+
+  return !noiseProducesAnyHeight && controlPoints.length === 0 && ridgeValleyLines.length === 0 && overrideCells === 0
+}
+
+function buildTerrainSnapshot(): PlanningTerrainData | undefined {
+  const terrain = planningTerrain.value
+  const budget = computeTerrainBudget(terrain)
+  const mode = budget.limited ? 'limited' : 'normal'
+
+  const next: PlanningTerrainData = {
+    ...terrain,
+    mode,
+    budget,
+  }
+
+  return isTerrainEmptyForSnapshot(next) ? undefined : next
+}
+
 function buildPlanningSnapshot() {
   return {
     version: 1 as const,
@@ -1381,6 +1593,7 @@ function buildPlanningSnapshot() {
       offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
     },
     guides: planningGuides.value.map((g) => ({ id: g.id, axis: g.axis, value: g.value })),
+    terrain: buildTerrainSnapshot(),
     polygons: polygons.value.map((poly) => ({
       id: poly.id,
       name: poly.name,
@@ -1474,6 +1687,7 @@ function isPlanningSnapshotEmpty(snapshot: ReturnType<typeof buildPlanningSnapsh
     && snapshot.polygons.length === 0
     && snapshot.polylines.length === 0
     && (!snapshot.guides || snapshot.guides.length === 0)
+    && (!snapshot.terrain || isTerrainEmptyForSnapshot(snapshot.terrain))
   )
 }
 
@@ -1609,6 +1823,7 @@ function resetPlanningState() {
   planningImages.value = []
   planningGuides.value = []
   guideDraft.value = null
+  planningTerrain.value = createDefaultPlanningTerrain()
   polygons.value = []
   polylines.value = []
   polygonDraftPoints.value = []
@@ -1664,6 +1879,116 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
   }
 }
 
+function normalizeTerrainFalloff(raw: unknown): PlanningTerrainFalloff {
+  return raw === 'linear' || raw === 'smoothstep' || raw === 'cosine' ? (raw as PlanningTerrainFalloff) : 'cosine'
+}
+
+function normalizeTerrainNoiseMode(raw: unknown): PlanningTerrainNoiseMode {
+  return raw === 'simple' || raw === 'perlin' || raw === 'ridge' || raw === 'voronoi' || raw === 'flat'
+    ? (raw as PlanningTerrainNoiseMode)
+    : 'perlin'
+}
+
+function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
+  const next = createDefaultPlanningTerrain()
+  if (!raw || typeof raw !== 'object') {
+    return next
+  }
+  const payload = raw as Record<string, unknown>
+
+  const grid = payload.grid && typeof payload.grid === 'object' ? (payload.grid as any) : null
+  const cellSize = Number(grid?.cellSize)
+  if (Number.isFinite(cellSize) && cellSize >= 0.1 && cellSize <= 20) {
+    next.grid = { cellSize }
+  }
+
+  const noise = payload.noise && typeof payload.noise === 'object' ? (payload.noise as any) : null
+  if (noise) {
+    next.noise = {
+      enabled: Boolean(noise.enabled),
+      seed: Number.isFinite(Number(noise.seed)) ? Math.floor(Number(noise.seed)) : next.noise?.seed,
+      mode: normalizeTerrainNoiseMode(noise.mode),
+      noiseScale: Number.isFinite(Number(noise.noiseScale)) ? Math.max(0.1, Number(noise.noiseScale)) : next.noise?.noiseScale,
+      noiseAmplitude: Number.isFinite(Number(noise.noiseAmplitude)) ? Number(noise.noiseAmplitude) : next.noise?.noiseAmplitude,
+      noiseStrength: Number.isFinite(Number(noise.noiseStrength)) ? Number(noise.noiseStrength) : next.noise?.noiseStrength,
+      detailScale: Number.isFinite(Number(noise.detailScale)) ? Math.max(0.1, Number(noise.detailScale)) : next.noise?.detailScale,
+      detailAmplitude: Number.isFinite(Number(noise.detailAmplitude)) ? Math.max(0, Number(noise.detailAmplitude)) : next.noise?.detailAmplitude,
+      edgeFalloff: Number.isFinite(Number(noise.edgeFalloff)) ? Math.max(0, Number(noise.edgeFalloff)) : next.noise?.edgeFalloff,
+    }
+  }
+
+  if (Array.isArray(payload.controlPoints)) {
+    next.controlPoints = payload.controlPoints
+      .map((cp: any) => {
+        const x = Number(cp?.x)
+        const y = Number(cp?.y)
+        const radius = Number(cp?.radius)
+        const height = Number(cp?.height)
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0 || !Number.isFinite(height)) {
+          return null
+        }
+        const id = typeof cp?.id === 'string' ? cp.id : createId('terrain-cp')
+        const nextCp: PlanningTerrainControlPoint = {
+          id,
+          x,
+          y,
+          radius,
+          height,
+          falloff: normalizeTerrainFalloff(cp?.falloff),
+        }
+        if (typeof cp?.name === 'string') {
+          nextCp.name = cp.name
+        }
+        return nextCp
+      })
+      .filter((cp): cp is PlanningTerrainControlPoint => !!cp)
+  }
+
+  if (Array.isArray(payload.ridgeValleyLines)) {
+    next.ridgeValleyLines = payload.ridgeValleyLines
+      .map((line: any) => {
+        const kind = line?.kind === 'ridge' || line?.kind === 'valley' ? line.kind : null
+        const width = Number(line?.width)
+        const strength = Number(line?.strength)
+        const points = Array.isArray(line?.points) ? line.points : null
+        if (!kind || !Number.isFinite(width) || width <= 0 || !Number.isFinite(strength) || !points || points.length < 2) {
+          return null
+        }
+        const normPoints = points
+          .map((p: any) => {
+            const x = Number(p?.x)
+            const y = Number(p?.y)
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+            return { x, y }
+          })
+          .filter((p: any) => !!p)
+        if (normPoints.length < 2) return null
+        const id = typeof line?.id === 'string' ? line.id : createId('terrain-line')
+        const nextLine: PlanningTerrainRidgeValleyLine = {
+          id,
+          kind,
+          width,
+          strength,
+          points: normPoints,
+          profile: normalizeTerrainFalloff(line?.profile),
+        }
+        if (typeof line?.name === 'string') {
+          nextLine.name = line.name
+        }
+        return nextLine
+      })
+      .filter((line): line is PlanningTerrainRidgeValleyLine => !!line)
+  }
+
+  // Overrides are reserved for future A brush. Keep, but do not attempt deep normalization.
+  const overrides = payload.overrides && typeof payload.overrides === 'object' ? (payload.overrides as any) : null
+  if (overrides && overrides.version === 1 && overrides.cells && typeof overrides.cells === 'object') {
+    next.overrides = { version: 1, cells: overrides.cells as Record<string, number> }
+  }
+
+  return next
+}
+
 function loadPlanningFromScene() {
   const data = sceneStore.planningData
   resetPlanningState()
@@ -1679,6 +2004,8 @@ function loadPlanningFromScene() {
   if (Array.isArray((data as any).guides)) {
     planningGuides.value = ((data as any).guides as unknown[]).map(normalizeGuide).filter((g): g is PlanningGuide => !!g)
   }
+
+  planningTerrain.value = normalizePlanningTerrain((data as any)?.terrain)
 
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
@@ -1989,6 +2316,35 @@ function scheduleRafFlush() {
       }
       pendingLineHoverClient = null
     }
+
+    if (pendingTerrainBrushHoverClient) {
+      if (dialogOpen.value && currentTool.value === 'terrain-brush') {
+        const nextHover = screenToWorld({
+          clientX: pendingTerrainBrushHoverClient.x,
+          clientY: pendingTerrainBrushHoverClient.y,
+        } as MouseEvent)
+        terrainBrushHoverPoint.value = isPointInsideCanvas(nextHover) ? nextHover : null
+      } else {
+        terrainBrushHoverPoint.value = null
+      }
+      pendingTerrainBrushHoverClient = null
+    }
+
+    if (pendingTerrainBrushPaintClient) {
+      const state = dragState.value
+      if (
+        dialogOpen.value
+        && state.type === 'terrain-brush'
+        && state.pointerId === pendingTerrainBrushPaintClient.pointerId
+      ) {
+        const nextPoint = screenToWorld({
+          clientX: pendingTerrainBrushPaintClient.x,
+          clientY: pendingTerrainBrushPaintClient.y,
+        } as MouseEvent)
+        applyTerrainBrushAt(nextPoint, state.mode)
+      }
+      pendingTerrainBrushPaintClient = null
+    }
   })
 }
 
@@ -2023,7 +2379,7 @@ const canUseLineTool = computed(() => {
 
 const canUseAreaTools = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route'
+  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route' && kind !== 'terrain'
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
@@ -2133,7 +2489,12 @@ const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
 })
 
+const terrainPanelActive = computed(() => activeListItem.value?.type === 'layer' && activeLayer.value?.kind === 'terrain')
+
 const propertyPanelDisabledReason = computed(() => {
+  if (terrainPanelActive.value) {
+    return null
+  }
   const target = selectedScatterTarget.value
   // Allow editing layer/shape properties from the property panel even when the layer is locked.
   if (target) {
@@ -2150,8 +2511,197 @@ const propertyPanelDisabledReason = computed(() => {
 const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
 
 const propertyPanelLayerKind = computed<LayerKind | null>(() => {
-  return selectedScatterTarget.value?.layer?.kind ?? null
+  return selectedScatterTarget.value?.layer?.kind ?? (terrainPanelActive.value ? 'terrain' : null)
 })
+
+const terrainBudget = computed(() => computeTerrainBudget(planningTerrain.value))
+const terrainLimited = computed(() => terrainBudget.value.limited)
+
+const terrainCellSizeModel = computed<number>({
+  get: () => {
+    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 1)
+    return Number.isFinite(raw) && raw >= 0.1 ? raw : 1
+  },
+  set: (value: number) => {
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    const clamped = Math.min(20, Math.max(0.1, next))
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      grid: { cellSize: clamped },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseEnabledModel = computed<boolean>({
+  get: () => Boolean(planningTerrain.value?.noise?.enabled),
+  set: (value: boolean) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), enabled: Boolean(value) },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseModeOptions: Array<{ value: PlanningTerrainNoiseMode; label: string }> = [
+  { value: 'perlin', label: 'Perlin' },
+  { value: 'ridge', label: 'Ridge' },
+  { value: 'voronoi', label: 'Voronoi' },
+  { value: 'simple', label: 'Simple' },
+  { value: 'flat', label: 'Flat' },
+]
+
+const terrainNoiseModeModel = computed<PlanningTerrainNoiseMode>({
+  get: () => {
+    const raw = planningTerrain.value?.noise?.mode
+    return normalizeTerrainNoiseMode(raw)
+  },
+  set: (value: PlanningTerrainNoiseMode) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), mode: value },
+    }
+    markPlanningDirty()
+  },
+})
+
+function clampNumberInput(raw: unknown, fallback: number, min: number, max: number): number {
+  const num = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(num)) return fallback
+  return Math.min(max, Math.max(min, num))
+}
+
+const terrainNoiseSeedModel = computed<number>({
+  get: () => clampNumberInput(planningTerrain.value?.noise?.seed, 1337, -2147483648, 2147483647),
+  set: (value: number) => {
+    const seed = Math.trunc(clampNumberInput(value, 1337, -2147483648, 2147483647))
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), seed },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseScaleModel = computed<number>({
+  get: () => clampNumberInput(planningTerrain.value?.noise?.noiseScale, 40, 1, 10000),
+  set: (value: number) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), noiseScale: clampNumberInput(value, 40, 1, 10000) },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseAmplitudeModel = computed<number>({
+  get: () => clampNumberInput(planningTerrain.value?.noise?.noiseAmplitude, 4, 0, 500),
+  set: (value: number) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), noiseAmplitude: clampNumberInput(value, 4, 0, 500) },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseStrengthModel = computed<number>({
+  get: () => clampNumberInput(planningTerrain.value?.noise?.noiseStrength, 1, 0, 10),
+  set: (value: number) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), noiseStrength: clampNumberInput(value, 1, 0, 10) },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainNoiseEdgeFalloffModel = computed<number>({
+  get: () => clampNumberInput(planningTerrain.value?.noise?.edgeFalloff, 0, 0, 20),
+  set: (value: number) => {
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      noise: { ...(planningTerrain.value.noise ?? createDefaultPlanningTerrain().noise!), edgeFalloff: clampNumberInput(value, 0, 0, 20) },
+    }
+    markPlanningDirty()
+  },
+})
+
+const terrainControlPoints = computed(() => (Array.isArray(planningTerrain.value.controlPoints) ? planningTerrain.value.controlPoints : []))
+const terrainRidgeValleyLines = computed(() => (Array.isArray(planningTerrain.value.ridgeValleyLines) ? planningTerrain.value.ridgeValleyLines : []))
+
+const terrainFalloffOptions: Array<{ value: PlanningTerrainFalloff; label: string }> = [
+  { value: 'cosine', label: 'Cosine' },
+  { value: 'smoothstep', label: 'Smoothstep' },
+  { value: 'linear', label: 'Linear' },
+]
+
+function updateTerrainControlPoint(id: string, patch: Partial<PlanningTerrainControlPoint>) {
+  const list = terrainControlPoints.value
+  const index = list.findIndex((cp) => cp.id === id)
+  if (index < 0) return
+  const next = list.slice()
+  next[index] = { ...next[index]!, ...patch }
+  planningTerrain.value = { ...planningTerrain.value, controlPoints: next }
+  markPlanningDirty()
+}
+
+function addTerrainControlPoint() {
+  const width = sceneGroundSize.value.width
+  const height = sceneGroundSize.value.height
+  const point: PlanningTerrainControlPoint = {
+    id: createId('terrain-cp'),
+    name: `Control Point ${terrainControlPoints.value.length + 1}`,
+    x: width * 0.5,
+    y: height * 0.5,
+    radius: 10,
+    height: 5,
+    falloff: 'cosine',
+  }
+  planningTerrain.value = { ...planningTerrain.value, controlPoints: [...terrainControlPoints.value, point] }
+  markPlanningDirty()
+}
+
+function removeTerrainControlPoint(id: string) {
+  planningTerrain.value = { ...planningTerrain.value, controlPoints: terrainControlPoints.value.filter((cp) => cp.id !== id) }
+  markPlanningDirty()
+}
+
+function updateTerrainLine(id: string, patch: Partial<PlanningTerrainRidgeValleyLine>) {
+  const list = terrainRidgeValleyLines.value
+  const index = list.findIndex((line) => line.id === id)
+  if (index < 0) return
+  const next = list.slice()
+  next[index] = { ...next[index]!, ...patch }
+  planningTerrain.value = { ...planningTerrain.value, ridgeValleyLines: next }
+  markPlanningDirty()
+}
+
+function removeTerrainLine(id: string) {
+  planningTerrain.value = { ...planningTerrain.value, ridgeValleyLines: terrainRidgeValleyLines.value.filter((l) => l.id !== id) }
+  markPlanningDirty()
+}
+
+function addTerrainLineFromSelected(kind: 'ridge' | 'valley') {
+  const line = selectedPolyline.value
+  if (!line || !Array.isArray(line.points) || line.points.length < 2) {
+    return
+  }
+  const points = line.points.map((p) => ({ x: p.x, y: p.y }))
+  const entry: PlanningTerrainRidgeValleyLine = {
+    id: createId('terrain-line'),
+    name: `${kind === 'ridge' ? 'Ridge' : 'Valley'} ${terrainRidgeValleyLines.value.length + 1}`,
+    kind,
+    points,
+    width: 8,
+    strength: kind === 'ridge' ? 2 : 2,
+    profile: 'cosine',
+  }
+  planningTerrain.value = { ...planningTerrain.value, ridgeValleyLines: [...terrainRidgeValleyLines.value, entry] }
+  markPlanningDirty()
+}
 
 const airWallEnabledModel = computed<boolean>({
   get: () => {
@@ -2303,14 +2853,6 @@ const floorSmoothModel = computed({
 
 // (removed layer-scoped floor preset model — layer-level floor presets are not used)
 
-// Floor preset selection (feature-scoped override)
-const floorFeaturePresetOverridden = computed<boolean>(() => {
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'floor') return false
-  const override = (target.shape as any)?.floorPresetAssetId
-  return typeof override === 'string' && override.trim().length > 0
-})
-
 const floorFeaturePresetAssetIdEffective = computed<string>(() => {
   const target = selectedScatterTarget.value
   if (!target || target.layer?.kind !== 'floor') return ''
@@ -2319,15 +2861,6 @@ const floorFeaturePresetAssetIdEffective = computed<string>(() => {
   const layer = target.layer
   return typeof layer.floorPresetAssetId === 'string' ? layer.floorPresetAssetId.trim() : ''
 })
-
-function clearFloorFeaturePresetOverride() {
-  if (propertyPanelDisabled.value) return
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'floor') return
-  const shape = target.shape as any
-  delete shape.floorPresetAssetId
-  markPlanningDirty()
-}
 
 function handleFloorFeaturePresetAssetChange(asset: ProjectAsset | null) {
   if (propertyPanelDisabled.value) return
@@ -2397,14 +2930,6 @@ const wallThicknessMetersModel = computed({
 
 // (removed layer-scoped wall preset model — layer-level wall presets are not used)
 
-// Wall preset selection (feature-scoped override)
-const wallFeaturePresetOverridden = computed<boolean>(() => {
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'wall') return false
-  const override = (target.shape as any)?.wallPresetAssetId
-  return typeof override === 'string' && override.trim().length > 0
-})
-
 const wallFeaturePresetAssetIdEffective = computed<string>(() => {
   const target = selectedScatterTarget.value
   if (!target || target.layer?.kind !== 'wall') return ''
@@ -2412,15 +2937,6 @@ const wallFeaturePresetAssetIdEffective = computed<string>(() => {
   if (typeof override === 'string' && override.trim().length) return override.trim()
   return ''
 })
-
-function clearWallFeaturePresetOverride() {
-  if (propertyPanelDisabled.value) return
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'wall') return
-  const shape = target.shape as any
-  delete shape.wallPresetAssetId
-  markPlanningDirty()
-}
 
 function handleWallFeaturePresetAssetChange(asset: ProjectAsset | null) {
   if (propertyPanelDisabled.value) return
@@ -3957,6 +4473,9 @@ function handleToolSelect(tool: PlanningTool) {
   if ((tool === 'rectangle' || tool === 'lasso') && !canUseAreaTools.value) {
     return
   }
+  if (tool === 'terrain-brush' && !canUseTerrainBrushTool.value) {
+    return
+  }
   currentTool.value = tool
 }
 
@@ -3983,6 +4502,9 @@ function handleLayerSelection(layerId: string) {
     currentTool.value = 'select'
   }
   if ((currentTool.value === 'rectangle' || currentTool.value === 'lasso') && !canUseAreaTools.value) {
+    currentTool.value = 'select'
+  }
+  if (currentTool.value === 'terrain-brush' && !canUseTerrainBrushTool.value) {
     currentTool.value = 'select'
   }
   ensureSelectionWithinActiveLayer()
@@ -4225,6 +4747,24 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
+  if (tool === 'terrain-brush') {
+    if (!insideCanvas) {
+      frozenCanvasSize.value = null
+      return
+    }
+    const layer = activeLayer.value
+    if (!layer || layer.kind !== 'terrain' || layer.locked) {
+      frozenCanvasSize.value = null
+      return
+    }
+
+    const mode: 'paint' | 'erase' = event.altKey ? 'erase' : terrainBrush.mode
+    dragState.value = { type: 'terrain-brush', pointerId: event.pointerId, mode }
+    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+    applyTerrainBrushAt(world, mode)
+    return
+  }
+
   // Pan view: when using pan tool, or when dragging on empty space with select tool
   if (tool === 'pan' || tool === 'select') {
     beginPanDrag(event)
@@ -4295,6 +4835,11 @@ function handleEditorContextMenu(event: MouseEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (dialogOpen.value && currentTool.value === 'terrain-brush') {
+    pendingTerrainBrushHoverClient = { x: event.clientX, y: event.clientY }
+    scheduleRafFlush()
+  }
+
   // Free-draw preview: when not dragging, update preview line following the mouse
   if (
     dialogOpen.value
@@ -4327,6 +4872,11 @@ function handlePointerMove(event: PointerEvent) {
 
   const state = dragState.value
   if (state.type === 'idle' || state.pointerId !== event.pointerId) {
+    return
+  }
+  if (state.type === 'terrain-brush') {
+    pendingTerrainBrushPaintClient = { x: event.clientX, y: event.clientY, pointerId: event.pointerId }
+    scheduleRafFlush()
     return
   }
   if (state.type === 'rectangle') {
@@ -4489,6 +5039,7 @@ async function handlePointerUp(event: PointerEvent) {
       state.type === 'pan'
       || state.type === 'move-polygon'
       || state.type === 'move-polyline'
+      || state.type === 'terrain-brush'
       || (state.type === 'drag-vertex' && (state.feature !== 'polyline' || didMovePolylineVertex))
       || state.type === 'move-image-layer'
       || state.type === 'move-align-marker'
@@ -5752,8 +6303,14 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string 
   { tool: 'rectangle', icon: 'mdi-rectangle-outline', tooltip: 'Draw rectangular area' },
   { tool: 'lasso', icon: 'mdi-shape-polygon-plus', tooltip: 'Draw freehand area' },
   { tool: 'line', icon: 'mdi-vector-line', tooltip: 'Draw line' },
+  { tool: 'terrain-brush', icon: 'mdi-brush-outline', tooltip: 'Terrain brush (A): paint absolute overrides' },
   { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
 ]
+
+const canUseTerrainBrushTool = computed(() => {
+  const layer = activeLayer.value
+  return !!layer && layer.kind === 'terrain' && !layer.locked
+})
 
 const visibleToolbarButtons = computed(() => {
   return toolbarButtons.filter((button) => {
@@ -5762,6 +6319,9 @@ const visibleToolbarButtons = computed(() => {
     }
     if (button.tool === 'rectangle' || button.tool === 'lasso') {
       return canUseAreaTools.value
+    }
+    if (button.tool === 'terrain-brush') {
+      return canUseTerrainBrushTool.value
     }
     return true
   })
@@ -6495,6 +7055,19 @@ onBeforeUnmount(() => {
                       @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
                     />
                   </g>
+
+                  <!-- Terrain brush cursor (A) -->
+                  <circle
+                    v-if="currentTool === 'terrain-brush' && terrainBrushHoverPoint"
+                    class="terrain-brush-cursor"
+                    :cx="terrainBrushHoverPoint.x"
+                    :cy="terrainBrushHoverPoint.y"
+                    :r="terrainBrush.radiusMeters"
+                    fill="none"
+                    stroke="rgba(255,255,255,0.85)"
+                    stroke-width="0.12"
+                    pointer-events="none"
+                  />
                 </svg>
 
                 <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
@@ -6692,7 +7265,357 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <template v-if="propertyPanelLayerKind === 'green'">
+            <template v-if="propertyPanelLayerKind === 'terrain'">
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">Grid</div>
+                <div class="property-panel__density-row">
+                  <v-text-field
+                    v-model.number="terrainCellSizeModel"
+                    type="number"
+                    min="0.1"
+                    max="20"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                    label="Cell size"
+                  />
+                </div>
+                <div style="margin-top:8px;font-size:0.85rem;opacity:0.85;">
+                  <div>Vertex count: {{ terrainBudget.vertexCount.toLocaleString() }}</div>
+                  <div>Expected override keys: {{ terrainBudget.expectedKeys.toLocaleString() }}</div>
+                  <div v-if="terrainLimited" style="margin-top:6px;color:#ffcc80;">
+                    Limited mode: noise is disabled for very large grids.
+                  </div>
+                </div>
+              </div>
+
+              <div class="property-panel__block">
+                <div class="property-panel__density-row">
+                  <v-switch
+                    v-model="terrainNoiseEnabledModel"
+                    density="compact"
+                    hide-details
+                    label="Procedural noise (F)"
+                    :disabled="terrainLimited"
+                  />
+                </div>
+                <div v-if="terrainLimited" style="font-size:0.85rem;opacity:0.85;">
+                  Noise is disabled because vertex count exceeds {{ TERRAIN_VERTEX_COUNT_LIMIT.toLocaleString() }}.
+                </div>
+
+                <div v-if="terrainNoiseEnabledModel && !terrainLimited" style="margin-top:8px;display:flex;flex-direction:column;gap:8px;">
+                  <v-select
+                    label="Mode"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :items="terrainNoiseModeOptions"
+                    item-title="label"
+                    item-value="value"
+                    v-model="terrainNoiseModeModel"
+                  />
+                  <v-text-field
+                    v-model.number="terrainNoiseSeedModel"
+                    type="number"
+                    step="1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    label="Seed"
+                  />
+                  <v-text-field
+                    v-model.number="terrainNoiseScaleModel"
+                    type="number"
+                    min="1"
+                    max="10000"
+                    step="1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    label="Scale"
+                    suffix="m"
+                  />
+                  <v-text-field
+                    v-model.number="terrainNoiseAmplitudeModel"
+                    type="number"
+                    min="0"
+                    max="500"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    label="Amplitude"
+                    suffix="m"
+                  />
+                  <v-text-field
+                    v-model.number="terrainNoiseStrengthModel"
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    label="Strength"
+                  />
+                  <v-text-field
+                    v-model.number="terrainNoiseEdgeFalloffModel"
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    label="Edge falloff"
+                  />
+                </div>
+              </div>
+
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">Brush overrides (A)</div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <v-select
+                    label="Mode"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :items="[
+                      { label: 'Paint', value: 'paint' },
+                      { label: 'Erase', value: 'erase' },
+                    ]"
+                    item-title="label"
+                    item-value="value"
+                    v-model="terrainBrush.mode"
+                    style="min-width:140px;flex:1;"
+                  />
+                  <v-text-field
+                    v-model.number="terrainBrush.radiusMeters"
+                    type="number"
+                    min="0.25"
+                    max="100"
+                    step="0.25"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                    label="Radius"
+                    style="min-width:140px;flex:1;"
+                    @update:modelValue="(v) => (terrainBrush.radiusMeters = clampTerrainBrushRadius(v))"
+                  />
+                  <v-text-field
+                    v-model.number="terrainBrush.heightMeters"
+                    type="number"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                    label="Height"
+                    style="min-width:140px;flex:1;"
+                    :disabled="terrainBrush.mode === 'erase'"
+                    @update:modelValue="(v) => (terrainBrush.heightMeters = clampTerrainBrushHeight(v))"
+                  />
+                </div>
+
+                <div style="margin-top:8px;font-size:0.85rem;opacity:0.85;display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                  <div>
+                    Overrides: {{ Object.keys(planningTerrain?.overrides?.cells ?? {}).length.toLocaleString() }}
+                    <span style="opacity:0.8;">(Alt = erase while painting)</span>
+                  </div>
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    color="error"
+                    :disabled="Object.keys(planningTerrain?.overrides?.cells ?? {}).length === 0"
+                    @click="() => { planningTerrain.overrides = { version: 1, cells: {} }; markPlanningDirty() }"
+                  >
+                    Clear
+                  </v-btn>
+                </div>
+              </div>
+
+              <div class="property-panel__block">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <div style="font-weight:600;">Control Points (D)</div>
+                  <v-btn size="small" variant="text" color="primary" @click="addTerrainControlPoint">Add</v-btn>
+                </div>
+                <div v-if="!terrainControlPoints.length" style="margin-top:6px;font-size:0.85rem;opacity:0.8;">
+                  No control points.
+                </div>
+                <div v-for="cp in terrainControlPoints" :key="cp.id" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <v-text-field
+                      :model-value="cp.name ?? ''"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Name"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainControlPoint(cp.id, { name: String(v) })"
+                    />
+                    <v-btn icon size="x-small" variant="text" @click="removeTerrainControlPoint(cp.id)">
+                      <v-icon size="18">mdi-delete</v-icon>
+                    </v-btn>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:6px;">
+                    <v-text-field
+                      :model-value="cp.x"
+                      type="number"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="X"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainControlPoint(cp.id, { x: Number(v) })"
+                    />
+                    <v-text-field
+                      :model-value="cp.y"
+                      type="number"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Y"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainControlPoint(cp.id, { y: Number(v) })"
+                    />
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:6px;">
+                    <v-text-field
+                      :model-value="cp.radius"
+                      type="number"
+                      min="0.1"
+                      step="0.1"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Radius"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainControlPoint(cp.id, { radius: Number(v) })"
+                    />
+                    <v-text-field
+                      :model-value="cp.height"
+                      type="number"
+                      step="0.1"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Height"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainControlPoint(cp.id, { height: Number(v) })"
+                    />
+                  </div>
+                  <v-select
+                    style="margin-top:6px;"
+                    label="Falloff"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :items="terrainFalloffOptions"
+                    item-title="label"
+                    item-value="value"
+                    :model-value="cp.falloff ?? 'cosine'"
+                    @update:model-value="(v) => updateTerrainControlPoint(cp.id, { falloff: v as any })"
+                  />
+                </div>
+              </div>
+
+              <div class="property-panel__block">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <div style="font-weight:600;">Ridge / Valley Lines (E)</div>
+                  <div style="display:flex;gap:6px;">
+                    <v-btn size="small" variant="text" color="primary" :disabled="!selectedPolyline" @click="addTerrainLineFromSelected('ridge')">Add Ridge</v-btn>
+                    <v-btn size="small" variant="text" color="primary" :disabled="!selectedPolyline" @click="addTerrainLineFromSelected('valley')">Add Valley</v-btn>
+                  </div>
+                </div>
+                <div style="margin-top:6px;font-size:0.85rem;opacity:0.8;">
+                  Select a polyline first to add it as a ridge/valley line.
+                </div>
+                <div v-if="!terrainRidgeValleyLines.length" style="margin-top:6px;font-size:0.85rem;opacity:0.8;">
+                  No ridge/valley lines.
+                </div>
+
+                <div v-for="line in terrainRidgeValleyLines" :key="line.id" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <v-text-field
+                      :model-value="line.name ?? ''"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Name"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainLine(line.id, { name: String(v) })"
+                    />
+                    <v-btn icon size="x-small" variant="text" @click="removeTerrainLine(line.id)">
+                      <v-icon size="18">mdi-delete</v-icon>
+                    </v-btn>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:6px;">
+                    <v-select
+                      label="Kind"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      :items="[{ value: 'ridge', label: 'Ridge' }, { value: 'valley', label: 'Valley' }]"
+                      item-title="label"
+                      item-value="value"
+                      :model-value="line.kind"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainLine(line.id, { kind: v as any })"
+                    />
+                    <v-select
+                      label="Profile"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      :items="terrainFalloffOptions"
+                      item-title="label"
+                      item-value="value"
+                      :model-value="line.profile ?? 'cosine'"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainLine(line.id, { profile: v as any })"
+                    />
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:6px;">
+                    <v-text-field
+                      :model-value="line.width"
+                      type="number"
+                      min="0.1"
+                      step="0.1"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Width"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainLine(line.id, { width: Number(v) })"
+                    />
+                    <v-text-field
+                      :model-value="line.strength"
+                      type="number"
+                      step="0.1"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      label="Strength"
+                      suffix="m"
+                      style="flex:1"
+                      @update:model-value="(v) => updateTerrainLine(line.id, { strength: Number(v) })"
+                    />
+                  </div>
+                  <div style="margin-top:6px;font-size:0.85rem;opacity:0.8;">Points: {{ line.points.length }}</div>
+                </div>
+              </div>
+
+            </template>
+
+            <template v-else-if="propertyPanelLayerKind === 'green'">
               <div class="property-panel__density">
                 <div class="property-panel__density-row">
                   <v-switch
