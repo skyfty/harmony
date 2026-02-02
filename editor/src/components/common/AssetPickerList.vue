@@ -203,7 +203,7 @@ async function loadRemoteAssets() {
     await scheduleScrollToSelected()
   } catch (error) {
     console.warn('Failed to load asset provider manifest', error)
-    errorMessage.value = (error as Error).message ?? '无法加载资产列表'
+    errorMessage.value = (error as Error).message ?? 'Unable to load asset list'
   } finally {
     loading.value = false
     if (props.active) {
@@ -370,44 +370,66 @@ onMounted(() => {
       </div>
 
       <div v-else ref="gridRef" class="asset-picker-list__grid" :style="gridStyle">
-        <div
-          class="asset-picker-list__tile asset-picker-list__tile--none"
-          :class="{ 'asset-picker-list__tile--selected': !selectedAssetId }"
-          data-asset-id="__none__"
-          @click="handleClearSelection"
-        >
-          <div class="asset-picker-list__thumbnail">
-            <div class="asset-picker-list__thumbnail-placeholder asset-picker-list__thumbnail-placeholder--none">
-              <v-icon size="28">mdi-close-circle-outline</v-icon>
+        <v-tooltip open-delay="150" location="top">
+          <template #activator="{ props }">
+              <div
+                v-bind="props"
+                class="asset-picker-list__tile asset-picker-list__tile--none"
+                :class="{ 'asset-picker-list__tile--selected': !selectedAssetId }"
+                data-asset-id="__none__"
+                @click="handleClearSelection"
+                tabindex="0"
+                aria-label="Clear selection"
+                @keydown.enter.prevent="handleClearSelection"
+                @keydown.space.prevent="handleClearSelection"
+                :title="'Clear selection'"
+              >
+              <div class="asset-picker-list__thumbnail">
+                <div class="asset-picker-list__thumbnail-placeholder asset-picker-list__thumbnail-placeholder--none">
+                  <v-icon size="28">mdi-close-circle-outline</v-icon>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </template>
+          <div>Clear selection</div>
+        </v-tooltip>
 
-        <div
-          v-for="asset in filteredAssets"
-          :key="asset.id"
-          class="asset-picker-list__tile"
-          :class="{ 'asset-picker-list__tile--selected': asset.id === selectedAssetId }"
-          :data-asset-id="asset.id"
-          @click="handleAssetClick(asset)"
-        >
-          <div class="asset-picker-list__thumbnail">
-            <v-img
-              v-if="assetThumbnailUrl(asset)"
-              class="asset-picker-list__img"
-              :src="assetThumbnailUrl(asset) || undefined"
-              :alt="asset.name"
-              cover
-            />
-            <div
-              v-else
-              class="asset-picker-list__thumbnail-placeholder"
-              :style="{ backgroundColor: asset.previewColor || '#455A64' }"
-            >
-              {{ resolveInitials(asset) }}
-            </div>
-          </div>
-        </div>
+        <template v-for="asset in filteredAssets" :key="asset.id">
+          <v-tooltip open-delay="150" location="top">
+            <template #activator="{ props }">
+              <div
+                v-bind="props"
+                class="asset-picker-list__tile"
+                :class="{ 'asset-picker-list__tile--selected': asset.id === selectedAssetId }"
+                :data-asset-id="asset.id"
+                @click="handleAssetClick(asset)"
+                tabindex="0"
+                :aria-label="`Select ${asset.name}`"
+                @keydown.enter.prevent="handleAssetClick(asset)"
+                @keydown.space.prevent="handleAssetClick(asset)"
+                :title="asset.name"
+              >
+                <div class="asset-picker-list__thumbnail">
+                  <v-img
+                    v-if="assetThumbnailUrl(asset)"
+                    class="asset-picker-list__img"
+                    :src="assetThumbnailUrl(asset) || undefined"
+                    :alt="asset.name"
+                    cover
+                  />
+                  <div
+                    v-else
+                    class="asset-picker-list__thumbnail-placeholder"
+                    :style="{ backgroundColor: asset.previewColor || '#455A64' }"
+                  >
+                    {{ resolveInitials(asset) }}
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div>{{ asset.name }}</div>
+          </v-tooltip>
+        </template>
       </div>
 
     </div>
