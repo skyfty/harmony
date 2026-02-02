@@ -18,13 +18,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type {
-  EnvironmentSettings,
-  EnvironmentSettingsPatch,
-  EnvironmentBackgroundMode,
-  EnvironmentMapMode,
-  EnvironmentFogMode,
-} from '@/types/environment'
+import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@/types/environment'
 import {
   GROUND_NODE_ID,
   SKY_NODE_ID,
@@ -58,6 +52,8 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
+import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
+import { createSkySceneNode as createSkySceneNodeImported, ensureSkyNode as ensureSkyNodeImported } from './skyUtils'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -156,7 +152,7 @@ import {
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { createRoadGroup, updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
@@ -233,9 +229,6 @@ import {
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
-  WALL_MIN_HEIGHT,
-  WALL_MIN_THICKNESS,
-  WALL_MIN_WIDTH,
   WALL_DEFAULT_SMOOTHING,
   clampWallProps,
   cloneWallComponentProps,
@@ -244,18 +237,10 @@ import {
   resolveRoadComponentPropsFromMesh,
   clampRoadProps,
   cloneRoadComponentProps,
-  clampGuideboardComponentProps,
-  cloneGuideboardComponentProps,
-  createGuideboardComponentState,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
-  createDisplayBoardComponentState,
-  clampViewPointComponentProps,
-  cloneViewPointComponentProps,
-  createViewPointComponentState,
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
-  createWarpGateComponentState,
   clampEffectComponentProps,
   cloneEffectComponentProps,
   clampRigidbodyComponentProps,
@@ -264,9 +249,6 @@ import {
   cloneVehicleComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
-  clampGuideRouteComponentProps,
-  cloneGuideRouteComponentProps,
-  resolveGuideRouteComponentPropsFromMesh,
   FLOOR_COMPONENT_TYPE,
   clampFloorComponentProps,
   cloneFloorComponentProps,
@@ -591,9 +573,6 @@ export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
 const DEFAULT_WALL_WIDTH = WALL_DEFAULT_WIDTH
 const DEFAULT_WALL_THICKNESS = WALL_DEFAULT_THICKNESS
-const MIN_WALL_HEIGHT = WALL_MIN_HEIGHT
-const MIN_WALL_WIDTH = WALL_MIN_WIDTH
-const MIN_WALL_THICKNESS = WALL_MIN_THICKNESS
 
 const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
@@ -830,275 +809,7 @@ function cloneTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap 
   return createEmptyTextureMap(input)
 }
 
-function cloneComponentProps<T>(props: T): T {
-  if (props === null || props === undefined) {
-    return props
-  }
-
-  // Direct-update mode: avoid deep clones (JSON / structuredClone) to prevent large stalls and
-  // keep update semantics as "mutate properties".
-  if (Array.isArray(props)) {
-    return [...props] as unknown as T
-  }
-  if (typeof props === 'object') {
-    return { ...(props as any) } as T
-  }
-  return props
-}
-
-function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?: NodeComponentType): SceneNodeComponentState<any> {
-  const resolvedType = (typeOverride ?? state.type) as NodeComponentType
-  const resolvedId = typeof state.id === 'string' && state.id.trim().length ? state.id : generateUuid()
-
-  const clonedMetadata: Record<string, unknown> | undefined = state.metadata
-
-  return {
-    id: resolvedId,
-    type: resolvedType,
-    enabled: state.enabled ?? true,
-    props: cloneComponentProps(state.props),
-    metadata: clonedMetadata,
-  }
-}
-
-function shouldAutoAttachDisplayBoard(node: SceneNode): boolean {
-  const userData = node.userData as Record<string, unknown> | undefined
-  if (userData) {
-    const directFlag = userData['displayBoard'] === true || userData['isDisplayBoard'] === true
-    if (directFlag) {
-      return true
-    }
-  }
-  const typeName = typeof node.nodeType === 'string' ? node.nodeType.trim().toLowerCase() : ''
-  if (typeName === 'displayboard') {
-    return true
-  }
-  const nodeName = typeof node.name === 'string' ? node.name.trim() : ''
-  if (nodeName.length && DISPLAY_BOARD_NAME_PATTERN.test(nodeName)) {
-    return true
-  }
-  return false
-}
-
-function normalizeNodeComponents(
-  node: SceneNode,
-  components?: SceneNodeComponentMap,
-  options: {
-    attachDisplayBoard?: boolean
-    attachGuideboard?: boolean
-    attachViewPoint?: boolean
-    attachWarpGate?: boolean
-    viewPointOverrides?: Partial<ViewPointComponentProps>
-  } = {},
-): SceneNodeComponentMap | undefined {
-  const normalized: SceneNodeComponentMap = {}
-
-  if (components) {
-    Object.entries(components).forEach(([rawType, state]) => {
-      if (!state) {
-        return
-      }
-      const type = (state.type ?? rawType) as NodeComponentType
-      normalized[type] = cloneComponentState(state, type)
-    })
-  }
-
-  if (node.dynamicMesh?.type === 'Wall') {
-    const baseProps = resolveWallComponentPropsFromMesh(node.dynamicMesh as WallDynamicMesh)
-    const existing = normalized[WALL_COMPONENT_TYPE]
-    const existingProps = (existing?.props ?? {}) as Partial<WallComponentProps>
-    const cornerModels = Array.isArray((existingProps as any).cornerModels)
-      ? (existingProps as any).cornerModels
-      : (Array.isArray((baseProps as any).cornerModels) ? (baseProps as any).cornerModels : [])
-
-    const nextProps = cloneWallComponentProps(
-      clampWallProps({
-        height: (existing?.props as { height?: number })?.height ?? baseProps.height,
-        width: (existing?.props as { width?: number })?.width ?? baseProps.width,
-        thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
-        smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
-        isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
-        bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
-        headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,
-        bodyEndCapAssetId: (existingProps as { bodyEndCapAssetId?: string | null }).bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
-        headEndCapAssetId: (existingProps as { headEndCapAssetId?: string | null }).headEndCapAssetId ?? baseProps.headEndCapAssetId,
-        cornerModels,
-      }),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
-
-    normalized[WALL_COMPONENT_TYPE] = {
-      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
-      type: WALL_COMPONENT_TYPE,
-      enabled: existing?.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  }
-
-  if (node.dynamicMesh?.type === 'Floor') {
-    const baseProps = resolveFloorComponentPropsFromMesh(node.dynamicMesh as FloorDynamicMesh)
-    const existing = normalized[FLOOR_COMPONENT_TYPE] as
-      | SceneNodeComponentState<FloorComponentProps>
-      | undefined
-    const existingProps = existing?.props as FloorComponentProps | undefined
-    const nextProps = cloneFloorComponentProps(
-      clampFloorComponentProps({
-        smooth: existingProps?.smooth ?? baseProps.smooth,
-        thickness: existingProps?.thickness ?? baseProps.thickness,
-        sideUvScale: existingProps?.sideUvScale ?? baseProps.sideUvScale,
-      }),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
-
-    normalized[FLOOR_COMPONENT_TYPE] = {
-      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
-      type: FLOOR_COMPONENT_TYPE,
-      enabled: existing?.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  }
-
-  if (node.dynamicMesh?.type === 'GuideRoute') {
-    const baseProps = resolveGuideRouteComponentPropsFromMesh(node.dynamicMesh as GuideRouteDynamicMesh)
-    const existing = normalized[GUIDE_ROUTE_COMPONENT_TYPE] as
-      | SceneNodeComponentState<GuideRouteComponentProps>
-      | undefined
-    const existingProps = existing?.props as GuideRouteComponentProps | undefined
-    const nextProps = cloneGuideRouteComponentProps(
-      clampGuideRouteComponentProps({
-        waypoints: existingProps?.waypoints ?? baseProps.waypoints,
-      }),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
-
-    normalized[GUIDE_ROUTE_COMPONENT_TYPE] = {
-      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
-      type: GUIDE_ROUTE_COMPONENT_TYPE,
-      enabled: existing?.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  }
-
-  const existingDisplayBoard = normalized[DISPLAY_BOARD_COMPONENT_TYPE] as
-    | SceneNodeComponentState<DisplayBoardComponentProps>
-    | undefined
-  const shouldAttachDisplayBoard = options.attachDisplayBoard ?? shouldAutoAttachDisplayBoard(node)
-  if (existingDisplayBoard) {
-    const nextProps = cloneDisplayBoardComponentProps(
-      clampDisplayBoardComponentProps(existingDisplayBoard.props as Partial<DisplayBoardComponentProps>),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existingDisplayBoard.metadata
-
-    normalized[DISPLAY_BOARD_COMPONENT_TYPE] = {
-      id: existingDisplayBoard.id && existingDisplayBoard.id.trim().length ? existingDisplayBoard.id : generateUuid(),
-      type: DISPLAY_BOARD_COMPONENT_TYPE,
-      enabled: existingDisplayBoard.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  } else if (shouldAttachDisplayBoard) {
-    normalized[DISPLAY_BOARD_COMPONENT_TYPE] = {
-      ...createDisplayBoardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
-    }
-  }
-
-  const existingGuideboard = normalized[GUIDEBOARD_COMPONENT_TYPE] as
-    | SceneNodeComponentState<GuideboardComponentProps>
-    | undefined
-  if (existingGuideboard) {
-    const nextProps = cloneGuideboardComponentProps(
-      clampGuideboardComponentProps(existingGuideboard.props as Partial<GuideboardComponentProps>),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existingGuideboard.metadata
-
-    normalized[GUIDEBOARD_COMPONENT_TYPE] = {
-      id: existingGuideboard.id && existingGuideboard.id.trim().length ? existingGuideboard.id : generateUuid(),
-      type: GUIDEBOARD_COMPONENT_TYPE,
-      enabled: existingGuideboard.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  } else if (options.attachGuideboard) {
-    normalized[GUIDEBOARD_COMPONENT_TYPE] = {
-      ...createGuideboardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
-    }
-  }
-
-  const existingViewPoint = normalized[VIEW_POINT_COMPONENT_TYPE] as
-    | SceneNodeComponentState<ViewPointComponentProps>
-    | undefined
-  if (existingViewPoint) {
-    const nextProps = cloneViewPointComponentProps(
-      clampViewPointComponentProps(existingViewPoint.props as Partial<ViewPointComponentProps>),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existingViewPoint.metadata
-
-    normalized[VIEW_POINT_COMPONENT_TYPE] = {
-      id: existingViewPoint.id && existingViewPoint.id.trim().length ? existingViewPoint.id : generateUuid(),
-      type: VIEW_POINT_COMPONENT_TYPE,
-      enabled: existingViewPoint.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  } else if (options.attachViewPoint) {
-    normalized[VIEW_POINT_COMPONENT_TYPE] = {
-      ...createViewPointComponentState(node, options.viewPointOverrides, { id: generateUuid(), enabled: true }),
-    }
-  }
-
-  const existingWarpGate = normalized[WARP_GATE_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WarpGateComponentProps>
-    | undefined
-  if (existingWarpGate) {
-    const nextProps = cloneWarpGateComponentProps(
-      clampWarpGateComponentProps(existingWarpGate.props as Partial<WarpGateComponentProps>),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existingWarpGate.metadata
-
-    normalized[WARP_GATE_COMPONENT_TYPE] = {
-      id: existingWarpGate.id && existingWarpGate.id.trim().length ? existingWarpGate.id : generateUuid(),
-      type: WARP_GATE_COMPONENT_TYPE,
-      enabled: existingWarpGate.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  } else if (options.attachWarpGate) {
-    normalized[WARP_GATE_COMPONENT_TYPE] = {
-      ...createWarpGateComponentState(node, undefined, { id: generateUuid(), enabled: true }),
-    }
-  }
-
-  const existingEffect = normalized[EFFECT_COMPONENT_TYPE] as
-    | SceneNodeComponentState<EffectComponentProps>
-    | undefined
-  if (existingEffect) {
-    const nextProps = cloneEffectComponentProps(
-      clampEffectComponentProps(existingEffect.props as Partial<EffectComponentProps>),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existingEffect.metadata
-
-    normalized[EFFECT_COMPONENT_TYPE] = {
-      id: existingEffect.id && existingEffect.id.trim().length ? existingEffect.id : generateUuid(),
-      type: EFFECT_COMPONENT_TYPE,
-      enabled: existingEffect.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
-    }
-  }
-
-  return Object.keys(normalized).length ? normalized : undefined
-}
+// `normalizeNodeComponents` is provided by `normalizeNodeComponentsUtils`.
 
 function listComponentEntries(
   components?: SceneNodeComponentMap,
@@ -1478,656 +1189,43 @@ function cloneGroundSettings(settings: Partial<GroundSettings> | null | undefine
   return normalizeGroundSettings(settings ?? null)
 }
 
-type WallWorldSegment = {
-  start: Vector3
-  end: Vector3
+import { buildWallDynamicMeshFromWorldSegments, applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported, resolveWallSmoothing as resolveWallSmoothingImported } from './wallUtils'
+
+// Local wrapper to inject runtime helpers into the moved wall helper.
+function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
+  return applyWallComponentPropsToNodeImported(node, props, { getRuntimeObject, updateWallGroup })
 }
 
-function mergeWallWorldSegmentChainsByEndpoint(segments: WallWorldSegment[]): WallWorldSegment[] {
-  if (segments.length < 2) {
-    return segments
-  }
-
-  const epsSq = 1e-8
-  const samePoint = (a: Vector3, b: Vector3): boolean => a.distanceToSquared(b) <= epsSq
-
-  // Start by treating each segment as its own chain.
-  let chains: WallWorldSegment[][] = segments.map((seg) => [seg])
-
-  const reverseChain = (chain: WallWorldSegment[]): WallWorldSegment[] =>
-    chain
-      .slice()
-      .reverse()
-      .map((seg) => ({ start: seg.end, end: seg.start }))
-
-  const tryMergeOnce = (): boolean => {
-    for (let i = 0; i < chains.length; i += 1) {
-      const a = chains[i]!
-      const aStart = a[0]!.start
-      const aEnd = a[a.length - 1]!.end
-
-      for (let j = i + 1; j < chains.length; j += 1) {
-        const b = chains[j]!
-        const bStart = b[0]!.start
-        const bEnd = b[b.length - 1]!.end
-
-        // aEnd -> bStart
-        if (samePoint(aEnd, bStart)) {
-          chains[i] = [...a, ...b]
-          chains.splice(j, 1)
-          return true
-        }
-        // aEnd -> bEnd (reverse b)
-        if (samePoint(aEnd, bEnd)) {
-          chains[i] = [...a, ...reverseChain(b)]
-          chains.splice(j, 1)
-          return true
-        }
-        // aStart -> bEnd (prepend b)
-        if (samePoint(aStart, bEnd)) {
-          chains[i] = [...b, ...a]
-          chains.splice(j, 1)
-          return true
-        }
-        // aStart -> bStart (reverse b, prepend)
-        if (samePoint(aStart, bStart)) {
-          chains[i] = [...reverseChain(b), ...a]
-          chains.splice(j, 1)
-          return true
-        }
-      }
-    }
-    return false
-  }
-
-  // Keep merging until no further endpoint connections exist.
-  // This intentionally allows merging chains at corners; the later colinear merge step
-  // will only collapse truly straight runs.
-  while (chains.length > 1 && tryMergeOnce()) {
-    /* keep merging */
-  }
-
-  return chains.flat()
-}
-
-function normalizeWallDimensions(values: { height?: number; width?: number; thickness?: number }): {
-  height: number
-  width: number
-  thickness: number
-} {
-  const height = Number.isFinite(values.height) ? Math.max(MIN_WALL_HEIGHT, values.height!) : DEFAULT_WALL_HEIGHT
-  const width = Number.isFinite(values.width) ? Math.max(MIN_WALL_WIDTH, values.width!) : DEFAULT_WALL_WIDTH
-  const thickness = Number.isFinite(values.thickness) ? Math.max(MIN_WALL_THICKNESS, values.thickness!) : DEFAULT_WALL_THICKNESS
-  return { height, width, thickness }
-}
-
-function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end: Vector3Like }>): WallWorldSegment[] {
-  return segments
-    .map((segment) => {
-      if (!segment?.start || !segment?.end) {
-        return null
-      }
-      const start = new Vector3(segment.start.x, segment.start.y, segment.start.z)
-      const end = new Vector3(segment.end.x, segment.end.y, segment.end.z)
-      if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(start.z)) {
-        return null
-      }
-      if (!Number.isFinite(end.x) || !Number.isFinite(end.y) || !Number.isFinite(end.z)) {
-        return null
-      }
-      if (start.distanceToSquared(end) <= 1e-10) {
-        return null
-      }
-      return { start, end }
-    })
-    .filter((entry): entry is WallWorldSegment => !!entry)
-}
-
-function computeWallCenter(segments: WallWorldSegment[]): Vector3 {
-  const min = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
-  const max = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
-
-  segments.forEach(({ start, end }) => {
-    min.x = Math.min(min.x, start.x, end.x)
-    min.y = Math.min(min.y, start.y, end.y)
-    min.z = Math.min(min.z, start.z, end.z)
-    max.x = Math.max(max.x, start.x, end.x)
-    max.y = Math.max(max.y, start.y, end.y)
-    max.z = Math.max(max.z, start.z, end.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return new Vector3(0, 0, 0)
-  }
-
-  return new Vector3(
-    (min.x + max.x) * 0.5,
-    (min.y + max.y) * 0.5,
-    (min.z + max.z) * 0.5,
-  )
-}
-
-function buildWallDynamicMeshFromWorldSegments(
-  segments: Array<{ start: Vector3Like; end: Vector3Like }>,
-  dimensions: { height?: number; width?: number; thickness?: number } = {},
-): { center: Vector3; definition: WallDynamicMesh } | null {
-  const worldSegments = mergeWallWorldSegmentChainsByEndpoint(buildWallWorldSegments(segments))
-  if (!worldSegments.length) {
-    return null
-  }
-
-  const { height, width, thickness } = normalizeWallDimensions(dimensions)
-  const center = computeWallCenter(worldSegments)
-
-  const dynamicSegments = worldSegments.map(({ start, end }) => ({
-    start: createVector(start.x - center.x, start.y - center.y, start.z - center.z),
-    end: createVector(end.x - center.x, end.y - center.y, end.z - center.z),
-    height,
-    width,
-    thickness,
-  }))
-
-  // Merge contiguous colinear segments to keep geometry minimal.
-  // Important: do NOT merge across corners; that would change wall topology.
-  const mergedSegments: typeof dynamicSegments = []
-  const eps = 1e-8
-  const minLen = 1e-6
-  const areColinearXZ = (
-    a: { start: Vector3Like; end: Vector3Like },
-    b: { start: Vector3Like; end: Vector3Like },
-  ): boolean => {
-    const v0x = Number(a.end.x) - Number(a.start.x)
-    const v0z = Number(a.end.z) - Number(a.start.z)
-    const v1x = Number(b.end.x) - Number(b.start.x)
-    const v1z = Number(b.end.z) - Number(b.start.z)
-    const l0 = Math.sqrt(v0x * v0x + v0z * v0z)
-    const l1 = Math.sqrt(v1x * v1x + v1z * v1z)
-    if (!Number.isFinite(l0) || !Number.isFinite(l1) || l0 <= minLen || l1 <= minLen) {
-      return false
-    }
-    const dot = (v0x / l0) * (v1x / l1) + (v0z / l0) * (v1z / l1)
-    return Number.isFinite(dot) && dot >= 0.9999
-  }
-  const lenSqXZ = (a: Vector3Like, b: Vector3Like): number => {
-    const dx = Number(b.x) - Number(a.x)
-    const dz = Number(b.z) - Number(a.z)
-    return dx * dx + dz * dz
-  }
-
-  for (const seg of dynamicSegments) {
-    if (!seg) {
-      continue
-    }
-    if (!Number.isFinite(Number(seg.start.x) + Number(seg.start.z) + Number(seg.end.x) + Number(seg.end.z))) {
-      continue
-    }
-    if (lenSqXZ(seg.start, seg.end) <= minLen * minLen) {
-      continue
-    }
-
-    const prev = mergedSegments[mergedSegments.length - 1]
-    if (!prev) {
-      mergedSegments.push(seg)
-      continue
-    }
-
-    const contSq = lenSqXZ(prev.end, seg.start)
-    const sameProps =
-      Math.abs(Number(prev.height) - Number(seg.height)) <= 1e-8 &&
-      Math.abs(Number(prev.width) - Number(seg.width)) <= 1e-8 &&
-      Math.abs(Number(prev.thickness) - Number(seg.thickness)) <= 1e-8
-    if (Number.isFinite(contSq) && contSq <= eps && sameProps && areColinearXZ(prev, seg)) {
-      prev.end = seg.end
-      continue
-    }
-
-    mergedSegments.push(seg)
-  }
-
-  const definition: WallDynamicMesh = {
-    type: 'Wall',
-    segments: mergedSegments,
-  }
-
-  return { center, definition }
-}
-
-function normalizeRoadWidth(value: unknown): number {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) {
-    return ROAD_DEFAULT_WIDTH
-  }
-  return Math.max(ROAD_MIN_WIDTH, numeric)
-}
-
-const ROAD_CURVE_EPSILON = 1e-6
-
-function buildRoadWorldPoints(points: Vector3Like[]): Vector3[] {
-  const out: Vector3[] = []
-  points.forEach((p) => {
-    if (!p) {
-      return
-    }
-    const x = Number(p.x)
-    const z = Number(p.z)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-      return
-    }
-    const vec = new Vector3(x, 0, z)
-    const prev = out[out.length - 1]
-    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
-      return
-    }
-    out.push(vec)
-  })
-  return out
-}
-
-function computeRoadCenter(points: Vector3[]): Vector3 {
-  const min = new Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
-  const max = new Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
-
-  points.forEach((p) => {
-    min.x = Math.min(min.x, p.x)
-    min.z = Math.min(min.z, p.z)
-    max.x = Math.max(max.x, p.x)
-    max.z = Math.max(max.z, p.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return new Vector3(0, 0, 0)
-  }
-
-  return new Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
-}
-
-function buildRoadDynamicMeshFromWorldPoints(
-  points: Vector3Like[],
-  width?: number,
-): { center: Vector3; definition: RoadDynamicMesh } | null {
-  const worldPoints = buildRoadWorldPoints(points)
-  if (worldPoints.length < 2) {
-    return null
-  }
-
-  const normalizedWidth = normalizeRoadWidth(width)
-  // Closed curves are represented by `closed=true` (topology via segments),
-  // NOT by repeating the first point as the last point.
-  let closed = false
-  if (
-    worldPoints.length >= 3 &&
-    worldPoints[0]!.distanceToSquared(worldPoints[worldPoints.length - 1]!) <= ROAD_CURVE_EPSILON
-  ) {
-    worldPoints.pop()
-    closed = true
-  }
-
-  // IMPORTANT: Persist only user control points.
-  // Road geometry densification/smoothing happens later during mesh generation.
-  const center = computeRoadCenter(worldPoints)
-
-  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
-  const segments: Array<{ a: number; b: number }> = []
-  for (let index = 0; index < vertices.length - 1; index += 1) {
-    segments.push({ a: index, b: index + 1 })
-  }
-  if (closed && vertices.length >= 3) {
-    segments.push({ a: vertices.length - 1, b: 0 })
-  }
-
-  const definition: RoadDynamicMesh = {
-    type: 'Road',
-    width: normalizedWidth,
-    vertices,
-    segments,
-  }
-
-  return { center, definition }
-}
+const resolveWallSmoothing = resolveWallSmoothingImported
+import { buildRoadDynamicMeshFromWorldPoints } from './roadUtils'
 
 // Floor dynamic mesh builders moved to ./sceneStoreFloor.ts
 
-function applyDisplayBoardComponentPropsToNode(
-  node: SceneNode,
-  props: DisplayBoardComponentProps,
-): boolean {
-  const runtime = getRuntimeObject(node.id)
-  if (!runtime) {
-    return false
-  }
+import {
+  applyDisplayBoardComponentPropsToNode as applyDisplayBoardComponentPropsToNodeImported,
+  refreshDisplayBoardGeometry as refreshDisplayBoardGeometryImported,
+} from './displayBoardUtils'
 
-  const mesh = findDisplayBoardPlaneMesh(runtime)
-  if (!mesh) {
-    return false
-  }
-
+function applyDisplayBoardComponentPropsToNode(node: SceneNode, props: DisplayBoardComponentProps): boolean {
   const normalized = clampDisplayBoardComponentProps(props)
-  const mediaSize = resolveDisplayBoardMediaSize(normalized, mesh)
-  const targetSize = computeDisplayBoardPlaneSize(mesh, normalized, mediaSize)
-  if (!targetSize) {
-    return false
-  }
-
-  const currentSize = extractPlaneGeometrySize(mesh.geometry)
-  if (
-    currentSize &&
-    Math.abs(currentSize.width - targetSize.width) < DISPLAY_BOARD_GEOMETRY_EPSILON &&
-    Math.abs(currentSize.height - targetSize.height) < DISPLAY_BOARD_GEOMETRY_EPSILON
-  ) {
-    return false
-  }
-
-  const { widthSegments, heightSegments } = resolvePlaneGeometrySegments(mesh.geometry)
-  const nextGeometry = new THREE.PlaneGeometry(
-    targetSize.width,
-    targetSize.height,
-    widthSegments,
-    heightSegments,
-  )
-  const previous = mesh.geometry
-  mesh.geometry = nextGeometry
-  previous?.dispose?.()
-  return true
+  // pass deps into imported helper
+  return applyDisplayBoardComponentPropsToNodeImported(node, normalized, { getRuntimeObject })
 }
 
 function refreshDisplayBoardGeometry(node: SceneNode | null | undefined): void {
-  if (!node) {
-    return
-  }
-  const componentState = node.components?.[DISPLAY_BOARD_COMPONENT_TYPE] as
-    | SceneNodeComponentState<DisplayBoardComponentProps>
-    | undefined
-  if (!componentState || componentState.enabled === false) {
-    return
-  }
-  applyDisplayBoardComponentPropsToNode(node, componentState.props as DisplayBoardComponentProps)
+  return refreshDisplayBoardGeometryImported(node, { getRuntimeObject })
 }
 
 // Floor component application moved to ./sceneStoreFloor.ts
+ 
 
-const DISPLAY_BOARD_GEOMETRY_EPSILON = 1e-4
-
-type DisplayBoardPlaneMesh = THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
-
-function findDisplayBoardPlaneMesh(root: Object3D): DisplayBoardPlaneMesh | null {
-  const stack: Object3D[] = [root]
-  while (stack.length) {
-    const current = stack.pop()
-    if (!current) {
-      continue
-    }
-    if ((current as THREE.Mesh).isMesh) {
-      const mesh = current as DisplayBoardPlaneMesh
-      if (isPlaneGeometry(mesh.geometry)) {
-        return mesh
-      }
-    }
-    if (current.children?.length) {
-      stack.push(...current.children)
-    }
-  }
-  return null
-}
-
-function resolveDisplayBoardMediaSize(
-  props: DisplayBoardComponentProps,
-  mesh: DisplayBoardPlaneMesh,
-): { width: number; height: number } | null {
-  const width = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
-  const height = typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
-  if (width && height) {
-    return { width, height }
-  }
-
-  const texture = extractPrimaryTexture(mesh.material)
-  if (!texture || !texture.image) {
-    return null
-  }
-
-  const image = texture.image as {
-    width?: number
-    height?: number
-    naturalWidth?: number
-    naturalHeight?: number
-    videoWidth?: number
-    videoHeight?: number
-  }
-  const inferredWidth = image?.naturalWidth ?? image?.videoWidth ?? image?.width ?? 0
-  const inferredHeight = image?.naturalHeight ?? image?.videoHeight ?? image?.height ?? 0
-  if (inferredWidth > 0 && inferredHeight > 0) {
-    return { width: inferredWidth, height: inferredHeight }
-  }
-
-  return null
-}
-
-function computeDisplayBoardPlaneSize(
-  mesh: DisplayBoardPlaneMesh,
-  props: DisplayBoardComponentProps,
-  mediaSize: { width: number; height: number } | null,
-): { width: number; height: number } | null {
-  const { maxWidth, maxHeight } = resolveDisplayBoardScaleLimits(mesh)
-  const boardSize = {
-    width: Math.max(maxWidth, 1e-3),
-    height: Math.max(maxHeight, 1e-3),
-  }
-  const hasAsset = typeof props.assetId === 'string' && props.assetId.trim().length > 0
-  if (!hasAsset) {
-    return convertWorldSizeToGeometry(mesh, boardSize)
-  }
-
-  const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
-  if (adaptation === 'fill') {
-    return convertWorldSizeToGeometry(mesh, boardSize)
-  }
-
-  const source = selectDisplayBoardMediaSize(props, mediaSize)
-  if (!source) {
-    const fallback = Math.max(Math.min(boardSize.width, boardSize.height), 1e-3)
-    return convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
-  }
-
-  const fitted = fitDisplayBoardMediaWithinLimits({ maxWidth, maxHeight }, source)
-  return convertWorldSizeToGeometry(mesh, fitted)
-}
-
-function selectDisplayBoardMediaSize(
-  props: DisplayBoardComponentProps,
-  mediaSize: { width: number; height: number } | null,
-): { width: number; height: number } | null {
-  if (mediaSize && mediaSize.width > 0 && mediaSize.height > 0) {
-    return mediaSize
-  }
-  const intrinsicWidth = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
-  const intrinsicHeight =
-    typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
-  if (!intrinsicWidth || !intrinsicHeight) {
-    return null
-  }
-  return { width: intrinsicWidth, height: intrinsicHeight }
-}
-
-function fitDisplayBoardMediaWithinLimits(
-  limits: { maxWidth: number; maxHeight: number },
-  mediaSize: { width: number; height: number },
-): { width: number; height: number } {
-  const maxWidth = Math.max(limits.maxWidth, 1e-3)
-  const maxHeight = Math.max(limits.maxHeight, 1e-3)
-  const aspect = mediaSize.width / Math.max(mediaSize.height, 1e-6)
-
-  let width = maxWidth
-  let height = width / Math.max(aspect, 1e-6)
-
-  if (height > maxHeight) {
-    height = maxHeight
-    width = height * aspect
-  }
-
-  return {
-    width: Math.max(width, 1e-3),
-    height: Math.max(height, 1e-3),
-  }
-}
-
-function resolveDisplayBoardScaleLimits(mesh: DisplayBoardPlaneMesh): { maxWidth: number; maxHeight: number } {
-  return {
-    maxWidth: resolveScaleComponent(mesh.scale.x),
-    maxHeight: resolveScaleComponent(mesh.scale.y),
-  }
-}
-
-function resolveScaleComponent(candidate: number): number {
-  const magnitude = Math.abs(candidate)
-  return magnitude > 1e-3 ? magnitude : 1e-3
-}
-
-function convertWorldSizeToGeometry(
-  mesh: DisplayBoardPlaneMesh,
-  worldSize: { width: number; height: number },
-): { width: number; height: number } {
-  const scaleX = resolveScaleComponent(mesh.scale.x)
-  const scaleY = resolveScaleComponent(mesh.scale.y)
-  return {
-    width: worldSize.width / scaleX,
-    height: worldSize.height / scaleY,
-  }
-}
-
-function extractPlaneGeometrySize(geometry: THREE.BufferGeometry): { width: number; height: number } | null {
-  const parameters = (geometry as unknown as { parameters?: { width?: number; height?: number } }).parameters
-  if (Number.isFinite(parameters?.width) && Number.isFinite(parameters?.height)) {
-    return { width: parameters!.width!, height: parameters!.height! }
-  }
-
-  if (!geometry.boundingBox) {
-    geometry.computeBoundingBox()
-  }
-  const box = geometry.boundingBox
-  if (!box) {
-    return null
-  }
-
-  const width = box.max.x - box.min.x
-  const height = box.max.y - box.min.y
-  if (!Number.isFinite(width) || !Number.isFinite(height)) {
-    return null
-  }
-
-  return { width: Math.abs(width), height: Math.abs(height) }
-}
-
-function resolvePlaneGeometrySegments(geometry: THREE.BufferGeometry): { widthSegments: number; heightSegments: number } {
-  const parameters = (geometry as unknown as { parameters?: { widthSegments?: number; heightSegments?: number } }).parameters
-  const widthSegments = Number.isFinite(parameters?.widthSegments)
-    ? Math.max(1, parameters!.widthSegments!)
-    : 1
-  const heightSegments = Number.isFinite(parameters?.heightSegments)
-    ? Math.max(1, parameters!.heightSegments!)
-    : 1
-  return { widthSegments, heightSegments }
-}
-
-function isPlaneGeometry(geometry: THREE.BufferGeometry): geometry is THREE.PlaneGeometry {
-  return geometry instanceof THREE.PlaneGeometry || geometry.type === 'PlaneGeometry'
-}
-
-function extractPrimaryTexture(material: THREE.Material | THREE.Material[]): THREE.Texture | null {
-  const materials = Array.isArray(material) ? material : [material]
-  for (const candidate of materials) {
-    if (!candidate) {
-      continue
-    }
-    const typed = candidate as THREE.Material & { map?: THREE.Texture | null }
-    if (typed.map) {
-      return typed.map
-    }
-  }
-  return null
-}
-
-function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
-  if (node.dynamicMesh?.type !== 'Wall' || !node.dynamicMesh.segments.length) {
-    return false
-  }
-  const normalized = clampWallProps(props)
-  const nextSegments = node.dynamicMesh.segments.map((segment) => {
-    const next = {
-      ...segment,
-      height: normalized.height,
-      width: normalized.width,
-      thickness: normalized.thickness
-    }
-    return next
-  })
-  node.dynamicMesh = {
-    ...(node.dynamicMesh as any),
-    type: 'Wall',
-    segments: nextSegments,
-  }
-
-  const runtime = getRuntimeObject(node.id)
-  if (runtime) {
-    runtime.traverse((child) => {
-      if (child.type === 'Group' && child.name === 'WallGroup' && child.userData.dynamicMeshType ==='Wall') {
-            if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
-              updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
-            }
-            return
-        }
-    });
-  }
-  return true
-}
+import { applyRoadComponentPropsToNode as applyRoadComponentPropsToNodeImported } from './roadUtils'
 
 function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProps, groundNode: SceneNode | null): boolean {
-  if (node.dynamicMesh?.type !== 'Road') {
-    return false
-  }
-  const normalized = clampRoadProps(props)
-  // Road geometry (vertices/segments) is edited directly via dynamicMesh.
-  // Component props control rendering parameters (lane lines, shoulders, smoothing, etc).
-  // Do NOT overwrite geometry from component props; otherwise toggles/rebuilds can revert user edits.
-  const existing = node.dynamicMesh
-  const existingWidth = existing && typeof (existing as any).width === 'number' ? Number((existing as any).width) : NaN
-  node.dynamicMesh = {
-    type: 'Road',
-    vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
-    segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
-    width: Number.isFinite(existingWidth) ? existingWidth : normalized.width,
-  }
-
-  const runtime = getRuntimeObject(node.id)
-  if (runtime) {
-    const heightSampler = resolveRoadLocalHeightSampler(node, groundNode)
-
-    runtime.traverse((child) => {
-      if (child.type === 'Group'  && node.dynamicMesh && node.dynamicMesh.type === 'Road') {
-        updateRoadGroup(child, node.dynamicMesh, {
-          junctionSmoothing: normalized.junctionSmoothing,
-          laneLines: normalized.laneLines,
-          shoulders: normalized.shoulders,
-          heightSampler,
-          samplingDensityFactor: normalized.samplingDensityFactor,
-          smoothingStrengthFactor: normalized.smoothingStrengthFactor,
-          minClearance: normalized.minClearance,
-          laneLineWidth: normalized.laneLineWidth,
-          shoulderWidth: normalized.shoulderWidth,
-        })
-      }
-    })
-  }
-  return true
+  return applyRoadComponentPropsToNodeImported(node, props, groundNode, { getRuntimeObject })
 }
 
-function resolveWallSmoothing(node: SceneNode): number {
-  const component = node.components?.[WALL_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WallComponentProps>
-    | undefined
-  if (!component) {
-    return WALL_DEFAULT_SMOOTHING
-  }
-  return clampWallProps(component.props ?? null).smoothing
-}
+
 
 function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh | undefined {
   if (!mesh) {
@@ -2259,74 +1357,7 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
   }
 }
 
-function buildGuideRouteWorldPoints(points: Vector3Like[]): Vector3[] {
-  const out: Vector3[] = []
-  points.forEach((p) => {
-    if (!p) {
-      return
-    }
-    const x = Number(p.x)
-    const y = Number(p.y)
-    const z = Number(p.z)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-      return
-    }
-    const vec = new Vector3(x, Number.isFinite(y) ? y : 0, z)
-    const prev = out[out.length - 1]
-    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
-      return
-    }
-    out.push(vec)
-  })
-  return out
-}
-
-function computeGuideRouteCenter(points: Vector3[]): Vector3 {
-  const min = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
-  const max = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
-
-  points.forEach((p) => {
-    min.x = Math.min(min.x, p.x)
-    min.y = Math.min(min.y, p.y)
-    min.z = Math.min(min.z, p.z)
-    max.x = Math.max(max.x, p.x)
-    max.y = Math.max(max.y, p.y)
-    max.z = Math.max(max.z, p.z)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return new Vector3(0, 0, 0)
-  }
-
-  return new Vector3(
-    (min.x + max.x) * 0.5,
-    (min.y + max.y) * 0.5,
-    (min.z + max.z) * 0.5,
-  )
-}
-
-function buildGuideRouteDynamicMeshFromWorldPoints(
-  points: Vector3Like[],
-): { center: Vector3; definition: GuideRouteDynamicMesh } | null {
-  const worldPoints = buildGuideRouteWorldPoints(points)
-  if (worldPoints.length < 2) {
-    return null
-  }
-
-  const center = computeGuideRouteCenter(worldPoints)
-  const vertices: Vector3Like[] = worldPoints.map((p) => ({
-    x: p.x - center.x,
-    y: p.y - center.y,
-    z: p.z - center.z,
-  }))
-
-  const definition: GuideRouteDynamicMesh = {
-    type: 'GuideRoute',
-    vertices,
-  }
-
-  return { center, definition }
-}
+import { buildGuideRouteDynamicMeshFromWorldPoints } from './guideRouteUtils'
 
 function createGroundDynamicMeshDefinition(
   overrides: Partial<GroundDynamicMesh> = {},
@@ -2412,275 +1443,25 @@ function isGroundNode(node: SceneNode): boolean {
   return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground'
 }
 
-function createSkySceneNode(overrides: { visible?: boolean; userData?: Record<string, unknown> | null } = {}): SceneNode {
-  return {
-    id: SKY_NODE_ID,
-    name: 'Sky',
-    nodeType: 'Sky',
-    canPrefab: false,
-    allowChildNodes: false,
-    position: createVector(0, 0, 0),
-    rotation: createVector(0, 0, 0),
-    scale: createVector(1, 1, 1),
-    visible: overrides.visible ?? true,
-    locked: true,
-    editorFlags: { editorOnly: true },
-    userData: overrides.userData ?? null,
-  }
-}
+import environmentUtils from './environmentUtils'
 
 function isSkyNode(node: SceneNode): boolean {
   return node.id === SKY_NODE_ID
 }
 
-function normalizeSkySceneNode(node: SceneNode | null | undefined): SceneNode {
-  if (!node) {
-    return createSkySceneNode()
-  }
-  const visible = node.visible ?? true
-  const userData = clonePlainRecord(node.userData as Record<string, unknown> | null) ?? null
-  const normalized = createSkySceneNode({ visible, userData })
-  if (node.children?.length) {
-    normalized.children = node.children.map(cloneNode)
-  }
-  return normalized
-}
-
 function ensureSkyNode(nodes: SceneNode[]): SceneNode[] {
-  let skyNode: SceneNode | null = null
-  const others: SceneNode[] = []
-  nodes.forEach((node) => {
-    if (!skyNode && isSkyNode(node)) {
-      skyNode = normalizeSkySceneNode(node)
-      return
-    }
-    if (!isSkyNode(node)) {
-      others.push(node)
-    }
-  })
-  if (!skyNode) {
-    skyNode = createSkySceneNode()
-  }
-  const insertIndex = others.findIndex((node) => isGroundNode(node))
-  const next = [...others]
-  next.splice(insertIndex >= 0 ? insertIndex + 1 : 0, 0, skyNode)
-  return next
+  return ensureSkyNodeImported(nodes, isGroundNode, (n: SceneNode) => n.id === SKY_NODE_ID, (overrides?: any) => createSkySceneNodeImported(SKY_NODE_ID, overrides))
 }
 
-const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{6})$/
-const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'
-const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
-const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 3.2
-const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
-const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
-const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
-const DEFAULT_ENVIRONMENT_FOG_FAR = 50
-const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
-const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
-const DEFAULT_ENVIRONMENT_FRICTION = 0.3
+const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = environmentUtils.cloneEnvironmentSettings(undefined)
 
-const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
-  background: {
-    mode: 'skybox',
-    solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
-    hdriAssetId: null,
-  },
-  ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-  ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-  fogMode: 'none',
-  fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
-  fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
-  fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
-  fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-  environmentMap: {
-    mode: 'skybox',
-    hdriAssetId: null,
-  },
-  gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
-  collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
-  collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
-}
-
-function normalizeHexColor(value: unknown, fallback: string): string {
-  if (typeof value === 'string') {
-    const sanitized = value.trim()
-    if (HEX_COLOR_PATTERN.test(sanitized)) {
-      return `#${sanitized.slice(1).toLowerCase()}`
-    }
-  }
-  return fallback
-}
-
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return fallback
-  }
-  if (numeric < min) {
-    return min
-  }
-  if (numeric > max) {
-    return max
-  }
-  return numeric
-}
-
-function normalizeAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
-}
-
-function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | EnvironmentSettings | null): EnvironmentSettings {
-  const backgroundSource = source?.background ?? null
-  const environmentMapSource = source?.environmentMap ?? null
-
-  let backgroundMode: EnvironmentBackgroundMode = 'skybox'
-  if (backgroundSource?.mode === 'hdri') {
-    backgroundMode = 'hdri'
-  } else if (backgroundSource?.mode === 'solidColor') {
-    backgroundMode = 'solidColor'
-  }
-  const environmentMapMode: EnvironmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
-  let fogMode: EnvironmentFogMode = 'none'
-  if (source?.fogMode === 'linear') {
-    fogMode = 'linear'
-  } else if (source?.fogMode === 'exp') {
-    fogMode = 'exp'
-  }
-
-  const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
-  const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
-  const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
-
-  return {
-    background: {
-      mode: backgroundMode,
-      solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
-      hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-    },
-    ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
-    ambientLightIntensity: clampNumber(source?.ambientLightIntensity, 0, 10, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY),
-    fogMode,
-    fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
-    fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
-    fogNear,
-    fogFar: normalizedFogFar,
-    environmentMap: {
-      mode: environmentMapMode,
-      hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
-    },
-    gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
-    collisionRestitution: clampNumber(source?.collisionRestitution, 0, 1, DEFAULT_ENVIRONMENT_RESTITUTION),
-    collisionFriction: clampNumber(source?.collisionFriction, 0, 1, DEFAULT_ENVIRONMENT_FRICTION),
-  }
-}
-
-function isEnvironmentNode(node: SceneNode): boolean {
-  return node.id === ENVIRONMENT_NODE_ID
-}
-
-function createEnvironmentSceneNode(
-  overrides: { settings?: Partial<EnvironmentSettings> | EnvironmentSettings | null; visible?: boolean } = {},
-): SceneNode {
-  const settings = cloneEnvironmentSettings(overrides.settings ?? null)
-  return {
-    id: ENVIRONMENT_NODE_ID,
-    name: 'Environment',
-    nodeType: 'Environment',
-    canPrefab: false,
-    allowChildNodes: false,
-    position: createVector(0, 0, 0),
-    rotation: createVector(0, 0, 0),
-    scale: createVector(1, 1, 1),
-    visible: overrides.visible ?? true,
-    locked: true,
-    userData: { environment: settings },
-  }
-}
-
-function normalizeEnvironmentSceneNode(node: SceneNode | null | undefined, override?: EnvironmentSettings): SceneNode {
-  if (!node) {
-    return createEnvironmentSceneNode({ settings: override })
-  }
-  const existingSettings = isPlainRecord(node.userData)
-    ? ((node.userData as Record<string, unknown>).environment as EnvironmentSettings | null | undefined)
-    : null
-  const settings = override ? cloneEnvironmentSettings(override) : cloneEnvironmentSettings(existingSettings ?? null)
-  const visible = node.visible ?? true
-  const normalized = createEnvironmentSceneNode({ settings, visible })
-  if (node.children?.length) {
-    normalized.children = node.children.map(cloneNode)
-  }
-  return normalized
-}
-
-function ensureEnvironmentNode(nodes: SceneNode[], override?: EnvironmentSettings): SceneNode[] {
-  let environment: SceneNode | null = null
-  const others: SceneNode[] = []
-
-  nodes.forEach((node) => {
-    if (!environment && isEnvironmentNode(node)) {
-      environment = normalizeEnvironmentSceneNode(node, override)
-      return
-    }
-    if (!isEnvironmentNode(node)) {
-      others.push(node)
-    }
-  })
-
-  if (!environment) {
-    environment = createEnvironmentSceneNode({ settings: override })
-  }
-
-  const result = [...others]
-  const skyIndex = result.findIndex((node) => isSkyNode(node))
-  const groundIndex = result.findIndex((node) => isGroundNode(node))
-  const insertIndex = skyIndex >= 0 ? skyIndex + 1 : groundIndex >= 0 ? groundIndex + 1 : 0
-  result.splice(insertIndex, 0, environment)
-  return result
-}
-
-function extractEnvironmentSettings(node: SceneNode | null | undefined): EnvironmentSettings {
-  if (!node) {
-    return cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
-  }
-  if (!isPlainRecord(node.userData)) {
-    return cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
-  }
-  const payload = (node.userData as Record<string, unknown>).environment as EnvironmentSettings | Partial<EnvironmentSettings> | null | undefined
-  return cloneEnvironmentSettings(payload ?? DEFAULT_ENVIRONMENT_SETTINGS)
-}
-
-function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings, epsilon = 1e-4): boolean {
-  return (
-    a.background.mode === b.background.mode &&
-    a.background.solidColor === b.background.solidColor &&
-    a.background.hdriAssetId === b.background.hdriAssetId &&
-    a.ambientLightColor === b.ambientLightColor &&
-    Math.abs(a.ambientLightIntensity - b.ambientLightIntensity) <= epsilon &&
-    a.fogMode === b.fogMode &&
-    a.fogColor === b.fogColor &&
-    Math.abs(a.fogDensity - b.fogDensity) <= epsilon &&
-    Math.abs(a.fogNear - b.fogNear) <= epsilon &&
-    Math.abs(a.fogFar - b.fogFar) <= epsilon &&
-    a.environmentMap.mode === b.environmentMap.mode &&
-    a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId &&
-    Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
-    Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
-    Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon
-  )
-}
-
-function resolveSceneDocumentEnvironment(scene: StoredSceneDocument): EnvironmentSettings {
-  if (scene.environment) {
-    return cloneEnvironmentSettings(scene.environment)
-  }
-  const environmentNode = findNodeById(scene.nodes, ENVIRONMENT_NODE_ID)
-  return extractEnvironmentSettings(environmentNode)
-}
+const cloneEnvironmentSettings = environmentUtils.cloneEnvironmentSettings
+const isEnvironmentNode = (node: SceneNode) => environmentUtils.isEnvironmentNode(node, ENVIRONMENT_NODE_ID)
+const ensureEnvironmentNode = (nodes: SceneNode[], override?: EnvironmentSettings) =>
+  environmentUtils.ensureEnvironmentNode(nodes, ENVIRONMENT_NODE_ID, isSkyNode, isGroundNode, override)
+const extractEnvironmentSettings = environmentUtils.extractEnvironmentSettings
+const environmentSettingsEqual = environmentUtils.environmentSettingsEqual
+const resolveSceneDocumentEnvironment = (scene: StoredSceneDocument) => environmentUtils.resolveSceneDocumentEnvironment(scene, findNodeById, ENVIRONMENT_NODE_ID)
 
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
   if (!node) {
