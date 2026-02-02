@@ -118,6 +118,8 @@ function computeWallEndpointHandleSignature(definition: WallDynamicMesh): string
 export function createWallEndpointRenderer(): WallEndpointRenderer {
   let state: WallEndpointHandleState | null = null
   const tmpWorldPos = new THREE.Vector3()
+  const tmpCameraWorldPos = new THREE.Vector3()
+  const tmpParentWorldScale = new THREE.Vector3(1, 1, 1)
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
 
@@ -343,6 +345,8 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
 
     state.group.updateWorldMatrix(true, true)
 
+    options.camera.getWorldPosition(tmpCameraWorldPos)
+
     for (const child of state.group.children) {
       const handle = child as THREE.Object3D
       const baseDiameter = Number(handle.userData?.baseDiameter)
@@ -351,14 +355,23 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       }
 
       handle.getWorldPosition(tmpWorldPos)
-      const distance = tmpWorldPos.distanceTo((options.camera as any).position ?? new THREE.Vector3())
+      const distance = Math.max(1e-6, tmpWorldPos.distanceTo(tmpCameraWorldPos))
       const unitsPerPixel = computeWorldUnitsPerPixel({
         camera: options.camera,
         distance,
         viewportHeightPx: rect.height,
       })
       const desiredDiameterWorld = unitsPerPixel * diameterPx
-      const scale = desiredDiameterWorld / baseDiameter
+
+      // Keep on-screen size stable even if the node (parent) is scaled.
+      const parent = handle.parent as THREE.Object3D | null
+      if (parent) {
+        parent.getWorldScale(tmpParentWorldScale)
+      } else {
+        tmpParentWorldScale.set(1, 1, 1)
+      }
+      const parentScale = Math.max(1e-6, Math.max(tmpParentWorldScale.x, tmpParentWorldScale.y, tmpParentWorldScale.z))
+      const scale = desiredDiameterWorld / (baseDiameter * parentScale)
       if (!Number.isFinite(scale) || scale <= 0) {
         continue
       }

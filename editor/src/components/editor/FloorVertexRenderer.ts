@@ -108,6 +108,8 @@ function computeWorldUnitsPerPixel(options: {
 export function createFloorVertexRenderer(): FloorVertexRenderer {
   let state: FloorVertexHandleState | null = null
   const tmpWorldPos = new THREE.Vector3()
+  const tmpCameraWorldPos = new THREE.Vector3()
+  const tmpParentWorldScale = new THREE.Vector3(1, 1, 1)
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
 
@@ -390,6 +392,8 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
 
     const viewportHeightPx = Math.max(1, options.canvas.getBoundingClientRect().height)
 
+    options.camera.getWorldPosition(tmpCameraWorldPos)
+
     state.group.updateWorldMatrix(true, false)
     for (const child of state.group.children) {
       const handle = child as THREE.Object3D
@@ -400,10 +404,18 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
           : 1
 
       handle.getWorldPosition(tmpWorldPos)
-      const distance = Math.max(1e-6, tmpWorldPos.distanceTo(options.camera.position))
+      const distance = Math.max(1e-6, tmpWorldPos.distanceTo(tmpCameraWorldPos))
       const unitsPerPx = computeWorldUnitsPerPixel({ camera: options.camera, distance, viewportHeightPx })
       const desiredWorldDiameter = Math.max(1e-6, diameterPx * unitsPerPx)
-      const scale = THREE.MathUtils.clamp(desiredWorldDiameter / baseDiameter, 1e-4, 1e6)
+
+      const parent = handle.parent as THREE.Object3D | null
+      if (parent) {
+        parent.getWorldScale(tmpParentWorldScale)
+      } else {
+        tmpParentWorldScale.set(1, 1, 1)
+      }
+      const parentScale = Math.max(1e-6, Math.max(tmpParentWorldScale.x, tmpParentWorldScale.y, tmpParentWorldScale.z))
+      const scale = THREE.MathUtils.clamp(desiredWorldDiameter / (baseDiameter * parentScale), 1e-4, 1e6)
       handle.scale.setScalar(scale)
     }
   }
