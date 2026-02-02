@@ -56,6 +56,7 @@ import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
 import { createSkySceneNode as createSkySceneNodeImported, ensureSkyNode as ensureSkyNodeImported } from './skyUtils'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
+import lightUtils from './lightUtils'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { ClipboardMeta, QuaternionJson } from '@/types/prefab'
 import type { DetachResult } from '@/types/detach-result'
@@ -135,7 +136,7 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { applyGroundGeneration, sampleGroundHeight } from '@schema/groundMesh'
+import { sampleGroundHeight } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   clampSceneNodeInstanceLayout,
@@ -302,62 +303,11 @@ type AddNodeComponentResult<T extends NodeComponentType> = {
   created: boolean
 }
 
-function isVehicleWheelCandidateNode(node: SceneNode): boolean {
-  const name = (node.name ?? '').trim().toLowerCase()
-  if (!name) return false
-  // Best-effort heuristic: common wheel/tire naming patterns (including Chinese).
-  return name.includes('wheel') || name.includes('tire') || name.includes('tyre') || name.includes('轮')
-}
-
-function collectVehicleWheelCandidates(root: SceneNode, maxDepth = 3): SceneNode[] {
-  const result: SceneNode[] = []
-  const visit = (node: SceneNode, depth: number) => {
-    if (depth > maxDepth) return
-    const children = Array.isArray(node.children) ? node.children : []
-    children.forEach((child) => {
-      if (isVehicleWheelCandidateNode(child)) {
-        result.push(child)
-      }
-      visit(child, depth + 1)
-    })
-  }
-  visit(root, 1)
-  return result
-}
-
 function inferVehicleWheelsFromNode(
   chassisNode: SceneNode,
   axisIndexForward: number,
 ): Array<Partial<VehicleWheelProps>> {
-  const candidates = collectVehicleWheelCandidates(chassisNode)
-  if (!candidates.length) {
-    return []
-  }
-
-  const axisKey = axisIndexForward === 1 ? 'y' : axisIndexForward === 2 ? 'z' : 'x'
-  const forwardValues = candidates
-    .map((node) => {
-      const raw = (node.position as any)?.[axisKey]
-      const numeric = typeof raw === 'number' ? raw : Number(raw)
-      return Number.isFinite(numeric) ? numeric : null
-    })
-    .filter((value): value is number => value !== null)
-
-  const center = forwardValues.length
-    ? forwardValues.reduce((sum, value) => sum + value, 0) / forwardValues.length
-    : 0
-
-  return candidates.map((node) => {
-    const rawForward = (node.position as any)?.[axisKey]
-    const forward = typeof rawForward === 'number' ? rawForward : Number(rawForward)
-    const isFrontWheel = Number.isFinite(forward) ? forward >= center : true
-    return {
-      id: generateUuid(),
-      nodeId: node.id,
-      chassisConnectionPointLocal: { x: node.position.x, y: node.position.y, z: node.position.z },
-      isFrontWheel,
-    }
-  })
+  return vehicleUtils.inferVehicleWheelsFromNodeWithDeps({ generateUuid }, chassisNode, axisIndexForward) as Array<Partial<VehicleWheelProps>>
 }
 
 export const SCENE_BUNDLE_FORMAT_VERSION = 1
@@ -582,10 +532,7 @@ const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_CONTACT_EPSILON = 1e-4
-const DEFAULT_GROUND_EXTENT = 100
-const MIN_GROUND_EXTENT = 1
-const MAX_GROUND_EXTENT = 20000
-const DEFAULT_GROUND_CELL_SIZE = GRID_CELL_SIZE
+// Ground constants moved to groundUtils
 const SEMI_TRANSPARENT_OPACITY = 0.35
 const HEIGHT_EPSILON = 1e-5
 const WALL_DIMENSION_EPSILON = 1e-4
@@ -1158,35 +1105,11 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   return result
 }
 
-function normalizeGroundDimension(value: unknown, fallback: number): number {
-  const numeric = typeof value === 'number'
-    ? value
-    : typeof value === 'string'
-      ? Number.parseFloat(value)
-      : Number.NaN
-  if (!Number.isFinite(numeric)) {
-    return fallback
-  }
-  if (numeric >= MAX_GROUND_EXTENT) {
-    return MAX_GROUND_EXTENT
-  }
-  if (numeric <= MIN_GROUND_EXTENT) {
-    return MIN_GROUND_EXTENT
-  }
-  return numeric
-}
-
-function normalizeGroundSettings(settings?: Partial<GroundSettings> | null): GroundSettings {
-  return {
-    width: normalizeGroundDimension(settings?.width, DEFAULT_GROUND_EXTENT),
-    depth: normalizeGroundDimension(settings?.depth, DEFAULT_GROUND_EXTENT),
-    // Default to true unless explicitly disabled
-    enableAirWall: settings?.enableAirWall !== false,
-  }
-}
+import * as groundUtils from './groundUtils'
+import * as vehicleUtils from './vehicleUtils'
 
 function cloneGroundSettings(settings: Partial<GroundSettings> | null | undefined): GroundSettings {
-  return normalizeGroundSettings(settings ?? null)
+  return groundUtils.cloneGroundSettings(settings as any) as GroundSettings
 }
 
 import { buildWallDynamicMeshFromWorldSegments, applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported, resolveWallSmoothing as resolveWallSmoothingImported } from './wallUtils'
@@ -1363,80 +1286,22 @@ function createGroundDynamicMeshDefinition(
   overrides: Partial<GroundDynamicMesh> = {},
   settings?: GroundSettings,
 ): GroundDynamicMesh {
-  const baseSettings = normalizeGroundSettings(settings ?? null)
-  const cellSize = overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE
-  const normalizedWidth = overrides.width !== undefined
-    ? normalizeGroundDimension(overrides.width, baseSettings.width)
-    : baseSettings.width
-  const normalizedDepth = overrides.depth !== undefined
-    ? normalizeGroundDimension(overrides.depth, baseSettings.depth)
-    : baseSettings.depth
-  const derivedColumns = overrides.columns ?? Math.max(1, Math.round(normalizedWidth / Math.max(cellSize, 1e-6)))
-  const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
-  const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
-  const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
-  const heightMapOverrides = overrides.heightMap ?? null
-  const hasHeightOverrides = Boolean(heightMapOverrides && Object.keys(heightMapOverrides).length > 0)
-  const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
-  const definition: GroundDynamicMesh = {
-    type: 'Ground',
-    width,
-    depth,
-    rows: derivedRows,
-    columns: derivedColumns,
-    cellSize,
-    heightMap: { ...(heightMapOverrides ?? {}) },
-    terrainScatterInstancesUpdatedAt: Date.now(),
-    textureDataUrl: overrides.textureDataUrl ?? null,
-    textureName: overrides.textureName ?? null,
-    generation: initialGeneration,
-    hasManualEdits: overrides.hasManualEdits,
-    terrainScatter: manualDeepClone(overrides.terrainScatter),
-    terrainPaint: manualDeepClone(overrides.terrainPaint),
-  }
-
-  if (initialGeneration && !hasHeightOverrides) {
-    applyGroundGeneration(definition, initialGeneration)
-  }
-
-  return definition
+  return groundUtils.createGroundDynamicMeshDefinition(overrides as any, settings as any) as GroundDynamicMesh
 }
 
 function createGroundSceneNode(
   overrides: { dynamicMesh?: Partial<GroundDynamicMesh> } = {},
   settings?: GroundSettings,
 ): SceneNode {
-  const dynamicMesh = createGroundDynamicMeshDefinition(overrides.dynamicMesh, settings)
-  return {
-    id: GROUND_NODE_ID,
-    name: 'Ground',
-    nodeType: 'Mesh',
-    selectedHighlight: false,
-    canPrefab: false,
-    allowChildNodes: false,
-    materials: [
-      createNodeMaterial(null, createMaterialProps({
-        color: '#707070',
-        wireframe: false,
-        opacity: 1,
-        transparent: false,
-      }), { name: 'Ground Material' })
-    ],
-    position: createVector(0, 0, 0),
-    rotation: createVector(0, 0, 0),
-    scale: createVector(1, 1, 1),
-    visible: true,
-    locked: true,
-    dynamicMesh,
-    components: {
-      [RIGIDBODY_COMPONENT_TYPE]: {
-        id: generateUuid(),
-        type: RIGIDBODY_COMPONENT_TYPE,
-        enabled: true,
-        props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-      },
-    },
-  }
+  return groundUtils.createGroundSceneNodeWithDeps({
+    createVector,
+    createNodeMaterial,
+    createMaterialProps,
+    generateUuid,
+    clampRigidbodyComponentProps,
+    RIGIDBODY_COMPONENT_TYPE,
+    GROUND_NODE_ID,
+  }, overrides, settings) as SceneNode
 }
 
 function isGroundNode(node: SceneNode): boolean {
@@ -1464,51 +1329,17 @@ const environmentSettingsEqual = environmentUtils.environmentSettingsEqual
 const resolveSceneDocumentEnvironment = (scene: StoredSceneDocument) => environmentUtils.resolveSceneDocumentEnvironment(scene, findNodeById, ENVIRONMENT_NODE_ID)
 
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
-  if (!node) {
-    return createGroundSceneNode({}, settings)
-  }
-  if (node.dynamicMesh?.type === 'Ground') {
-    const primaryMaterial = getPrimaryNodeMaterial(node)
-    const children = node.children?.length ? node.children.map(cloneNode) : undefined
-    const nextComponents: SceneNodeComponentMap | undefined = (() => {
-      const base = { ...(node.components ?? {}) }
-      if (!base[RIGIDBODY_COMPONENT_TYPE]) {
-        base[RIGIDBODY_COMPONENT_TYPE] = {
-          id: generateUuid(),
-          type: RIGIDBODY_COMPONENT_TYPE,
-          enabled: true,
-          props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-        }
-      }
-      return Object.keys(base).length ? base : undefined
-    })()
-
-    return {
-      ...node,
-      id: GROUND_NODE_ID,
-      name: 'Ground',
-  nodeType: 'Mesh',
-      allowChildNodes: false,
-      materials: [
-        createNodeMaterial(null, createMaterialProps({
-          color: primaryMaterial?.color ?? '#707070',
-          wireframe: false,
-          opacity: 1,
-          transparent: false,
-        }), { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type })
-      ],
-      position: createVector(0, 0, 0),
-      rotation: createVector(0, 0, 0),
-      scale: createVector(1, 1, 1),
-      visible: node.visible ?? true,
-      locked: true,
-      dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
-      components: nextComponents,
-      sourceAssetId: undefined,
-      children,
-    }
-  }
-  return createGroundSceneNode({}, settings)
+  return groundUtils.normalizeGroundSceneNodeWithDeps({
+    createVector,
+    createNodeMaterial,
+    createMaterialProps,
+    generateUuid,
+    clampRigidbodyComponentProps,
+    RIGIDBODY_COMPONENT_TYPE,
+    GROUND_NODE_ID,
+    getPrimaryNodeMaterial,
+    cloneNode,
+  }, node, settings) as SceneNode
 }
 
 function ensureGroundNode(nodes: SceneNode[], settings?: GroundSettings): SceneNode[] {
@@ -1550,15 +1381,11 @@ type GroundRegionBounds = {
 }
 
 function groundVertexKey(row: number, column: number): string {
-  return `${row}:${column}`
+  return groundUtils.groundVertexKey(row, column)
 }
 
 function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: GroundRegionBounds): GroundRegionBounds {
-  const minRow = Math.max(0, Math.min(definition.rows, Math.min(bounds.minRow, bounds.maxRow)))
-  const maxRow = Math.max(0, Math.min(definition.rows, Math.max(bounds.minRow, bounds.maxRow)))
-  const minColumn = Math.max(0, Math.min(definition.columns, Math.min(bounds.minColumn, bounds.maxColumn)))
-  const maxColumn = Math.max(0, Math.min(definition.columns, Math.max(bounds.minColumn, bounds.maxColumn)))
-  return { minRow, maxRow, minColumn, maxColumn }
+  return groundUtils.normalizeGroundBounds(definition as any, bounds as any) as GroundRegionBounds
 }
 
 function applyGroundRegionTransform(
@@ -1566,35 +1393,7 @@ function applyGroundRegionTransform(
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
 ): { definition: GroundDynamicMesh; changed: boolean } {
-  const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = { ...definition.heightMap }
-  let changed = false
-  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
-    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const key = groundVertexKey(row, column)
-      const current = nextHeightMap[key] ?? 0
-      const next = transform(current, row, column)
-      if (Math.abs(next) <= HEIGHT_EPSILON) {
-        if (key in nextHeightMap) {
-          delete nextHeightMap[key]
-          changed = true
-        }
-      } else if (Math.abs(next - current) > HEIGHT_EPSILON) {
-        nextHeightMap[key] = next
-        changed = true
-      }
-    }
-  }
-  if (!changed) {
-    return { definition, changed: false }
-  }
-  return {
-    definition: {
-      ...definition,
-      heightMap: nextHeightMap,
-    },
-    changed: true,
-  }
+  return groundUtils.applyGroundRegionTransform(definition as any, bounds as any, transform as any) as { definition: GroundDynamicMesh; changed: boolean }
 }
 
 const initialAssetCatalog = createEmptyAssetCatalog()
@@ -1611,71 +1410,11 @@ function createLightNode(options: {
   target?: THREE.Vector3
   extras?: LightNodeExtras
 }): SceneNode {
-  const normalizedType = normalizeLightNodeType(options.type)
-  const light: LightNodeProperties = {
-    type: normalizedType,
-    color: options.color,
-    intensity: options.intensity,
-    ...(options.extras ?? {}),
-  }
-
-  if (options.target) {
-    light.target = createVector(options.target.x, options.target.y, options.target.z)
-  }
-
-  return {
-    id: generateUuid(),
-    name: options.name,
-    nodeType: 'Light',
-    light,
-    position: createVector(options.position.x, options.position.y, options.position.z),
-    rotation: options.rotation
-      ? createVector(options.rotation.x, options.rotation.y, options.rotation.z)
-      : createVector(0, 0, 0),
-    scale: createVector(1, 1, 1),
-    visible: true,
-  }
+  return lightUtils.createLightNodeWithDeps({ createVector, generateUuid }, options as any)
 }
 
 function getLightPreset(type: LightNodeType) {
-  const normalizedType = normalizeLightNodeType(type)
-  switch (normalizedType) {
-    case 'Directional':
-      return {
-        name: 'Directional Light',
-        color: '#ffffff',
-        intensity: 1.2,
-        position: createVector(20, 40, 20),
-        target: createVector(0, 0, 0),
-        extras: { castShadow: true } as LightNodeExtras,
-      }
-    case 'Point':
-      return {
-        name: 'Point Light',
-        color: '#ffffff',
-        intensity: 1,
-        position: createVector(0, 8, 0),
-        extras: { distance: 60, decay: 2, castShadow: false } as LightNodeExtras,
-      }
-    case 'Spot':
-      return {
-        name: 'Spot Light',
-        color: '#ffffff',
-        intensity: 1,
-        position: createVector(12, 18, 12),
-        target: createVector(0, 0, 0),
-        extras: { angle: Math.PI / 5, penumbra: 0.35, distance: 80, decay: 2, castShadow: true } as LightNodeExtras,
-      }
-    case 'Ambient':
-    default:
-      return {
-        name: 'Ambient Light',
-        color: '#ffffff',
-        intensity: 0.35,
-        position: createVector(0, 25, 0),
-        extras: {} as LightNodeExtras,
-      }
-  }
+  return lightUtils.getLightPresetWithDeps({ createVector }, type)
 }
 
 type ExternalSceneImportContext = {
@@ -1708,17 +1447,7 @@ function isBoneObject(object: Object3D): boolean {
 }
 
 function resolveLightTypeFromObject(light: Light): LightNodeType {
-  const typed = light as Light & Record<string, unknown>
-  if (typed.isDirectionalLight) {
-    return 'Directional'
-  }
-  if (typed.isSpotLight) {
-    return 'Spot'
-  }
-  if (typed.isPointLight || typed.isRectAreaLight) {
-    return 'Point'
-  }
-  return 'Ambient'
+  return lightUtils.resolveLightTypeFromObject(light)
 }
 
 async function textureToBlob(texture: Texture): Promise<{ blob: Blob; mimeType: string; extension: string } | null> {
