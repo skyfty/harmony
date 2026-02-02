@@ -44,6 +44,10 @@ export type FloorVertexDragState = {
   dragPlane: THREE.Plane
   startPointWorld: THREE.Vector3
 
+  // Captured when drag actually begins (threshold crossed). Use as baseline
+  // to compute deltas and avoid an initial jump.
+  startHitWorld: THREE.Vector3 | null
+
   startVertex: [number, number]
   containerObject: THREE.Object3D
   runtimeObject: THREE.Object3D

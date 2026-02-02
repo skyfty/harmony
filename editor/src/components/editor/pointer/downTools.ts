@@ -329,6 +329,7 @@ export function handlePointerDownTools(
               freePlaneNormal: new THREE.Vector3(0, 1, 0),
             }),
             startPointWorld: startPointWorld.clone(),
+            startHitWorld: null,
 
             startVertex,
             containerObject: runtime,

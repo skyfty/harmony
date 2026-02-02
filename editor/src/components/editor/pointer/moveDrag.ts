@@ -282,7 +282,9 @@ export function handlePointerMoveDrag(
       const axis = state.axisWorld.clone().normalize()
       const delta = tmpIntersection.clone().sub(state.startPointWorld)
       const t = axis.dot(delta)
-      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
+      // Quantize to 0.1m steps (like wall height drag) and keep one decimal to reduce float noise.
+      const tQuantized = Number((Math.round(t * 10) / 10).toFixed(1))
+      const world = state.startPointWorld.clone().add(axis.multiplyScalar(tQuantized))
       local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     } else {
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
@@ -342,11 +344,14 @@ export function handlePointerMoveDrag(
 
   if (ctx.floorVertexDragState && event.pointerId === ctx.floorVertexDragState.pointerId) {
     const state = ctx.floorVertexDragState
+
+    // Only start processing once user has moved beyond the click-drag threshold.
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
-    if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
-      state.moved = true
+    if (!state.moved && Math.hypot(dx, dy) < ctx.clickDragThresholdPx) {
+      return { handled: true }
     }
+    state.moved = true
 
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
@@ -355,15 +360,31 @@ export function handlePointerMoveDrag(
 
     let local: THREE.Vector3 | null = null
     if (state.dragMode === 'axis' && state.axisWorld) {
+      // For axis drags, capture the plane hit at drag start if not already captured,
+      // then compute the constrained point relative to that hit to avoid a jump.
+      if (!state.startHitWorld) {
+        if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+          return { handled: true }
+        }
+        state.startHitWorld = tmpIntersection.clone()
+      }
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startPointWorld)
+      const delta = tmpIntersection.clone().sub(state.startHitWorld)
       const t = axis.dot(delta)
-      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
+      const world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
       local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
     } else {
+      // Free dragging uses ground projection. Capture ground hit at drag start to
+      // avoid the initial jump.
+      if (!state.startHitWorld) {
+        if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+          return { handled: true }
+        }
+        state.startHitWorld = ctx.groundPointerHelper.clone()
+      }
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
@@ -427,16 +448,23 @@ export function handlePointerMoveFloorEdgeDrag(
     const state = ctx.floorEdgeDragState
     const dx = event.clientX - state.startX
     const dy = event.clientY - state.startY
-    if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
-      state.moved = true
-    }
-
     const isLeftDown = (event.buttons & 1) !== 0
     if (!isLeftDown) {
       return { handled: true }
     }
     if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
       return { handled: true }
+    }
+
+    // Avoid a first-frame "jump": do not mutate geometry until this is clearly a drag.
+    // When drag begins, capture the current projection as baseline so delta starts at 0.
+    if (!state.moved) {
+      if (Math.hypot(dx, dy) < ctx.clickDragThresholdPx) {
+        return { handled: true }
+      }
+      state.moved = true
+      const startPointerVec = new THREE.Vector2(ctx.groundPointerHelper.x, ctx.groundPointerHelper.z)
+      state.initialProjection = state.perp.dot(startPointerVec.clone().sub(state.referencePoint))
     }
 
     const pointerVec = new THREE.Vector2(ctx.groundPointerHelper.x, ctx.groundPointerHelper.z)
