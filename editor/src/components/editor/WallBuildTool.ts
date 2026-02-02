@@ -8,6 +8,7 @@ import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSeg
 import { GRID_MAJOR_SPACING } from './constants'
 import { findSceneNode } from './sceneUtils'
 import { constrainWallEndPointSoftSnap } from './wallEndpointSnap'
+import { distanceSqXZ, splitWallSegmentsIntoChains } from './wallSegmentUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -27,12 +28,25 @@ export type WallBuildToolHandle = {
   handlePointerCancel: (event: PointerEvent) => boolean
   cancel: () => boolean
   dispose: () => void
+  beginBranchFromEndpoint: (options: {
+    nodeId: string
+    chainStartIndex: number
+    chainEndIndex: number
+    endpointKind: 'start' | 'end'
+    worldPoint: THREE.Vector3
+  }) => boolean
 }
 
 export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
   brushPresetAssetId: string | null
   brushPresetData: WallPresetData | null
+  branchFrom: {
+    nodeId: string
+    chainStartIndex: number
+    chainEndIndex: number
+    endpointKind: 'start' | 'end'
+  } | null
   shapeDraft: {
     kind: Exclude<WallBuildShape, 'polygon'>
     pointerId: number
@@ -82,6 +96,7 @@ export function createWallBuildTool(options: {
       bodyAssetId: null,
       brushPresetAssetId: null,
       brushPresetData: null,
+      branchFrom: null,
       shapeDraft: null,
     }
     return session
@@ -129,6 +144,69 @@ export function createWallBuildTool(options: {
       return start.clone()
     }
     return constrainWallEndPointSoftSnap(start, target, rawTarget)
+  }
+
+  const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.35
+  const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE_SQ = WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE * WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE
+
+  const snapToSameNodeChainEndpointIfClose = (point: THREE.Vector3): THREE.Vector3 => {
+    if (!session?.nodeId) {
+      return point
+    }
+    if (!Array.isArray(session.segments) || session.segments.length < 2) {
+      return point
+    }
+
+    const chains = splitWallSegmentsIntoChains(session.segments as any[])
+    if (!chains.length) {
+      return point
+    }
+
+    // If we started from a specific chain endpoint, prefer snapping to *other* chains.
+    const excludeChain = session.branchFrom && session.branchFrom.nodeId === session.nodeId
+      ? { startIndex: session.branchFrom.chainStartIndex, endIndex: session.branchFrom.chainEndIndex }
+      : null
+
+    let best: THREE.Vector3 | null = null
+    let bestDistSq = Number.POSITIVE_INFINITY
+
+    for (const chain of chains) {
+      if (excludeChain && chain.startIndex === excludeChain.startIndex && chain.endIndex === excludeChain.endIndex) {
+        continue
+      }
+
+      const startSeg = session.segments[chain.startIndex]
+      const endSeg = session.segments[chain.endIndex]
+      if (!startSeg || !endSeg) {
+        continue
+      }
+
+      const candidates = [startSeg.start, endSeg.end]
+      for (const candidate of candidates) {
+        if (!candidate) {
+          continue
+        }
+        const distSq = distanceSqXZ(point.x, point.z, candidate.x, candidate.z)
+        if (distSq <= WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE_SQ && distSq < bestDistSq) {
+          bestDistSq = distSq
+          best = candidate.clone()
+        }
+      }
+    }
+
+    if (!best) {
+      return point
+    }
+
+    return best
+  }
+
+  const constrainWallEndPointForBuild = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
+    const base = constrainWallEndPoint(start, target, rawTarget)
+    if (base.equals(start)) {
+      return base
+    }
+    return snapToSameNodeChainEndpointIfClose(base)
   }
 
   const hydrateFromSelection = (target: WallBuildToolSession) => {
@@ -399,6 +477,8 @@ export function createWallBuildTool(options: {
       return false
     }
 
+    const startedFromBranch = Boolean(session.branchFrom)
+
     const start = session.dragStart.clone()
     const end = session.dragEnd.clone()
     if (start.distanceToSquared(end) < 1e-6) {
@@ -456,6 +536,9 @@ export function createWallBuildTool(options: {
 
     session.dragStart = end.clone()
     session.dragEnd = end.clone()
+    if (startedFromBranch) {
+      session.branchFrom = null
+    }
     session.dimensions = options.normalizeWallDimensionsForViewport(session.dimensions)
     previewRenderer.markDirty()
     return true
@@ -481,7 +564,7 @@ export function createWallBuildTool(options: {
       return true
     }
 
-    const constrained = constrainWallEndPoint(current.dragStart, snappedPoint, rawPointer)
+    const constrained = constrainWallEndPointForBuild(current.dragStart, snappedPoint, rawPointer)
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -511,7 +594,7 @@ export function createWallBuildTool(options: {
 
     const rawPointer = groundPointerHelper.clone()
     const pointer = options.snapPoint(rawPointer.clone())
-    const constrained = constrainWallEndPoint(session.dragStart, pointer, rawPointer)
+    const constrained = constrainWallEndPointForBuild(session.dragStart, pointer, rawPointer)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return
@@ -659,6 +742,44 @@ export function createWallBuildTool(options: {
       cancelShapeDraft()
       cancelDrag()
       clearSession(true)
+      return true
+    },
+
+    beginBranchFromEndpoint: ({ nodeId, chainStartIndex, chainEndIndex, endpointKind, worldPoint }) => {
+      if (options.activeBuildTool.value !== 'wall') {
+        return false
+      }
+      if (getShape() !== 'polygon') {
+        return false
+      }
+
+      const node = findSceneNode(options.sceneStore.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'Wall') {
+        return false
+      }
+
+      const current = ensureSession()
+      hydrateFromSelection(current)
+
+      current.nodeId = nodeId
+      current.dimensions = getWallNodeDimensions(node)
+      current.segments = expandWallSegmentsToWorld(node)
+      current.dragStart = worldPoint.clone()
+      current.dragEnd = worldPoint.clone()
+      current.shapeDraft = null
+
+      // When branching from an existing wall, never apply brush presets.
+      current.brushPresetAssetId = null
+      current.brushPresetData = null
+
+      current.branchFrom = {
+        nodeId,
+        chainStartIndex: Math.max(0, Math.trunc(chainStartIndex)),
+        chainEndIndex: Math.max(0, Math.trunc(chainEndIndex)),
+        endpointKind: endpointKind === 'end' ? 'end' : 'start',
+      }
+
+      previewRenderer.markDirty()
       return true
     },
 

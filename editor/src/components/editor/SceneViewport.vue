@@ -9009,6 +9009,7 @@ async function handlePointerUp(event: PointerEvent) {
         updateRoadGroup,
         updateFloorGroup,
         roadBuildToolBeginBranchFromVertex: (options) => roadBuildTool.beginBranchFromVertex(options),
+        wallBuildToolBeginBranchFromEndpoint: (options) => wallBuildTool.beginBranchFromEndpoint(options),
       })
       if (drag) {
         applyPointerUpResult(drag)

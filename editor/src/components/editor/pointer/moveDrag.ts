@@ -5,6 +5,8 @@ import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorV
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
+import { GRID_MAJOR_SPACING } from '../constants'
+import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
 import {
   applyWallPreviewStyling,
   buildWallPreviewDynamicMeshFromWorldSegments,
@@ -192,6 +194,37 @@ export function handlePointerMoveDrag(
 
       constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
       constrained.y = state.startEndpointWorld.y
+
+      // Same-node endpoint magnet: help connect different chains by snapping the dragged endpoint
+      // to the nearest endpoint of other chains within the same wall node.
+      const snapDistance = GRID_MAJOR_SPACING * 0.35
+      const snapDistanceSq = snapDistance * snapDistance
+      const chains = splitWallSegmentsIntoChains(state.workingSegmentsWorld as any[])
+
+      let best: THREE.Vector3 | null = null
+      let bestDistSq = Number.POSITIVE_INFINITY
+      for (const chain of chains) {
+        if (chain.startIndex === state.chainStartIndex && chain.endIndex === state.chainEndIndex) {
+          continue
+        }
+        const startSeg = state.workingSegmentsWorld[chain.startIndex]
+        const endSeg = state.workingSegmentsWorld[chain.endIndex]
+        if (!startSeg || !endSeg) {
+          continue
+        }
+        const candidates = [startSeg.start, endSeg.end]
+        for (const candidate of candidates) {
+          const distSq = distanceSqXZ(constrained.x, constrained.z, candidate.x, candidate.z)
+          if (distSq <= snapDistanceSq && distSq < bestDistSq) {
+            bestDistSq = distSq
+            best = candidate.clone()
+          }
+        }
+      }
+      if (best) {
+        constrained.copy(best)
+        constrained.y = state.startEndpointWorld.y
+      }
     }
 
     const working = state.workingSegmentsWorld

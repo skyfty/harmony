@@ -62,6 +62,14 @@ export function handlePointerUpDrag(
       worldPoint: THREE.Vector3
       width: number
     }) => void
+
+    wallBuildToolBeginBranchFromEndpoint: (options: {
+      nodeId: string
+      chainStartIndex: number
+      chainEndIndex: number
+      endpointKind: 'start' | 'end'
+      worldPoint: THREE.Vector3
+    }) => void
   },
 ): PointerUpResult | null {
   if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId && event.button === 0) {
@@ -244,6 +252,25 @@ export function handlePointerUpDrag(
       /* noop */
     }
 
+    // Click (no drag): start a wall build session from this endpoint.
+    const node = ctx.findSceneNode(ctx.nodes, state.nodeId)
+    if (node?.dynamicMesh?.type === 'Wall') {
+      ctx.wallBuildToolBeginBranchFromEndpoint({
+        nodeId: state.nodeId,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+        endpointKind: state.endpointKind,
+        worldPoint: state.startEndpointWorld.clone(),
+      })
+      return {
+        handled: true,
+        nextWallEndpointDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
     return {
       handled: true,
       nextWallEndpointDragState: null,
@@ -252,6 +279,8 @@ export function handlePointerUpDrag(
       stopImmediatePropagation: true,
     }
   }
+
+  // (handled above) wall endpoint drag state
 
   if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId && event.button === 0) {
     const state = ctx.roadVertexDragState
