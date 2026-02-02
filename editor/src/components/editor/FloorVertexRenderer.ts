@@ -61,7 +61,7 @@ export type FloorVertexRenderer = {
 const FLOOR_VERTEX_HANDLE_Y_OFFSET = 0.03
 const FLOOR_VERTEX_HANDLE_RENDER_ORDER = 1001
 const FLOOR_VERTEX_HANDLE_GROUP_NAME = '__FloorVertexHandles'
-const FLOOR_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 22
+const FLOOR_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 44
 const FLOOR_VERTEX_HANDLE_COLOR = 0xff4081
 
 function computeFloorVertexHandleSignature(definition: FloorDynamicMesh): string {

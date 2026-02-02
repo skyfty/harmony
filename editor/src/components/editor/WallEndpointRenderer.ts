@@ -71,7 +71,7 @@ export const WALL_ENDPOINT_HANDLE_GROUP_NAME = '__WallEndpointHandles'
 export const WALL_ENDPOINT_HANDLE_Y_OFFSET = 0.03
 
 const WALL_ENDPOINT_HANDLE_RENDER_ORDER = 1001
-const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 24
+const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 48
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera

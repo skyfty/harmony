@@ -62,7 +62,7 @@ export type RoadVertexRenderer = {
 const ROAD_VERTEX_HANDLE_Y_OFFSET = 0.03
 const ROAD_VERTEX_HANDLE_RENDER_ORDER = 1001
 const HANDLE_GROUP_NAME = '__RoadVertexHandles'
-const ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 20
+const ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 40
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
