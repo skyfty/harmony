@@ -71,7 +71,7 @@ export const WALL_ENDPOINT_HANDLE_GROUP_NAME = '__WallEndpointHandles'
 export const WALL_ENDPOINT_HANDLE_Y_OFFSET = 0.03
 
 const WALL_ENDPOINT_HANDLE_RENDER_ORDER = 1001
-const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 48
+const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 36
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
@@ -96,6 +96,12 @@ function computeWorldUnitsPerPixel(options: {
 
   return Math.max(1e-6, distance) / safeHeight
 }
+
+// If the camera is very close to the handle, apply an extra on-screen multiplier
+// so the gizmo becomes proportionally larger at near distances. This helps
+// clicking when the camera is almost on top of a node.
+const NEAR_SCALE_DISTANCE = 2.5
+const NEAR_SCALE_MAX_MULT = 2.0
 
 function disposeWallEndpointHandleGroup(group: THREE.Group) {
   for (const child of group.children) {
@@ -361,7 +367,13 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         distance,
         viewportHeightPx: rect.height,
       })
-      const desiredDiameterWorld = unitsPerPixel * diameterPx
+      let desiredDiameterWorld = unitsPerPixel * diameterPx
+      // Apply near-distance extra multiplier (linear from NEAR_SCALE_MAX_MULT at 0m to 1 at NEAR_SCALE_DISTANCE).
+      if (distance < NEAR_SCALE_DISTANCE) {
+        const t = THREE.MathUtils.clamp(1 - distance / NEAR_SCALE_DISTANCE, 0, 1)
+        const nearMult = 1 + t * (NEAR_SCALE_MAX_MULT - 1)
+        desiredDiameterWorld *= nearMult
+      }
 
       // Keep on-screen size stable even if the node (parent) is scaled.
       const parent = handle.parent as THREE.Object3D | null

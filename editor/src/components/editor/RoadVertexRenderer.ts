@@ -62,7 +62,7 @@ export type RoadVertexRenderer = {
 const ROAD_VERTEX_HANDLE_Y_OFFSET = 0.03
 const ROAD_VERTEX_HANDLE_RENDER_ORDER = 1001
 const HANDLE_GROUP_NAME = '__RoadVertexHandles'
-const ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 40
+const ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 30
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
@@ -109,6 +109,8 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
   const tmpWorldPos = new THREE.Vector3()
   const tmpCameraWorldPos = new THREE.Vector3()
   const tmpParentWorldScale = new THREE.Vector3(1, 1, 1)
+  const NEAR_SCALE_DISTANCE = 2.5
+  const NEAR_SCALE_MAX_MULT = 2.0
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
 
@@ -414,7 +416,12 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
       handle.getWorldPosition(tmpWorldPos)
       const distance = Math.max(1e-6, tmpWorldPos.distanceTo(tmpCameraWorldPos))
       const unitsPerPx = computeWorldUnitsPerPixel({ camera: options.camera, distance, viewportHeightPx })
-      const desiredWorldDiameter = Math.max(1e-6, diameterPx * unitsPerPx)
+      let desiredWorldDiameter = Math.max(1e-6, diameterPx * unitsPerPx)
+      if (distance < NEAR_SCALE_DISTANCE) {
+        const t = THREE.MathUtils.clamp(1 - distance / NEAR_SCALE_DISTANCE, 0, 1)
+        const nearMult = 1 + t * (NEAR_SCALE_MAX_MULT - 1)
+        desiredWorldDiameter *= nearMult
+      }
 
       const parent = handle.parent as THREE.Object3D | null
       if (parent) {

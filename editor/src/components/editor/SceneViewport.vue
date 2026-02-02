@@ -7546,9 +7546,9 @@ function animate() {
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   // Endpoint gizmos: keep a large, click-friendly on-screen size.
-  roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 40 })
-  wallEndpointRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
-  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 44 })
+  roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })
+  wallEndpointRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 36 })
+  floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   updateVertexSnapHintPulse(performance.now())
   updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
