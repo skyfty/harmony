@@ -11,7 +11,13 @@ import {
   computeWallPreviewSignature,
   mergeWallPreviewSegmentChainsByEndpoint,
 } from '../wallPreviewGroupUtils'
-import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, PointerMoveResult } from './types'
+import type {
+  FloorVertexDragState,
+  RoadVertexDragState,
+  WallEndpointDragState,
+  WallHeightDragState,
+  PointerMoveResult,
+} from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -27,7 +33,6 @@ type FloorEdgeDragStateLike = {
   referencePoint: THREE.Vector2
   initialProjection: number
 }
-
 export function handlePointerMoveDrag(
   event: PointerEvent,
   ctx: {
@@ -36,6 +41,7 @@ export function handlePointerMoveDrag(
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
     wallEndpointDragState: WallEndpointDragState | null
+    wallHeightDragState: WallHeightDragState | null
 
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
     raycastPlanePoint: (event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3) => boolean
@@ -52,6 +58,102 @@ export function handlePointerMoveDrag(
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
+
+  if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId) {
+    const state = ctx.wallHeightDragState
+
+    // Only transition to actual dragging once the pointer has moved beyond the drag threshold.
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    // Capture the initial plane hit when drag begins (if not already captured).
+    if (!state.startHitWorld) {
+      state.startHitWorld = tmpIntersection.clone()
+      state.startHeight = state.dimensions.height
+    }
+
+    const startHit = state.startHitWorld ?? state.startPointWorld
+    const worldUp = new THREE.Vector3(0, 1, 0)
+    const delta = tmpIntersection.clone().sub(startHit)
+    const dh = delta.dot(worldUp) * state.axisSign
+
+    const minHeight = 0.1
+    const maxHeight = 100
+    const rawNextHeight = state.startHeight + dh
+    const clamped = THREE.MathUtils.clamp(rawNextHeight, minHeight, maxHeight)
+    // Quantize to 0.1m and keep one decimal for display.
+    const quantized = Math.round(clamped * 10) / 10
+    state.dimensions.height = quantized
+
+    // Best-effort: update wall component props in real-time so inspector reflects changes immediately.
+    try {
+      const setter = (ctx as any).setWallNodeDimensions
+      if (typeof setter === 'function') {
+        setter(state.nodeId, { height: quantized })
+      }
+    } catch {
+      /* noop */
+    }
+
+    const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
+    const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
+    if (nextSignature !== state.previewSignature) {
+      state.previewSignature = nextSignature
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      if (build) {
+        if (!state.previewGroup) {
+          const preview = createWallGroup(build.definition)
+          applyWallPreviewStyling(preview)
+          preview.userData.isWallEndpointDragPreview = true
+          state.previewGroup = preview
+          ctx.rootGroup.add(preview)
+        } else {
+          updateWallGroup(state.previewGroup, build.definition)
+          applyWallPreviewStyling(state.previewGroup)
+          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
+            ctx.rootGroup.add(state.previewGroup)
+          }
+        }
+        state.previewGroup!.position.copy(build.center)
+      }
+    }
+
+    // Update handle positions so the gizmo stays at mid-height while dragging.
+    const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const yOffset = Math.max(0.05, quantized * 0.5)
+      for (const child of handles.children) {
+        const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+        const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
+        const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
+        const startSeg = state.workingSegmentsWorld[chainStartIndex]
+        const endSeg = state.workingSegmentsWorld[chainEndIndex]
+        if (!startSeg || !endSeg) continue
+
+        const endpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+        const local = state.containerObject.worldToLocal(endpointWorld)
+
+        child.userData.yOffset = yOffset
+        child.position.set(local.x, local.y + yOffset, local.z)
+      }
+    }
+
+    return { handled: true }
+  }
 
   if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId) {
     const state = ctx.wallEndpointDragState

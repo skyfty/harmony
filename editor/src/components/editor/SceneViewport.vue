@@ -33,6 +33,7 @@ import type {
   FloorVertexDragState,
   RoadVertexDragState,
   WallEndpointDragState,
+  WallHeightDragState,
 } from './pointer/types'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
@@ -3101,6 +3102,7 @@ type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: nu
 let roadVertexDragState: RoadVertexDragState | null = null
 let floorVertexDragState: FloorVertexDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
+let wallHeightDragState: WallHeightDragState | null = null
 
 type FloorEdgeDragState = {
   pointerId: number
@@ -8492,6 +8494,9 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
       wallEndpointDragState = result.nextWallEndpointDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
+      wallHeightDragState = result.nextWallHeightDragState ?? null
+    }
     if (result.preventDefault) {
       event.preventDefault()
     }
@@ -8756,6 +8761,7 @@ function handlePointerMove(event: PointerEvent) {
     !roadVertexDragState &&
     !floorVertexDragState &&
     !wallEndpointDragState &&
+    !wallHeightDragState &&
     isStrictPointOnCanvas(event.clientX, event.clientY)
 
   if (canHoverGizmos) {
@@ -8772,11 +8778,12 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexRenderer.clearHover()
   }
 
-  const roadVertex = handlePointerMoveDrag(event, {
+  const _moveDragCtx: any = {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
     roadVertexDragState,
     floorVertexDragState,
     wallEndpointDragState,
+    wallHeightDragState,
     raycastGroundPoint,
     raycastPlanePoint,
     groundPointerHelper,
@@ -8787,7 +8794,11 @@ function handlePointerMove(event: PointerEvent) {
     updateRoadGroup,
 
     updateFloorGroup,
-  })
+  }
+  _moveDragCtx.setWallNodeDimensions = (nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }) =>
+    sceneStore.setWallNodeDimensions(nodeId, dimensions)
+
+  const roadVertex = handlePointerMoveDrag(event, _moveDragCtx)
   if (roadVertex) {
     applyPointerMoveResult(roadVertex)
     return
@@ -8920,6 +8931,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
+        wallHeightDragState = result.nextWallHeightDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
         instancedEraseDragState = result.nextInstancedEraseDragState ?? null
       }
@@ -8949,6 +8963,7 @@ async function handlePointerUp(event: PointerEvent) {
         roadVertexDragState?.pointerId === event.pointerId ||
         floorVertexDragState?.pointerId === event.pointerId ||
         wallEndpointDragState?.pointerId === event.pointerId ||
+        wallHeightDragState?.pointerId === event.pointerId ||
         floorEdgeDragState?.pointerId === event.pointerId ||
         instancedEraseDragState?.pointerId === event.pointerId ||
         pointerInteraction.get()?.pointerId === event.pointerId ||
@@ -8973,6 +8988,7 @@ async function handlePointerUp(event: PointerEvent) {
         roadVertexDragState,
         floorVertexDragState,
         wallEndpointDragState,
+        wallHeightDragState,
         floorEdgeDragState,
         findSceneNode,
         nodes: sceneStore.nodes,
@@ -9261,6 +9277,47 @@ function handlePointerCancel(event: PointerEvent) {
         if (mesh) {
           const local = state.containerObject.worldToLocal(state.startEndpointWorld.clone())
           mesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (wallHeightDragState && event.pointerId === wallHeightDragState.pointerId) {
+    const state = wallHeightDragState
+    wallHeightDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWallEndpointHandle(null)
+
+    try {
+      if (state.previewGroup) {
+        const preview = state.previewGroup
+        state.previewGroup = null
+        preview.removeFromParent()
+        disposeWallPreviewGroup(preview)
+      }
+
+      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const yOffset = Math.max(0.05, state.startHeight * 0.5)
+        for (const child of handles.children) {
+          const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+          const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
+          const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
+          const startSeg = state.baseSegmentsWorld[chainStartIndex]
+          const endSeg = state.baseSegmentsWorld[chainEndIndex]
+          if (!startSeg || !endSeg) continue
+
+          const endpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+          const local = state.containerObject.worldToLocal(endpointWorld)
+          child.userData.yOffset = yOffset
+          child.position.set(local.x, local.y + yOffset, local.z)
         }
       }
     } catch {

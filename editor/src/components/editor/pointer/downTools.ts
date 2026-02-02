@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
-import type { FloorVertexDragState, PointerDownResult, RoadVertexDragState, WallEndpointDragState } from './types'
+import type {
+  FloorVertexDragState,
+  PointerDownResult,
+  RoadVertexDragState,
+  WallEndpointDragState,
+  WallHeightDragState,
+} from './types'
 
 export function handlePointerDownTools(
   event: PointerEvent,
@@ -142,6 +148,65 @@ export function handlePointerDownTools(
                 : null
             const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
             const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+
+            // Special case: dragging the Y axis arrow adjusts wall height (whole wall), not endpoint position.
+            const isYAxisDrag =
+              effectiveDragMode === 'axis' &&
+              effectiveAxisWorld &&
+              Math.abs(effectiveAxisWorld.y) > 0.9 &&
+              Math.abs(effectiveAxisWorld.x) < 0.2 &&
+              Math.abs(effectiveAxisWorld.z) < 0.2
+
+            if (isYAxisDrag) {
+              const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
+              const startPointWorld = startEndpointWorld.clone()
+              startPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
+
+              const wallHeightDragState: WallHeightDragState = {
+                pointerId: event.pointerId,
+                nodeId: handleHit.nodeId,
+                startX: event.clientX,
+                startY: event.clientY,
+                moved: false,
+
+                axisSign,
+                dragPlane: ctx.createEndpointDragPlane({
+                  mode: 'axis',
+                  axisWorld: new THREE.Vector3(0, axisSign, 0),
+                  startPointWorld,
+                }),
+                startPointWorld: startPointWorld.clone(),
+                startHitWorld: null,
+
+                startHeight: dimensions.height,
+
+                containerObject: runtime,
+                dimensions: { ...dimensions },
+                baseSegmentsWorld,
+                workingSegmentsWorld,
+                previewGroup: null,
+                previewSignature: null,
+              }
+
+              ctx.setActiveWallEndpointHandle({
+                nodeId: handleHit.nodeId,
+                chainStartIndex,
+                chainEndIndex,
+                endpointKind,
+                gizmoPart: handleHit.gizmoPart,
+              })
+
+              return {
+                handled: true,
+                clearPointerTrackingState: true,
+                nextWallEndpointDragState: null,
+                nextWallHeightDragState: wallHeightDragState,
+                capturePointerId: event.pointerId,
+                preventDefault: true,
+                stopPropagation: true,
+                stopImmediatePropagation: true,
+              }
+            }
 
             const wallEndpointDragState: WallEndpointDragState = {
               pointerId: event.pointerId,

@@ -4,7 +4,7 @@ import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVert
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
-import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, PointerUpResult } from './types'
+import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, WallHeightDragState, PointerUpResult } from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -22,6 +22,7 @@ export function handlePointerUpDrag(
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
     wallEndpointDragState: WallEndpointDragState | null
+    wallHeightDragState: WallHeightDragState | null
     floorEdgeDragState: FloorEdgeDragStateLike | null
 
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -63,6 +64,77 @@ export function handlePointerUpDrag(
     }) => void
   },
 ): PointerUpResult | null {
+  if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId && event.button === 0) {
+    const state = ctx.wallHeightDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    // Height drag uses the same gizmo highlight API as endpoint drag.
+    ctx.setActiveWallEndpointHandle(null)
+
+    // Always remove preview.
+    if (state.previewGroup) {
+      const preview = state.previewGroup
+      state.previewGroup = null
+      preview.removeFromParent()
+      disposeWallPreviewGroup(preview)
+    }
+
+    if (state.moved) {
+      const segmentsPayload = state.workingSegmentsWorld.map((s) => ({
+        start: { x: s.start.x, y: s.start.y, z: s.start.z },
+        end: { x: s.end.x, y: s.end.y, z: s.end.z },
+      }))
+
+      ctx.sceneStoreUpdateWallNodeGeometry(state.nodeId, {
+        segments: segmentsPayload,
+        dimensions: state.dimensions,
+      })
+
+      ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextWallHeightDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click/no-drag: revert handle y offsets.
+    try {
+      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const yOffset = Math.max(0.05, state.startHeight * 0.5)
+        for (const child of handles.children) {
+          const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+          const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
+          const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
+          const startSeg = state.baseSegmentsWorld[chainStartIndex]
+          const endSeg = state.baseSegmentsWorld[chainEndIndex]
+          if (!startSeg || !endSeg) continue
+
+          const endpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+          const local = state.containerObject.worldToLocal(endpointWorld)
+          child.userData.yOffset = yOffset
+          child.position.set(local.x, local.y + yOffset, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextWallHeightDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
   if (ctx.floorVertexDragState && event.pointerId === ctx.floorVertexDragState.pointerId && event.button === 0) {
     const state = ctx.floorVertexDragState
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)

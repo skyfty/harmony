@@ -79,6 +79,36 @@ export type WallEndpointDragState = {
   previewSignature: string | null
 }
 
+export type WallHeightDragState = {
+  pointerId: number
+  nodeId: string
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  // Always axis drag along world up (+Y). `axisSign` indicates whether the picked arrow
+  // was +Y (1) or -Y (-1), so dragging up/down feels consistent with the arrow direction.
+  axisSign: 1 | -1
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+
+  // Captured when the interaction crosses the click-drag threshold.
+  // Used as the reference point for delta computation to avoid an initial jump.
+  startHitWorld: THREE.Vector3 | null
+
+  startHeight: number
+
+  containerObject: THREE.Object3D
+
+  dimensions: { height: number; width: number; thickness: number }
+  baseSegmentsWorld: WallWorldSegment[]
+  workingSegmentsWorld: WallWorldSegment[]
+
+  previewGroup: THREE.Group | null
+  previewSignature: string | null
+}
+
 export type PointerDownResult = {
   handled: true
   clearPointerTrackingState?: boolean
@@ -93,6 +123,7 @@ export type PointerDownResult = {
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
+  nextWallHeightDragState?: WallHeightDragState | null
 }
 
 export type PointerMoveResult = {
@@ -118,5 +149,6 @@ export type PointerUpResult = {
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
+  nextWallHeightDragState?: WallHeightDragState | null
   clearFloorEdgeDragState?: boolean
 }

@@ -192,7 +192,7 @@ watch(
       return
     }
     isSyncingFromScene.value = true
-    localHeight.value = props.height ?? WALL_DEFAULT_HEIGHT
+      localHeight.value = Number(((props.height ?? WALL_DEFAULT_HEIGHT)).toFixed(1))
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
     localIsAirWall.value = Boolean((props as any).isAirWall)

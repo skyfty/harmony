@@ -12625,13 +12625,40 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       node.position = createVector(build.center.x, build.center.y, build.center.z)
       node.dynamicMesh = build.definition
+
+      // Keep wall component dimensions in sync with the wall mesh so inspector UI and runtime component state
+      // always reflect geometry edits (e.g. gizmo height drag).
+      const meshProps = resolveWallComponentPropsFromMesh(build.definition)
+      const previousWallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const previousProps = previousWallComponent?.props as WallComponentProps | undefined
+      const nextProps = clampWallProps({
+        ...(previousProps ?? {}),
+        height: meshProps.height,
+        width: meshProps.width,
+        thickness: meshProps.thickness,
+      })
+      const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+      nextComponents[WALL_COMPONENT_TYPE] = {
+        id: previousWallComponent?.id && previousWallComponent.id.trim().length ? previousWallComponent.id : generateUuid(),
+        type: WALL_COMPONENT_TYPE,
+        enabled: previousWallComponent?.enabled ?? true,
+        props: cloneWallComponentProps(nextProps),
+        metadata: previousWallComponent?.metadata,
+      }
+      node.components = nextComponents
+
       const recentered = parentId
         ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
         : false
       if (!recentered) {
-        this.queueSceneNodePatch(nodeId, ['transform', 'dynamicMesh'])
+        this.queueSceneNodePatch(nodeId, ['transform', 'dynamicMesh', 'components'])
+      } else {
+        this.queueSceneNodePatch(nodeId, ['components'])
       }
       commitSceneSnapshot(this)
+
+      // Ensure runtime component instances see the updated props.
+      componentManager.syncNode(node)
 
       const runtime = getRuntimeObject(nodeId)
       if (runtime) {
