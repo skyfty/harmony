@@ -5,8 +5,9 @@ import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { SceneNodeComponentState, SceneNode } from '@harmony/schema'
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
 import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSegment } from './WallPreviewRenderer'
-import { GRID_MAJOR_SPACING, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
+import { GRID_MAJOR_SPACING } from './constants'
 import { findSceneNode } from './sceneUtils'
+import { constrainWallEndPointSoftSnap } from './wallEndpointSnap'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -120,43 +121,14 @@ export function createWallBuildTool(options: {
   }
 
   const constrainWallEndPoint = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
+    // Keep legacy behavior of returning the start point when the movement doesn't cross a grid cell.
     const delta = target.clone().sub(start)
-    let stepX = Math.round(delta.x / GRID_MAJOR_SPACING)
-    let stepZ = Math.round(delta.z / GRID_MAJOR_SPACING)
-
+    const stepX = Math.round(delta.x / GRID_MAJOR_SPACING)
+    const stepZ = Math.round(delta.z / GRID_MAJOR_SPACING)
     if (stepX === 0 && stepZ === 0) {
       return start.clone()
     }
-
-    const rawDelta = rawTarget ? rawTarget.clone().sub(start) : delta.clone()
-    const absRawX = Math.abs(rawDelta.x)
-    const absRawZ = Math.abs(rawDelta.z)
-
-    if (absRawX > 1e-4 || absRawZ > 1e-4) {
-      const angle = Math.atan2(absRawZ, absRawX)
-      const diagonalAngle = Math.PI * 0.25
-      if (!Number.isNaN(angle) && Math.abs(angle - diagonalAngle) <= WALL_DIAGONAL_SNAP_THRESHOLD) {
-        const diagSteps = Math.max(Math.abs(stepX), Math.abs(stepZ), 1)
-        const signX = rawDelta.x >= 0 ? 1 : -1
-        const signZ = rawDelta.z >= 0 ? 1 : -1
-        stepX = diagSteps * signX
-        stepZ = diagSteps * signZ
-      }
-    }
-
-    if (stepX !== 0 && stepZ !== 0 && Math.abs(stepX) !== Math.abs(stepZ)) {
-      if (Math.abs(stepX) > Math.abs(stepZ)) {
-        stepZ = 0
-      } else {
-        stepX = 0
-      }
-    }
-
-    return new THREE.Vector3(
-      start.x + stepX * GRID_MAJOR_SPACING,
-      start.y,
-      start.z + stepZ * GRID_MAJOR_SPACING,
-    )
+    return constrainWallEndPointSoftSnap(start, target, rawTarget)
   }
 
   const hydrateFromSelection = (target: WallBuildToolSession) => {

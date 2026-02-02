@@ -1,7 +1,16 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
-import type { RoadVertexDragState, PointerMoveResult } from './types'
+import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
+import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
+import {
+  applyWallPreviewStyling,
+  buildWallPreviewDynamicMeshFromWorldSegments,
+  computeWallPreviewSignature,
+  mergeWallPreviewSegmentChainsByEndpoint,
+} from '../wallPreviewGroupUtils'
+import type { RoadVertexDragState, WallEndpointDragState, PointerMoveResult } from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -24,14 +33,110 @@ export function handlePointerMoveDrag(
     clickDragThresholdPx: number
 
     roadVertexDragState: RoadVertexDragState | null
+    wallEndpointDragState: WallEndpointDragState | null
 
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
     groundPointerHelper: THREE.Vector3
+
+    rootGroup: THREE.Group
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
   },
 ): PointerMoveResult | null {
+  if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId) {
+    const state = ctx.wallEndpointDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
+      state.moved = true
+    }
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+      return { handled: true }
+    }
+
+    const rawPointer = ctx.groundPointerHelper.clone()
+    const target = rawPointer.clone()
+    target.y = state.startEndpointWorld.y
+
+    const anchor = state.anchorPointWorld.clone()
+    anchor.y = state.startEndpointWorld.y
+
+    const constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
+    constrained.y = state.startEndpointWorld.y
+
+    const working = state.workingSegmentsWorld
+    const startSeg = working[state.chainStartIndex]
+    const endSeg = working[state.chainEndIndex]
+    if (!startSeg || !endSeg) {
+      return { handled: true }
+    }
+
+    if (state.endpointKind === 'start') {
+      startSeg.start.copy(constrained)
+    } else {
+      endSeg.end.copy(constrained)
+    }
+
+    if (!state.moved) {
+      const ddx = constrained.x - state.startEndpointWorld.x
+      const ddz = constrained.z - state.startEndpointWorld.z
+      if (ddx * ddx + ddz * ddz > 1e-8) {
+        state.moved = true
+      }
+    }
+
+    const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
+    const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
+    if (nextSignature !== state.previewSignature) {
+      state.previewSignature = nextSignature
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      if (build) {
+        if (!state.previewGroup) {
+          const preview = createWallGroup(build.definition)
+          applyWallPreviewStyling(preview)
+          preview.userData.isWallEndpointDragPreview = true
+          state.previewGroup = preview
+          ctx.rootGroup.add(preview)
+        } else {
+          updateWallGroup(state.previewGroup, build.definition)
+          applyWallPreviewStyling(state.previewGroup)
+          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
+            ctx.rootGroup.add(state.previewGroup)
+          }
+        }
+        state.previewGroup!.position.copy(build.center)
+      }
+    }
+
+    // Update handle position in local space for immediate feedback.
+    const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const local = state.containerObject.worldToLocal(constrained.clone())
+      const handleMesh = handles.children.find((child) => {
+        const kind = child?.userData?.endpointKind
+        const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+        const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+        return (
+          (kind === state.endpointKind) &&
+          startIndex === state.chainStartIndex &&
+          endIndex === state.chainEndIndex
+        )
+      }) as THREE.Object3D | undefined
+      if (handleMesh) {
+        handleMesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+      }
+    }
+
+    return { handled: true }
+  }
+
   if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId) {
     const state = ctx.roadVertexDragState
     const dx = event.clientX - state.startX

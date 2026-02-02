@@ -1,6 +1,6 @@
-import type * as THREE from 'three'
+import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
-import type { PointerDownResult, RoadVertexDragState } from './types'
+import type { PointerDownResult, RoadVertexDragState, WallEndpointDragState } from './types'
 
 export function handlePointerDownTools(
   event: PointerEvent,
@@ -27,6 +27,15 @@ export function handlePointerDownTools(
     // Road vertex drag
     ensureRoadVertexHandlesForSelectedNode: () => void
     pickRoadVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number } | null
+
+    // Wall endpoint drag
+    ensureWallEndpointHandlesForSelectedNode: () => void
+    pickWallEndpointHandleAtPointer: (event: PointerEvent) => {
+      nodeId: string
+      chainStartIndex: number
+      chainEndIndex: number
+      endpointKind: 'start' | 'end'
+    } | null
 
     nodes: SceneNode[]
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -55,6 +64,95 @@ export function handlePointerDownTools(
   }
 
   if (ctx.activeBuildTool === 'wall') {
+    if (button === 0 && !ctx.isAltOverrideActive) {
+      // If a wall endpoint handle is under the cursor, begin endpoint interaction (drag to reshape).
+      ctx.ensureWallEndpointHandlesForSelectedNode()
+      const handleHit = ctx.pickWallEndpointHandleAtPointer(event)
+      if (handleHit) {
+        const node = ctx.findSceneNode(ctx.nodes, handleHit.nodeId)
+        const runtime = ctx.objectMap.get(handleHit.nodeId) ?? null
+
+        if (node?.dynamicMesh?.type === 'Wall' && runtime) {
+          const origin = new THREE.Vector3(
+            Number(node.position?.x) || 0,
+            Number(node.position?.y) || 0,
+            Number(node.position?.z) || 0,
+          )
+          const segments = Array.isArray(node.dynamicMesh.segments) ? node.dynamicMesh.segments : []
+
+          const baseSegmentsWorld = segments.map((seg) => {
+            const sx = Number((seg as any).start?.x) || 0
+            const sy = Number((seg as any).start?.y) || 0
+            const sz = Number((seg as any).start?.z) || 0
+            const ex = Number((seg as any).end?.x) || 0
+            const ey = Number((seg as any).end?.y) || 0
+            const ez = Number((seg as any).end?.z) || 0
+            return {
+              start: new THREE.Vector3(sx + origin.x, sy + origin.y, sz + origin.z),
+              end: new THREE.Vector3(ex + origin.x, ey + origin.y, ez + origin.z),
+            }
+          })
+
+          const workingSegmentsWorld = baseSegmentsWorld.map((s) => ({ start: s.start.clone(), end: s.end.clone() }))
+
+          const sample = segments[0] as any
+          const dimensions = {
+            height: Number.isFinite(Number(sample?.height)) ? Number(sample.height) : 3,
+            width: Number.isFinite(Number(sample?.width)) ? Number(sample.width) : 0.2,
+            thickness: Number.isFinite(Number(sample?.thickness)) ? Number(sample.thickness) : 0.1,
+          }
+
+          const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))
+          const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
+          const endpointKind = handleHit.endpointKind === 'end' ? 'end' : 'start'
+
+          const startSeg = workingSegmentsWorld[chainStartIndex]
+          const endSeg = workingSegmentsWorld[chainEndIndex]
+          if (startSeg && endSeg) {
+            const startEndpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+            const anchorPointWorld = endpointKind === 'start' ? startSeg.end.clone() : endSeg.start.clone()
+
+            const wallEndpointDragState: WallEndpointDragState = {
+              pointerId: event.pointerId,
+              nodeId: handleHit.nodeId,
+              chainStartIndex,
+              chainEndIndex,
+              endpointKind,
+              startX: event.clientX,
+              startY: event.clientY,
+              moved: false,
+              containerObject: runtime,
+              dimensions,
+              baseSegmentsWorld,
+              workingSegmentsWorld,
+              anchorPointWorld,
+              startEndpointWorld,
+              previewGroup: null,
+              previewSignature: null,
+            }
+
+            return {
+              handled: true,
+              clearPointerTrackingState: true,
+              nextWallEndpointDragState: wallEndpointDragState,
+              capturePointerId: event.pointerId,
+              preventDefault: true,
+              stopPropagation: true,
+              stopImmediatePropagation: true,
+            }
+          }
+        }
+
+        return {
+          handled: true,
+          clearPointerTrackingState: true,
+          preventDefault: true,
+          stopPropagation: true,
+          stopImmediatePropagation: true,
+        }
+      }
+    }
+
     if (ctx.wallBuildToolHandlePointerDown(event)) {
       return { handled: true, clearPointerTrackingState: true }
     }

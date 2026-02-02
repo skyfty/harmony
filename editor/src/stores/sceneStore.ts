@@ -1483,6 +1483,73 @@ type WallWorldSegment = {
   end: Vector3
 }
 
+function mergeWallWorldSegmentChainsByEndpoint(segments: WallWorldSegment[]): WallWorldSegment[] {
+  if (segments.length < 2) {
+    return segments
+  }
+
+  const epsSq = 1e-8
+  const samePoint = (a: Vector3, b: Vector3): boolean => a.distanceToSquared(b) <= epsSq
+
+  // Start by treating each segment as its own chain.
+  let chains: WallWorldSegment[][] = segments.map((seg) => [seg])
+
+  const reverseChain = (chain: WallWorldSegment[]): WallWorldSegment[] =>
+    chain
+      .slice()
+      .reverse()
+      .map((seg) => ({ start: seg.end, end: seg.start }))
+
+  const tryMergeOnce = (): boolean => {
+    for (let i = 0; i < chains.length; i += 1) {
+      const a = chains[i]!
+      const aStart = a[0]!.start
+      const aEnd = a[a.length - 1]!.end
+
+      for (let j = i + 1; j < chains.length; j += 1) {
+        const b = chains[j]!
+        const bStart = b[0]!.start
+        const bEnd = b[b.length - 1]!.end
+
+        // aEnd -> bStart
+        if (samePoint(aEnd, bStart)) {
+          chains[i] = [...a, ...b]
+          chains.splice(j, 1)
+          return true
+        }
+        // aEnd -> bEnd (reverse b)
+        if (samePoint(aEnd, bEnd)) {
+          chains[i] = [...a, ...reverseChain(b)]
+          chains.splice(j, 1)
+          return true
+        }
+        // aStart -> bEnd (prepend b)
+        if (samePoint(aStart, bEnd)) {
+          chains[i] = [...b, ...a]
+          chains.splice(j, 1)
+          return true
+        }
+        // aStart -> bStart (reverse b, prepend)
+        if (samePoint(aStart, bStart)) {
+          chains[i] = [...reverseChain(b), ...a]
+          chains.splice(j, 1)
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  // Keep merging until no further endpoint connections exist.
+  // This intentionally allows merging chains at corners; the later colinear merge step
+  // will only collapse truly straight runs.
+  while (chains.length > 1 && tryMergeOnce()) {
+    /* keep merging */
+  }
+
+  return chains.flat()
+}
+
 function normalizeWallDimensions(values: { height?: number; width?: number; thickness?: number }): {
   height: number
   width: number
@@ -1544,7 +1611,7 @@ function buildWallDynamicMeshFromWorldSegments(
   segments: Array<{ start: Vector3Like; end: Vector3Like }>,
   dimensions: { height?: number; width?: number; thickness?: number } = {},
 ): { center: Vector3; definition: WallDynamicMesh } | null {
-  const worldSegments = buildWallWorldSegments(segments)
+  const worldSegments = mergeWallWorldSegmentChainsByEndpoint(buildWallWorldSegments(segments))
   if (!worldSegments.length) {
     return null
   }

@@ -1,6 +1,7 @@
 import type * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
+import type { WallWorldSegment } from '../wallPreviewGroupUtils'
 
 export type InstancedEraseDragState = {
   pointerId: number
@@ -22,6 +23,30 @@ export type RoadVertexDragState = {
   workingDefinition: RoadDynamicMesh
 }
 
+export type WallEndpointDragState = {
+  pointerId: number
+  nodeId: string
+  chainStartIndex: number
+  chainEndIndex: number
+  endpointKind: 'start' | 'end'
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  containerObject: THREE.Object3D
+
+  dimensions: { height: number; width: number; thickness: number }
+  baseSegmentsWorld: WallWorldSegment[]
+  workingSegmentsWorld: WallWorldSegment[]
+
+  anchorPointWorld: THREE.Vector3
+  startEndpointWorld: THREE.Vector3
+
+  previewGroup: THREE.Group | null
+  previewSignature: string | null
+}
+
 export type PointerDownResult = {
   handled: true
   clearPointerTrackingState?: boolean
@@ -34,6 +59,7 @@ export type PointerDownResult = {
   nextPointerTrackingState?: PointerTrackingState | null
   nextInstancedEraseDragState?: InstancedEraseDragState | null
   nextRoadVertexDragState?: RoadVertexDragState | null
+  nextWallEndpointDragState?: WallEndpointDragState | null
 }
 
 export type PointerMoveResult = {
@@ -57,5 +83,6 @@ export type PointerUpResult = {
 
   nextInstancedEraseDragState?: InstancedEraseDragState | null
   nextRoadVertexDragState?: RoadVertexDragState | null
+  nextWallEndpointDragState?: WallEndpointDragState | null
   clearFloorEdgeDragState?: boolean
 }

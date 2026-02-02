@@ -1,7 +1,9 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
-import type { RoadVertexDragState, PointerUpResult } from './types'
+import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
+import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
+import type { RoadVertexDragState, WallEndpointDragState, PointerUpResult } from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -17,6 +19,7 @@ export function handlePointerUpDrag(
   ctx: {
     roadDefaultWidth: number
     roadVertexDragState: RoadVertexDragState | null
+    wallEndpointDragState: WallEndpointDragState | null
     floorEdgeDragState: FloorEdgeDragStateLike | null
 
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -24,10 +27,15 @@ export function handlePointerUpDrag(
     objectMap: Map<string, THREE.Object3D>
 
     sceneStoreUpdateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
+    sceneStoreUpdateWallNodeGeometry: (nodeId: string, payload: {
+      segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
+      dimensions: { height: number; width: number; thickness: number }
+    }) => boolean
 
     pointerInteractionReleaseIfCaptured: (pointerId: number) => void
 
     ensureRoadVertexHandlesForSelectedNode: () => void
+    ensureWallEndpointHandlesForSelectedNode: (options?: { force?: boolean }) => void
     nextTick: (cb?: () => void) => Promise<void>
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
@@ -42,6 +50,75 @@ export function handlePointerUpDrag(
     }) => void
   },
 ): PointerUpResult | null {
+  if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId && event.button === 0) {
+    const state = ctx.wallEndpointDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+
+    // Always remove preview.
+    if (state.previewGroup) {
+      const preview = state.previewGroup
+      state.previewGroup = null
+      preview.removeFromParent()
+      disposeWallPreviewGroup(preview)
+    }
+
+    if (state.moved) {
+      const segmentsPayload = state.workingSegmentsWorld.map((s) => ({
+        start: { x: s.start.x, y: s.start.y, z: s.start.z },
+        end: { x: s.end.x, y: s.end.y, z: s.end.z },
+      }))
+      ctx.sceneStoreUpdateWallNodeGeometry(state.nodeId, {
+        segments: segmentsPayload,
+        dimensions: state.dimensions,
+      })
+
+      // Runtime sync happens via scene reconciliation; rebuild handles after that.
+      ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextWallEndpointDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click (no drag): revert handle position.
+    try {
+      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => {
+          const kind = child?.userData?.endpointKind
+          const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+          const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+          return (
+            (kind === state.endpointKind) &&
+            startIndex === state.chainStartIndex &&
+            endIndex === state.chainEndIndex
+          )
+        }) as THREE.Object3D | undefined
+        if (mesh) {
+          const local = state.containerObject.worldToLocal(state.startEndpointWorld.clone())
+          mesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextWallEndpointDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
   if (ctx.roadVertexDragState && event.pointerId === ctx.roadVertexDragState.pointerId && event.button === 0) {
     const state = ctx.roadVertexDragState
 

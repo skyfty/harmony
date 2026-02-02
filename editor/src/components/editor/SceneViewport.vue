@@ -31,6 +31,7 @@ import type {
   PointerMoveResult,
   PointerUpResult,
   RoadVertexDragState,
+  WallEndpointDragState,
 } from './pointer/types'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
@@ -50,6 +51,7 @@ import type {
   RoadDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
+  WallDynamicMesh,
 } from '@harmony/schema'
 import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isVideoLikeExtension } from '@harmony/schema'
 import {
@@ -165,6 +167,13 @@ import {
   ROAD_VERTEX_HANDLE_Y,
   type RoadVertexHandlePickResult,
 } from './RoadVertexRenderer'
+import {
+  createWallEndpointRenderer,
+  type WallEndpointHandlePickResult,
+  WALL_ENDPOINT_HANDLE_GROUP_NAME,
+  WALL_ENDPOINT_HANDLE_Y_OFFSET,
+} from './WallEndpointRenderer'
+import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer } from './FloorVertexRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
@@ -3089,6 +3098,7 @@ type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: nu
 
 // road build session moved into `roadBuildTool`
 let roadVertexDragState: RoadVertexDragState | null = null
+let wallEndpointDragState: WallEndpointDragState | null = null
 
 type FloorEdgeDragState = {
   pointerId: number
@@ -3108,6 +3118,7 @@ type FloorEdgeDragState = {
 let floorEdgeDragState: FloorEdgeDragState | null = null
 
 const roadVertexRenderer = createRoadVertexRenderer()
+const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
@@ -3132,6 +3143,36 @@ function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
 
 function pickRoadVertexHandleAtPointer(event: PointerEvent): RoadVertexHandlePickResult | null {
   return roadVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function ensureWallEndpointHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'wall'
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveWallDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'Wall' ? (node.dynamicMesh as WallDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    wallEndpointRenderer.forceRebuild(common)
+  } else {
+    wallEndpointRenderer.ensure(common)
+  }
+}
+
+function pickWallEndpointHandleAtPointer(event: PointerEvent): WallEndpointHandlePickResult | null {
+  return wallEndpointRenderer.pick({
     camera,
     canvas: canvasRef.value,
     event,
@@ -6220,6 +6261,7 @@ watch(
   ],
   () => {
     ensureRoadVertexHandlesForSelectedNode()
+    ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
   },
   { deep: false, immediate: true },
@@ -7480,6 +7522,7 @@ function animate() {
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
+  wallEndpointRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 12 })
   updateVertexSnapHintPulse(performance.now())
   updatePlacementSideSnapHintPulse(performance.now())
@@ -8376,6 +8419,9 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
       roadVertexDragState = result.nextRoadVertexDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
+      wallEndpointDragState = result.nextWallEndpointDragState ?? null
+    }
     if (result.preventDefault) {
       event.preventDefault()
     }
@@ -8511,6 +8557,8 @@ async function handlePointerDown(event: PointerEvent) {
     tryBeginFloorEdgeDrag,
     ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
     pickRoadVertexHandleAtPointer,
+    ensureWallEndpointHandlesForSelectedNode: () => ensureWallEndpointHandlesForSelectedNode(),
+    pickWallEndpointHandleAtPointer,
     nodes: sceneStore.nodes,
     findSceneNode,
     objectMap,
@@ -8625,8 +8673,10 @@ function handlePointerMove(event: PointerEvent) {
   const roadVertex = handlePointerMoveDrag(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
     roadVertexDragState,
+    wallEndpointDragState,
     raycastGroundPoint,
     groundPointerHelper,
+    rootGroup,
     resolveRoadRenderOptionsForNodeId,
     updateRoadGroup,
   })
@@ -8756,6 +8806,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
         roadVertexDragState = result.nextRoadVertexDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
+        wallEndpointDragState = result.nextWallEndpointDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
         instancedEraseDragState = result.nextInstancedEraseDragState ?? null
       }
@@ -8783,6 +8836,7 @@ async function handlePointerUp(event: PointerEvent) {
         pointerCaptureGuard.hasCaptured(event.pointerId) ||
         pointerTrackingState?.pointerId === event.pointerId ||
         roadVertexDragState?.pointerId === event.pointerId ||
+        wallEndpointDragState?.pointerId === event.pointerId ||
         floorEdgeDragState?.pointerId === event.pointerId ||
         instancedEraseDragState?.pointerId === event.pointerId ||
         pointerInteraction.get()?.pointerId === event.pointerId ||
@@ -8805,13 +8859,16 @@ async function handlePointerUp(event: PointerEvent) {
       const drag = handlePointerUpDrag(event, {
         roadDefaultWidth: ROAD_DEFAULT_WIDTH,
         roadVertexDragState,
+        wallEndpointDragState,
         floorEdgeDragState,
         findSceneNode,
         nodes: sceneStore.nodes,
         objectMap,
         sceneStoreUpdateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),
+        sceneStoreUpdateWallNodeGeometry: (nodeId, payload) => sceneStore.updateWallNodeGeometry(nodeId, payload),
         pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
         ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
+        ensureWallEndpointHandlesForSelectedNode: (options) => ensureWallEndpointHandlesForSelectedNode(options),
         nextTick,
         resolveRoadRenderOptionsForNodeId,
         updateRoadGroup,
@@ -9051,6 +9108,46 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (wallEndpointDragState && event.pointerId === wallEndpointDragState.pointerId) {
+    const state = wallEndpointDragState
+    wallEndpointDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+
+    try {
+      if (state.previewGroup) {
+        const preview = state.previewGroup
+        state.previewGroup = null
+        preview.removeFromParent()
+        disposeWallPreviewGroup(preview)
+      }
+
+      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => {
+          const kind = child?.userData?.endpointKind
+          const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+          const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+          return (
+            (kind === state.endpointKind) &&
+            startIndex === state.chainStartIndex &&
+            endIndex === state.chainEndIndex
+          )
+        }) as THREE.Object3D | undefined
+        if (mesh) {
+          const local = state.containerObject.worldToLocal(state.startEndpointWorld.clone())
+          mesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
