@@ -4,7 +4,14 @@ import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVert
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
-import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, WallHeightDragState, PointerUpResult } from './types'
+import type {
+  FloorThicknessDragState,
+  FloorVertexDragState,
+  RoadVertexDragState,
+  WallEndpointDragState,
+  WallHeightDragState,
+  PointerUpResult,
+} from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -21,6 +28,7 @@ export function handlePointerUpDrag(
     roadDefaultWidth: number
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
+    floorThicknessDragState: FloorThicknessDragState | null
     wallEndpointDragState: WallEndpointDragState | null
     wallHeightDragState: WallHeightDragState | null
     floorEdgeDragState: FloorEdgeDragStateLike | null
@@ -72,6 +80,48 @@ export function handlePointerUpDrag(
     }) => void
   },
 ): PointerUpResult | null {
+  if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId && event.button === 0) {
+    const state = ctx.floorThicknessDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveFloorVertexHandle(null)
+
+    if (state.moved) {
+      ctx.ensureFloorVertexHandlesForSelectedNode()
+      void ctx.nextTick(() => {
+        ctx.ensureFloorVertexHandlesForSelectedNode()
+      })
+      return {
+        handled: true,
+        nextFloorThicknessDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click (no drag): revert handle y offsets.
+    try {
+      const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const yOffset = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.startThickness) * 0.5
+        for (const child of handles.children) {
+          child.userData.yOffset = yOffset
+          child.position.y = yOffset
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextFloorThicknessDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
   if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId && event.button === 0) {
     const state = ctx.wallHeightDragState
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)

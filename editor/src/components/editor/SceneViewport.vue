@@ -30,6 +30,7 @@ import type {
   PointerDownResult,
   PointerMoveResult,
   PointerUpResult,
+  FloorThicknessDragState,
   FloorVertexDragState,
   RoadVertexDragState,
   WallEndpointDragState,
@@ -176,7 +177,7 @@ import {
   WALL_ENDPOINT_HANDLE_Y_OFFSET,
 } from './WallEndpointRenderer'
 import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
-import { createFloorVertexRenderer } from './FloorVertexRenderer'
+import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -3101,6 +3102,7 @@ type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: nu
 // road build session moved into `roadBuildTool`
 let roadVertexDragState: RoadVertexDragState | null = null
 let floorVertexDragState: FloorVertexDragState | null = null
+let floorThicknessDragState: FloorThicknessDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
 let wallHeightDragState: WallHeightDragState | null = null
 
@@ -8491,6 +8493,9 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextFloorVertexDragState')) {
       floorVertexDragState = result.nextFloorVertexDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextFloorThicknessDragState')) {
+      floorThicknessDragState = result.nextFloorThicknessDragState ?? null
+    }
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
       wallEndpointDragState = result.nextWallEndpointDragState ?? null
     }
@@ -8760,6 +8765,7 @@ function handlePointerMove(event: PointerEvent) {
     event.pointerType === 'mouse' &&
     !roadVertexDragState &&
     !floorVertexDragState &&
+    !floorThicknessDragState &&
     !wallEndpointDragState &&
     !wallHeightDragState &&
     isStrictPointOnCanvas(event.clientX, event.clientY)
@@ -8782,6 +8788,7 @@ function handlePointerMove(event: PointerEvent) {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
     roadVertexDragState,
     floorVertexDragState,
+    floorThicknessDragState,
     wallEndpointDragState,
     wallHeightDragState,
     raycastGroundPoint,
@@ -8797,6 +8804,8 @@ function handlePointerMove(event: PointerEvent) {
   }
   _moveDragCtx.setWallNodeDimensions = (nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }) =>
     sceneStore.setWallNodeDimensions(nodeId, dimensions)
+  _moveDragCtx.setFloorNodeThickness = (nodeId: string, thickness: number, options?: { captureHistory?: boolean }) =>
+    sceneStore.setFloorNodeThickness(nodeId, thickness, options)
 
   const roadVertex = handlePointerMoveDrag(event, _moveDragCtx)
   if (roadVertex) {
@@ -8928,6 +8937,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextFloorVertexDragState')) {
         floorVertexDragState = result.nextFloorVertexDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextFloorThicknessDragState')) {
+        floorThicknessDragState = result.nextFloorThicknessDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
@@ -8962,6 +8974,7 @@ async function handlePointerUp(event: PointerEvent) {
         pointerTrackingState?.pointerId === event.pointerId ||
         roadVertexDragState?.pointerId === event.pointerId ||
         floorVertexDragState?.pointerId === event.pointerId ||
+        floorThicknessDragState?.pointerId === event.pointerId ||
         wallEndpointDragState?.pointerId === event.pointerId ||
         wallHeightDragState?.pointerId === event.pointerId ||
         floorEdgeDragState?.pointerId === event.pointerId ||
@@ -8987,6 +9000,7 @@ async function handlePointerUp(event: PointerEvent) {
         roadDefaultWidth: ROAD_DEFAULT_WIDTH,
         roadVertexDragState,
         floorVertexDragState,
+        floorThicknessDragState,
         wallEndpointDragState,
         wallHeightDragState,
         floorEdgeDragState,
@@ -9319,6 +9333,31 @@ function handlePointerCancel(event: PointerEvent) {
           const local = state.containerObject.worldToLocal(endpointWorld)
           child.userData.yOffset = yOffset
           child.position.set(local.x, local.y + yOffset, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (floorThicknessDragState && event.pointerId === floorThicknessDragState.pointerId) {
+    const state = floorThicknessDragState
+    floorThicknessDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveFloorVertexHandle(null)
+
+    try {
+      const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const yOffset = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.startThickness) * 0.5
+        for (const child of handles.children) {
+          child.userData.yOffset = yOffset
+          child.position.y = yOffset
         }
       }
     } catch {

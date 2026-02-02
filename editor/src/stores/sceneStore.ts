@@ -12732,6 +12732,76 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
+
+    setFloorNodeThickness(nodeId: string, thickness: number, options: { captureHistory?: boolean } = {}): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'Floor') {
+        return false
+      }
+
+      const current = resolveFloorComponentPropsFromMesh(node.dynamicMesh as FloorDynamicMesh)
+
+      const floorComponent = node.components?.[FLOOR_COMPONENT_TYPE] as SceneNodeComponentState<FloorComponentProps> | undefined
+      const componentProps = floorComponent ? (floorComponent.props as FloorComponentProps) : current
+
+      const currentSmooth = Number.isFinite(componentProps.smooth) ? componentProps.smooth : current.smooth
+      const currentSideUvScale = componentProps.sideUvScale ?? current.sideUvScale
+
+      const targetProps = clampFloorComponentProps({
+        smooth: currentSmooth,
+        thickness,
+        sideUvScale: currentSideUvScale,
+      })
+
+      const meshThickness = Number.isFinite((node.dynamicMesh as any).thickness)
+        ? Number((node.dynamicMesh as any).thickness)
+        : FLOOR_DEFAULT_THICKNESS
+      const componentThickness = Number.isFinite(componentProps.thickness) ? componentProps.thickness : FLOOR_DEFAULT_THICKNESS
+
+      const hasGeometryChange = Math.abs(meshThickness - targetProps.thickness) > 1e-6
+      const hasComponentChange = Math.abs(componentThickness - targetProps.thickness) > 1e-6
+      if (!hasGeometryChange && !hasComponentChange) {
+        return false
+      }
+
+      if (options.captureHistory) {
+        this.captureHistorySnapshot()
+      }
+
+      visitNode(this.nodes, nodeId, (target) => {
+        floorHelpers.applyFloorComponentPropsToNode(target, targetProps)
+        const previous = target.components?.[FLOOR_COMPONENT_TYPE] as SceneNodeComponentState<FloorComponentProps> | undefined
+        const previousProps = previous?.props as FloorComponentProps | undefined
+
+        const propsChanged =
+          !previousProps ||
+          Math.abs((Number.isFinite(previousProps.thickness) ? previousProps.thickness : FLOOR_DEFAULT_THICKNESS) - targetProps.thickness) > 1e-6
+
+        if (!propsChanged && previous) {
+          return
+        }
+
+        const nextComponents: SceneNodeComponentMap = { ...(target.components ?? {}) }
+        nextComponents[FLOOR_COMPONENT_TYPE] = {
+          id: previous?.id && previous.id.trim().length ? previous.id : generateUuid(),
+          type: FLOOR_COMPONENT_TYPE,
+          enabled: previous?.enabled ?? true,
+          props: cloneFloorComponentProps(targetProps),
+          metadata: previous?.metadata,
+        }
+        target.components = nextComponents
+      })
+
+      this.queueSceneNodePatch(nodeId, ['components', 'dynamicMesh'])
+      const normalizedNode = findNodeById(this.nodes, nodeId)
+      if (normalizedNode) {
+        componentManager.syncNode(normalizedNode)
+      }
+      if (options.captureHistory) {
+        commitSceneSnapshot(this)
+      }
+      return true
+    },
     addNodeComponent<T extends NodeComponentType>(
       nodeId: string,
       type: T,

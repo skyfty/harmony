@@ -113,6 +113,31 @@ export type WallHeightDragState = {
   previewSignature: string | null
 }
 
+export type FloorThicknessDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  // Always axis drag along world up (+Y). `axisSign` indicates whether the picked arrow
+  // was +Y (1) or -Y (-1), so dragging up/down feels consistent with the arrow direction.
+  axisSign: 1 | -1
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+
+  // Captured when the interaction crosses the click-drag threshold.
+  // Used as the reference point for delta computation to avoid an initial jump.
+  startHitWorld: THREE.Vector3 | null
+
+  startThickness: number
+  thickness: number
+
+  containerObject: THREE.Object3D
+}
+
 export type PointerDownResult = {
   handled: true
   clearPointerTrackingState?: boolean
@@ -126,6 +151,7 @@ export type PointerDownResult = {
   nextInstancedEraseDragState?: InstancedEraseDragState | null
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
+  nextFloorThicknessDragState?: FloorThicknessDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
 }
@@ -152,6 +178,7 @@ export type PointerUpResult = {
   nextInstancedEraseDragState?: InstancedEraseDragState | null
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
+  nextFloorThicknessDragState?: FloorThicknessDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
   clearFloorEdgeDragState?: boolean

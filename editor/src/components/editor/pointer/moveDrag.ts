@@ -7,6 +7,7 @@ import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
 import { GRID_MAJOR_SPACING } from '../constants'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
+import { FLOOR_MAX_THICKNESS, FLOOR_MIN_THICKNESS } from '@schema/components'
 import {
   applyWallPreviewStyling,
   buildWallPreviewDynamicMeshFromWorldSegments,
@@ -15,6 +16,7 @@ import {
 } from '../wallPreviewGroupUtils'
 import type {
   FloorVertexDragState,
+  FloorThicknessDragState,
   RoadVertexDragState,
   WallEndpointDragState,
   WallHeightDragState,
@@ -42,6 +44,7 @@ export function handlePointerMoveDrag(
 
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
+    floorThicknessDragState: FloorThicknessDragState | null
     wallEndpointDragState: WallEndpointDragState | null
     wallHeightDragState: WallHeightDragState | null
 
@@ -60,6 +63,68 @@ export function handlePointerMoveDrag(
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
+
+  if (ctx.floorThicknessDragState && event.pointerId === ctx.floorThicknessDragState.pointerId) {
+    const state = ctx.floorThicknessDragState
+
+    // Only transition to actual dragging once the pointer has moved beyond the drag threshold.
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    const isFirstDragSample = !state.startHitWorld
+    // Capture the initial plane hit when drag begins (if not already captured).
+    if (isFirstDragSample) {
+      state.startHitWorld = tmpIntersection.clone()
+      state.startThickness = state.thickness
+    }
+
+    const startHit = state.startHitWorld ?? state.startPointWorld
+    const worldUp = new THREE.Vector3(0, 1, 0)
+    const delta = tmpIntersection.clone().sub(startHit)
+    const dh = delta.dot(worldUp) * state.axisSign
+
+    // Match FloorPanel's input step.
+    const rawNextThickness = state.startThickness + dh
+    const clamped = THREE.MathUtils.clamp(rawNextThickness, FLOOR_MIN_THICKNESS, FLOOR_MAX_THICKNESS)
+    const quantized = Math.round(clamped / 0.05) * 0.05
+    state.thickness = Number.isFinite(quantized) ? quantized : state.thickness
+
+    // Best-effort: update floor thickness in real-time so inspector reflects changes immediately.
+    try {
+      const setter = (ctx as any).setFloorNodeThickness
+      if (typeof setter === 'function') {
+        setter(state.nodeId, state.thickness, { captureHistory: isFirstDragSample })
+      }
+    } catch {
+      /* noop */
+    }
+
+    // Update handle positions so the gizmo stays at mid-thickness while dragging.
+    const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const yOffset = FLOOR_VERTEX_HANDLE_Y + Math.max(0, state.thickness) * 0.5
+      for (const child of handles.children) {
+        child.userData.yOffset = yOffset
+        child.position.y = yOffset
+      }
+    }
+
+    return { handled: true }
+  }
 
   if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId) {
     const state = ctx.wallHeightDragState

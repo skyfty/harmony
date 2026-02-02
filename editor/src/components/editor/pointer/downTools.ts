@@ -1,12 +1,23 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
+import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import type {
   FloorVertexDragState,
+  FloorThicknessDragState,
   PointerDownResult,
   RoadVertexDragState,
   WallEndpointDragState,
   WallHeightDragState,
 } from './types'
+
+import {
+  FLOOR_COMPONENT_TYPE,
+  FLOOR_DEFAULT_THICKNESS,
+  FLOOR_MAX_THICKNESS,
+  FLOOR_MIN_THICKNESS,
+  type FloorComponentProps,
+} from '@schema/components'
+import type { SceneNodeComponentState } from '@harmony/schema'
 
 export function handlePointerDownTools(
   event: PointerEvent,
@@ -305,6 +316,58 @@ export function handlePointerDownTools(
 
           const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], 0, startVertex[1]))
           const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+
+          // Special case: dragging the Y axis arrow adjusts floor thickness (whole floor), not vertex position.
+          const isYAxisArrow = handleHit.gizmoKind === 'axis' && (handleHit.gizmoPart === 'py' || handleHit.gizmoPart === 'ny')
+          if (isYAxisArrow) {
+            const axisSign: 1 | -1 = handleHit.gizmoPart === 'ny' ? -1 : 1
+
+            const floorComponent = node.components?.[FLOOR_COMPONENT_TYPE] as SceneNodeComponentState<FloorComponentProps> | undefined
+            const baseThickness = Number.isFinite(floorComponent?.props?.thickness)
+              ? Number(floorComponent!.props.thickness)
+              : (Number.isFinite((node.dynamicMesh as any).thickness) ? Number((node.dynamicMesh as any).thickness) : FLOOR_DEFAULT_THICKNESS)
+
+            const clampedBase = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, baseThickness))
+            const yOffset = FLOOR_VERTEX_HANDLE_Y + clampedBase * 0.5
+            const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], yOffset, startVertex[1]))
+
+            const floorThicknessDragState: FloorThicknessDragState = {
+              pointerId: event.pointerId,
+              nodeId: handleHit.nodeId,
+              vertexIndex: handleHit.vertexIndex,
+              startX: event.clientX,
+              startY: event.clientY,
+              moved: false,
+
+              axisSign,
+              dragPlane: ctx.createEndpointDragPlane({
+                mode: 'axis',
+                axisWorld: new THREE.Vector3(0, axisSign, 0),
+                startPointWorld,
+              }),
+              startPointWorld: startPointWorld.clone(),
+              startHitWorld: null,
+
+              startThickness: clampedBase,
+              thickness: clampedBase,
+
+              containerObject: runtime,
+            }
+
+            ctx.setActiveFloorVertexHandle({ nodeId: handleHit.nodeId, vertexIndex: handleHit.vertexIndex, gizmoPart: handleHit.gizmoPart })
+
+            return {
+              handled: true,
+              clearPointerTrackingState: true,
+              nextFloorVertexDragState: null,
+              nextFloorThicknessDragState: floorThicknessDragState,
+              capturePointerId: event.pointerId,
+              preventDefault: true,
+              stopPropagation: true,
+              stopImmediatePropagation: true,
+            }
+          }
+
           const axisWorld =
             dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
               ? new THREE.Vector3(handleHit.gizmoAxis.x, 0, handleHit.gizmoAxis.z).normalize()

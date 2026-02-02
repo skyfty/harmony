@@ -226,7 +226,7 @@ export function createFloorVertexRenderer(): FloorVertexRenderer {
         return
       }
         const gizmo = createEndpointGizmoObject({
-          axes: { x: true, y: false, z: true },
+          axes: { x: true, y: true, z: true },
           showNegativeAxes: true,
           renderOrder: FLOOR_VERTEX_HANDLE_RENDER_ORDER,
           depthTest: false,
