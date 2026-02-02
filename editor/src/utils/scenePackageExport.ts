@@ -65,36 +65,40 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
   const out = new Map<string, ResolvedEmbedAsset>()
 
   for (const scene of scenes) {
-    const doc: any = scene?.document
+    const doc = scene?.document as SceneJsonExportDocument | null | undefined
     if (!doc || typeof doc !== 'object') {
       continue
     }
 
-    const indexMap: Record<string, any> = doc.assetIndex ?? {}
-    const resourceAssets: any[] = Array.isArray(doc?.resourceSummary?.assets) ? doc.resourceSummary.assets : []
+    const indexMap: Record<string, unknown> = (doc.assetIndex as Record<string, unknown>) ?? {}
+    const resourceAssets: unknown[] = Array.isArray((doc as any)?.resourceSummary?.assets) ? (doc as any).resourceSummary.assets : []
 
     // Prefer resourceSummary entries (they often include downloadUrl).
+    const entryHasLocalSource = (entry: unknown): boolean => {
+      if (!entry || typeof entry !== 'object') return false
+      const e = entry as Record<string, unknown>
+      const src = e.source as Record<string, unknown> | undefined
+      return Boolean(src && typeof src.type === 'string' && src.type === 'local')
+    }
+
     for (const item of resourceAssets) {
-      const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : ''
+      const it = item as Record<string, unknown> | null | undefined
+      const assetId = typeof it?.assetId === 'string' ? it.assetId.trim() : ''
       if (!assetId) continue
-      const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
+      const downloadUrl = typeof it?.downloadUrl === 'string' ? it.downloadUrl.trim() : ''
       if (!downloadUrl) continue
 
       // Skip already-known local assets.
-      try {
-        if (indexMap?.[assetId]?.source?.type === 'local') {
-          continue
-        }
-      } catch (_e) {
-        // ignore
+      if (entryHasLocalSource(indexMap?.[assetId])) {
+        continue
       }
 
       if (!out.has(assetId)) {
         out.set(assetId, {
           assetId,
           downloadUrl,
-          mimeTypeHint: typeof item?.mimeType === 'string' ? item.mimeType : null,
-          filenameHint: typeof item?.filename === 'string' ? item.filename : null,
+          mimeTypeHint: typeof it?.mimeType === 'string' ? it.mimeType : null,
+          filenameHint: typeof it?.filename === 'string' ? it.filename : null,
         })
       }
     }
@@ -106,12 +110,8 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
       if (!trimmed || out.has(trimmed)) {
         continue
       }
-      try {
-        if (indexMap?.[trimmed]?.source?.type === 'local') {
-          continue
-        }
-      } catch (_e) {
-        // ignore
+      if (entryHasLocalSource(indexMap?.[trimmed])) {
+        continue
       }
       // If the assetId itself is a URL, we can embed it directly.
       const url = /^(https?:)?\/\//i.test(trimmed) ? trimmed : null
@@ -212,7 +212,7 @@ export async function exportScenePackageZip(payload: {
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.json`
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
-    const indexMap = (scene.document as any).assetIndex ?? {}
+    const indexMap = (scene.document as SceneJsonExportDocument).assetIndex ?? {}
     const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => {
       try {
         return indexMap[assetId]?.source?.type === 'local'
@@ -222,14 +222,14 @@ export async function exportScenePackageZip(payload: {
     })
 
     // Prepare a clone of the scene document and ensure assetUrlOverrides exists
-    const docClone = JSON.parse(JSON.stringify(scene.document)) as typeof scene.document
-    ;(docClone as any).assetUrlOverrides = (docClone as any).assetUrlOverrides ?? {}
+    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneJsonExportDocument & { assetUrlOverrides?: Record<string, string> }
+    docClone.assetUrlOverrides = docClone.assetUrlOverrides ?? {}
 
     // Apply shared embedded asset overrides (paths within ZIP). These are informational today,
     // but also allow runtimes to redirect by key if they consult this field.
     if (sharedAssetPathById.size > 0) {
       for (const [assetId, resourcePath] of sharedAssetPathById.entries()) {
-        ;(docClone as any).assetUrlOverrides[assetId] = resourcePath
+        docClone.assetUrlOverrides[assetId] = resourcePath
       }
     }
 

@@ -111,10 +111,11 @@ export function collectOutlinePoints(
     if (points.length >= maxPoints) {
       return
     }
-    const mesh = child as THREE.Mesh & { geometry?: THREE.BufferGeometry }
-    const isMesh = (mesh as any).isMesh || (mesh as any).isSkinnedMesh
-    const isPoints = (mesh as any).isPoints
-    const isLine = (mesh as any).isLine
+    const mesh = child as THREE.Object3D & { geometry?: THREE.BufferGeometry }
+    const meta = mesh as unknown as { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
+    const isMesh = Boolean(meta.isMesh || meta.isSkinnedMesh)
+    const isPoints = Boolean(meta.isPoints)
+    const isLine = Boolean(meta.isLine)
     if (!isMesh && !isPoints && !isLine) {
       return
     }

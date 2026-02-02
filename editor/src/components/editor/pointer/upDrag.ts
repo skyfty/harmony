@@ -1,9 +1,10 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
+import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
-import type { RoadVertexDragState, WallEndpointDragState, PointerUpResult } from './types'
+import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, PointerUpResult } from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -19,6 +20,7 @@ export function handlePointerUpDrag(
   ctx: {
     roadDefaultWidth: number
     roadVertexDragState: RoadVertexDragState | null
+    floorVertexDragState: FloorVertexDragState | null
     wallEndpointDragState: WallEndpointDragState | null
     floorEdgeDragState: FloorEdgeDragStateLike | null
 
@@ -35,7 +37,18 @@ export function handlePointerUpDrag(
     pointerInteractionReleaseIfCaptured: (pointerId: number) => void
 
     ensureRoadVertexHandlesForSelectedNode: () => void
+    ensureFloorVertexHandlesForSelectedNode: () => void
     ensureWallEndpointHandlesForSelectedNode: (options?: { force?: boolean }) => void
+
+    setActiveRoadVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
+    setActiveFloorVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
+    setActiveWallEndpointHandle: (active: {
+      nodeId: string
+      chainStartIndex: number
+      chainEndIndex: number
+      endpointKind: 'start' | 'end'
+      gizmoPart: any
+    } | null) => void
     nextTick: (cb?: () => void) => Promise<void>
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
@@ -50,9 +63,57 @@ export function handlePointerUpDrag(
     }) => void
   },
 ): PointerUpResult | null {
+  if (ctx.floorVertexDragState && event.pointerId === ctx.floorVertexDragState.pointerId && event.button === 0) {
+    const state = ctx.floorVertexDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveFloorVertexHandle(null)
+
+    if (state.moved) {
+      ctx.sceneStoreUpdateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      ctx.ensureFloorVertexHandlesForSelectedNode()
+      void ctx.nextTick(() => {
+        ctx.ensureFloorVertexHandlesForSelectedNode()
+      })
+      return {
+        handled: true,
+        nextFloorVertexDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click (no drag): revert any preview mutations and handle position.
+    try {
+      ctx.updateFloorGroup(state.runtimeObject, state.baseDefinition)
+      const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => child?.userData?.floorVertexIndex === state.vertexIndex) as
+          | THREE.Object3D
+          | undefined
+        if (mesh) {
+          const [vx, vz] = state.startVertex
+          const y = Number(mesh.userData?.yOffset)
+          mesh.position.set(vx, Number.isFinite(y) ? y : FLOOR_VERTEX_HANDLE_Y, vz)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextFloorVertexDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
   if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId && event.button === 0) {
     const state = ctx.wallEndpointDragState
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveWallEndpointHandle(null)
 
     // Always remove preview.
     if (state.previewGroup) {
@@ -103,7 +164,8 @@ export function handlePointerUpDrag(
         }) as THREE.Object3D | undefined
         if (mesh) {
           const local = state.containerObject.worldToLocal(state.startEndpointWorld.clone())
-          mesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+          const yOffset = Number(mesh.userData?.yOffset)
+          mesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }
     } catch {
@@ -123,6 +185,7 @@ export function handlePointerUpDrag(
     const state = ctx.roadVertexDragState
 
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveRoadVertexHandle(null)
 
     if (state.moved) {
       ctx.sceneStoreUpdateNodeDynamicMesh(state.nodeId, state.workingDefinition)
@@ -151,7 +214,8 @@ export function handlePointerUpDrag(
         ) as THREE.Object3D | undefined
         if (mesh) {
           const [vx, vz] = state.startVertex
-          mesh.position.set(vx, ROAD_VERTEX_HANDLE_Y, vz)
+          const y = Number(mesh.userData?.yOffset)
+          mesh.position.set(vx, Number.isFinite(y) ? y : ROAD_VERTEX_HANDLE_Y, vz)
         }
       }
     } catch {

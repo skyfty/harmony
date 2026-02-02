@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
+import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
@@ -10,7 +11,7 @@ import {
   computeWallPreviewSignature,
   mergeWallPreviewSegmentChainsByEndpoint,
 } from '../wallPreviewGroupUtils'
-import type { RoadVertexDragState, WallEndpointDragState, PointerMoveResult } from './types'
+import type { FloorVertexDragState, RoadVertexDragState, WallEndpointDragState, PointerMoveResult } from './types'
 
 type FloorEdgeDragStateLike = {
   pointerId: number
@@ -33,17 +34,25 @@ export function handlePointerMoveDrag(
     clickDragThresholdPx: number
 
     roadVertexDragState: RoadVertexDragState | null
+    floorVertexDragState: FloorVertexDragState | null
     wallEndpointDragState: WallEndpointDragState | null
 
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+    raycastPlanePoint: (event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3) => boolean
     groundPointerHelper: THREE.Vector3
+
+    camera: THREE.Camera | null
 
     rootGroup: THREE.Group
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
+
+    updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
   },
 ): PointerMoveResult | null {
+  const tmpIntersection = new THREE.Vector3()
+
   if (ctx.wallEndpointDragState && event.pointerId === ctx.wallEndpointDragState.pointerId) {
     const state = ctx.wallEndpointDragState
     const dx = event.clientX - state.startX
@@ -57,19 +66,31 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
 
-    if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
-      return { handled: true }
+    let constrained: THREE.Vector3 | null = null
+
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+        return { handled: true }
+      }
+      const axis = state.axisWorld.clone().normalize()
+      const delta = tmpIntersection.clone().sub(state.startEndpointWorld)
+      const t = axis.dot(delta)
+      constrained = state.startEndpointWorld.clone().add(axis.multiplyScalar(t))
+    } else {
+      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        return { handled: true }
+      }
+
+      const rawPointer = ctx.groundPointerHelper.clone()
+      const target = rawPointer.clone()
+      target.y = state.startEndpointWorld.y
+
+      const anchor = state.anchorPointWorld.clone()
+      anchor.y = state.startEndpointWorld.y
+
+      constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
+      constrained.y = state.startEndpointWorld.y
     }
-
-    const rawPointer = ctx.groundPointerHelper.clone()
-    const target = rawPointer.clone()
-    target.y = state.startEndpointWorld.y
-
-    const anchor = state.anchorPointWorld.clone()
-    anchor.y = state.startEndpointWorld.y
-
-    const constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
-    constrained.y = state.startEndpointWorld.y
 
     const working = state.workingSegmentsWorld
     const startSeg = working[state.chainStartIndex]
@@ -78,16 +99,17 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
 
-    if (state.endpointKind === 'start') {
-      startSeg.start.copy(constrained)
-    } else {
-      endSeg.end.copy(constrained)
+    if (constrained) {
+      if (state.endpointKind === 'start') {
+        startSeg.start.copy(constrained)
+      } else {
+        endSeg.end.copy(constrained)
+      }
     }
 
-    if (!state.moved) {
-      const ddx = constrained.x - state.startEndpointWorld.x
-      const ddz = constrained.z - state.startEndpointWorld.z
-      if (ddx * ddx + ddz * ddz > 1e-8) {
+    if (constrained && !state.moved) {
+      const dd = constrained.clone().sub(state.startEndpointWorld)
+      if (dd.lengthSq() > 1e-8) {
         state.moved = true
       }
     }
@@ -130,7 +152,8 @@ export function handlePointerMoveDrag(
         )
       }) as THREE.Object3D | undefined
       if (handleMesh) {
-        handleMesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+        const yOffset = Number(handleMesh.userData?.yOffset)
+        handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
       }
     }
 
@@ -149,13 +172,28 @@ export function handlePointerMoveDrag(
     if (!isLeftDown) {
       return { handled: true }
     }
-    if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+    let local: THREE.Vector3 | null = null
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+        return { handled: true }
+      }
+      const axis = state.axisWorld.clone().normalize()
+      const delta = tmpIntersection.clone().sub(state.startPointWorld)
+      const t = axis.dot(delta)
+      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
+      local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
+    } else {
+      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        return { handled: true }
+      }
+      const snapped = ctx.groundPointerHelper.clone()
+      snapped.y = 0
+      local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+    }
+
+    if (!local) {
       return { handled: true }
     }
-    const snapped = ctx.groundPointerHelper.clone()
-    snapped.y = 0
-
-    const local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
     const working = state.workingDefinition
     const vertices = Array.isArray(working.vertices) ? working.vertices : []
     if (!vertices[state.vertexIndex]) {
@@ -192,7 +230,79 @@ export function handlePointerMoveDrag(
         if (!Number.isFinite(x) || !Number.isFinite(z)) {
           continue
         }
-        child.position.set(x, ROAD_VERTEX_HANDLE_Y, z)
+        const y = Number(child?.userData?.yOffset)
+        child.position.set(x, Number.isFinite(y) ? y : ROAD_VERTEX_HANDLE_Y, z)
+      }
+    }
+
+    return { handled: true }
+  }
+
+  if (ctx.floorVertexDragState && event.pointerId === ctx.floorVertexDragState.pointerId) {
+    const state = ctx.floorVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
+      state.moved = true
+    }
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    let local: THREE.Vector3 | null = null
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+        return { handled: true }
+      }
+      const axis = state.axisWorld.clone().normalize()
+      const delta = tmpIntersection.clone().sub(state.startPointWorld)
+      const t = axis.dot(delta)
+      const world = state.startPointWorld.clone().add(axis.multiplyScalar(t))
+      local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
+    } else {
+      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        return { handled: true }
+      }
+      const snapped = ctx.groundPointerHelper.clone()
+      snapped.y = 0
+      local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+    }
+
+    if (!local) return { handled: true }
+
+    const working = state.workingDefinition
+    const vertices = Array.isArray(working.vertices) ? working.vertices : []
+    if (!vertices[state.vertexIndex]) {
+      return { handled: true }
+    }
+    vertices[state.vertexIndex] = [local.x, local.z]
+    working.vertices = vertices
+
+    if (!state.moved) {
+      const [startVX, startVZ] = state.startVertex
+      const ddx = local.x - startVX
+      const ddz = local.z - startVZ
+      if (ddx * ddx + ddz * ddz > 1e-8) {
+        state.moved = true
+      }
+    }
+
+    ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+
+    const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const nextVertices = Array.isArray(state.workingDefinition.vertices) ? state.workingDefinition.vertices : []
+      for (const child of handles.children) {
+        const index = Math.trunc(Number(child?.userData?.floorVertexIndex))
+        const v = nextVertices[index]
+        if (!Array.isArray(v) || v.length < 2) continue
+        const x = Number(v[0])
+        const z = Number(v[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue
+        const y = Number(child?.userData?.yOffset)
+        child.position.set(x, Number.isFinite(y) ? y : FLOOR_VERTEX_HANDLE_Y, z)
       }
     }
 

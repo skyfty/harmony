@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
-import type { PointerDownResult, RoadVertexDragState, WallEndpointDragState } from './types'
+import type { FloorVertexDragState, PointerDownResult, RoadVertexDragState, WallEndpointDragState } from './types'
 
 export function handlePointerDownTools(
   event: PointerEvent,
@@ -24,9 +24,15 @@ export function handlePointerDownTools(
     // Floor edge drag
     tryBeginFloorEdgeDrag: (event: PointerEvent) => boolean
 
+    // Floor vertex drag
+    ensureFloorVertexHandlesForSelectedNode: () => void
+    pickFloorVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number; gizmoKind: 'center' | 'axis'; gizmoAxis?: THREE.Vector3; gizmoPart: any } | null
+    setActiveFloorVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
+
     // Road vertex drag
     ensureRoadVertexHandlesForSelectedNode: () => void
-    pickRoadVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number } | null
+    pickRoadVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number; gizmoKind: 'center' | 'axis'; gizmoAxis?: THREE.Vector3; gizmoPart: any } | null
+    setActiveRoadVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
 
     // Wall endpoint drag
     ensureWallEndpointHandlesForSelectedNode: () => void
@@ -35,7 +41,24 @@ export function handlePointerDownTools(
       chainStartIndex: number
       chainEndIndex: number
       endpointKind: 'start' | 'end'
+      gizmoKind: 'center' | 'axis'
+      gizmoAxis?: THREE.Vector3
+      gizmoPart: any
     } | null
+    setActiveWallEndpointHandle: (active: {
+      nodeId: string
+      chainStartIndex: number
+      chainEndIndex: number
+      endpointKind: 'start' | 'end'
+      gizmoPart: any
+    } | null) => void
+
+    createEndpointDragPlane: (options: {
+      mode: 'free' | 'axis'
+      axisWorld: THREE.Vector3 | null
+      startPointWorld: THREE.Vector3
+      freePlaneNormal?: THREE.Vector3
+    }) => THREE.Plane
 
     nodes: SceneNode[]
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -112,6 +135,14 @@ export function handlePointerDownTools(
             const startEndpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
             const anchorPointWorld = endpointKind === 'start' ? startSeg.end.clone() : endSeg.start.clone()
 
+            const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+            const axisWorld =
+              dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
+                ? (handleHit.gizmoAxis as THREE.Vector3).clone().normalize()
+                : null
+            const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
+            const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+
             const wallEndpointDragState: WallEndpointDragState = {
               pointerId: event.pointerId,
               nodeId: handleHit.nodeId,
@@ -121,6 +152,14 @@ export function handlePointerDownTools(
               startX: event.clientX,
               startY: event.clientY,
               moved: false,
+              dragMode: effectiveDragMode,
+              axisWorld: effectiveAxisWorld,
+              dragPlane: ctx.createEndpointDragPlane({
+                mode: effectiveDragMode,
+                axisWorld: effectiveAxisWorld,
+                startPointWorld: startEndpointWorld,
+                freePlaneNormal: new THREE.Vector3(0, 1, 0),
+              }),
               containerObject: runtime,
               dimensions,
               baseSegmentsWorld,
@@ -130,6 +169,14 @@ export function handlePointerDownTools(
               previewGroup: null,
               previewSignature: null,
             }
+
+            ctx.setActiveWallEndpointHandle({
+              nodeId: handleHit.nodeId,
+              chainStartIndex,
+              chainEndIndex,
+              endpointKind,
+              gizmoPart: handleHit.gizmoPart,
+            })
 
             return {
               handled: true,
@@ -176,6 +223,82 @@ export function handlePointerDownTools(
 
   if (ctx.activeBuildTool === 'floor') {
     if (button === 0 && !ctx.isAltOverrideActive) {
+      // If a floor vertex handle is under the cursor, begin vertex interaction (drag to move).
+      ctx.ensureFloorVertexHandlesForSelectedNode()
+      const handleHit = ctx.pickFloorVertexHandleAtPointer(event)
+      if (handleHit) {
+        const node = ctx.findSceneNode(ctx.nodes, handleHit.nodeId)
+        const runtime = ctx.objectMap.get(handleHit.nodeId) ?? null
+
+        if (node?.dynamicMesh?.type === 'Floor' && runtime) {
+          const baseVertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+          const baseVertex = baseVertices[handleHit.vertexIndex]
+          const startVertex: [number, number] =
+            Array.isArray(baseVertex) && baseVertex.length >= 2
+              ? [Number(baseVertex[0]) || 0, Number(baseVertex[1]) || 0]
+              : [0, 0]
+
+          const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], 0, startVertex[1]))
+          const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+          const axisWorld =
+            dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
+              ? new THREE.Vector3(handleHit.gizmoAxis.x, 0, handleHit.gizmoAxis.z).normalize()
+              : null
+          const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
+          const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+
+          const floorVertexDragState: FloorVertexDragState = {
+            pointerId: event.pointerId,
+            nodeId: handleHit.nodeId,
+            vertexIndex: handleHit.vertexIndex,
+            startX: event.clientX,
+            startY: event.clientY,
+            moved: false,
+
+            dragMode: effectiveDragMode,
+            axisWorld: effectiveAxisWorld,
+            dragPlane: ctx.createEndpointDragPlane({
+              mode: effectiveDragMode,
+              axisWorld: effectiveAxisWorld,
+              startPointWorld,
+              freePlaneNormal: new THREE.Vector3(0, 1, 0),
+            }),
+            startPointWorld: startPointWorld.clone(),
+
+            startVertex,
+            containerObject: runtime,
+            runtimeObject: runtime,
+            baseDefinition: node.dynamicMesh,
+            workingDefinition: {
+              ...node.dynamicMesh,
+              vertices: (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []).map(
+                ([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number],
+              ),
+            },
+          }
+
+          ctx.setActiveFloorVertexHandle({ nodeId: handleHit.nodeId, vertexIndex: handleHit.vertexIndex, gizmoPart: handleHit.gizmoPart })
+
+          return {
+            handled: true,
+            clearPointerTrackingState: true,
+            nextFloorVertexDragState: floorVertexDragState,
+            capturePointerId: event.pointerId,
+            preventDefault: true,
+            stopPropagation: true,
+            stopImmediatePropagation: true,
+          }
+        }
+
+        return {
+          handled: true,
+          clearPointerTrackingState: true,
+          preventDefault: true,
+          stopPropagation: true,
+          stopImmediatePropagation: true,
+        }
+      }
+
       if (ctx.tryBeginFloorEdgeDrag(event)) {
         // `tryBeginFloorEdgeDrag` owns its own state/capture; preserve original behavior.
         return { handled: true }
@@ -231,6 +354,15 @@ export function handlePointerDownTools(
               ? [Number(baseVertex[0]) || 0, Number(baseVertex[1]) || 0]
               : [0, 0]
 
+          const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], 0, startVertex[1]))
+          const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+          const axisWorld =
+            dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
+              ? new THREE.Vector3(handleHit.gizmoAxis.x, 0, handleHit.gizmoAxis.z).normalize()
+              : null
+          const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
+          const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+
           const roadVertexDragState: RoadVertexDragState = {
             pointerId: event.pointerId,
             nodeId: handleHit.nodeId,
@@ -238,6 +370,17 @@ export function handlePointerDownTools(
             startX: event.clientX,
             startY: event.clientY,
             moved: false,
+
+            dragMode: effectiveDragMode,
+            axisWorld: effectiveAxisWorld,
+            dragPlane: ctx.createEndpointDragPlane({
+              mode: effectiveDragMode,
+              axisWorld: effectiveAxisWorld,
+              startPointWorld,
+              freePlaneNormal: new THREE.Vector3(0, 1, 0),
+            }),
+            startPointWorld: startPointWorld.clone(),
+
             startVertex,
             containerObject: runtime,
             roadGroup: roadGroupCandidate,
@@ -253,6 +396,8 @@ export function handlePointerDownTools(
               })),
             },
           }
+
+          ctx.setActiveRoadVertexHandle({ nodeId: handleHit.nodeId, vertexIndex: handleHit.vertexIndex, gizmoPart: handleHit.gizmoPart })
 
           return {
             handled: true,

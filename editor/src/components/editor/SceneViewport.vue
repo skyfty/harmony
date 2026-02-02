@@ -30,6 +30,7 @@ import type {
   PointerDownResult,
   PointerMoveResult,
   PointerUpResult,
+  FloorVertexDragState,
   RoadVertexDragState,
   WallEndpointDragState,
 } from './pointer/types'
@@ -3098,6 +3099,7 @@ type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: nu
 
 // road build session moved into `roadBuildTool`
 let roadVertexDragState: RoadVertexDragState | null = null
+let floorVertexDragState: FloorVertexDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
 
 type FloorEdgeDragState = {
@@ -3151,6 +3153,10 @@ function pickRoadVertexHandleAtPointer(event: PointerEvent): RoadVertexHandlePic
   })
 }
 
+function setActiveRoadVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
+  roadVertexRenderer.setActiveHandle(active as any)
+}
+
 function ensureWallEndpointHandlesForSelectedNode(options?: { force?: boolean }) {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   const active = activeBuildTool.value === 'wall'
@@ -3181,6 +3187,10 @@ function pickWallEndpointHandleAtPointer(event: PointerEvent): WallEndpointHandl
   })
 }
 
+function setActiveWallEndpointHandle(active: any | null) {
+  wallEndpointRenderer.setActiveHandle(active)
+}
+
 function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   const active = activeBuildTool.value === 'floor'
@@ -3199,6 +3209,20 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
   } else {
     floorVertexRenderer.ensure(common)
   }
+}
+
+function pickFloorVertexHandleAtPointer(event: PointerEvent) {
+  return floorVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveFloorVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
+  floorVertexRenderer.setActiveHandle(active as any)
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -8408,6 +8432,48 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
   return !!raycaster.ray.intersectPlane(groundPlane, result)
 }
 
+function raycastPlanePoint(event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3): boolean {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return false
+  }
+  return !!raycaster.ray.intersectPlane(plane, result)
+}
+
+function createEndpointDragPlane(options: {
+  mode: 'free' | 'axis'
+  axisWorld: THREE.Vector3 | null
+  startPointWorld: THREE.Vector3
+  freePlaneNormal?: THREE.Vector3
+}): THREE.Plane {
+  const start = options.startPointWorld
+  const plane = new THREE.Plane()
+
+  if (options.mode === 'free' || !options.axisWorld) {
+    const n = (options.freePlaneNormal ?? new THREE.Vector3(0, 1, 0)).clone().normalize()
+    return plane.setFromNormalAndCoplanarPoint(n, start)
+  }
+
+  // Axis drag: plane that contains the axis and is (roughly) perpendicular to camera direction.
+  const axis = options.axisWorld.clone().normalize()
+  const cameraDir = new THREE.Vector3(0, 0, -1)
+  if (camera) {
+    camera.getWorldDirection(cameraDir)
+  }
+
+  const tmp = new THREE.Vector3()
+  // normal = axis x (cameraDir x axis)
+  tmp.crossVectors(cameraDir, axis)
+  if (tmp.lengthSq() < 1e-8) {
+    tmp.crossVectors(new THREE.Vector3(0, 1, 0), axis)
+  }
+  const normal = new THREE.Vector3().crossVectors(axis, tmp)
+  if (normal.lengthSq() < 1e-8) {
+    return plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), start)
+  }
+  normal.normalize()
+  return plane.setFromNormalAndCoplanarPoint(normal, start)
+}
+
 async function handlePointerDown(event: PointerEvent) {
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
@@ -8418,6 +8484,9 @@ async function handlePointerDown(event: PointerEvent) {
     }
     if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
       roadVertexDragState = result.nextRoadVertexDragState ?? null
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextFloorVertexDragState')) {
+      floorVertexDragState = result.nextFloorVertexDragState ?? null
     }
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
       wallEndpointDragState = result.nextWallEndpointDragState ?? null
@@ -8555,10 +8624,20 @@ async function handlePointerDown(event: PointerEvent) {
     roadBuildToolGetSession: () => roadBuildTool.getSession(),
     beginBuildToolRightClick: (e, options) => pointerInteraction.beginBuildToolRightClick(e, options),
     tryBeginFloorEdgeDrag,
+
+    ensureFloorVertexHandlesForSelectedNode: () => ensureFloorVertexHandlesForSelectedNode(),
+    pickFloorVertexHandleAtPointer,
+    setActiveFloorVertexHandle,
+
     ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
     pickRoadVertexHandleAtPointer,
+    setActiveRoadVertexHandle,
     ensureWallEndpointHandlesForSelectedNode: () => ensureWallEndpointHandlesForSelectedNode(),
     pickWallEndpointHandleAtPointer,
+
+    setActiveWallEndpointHandle,
+    createEndpointDragPlane,
+
     nodes: sceneStore.nodes,
     findSceneNode,
     objectMap,
@@ -8670,15 +8749,43 @@ function handlePointerMove(event: PointerEvent) {
     }
   }
 
+  // Hover highlight for endpoint gizmos (mouse only, no active drag).
+  const canHoverGizmos =
+    event.pointerType === 'mouse' &&
+    !roadVertexDragState &&
+    !floorVertexDragState &&
+    !wallEndpointDragState &&
+    isStrictPointOnCanvas(event.clientX, event.clientY)
+
+  if (canHoverGizmos) {
+    ensureRoadVertexHandlesForSelectedNode()
+    ensureWallEndpointHandlesForSelectedNode()
+    ensureFloorVertexHandlesForSelectedNode()
+
+    roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+  } else {
+    roadVertexRenderer.clearHover()
+    wallEndpointRenderer.clearHover()
+    floorVertexRenderer.clearHover()
+  }
+
   const roadVertex = handlePointerMoveDrag(event, {
     clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
     roadVertexDragState,
+    floorVertexDragState,
     wallEndpointDragState,
     raycastGroundPoint,
+    raycastPlanePoint,
     groundPointerHelper,
+
+    camera,
     rootGroup,
     resolveRoadRenderOptionsForNodeId,
     updateRoadGroup,
+
+    updateFloorGroup,
   })
   if (roadVertex) {
     applyPointerMoveResult(roadVertex)
@@ -8806,6 +8913,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextRoadVertexDragState')) {
         roadVertexDragState = result.nextRoadVertexDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextFloorVertexDragState')) {
+        floorVertexDragState = result.nextFloorVertexDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
@@ -8836,6 +8946,7 @@ async function handlePointerUp(event: PointerEvent) {
         pointerCaptureGuard.hasCaptured(event.pointerId) ||
         pointerTrackingState?.pointerId === event.pointerId ||
         roadVertexDragState?.pointerId === event.pointerId ||
+        floorVertexDragState?.pointerId === event.pointerId ||
         wallEndpointDragState?.pointerId === event.pointerId ||
         floorEdgeDragState?.pointerId === event.pointerId ||
         instancedEraseDragState?.pointerId === event.pointerId ||
@@ -8859,6 +8970,7 @@ async function handlePointerUp(event: PointerEvent) {
       const drag = handlePointerUpDrag(event, {
         roadDefaultWidth: ROAD_DEFAULT_WIDTH,
         roadVertexDragState,
+        floorVertexDragState,
         wallEndpointDragState,
         floorEdgeDragState,
         findSceneNode,
@@ -8868,7 +8980,13 @@ async function handlePointerUp(event: PointerEvent) {
         sceneStoreUpdateWallNodeGeometry: (nodeId, payload) => sceneStore.updateWallNodeGeometry(nodeId, payload),
         pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
         ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
+        ensureFloorVertexHandlesForSelectedNode: () => ensureFloorVertexHandlesForSelectedNode(),
         ensureWallEndpointHandlesForSelectedNode: (options) => ensureWallEndpointHandlesForSelectedNode(options),
+
+        setActiveRoadVertexHandle,
+        setActiveFloorVertexHandle,
+        setActiveWallEndpointHandle,
+
         nextTick,
         resolveRoadRenderOptionsForNodeId,
         updateRoadGroup,

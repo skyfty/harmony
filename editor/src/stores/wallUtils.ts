@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh, Vector3Like } from '@harmony/schema'
+import type { WallDynamicMesh, Vector3Like, SceneNode } from '@harmony/schema'
 import {
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -241,8 +241,8 @@ export function buildWallDynamicMeshFromWorldSegments(
   return { center, definition }
 }
 
-export function resolveWallSmoothing(node: any): number {
-  const component = node.components?.['wall'] as
+export function resolveWallSmoothing(node: SceneNode | null | undefined): number {
+  const component = node?.components?.['wall'] as
     | { props?: Partial<WallComponentProps> | null }
     | undefined
   if (!component) {
@@ -252,33 +252,35 @@ export function resolveWallSmoothing(node: any): number {
 }
 
 export function applyWallComponentPropsToNode(
-  node: any,
+  node: SceneNode,
   props: WallComponentProps,
   deps: WallStoreDeps,
 ): boolean {
-  if (node.dynamicMesh?.type !== 'Wall' || !node.dynamicMesh.segments.length) {
+  if (!node.dynamicMesh || node.dynamicMesh.type !== 'Wall' || !Array.isArray(node.dynamicMesh.segments) || !node.dynamicMesh.segments.length) {
     return false
   }
+
   const normalized = clampWallProps(props)
-  const nextSegments = node.dynamicMesh.segments.map((segment: any) => {
-    const next = {
-      ...segment,
+  type Segment = WallDynamicMesh['segments'][number]
+  const nextSegments: Segment[] = node.dynamicMesh.segments.map((segment) => {
+    const seg = segment as Segment
+    return {
+      ...seg,
       height: normalized.height,
       width: normalized.width,
       thickness: normalized.thickness,
     }
-    return next
   })
+
   node.dynamicMesh = {
-    ...(node.dynamicMesh as any),
     type: 'Wall',
     segments: nextSegments,
   }
 
   const runtime = deps.getRuntimeObject(node.id)
   if (runtime) {
-    runtime.traverse((child: Object3D & { type?: string; name?: string; userData?: any }) => {
-      if (child.type === 'Group' && child.name === 'WallGroup' && child.userData.dynamicMeshType === 'Wall') {
+    runtime.traverse((child: Object3D & { type?: string; name?: string; userData?: Record<string, unknown> | undefined }) => {
+      if (child.type === 'Group' && child.name === 'WallGroup' && child.userData?.dynamicMeshType === 'Wall') {
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
           deps.updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
         }

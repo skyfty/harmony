@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { WallDynamicMesh } from '@harmony/schema'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { splitWallSegmentsIntoChains } from './wallSegmentUtils'
+import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 
 export type WallEndpointHandleState = {
   nodeId: string
@@ -14,11 +15,29 @@ export type WallEndpointHandlePickResult = {
   chainStartIndex: number
   chainEndIndex: number
   endpointKind: 'start' | 'end'
+  gizmoPart: EndpointGizmoPart
+  gizmoKind: 'center' | 'axis'
+  gizmoAxis?: THREE.Vector3
   point: THREE.Vector3
 }
 
 export type WallEndpointRenderer = {
   clear(): void
+  clearHover(): void
+  setActiveHandle(active: {
+    nodeId: string
+    chainStartIndex: number
+    chainEndIndex: number
+    endpointKind: 'start' | 'end'
+    gizmoPart: EndpointGizmoPart
+  } | null): void
+  updateHover(options: {
+    camera: THREE.Camera | null
+    canvas: HTMLCanvasElement | null
+    event: PointerEvent
+    pointer: THREE.Vector2
+    raycaster: THREE.Raycaster
+  }): void
   ensure(options: {
     active: boolean
     selectedNodeId: string | null
@@ -52,7 +71,7 @@ export const WALL_ENDPOINT_HANDLE_GROUP_NAME = '__WallEndpointHandles'
 export const WALL_ENDPOINT_HANDLE_Y_OFFSET = 0.03
 
 const WALL_ENDPOINT_HANDLE_RENDER_ORDER = 1001
-const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 12
+const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 24
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
@@ -79,18 +98,10 @@ function computeWorldUnitsPerPixel(options: {
 }
 
 function disposeWallEndpointHandleGroup(group: THREE.Group) {
-  group.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      mesh.geometry?.dispose?.()
-      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined
-      if (Array.isArray(mat)) {
-        mat.forEach((entry) => entry?.dispose?.())
-      } else {
-        mat?.dispose?.()
-      }
-    }
-  })
+  for (const child of group.children) {
+    const gizmo = child?.userData?.endpointGizmo as { dispose?: () => void } | undefined
+    gizmo?.dispose?.()
+  }
 }
 
 function computeWallEndpointHandleSignature(definition: WallDynamicMesh): string {
@@ -104,24 +115,11 @@ function computeWallEndpointHandleSignature(definition: WallDynamicMesh): string
   return hashString(serialized)
 }
 
-function createWallEndpointHandleMaterial(): THREE.MeshBasicMaterial {
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x4caf50,
-    transparent: true,
-    opacity: 0.9,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-    depthTest: false,
-  })
-  material.polygonOffset = true
-  material.polygonOffsetFactor = -2
-  material.polygonOffsetUnits = -2
-  return material
-}
-
 export function createWallEndpointRenderer(): WallEndpointRenderer {
   let state: WallEndpointHandleState | null = null
   const tmpWorldPos = new THREE.Vector3()
+  let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
+  let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
 
   function clear() {
     if (!state) {
@@ -131,6 +129,50 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     state = null
     existing.group.removeFromParent()
     disposeWallEndpointHandleGroup(existing.group)
+    hovered = null
+    active = null
+  }
+
+  function clearHover() {
+    if (!hovered) return
+    hovered = null
+    refreshHighlight()
+  }
+
+  function setActiveHandle(next: {
+    nodeId: string
+    chainStartIndex: number
+    chainEndIndex: number
+    endpointKind: 'start' | 'end'
+    gizmoPart: EndpointGizmoPart
+  } | null) {
+    if (!state) {
+      active = null
+      return
+    }
+    if (!next) {
+      active = null
+      refreshHighlight()
+      return
+    }
+    const handleKey = `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:${next.endpointKind}`
+    active = { handleKey, gizmoPart: next.gizmoPart }
+    refreshHighlight()
+  }
+
+  function refreshHighlight() {
+    if (!state) return
+    for (const handle of state.group.children) {
+      const gizmo = handle?.userData?.endpointGizmo as { clearStates?: () => void; setState?: (p: EndpointGizmoPart, s: any) => void } | undefined
+      if (!gizmo?.clearStates || !gizmo?.setState) continue
+      gizmo.clearStates()
+      const key = typeof handle.userData?.handleKey === 'string' ? handle.userData.handleKey : ''
+      if (active && key === active.handleKey) {
+        gizmo.setState(active.gizmoPart, 'active')
+      } else if (hovered && key === hovered.handleKey) {
+        gizmo.setState(hovered.gizmoPart, 'hover')
+      }
+    }
   }
 
   function attachOrRebuild(options: {
@@ -141,9 +183,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
     force?: boolean
   }) {
-    const { active, selectedNodeId } = options
+    const { active: isActive, selectedNodeId } = options
 
-    if (!active || !selectedNodeId) {
+    if (!isActive || !selectedNodeId) {
       clear()
       return
     }
@@ -188,13 +230,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     }
 
     const sample = segments[0] as any
-    const width = Number.isFinite(Number(sample?.width)) ? Math.max(0.2, Number(sample.width)) : 0.2
-    const radius = Math.max(0.15, width * 0.75)
-
-    const baseGeometry = new THREE.CircleGeometry(radius, 32)
-    baseGeometry.rotateX(-Math.PI / 2)
-
-    const baseMaterial = createWallEndpointHandleMaterial()
+    const height = Number.isFinite(Number(sample?.height)) ? Math.max(0.1, Number(sample.height)) : 3
+    // Place the gizmo at the middle of the wall height for better intuition.
+    const yOffset = height * 0.5
 
     const chainRanges = splitWallSegmentsIntoChains(segments as any[])
     chainRanges.forEach((range, chainIndex) => {
@@ -217,19 +255,42 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         if (!Number.isFinite(x + z)) {
           return
         }
-        const mesh = new THREE.Mesh(baseGeometry.clone(), baseMaterial.clone())
-        mesh.name = `WallEndpointHandle_${chainIndex + 1}_${kind}`
-        mesh.position.set(x, (Number.isFinite(y) ? y : 0) + WALL_ENDPOINT_HANDLE_Y_OFFSET, z)
-        mesh.renderOrder = WALL_ENDPOINT_HANDLE_RENDER_ORDER
-        mesh.layers.enableAll()
-        mesh.userData.editorOnly = true
-        mesh.userData.isWallEndpointHandle = true
-        mesh.userData.nodeId = selectedNodeId
-        mesh.userData.chainStartIndex = range.startIndex
-        mesh.userData.chainEndIndex = range.endIndex
-        mesh.userData.endpointKind = kind
-        mesh.userData.baseDiameter = radius * 2
-        group.add(mesh)
+
+        const gizmo = createEndpointGizmoObject({
+          axes: { x: true, y: true, z: true },
+          showNegativeAxes: true,
+          renderOrder: WALL_ENDPOINT_HANDLE_RENDER_ORDER,
+          depthTest: false,
+          depthWrite: false,
+          opacity: 0.9,
+        })
+        const handle = gizmo.root
+        handle.name = `WallEndpointHandle_${chainIndex + 1}_${kind}`
+        handle.position.set(x, (Number.isFinite(y) ? y : 0) + yOffset, z)
+        handle.layers.enableAll()
+        handle.userData.editorOnly = true
+        handle.userData.isWallEndpointHandle = true
+        handle.userData.nodeId = selectedNodeId
+        handle.userData.chainStartIndex = range.startIndex
+        handle.userData.chainEndIndex = range.endIndex
+        handle.userData.endpointKind = kind
+        handle.userData.baseDiameter = gizmo.baseDiameter
+        handle.userData.endpointGizmo = gizmo
+        handle.userData.handleKey = `${selectedNodeId}:${range.startIndex}:${range.endIndex}:${kind}`
+        handle.userData.yOffset = yOffset
+
+        handle.traverse((child) => {
+          const mesh = child as THREE.Mesh
+          if (!mesh?.isMesh) return
+          mesh.userData.editorOnly = true
+          mesh.userData.isWallEndpointHandle = true
+          mesh.userData.nodeId = selectedNodeId
+          mesh.userData.chainStartIndex = range.startIndex
+          mesh.userData.chainEndIndex = range.endIndex
+          mesh.userData.endpointKind = kind
+        })
+
+        group.add(handle)
       }
 
       addHandle('start', start)
@@ -238,6 +299,8 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
 
     runtimeObject.add(group)
     state = { nodeId: selectedNodeId, group, signature }
+    hovered = null
+    active = null
   }
 
   function ensure(options: {
@@ -281,16 +344,13 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     state.group.updateWorldMatrix(true, true)
 
     for (const child of state.group.children) {
-      const mesh = child as THREE.Mesh
-      if (!mesh?.isMesh) {
-        continue
-      }
-      const baseDiameter = Number(mesh.userData?.baseDiameter)
+      const handle = child as THREE.Object3D
+      const baseDiameter = Number(handle.userData?.baseDiameter)
       if (!Number.isFinite(baseDiameter) || baseDiameter <= 1e-6) {
         continue
       }
 
-      mesh.getWorldPosition(tmpWorldPos)
+      handle.getWorldPosition(tmpWorldPos)
       const distance = tmpWorldPos.distanceTo((options.camera as any).position ?? new THREE.Vector3())
       const unitsPerPixel = computeWorldUnitsPerPixel({
         camera: options.camera,
@@ -302,8 +362,59 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       if (!Number.isFinite(scale) || scale <= 0) {
         continue
       }
-      mesh.scale.setScalar(scale)
+      handle.scale.setScalar(scale)
     }
+  }
+
+  function updateHover(options: {
+    camera: THREE.Camera | null
+    canvas: HTMLCanvasElement | null
+    event: PointerEvent
+    pointer: THREE.Vector2
+    raycaster: THREE.Raycaster
+  }) {
+    if (!state || !options.camera || !options.canvas) {
+      clearHover()
+      return
+    }
+
+    const rect = options.canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      clearHover()
+      return
+    }
+
+    options.pointer.x = ((options.event.clientX - rect.left) / rect.width) * 2 - 1
+    options.pointer.y = -((options.event.clientY - rect.top) / rect.height) * 2 + 1
+    options.raycaster.setFromCamera(options.pointer, options.camera)
+
+    state.group.updateWorldMatrix(true, true)
+    const intersections = options.raycaster.intersectObjects(state.group.children, true)
+    intersections.sort((a, b) => a.distance - b.distance)
+
+    const first = intersections[0]
+    if (!first) {
+      clearHover()
+      return
+    }
+
+    const target = first.object as THREE.Object3D
+    const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
+    const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
+    const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
+    const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
+    const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
+    if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex || !gizmoPart) {
+      clearHover()
+      return
+    }
+
+    const handleKey = `${nodeId}:${chainStartIndex}:${chainEndIndex}:${endpointKind}`
+    if (hovered && hovered.handleKey === handleKey && hovered.gizmoPart === gizmoPart) {
+      return
+    }
+    hovered = { handleKey, gizmoPart }
+    refreshHighlight()
   }
 
   function pick(options: {
@@ -340,8 +451,10 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
+    const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
+    const partInfo = getEndpointGizmoPartInfoFromObject(target)
 
-    if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex) {
+    if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex || !gizmoPart || !partInfo) {
       return null
     }
 
@@ -350,12 +463,18 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       chainStartIndex,
       chainEndIndex,
       endpointKind,
+      gizmoPart,
+      gizmoKind: partInfo.kind,
+      gizmoAxis: partInfo.kind === 'axis' ? partInfo.axis.clone() : undefined,
       point: first.point.clone(),
     }
   }
 
   return {
     clear,
+    clearHover,
+    setActiveHandle,
+    updateHover,
     ensure,
     forceRebuild,
     updateScreenSize,

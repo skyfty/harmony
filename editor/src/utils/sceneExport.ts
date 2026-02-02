@@ -118,8 +118,8 @@ function shouldExcludeFromGLTF(object: THREE.Object3D) {
         return true
     }
 
-    if ((object as any).isTransformControlsRoot) {
-        return true
+    if ((object as unknown as { isTransformControlsRoot?: boolean }).isTransformControlsRoot) {
+      return true
     }
 
     return false
@@ -189,7 +189,7 @@ async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
 function cloneMeshMaterials(root: THREE.Object3D) {
   root.traverse((node) => {
     const mesh = node as THREE.Mesh
-    if (!(mesh as any)?.isMesh) {
+    if (!((mesh as unknown as { isMesh?: boolean }).isMesh)) {
       return
     }
     const material = mesh.material
@@ -204,7 +204,7 @@ function cloneMeshMaterials(root: THREE.Object3D) {
 function removeLights(root: THREE.Object3D) {
   const collected: THREE.Object3D[] = []
   root.traverse((node) => {
-    if ((node as any)?.isLight) {
+    if ((node as unknown as { isLight?: boolean }).isLight) {
       collected.push(node)
     }
   })
@@ -216,9 +216,10 @@ function stripSkeletonData(root: THREE.Object3D) {
   const bones: THREE.Object3D[] = []
 
   root.traverse((node) => {
-    if ((node as any)?.isSkinnedMesh) {
+    const meta = node as unknown as { isSkinnedMesh?: boolean; isBone?: boolean }
+    if (meta.isSkinnedMesh) {
       skinnedMeshes.push(node as THREE.SkinnedMesh)
-    } else if ((node as any)?.isBone) {
+    } else if (meta.isBone) {
       bones.push(node)
     }
   })

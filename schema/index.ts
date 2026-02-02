@@ -83,6 +83,8 @@ export type { SceneNodeId, SceneNodeMap, SceneNodeParentMap } from './nodeIndexU
 
 export * from './instanceLayout'
 
+export * from './components'
+
 export {
   AssetTypes,
   DEFAULT_ASSET_TYPE,

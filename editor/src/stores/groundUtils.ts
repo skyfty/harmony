@@ -127,6 +127,7 @@ export function cloneGroundSettings(settings: Partial<GroundSettings> | null | u
 
 export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}, settings?: GroundSettings): GroundDynamicMesh {
   const baseSettings = normalizeGroundSettings(settings ?? null)
+  const o = overrides as Partial<GroundDynamicMeshLike>
   const cellSize = overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE
   const normalizedWidth = overrides.width !== undefined
     ? normalizeGroundDimension(overrides.width as unknown, baseSettings.width)
@@ -154,9 +155,9 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
     // GroundDynamicMesh may or may not include these optional editor-only fields
-    hasManualEdits: (overrides as any).hasManualEdits,
-    terrainScatter: manualDeepCloneLocal(overrides.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter'],
-    terrainPaint: manualDeepCloneLocal(overrides.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint'],
+    hasManualEdits: o.hasManualEdits,
+    terrainScatter: manualDeepCloneLocal(o.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter'],
+    terrainPaint: manualDeepCloneLocal(o.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint'],
   }
 
   if (initialGeneration && !hasHeightOverrides) {
@@ -350,20 +351,21 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       name: 'Ground',
       nodeType: 'Mesh',
       allowChildNodes: false,
+      // preserve primary material identity when possible
       materials: [
         createNodeMaterial(null, createMaterialProps({
           color: primaryMaterial?.color ?? '#707070',
           wireframe: false,
           opacity: 1,
           transparent: false,
-        }), { id: (primaryMaterial as any)?.id, name: (primaryMaterial as any)?.name ?? 'Ground Material', type: (primaryMaterial as any)?.type })
+        }), { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type })
       ],
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),
       visible: node.visible ?? true,
       locked: true,
-      dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh as any, settings),
+      dynamicMesh: createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings),
       components: nextComponents,
       sourceAssetId: undefined,
       children,
