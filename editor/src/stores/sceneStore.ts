@@ -9977,11 +9977,6 @@ export const useSceneStore = defineStore('scene', {
         if (bounds.isEmpty()) {
           return
         }
-        const offsetY = desiredPrefabMinY - bounds.min.y
-        if (Math.abs(offsetY) <= PREFAB_PLACEMENT_EPSILON) {
-          return
-        }
-
         const currentWorldMatrix = computeWorldMatrixForNode(this.nodes, duplicate.id)
         if (!currentWorldMatrix) {
           return
@@ -9990,7 +9985,6 @@ export const useSceneStore = defineStore('scene', {
         const currentWorldQuaternion = new Quaternion()
         const currentWorldScale = new Vector3()
         currentWorldMatrix.decompose(currentWorldPosition, currentWorldQuaternion, currentWorldScale)
-        currentWorldPosition.y += offsetY
         this.setNodeWorldPositionPositionOnly(duplicate.id, currentWorldPosition)
       })
 
