@@ -142,8 +142,164 @@ export type PrefabActionsDeps = {
   // Snapshot
   commitSceneSnapshot: (store: any, options?: any) => void
 
-  // Prefab asset dependency collector
-  collectPrefabAssetReferences: (root: SceneNode | null | undefined) => string[]
+}
+
+// --- Prefab asset reference collection (self-contained copy used by prefab module) ---
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function sanitizeEnvironmentAssetReferences<T>(value: T): T {
+  if (!isPlainObject(value)) {
+    return value
+  }
+
+  const clone: Record<string, unknown> = { ...(value as any) }
+
+  const stripHdriAsset = (raw: unknown, key: 'background' | 'environmentMap'): void => {
+    if (!isPlainObject(raw)) {
+      return
+    }
+    const section: Record<string, unknown> = { ...raw }
+    const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
+    if (mode !== 'hdri') {
+      delete section.hdriAssetId
+    }
+    clone[key] = section
+  }
+
+  stripHdriAsset(clone.background, 'background')
+  stripHdriAsset(clone.environmentMap, 'environmentMap')
+
+  return clone as T
+}
+
+const ASSET_REFERENCE_SKIP_KEYS = new Set<string>(['prefabSource'])
+
+function isAssetReferenceKey(key: string | null | undefined): boolean {
+  if (!key) return false
+  const normalized = key.trim().toLowerCase()
+  if (!normalized) return false
+  return normalized.includes('assetid')
+}
+
+function normalizePrefabAssetIdCandidate(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  let candidate = value.trim()
+  if (!candidate) return null
+  const assetProtocol = 'asset://'
+  if (candidate.startsWith(assetProtocol)) candidate = candidate.slice(assetProtocol.length)
+  if (!candidate) return null
+  if (candidate.startsWith('local:')) return null
+  if (/^(?:https?:|data:|blob:)/i.test(candidate)) return null
+  if (candidate.length > 256) return null
+  return candidate
+}
+
+function collectAssetIdCandidate(bucket: Set<string>, value: unknown) {
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectAssetIdCandidate(bucket, entry))
+    return
+  }
+  const normalized = normalizePrefabAssetIdCandidate(value)
+  if (normalized) bucket.add(normalized)
+}
+
+function collectAssetIdsFromUnknown(value: unknown, bucket: Set<string>) {
+  if (!value) return
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectAssetIdsFromUnknown(entry, bucket))
+    return
+  }
+  if (!isPlainObject(value)) return
+  Object.entries(value).forEach(([key, entry]) => {
+    if (ASSET_REFERENCE_SKIP_KEYS.has(key)) return
+    if (isAssetReferenceKey(key)) {
+      collectAssetIdCandidate(bucket, entry)
+    } else {
+      collectAssetIdsFromUnknown(entry, bucket)
+    }
+  })
+}
+
+function collectTerrainScatterAssetDependencies(snapshot: any, bucket: Set<string>) {
+  if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) return
+  snapshot.layers.forEach((layer: any) => {
+    collectAssetIdCandidate(bucket, layer.assetId)
+    collectAssetIdCandidate(bucket, layer.profileId)
+    if (Array.isArray(layer.instances)) {
+      layer.instances.forEach((instance: any) => {
+        collectAssetIdCandidate(bucket, instance.assetId)
+        collectAssetIdCandidate(bucket, instance.profileId)
+      })
+    }
+  })
+}
+
+function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, bucket: Set<string>) {
+  if (!node) return
+  collectAssetIdCandidate(bucket, (node as any).sourceAssetId)
+  collectAssetIdCandidate(bucket, (node as any).importMetadata?.assetId)
+
+  const rawLayout = (node as any).instanceLayout as unknown
+  if (rawLayout) {
+    try {
+      // Attempt best-effort instance layout handling using schema utilities when available
+      // (these imports are available in callers like prefabPreviewBuilder)
+      // Fallback: ignore if utilities are not present at runtime.
+      // @ts-ignore
+      const { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } = require('@schema/instanceLayout')
+      const layout = clampSceneNodeInstanceLayout(rawLayout)
+      if (layout?.mode === 'grid') {
+        const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, (node as any).sourceAssetId)
+        collectAssetIdCandidate(bucket, templateAssetId)
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (Array.isArray((node as any).materials) && (node as any).materials.length) {
+    ;((node as any).materials as any[]).forEach((material) => collectAssetIdsFromUnknown(material, bucket))
+  }
+  if ((node as any).components) {
+    Object.values((node as any).components).forEach((component: any) => {
+      if (component?.props) collectAssetIdsFromUnknown(component.props, bucket)
+    })
+  }
+  if ((node as any).userData) {
+    if ((node as any).nodeType === 'Environment' && isPlainObject((node as any).userData)) {
+      const sanitizedUserData = { ...((node as any).userData as Record<string, unknown>) }
+      if ('environment' in sanitizedUserData) sanitizedUserData.environment = sanitizeEnvironmentAssetReferences(sanitizedUserData.environment)
+      collectAssetIdsFromUnknown(sanitizedUserData, bucket)
+    } else {
+      collectAssetIdsFromUnknown((node as any).userData, bucket)
+    }
+  }
+  if ((node as any).dynamicMesh?.type === 'Ground') {
+    const definition = (node as any).dynamicMesh as any
+    collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
+    const terrainPaint: any = definition?.terrainPaint
+    if (terrainPaint && terrainPaint.version === 1 && terrainPaint.chunks && typeof terrainPaint.chunks === 'object') {
+      if (Array.isArray(terrainPaint.layers)) {
+        terrainPaint.layers.forEach((layer: any) => collectAssetIdCandidate(bucket, layer?.textureAssetId))
+      }
+      Object.values(terrainPaint.chunks).forEach((ref: any) => {
+        const logicalId = typeof ref?.logicalId === 'string' ? ref.logicalId.trim() : ''
+        if (logicalId) bucket.add(logicalId)
+      })
+    }
+  }
+  if (Array.isArray(node.children) && node.children.length) {
+    node.children.forEach((child) => collectNodeAssetDependenciesLocal(child, bucket))
+  }
+}
+
+export function collectPrefabAssetReferences(root: SceneNode | null | undefined): string[] {
+  if (!root) return []
+  const bucket = new Set<string>()
+  collectNodeAssetDependenciesLocal(root, bucket)
+  return Array.from(bucket)
 }
 
 export function normalizePrefabName(value: string | null | undefined): string {
@@ -400,7 +556,7 @@ export function buildSerializedPrefabPayload(
   const prefabRoot = ensurePrefabGroupRoot(deps, node)
   const prefabData = createNodePrefabData(deps, prefabRoot, context.name ?? node.name ?? '')
   bakePrefabSubtreeTransforms(deps, prefabData.root, context.sceneNodes)
-  const dependencyAssetIds = deps.collectPrefabAssetReferences(prefabData.root)
+  const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
   if (dependencyAssetIds.length) {
     const assetIndexSubset = deps.buildAssetIndexSubsetForPrefab(context.assetIndex, dependencyAssetIds)
     if (assetIndexSubset) {
@@ -829,7 +985,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         prefabAssetIdForDownloadProgress?: string | null
       } = {},
     ): Promise<SceneNode> {
-      const dependencyAssetIds = options.dependencyAssetIds ?? deps.collectPrefabAssetReferences(prefab.root)
+      const dependencyAssetIds = options.dependencyAssetIds ?? collectPrefabAssetReferences(prefab.root)
       const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
       const providerId = options.providerId ?? null
       const prefabAssetIndex = prefab.assetIndex && deps.isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined

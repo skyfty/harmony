@@ -565,7 +565,6 @@ const prefabDeps: PrefabActionsDeps = {
   syncNode: (node) => componentManager.syncNode(node),
 
   commitSceneSnapshot,
-  collectPrefabAssetReferences,
 }
 
 const prefabActions = createPrefabActions(prefabDeps)
@@ -4387,14 +4386,7 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   }
 }
 
-export function collectPrefabAssetReferences(root: SceneNode | null | undefined): string[] {
-  if (!root) {
-    return []
-  }
-  const bucket = new Set<string>()
-  collectNodeAssetDependencies(root, bucket)
-  return Array.from(bucket)
-}
+// `collectPrefabAssetReferences` moved to `prefabActions` to reduce sceneStore surface.
 
 export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
   const bucket = new Set<string>()
