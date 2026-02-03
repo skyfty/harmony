@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import SceneCreatorPane from './SceneCreatorPane.vue'
 
 const props = defineProps<{ modelValue: boolean; initialName?: string }>()
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
-  (event: 'confirm', payload: { name: string }): void
+  (event: 'confirm', payload: { name: string; defaultScene?: { name: string; groundWidth: number; groundDepth: number } }): void
 }>()
 
 const dialogOpen = computed({
@@ -13,6 +14,9 @@ const dialogOpen = computed({
 })
 
 const name = ref('')
+const defaultSceneName = ref('New Scene')
+const defaultGroundWidth = ref<number>(100)
+const defaultGroundDepth = ref<number>(100)
 
 watch(
   () => props.modelValue,
@@ -30,7 +34,14 @@ function handleCancel() {
 
 function handleConfirm() {
   const trimmed = name.value.trim()
-  emit('confirm', { name: trimmed.length ? trimmed : 'New Project' })
+  emit('confirm', {
+    name: trimmed.length ? trimmed : 'New Project',
+    defaultScene: {
+      name: defaultSceneName.value,
+      groundWidth: defaultGroundWidth.value,
+      groundDepth: defaultGroundDepth.value,
+    },
+  })
   dialogOpen.value = false
 }
 </script>
@@ -41,9 +52,12 @@ function handleConfirm() {
       <v-card-title class="text-h6">New Project</v-card-title>
       <v-card-text>
         <v-text-field v-model="name" label="Project Name" variant="outlined" density="comfortable" clearable />
-        <div class="text-caption mt-2" style="opacity: 0.7">
-          An empty project will be created with a default scene generated automatically when opened.
-        </div>
+ 
+        <SceneCreatorPane
+          v-model:sceneName="defaultSceneName"
+          v-model:groundWidth="defaultGroundWidth"
+          v-model:groundDepth="defaultGroundDepth"
+        />
       </v-card-text>
       <v-card-actions>
         <v-spacer />

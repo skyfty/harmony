@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { fetchPresetSceneDetail, fetchPresetSceneSummaries } from '@/api/presetScenes'
-import type { PresetSceneDetail, PresetSceneDocument, PresetSceneSummary } from '@/types/preset-scene'
+import type { PresetSceneDetail, PresetSceneDocument } from '@/types/preset-scene'
+import SceneCreatorPane from './SceneCreatorPane.vue'
 import { generateUuid } from '@/utils/uuid'
 
 const props = defineProps<{
@@ -31,24 +31,18 @@ const sceneName = ref('New Scene')
 const groundWidth = ref<number>(100)
 const groundDepth = ref<number>(100)
 
-type PresetSourceType = 'local' | 'remote'
-
 interface PresetListEntry {
   id: string
   name: string
   thumbnailUrl: string | null
   description?: string | null
-  source: PresetSourceType
+  source: 'local'
 }
 
 const localPresetsLoaded = ref(false)
 const localPresetEntries = ref<PresetListEntry[]>([])
-const remotePresetSummaries = ref<PresetSceneSummary[]>([])
 const presetEntries = ref<PresetListEntry[]>([])
-const remotePresetsLoaded = ref(false)
-const presetScenesLoading = ref(false)
 const selectedPresetId = ref<string | null>(null)
-const loadingPresetDetailId = ref<string | null>(null)
 const presetSceneDetails = ref<Record<string, PresetSceneDetail>>({})
 const confirmError = ref<string | null>(null)
 const isConfirming = ref(false)
@@ -61,9 +55,6 @@ const selectedPresetDetail = computed(() =>
 
 const isCreateDisabled = computed(() => {
   if (!selectedPresetId.value) {
-    return true
-  }
-  if (loadingPresetDetailId.value !== null) {
     return true
   }
   if (isConfirming.value) {
@@ -122,14 +113,7 @@ function sanitizeLocalPresetDetail(path: string, moduleValue: unknown): PresetSc
 }
 
 function updatePresetEntriesList() {
-  const remoteEntries = remotePresetSummaries.value.map<PresetListEntry>((item) => ({
-    id: item.id,
-    name: item.name,
-    thumbnailUrl: item.thumbnailUrl ?? null,
-    description: item.description ?? null,
-    source: 'remote',
-  }))
-  presetEntries.value = [...localPresetEntries.value, ...remoteEntries]
+  presetEntries.value = [...localPresetEntries.value]
 }
 
 async function loadLocalPresetsOnce(): Promise<void> {
@@ -160,30 +144,10 @@ async function loadLocalPresetsOnce(): Promise<void> {
   void ensureDefaultPresetSelection()
 }
 
-async function loadRemotePresetSummaries(options: { force?: boolean } = {}) {
-  if (presetScenesLoading.value) {
-    return
-  }
-  if (remotePresetsLoaded.value && !options.force) {
-    return
-  }
-  presetScenesLoading.value = true
-  try {
-    const data = await fetchPresetSceneSummaries()
-    remotePresetSummaries.value = data
-    remotePresetsLoaded.value = true
-    updatePresetEntriesList()
-    void ensureDefaultPresetSelection()
-  } catch (error) {
-    console.warn('[NewSceneDialog] Failed to load remote preset scenes', error)
-  } finally {
-    presetScenesLoading.value = false
-  }
-}
+// Remote preset fetching removed: only local presets are used.
 
 function resetPresetState() {
   selectedPresetId.value = null
-  loadingPresetDetailId.value = null
   confirmError.value = null
 }
 
@@ -192,20 +156,9 @@ async function ensurePresetDetail(id: string): Promise<PresetSceneDetail | null>
   if (cached) {
     return cached
   }
-  loadingPresetDetailId.value = id
-  try {
-    const detail = await fetchPresetSceneDetail(id)
-    presetSceneDetails.value = { ...presetSceneDetails.value, [id]: detail }
-    return detail
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '预置场景详情加载失败'
-    confirmError.value = message
-    return null
-  } finally {
-    if (loadingPresetDetailId.value === id) {
-      loadingPresetDetailId.value = null
-    }
-  }
+  // Only local presets are supported; missing detail is treated as error.
+  confirmError.value = '预置场景详情不可用'
+  return null
 }
 
 async function selectPreset(id: string, options: { userInitiated?: boolean } = {}) {
@@ -244,9 +197,7 @@ async function ensureDefaultPresetSelection() {
   }
 }
 
-function reloadPresetScenes() {
-  void loadRemotePresetSummaries({ force: true }).then(() => ensureDefaultPresetSelection())
-}
+// reloadPresetScenes removed; remote presets are not used.
 
 async function handlePresetSelection(id: string) {
   await selectPreset(id, { userInitiated: true })
@@ -265,7 +216,7 @@ watch(
       selectedPresetId.value = null
       await loadLocalPresetsOnce()
       await ensureDefaultPresetSelection()
-      void loadRemotePresetSummaries()
+      // remote loading removed
       await nextTick()
       const input = document.getElementById('new-scene-name') as HTMLInputElement | null
       input?.focus()
@@ -331,7 +282,7 @@ function cancel() {
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" max-width="880">
+  <v-dialog v-model="dialogOpen" max-width="640">
     <v-card>
       <v-card-title class="dialog-title">
         <div class="title-text">新建场景</div>
@@ -340,113 +291,12 @@ function cancel() {
         </v-btn>
       </v-card-title>
       <v-card-text>
-        <div class="preset-section">
-          <div class="preset-header">
-            <span class="preset-title"></span>
-            <v-btn size="small" variant="text" :loading="presetScenesLoading" @click="reloadPresetScenes">
-              刷新
-            </v-btn>
-          </div>
-          <div v-if="presetScenesLoading && !hasPresetScenes" class="preset-loading-row">
-            <v-progress-linear color="primary" indeterminate rounded />
-          </div>
-          <v-alert
-            v-else-if="!presetScenesLoading && !hasPresetScenes"
-            type="info"
-            density="comfortable"
-            border="start"
-            border-color="info"
-          >
-            暂无可用预置场景，请检查资源目录或网络连接后重试。
-          </v-alert>
-          <div v-else-if="hasPresetScenes" class="preset-grid" role="list">
-            <button
-              v-for="scene in presetEntries"
-              :key="scene.id"
-              type="button"
-              role="listitem"
-              class="preset-card"
-              :class="{ selected: scene.id === selectedPresetId }"
-              @click="handlePresetSelection(scene.id)"
-            >
-              <div class="preset-thumbnail">
-                <v-img
-                  :src="scene.thumbnailUrl || undefined"
-                  :alt="scene.name"
-                  cover
-                  width="100%"
-                  height="100%"
-                />
-                <div v-if="loadingPresetDetailId === scene.id" class="preset-spinner">
-                  <v-progress-circular color="primary" indeterminate size="30" width="3" />
-                </div>
-              </div>
-              <div class="preset-card-body">
-                <div class="preset-name">{{ scene.name }}</div>
-                <div v-if="scene.description" class="preset-description">{{ scene.description }}</div>
-              </div>
-            </button>
-          </div>
-          <div v-if="selectedPresetDetail" class="preset-meta">
-            <span class="preset-meta-name">当前选择：{{ selectedPresetDetail.name }}</span>
-            <span class="preset-meta-size">
-              建议地面：
-              {{ selectedPresetDetail.document.groundSettings?.width ?? '—' }}m ×
-              {{ selectedPresetDetail.document.groundSettings?.depth ?? '—' }}m
-            </span>
-          </div>
-        </div>
-
-        <v-divider class="my-4" />
-
-        <v-text-field
-          id="new-scene-name"
-          v-model="sceneName"
-          label="场景名称"
-          variant="outlined"
-          density="comfortable"
-          autofocus
-          @keydown.enter.prevent="confirm"
+        <SceneCreatorPane
+          v-model:sceneName="sceneName"
+          v-model:groundWidth="groundWidth"
+          v-model:groundDepth="groundDepth"
+          :confirmError="confirmError"
         />
-        <v-row dense>
-          <v-col cols="6">
-            <v-text-field
-              v-model.number="groundWidth"
-              label="地面宽度 (m)"
-              variant="outlined"
-              density="comfortable"
-              type="number"
-              min="1"
-              step="1"
-              suffix="m"
-              @keydown.enter.prevent="confirm"
-            />
-          </v-col>
-          <v-col cols="6">
-            <v-text-field
-              v-model.number="groundDepth"
-              label="地面深度 (m)"
-              variant="outlined"
-              density="comfortable"
-              type="number"
-              min="1"
-              step="1"
-              suffix="m"
-              @keydown.enter.prevent="confirm"
-            />
-          </v-col>
-        </v-row>
-
-        <v-alert
-          v-if="confirmError"
-          type="error"
-          density="comfortable"
-          border="start"
-          border-color="error"
-          class="mt-4"
-        >
-          {{ confirmError }}
-        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
