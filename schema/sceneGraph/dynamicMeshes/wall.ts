@@ -75,7 +75,14 @@ export async function buildWallMesh(
       bodyCornerObjectsByAssetId,
       headCornerObjectsByAssetId,
     },
-    { smoothing: wallProps.smoothing, cornerModels },
+    {
+      smoothing: wallProps.smoothing,
+      cornerModels,
+      bodyOrientation: wallProps.bodyOrientation,
+      headOrientation: wallProps.headOrientation,
+      bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
+      headEndCapOrientation: wallProps.headEndCapOrientation,
+    },
   );
   group.name = node.name ?? (group.name || 'Wall');
 
