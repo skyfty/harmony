@@ -9,6 +9,10 @@ import type {
   SceneNodeComponentState,
   Vector3Like,
 } from '@harmony/schema'
+import type { AssetSourceMetadata } from '@harmony/schema'
+import type { SceneCameraState } from '@/types/scene-camera-state'
+import type { SceneHistoryNodeLocation } from '@/types/scene-history-entry'
+import type { SceneState } from '@/types/scene-state'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import { behaviorMapToList, cloneBehaviorList } from '@schema/behaviors/definitions'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -29,7 +33,7 @@ import {
 
 export type PrefabStoreLike = {
   nodes: SceneNode[]
-  camera: unknown
+  camera: SceneCameraState | null | undefined
   assetIndex: Record<string, AssetIndexEntry>
   packageAssetMap: Record<string, string>
   prefabAssetDownloadProgress: Record<
@@ -45,28 +49,43 @@ export type PrefabStoreLike = {
   getAsset: (id: string) => ProjectAsset | null
   findAssetInCatalog: (assetId: string) => ProjectAsset | null
 
-  registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
-  registerAssets: (assets: ProjectAsset[], options: any) => ProjectAsset[]
+  registerAsset: (
+    asset: ProjectAsset,
+    options?: { categoryId?: string; source?: AssetSourceMetadata; internal?: boolean; commitOptions?: { updateNodes?: boolean } },
+  ) => ProjectAsset
+  registerAssets: (
+    assets: ProjectAsset[],
+    options?: {
+      categoryId?: string | ((asset: ProjectAsset) => string)
+      source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+      internal?: boolean | ((asset: ProjectAsset) => boolean)
+      commitOptions?: { updateNodes?: boolean }
+    },
+  ) => ProjectAsset[]
 
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
 
   copyPackageAssetsToAssets: (providerId: string, assets: ProjectAsset[]) => ProjectAsset[]
 
-  queueSceneNodePatch: (nodeId: string, fields: any[]) => void
-  captureNodeStructureHistorySnapshot: (ops: any[]) => void
+  queueSceneNodePatch: (nodeId: string, fields: string[]) => void
+  captureNodeStructureHistorySnapshot: (ops: unknown[]) => void
 
-  addPlaceholderNode: (asset: ProjectAsset, transform: any, options: { parentId?: string | null }) => SceneNode
+  addPlaceholderNode: (
+    asset: ProjectAsset,
+    transform: { position?: Vector3Like; rotation?: Vector3Like; scale?: Vector3Like },
+    options: { parentId?: string | null },
+  ) => SceneNode
   removeSceneNodes: (ids: string[]) => void
-  setSelection: (ids: string[], options?: any) => void
+  setSelection: (ids: string[], options?: Record<string, unknown> | undefined) => void
 
-  ensureSceneAssetsReady: (options: any) => Promise<void>
+  ensureSceneAssetsReady: (options?: Record<string, unknown>) => Promise<void>
   withHistorySuppressed: <T>(fn: () => T | Promise<T>) => Promise<T>
   setNodeWorldPositionPositionOnly: (nodeId: string, worldPosition: Vector3) => void
   syncComponentSubtree: (node: SceneNode) => void
 
-  addNodeComponent: <T extends string>(nodeId: string, type: T) => any
-  updateNodeComponentProps: (nodeId: string, componentId: string, patch: any) => boolean
+  addNodeComponent: <T extends string>(nodeId: string, type: T) => unknown
+  updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
 }
 
 export type PrefabActionsDeps = {
@@ -96,15 +115,23 @@ export type PrefabActionsDeps = {
   isPrefabDependencyPlaceholderAsset: (asset: ProjectAsset) => boolean
 
   cloneNode: (node: SceneNode) => SceneNode
-  createVector: (x: number, y: number, z: number) => any
+  createVector: (x: number, y: number, z: number) => Vector3
   composeNodeMatrix: (node: SceneNode) => Matrix4
   computeWorldMatrixForNode: (nodes: SceneNode[], id: string) => Matrix4 | null
 
-  resolveSpawnPosition: (options: any) => Vector3
+  resolveSpawnPosition: (options: {
+    baseY: number
+    radius: number
+    localCenter?: Vector3
+    camera: SceneCameraState | null | undefined
+    nodes: SceneNode[]
+    snapToGrid?: boolean
+  }) => Vector3
+
   toPlainVector: (value: Vector3) => Vector3Like
 
   insertNodeMutable: (nodes: SceneNode[], parentId: string, node: SceneNode, mode: 'inside' | 'before' | 'after') => boolean
-  findNodeLocationInTree: (nodes: SceneNode[], nodeId: string) => any
+  findNodeLocationInTree: (nodes: SceneNode[], nodeId: string) => SceneHistoryNodeLocation | null
 
   getRuntimeObject: (nodeId: string) => Object3D | null
 
@@ -140,7 +167,7 @@ export type PrefabActionsDeps = {
   syncNode: (node: SceneNode) => void
 
   // Snapshot
-  commitSceneSnapshot: (store: any, options?: any) => void
+  commitSceneSnapshot: (store: SceneState, options?: Record<string, unknown>) => void
 
 }
 
@@ -1184,7 +1211,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         ;(duplicate as any).groupExpanded = false
       }
       store.setSelection([duplicate.id], { primaryId: duplicate.id })
-      deps.commitSceneSnapshot(store)
+      deps.commitSceneSnapshot(store as unknown as SceneState)
       return duplicate
     },
 
