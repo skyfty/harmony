@@ -582,10 +582,8 @@ async function handleAddAsset(asset: ProjectAsset) {
     const currentNode = selectedSceneNode.value
     const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
-      await sceneStore.spawnPrefabWithPlaceholder(preparedAsset.id, null, {
-        parentId: parentNode?.id ?? null,
-        placeAtParentOrigin: Boolean(parentNode?.id),
-      })
+      const spawnPosition = parentNode?.id ? sceneStore.getNodeWorldCenter(parentNode.id) : null
+      await sceneStore.spawnPrefabWithPlaceholder(preparedAsset.id, spawnPosition, { parentId: null })
       return
     }
     await ensureAssetCached(preparedAsset)

@@ -10466,7 +10466,7 @@ async function handleViewportDrop(event: DragEvent) {
   if (placementSideSnap) {
     spawnPoint.add(placementSideSnap.delta)
   }
-  const parentGroupId = resolveSelectedGroupDropParent()
+  const parentGroupId = assetType === 'prefab' ? null : resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
     const isEmptySelectedGroup = (() => {

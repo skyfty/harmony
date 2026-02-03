@@ -845,6 +845,29 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
 async function handleAssetDropOnNode(asset: ProjectAsset, targetId: string): Promise<void> {
   let resolvedParentId: string | null = null
   try {
+    if (asset.type === 'prefab') {
+      // Prefab instances must always be created under the scene root.
+      // Keep the inferred world position by spawning near the target (or its group parent) in world space.
+      const targetNode = sceneStore.getNodeById(targetId)
+      const { parentId: targetParentId, parentNode } = findParentInfo(targetId)
+
+      const spawnAnchorId = (() => {
+        if (targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)) {
+          return targetId
+        }
+        if (parentNode?.nodeType === 'Group' && targetParentId) {
+          return targetParentId
+        }
+        return targetId
+      })()
+
+      const anchorCenter = sceneStore.getNodeWorldCenter(spawnAnchorId)
+      const spawnCenter = anchorCenter ? anchorCenter.clone() : null
+
+      await sceneStore.spawnPrefabWithPlaceholder(asset.id, spawnCenter, { parentId: null })
+      return
+    }
+
     resolvedParentId = resolveAssetDropParentId(targetId)
     if (!resolvedParentId) {
       console.warn('Unable to resolve valid group parent for asset drop', asset.id, targetId)
@@ -852,13 +875,6 @@ async function handleAssetDropOnNode(asset: ProjectAsset, targetId: string): Pro
     }
     const parentCenter = sceneStore.getNodeWorldCenter(resolvedParentId)
     const spawnCenter = parentCenter ? parentCenter.clone() : null
-    if (asset.type === 'prefab') {
-      await sceneStore.spawnPrefabWithPlaceholder(asset.id, spawnCenter, {
-        parentId: resolvedParentId,
-      })
-      sceneStore.setGroupExpanded(resolvedParentId, true, { captureHistory: false })
-      return
-    }
 
     if (asset.type === 'model') {
       await ensureModelAssetCached(asset)
@@ -1368,7 +1384,7 @@ async function handleDrop(event: DragEvent, targetId: string) {
     assetRootDropActive.value = false
     event.preventDefault()
     event.stopPropagation()
-    if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+    if (hierarchyAsset.type !== 'prefab' && !sceneStore.nodeAllowsChildCreation(targetId)) {
       resetDragState()
       return
     }
