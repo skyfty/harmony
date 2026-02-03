@@ -47,12 +47,6 @@ const presetSceneDetails = ref<Record<string, PresetSceneDetail>>({})
 const confirmError = ref<string | null>(null)
 const isConfirming = ref(false)
 
-const hasPresetScenes = computed(() => presetEntries.value.length > 0)
-
-const selectedPresetDetail = computed(() =>
-  selectedPresetId.value ? presetSceneDetails.value[selectedPresetId.value] ?? null : null,
-)
-
 const isCreateDisabled = computed(() => {
   if (!selectedPresetId.value) {
     return true
@@ -198,10 +192,6 @@ async function ensureDefaultPresetSelection() {
 }
 
 // reloadPresetScenes removed; remote presets are not used.
-
-async function handlePresetSelection(id: string) {
-  await selectPreset(id, { userInitiated: true })
-}
 
 watch(
   () => props.modelValue,

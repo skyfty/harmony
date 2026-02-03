@@ -118,7 +118,7 @@ import {
   DEFAULT_SCENE_MATERIAL_TYPE,
   MATERIAL_TEXTURE_SLOTS,
 } from '@/types/material'
-import { behaviorMapToList, cloneBehaviorList, createBehaviorSequenceId } from '@schema/behaviors/definitions'
+import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import {
@@ -130,7 +130,6 @@ import {
 } from '@/stores/skyboxPresets'
 import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
-import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -157,14 +156,7 @@ import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
-import {
-  buildBehaviorPrefabFilename,
-  createBehaviorPrefabData,
-  deserializeBehaviorPrefab,
-  instantiateBehaviorPrefab,
-  serializeBehaviorPrefab,
-  type BehaviorPrefabData,
-} from '@/utils/behaviorPrefab'
+import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
   type LodPresetData,
 } from '@/utils/lodPreset'
@@ -174,6 +166,14 @@ import { type FloorPresetData } from '@/utils/floorPreset'
 import { createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
+import {
+  createNodePrefabHelpers,
+  createPrefabActions,
+  normalizePrefabName,
+  stopPrefabPlaceholderWatcher,
+  type PrefabActionsDeps,
+  type PrefabStoreLike,
+} from './prefabActions'
 import {
   AI_MODEL_MESH_USERDATA_KEY,
   createBufferGeometryFromMetadata,
@@ -457,6 +457,9 @@ function normalizeRemoteCandidate(value: string | null | undefined): string | nu
   }
   return null
 }
+
+export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
+
 const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
@@ -464,6 +467,9 @@ const LOD_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const WALL_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const FLOOR_PRESET_PREVIEW_COLOR = NODE_PREFAB_PREVIEW_COLOR
 const PREFAB_PLACEMENT_EPSILON = 1e-3
+
+const GRID_CELL_SIZE = 1
+const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 
 const wallPresetActions = createWallPresetActions({
   WALL_PRESET_PREVIEW_COLOR,
@@ -510,6 +516,61 @@ const lodPresetActions = createLodPresetActions({
   findNodeById,
 })
 
+const prefabDeps: PrefabActionsDeps = {
+  PREFAB_SOURCE_METADATA_KEY,
+  NODE_PREFAB_FORMAT_VERSION,
+  NODE_PREFAB_PREVIEW_COLOR,
+  BEHAVIOR_PREFAB_PREVIEW_COLOR,
+
+  SKY_NODE_ID,
+  ENVIRONMENT_NODE_ID,
+
+  PREFAB_PLACEMENT_EPSILON,
+  DEFAULT_SPAWN_RADIUS,
+  LOCAL_EMBEDDED_ASSET_PREFIX,
+
+  generateUuid,
+
+  findNodeById,
+  allowsChildNodes,
+  buildParentMap,
+  findAssetInTree,
+
+  isGroundNode,
+  isPrefabDependencyPlaceholderAsset,
+
+  cloneNode,
+  createVector,
+  composeNodeMatrix,
+  computeWorldMatrixForNode,
+  resolveSpawnPosition,
+  toPlainVector,
+  insertNodeMutable,
+  findNodeLocationInTree,
+  getRuntimeObject,
+
+  isPlainRecord,
+  clonePlainRecord,
+
+  isAssetIndex,
+  isPackageAssetMap,
+  cloneAssetIndex,
+  clonePackageAssetMap,
+  buildAssetIndexSubsetForPrefab,
+  buildPackageAssetMapSubsetForPrefab,
+  mergeAssetIndexEntries,
+  mergePackageAssetMapEntries,
+
+  duplicateNodeTree,
+  syncNode: (node) => componentManager.syncNode(node),
+
+  commitSceneSnapshot,
+  collectPrefabAssetReferences,
+}
+
+const prefabActions = createPrefabActions(prefabDeps)
+const nodePrefabHelpers = createNodePrefabHelpers(prefabDeps)
+
 const floorHelpers = createSceneStoreFloorHelpers({
   createFloorNodeMaterials,
   createNodeMaterial,
@@ -517,20 +578,14 @@ const floorHelpers = createSceneStoreFloorHelpers({
   updateFloorGroup,
 })
 
-export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
-
-
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
 const DEFAULT_WALL_WIDTH = WALL_DEFAULT_WIDTH
 const DEFAULT_WALL_THICKNESS = WALL_DEFAULT_THICKNESS
-
-const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
 const CAMERA_FAR = 500
 const CAMERA_DISTANCE_EPSILON = 1e-6
 const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
-const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_CONTACT_EPSILON = 1e-4
 // Ground constants moved to groundUtils
 const SEMI_TRANSPARENT_OPACITY = 0.35
@@ -860,20 +915,6 @@ function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
 
 function cloneSceneMaterials(materials: SceneMaterial[]): SceneMaterial[] {
   return materials.map((material) => cloneSceneMaterial(material))
-}
-
-function extractBehaviorList(
-  component: SceneNodeComponentState<BehaviorComponentProps> | undefined,
-): SceneBehavior[] {
-  if (!component) {
-    return []
-  }
-  const props = component.props as BehaviorComponentProps | undefined
-  const behaviors = props?.behaviors
-  if (Array.isArray(behaviors)) {
-    return cloneBehaviorList(behaviors)
-  }
-  return cloneBehaviorList(behaviorMapToList(behaviors))
 }
 
 function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | null {
@@ -2757,8 +2798,8 @@ function collectClipboardPayload(
     }
     const found = findNodeById(nodes, id)
     if (found) {
-      const rootNode = prepareNodePrefabRoot(found, { regenerateIds: false })
-      bakePrefabSubtreeTransforms(rootNode, nodes)
+      const rootNode = nodePrefabHelpers.prepareNodePrefabRoot(found, { regenerateIds: false })
+      nodePrefabHelpers.bakePrefabSubtreeTransforms(rootNode, nodes)
       const serialized = JSON.stringify(rootNode, null, 2)
       entries.push({
         sourceId: id,
@@ -3508,320 +3549,6 @@ function createDefaultSceneNodes(settings?: GroundSettings, environment?: Enviro
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
 }
-
-function normalizePrefabName(value: string | null | undefined): string {
-  if (typeof value !== 'string') {
-    return ''
-  }
-  return value.trim()
-}
-
-function buildNodePrefabFilename(name: string): string {
-  const normalized = normalizePrefabName(name) || 'Unnamed Prefab'
-  const sanitized = normalized
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-  const base = sanitized.length ? sanitized : 'UnnamedPrefab'
-  return `${base}.prefab`
-}
-
-function sanitizePrefabUserData(userData?: Record<string, unknown> | null): Record<string, unknown> | null {
-  if (!userData || !isPlainRecord(userData)) {
-    return null
-  }
-  const cloned = clonePlainRecord(userData)
-  if (!cloned) {
-    return null
-  }
-  if (PREFAB_SOURCE_METADATA_KEY in cloned) {
-    delete cloned[PREFAB_SOURCE_METADATA_KEY]
-  }
-  return Object.keys(cloned).length ? cloned : null
-}
-
-function stripPrefabTransientFields(node: SceneNode): SceneNode {
-  const sanitized: SceneNode = { ...node }
-  delete (sanitized as { parentId?: string | null }).parentId
-  delete (sanitized as { downloadProgress?: number }).downloadProgress
-  delete (sanitized as { downloadStatus?: SceneNode['downloadStatus'] }).downloadStatus
-  delete (sanitized as { downloadError?: string | null }).downloadError
-  delete (sanitized as { isPlaceholder?: boolean }).isPlaceholder
-  sanitized.visible = sanitized.visible ?? true
-  if ('locked' in sanitized) {
-    delete sanitized.locked
-  }
-  const cleanedUserData = sanitizePrefabUserData(sanitized.userData as Record<string, unknown> | null)
-  if (cleanedUserData) {
-    sanitized.userData = cleanedUserData
-  } else if ('userData' in sanitized) {
-    delete sanitized.userData
-  }
-  if (sanitized.children?.length) {
-    sanitized.children = sanitized.children.map(stripPrefabTransientFields)
-  } else if (sanitized.children) {
-    delete sanitized.children
-  }
-  return sanitized
-}
-
-function attachPrefabMetadata(node: SceneNode, assetId: string) {
-  if (!assetId) {
-    return
-  }
-  const current = clonePlainRecord(node.userData as Record<string, unknown> | null)
-  const next: Record<string, unknown> = current ? { ...current } : {}
-  next[PREFAB_SOURCE_METADATA_KEY] = assetId
-  node.userData = next
-}
-
-function remapPrefabNodeIds(node: SceneNode, regenerate: boolean): SceneNode {
-  const resolvedId = regenerate || typeof node.id !== 'string' || !node.id.trim().length
-    ? generateUuid()
-    : node.id
-  const children = node.children?.map((child) => remapPrefabNodeIds(child, regenerate))
-  const sanitized: SceneNode = {
-    ...node,
-    id: resolvedId,
-  }
-  if (children && children.length) {
-    sanitized.children = children
-  } else if (children) {
-    delete sanitized.children
-  }
-  return sanitized
-}
-
-function prepareNodePrefabRoot(
-  source: SceneNode,
-  options: { regenerateIds?: boolean } = {},
-): SceneNode {
-  const cloned = cloneNode(source)
-  const stripped = stripPrefabTransientFields(cloned)
-  return remapPrefabNodeIds(stripped, options.regenerateIds ?? false)
-}
-
-function sanitizeFiniteVector3Like(value: Vector3Like | null | undefined, fallback: Vector3Like): Vector3Like {
-  if (!value) {
-    return fallback
-  }
-  const x = typeof value.x === 'number' && Number.isFinite(value.x) ? value.x : fallback.x
-  const y = typeof value.y === 'number' && Number.isFinite(value.y) ? value.y : fallback.y
-  const z = typeof value.z === 'number' && Number.isFinite(value.z) ? value.z : fallback.z
-  return { x, y, z }
-}
-
-function bakePrefabSubtreeTransforms(root: SceneNode, sceneNodes: SceneNode[]): SceneNode {
-  const identity = new Matrix4()
-  const rootWorld = computeWorldMatrixForNode(sceneNodes, root.id) ?? identity
-  const rootDet = rootWorld.determinant()
-  const rootInverse = Number.isFinite(rootDet) && Math.abs(rootDet) > 1e-12 ? rootWorld.clone().invert() : identity
-
-  const rewrite = (node: SceneNode, parentRelativeWorld: Matrix4, parentSceneWorld: Matrix4) => {
-    const sceneWorld = computeWorldMatrixForNode(sceneNodes, node.id)
-      ?? new Matrix4().multiplyMatrices(parentSceneWorld, composeNodeMatrix(node))
-    const relativeWorld = new Matrix4().multiplyMatrices(rootInverse, sceneWorld)
-    const parentInverse = parentRelativeWorld.clone().invert()
-    const localMatrix = new Matrix4().multiplyMatrices(parentInverse, relativeWorld)
-
-    const position = new Vector3()
-    const quaternion = new Quaternion()
-    const scale = new Vector3()
-    localMatrix.decompose(position, quaternion, scale)
-
-    const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
-    const nextPosition = sanitizeFiniteVector3Like({ x: position.x, y: position.y, z: position.z }, { x: 0, y: 0, z: 0 })
-    const nextRotation = sanitizeFiniteVector3Like({ x: euler.x, y: euler.y, z: euler.z }, { x: 0, y: 0, z: 0 })
-    const nextScale = sanitizeFiniteVector3Like({ x: scale.x, y: scale.y, z: scale.z }, { x: 1, y: 1, z: 1 })
-
-    node.position = createVector(nextPosition.x, nextPosition.y, nextPosition.z)
-    node.rotation = createVector(nextRotation.x, nextRotation.y, nextRotation.z)
-    node.scale = createVector(nextScale.x, nextScale.y, nextScale.z)
-
-    if (node.children?.length) {
-      node.children.forEach((child) => rewrite(child, relativeWorld, sceneWorld))
-    }
-  }
-
-  rewrite(root, identity, identity)
-  return root
-}
-
-function ensurePrefabGroupRoot(node: SceneNode): SceneNode {
-  if (node.nodeType === 'Group') {
-    const cloned = cloneNode(node)
-    cloned.groupExpanded = false
-    return cloned
-  }
-  const wrapper: SceneNode = {
-    id: generateUuid(),
-    name: node.name?.trim().length ? `${node.name} Group` : 'Group Root',
-    nodeType: 'Group',
-    position: createVector(0, 0, 0),
-    rotation: createVector(0, 0, 0),
-    scale: createVector(1, 1, 1),
-    visible: node.visible ?? true,
-    locked: false,
-    groupExpanded: false,
-    children: [cloneNode(node)],
-  }
-  return wrapper
-}
-
-function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
-  const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
-  const root = prepareNodePrefabRoot(node, { regenerateIds: false })
-  return {
-    formatVersion: NODE_PREFAB_FORMAT_VERSION,
-    name: normalizedName,
-    root,
-  }
-}
-
-function serializeNodePrefab(payload: NodePrefabData): string {
-  return JSON.stringify(payload, null, 2)
-}
-
-function parseNodePrefab(raw: string): NodePrefabData {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`节点预制件数据无效: ${(error as Error).message}`)
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('节点预制件数据格式错误')
-  }
-  const candidate = parsed as Partial<NodePrefabData> & { root?: SceneNode | null }
-  const formatVersion = Number.isFinite(candidate.formatVersion)
-    ? Number(candidate.formatVersion)
-    : NODE_PREFAB_FORMAT_VERSION
-  if (formatVersion !== NODE_PREFAB_FORMAT_VERSION) {
-    throw new Error(`不支持的节点预制件版本: ${candidate.formatVersion}`)
-  }
-  if (!candidate.root || typeof candidate.root !== 'object') {
-    throw new Error('节点预制件缺少有效的节点数据')
-  }
-  const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
-  const root = prepareNodePrefabRoot(candidate.root as SceneNode, { regenerateIds: false })
-  const assetIndex = candidate.assetIndex && isAssetIndex(candidate.assetIndex)
-    ? cloneAssetIndex(candidate.assetIndex as Record<string, AssetIndexEntry>)
-    : undefined
-  const packageAssetMap = candidate.packageAssetMap && isPackageAssetMap(candidate.packageAssetMap)
-    ? clonePackageAssetMap(candidate.packageAssetMap as Record<string, string>)
-    : undefined
-  const prefab: NodePrefabData = {
-    formatVersion: NODE_PREFAB_FORMAT_VERSION,
-    name: normalizedName,
-    root,
-  }
-  if (assetIndex && Object.keys(assetIndex).length) {
-    prefab.assetIndex = assetIndex
-  }
-  if (packageAssetMap && Object.keys(packageAssetMap).length) {
-    prefab.packageAssetMap = packageAssetMap
-  }
-  return prefab
-}
-
-function instantiateNodePrefab(
-  prefab: NodePrefabData,
-  context: {
-    assetCache: ReturnType<typeof useAssetCacheStore>
-    runtimeSnapshots?: Map<string, Object3D>
-    regenerateBehaviorIds?: boolean
-  },
-): SceneNode {
-  const duplicateContext: DuplicateContext = {
-    assetCache: context.assetCache,
-    runtimeSnapshots: context.runtimeSnapshots ?? new Map<string, Object3D>(),
-    idMap: new Map<string, string>(),
-    regenerateBehaviorIds: context.regenerateBehaviorIds ?? true,
-  }
-  return duplicateNodeTree(prefab.root, duplicateContext)
-}
-
-type SerializedPrefabPayload = {
-  prefab: NodePrefabData
-  serialized: string
-  dependencyAssetIds: string[]
-}
-
-function buildSerializedPrefabPayload(
-  node: SceneNode,
-  context: {
-    name?: string
-    assetIndex: Record<string, AssetIndexEntry>
-    packageAssetMap: Record<string, string>
-    sceneNodes: SceneNode[]
-  },
-): SerializedPrefabPayload {
-  const prefabRoot = ensurePrefabGroupRoot(node)
-  const prefabData = createNodePrefabData(prefabRoot, context.name ?? node.name ?? '')
-  bakePrefabSubtreeTransforms(prefabData.root, context.sceneNodes)
-  const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
-  if (dependencyAssetIds.length) {
-    const assetIndexSubset = buildAssetIndexSubsetForPrefab(context.assetIndex, dependencyAssetIds)
-    if (assetIndexSubset) {
-      prefabData.assetIndex = assetIndexSubset
-    } else {
-      delete prefabData.assetIndex
-    }
-    const packageAssetMapSubset = buildPackageAssetMapSubsetForPrefab(context.packageAssetMap, dependencyAssetIds)
-    if (packageAssetMapSubset) {
-      prefabData.packageAssetMap = packageAssetMapSubset
-    } else {
-      delete prefabData.packageAssetMap
-    }
-  } else {
-    delete prefabData.assetIndex
-    delete prefabData.packageAssetMap
-  }
-  const serialized = serializeNodePrefab(prefabData)
-  return {
-    prefab: prefabData,
-    serialized,
-    dependencyAssetIds,
-  }
-}
-function deserializeSceneNode(raw: string): SceneNode | null {
-  if (typeof raw !== 'string') {
-    return null
-  }
-  const normalized = raw.trim()
-  if (!normalized.length) {
-    return null
-  }
-
-  try {
-    const prefab = parseNodePrefab(normalized)
-    return prefab.root
-  } catch (_prefabError) {
-    // Fall through to plain node handling.
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(normalized)
-  } catch (error) {
-    console.warn('Failed to parse scene node clipboard payload', error)
-    return null
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    return null
-  }
-
-  try {
-    const root = prepareNodePrefabRoot(parsed as SceneNode, { regenerateIds: false })
-    return root
-  } catch (error) {
-    console.warn('Failed to normalize scene node clipboard payload', error)
-    return null
-  }
-}
-
 // System clipboard I/O has been moved to clipboardStore
 
 function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: string): ProjectAsset | null {
@@ -4667,16 +4394,6 @@ export function collectPrefabAssetReferences(root: SceneNode | null | undefined)
   const bucket = new Set<string>()
   collectNodeAssetDependencies(root, bucket)
   return Array.from(bucket)
-}
-
-const prefabPlaceholderWatchers = new Map<string, WatchStopHandle>()
-
-function stopPrefabPlaceholderWatcher(nodeId: string) {
-  const stop = prefabPlaceholderWatchers.get(nodeId)
-  if (stop) {
-    stop()
-    prefabPlaceholderWatchers.delete(nodeId)
-  }
 }
 
 export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
@@ -6522,7 +6239,7 @@ export const useSceneStore = defineStore('scene', {
             rootWorldRotation = { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
             rootWorldScale = toPlainVector(scale)
           }
-          const payload = buildSerializedPrefabPayload(node, {
+          const payload = nodePrefabHelpers.buildSerializedPrefabPayload(node, {
             name: node.name ?? '',
             assetIndex: this.assetIndex,
             packageAssetMap: this.packageAssetMap,
@@ -6558,7 +6275,7 @@ export const useSceneStore = defineStore('scene', {
         const source = findNodeById(this.nodes, id)
         if (!source) return
         const sourceWorld = computeWorldMatrixForNode(this.nodes, id)
-        const cloned = prepareNodePrefabRoot(source, { regenerateIds: false })
+        const cloned = nodePrefabHelpers.prepareNodePrefabRoot(source, { regenerateIds: false })
         if (sourceWorld) {
           const localMatrix = new Matrix4().multiplyMatrices(pivotInverse, sourceWorld)
           const position = new Vector3()
@@ -6589,7 +6306,7 @@ export const useSceneStore = defineStore('scene', {
         children,
       }
 
-      const payload = buildSerializedPrefabPayload(wrapper, {
+      const payload = nodePrefabHelpers.buildSerializedPrefabPayload(wrapper, {
         name: 'Clipboard',
         assetIndex: this.assetIndex,
         packageAssetMap: this.packageAssetMap,
@@ -9434,127 +9151,16 @@ export const useSceneStore = defineStore('scene', {
       serialized: string,
       options: { assetId?: string | null; select?: boolean } = {},
     ): Promise<ProjectAsset> {
-      const targetAssetId = options.assetId ?? generateUuid()
-      const fileName = buildNodePrefabFilename(prefabData.name)
-      const blob = new Blob([serialized], { type: 'application/json' })
-      const assetCache = useAssetCacheStore()
-      await assetCache.storeAssetBlob(targetAssetId, {
-        blob,
-        mimeType: 'application/json',
-        filename: fileName,
-      })
-
-      if (options.assetId) {
-        const existing = this.getAsset(targetAssetId)
-        if (!existing) {
-          throw new Error('节点预制件资源不存在')
-        }
-        if (existing.type !== 'prefab') {
-          throw new Error('指定资源并非节点预制件')
-        }
-        const updated: ProjectAsset = {
-          ...existing,
-          name: prefabData.name,
-          description: fileName,
-          previewColor: NODE_PREFAB_PREVIEW_COLOR,
-          extension: extractExtension(fileName) ?? existing.extension ?? null,
-        }
-        const categoryId = determineAssetCategoryId(updated)
-        const sourceMeta = this.assetIndex[targetAssetId]?.source
-        return this.registerAsset(updated, {
-          categoryId,
-          source: sourceMeta,
-          commitOptions: { updateNodes: false },
-        })
-      }
-
-      const projectAsset: ProjectAsset = {
-        id: targetAssetId,
-        name: prefabData.name,
-        type: 'prefab',
-        downloadUrl: targetAssetId,
-        previewColor: NODE_PREFAB_PREVIEW_COLOR,
-        thumbnail: null,
-        description: fileName,
-        gleaned: true,
-        extension: extractExtension(fileName) ?? null,
-      }
-      const categoryId = determineAssetCategoryId(projectAsset)
-      const registered = this.registerAsset(projectAsset, {
-        categoryId,
-        source: { type: 'local' },
-        commitOptions: { updateNodes: false },
-      })
-      if (options.select !== false) {
-        this.setActiveDirectory(categoryId)
-        this.selectAsset(registered.id)
-      }
-      return registered
+      return prefabActions.registerPrefabAssetFromData(this as unknown as PrefabStoreLike, prefabData, serialized, options)
     },
     async saveNodePrefab(nodeId: string, options: { assetId?: string; name?: string } = {}): Promise<ProjectAsset> {
-      const node = findNodeById(this.nodes, nodeId)
-      if (!node) {
-        throw new Error('节点不存在或已被移除')
-      }
-      if (node.canPrefab === false) {
-        throw new Error('该节点不允许保存为预制件')
-      }
-      if (isGroundNode(node)) {
-        throw new Error('地面节点无法保存为预制件')
-      }
-
-      const payload = buildSerializedPrefabPayload(node, {
-        name: options.name ?? node.name ?? '',
-        assetIndex: this.assetIndex,
-        packageAssetMap: this.packageAssetMap,
-        sceneNodes: this.nodes,
-      })
-
-      const registered = await this.registerPrefabAssetFromData(payload.prefab, payload.serialized, {
-        assetId: options.assetId,
-      })
-
-      attachPrefabMetadata(node, registered.id)
-      this.queueSceneNodePatch(nodeId, ['userData'])
-      return registered
+      return prefabActions.saveNodePrefab(this as unknown as PrefabStoreLike, nodeId, options)
     },
     async importPrefabAssetFromClipboard(serialized: string): Promise<ProjectAsset | null> {
-      if (typeof serialized !== 'string' || !serialized.trim().length) {
-        return null
-      }
-      try {
-        const prefabData = parseNodePrefab(serialized)
-        return await this.registerPrefabAssetFromData(prefabData, serialized)
-      } catch (error) {
-        console.warn('Invalid prefab clipboard payload', error)
-        return null
-      }
+      return prefabActions.importPrefabAssetFromClipboard(this as unknown as PrefabStoreLike, serialized)
     },
     async loadNodePrefab(assetId: string): Promise<NodePrefabData> {
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('节点预制件资源不存在')
-      }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非节点预制件')
-      }
-
-      const assetCache = useAssetCacheStore()
-      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
-      if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
-      }
-      if (!entry || !entry.blob) {
-        throw new Error('无法加载节点预制件数据')
-      }
-
-      assetCache.touch(assetId)
-      const text = await entry.blob.text()
-      return parseNodePrefab(text)
+      return prefabActions.loadNodePrefab(this as unknown as PrefabStoreLike, assetId)
     },
     async ensurePrefabDependencies(
       assetIds: string[],
@@ -9565,211 +9171,7 @@ export const useSceneStore = defineStore('scene', {
         prefabPackageAssetMap?: Record<string, string> | null
       } = {},
     ) {
-      const providerId = options.providerId ?? null
-      const prefabProgressKey = typeof options.prefabAssetIdForDownloadProgress === 'string'
-        ? options.prefabAssetIdForDownloadProgress.trim()
-        : ''
-      const shouldReportPrefabProgress = prefabProgressKey.length > 0
-      const normalizedIds = Array.from(
-        new Set(
-          assetIds
-            .map((value) => (typeof value === 'string' ? value.trim() : ''))
-            .filter((value) => value.length > 0 && !value.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)),
-        ),
-      )
-
-      if (!normalizedIds.length) {
-        return
-      }
-
-      const assetCache = useAssetCacheStore()
-      const missingIds = normalizedIds.filter((assetId) => !this.getAsset(assetId))
-
-      if (providerId) {
-        const providerDirectories = this.packageDirectoryCache[providerId]
-        if (providerDirectories?.length) {
-          const providerAssets: ProjectAsset[] = []
-          normalizedIds.forEach((assetId) => {
-            const providerAsset = findAssetInTree(providerDirectories, assetId)
-            if (!providerAsset) {
-              return
-            }
-            const existing = this.getAsset(assetId)
-            if (!existing || isPrefabDependencyPlaceholderAsset(existing)) {
-              providerAssets.push(providerAsset)
-            }
-          })
-          if (providerAssets.length) {
-            // Register in a batch to avoid repeated tree rebuilds.
-            this.copyPackageAssetsToAssets(providerId, providerAssets)
-          }
-        } else if (missingIds.length) {
-          console.warn(`Provider ${providerId} is not loaded; prefab dependencies may be unavailable.`)
-        }
-      }
-      // Register placeholders for any remaining dependencies so the Asset panel can display them.
-      const unresolvedIds = normalizedIds.filter((assetId) => !this.findAssetInCatalog(assetId))
-      if (unresolvedIds.length) {
-        const placeholderAssets: ProjectAsset[] = []
-        unresolvedIds.forEach((assetId) => {
-          const placeholder = findAssetInTree(this.projectTree, assetId)
-          if (placeholder) {
-            placeholderAssets.push(placeholder)
-          }
-        })
-
-        if (placeholderAssets.length) {
-          this.registerAssets(placeholderAssets, {
-            categoryId: (asset) => determineAssetCategoryId(asset),
-            commitOptions: { updateNodes: false },
-          })
-        }
-      }
-
-      const resolvedAssets: ProjectAsset[] = []
-      normalizedIds.forEach((assetId) => {
-        const asset = this.getAsset(assetId)
-        if (asset) {
-          resolvedAssets.push(asset)
-        }
-      })
-
-      if (!resolvedAssets.length) {
-        return
-      }
-
-      const trackedAssetIds = normalizedIds
-      const prefabProgressWatcher = { stop: null as WatchStopHandle | null }
-
-      const clampPercent = (value: unknown): number => {
-        const numeric = typeof value === 'number' && Number.isFinite(value) ? value : 0
-        return Math.max(0, Math.min(100, Math.round(numeric)))
-      }
-
-      const computePrefabAggregateProgress = (): { active: boolean; progress: number; error: string | null } => {
-        if (!trackedAssetIds.length) {
-          return { active: false, progress: 100, error: null }
-        }
-        let sum = 0
-        let missing = 0
-        let downloading = 0
-        let errorCount = 0
-        let firstError: string | null = null
-
-        for (const id of trackedAssetIds) {
-          const entry = assetCache.getEntry(id)
-          const cached = assetCache.hasCache(id) || entry?.status === 'cached'
-          if (cached) {
-            sum += 100
-            continue
-          }
-          if (entry?.status === 'downloading') {
-            downloading += 1
-            sum += clampPercent(entry.progress)
-            continue
-          }
-          if (entry?.status === 'error') {
-            errorCount += 1
-            if (!firstError) {
-              firstError = entry.error ?? '资源下载失败'
-            }
-            sum += 0
-            continue
-          }
-          missing += 1
-          sum += 0
-        }
-
-        const progress = Math.round(sum / trackedAssetIds.length)
-        const active = downloading > 0 || missing > 0
-        const error = errorCount > 0
-          ? (errorCount === 1 ? firstError : `${errorCount} assets failed`)
-          : null
-        return { active, progress, error }
-      }
-
-      let prefabProgressTimer: ReturnType<typeof setTimeout> | null = null
-      const PREFAB_PROGRESS_VISIBILITY_DELAY_MS = 120
-
-      if (shouldReportPrefabProgress) {
-        prefabProgressTimer = setTimeout(() => {
-          const initial = computePrefabAggregateProgress()
-          if (!initial.active && !initial.error) {
-            return
-          }
-
-          this.prefabAssetDownloadProgress[prefabProgressKey] = {
-            active: initial.active,
-            progress: initial.progress,
-            error: initial.error,
-            assetIds: trackedAssetIds,
-          }
-
-          prefabProgressWatcher.stop = watch(
-            () =>
-              trackedAssetIds.map((id) => {
-                const entry = assetCache.getEntry(id)
-                return [entry?.status ?? 'idle', entry?.progress ?? 0, entry?.error ?? null] as const
-              }),
-            () => {
-              const next = computePrefabAggregateProgress()
-              const previous = this.prefabAssetDownloadProgress[prefabProgressKey]
-              if (!previous) {
-                return
-              }
-              this.prefabAssetDownloadProgress[prefabProgressKey] = {
-                ...previous,
-                active: next.active,
-                progress: next.progress,
-                error: next.error,
-              }
-            },
-            { immediate: true },
-          )
-        }, PREFAB_PROGRESS_VISIBILITY_DELAY_MS)
-      }
-
-      const errors: Array<{ assetId: string; message: string }> = []
-
-      try {
-        await Promise.all(
-          resolvedAssets.map(async (asset) => {
-            if (assetCache.hasCache(asset.id)) {
-              assetCache.touch(asset.id)
-              return
-            }
-            try {
-              await assetCache.downloaProjectAsset(asset)
-            } catch (error) {
-              const message = (error as Error).message ?? '资源下载失败'
-              errors.push({ assetId: asset.id, message })
-              console.warn(`Failed to preload prefab dependency ${asset.id}`, error)
-            }
-          }),
-        )
-      } finally {
-        if (prefabProgressTimer) {
-          clearTimeout(prefabProgressTimer)
-          prefabProgressTimer = null
-        }
-        prefabProgressWatcher.stop?.()
-        prefabProgressWatcher.stop = null
-        if (shouldReportPrefabProgress) {
-          const latest = this.prefabAssetDownloadProgress[prefabProgressKey]
-          const next = computePrefabAggregateProgress()
-          if (errors.length > 0) {
-            this.prefabAssetDownloadProgress[prefabProgressKey] = {
-              ...(latest ?? { assetIds: trackedAssetIds }),
-              active: false,
-              progress: next.progress,
-              error: errors.length === 1 ? errors[0]?.message ?? next.error : `${errors.length} assets failed`,
-              assetIds: trackedAssetIds,
-            }
-          } else if (latest) {
-            delete this.prefabAssetDownloadProgress[prefabProgressKey]
-          }
-        }
-      }
+      return prefabActions.ensurePrefabDependencies(this as unknown as PrefabStoreLike, assetIds, options)
     },
     async instantiatePrefabData(
       prefab: NodePrefabData,
@@ -9782,81 +9184,7 @@ export const useSceneStore = defineStore('scene', {
         prefabAssetIdForDownloadProgress?: string | null
       } = {},
     ): Promise<SceneNode> {
-      const dependencyAssetIds = options.dependencyAssetIds ?? collectPrefabAssetReferences(prefab.root)
-      const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
-      const providerId = options.providerId ?? null
-      const prefabAssetIndex = prefab.assetIndex && isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
-      const prefabPackageAssetMap = prefab.packageAssetMap && isPackageAssetMap(prefab.packageAssetMap)
-        ? prefab.packageAssetMap
-        : undefined
-      if (prefabAssetIndex || prefabPackageAssetMap) {
-        const { next: mergedIndex, changed: assetIndexChanged } = mergeAssetIndexEntries(
-          this.assetIndex,
-          prefabAssetIndex,
-          dependencyFilter,
-        )
-        if (assetIndexChanged) {
-          this.assetIndex = mergedIndex
-        }
-        const { next: mergedPackageMap, changed: packageMapChanged } = mergePackageAssetMapEntries(
-          this.packageAssetMap,
-          prefabPackageAssetMap,
-          dependencyFilter,
-        )
-        if (packageMapChanged) {
-          this.packageAssetMap = mergedPackageMap
-        }
-      }
-
-      if (dependencyAssetIds.length) {
-        await this.ensurePrefabDependencies(dependencyAssetIds, {
-          providerId,
-          prefabAssetIdForDownloadProgress: options.prefabAssetIdForDownloadProgress ?? null,
-          prefabAssetIndex: prefabAssetIndex ?? null,
-          prefabPackageAssetMap: prefabPackageAssetMap ?? null,
-        })
-      }
-
-      const assetCache = useAssetCacheStore()
-      const runtimeSnapshots = options.runtimeSnapshots ?? new Map<string, Object3D>()
-      const duplicate = instantiateNodePrefab(prefab, {
-        assetCache,
-        runtimeSnapshots,
-        regenerateBehaviorIds: true,
-      })
-      const requestedPosition = options.position
-      const spawnPosition =
-        requestedPosition === undefined
-          ? resolveSpawnPosition({
-              baseY: 0,
-              radius: DEFAULT_SPAWN_RADIUS,
-              localCenter: new Vector3(0, 0, 0),
-              camera: this.camera,
-              nodes: this.nodes,
-              snapToGrid: true,
-            })
-          : requestedPosition === null
-            ? null
-            : requestedPosition.clone()
-      if (spawnPosition) {
-        duplicate.position = toPlainVector(spawnPosition)
-      }
-      duplicate.rotation = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
-      duplicate.scale = duplicate.scale ?? { x: 1, y: 1, z: 1 }
-      if (duplicate.nodeType === 'Group') {
-        duplicate.groupExpanded = false
-      }
-      if (options.sourceAssetId) {
-        attachPrefabMetadata(duplicate, options.sourceAssetId)
-      } else if (duplicate.userData && isPlainRecord(duplicate.userData)) {
-        const sanitized = clonePlainRecord(duplicate.userData as Record<string, unknown>)
-        if (sanitized && PREFAB_SOURCE_METADATA_KEY in sanitized) {
-          delete sanitized[PREFAB_SOURCE_METADATA_KEY]
-          duplicate.userData = Object.keys(sanitized).length ? sanitized : undefined
-        }
-      }
-      componentManager.syncNode(duplicate)
-      return duplicate
+      return prefabActions.instantiatePrefabData(this as unknown as PrefabStoreLike, prefab, options)
     },
     syncComponentSubtree(node: SceneNode) {
         componentManager.syncNode(node)
@@ -9869,204 +9197,11 @@ export const useSceneStore = defineStore('scene', {
       position?: THREE.Vector3,
       options: { parentId?: string | null; rotation?: THREE.Vector3 | null } = {},
     ): Promise<SceneNode> {
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('节点预制件资源不存在')
-      }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非节点预制件')
-      }
-
-      const prefab = await this.loadNodePrefab(assetId)
-      const sourceMeta = this.assetIndex[assetId]?.source ?? null
-      const dependencyProviderId = sourceMeta && sourceMeta.type === 'package' ? sourceMeta.providerId ?? null : null
-      const duplicate = await this.instantiatePrefabData(prefab, {
-        sourceAssetId: assetId,
-        position: position ?? null,
-        providerId: dependencyProviderId,
-        prefabAssetIdForDownloadProgress: assetId,
-      })
-
-      if (options.rotation) {
-        const existing = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
-        duplicate.rotation = {
-          x: (existing.x ?? 0) + options.rotation.x,
-          y: (existing.y ?? 0) + options.rotation.y,
-          z: (existing.z ?? 0) + options.rotation.z,
-        } as Vector3Like
-      }
-
-      const spawnPositionVector = new Vector3(
-        duplicate.position?.x ?? 0,
-        duplicate.position?.y ?? 0,
-        duplicate.position?.z ?? 0,
-      )
-      const desiredPrefabMinY = spawnPositionVector.y
-
-      let parentId = options.parentId ?? null
-      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
-        parentId = null
-      }
-      if (parentId) {
-        const parentNode = findNodeById(this.nodes, parentId)
-        if (!allowsChildNodes(parentNode)) {
-          parentId = null
-        }
-      }
-      if (parentId) {
-        const parentMatrix = computeWorldMatrixForNode(this.nodes, parentId)
-        if (parentMatrix) {
-          const worldMatrix = composeNodeMatrix(duplicate)
-          const parentInverse = parentMatrix.clone().invert()
-          const localMatrix = new Matrix4().multiplyMatrices(parentInverse, worldMatrix)
-          const localPosition = new Vector3()
-          const localQuaternion = new Quaternion()
-          const localScale = new Vector3()
-          localMatrix.decompose(localPosition, localQuaternion, localScale)
-          const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
-          duplicate.position = createVector(localPosition.x, localPosition.y, localPosition.z)
-          duplicate.rotation = createVector(localEuler.x, localEuler.y, localEuler.z)
-          duplicate.scale = createVector(localScale.x, localScale.y, localScale.z)
-          componentManager.syncNode(duplicate)
-        } else {
-          parentId = null
-        }
-      }
-
-      let nextNodes: SceneNode[]
-      if (parentId) {
-        const workingTree = [...this.nodes]
-        const inserted = insertNodeMutable(workingTree, parentId, duplicate, 'inside')
-        if (inserted) {
-          nextNodes = workingTree
-        } else {
-          nextNodes = [...this.nodes, duplicate]
-        }
-      } else {
-        nextNodes = [...this.nodes, duplicate]
-      }
-      this.nodes = nextNodes
-
-      // Structural history: undo by removing the inserted prefab subtree.
-      const insertionLocation = findNodeLocationInTree(this.nodes, duplicate.id)
-      if (insertionLocation) {
-        this.captureNodeStructureHistorySnapshot([
-          {
-            type: 'remove',
-            location: insertionLocation,
-            nodeId: duplicate.id,
-          },
-        ])
-      }
-      await this.ensureSceneAssetsReady({
-        nodes: [duplicate],
-        showOverlay: false,
-        prefabAssetIdForDownloadProgress: assetId,
-        refreshViewport: true,
-      })
-
-      // Prefabs often have no accurate bounds until their runtime objects exist.
-      // Do a one-time bottom alignment using the runtime world bounds.
-      await this.withHistorySuppressed(() => {
-        const runtimeRoot = getRuntimeObject(duplicate.id)
-        if (!runtimeRoot) {
-          return
-        }
-        runtimeRoot.updateMatrixWorld(true)
-        const bounds = new Box3().setFromObject(runtimeRoot)
-        if (bounds.isEmpty()) {
-          return
-        }
-        const currentWorldMatrix = computeWorldMatrixForNode(this.nodes, duplicate.id)
-        if (!currentWorldMatrix) {
-          return
-        }
-        const currentWorldPosition = new Vector3()
-        const currentWorldQuaternion = new Quaternion()
-        const currentWorldScale = new Vector3()
-        currentWorldMatrix.decompose(currentWorldPosition, currentWorldQuaternion, currentWorldScale)
-        this.setNodeWorldPositionPositionOnly(duplicate.id, currentWorldPosition)
-      })
-
-      // Ensure all nodes in the prefab subtree are correctly synced to the runtime scene graph.
-      // ensureSceneAssetsReady only processes nodes with assets, so we need to explicitly sync the hierarchy
-      // to ensure parenting is correct for all nodes (including Groups and those without assets).
-
-      this.syncComponentSubtree(duplicate)
-
-      // Prefab dependencies are ready; now create the subtree in the viewport.
-      this.queueSceneNodePatch(duplicate.id, ['transform'])
-
-      if (duplicate.nodeType === 'Group') {
-        duplicate.groupExpanded = false
-      }
-      this.setSelection([duplicate.id], { primaryId: duplicate.id })
-      commitSceneSnapshot(this)
-      return duplicate
+      return prefabActions.instantiateNodePrefabAsset(this as unknown as PrefabStoreLike, assetId, position, options)
     },
 
     observePrefabDownloadForNode(nodeId: string, prefabAssetId: string) {
-      stopPrefabPlaceholderWatcher(nodeId)
-      const prefabKey = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''
-      if (!prefabKey) {
-        return
-      }
-
-      const stop = watch(
-        () => {
-          const entry = this.prefabAssetDownloadProgress?.[prefabKey] ?? null
-          if (!entry) {
-            return null
-          }
-          return {
-            active: entry.active,
-            progress: entry.progress ?? 0,
-            error: entry.error ?? null,
-          }
-        },
-        (snapshot) => {
-          const target = findNodeById(this.nodes, nodeId)
-          if (!target) {
-            stopPrefabPlaceholderWatcher(nodeId)
-            return
-          }
-
-          if (!snapshot) {
-            // Prefab dependencies finished (or tracker cleaned up). Keep the placeholder until
-            // the caller replaces it with the real prefab instance.
-            if (target.downloadProgress !== 100) {
-              target.downloadProgress = 100
-              this.queueSceneNodePatch(nodeId, ['download'])
-            }
-            return
-          }
-
-          let changed = false
-          if (target.downloadProgress !== snapshot.progress) {
-            target.downloadProgress = snapshot.progress
-            changed = true
-          }
-          if (target.downloadError !== snapshot.error) {
-            target.downloadError = snapshot.error
-            changed = true
-          }
-          const nextStatus = snapshot.error
-            ? 'error'
-            : snapshot.active
-              ? 'downloading'
-              : 'ready'
-          if (target.downloadStatus !== nextStatus) {
-            target.downloadStatus = nextStatus
-            changed = true
-          }
-          if (changed) {
-            this.queueSceneNodePatch(nodeId, ['download'])
-          }
-        },
-        { immediate: true },
-      )
-
-      prefabPlaceholderWatchers.set(nodeId, stop)
+      return prefabActions.observePrefabDownloadForNode(this as unknown as PrefabStoreLike, nodeId, prefabAssetId)
     },
 
     async spawnPrefabWithPlaceholder(
@@ -10074,126 +9209,14 @@ export const useSceneStore = defineStore('scene', {
       position: THREE.Vector3 | null,
       options: { parentId?: string | null; placeAtParentOrigin?: boolean; rotation?: THREE.Vector3 | null } = {},
     ): Promise<SceneNode> {
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('节点预制件资源不存在')
-      }
-      if (asset.type !== 'prefab') {
-        throw new Error('指定资源并非节点预制件')
-      }
-
-      const parentMap = buildParentMap(this.nodes)
-      let parentId = options.parentId ?? null
-      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
-        parentId = null
-      }
-      while (parentId) {
-        const parentNode = findNodeById(this.nodes, parentId)
-        if (allowsChildNodes(parentNode)) {
-          break
-        }
-        parentId = parentMap.get(parentId) ?? null
-      }
-
-      let spawnPosition = position ? position.clone() : null
-      if (!spawnPosition && parentId && options.placeAtParentOrigin) {
-        const parentMatrix = computeWorldMatrixForNode(this.nodes, parentId)
-        if (parentMatrix) {
-          const parentWorldPosition = new Vector3()
-          const parentWorldQuaternion = new Quaternion()
-          const parentWorldScale = new Vector3()
-          parentMatrix.decompose(parentWorldPosition, parentWorldQuaternion, parentWorldScale)
-          spawnPosition = parentWorldPosition
-        }
-      }
-
-      if (!spawnPosition) {
-        spawnPosition = resolveSpawnPosition({
-          baseY: 0,
-          radius: DEFAULT_SPAWN_RADIUS,
-          localCenter: new Vector3(0, 0, 0),
-          camera: this.camera,
-          nodes: this.nodes,
-          snapToGrid: true,
-        })
-      }
-
-      const placeholder = this.addPlaceholderNode(
-        asset,
-        {
-          position: toPlainVector(spawnPosition),
-          rotation: options.rotation ? toPlainVector(options.rotation) : ({ x: 0, y: 0, z: 0 } as Vector3Like),
-          scale: { x: 1, y: 1, z: 1 } as Vector3Like,
-        },
-        { parentId },
-      )
-
-      // Structural history: undo removes the placeholder (and later the prefab if it replaces the placeholder).
-      const placeholderLocation = findNodeLocationInTree(this.nodes, placeholder.id)
-      if (placeholderLocation) {
-        this.captureNodeStructureHistorySnapshot([
-          { type: 'remove', location: placeholderLocation, nodeId: placeholder.id },
-        ])
-      }
-
-      this.observePrefabDownloadForNode(placeholder.id, assetId)
-
-      void (async () => {
-        try {
-          const instantiated = await this.instantiateNodePrefabAsset(assetId, spawnPosition ?? undefined, {
-            parentId,
-            rotation: options.rotation ?? null,
-          })
-          stopPrefabPlaceholderWatcher(placeholder.id)
-          this.removeSceneNodes([placeholder.id])
-          this.setSelection([instantiated.id], { primaryId: instantiated.id })
-
-        } catch (error) {
-          const target = findNodeById(this.nodes, placeholder.id)
-          if (target) {
-            target.downloadStatus = 'error'
-            target.downloadError = (error as Error).message ?? '资源下载失败'
-            this.queueSceneNodePatch(placeholder.id, ['download'])
-          }
-        }
-      })()
-
-      return placeholder
+      return prefabActions.spawnPrefabWithPlaceholder(this as unknown as PrefabStoreLike, assetId, position, options)
     },
     async saveBehaviorPrefab(payload: {
       name: string
       action: BehaviorEventType
       sequence: SceneBehavior[]
     }): Promise<ProjectAsset> {
-      const sanitized = createBehaviorPrefabData(payload)
-      const serialized = serializeBehaviorPrefab(sanitized)
-      const assetId = generateUuid()
-      const fileName = buildBehaviorPrefabFilename(sanitized.name)
-      const blob = new Blob([serialized], { type: 'application/json' })
-      const assetCache = useAssetCacheStore()
-      await assetCache.storeAssetBlob(assetId, {
-        blob,
-        mimeType: 'application/json',
-        filename: fileName,
-      })
-
-      const projectAsset: ProjectAsset = {
-        id: assetId,
-        name: sanitized.name,
-        type: 'behavior',
-        downloadUrl: assetId,
-        previewColor: BEHAVIOR_PREFAB_PREVIEW_COLOR,
-        thumbnail: null,
-        description: fileName,
-        gleaned: true,
-        extension: extractExtension(fileName) ?? null,
-      }
-
-      return this.registerAsset(projectAsset, {
-        categoryId: determineAssetCategoryId(projectAsset),
-        source: { type: 'local' },
-        commitOptions: { updateNodes: false },
-      })
+      return prefabActions.saveBehaviorPrefab(this as unknown as PrefabStoreLike, payload)
     },
 
     async saveLodPreset(payload: {
@@ -10270,94 +9293,13 @@ export const useSceneStore = defineStore('scene', {
       return lodPresetActions.applyLodPresetToNode(this as any, nodeId, assetId)
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('行为预制件资源不存在')
-      }
-      if (asset.type !== 'behavior') {
-        throw new Error('指定资源并非行为预制件')
-      }
-
-      const assetCache = useAssetCacheStore()
-      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
-      if (!entry || entry.status !== 'cached' || !entry.blob) {
-        entry = await assetCache.loadFromIndexedDb(assetId)
-      }
-      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
-        await assetCache.downloaProjectAsset(asset)
-        entry = assetCache.getEntry(assetId)
-      }
-      if (!entry || !entry.blob) {
-        throw new Error('无法加载行为预制件数据')
-      }
-
-      assetCache.touch(assetId)
-      const text = await entry.blob.text()
-      return deserializeBehaviorPrefab(text)
+      return prefabActions.loadBehaviorPrefab(this as unknown as PrefabStoreLike, assetId)
     },
     async applyBehaviorPrefabToNode(
       nodeId: string,
       assetId: string,
     ): Promise<{ sequenceId: string; sequence: SceneBehavior[]; action: BehaviorEventType; name: string } | null> {
-      const node = findNodeById(this.nodes, nodeId)
-      if (!node) {
-        return null
-      }
-
-      const asset = this.getAsset(assetId)
-      if (!asset) {
-        throw new Error('行为预制件资源不存在')
-      }
-      if (asset.type !== 'behavior') {
-        throw new Error('指定资源并非行为预制件')
-      }
-
-      const prefab = await this.loadBehaviorPrefab(assetId)
-      const instantiated = instantiateBehaviorPrefab(prefab, { nodeId })
-
-      if (!node.components?.[BEHAVIOR_COMPONENT_TYPE]) {
-        const result = this.addNodeComponent<typeof BEHAVIOR_COMPONENT_TYPE>(nodeId, BEHAVIOR_COMPONENT_TYPE)
-        if (!result) {
-          throw new Error('无法为节点添加行为组件')
-        }
-      }
-
-      const refreshedNode = findNodeById(this.nodes, nodeId)
-      const behaviorComponent = refreshedNode?.components?.[BEHAVIOR_COMPONENT_TYPE] as
-        | SceneNodeComponentState<BehaviorComponentProps>
-        | undefined
-      if (!behaviorComponent) {
-        throw new Error('行为组件不可用')
-      }
-
-      const currentList = extractBehaviorList(behaviorComponent)
-      const newSequence = cloneBehaviorList(instantiated.sequence)
-      const nextList: SceneBehavior[] = []
-      let inserted = false
-
-      currentList.forEach((step) => {
-        if (!inserted && step.action === instantiated.action) {
-          nextList.push(...newSequence)
-          inserted = true
-        }
-        if (step.action !== instantiated.action) {
-          nextList.push(step)
-        }
-      })
-
-      if (!inserted) {
-        nextList.push(...newSequence)
-      }
-
-      const updated = this.updateNodeComponentProps(nodeId, behaviorComponent.id, {
-        behaviors: cloneBehaviorList(nextList),
-      })
-
-      if (!updated) {
-        return null
-      }
-
-      return instantiated
+      return prefabActions.applyBehaviorPrefabToNode(this as unknown as PrefabStoreLike, nodeId, assetId)
     },
     copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
       return this.copyPackageAssetsToAssets(providerId, [asset])[0] ?? asset
@@ -14011,12 +12953,39 @@ export const useSceneStore = defineStore('scene', {
 
       let prefab: NodePrefabData | null = null
       try {
-        prefab = parseNodePrefab(normalized)
+        prefab = nodePrefabHelpers.parseNodePrefab(normalized)
       } catch (_error) {
-        const node = deserializeSceneNode(normalized)
-        if (!node) return false
-        const root = ensurePrefabGroupRoot(node)
-        prefab = createNodePrefabData(root, node.name ?? 'Clipboard')
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(normalized)
+        } catch {
+          return false
+        }
+
+        if (!parsed || typeof parsed !== 'object') return false
+
+        const rawNode = parsed as SceneNode
+        const groupRoot: SceneNode = rawNode.nodeType === 'Group'
+          ? { ...rawNode, groupExpanded: false }
+          : {
+              id: generateUuid(),
+              name: rawNode.name?.trim().length ? `${rawNode.name} Group` : 'Group Root',
+              nodeType: 'Group',
+              position: createVector(0, 0, 0),
+              rotation: createVector(0, 0, 0),
+              scale: createVector(1, 1, 1),
+              visible: rawNode.visible ?? true,
+              locked: false,
+              groupExpanded: false,
+              children: [rawNode],
+            }
+
+        const root = nodePrefabHelpers.prepareNodePrefabRoot(groupRoot, { regenerateIds: false })
+        prefab = {
+          formatVersion: NODE_PREFAB_FORMAT_VERSION,
+          name: normalizePrefabName(rawNode.name ?? 'Clipboard') || 'Clipboard',
+          root,
+        }
       }
 
       if (!prefab) return false
