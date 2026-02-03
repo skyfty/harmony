@@ -499,40 +499,47 @@ class SceneGraphBuilder {
       if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
         ids.add(node.sourceAssetId);
       }
-      const wallState = node.components?.[WALL_COMPONENT_TYPE] as
-        | SceneNodeComponentState<WallComponentProps>
-        | undefined;
-      if (wallState?.enabled !== false) {
-        const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
-        if (props.bodyAssetId) {
-          ids.add(props.bodyAssetId);
-        }
-        if (props.headAssetId) {
-          ids.add(props.headAssetId);
-        }
-        if (props.bodyEndCapAssetId) {
-          ids.add(props.bodyEndCapAssetId);
-        }
-        if (props.headEndCapAssetId) {
-          ids.add(props.headEndCapAssetId);
-        }
-        const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : []
-        for (const rule of cornerModels) {
-          const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : ''
-          if (bodyCornerAssetId) {
-            ids.add(bodyCornerAssetId)
-          }
-          const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''
-          if (headCornerAssetId) {
-            ids.add(headCornerAssetId)
-          }
-        }
+      if (node.components?.[WALL_COMPONENT_TYPE]) {
+        this.collectWallAssetIds(node, ids);
       }
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
       }
     }
     return Array.from(ids);
+  }
+
+  private collectWallAssetIds(node: SceneNodeWithExtras, ids: Set<string>): void {
+    const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined;
+    if (wallState?.enabled === false) {
+      return;
+    }
+    const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+    if (props.bodyAssetId) {
+      ids.add(props.bodyAssetId);
+    }
+    if (props.headAssetId) {
+      ids.add(props.headAssetId);
+    }
+    if (props.bodyEndCapAssetId) {
+      ids.add(props.bodyEndCapAssetId);
+    }
+    if (props.headEndCapAssetId) {
+      ids.add(props.headEndCapAssetId);
+    }
+    const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : [];
+    for (const rule of cornerModels) {
+      const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : '';
+      if (bodyCornerAssetId) {
+        ids.add(bodyCornerAssetId);
+      }
+      const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : '';
+      if (headCornerAssetId) {
+        ids.add(headCornerAssetId);
+      }
+    }
   }
 
   private collectInstanceLayoutAssetIds(nodes: SceneNodeWithExtras[]): string[] {
