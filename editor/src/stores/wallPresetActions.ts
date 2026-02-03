@@ -9,6 +9,7 @@ import {
   buildWallPresetFilename,
   isWallPresetFilename,
   type StrictWallPresetWallProps,
+  type WallForwardAxis,
   type WallPresetData,
   type WallPresetMaterialPatch,
 } from '@/utils/wallPreset'
@@ -95,6 +96,32 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     return normalized
   }
 
+  const requiredForwardAxis = (value: unknown, label: string): WallForwardAxis => {
+    if (value === '+x' || value === '-x' || value === '+z' || value === '-z') {
+      return value
+    }
+    throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}`)
+  }
+
+  const requiredYawDeg = (value: unknown, label: string): number => {
+    const num = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(num)) {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}`)
+    }
+    return Math.max(-180, Math.min(180, num))
+  }
+
+  const requiredOrientation = (value: unknown, label: string): { forwardAxis: WallForwardAxis; yawDeg: number } => {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}`)
+    }
+    const obj = value as Record<string, unknown>
+    return {
+      forwardAxis: requiredForwardAxis(obj.forwardAxis, `${label}.forwardAxis`),
+      yawDeg: requiredYawDeg(obj.yawDeg, `${label}.yawDeg`),
+    }
+  }
+
   const cornerModelsRaw = record.cornerModels
   if (!Array.isArray(cornerModelsRaw)) {
     throw new Error('墙体预设 wallProps 缺少或无效字段: cornerModels')
@@ -121,7 +148,11 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     if (!Number.isFinite(tolerance)) {
       throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: tolerance`)
     }
-    return { bodyAssetId: bodyAssetId ?? null, headAssetId: headAssetId ?? null, angle, tolerance }
+    const bodyForwardAxis = requiredForwardAxis(row.bodyForwardAxis, `cornerModels[${index}].bodyForwardAxis`)
+    const bodyYawDeg = requiredYawDeg(row.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`)
+    const headForwardAxis = requiredForwardAxis(row.headForwardAxis, `cornerModels[${index}].headForwardAxis`)
+    const headYawDeg = requiredYawDeg(row.headYawDeg, `cornerModels[${index}].headYawDeg`)
+    return { bodyAssetId: bodyAssetId ?? null, headAssetId: headAssetId ?? null, bodyForwardAxis, bodyYawDeg, headForwardAxis, headYawDeg, angle, tolerance }
   })
 
   return {
@@ -131,9 +162,13 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     smoothing: requiredNumber('smoothing'),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
+    bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
     headAssetId: requiredAssetIdOrNull('headAssetId'),
+    headOrientation: requiredOrientation(record.headOrientation, 'headOrientation') as any,
     bodyEndCapAssetId: requiredAssetIdOrNull('bodyEndCapAssetId'),
+    bodyEndCapOrientation: requiredOrientation(record.bodyEndCapOrientation, 'bodyEndCapOrientation') as any,
     headEndCapAssetId: requiredAssetIdOrNull('headEndCapAssetId'),
+    headEndCapOrientation: requiredOrientation(record.headEndCapOrientation, 'headEndCapOrientation') as any,
     cornerModels,
   }
 }
@@ -561,9 +596,13 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         smoothing: wallProps.smoothing,
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
+        bodyOrientation: (wallProps as any).bodyOrientation,
         headAssetId: wallProps.headAssetId ?? null,
+        headOrientation: (wallProps as any).headOrientation,
         bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
+        bodyEndCapOrientation: (wallProps as any).bodyEndCapOrientation,
         headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
+        headEndCapOrientation: (wallProps as any).headEndCapOrientation,
         cornerModels: wallProps.cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)
 

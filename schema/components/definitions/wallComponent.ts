@@ -12,11 +12,28 @@ export const WALL_MIN_WIDTH = 0.1
 export const WALL_MIN_THICKNESS = 0.05
 export const WALL_DEFAULT_SMOOTHING = 0.05
 
+export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
+
+export type WallModelOrientation = {
+  /** Local forward axis of the model (horizontal only). */
+  forwardAxis: WallForwardAxis
+  /** Extra yaw offset in degrees, applied around +Y. */
+  yawDeg: number
+}
+
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
   bodyAssetId: string | null
+  /** Local forward axis for the body corner model. */
+  bodyForwardAxis: WallForwardAxis
+  /** Extra yaw offset in degrees for the body corner model. */
+  bodyYawDeg: number
   /** Asset id of the upper wall head corner/joint model to be instanced. */
   headAssetId: string | null
+  /** Local forward axis for the head corner model. */
+  headForwardAxis: WallForwardAxis
+  /** Extra yaw offset in degrees for the head corner model. */
+  headYawDeg: number
   /**
    * Target interior corner angle (degrees). Straight = 180°.
    * Runtime picks the closest match within tolerance.
@@ -38,84 +55,152 @@ export interface WallComponentProps {
    */
   isAirWall: boolean
   /** Lower wall body model asset id (required to enable model mode). */
-  bodyAssetId?: string | null
+  bodyAssetId: string | null
+  /** Orientation overrides for the body model. */
+  bodyOrientation: WallModelOrientation
   /** Upper wall head model asset id (optional; only valid when bodyAssetId is set). */
-  headAssetId?: string | null
+  headAssetId: string | null
+  /** Orientation overrides for the head model. */
+  headOrientation: WallModelOrientation
   /** Lower wall end-cap model asset id (optional; only valid when bodyAssetId is set; not used for closed loops). */
-  bodyEndCapAssetId?: string | null
+  bodyEndCapAssetId: string | null
+  /** Orientation overrides for the body end-cap model. */
+  bodyEndCapOrientation: WallModelOrientation
   /** Upper wall head end-cap model asset id (optional; only valid when bodyEndCapAssetId is set; not used for closed loops). */
-  headEndCapAssetId?: string | null
+  headEndCapAssetId: string | null
+  /** Orientation overrides for the head end-cap model. */
+  headEndCapOrientation: WallModelOrientation
   /**
    * Optional corner model overrides. At runtime the system will pick a model
    * based on the interior corner angle between adjacent wall segments.
    */
-  cornerModels?: WallCornerModelRule[]
+  cornerModels: WallCornerModelRule[]
 }
 
 export function clampWallProps(props: Partial<WallComponentProps> | null | undefined): WallComponentProps {
-  const height = Number.isFinite(props?.height)
-    ? Math.max(WALL_MIN_HEIGHT, props!.height!)
-    : WALL_DEFAULT_HEIGHT
-  const width = Number.isFinite(props?.width)
-    ? Math.max(WALL_MIN_WIDTH, props!.width!)
-    : WALL_DEFAULT_WIDTH
-  const thickness = Number.isFinite(props?.thickness)
-    ? Math.max(WALL_MIN_THICKNESS, props!.thickness!)
-    : WALL_DEFAULT_THICKNESS
-  const smoothingRaw = (props as WallComponentProps | undefined)?.smoothing
-  const smoothingValue = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
-  const smoothing = Number.isFinite(smoothingValue)
-    ? Math.min(1, Math.max(0, smoothingValue))
-    : WALL_DEFAULT_SMOOTHING
-
-  const normalizeAssetId = (value: unknown): string | null => {
-    return typeof value === 'string' && value.trim().length ? value : null
+  const requiredNumber = (key: keyof WallComponentProps): number => {
+    const raw = (props as any)?.[key]
+    const value = typeof raw === 'number' ? raw : Number(raw)
+    if (!Number.isFinite(value)) {
+      throw new Error(`WallComponentProps missing/invalid number: ${String(key)}`)
+    }
+    return value
   }
 
-  const normalizeAngle = (value: unknown, fallback: number): number => {
+  const requiredBoolean = (key: keyof WallComponentProps): boolean => {
+    const raw = (props as any)?.[key]
+    if (typeof raw !== 'boolean') {
+      throw new Error(`WallComponentProps missing/invalid boolean: ${String(key)}`)
+    }
+    return raw
+  }
+
+  const requiredAssetIdOrNull = (key: keyof WallComponentProps): string | null => {
+    const raw = (props as any)?.[key]
+    if (raw === null) {
+      return null
+    }
+    if (typeof raw !== 'string' || !raw.trim().length) {
+      throw new Error(`WallComponentProps missing/invalid asset id: ${String(key)}`)
+    }
+    return raw.trim()
+  }
+
+  const requiredForwardAxis = (value: unknown, label: string): WallForwardAxis => {
+    if (value === '+x' || value === '-x' || value === '+z' || value === '-z') {
+      return value
+    }
+    throw new Error(`WallComponentProps missing/invalid forwardAxis: ${label}`)
+  }
+
+  const requiredYawDeg = (value: unknown, label: string): number => {
     const num = typeof value === 'number' ? value : Number(value)
     if (!Number.isFinite(num)) {
-      return fallback
+      throw new Error(`WallComponentProps missing/invalid yawDeg: ${label}`)
+    }
+    // Keep yaw in a reasonable range for UI sanity.
+    return Math.max(-180, Math.min(180, num))
+  }
+
+  const requiredOrientation = (value: unknown, label: string): WallModelOrientation => {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`WallComponentProps missing/invalid orientation: ${label}`)
+    }
+    const record = value as Record<string, unknown>
+    return {
+      forwardAxis: requiredForwardAxis(record.forwardAxis, `${label}.forwardAxis`),
+      yawDeg: requiredYawDeg(record.yawDeg, `${label}.yawDeg`),
+    }
+  }
+
+  const height = Math.max(WALL_MIN_HEIGHT, requiredNumber('height'))
+  const width = Math.max(WALL_MIN_WIDTH, requiredNumber('width'))
+  const thickness = Math.max(WALL_MIN_THICKNESS, requiredNumber('thickness'))
+  const smoothing = Math.min(1, Math.max(0, requiredNumber('smoothing')))
+
+  const normalizeAngle = (value: unknown): number => {
+    const num = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(num)) {
+      throw new Error('WallComponentProps missing/invalid cornerModels.angle')
     }
     return Math.max(0, Math.min(180, num))
   }
 
-  const normalizeTolerance = (value: unknown, fallback: number): number => {
+  const normalizeTolerance = (value: unknown): number => {
     const num = typeof value === 'number' ? value : Number(value)
     if (!Number.isFinite(num)) {
-      return fallback
+      throw new Error('WallComponentProps missing/invalid cornerModels.tolerance')
     }
     return Math.max(0, Math.min(90, num))
   }
 
-  const rawCornerModels = (props as WallComponentProps | undefined)?.cornerModels
-  const cornerModels = Array.isArray(rawCornerModels)
-    ? rawCornerModels
-      .map((entry) => {
-        const bodyAssetId = normalizeAssetId((entry as WallCornerModelRule | undefined)?.bodyAssetId)
-        const headAssetId = bodyAssetId
-          ? normalizeAssetId((entry as WallCornerModelRule | undefined)?.headAssetId)
-          : null
-        const angle = normalizeAngle((entry as WallCornerModelRule | undefined)?.angle, 90)
-        const tolerance = normalizeTolerance((entry as WallCornerModelRule | undefined)?.tolerance, 5)
-        return { bodyAssetId, headAssetId, angle, tolerance } satisfies WallCornerModelRule
-      })
-    : []
+  const rawCornerModels = (props as any)?.cornerModels
+  if (!Array.isArray(rawCornerModels)) {
+    throw new Error('WallComponentProps missing/invalid cornerModels')
+  }
 
-  const isAirWall = (props as WallComponentProps | undefined)?.isAirWall
-  const normalizedIsAirWall = Boolean(isAirWall)
+  const cornerModels = rawCornerModels.map((entry: unknown, index: number) => {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`WallComponentProps cornerModels[${index}] invalid`)
+    }
+    const record = entry as Record<string, unknown>
 
-  const bodyAssetId = normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId)
-  const headAssetId = bodyAssetId
-    ? normalizeAssetId((props as WallComponentProps | undefined)?.headAssetId)
-    : null
+    const parseRuleAssetId = (value: unknown, label: string): string | null => {
+      if (value === null) {
+        return null
+      }
+      if (typeof value !== 'string' || !value.trim().length) {
+        throw new Error(`WallComponentProps cornerModels[${index}] missing/invalid ${label}`)
+      }
+      return value.trim()
+    }
 
-  const bodyEndCapAssetId = bodyAssetId
-    ? normalizeAssetId((props as WallComponentProps | undefined)?.bodyEndCapAssetId)
-    : null
-  const headEndCapAssetId = bodyEndCapAssetId
-    ? normalizeAssetId((props as WallComponentProps | undefined)?.headEndCapAssetId)
-    : null
+    const bodyAssetId = parseRuleAssetId(record.bodyAssetId, 'bodyAssetId')
+    const headAssetId = parseRuleAssetId(record.headAssetId, 'headAssetId')
+    return {
+      bodyAssetId,
+      headAssetId,
+      bodyForwardAxis: requiredForwardAxis(record.bodyForwardAxis, `cornerModels[${index}].bodyForwardAxis`),
+      bodyYawDeg: requiredYawDeg(record.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`),
+      headForwardAxis: requiredForwardAxis(record.headForwardAxis, `cornerModels[${index}].headForwardAxis`),
+      headYawDeg: requiredYawDeg(record.headYawDeg, `cornerModels[${index}].headYawDeg`),
+      angle: normalizeAngle(record.angle),
+      tolerance: normalizeTolerance(record.tolerance),
+    } satisfies WallCornerModelRule
+  })
+
+  const normalizedIsAirWall = requiredBoolean('isAirWall')
+
+  const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
+  const headAssetId = bodyAssetId ? requiredAssetIdOrNull('headAssetId') : null
+
+  const bodyEndCapAssetId = bodyAssetId ? requiredAssetIdOrNull('bodyEndCapAssetId') : null
+  const headEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('headEndCapAssetId') : null
+
+  const bodyOrientation = requiredOrientation((props as any).bodyOrientation, 'bodyOrientation')
+  const headOrientation = requiredOrientation((props as any).headOrientation, 'headOrientation')
+  const bodyEndCapOrientation = requiredOrientation((props as any).bodyEndCapOrientation, 'bodyEndCapOrientation')
+  const headEndCapOrientation = requiredOrientation((props as any).headEndCapOrientation, 'headEndCapOrientation')
 
   return {
     height,
@@ -124,9 +209,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     smoothing,
     isAirWall: normalizedIsAirWall,
     bodyAssetId,
+    bodyOrientation,
     headAssetId,
+    headOrientation,
     bodyEndCapAssetId,
+    bodyEndCapOrientation,
     headEndCapAssetId,
+    headEndCapOrientation,
     cornerModels,
   }
 }
@@ -140,9 +229,13 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       smoothing: WALL_DEFAULT_SMOOTHING,
       isAirWall: false,
       bodyAssetId: null,
+      bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headAssetId: null,
+      headOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyEndCapAssetId: null,
+      bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headEndCapAssetId: null,
+      headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
       cornerModels: [],
     }
   }
@@ -153,6 +246,14 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     thickness: base?.thickness,
     smoothing: WALL_DEFAULT_SMOOTHING,
     isAirWall: false,
+    bodyAssetId: null,
+    headAssetId: null,
+    bodyEndCapAssetId: null,
+    headEndCapAssetId: null,
+    bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    headOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     cornerModels: [],
   })
 }
@@ -165,13 +266,33 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     smoothing: props.smoothing,
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
+    bodyOrientation: {
+      forwardAxis: props.bodyOrientation.forwardAxis,
+      yawDeg: props.bodyOrientation.yawDeg,
+    },
     headAssetId: props.headAssetId ?? null,
+    headOrientation: {
+      forwardAxis: props.headOrientation.forwardAxis,
+      yawDeg: props.headOrientation.yawDeg,
+    },
     bodyEndCapAssetId: props.bodyEndCapAssetId ?? null,
+    bodyEndCapOrientation: {
+      forwardAxis: props.bodyEndCapOrientation.forwardAxis,
+      yawDeg: props.bodyEndCapOrientation.yawDeg,
+    },
     headEndCapAssetId: props.headEndCapAssetId ?? null,
+    headEndCapOrientation: {
+      forwardAxis: props.headEndCapOrientation.forwardAxis,
+      yawDeg: props.headEndCapOrientation.yawDeg,
+    },
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
         bodyAssetId: typeof entry?.bodyAssetId === 'string' ? entry.bodyAssetId : null,
         headAssetId: typeof entry?.headAssetId === 'string' ? entry.headAssetId : null,
+        bodyForwardAxis: entry.bodyForwardAxis,
+        bodyYawDeg: entry.bodyYawDeg,
+        headForwardAxis: entry.headForwardAxis,
+        headYawDeg: entry.headYawDeg,
         angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
         tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
       }))
@@ -242,10 +363,14 @@ export function createWallComponentState(
     smoothing: overrides?.smoothing ?? defaults.smoothing,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
+    headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
     bodyEndCapAssetId: overrides?.bodyEndCapAssetId ?? defaults.bodyEndCapAssetId,
+    bodyEndCapOrientation: (overrides as any)?.bodyEndCapOrientation ?? defaults.bodyEndCapOrientation,
     headEndCapAssetId: overrides?.headEndCapAssetId ?? defaults.headEndCapAssetId,
-    cornerModels: overrides?.cornerModels ?? (defaults as WallComponentProps).cornerModels,
+    headEndCapOrientation: (overrides as any)?.headEndCapOrientation ?? defaults.headEndCapOrientation,
+    cornerModels: overrides?.cornerModels ?? defaults.cornerModels,
   })
   return {
     id: options.id ?? '',

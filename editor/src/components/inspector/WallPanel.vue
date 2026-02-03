@@ -17,6 +17,8 @@ import {
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
+  type WallForwardAxis,
+  type WallModelOrientation,
   type WallComponentProps,
 } from '@schema/components'
 
@@ -114,6 +116,13 @@ const headCapAsset = computed(() => {
 
 type WallCornerModelRow = NonNullable<WallComponentProps['cornerModels']>[number]
 
+const FORWARD_AXIS_ITEMS: Array<{ title: string; value: WallForwardAxis }> = [
+  { title: '+Z', value: '+z' },
+  { title: '-Z', value: '-z' },
+  { title: '+X', value: '+x' },
+  { title: '-X', value: '-x' },
+]
+
 const cornerModels = computed<WallCornerModelRow[]>(() => {
   const raw = wallComponent.value?.props?.cornerModels
   return Array.isArray(raw) ? (raw as WallCornerModelRow[]) : []
@@ -135,6 +144,46 @@ function clampTolerance(value: unknown, fallback: number): number {
   return Math.max(0, Math.min(90, num))
 }
 
+function normalizeForwardAxis(value: unknown, fallback: WallForwardAxis): WallForwardAxis {
+  if (value === '+z' || value === '-z' || value === '+x' || value === '-x') {
+    return value
+  }
+  return fallback
+}
+
+function clampYawDeg(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) {
+    return fallback
+  }
+  return Math.max(-180, Math.min(180, num))
+}
+
+function normalizeOrientation(value: unknown, fallback: WallModelOrientation): WallModelOrientation {
+  if (!value || typeof value !== 'object') {
+    return fallback
+  }
+  const record = value as Record<string, unknown>
+  return {
+    forwardAxis: normalizeForwardAxis(record.forwardAxis, fallback.forwardAxis),
+    yawDeg: clampYawDeg(record.yawDeg, fallback.yawDeg),
+  }
+}
+
+function updateWallOrientation(
+  key: 'bodyOrientation' | 'headOrientation' | 'bodyEndCapOrientation' | 'headEndCapOrientation',
+  patch: Partial<WallModelOrientation>,
+): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const current = (component.props as any)?.[key] as WallModelOrientation | undefined
+  const next = normalizeOrientation({ ...(current ?? {}), ...patch }, { forwardAxis: '+z', yawDeg: 0 })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: next } as any)
+}
+
 function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undefined): WallCornerModelRow {
   const bodyAssetId = typeof (row as any)?.bodyAssetId === 'string' && (row as any).bodyAssetId.trim().length
     ? (row as any).bodyAssetId
@@ -144,7 +193,13 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
     : null
   const angle = clampAngleDegrees((row as any)?.angle, 90)
   const tolerance = clampTolerance((row as any)?.tolerance, 5)
-  return { bodyAssetId, headAssetId, angle, tolerance } as WallCornerModelRow
+
+  const bodyForwardAxis = normalizeForwardAxis((row as any)?.bodyForwardAxis, '+z')
+  const bodyYawDeg = clampYawDeg((row as any)?.bodyYawDeg, 0)
+  const headForwardAxis = normalizeForwardAxis((row as any)?.headForwardAxis, '+z')
+  const headYawDeg = clampYawDeg((row as any)?.headYawDeg, 0)
+
+  return { bodyAssetId, headAssetId, bodyForwardAxis, bodyYawDeg, headForwardAxis, headYawDeg, angle, tolerance } as WallCornerModelRow
 }
 
 function commitCornerModels(next: WallCornerModelRow[]): void {
@@ -158,7 +213,16 @@ function commitCornerModels(next: WallCornerModelRow[]): void {
 
 function addCornerModel(): void {
   // Corner model rules use interior angle semantics (straight = 180°).
-  const next = [...cornerModels.value, normalizeCornerModelRow({ bodyAssetId: null, headAssetId: null, angle: 90, tolerance: 5 } as any)]
+  const next = [...cornerModels.value, normalizeCornerModelRow({
+    bodyAssetId: null,
+    headAssetId: null,
+    bodyForwardAxis: '+z',
+    bodyYawDeg: 0,
+    headForwardAxis: '+z',
+    headYawDeg: 0,
+    angle: 90,
+    tolerance: 5,
+  } as any)]
   commitCornerModels(next)
 }
 
@@ -883,6 +947,33 @@ function applyAirWallUpdate(rawValue: unknown) {
                       @click.stop="(e) => openWallAssetDialog('body', e)"
                     />
                   </div>
+
+                  <div v-if="wallComponent" class="wall-orientation-row">
+                    <v-select
+                      density="compact"
+                      variant="underlined"
+                      label="Forward"
+                      :items="FORWARD_AXIS_ITEMS"
+                      item-title="title"
+                      item-value="value"
+                      hide-details
+                      :model-value="(wallComponent.props as any).bodyOrientation.forwardAxis"
+                      @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { forwardAxis: value as any })"
+                    />
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Yaw (deg)"
+                      hide-details
+                      step="1"
+                      min="-180"
+                      max="180"
+                      :model-value="(wallComponent.props as any).bodyOrientation.yawDeg"
+                      @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { yawDeg: Number(value) })"
+                    />
+                  </div>
+
                   <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
                 </div>
 
@@ -909,6 +1000,33 @@ function applyAirWallUpdate(rawValue: unknown) {
                       @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', e) }"
                     />
                   </div>
+
+                  <div v-if="wallComponent" class="wall-orientation-row">
+                    <v-select
+                      density="compact"
+                      variant="underlined"
+                      label="Forward"
+                      :items="FORWARD_AXIS_ITEMS"
+                      item-title="title"
+                      item-value="value"
+                      hide-details
+                      :model-value="(wallComponent.props as any).headOrientation.forwardAxis"
+                      @update:modelValue="(value) => updateWallOrientation('headOrientation', { forwardAxis: value as any })"
+                    />
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Yaw (deg)"
+                      hide-details
+                      step="1"
+                      min="-180"
+                      max="180"
+                      :model-value="(wallComponent.props as any).headOrientation.yawDeg"
+                      @update:modelValue="(value) => updateWallOrientation('headOrientation', { yawDeg: Number(value) })"
+                    />
+                  </div>
+
                   <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
                 </div>
               </div>
@@ -941,6 +1059,33 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
                   />
                 </div>
+
+                <div v-if="wallComponent" class="wall-orientation-row">
+                  <v-select
+                    density="compact"
+                    variant="underlined"
+                    label="Forward"
+                    :items="FORWARD_AXIS_ITEMS"
+                    item-title="title"
+                    item-value="value"
+                    hide-details
+                    :model-value="(wallComponent.props as any).bodyEndCapOrientation.forwardAxis"
+                    @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { forwardAxis: value as any })"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Yaw (deg)"
+                    hide-details
+                    step="1"
+                    min="-180"
+                    max="180"
+                    :model-value="(wallComponent.props as any).bodyEndCapOrientation.yawDeg"
+                    @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
+                  />
+                </div>
+
                 <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
               </div>
 
@@ -967,6 +1112,33 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
                   />
                 </div>
+
+                <div v-if="wallComponent" class="wall-orientation-row">
+                  <v-select
+                    density="compact"
+                    variant="underlined"
+                    label="Forward"
+                    :items="FORWARD_AXIS_ITEMS"
+                    item-title="title"
+                    item-value="value"
+                    hide-details
+                    :model-value="(wallComponent.props as any).headEndCapOrientation.forwardAxis"
+                    @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { forwardAxis: value as any })"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Yaw (deg)"
+                    hide-details
+                    step="1"
+                    min="-180"
+                    max="180"
+                    :model-value="(wallComponent.props as any).headEndCapOrientation.yawDeg"
+                    @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
+                  />
+                </div>
+
                 <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
               </div>
               </div>
@@ -1078,6 +1250,59 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @blur="() => updateCornerModel(index, {})"
                   />
                 </div>
+
+                <div class="wall-corner-orientation-inputs">
+                  <v-select
+                    density="compact"
+                    variant="underlined"
+                    label="Body Forward"
+                    :items="FORWARD_AXIS_ITEMS"
+                    item-title="title"
+                    item-value="value"
+                    hide-details
+                    :model-value="(entry as any).bodyForwardAxis"
+                    @update:modelValue="(value) => updateCornerModel(index, { bodyForwardAxis: value as any } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Body Yaw"
+                    hide-details
+                    step="1"
+                    min="-180"
+                    max="180"
+                    :model-value="(entry as any).bodyYawDeg"
+                    @update:modelValue="(value) => updateCornerModel(index, { bodyYawDeg: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-select
+                    density="compact"
+                    variant="underlined"
+                    label="Head Forward"
+                    :items="FORWARD_AXIS_ITEMS"
+                    item-title="title"
+                    item-value="value"
+                    hide-details
+                    :model-value="(entry as any).headForwardAxis"
+                    @update:modelValue="(value) => updateCornerModel(index, { headForwardAxis: value as any } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Head Yaw"
+                    hide-details
+                    step="1"
+                    min="-180"
+                    max="180"
+                    :model-value="(entry as any).headYawDeg"
+                    @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1153,6 +1378,20 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: grid;
   gap: 0.2rem;
   margin: 0px 5px;
+}
+
+.wall-orientation-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.wall-corner-orientation-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-top: 0.25rem;
 }
 
 .wall-field-labels {

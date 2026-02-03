@@ -132,6 +132,10 @@ export function normalizeNodeComponents(
         headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,
         bodyEndCapAssetId: (existingProps as { bodyEndCapAssetId?: string | null }).bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
         headEndCapAssetId: (existingProps as { headEndCapAssetId?: string | null }).headEndCapAssetId ?? baseProps.headEndCapAssetId,
+        bodyOrientation: (existingProps as { bodyOrientation?: unknown }).bodyOrientation ?? (baseProps as any).bodyOrientation,
+        headOrientation: (existingProps as { headOrientation?: unknown }).headOrientation ?? (baseProps as any).headOrientation,
+        bodyEndCapOrientation: (existingProps as { bodyEndCapOrientation?: unknown }).bodyEndCapOrientation ?? (baseProps as any).bodyEndCapOrientation,
+        headEndCapOrientation: (existingProps as { headEndCapOrientation?: unknown }).headEndCapOrientation ?? (baseProps as any).headEndCapOrientation,
         cornerModels,
       }),
     )

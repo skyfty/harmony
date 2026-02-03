@@ -29,12 +29,31 @@ export type WallCornerModelRule = {
   headAssetId: string | null
   angle: number
   tolerance: number
+
+  // Per-part orientation overrides (Option B).
+  bodyForwardAxis: WallForwardAxis
+  bodyYawDeg: number
+  headForwardAxis: WallForwardAxis
+  headYawDeg: number
+}
+
+export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
+
+export type WallModelOrientation = {
+  forwardAxis: WallForwardAxis
+  yawDeg: number
 }
 
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
+
+  // Part orientations.
+  bodyOrientation?: WallModelOrientation
+  headOrientation?: WallModelOrientation
+  bodyEndCapOrientation?: WallModelOrientation
+  headEndCapOrientation?: WallModelOrientation
 }
 
 const WALL_DEFAULT_COLOR = 0xcfd2d6
@@ -52,6 +71,81 @@ const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
 
 type WallSegment = WallDynamicMesh['segments'] extends Array<infer T> ? T : never
+
+type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
+
+function requireWallForwardAxis(value: unknown, label: string): WallForwardAxis {
+  if (value === '+x' || value === '-x' || value === '+z' || value === '-z') {
+    return value
+  }
+  throw new Error(`Wall: invalid ${label}`)
+}
+
+function normalizeWallYawDeg(value: unknown, label: string): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw)) {
+    throw new Error(`Wall: invalid ${label}`)
+  }
+  return THREE.MathUtils.clamp(raw, -180, 180)
+}
+
+function requireWallOrientation(value: unknown, label: string): WallModelOrientation {
+  const obj = value as { forwardAxis?: unknown; yawDeg?: unknown } | null
+  if (!obj || typeof obj !== 'object') {
+    throw new Error(`Wall: missing ${label}`)
+  }
+  return {
+    forwardAxis: requireWallForwardAxis(obj.forwardAxis, `${label}.forwardAxis`),
+    yawDeg: normalizeWallYawDeg(obj.yawDeg, `${label}.yawDeg`),
+  }
+}
+
+function wallForwardAxisInfo(forwardAxis: WallForwardAxis): WallForwardAxisInfo {
+  switch (forwardAxis) {
+    case '+x':
+      return { axis: 'x', sign: 1 }
+    case '-x':
+      return { axis: 'x', sign: -1 }
+    case '+z':
+      return { axis: 'z', sign: 1 }
+    case '-z':
+      return { axis: 'z', sign: -1 }
+  }
+}
+
+function writeWallLocalForward(out: THREE.Vector3, forwardAxis: WallForwardAxis): THREE.Vector3 {
+  switch (forwardAxis) {
+    case '+x':
+      return out.set(1, 0, 0)
+    case '-x':
+      return out.set(-1, 0, 0)
+    case '+z':
+      return out.set(0, 0, 1)
+    case '-z':
+      return out.set(0, 0, -1)
+  }
+}
+
+function resolveWallTemplateAlongAxis(template: InstancedAssetTemplate, forwardAxis: WallForwardAxis): {
+  tileLengthLocal: number
+  minAlongAxis: number
+  maxAlongAxis: number
+} {
+  const info = wallForwardAxisInfo(forwardAxis)
+  const axis = info.axis
+
+  const minRaw = template.bounds.min[axis]
+  const maxRaw = template.bounds.max[axis]
+  const lengthAbs = Math.abs(maxRaw - minRaw)
+  const tileLengthLocal = Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, lengthAbs)
+
+  // Along coordinate is dot(localForward, localPos). With axis-aligned forward,
+  // this becomes either +axis or -axis.
+  const minAlongAxis = info.sign === 1 ? minRaw : -maxRaw
+  const maxAlongAxis = info.sign === 1 ? maxRaw : -minRaw
+
+  return { tileLengthLocal, minAlongAxis, maxAlongAxis }
+}
 
 function wallDistanceSqXZ(a: { x: number; z: number }, b: { x: number; z: number }): number {
   const dx = a.x - b.x
@@ -209,13 +303,13 @@ function computeWallAlongAxisInstanceMatrices(
   definition: WallDynamicMesh,
   template: InstancedAssetTemplate,
   mode: 'body' | 'head',
+  orientation: WallModelOrientation,
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
 
-  // Convention: model local +Z is the along-wall axis.
-  const tileLengthLocal = Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, Math.abs(template.baseSize.z))
-  const minAlongAxis = template.bounds.min.z
-  const maxAlongAxis = template.bounds.max.z
+  const localForward = new THREE.Vector3()
+  writeWallLocalForward(localForward, orientation.forwardAxis)
+  const { tileLengthLocal, minAlongAxis, maxAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
 
   const start = new THREE.Vector3()
   const end = new THREE.Vector3()
@@ -225,6 +319,7 @@ function computeWallAlongAxisInstanceMatrices(
   const offset = new THREE.Vector3()
   const pos = new THREE.Vector3()
   const quat = new THREE.Quaternion()
+  const yawQuat = new THREE.Quaternion()
   const scale = new THREE.Vector3(1, 1, 1)
   const localMatrix = new THREE.Matrix4()
 
@@ -264,12 +359,16 @@ function computeWallAlongAxisInstanceMatrices(
     // Strict endpoint coverage without scaling: last tile aligns its max-face to the segment end.
     const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
 
-    quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), unitDir)
+    quat.setFromUnitVectors(localForward, unitDir)
+    if (orientation.yawDeg) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
+      quat.multiply(yawQuat)
+    }
 
     for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
       if (instanceIndex === instanceCount - 1) {
         // Last tile: align max face to segment end.
-        offset.set(0, 0, maxAlongAxis)
+        offset.copy(localForward).multiplyScalar(maxAlongAxis)
         offset.applyQuaternion(quat)
         pos.copy(end).sub(offset)
       } else {
@@ -277,7 +376,7 @@ function computeWallAlongAxisInstanceMatrices(
         minPoint.copy(start).addScaledVector(unitDir, along)
 
         // Align the template's local min face (bounds.min.z) to the desired min point.
-        offset.set(0, 0, minAlongAxis)
+        offset.copy(localForward).multiplyScalar(minAlongAxis)
         offset.applyQuaternion(quat)
         pos.copy(minPoint).sub(offset)
       }
@@ -295,18 +394,13 @@ function computeWallAlongAxisInstanceMatrices(
   return matrices
 }
 
-type WallCornerPickRule = {
-  assetId: string | null
-  angle: number
-  tolerance: number
-}
-
-function pickWallCornerAsset(
+function pickWallCornerRule(
   angleRadians: number,
-  rules: WallCornerPickRule[],
-): { assetId: string | null; extraYawRadians: number } {
+  rules: WallCornerModelRule[],
+  mode: 'body' | 'head',
+): WallCornerModelRule | null {
   if (!Number.isFinite(angleRadians)) {
-    return { assetId: null, extraYawRadians: 0 }
+    return null
   }
 
   const angleDeg = Math.max(0, Math.min(180, THREE.MathUtils.radToDeg(angleRadians)))
@@ -314,24 +408,26 @@ function pickWallCornerAsset(
   // always use it and ignore tolerance. Use the radian epsilon constant defined above.
   if (Math.abs(angleRadians - Math.PI) < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
     for (const rule of rules) {
-      const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId.trim() : null
+      const rawAsset = mode === 'body' ? rule?.bodyAssetId : rule?.headAssetId
+      const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
       if (!assetId) {
         continue
       }
       const rawAngle = typeof rule.angle === 'number' ? rule.angle : Number((rule as any).angle)
       const ruleAngle = Number.isFinite(rawAngle) ? Math.max(0, Math.min(180, rawAngle)) : 90
       if (ruleAngle >= 180 - 1e-6) {
-        return { assetId, extraYawRadians: 0 }
+        return rule
       }
     }
   }
 
   let best:
-    | { assetId: string; diff: number; ruleAngle: number }
+    | { rule: WallCornerModelRule; diff: number; ruleAngle: number }
     | null = null
 
   for (const rule of rules) {
-    const assetId = typeof rule?.assetId === 'string' && rule.assetId.trim().length ? rule.assetId.trim() : null
+    const rawAsset = mode === 'body' ? rule?.bodyAssetId : rule?.headAssetId
+    const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
     if (!assetId) {
       continue
     }
@@ -350,31 +446,28 @@ function pickWallCornerAsset(
     }
 
     if (!best) {
-      best = { assetId, diff, ruleAngle }
+      best = { rule, diff, ruleAngle }
       continue
     }
 
     if (diff + 1e-6 < best.diff) {
-      best = { assetId, diff, ruleAngle }
+      best = { rule, diff, ruleAngle }
       continue
     }
 
     // Tie-breaker: lower target angle for determinism.
     if (Math.abs(diff - best.diff) <= 1e-6 && ruleAngle + 1e-6 < best.ruleAngle) {
-      best = { assetId, diff, ruleAngle }
+      best = { rule, diff, ruleAngle }
     }
   }
 
-  if (best) {
-    return { assetId: best.assetId, extraYawRadians: 0 }
-  }
-  return { assetId: null, extraYawRadians: 0 }
+  return best ? best.rule : null
 }
 
 function computeWallCornerInstanceMatricesByAsset(
   definition: WallDynamicMesh,
   templatesByAssetId: Map<string, InstancedAssetTemplate>,
-  rules: WallCornerPickRule[],
+  rules: WallCornerModelRule[],
   mode: 'body' | 'head',
 ): Map<string, THREE.Matrix4[]> {
   const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
@@ -388,6 +481,7 @@ function computeWallCornerInstanceMatricesByAsset(
   const incoming = new THREE.Vector3()
   const outgoing = new THREE.Vector3()
   const bisector = new THREE.Vector3()
+  const localForward = new THREE.Vector3()
   const quat = new THREE.Quaternion()
   const yawQuat = new THREE.Quaternion()
   const pos = new THREE.Vector3()
@@ -433,14 +527,30 @@ function computeWallCornerInstanceMatricesByAsset(
       return
     }
 
-    const selection = pickWallCornerAsset(angle, rules)
-    if (!selection.assetId) {
+    const rule = pickWallCornerRule(angle, rules, mode)
+    if (!rule) {
       return
     }
-    const template = templatesByAssetId.get(selection.assetId)
+
+    const rawAsset = mode === 'body' ? rule.bodyAssetId : rule.headAssetId
+    const assetId = typeof rawAsset === 'string' ? rawAsset.trim() : ''
+    if (!assetId) {
+      return
+    }
+    const template = templatesByAssetId.get(assetId)
     if (!template) {
       return
     }
+
+    const forwardAxis = requireWallForwardAxis(
+      mode === 'body' ? rule.bodyForwardAxis : rule.headForwardAxis,
+      `cornerModels.${mode}ForwardAxis`,
+    )
+    const yawDeg = normalizeWallYawDeg(
+      mode === 'body' ? rule.bodyYawDeg : rule.headYawDeg,
+      `cornerModels.${mode}YawDeg`,
+    )
+    writeWallLocalForward(localForward, forwardAxis)
 
     const bodyHeight = resolveWallBodyHeight(current as any)
     const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
@@ -456,16 +566,16 @@ function computeWallCornerInstanceMatricesByAsset(
       bisector.copy(outgoing)
     }
 
-    quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), bisector.normalize())
-    if (selection.extraYawRadians) {
-      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), selection.extraYawRadians)
+    quat.setFromUnitVectors(localForward, bisector.normalize())
+    if (yawDeg) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(yawDeg))
       quat.multiply(yawQuat)
     }
 
     pos.set(cornerX, anchoredY, cornerZ)
     localMatrix.compose(pos, quat, scale)
     localMatrix.multiply(template.meshToRoot)
-    push(selection.assetId, new THREE.Matrix4().copy(localMatrix))
+    push(assetId, new THREE.Matrix4().copy(localMatrix))
   }
 
   for (let i = 0; i < segments.length - 1; i += 1) {
@@ -490,6 +600,7 @@ function computeWallEndCapInstanceMatrices(
   definition: WallDynamicMesh,
   template: InstancedAssetTemplate,
   mode: 'body' | 'head',
+  orientation: WallModelOrientation,
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
   const segments = definition.segments ?? []
@@ -506,13 +617,16 @@ function computeWallEndCapInstanceMatrices(
     return matrices
   }
 
-  const minAlongAxis = template.bounds.min.z
+  const localForward = new THREE.Vector3()
+  writeWallLocalForward(localForward, orientation.forwardAxis)
+  const { minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
   const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
   const templateMinY = template.bounds.min.y
 
   const dir = new THREE.Vector3()
   const unitDir = new THREE.Vector3()
   const quat = new THREE.Quaternion()
+  const yawQuat = new THREE.Quaternion()
   const offset = new THREE.Vector3()
   const pos = new THREE.Vector3()
   const scale = new THREE.Vector3(1, 1, 1)
@@ -522,8 +636,12 @@ function computeWallEndCapInstanceMatrices(
     if (outwardDir.lengthSq() <= WALL_INSTANCING_DIR_EPSILON) {
       return
     }
-    quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), outwardDir)
-    offset.set(0, 0, minAlongAxis)
+    quat.setFromUnitVectors(localForward, outwardDir)
+    if (orientation.yawDeg) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
+      quat.multiply(yawQuat)
+    }
+    offset.copy(localForward).multiplyScalar(minAlongAxis)
     offset.applyQuaternion(quat)
     pos.set(point.x, point.y, point.z)
     pos.sub(offset)
@@ -1028,7 +1146,8 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate) {
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body'))
+    const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body', bodyOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyInstances'
@@ -1043,7 +1162,8 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate && headTemplate) {
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head'))
+    const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head', headOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headTemplate.geometry, headTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadInstances'
@@ -1058,7 +1178,8 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate && bodyEndCapTemplate) {
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, bodyEndCapTemplate, 'body'))
+    const bodyEndCapOrientation = requireWallOrientation(options.bodyEndCapOrientation, 'bodyEndCapOrientation')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyEndCapTemplate.geometry, bodyEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyEndCapInstances'
@@ -1073,7 +1194,8 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate && bodyEndCapTemplate && headEndCapTemplate) {
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, headEndCapTemplate, 'head'))
+    const headEndCapOrientation = requireWallOrientation(options.headEndCapOrientation, 'headEndCapOrientation')
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, headEndCapTemplate, 'head', headEndCapOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headEndCapTemplate.geometry, headEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadEndCapInstances'
@@ -1089,15 +1211,9 @@ function rebuildWallGroup(
 
   const cornerRules = options.cornerModels
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && bodyCornerTemplatesByAssetId.size) {
-    const pickRules: WallCornerPickRule[] = cornerRules.map((rule) => ({
-      assetId: rule.bodyAssetId,
-      angle: rule.angle,
-      tolerance: rule.tolerance,
-    }))
-
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef, bodyCornerTemplatesByAssetId, pickRules, 'body')
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef, bodyCornerTemplatesByAssetId, cornerRules, 'body')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {
@@ -1126,15 +1242,9 @@ function rebuildWallGroup(
   }
 
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && headCornerTemplatesByAssetId.size) {
-    const pickRules: WallCornerPickRule[] = cornerRules.map((rule) => ({
-      assetId: rule.headAssetId,
-      angle: rule.angle,
-      tolerance: rule.tolerance,
-    }))
-
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef, headCornerTemplatesByAssetId, pickRules, 'head')
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef, headCornerTemplatesByAssetId, cornerRules, 'head')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {

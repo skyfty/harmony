@@ -12632,7 +12632,12 @@ export const useSceneStore = defineStore('scene', {
       const previousWallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
       const previousProps = previousWallComponent?.props as WallComponentProps | undefined
       const nextProps = clampWallProps({
+        ...meshProps,
         ...(previousProps ?? {}),
+        bodyOrientation: previousProps?.bodyOrientation ?? meshProps.bodyOrientation,
+        headOrientation: previousProps?.headOrientation ?? meshProps.headOrientation,
+        bodyEndCapOrientation: previousProps?.bodyEndCapOrientation ?? meshProps.bodyEndCapOrientation,
+        headEndCapOrientation: previousProps?.headEndCapOrientation ?? meshProps.headEndCapOrientation,
         height: meshProps.height,
         width: meshProps.width,
         thickness: meshProps.thickness,
@@ -12673,14 +12678,15 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const current = resolveWallComponentPropsFromMesh(node.dynamicMesh)
+      const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+      const componentProps = wallComponent ? clampWallProps(wallComponent.props as WallComponentProps) : current
+
       const targetProps = clampWallProps({
+        ...componentProps,
         height: dimensions.height ?? current.height,
         width: dimensions.width ?? current.width,
         thickness: dimensions.thickness ?? current.thickness,
       })
-
-  const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
-  const componentProps = wallComponent ? (wallComponent.props as WallComponentProps) : current
 
       const hasGeometryChange =
         Math.abs(current.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
@@ -12981,9 +12987,27 @@ export const useSceneStore = defineStore('scene', {
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
+        const hasBodyOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyOrientation')
+        const hasHeadOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headOrientation')
+        const hasBodyEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOrientation')
+        const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
+
+        const orientationsEqual = (a: any, b: any): boolean => {
+          const axisA = typeof a?.forwardAxis === 'string' ? a.forwardAxis : null
+          const axisB = typeof b?.forwardAxis === 'string' ? b.forwardAxis : null
+          const yawA = typeof a?.yawDeg === 'number' ? a.yawDeg : Number(a?.yawDeg)
+          const yawB = typeof b?.yawDeg === 'number' ? b.yawDeg : Number(b?.yawDeg)
+          if ((axisA ?? null) !== (axisB ?? null)) {
+            return false
+          }
+          if (!Number.isFinite(yawA) || !Number.isFinite(yawB) || Math.abs(yawA - yawB) > 1e-6) {
+            return false
+          }
+          return true
+        }
 
         const cornerModelsEqual = (a: unknown, b: unknown): boolean => {
           const arrA = Array.isArray(a) ? a : []
@@ -13002,6 +13026,17 @@ export const useSceneStore = defineStore('scene', {
             const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
             const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
             const toleranceB = typeof entryB?.tolerance === 'number' ? entryB.tolerance : Number(entryB?.tolerance)
+
+            const bodyForwardAxisA = typeof entryA?.bodyForwardAxis === 'string' ? entryA.bodyForwardAxis : null
+            const bodyForwardAxisB = typeof entryB?.bodyForwardAxis === 'string' ? entryB.bodyForwardAxis : null
+            const bodyYawDegA = typeof entryA?.bodyYawDeg === 'number' ? entryA.bodyYawDeg : Number(entryA?.bodyYawDeg)
+            const bodyYawDegB = typeof entryB?.bodyYawDeg === 'number' ? entryB.bodyYawDeg : Number(entryB?.bodyYawDeg)
+
+            const headForwardAxisA = typeof entryA?.headForwardAxis === 'string' ? entryA.headForwardAxis : null
+            const headForwardAxisB = typeof entryB?.headForwardAxis === 'string' ? entryB.headForwardAxis : null
+            const headYawDegA = typeof entryA?.headYawDeg === 'number' ? entryA.headYawDeg : Number(entryA?.headYawDeg)
+            const headYawDegB = typeof entryB?.headYawDeg === 'number' ? entryB.headYawDeg : Number(entryB?.headYawDeg)
+
             if ((bodyAssetA ?? null) !== (bodyAssetB ?? null)) {
               return false
             }
@@ -13012,6 +13047,19 @@ export const useSceneStore = defineStore('scene', {
               return false
             }
             if (!Number.isFinite(toleranceA) || !Number.isFinite(toleranceB) || Math.abs(toleranceA - toleranceB) > 1e-6) {
+              return false
+            }
+
+            if ((bodyForwardAxisA ?? null) !== (bodyForwardAxisB ?? null)) {
+              return false
+            }
+            if (!Number.isFinite(bodyYawDegA) || !Number.isFinite(bodyYawDegB) || Math.abs(bodyYawDegA - bodyYawDegB) > 1e-6) {
+              return false
+            }
+            if ((headForwardAxisA ?? null) !== (headForwardAxisB ?? null)) {
+              return false
+            }
+            if (!Number.isFinite(headYawDegA) || !Number.isFinite(headYawDegB) || Math.abs(headYawDegA - headYawDegB) > 1e-6) {
               return false
             }
           }
@@ -13040,6 +13088,18 @@ export const useSceneStore = defineStore('scene', {
           headEndCapAssetId: hasHeadEndCapAssetId
             ? (typedPatch.headEndCapAssetId as string | null | undefined)
             : currentProps.headEndCapAssetId,
+          bodyOrientation: hasBodyOrientation
+            ? (typedPatch.bodyOrientation as any)
+            : currentProps.bodyOrientation,
+          headOrientation: hasHeadOrientation
+            ? (typedPatch.headOrientation as any)
+            : currentProps.headOrientation,
+          bodyEndCapOrientation: hasBodyEndCapOrientation
+            ? (typedPatch.bodyEndCapOrientation as any)
+            : currentProps.bodyEndCapOrientation,
+          headEndCapOrientation: hasHeadEndCapOrientation
+            ? (typedPatch.headEndCapOrientation as any)
+            : currentProps.headEndCapOrientation,
           cornerModels: hasCornerModels
             ? (typedPatch.cornerModels as any)
             : currentProps.cornerModels,
@@ -13055,6 +13115,10 @@ export const useSceneStore = defineStore('scene', {
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
           (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
           (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&
+          orientationsEqual(currentProps.bodyOrientation, merged.bodyOrientation) &&
+          orientationsEqual(currentProps.headOrientation, merged.headOrientation) &&
+          orientationsEqual(currentProps.bodyEndCapOrientation, merged.bodyEndCapOrientation) &&
+          orientationsEqual(currentProps.headEndCapOrientation, merged.headEndCapOrientation) &&
           cornerModelsEqual(currentProps.cornerModels, merged.cornerModels)
         if (unchanged) {
           return false
