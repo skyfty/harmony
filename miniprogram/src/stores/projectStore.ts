@@ -78,121 +78,98 @@ export function createProjectEntryFromScenePackage(payload: {
 }
 
 type ProjectStoreSetup = {
-	projects: Ref<StoredProjectEntry[]>;
+	currentProject: Ref<StoredProjectEntry | null>;
 	initialized: Ref<boolean>;
-	orderedProjects: ComputedRef<StoredProjectEntry[]>;
 	bootstrap: () => void;
-	importScenePackage: (payload: { zipBase64: string; project: ProjectConfig; sceneCount: number }, origin?: string) => StoredProjectEntry;
-	removeProject: (projectId: string) => void;
-	getProject: (projectId: string) => StoredProjectEntry | undefined;
+	setProject: (payload: { zipBase64: string; project: ProjectConfig; sceneCount: number }, origin?: string) => StoredProjectEntry;
+	clearProject: () => void;
+	getProject: () => StoredProjectEntry | undefined;
 };
 
 export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup => {
-	const projects = ref<StoredProjectEntry[]>([]);
+	const currentProject = ref<StoredProjectEntry | null>(null);
 	const initialized = ref(false);
-
-	const orderedProjects = computed(() => [...projects.value].sort((a, b) => (a.savedAt > b.savedAt ? -1 : 1)));
 
 	function bootstrap() {
 		if (initialized.value) {
 			return;
 		}
-		projects.value = loadProjectsFromStorage();
+		currentProject.value = loadProjectFromStorage();
 		initialized.value = true;
 	}
 
-	function loadProjectsFromStorage(): StoredProjectEntry[] {
+	function loadProjectFromStorage(): StoredProjectEntry | null {
 		try {
 			const raw = uni.getStorageSync(STORAGE_KEY);
 			if (!raw) {
-				return [];
+				return null;
 			}
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) {
-				return [];
+			const entry = JSON.parse(raw);
+			if (!entry || typeof entry !== 'object') {
+				return null;
 			}
-			const sanitized: StoredProjectEntry[] = [];
-			parsed.forEach((entry) => {
-				if (!entry || typeof entry !== 'object') {
-					return;
-				}
-				const { id, savedAt, origin, zipBase64, project, sceneCount } = entry as StoredProjectEntry;
-				if (typeof id !== 'string' || typeof savedAt !== 'string' || typeof zipBase64 !== 'string') {
-					return;
-				}
-				try {
-					const rawProject = project as unknown;
-					if (!isProjectConfig(rawProject)) {
-						return;
-					}
-					const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
-					sanitized.push({
-						id,
-						savedAt,
-						...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-						zipBase64,
-						project: {
-							id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
-							name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
-							defaultSceneId: (rawProject as any).defaultSceneId ?? null,
-							lastEditedSceneId: (rawProject as any).lastEditedSceneId ?? null,
-							sceneOrder: Array.isArray((rawProject as any).sceneOrder) ? (rawProject as any).sceneOrder : [],
-						},
-						sceneCount: Number.isFinite(sceneCount) ? Math.max(0, Math.floor(sceneCount)) : 0,
-					});
-				} catch (_error) {
-					// ignore invalid entries
-				}
-			});
-			return sanitized;
+			const { id, savedAt, origin, zipBase64, project, sceneCount } = entry as StoredProjectEntry;
+			if (typeof id !== 'string' || typeof savedAt !== 'string' || typeof zipBase64 !== 'string') {
+				return null;
+			}
+			const rawProject = project as unknown;
+			if (!isProjectConfig(rawProject)) {
+				return null;
+			}
+			const normalizedOrigin = typeof origin === 'string' && origin.trim().length ? origin.trim() : '';
+			return {
+				id,
+				savedAt,
+				...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
+				zipBase64,
+				project: {
+					id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
+					name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
+					defaultSceneId: (rawProject as any).defaultSceneId ?? null,
+					lastEditedSceneId: (rawProject as any).lastEditedSceneId ?? null,
+					sceneOrder: Array.isArray((rawProject as any).sceneOrder) ? (rawProject as any).sceneOrder : [],
+				},
+				sceneCount: Number.isFinite(sceneCount) ? Math.max(0, Math.floor(sceneCount)) : 0,
+			};
 		} catch (_error) {
-			return [];
+			return null;
 		}
 	}
 
-	function persistProjects(entries: StoredProjectEntry[]): void {
-		const payload = JSON.stringify(entries);
-		uni.setStorageSync(STORAGE_KEY, payload);
-	}
-
-	function upsertProject(entry: StoredProjectEntry): StoredProjectEntry {
-		const index = projects.value.findIndex((item) => item.id === entry.id);
-		if (index >= 0) {
-			const next = [...projects.value];
-			next.splice(index, 1, entry);
-			projects.value = next;
-			persistProjects(projects.value);
-			return entry;
+	function persistProject(entry: StoredProjectEntry | null): void {
+		if (entry) {
+			const payload = JSON.stringify(entry);
+			uni.setStorageSync(STORAGE_KEY, payload);
+		} else {
+			uni.removeStorageSync(STORAGE_KEY);
 		}
-		projects.value = [entry, ...projects.value];
-		persistProjects(projects.value);
-		return entry;
 	}
 
-	function importScenePackage(
+	function setProject(
 		payload: { zipBase64: string; project: ProjectConfig; sceneCount: number },
 		origin?: string,
 	): StoredProjectEntry {
 		const entry = createProjectEntryFromScenePackage(payload, origin);
-		return upsertProject(entry);
+		currentProject.value = entry;
+		persistProject(entry);
+		return entry;
 	}
 
-	function removeProject(projectId: string): void {
-		projects.value = projects.value.filter((item) => item.id !== projectId);
-		persistProjects(projects.value);
+	function clearProject(): void {
+		currentProject.value = null;
+		persistProject(null);
 	}
 
-	function getProject(projectId: string): StoredProjectEntry | undefined {
-		return projects.value.find((item) => item.id === projectId);
+	function getProject(): StoredProjectEntry | undefined {
+		return currentProject.value || undefined;
 	}
 
 	return {
-		projects,
+		currentProject,
 		initialized,
-		orderedProjects,
 		bootstrap,
-		importScenePackage,
-		removeProject,
+		setProject,
+		clearProject,
 		getProject,
 	};
 });

@@ -1,40 +1,35 @@
 <template>
     <view class="page">
+        <view class="content">
+            <view v-if="currentProject" class="current-project">
+                <view class="project-card" @tap="openProject()">
+                    <view class="card-header">
+                        <text class="project-name">{{ currentProject.project.name || '未命名项目' }}</text>
+                    </view>
+                    <view class="card-meta">
+                        <text>导入于 {{ formatDate(currentProject.savedAt) }}</text>
+                        <text>场景数 {{ currentProject.sceneCount }} 个</text>
+                    </view>
+                    <view class="card-footer">
+                        <text class="card-origin" v-if="currentProject.origin">来源：{{ currentProject.origin }}</text>
+                    </view>
+                </view>
+                <button class="remove-button" @tap="removeProject">
+                    移除项目
+                </button>
+            </view>
+
+            <view v-else class="empty">
+                <text class="empty-title">暂无项目</text>
+                <text class="empty-desc">通过本地文件导入场景包 ZIP</text>
+            </view>
+        </view>
+
         <view class="toolbar">
             <button class="action primary" @tap="handleLocalImport" :disabled="importing">
                 本地导入项目
             </button>
         </view>
-
-        <view class="stats">
-            <text class="title">我的项目</text>
-            <text class="count">{{ orderedProjects.length }} 个</text>
-        </view>
-
-        <scroll-view scroll-y class="scene-list">
-            <view v-if="!orderedProjects.length && !importing" class="empty">
-                <text class="empty-title">暂无项目</text>
-                <text class="empty-desc">通过本地文件导入场景包 ZIP</text>
-            </view>
-
-            <view
-                v-for="project in orderedProjects"
-                :key="project.id"
-                class="scene-card"
-                @tap="openProject(project.id)"
-            >
-                <view class="card-header">
-                    <text class="scene-name">{{ project.project.name || '未命名项目' }}</text>
-                </view>
-                <view class="card-meta">
-                    <text>导入于 {{ formatDate(project.savedAt) }}</text>
-                    <text>场景数 {{ project.sceneCount }} 个</text>
-                </view>
-                <view class="card-footer">
-                    <text class="card-origin" v-if="project.origin">来源：{{ project.origin }}</text>
-                </view>
-            </view>
-        </scroll-view>
     </view>
 </template>
 
@@ -46,7 +41,7 @@ import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema
 import { Base64 } from 'js-base64';
 
 const projectStore = useProjectStore();
-const { orderedProjects } = storeToRefs(projectStore);
+const { currentProject } = storeToRefs(projectStore);
 const importing = ref(false);
 
 onMounted(() => {
@@ -68,8 +63,21 @@ const formatDate = (value?: string) => {
     return `${date.getFullYear()}-${month}-${day} ${hour}:${minute}`;
 };
 
-function openProject(projectId: string) {
-    uni.navigateTo({ url: `/pages/scene-viewer/index?projectId=${encodeURIComponent(projectId)}` });
+function openProject() {
+    if (!currentProject.value) return;
+    uni.navigateTo({ url: `/pages/scene-viewer/index?projectId=${encodeURIComponent(currentProject.value.id)}` });
+}
+
+function removeProject() {
+    uni.showModal({
+        title: '确认移除',
+        content: '确定要移除当前项目吗？',
+        success: (res) => {
+            if (res.confirm) {
+                projectStore.clearProject();
+            }
+        },
+    });
 }
 
 function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
@@ -176,7 +184,7 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
     const zipBase64 = arrayBufferToBase64(ab);
     const sceneCount = Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.length : 0;
 
-    projectStore.importScenePackage(
+    const newProject = projectStore.setProject(
         {
             zipBase64,
             project: {
@@ -190,6 +198,11 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
         },
         origin,
     );
+
+    // Navigate to the project immediately after import
+    setTimeout(() => {
+        uni.navigateTo({ url: `/pages/scene-viewer/index?projectId=${encodeURIComponent(newProject.id)}` });
+    }, 500);
 
     uni.showToast({ title: '项目导入成功', icon: 'success' });
 }
@@ -291,11 +304,21 @@ async function handleLocalImport() {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 16px 16px 96px;
-  padding-top: 84px;
+    padding: 16px;
+    padding-top: 84px;
+    padding-bottom: 96px;
     box-sizing: border-box;
     background-color: #f5f7fb;
     gap: 12px;
+}
+
+.content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 20px 0;
 }
 
 .toolbar {
@@ -328,37 +351,19 @@ async function handleLocalImport() {
     opacity: 0.5;
 }
 
-.stats {
+.current-project {
+    width: 100%;
+    max-width: 320px;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 4px;
-    color: #4b4f58;
+    flex-direction: column;
+    gap: 12px;
 }
 
-.title {
-    font-size: 18px;
-    font-weight: 600;
-    color: #1a1a1a;
-}
-
-.count {
-    font-size: 13px;
-}
-
-.scene-list {
-    flex: 1;
-    background-color: transparent;
-    padding-bottom: 80px;
-    box-sizing: border-box;
-}
-
-.scene-card {
-    margin-bottom: 12px;
-    padding: 14px;
+.project-card {
+    padding: 16px;
     border-radius: 16px;
     background-color: #ffffff;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -370,8 +375,8 @@ async function handleLocalImport() {
     align-items: baseline;
 }
 
-.scene-name {
-    font-size: 16px;
+.project-name {
+    font-size: 18px;
     font-weight: 600;
     color: #1f1f1f;
 }
@@ -397,97 +402,35 @@ async function handleLocalImport() {
     flex: 1;
 }
 
-.delete-button {
-    width: 64px;
-    padding: 6px 0;
-    border-radius: 16px;
+.remove-button {
+    padding: 8px 16px;
+    border-radius: 20px;
     border: none;
     font-size: 13px;
     color: #d93025;
     background-color: rgba(217, 48, 37, 0.1);
+    align-self: center;
 }
 
 .empty {
-    margin-top: 60px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     color: #7a7f8a;
+    text-align: center;
 }
 
 .empty-title {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 600;
     color: #4a4d55;
+    margin-bottom: 4px;
 }
 
 .empty-desc {
-    font-size: 13px;
+    font-size: 14px;
     color: #7a7f8a;
+    line-height: 1.4;
 }
-
-.dialog-mask {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    z-index: 1000;
-}
-
-.dialog {
-    width: 100%;
-    max-width: 320px;
-    background-color: #ffffff;
-    border-radius: 16px;
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.dialog-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: #1f1f1f;
-}
-
-.dialog-input {
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    font-size: 14px;
-    color: #1f1f1f;
-}
-
-.dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-}
-
-.dialog-button {
-    padding: 8px 14px;
-    border-radius: 18px;
-    border: none;
-    font-size: 14px;
-    background-color: rgba(0, 0, 0, 0.08);
-    color: #1f1f1f;
-}
-
-.dialog-button.primary {
-    background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
-    color: #ffffff;
-}
-
-.dialog-button[disabled] {
-    opacity: 0.5;
-}
-
 </style>

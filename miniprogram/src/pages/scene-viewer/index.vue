@@ -9311,8 +9311,8 @@ onLoad((query) => {
   } else if (projectIdParam) {
     requestedMode.value = 'project';
     currentProjectId.value = projectIdParam;
-    const entry = projectStore.getProject(projectIdParam);
-    if (!entry) {
+    const entry = projectStore.getProject();
+    if (!entry || entry.id !== projectIdParam) {
       requestedMode.value = null;
       error.value = '未找到对应的项目，请返回首页重新导入';
       loading.value = false;
