@@ -1160,10 +1160,10 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         if (inserted) {
           nextNodes = workingTree
         } else {
-          nextNodes = [...store.nodes, duplicate]
+          nextNodes = [duplicate,...store.nodes]
         }
       } else {
-        nextNodes = [...store.nodes, duplicate]
+        nextNodes = [duplicate,...store.nodes]
       }
       store.nodes = nextNodes
 
