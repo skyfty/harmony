@@ -1351,9 +1351,9 @@ function applyAirWallUpdate(rawValue: unknown) {
             :key="`corner-${index}`"
             class="wall-corner-row"
           >
-            <div class="wall-corner-assets">
+            <div class="wall-corner-model-row wall-corner-model-row--body">
               <div
-                class="wall-corner-asset"
+                class="wall-corner-model-picker"
                 @click.stop="(e) => openWallCornerModelDialog(index, 'body', e)"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).bodyAssetId)">
@@ -1373,9 +1373,41 @@ function applyAirWallUpdate(rawValue: unknown) {
                 </template>
               </div>
 
+              <div class="wall-corner-orientation-stack">
+                <v-select
+                  density="compact"
+                  variant="underlined"
+                  label="Body Forward"
+                  :items="FORWARD_AXIS_ITEMS"
+                  item-title="title"
+                  item-value="value"
+                  hide-details
+                  :model-value="(entry as any).bodyForwardAxis"
+                  @update:modelValue="(value) => updateCornerModel(index, { bodyForwardAxis: value as any } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Body Yaw"
+                  hide-details
+                  step="1"
+                  min="-180"
+                  max="180"
+                  :model-value="(entry as any).bodyYawDeg"
+                  @update:modelValue="(value) => updateCornerModel(index, { bodyYawDeg: Number(value) } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
+            </div>
+
+            <div
+              class="wall-corner-model-row wall-corner-model-row--head"
+              :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+            >
               <div
-                class="wall-corner-asset"
-                :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+                class="wall-corner-model-picker"
                 @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'head', e) }"
               >
                 <template v-if="resolveCornerModelAsset((entry as any).headAssetId)">
@@ -1393,6 +1425,34 @@ function applyAirWallUpdate(rawValue: unknown) {
                 <template v-else>
                   <div class="asset-thumbnail placeholder" />
                 </template>
+              </div>
+
+              <div class="wall-corner-orientation-stack">
+                <v-select
+                  density="compact"
+                  variant="underlined"
+                  label="Head Forward"
+                  :items="FORWARD_AXIS_ITEMS"
+                  item-title="title"
+                  item-value="value"
+                  hide-details
+                  :model-value="(entry as any).headForwardAxis"
+                  @update:modelValue="(value) => updateCornerModel(index, { headForwardAxis: value as any } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Head Yaw"
+                  hide-details
+                  step="1"
+                  min="-180"
+                  max="180"
+                  :model-value="(entry as any).headYawDeg"
+                  @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
               </div>
             </div>
 
@@ -1442,59 +1502,6 @@ function applyAirWallUpdate(rawValue: unknown) {
                 variant="text"
                 @click.stop="removeCornerModel(index)"
                 :disabled="!wallComponent"
-              />
-            </div>
-
-            <div class="wall-corner-orientation-inputs">
-              <v-select
-                density="compact"
-                variant="underlined"
-                label="Body Forward"
-                :items="FORWARD_AXIS_ITEMS"
-                item-title="title"
-                item-value="value"
-                hide-details
-                :model-value="(entry as any).bodyForwardAxis"
-                @update:modelValue="(value) => updateCornerModel(index, { bodyForwardAxis: value as any } as any)"
-                @blur="() => updateCornerModel(index, {})"
-              />
-              <v-text-field
-                density="compact"
-                variant="underlined"
-                type="number"
-                label="Body Yaw"
-                hide-details
-                step="1"
-                min="-180"
-                max="180"
-                :model-value="(entry as any).bodyYawDeg"
-                @update:modelValue="(value) => updateCornerModel(index, { bodyYawDeg: Number(value) } as any)"
-                @blur="() => updateCornerModel(index, {})"
-              />
-              <v-select
-                density="compact"
-                variant="underlined"
-                label="Head Forward"
-                :items="FORWARD_AXIS_ITEMS"
-                item-title="title"
-                item-value="value"
-                hide-details
-                :model-value="(entry as any).headForwardAxis"
-                @update:modelValue="(value) => updateCornerModel(index, { headForwardAxis: value as any } as any)"
-                @blur="() => updateCornerModel(index, {})"
-              />
-              <v-text-field
-                density="compact"
-                variant="underlined"
-                type="number"
-                label="Head Yaw"
-                hide-details
-                step="1"
-                min="-180"
-                max="180"
-                :model-value="(entry as any).headYawDeg"
-                @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
-                @blur="() => updateCornerModel(index, {})"
               />
             </div>
           </div>
@@ -1705,8 +1712,9 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: grid;
   grid-template-columns: auto 1fr auto;
   grid-template-areas:
-    'assets fields actions'
-    'orientation orientation orientation';
+    'body body actions'
+    'head head actions'
+    'fields fields fields';
   column-gap: 0.75rem;
   row-gap: 0.4rem;
   align-items: start;
@@ -1719,23 +1727,35 @@ function applyAirWallUpdate(rawValue: unknown) {
   padding-top: 0;
 }
 
-.wall-corner-assets {
-  grid-area: assets;
+.wall-corner-model-row {
   display: grid;
-  grid-template-columns: auto auto;
-  gap: 0.35rem;
-  align-items: center;
-  margin-bottom: 0;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  align-items: start;
 }
 
-.wall-corner-asset {
+.wall-corner-model-row--body {
+  grid-area: body;
+}
+
+.wall-corner-model-row--head {
+  grid-area: head;
+}
+
+.wall-corner-model-row.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.wall-corner-model-picker {
   display: flex;
   align-items: center;
 }
 
-.wall-corner-asset.is-disabled {
-  opacity: 0.45;
-  pointer-events: none;
+.wall-corner-orientation-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
 }
 
 .asset-pair-grid {
