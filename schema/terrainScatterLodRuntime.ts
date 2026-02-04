@@ -15,6 +15,7 @@ import {
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
 } from './modelObjectCache'
+import { resolveGroundChunkCells, resolveGroundChunkRadiusMeters } from './groundMesh'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -47,10 +48,18 @@ export type TerrainScatterLodRuntimeOptions = {
   cullGraceMs?: number
   // Budget how many allocate/release operations can happen per visibility update.
   maxBindingChangesPerUpdate?: number
+  // Optional chunk streaming to avoid iterating/allocating scatter across the entire ground.
+  chunkStreaming?: {
+    enabled?: boolean
+    radiusMeters?: number
+    unloadPaddingMeters?: number
+    maxChunkChangesPerUpdate?: number
+  }
 }
 
 type GroundScatterEntry = {
   nodeId: string
+  definition: GroundDynamicMesh
   snapshot: TerrainScatterStoreSnapshot
 }
 
@@ -120,7 +129,7 @@ function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): Gro
       }
       const snapshot = definition.terrainScatter
       if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
-        entries.push({ nodeId: node.id, snapshot })
+        entries.push({ nodeId: node.id, definition, snapshot })
       }
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -128,6 +137,65 @@ function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): Gro
     }
   }
   return entries
+}
+
+function clampFinite(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(num) ? num : fallback
+}
+
+function computeGroundChunkKeyFromLocal(definition: GroundDynamicMesh, chunkCells: number, localX: number, localZ: number): string {
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const normalizedColumn = (localX + halfWidth) / cellSize
+  const normalizedRow = (localZ + halfDepth) / cellSize
+  const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
+  const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
+  const chunkRow = Math.floor(row / Math.max(1, chunkCells))
+  const chunkColumn = Math.floor(column / Math.max(1, chunkCells))
+  return `${chunkRow}:${chunkColumn}`
+}
+
+function computeChunkKeysInRadius(
+  definition: GroundDynamicMesh,
+  chunkCells: number,
+  localX: number,
+  localZ: number,
+  radius: number,
+): Set<string> {
+  const effectiveRadius = clampFinite(radius, 0)
+  if (!(effectiveRadius > 0)) {
+    return new Set([computeGroundChunkKeyFromLocal(definition, chunkCells, localX, localZ)])
+  }
+
+  const chunkCellCount = Math.max(1, Math.round(chunkCells))
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+
+  const minColumnUnclamped = Math.floor((localX - effectiveRadius + halfWidth) / cellSize)
+  const maxColumnUnclamped = Math.ceil((localX + effectiveRadius + halfWidth) / cellSize)
+  const minRowUnclamped = Math.floor((localZ - effectiveRadius + halfDepth) / cellSize)
+  const maxRowUnclamped = Math.ceil((localZ + effectiveRadius + halfDepth) / cellSize)
+
+  const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+  const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+  const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
+  const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+
+  const minChunkColumn = Math.floor(minColumn / chunkCellCount)
+  const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)
+  const minChunkRow = Math.floor(minRow / chunkCellCount)
+  const maxChunkRow = Math.floor(maxRow / chunkCellCount)
+
+  const keys = new Set<string>()
+  for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+    for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+      keys.add(`${chunkRow}:${chunkColumn}`)
+    }
+  }
+  return keys
 }
 
 function normalizeText(value: unknown): string {
@@ -298,10 +366,25 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       ? (typedOptions.maxBindingChangesPerUpdate as number)
       : Number.POSITIVE_INFINITY
 
+  const chunkStreamingOptions = typedOptions.chunkStreaming
+  const chunkStreamingEnabled = Boolean(chunkStreamingOptions?.enabled)
+  const chunkStreamingRadiusOverride = clampFinite(chunkStreamingOptions?.radiusMeters, Number.NaN)
+  const chunkStreamingPaddingOverride = clampFinite(chunkStreamingOptions?.unloadPaddingMeters, Number.NaN)
+  const maxChunkChangesPerUpdate =
+    Number.isFinite(chunkStreamingOptions?.maxChunkChangesPerUpdate) && (chunkStreamingOptions?.maxChunkChangesPerUpdate as number) > 0
+      ? Number(chunkStreamingOptions?.maxChunkChangesPerUpdate)
+      : Number.POSITIVE_INFINITY
+
   let resourceCache: ResourceCache | null = null
   const allocatedNodeIds = new Set<string>()
   const visibleNodeIds = new Set<string>()
   const runtimeInstances = new Map<string, ScatterRuntimeInstance>()
+
+  const runtimeInstancesByChunkKey = new Map<string, string[]>()
+  const chunkKeysActive = new Set<string>()
+  const chunkStreamingActiveNodeIds = new Set<string>()
+  const chunkCellsByGroundNodeId = new Map<string, number>()
+  const groundDefinitionByNodeId = new Map<string, GroundDynamicMesh>()
 
   const lastVisibleAt = new Map<string, number>()
   let lastFrustumVisibleIds: Set<string> = new Set<string>()
@@ -318,6 +401,11 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     allocatedNodeIds.clear()
     visibleNodeIds.clear()
     runtimeInstances.clear()
+    runtimeInstancesByChunkKey.clear()
+    chunkKeysActive.clear()
+    chunkStreamingActiveNodeIds.clear()
+    chunkCellsByGroundNodeId.clear()
+    groundDefinitionByNodeId.clear()
     resourceCache = null
     lodPresetCache.clear()
     pendingLodPresetLoads.clear()
@@ -374,6 +462,10 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     }
 
     for (const entry of entries) {
+      groundDefinitionByNodeId.set(entry.nodeId, entry.definition)
+      const chunkCells = resolveGroundChunkCells(entry.definition)
+      chunkCellsByGroundNodeId.set(entry.nodeId, chunkCells)
+
       const groundMesh = resolveGroundMeshObject(entry.nodeId)
       if (!groundMesh) {
         continue
@@ -408,14 +500,28 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
         for (const instance of instances) {
           const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
-          const binding = allocateModelInstance(bindingAssetId, nodeId)
-          if (!binding) {
-            continue
+
+          if (!chunkStreamingEnabled) {
+            const binding = allocateModelInstance(bindingAssetId, nodeId)
+            if (!binding) {
+              continue
+            }
+            const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
+            updateModelInstanceMatrix(nodeId, matrix)
+            allocatedNodeIds.add(nodeId)
+            visibleNodeIds.add(nodeId)
+          } else {
+            const local = instance.localPosition
+            const chunkKey = computeGroundChunkKeyFromLocal(entry.definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
+            const compositeKey = `${entry.nodeId}|${chunkKey}`
+            const bucket = runtimeInstancesByChunkKey.get(compositeKey)
+            if (bucket) {
+              bucket.push(nodeId)
+            } else {
+              runtimeInstancesByChunkKey.set(compositeKey, [nodeId])
+            }
           }
-          const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
-          updateModelInstanceMatrix(nodeId, matrix)
-          allocatedNodeIds.add(nodeId)
-          visibleNodeIds.add(nodeId)
+
           runtimeInstances.set(nodeId, {
             nodeId,
             groundNodeId: entry.nodeId,
@@ -429,6 +535,116 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     }
   }
 
+  function updateChunkStreamingActiveWindow(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {
+    if (!chunkStreamingEnabled) {
+      return
+    }
+    const cameraPosition = (camera as THREE.Camera & { position?: THREE.Vector3 }).position
+    if (!cameraPosition) {
+      return
+    }
+
+    const nextActiveChunkKeys = new Set<string>()
+    const nextActiveNodeIds = new Set<string>()
+
+    for (const [groundNodeId, definition] of groundDefinitionByNodeId.entries()) {
+      const groundMesh = resolveGroundMeshObject(groundNodeId)
+      if (!groundMesh) {
+        continue
+      }
+      const chunkCells = chunkCellsByGroundNodeId.get(groundNodeId) ?? resolveGroundChunkCells(definition)
+      const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+      const chunkWorldSize = Math.max(1, Math.round(chunkCells)) * cellSize
+
+      const radius = Number.isFinite(chunkStreamingRadiusOverride)
+        ? Math.max(0, chunkStreamingRadiusOverride)
+        : resolveGroundChunkRadiusMeters(definition)
+      const padding = Number.isFinite(chunkStreamingPaddingOverride)
+        ? Math.max(0, chunkStreamingPaddingOverride)
+        : chunkWorldSize
+
+      groundMesh.updateMatrixWorld(true)
+      const inv = scatterInstanceMatrixHelper.copy(groundMesh.matrixWorld).invert()
+      scatterWorldPositionHelper.copy(cameraPosition).applyMatrix4(inv)
+      const localX = scatterWorldPositionHelper.x
+      const localZ = scatterWorldPositionHelper.z
+
+      const desired = computeChunkKeysInRadius(definition, chunkCells, localX, localZ, radius)
+      const retain = computeChunkKeysInRadius(definition, chunkCells, localX, localZ, radius + padding)
+
+      desired.forEach((chunkKey) => {
+        const compositeKey = `${groundNodeId}|${chunkKey}`
+        nextActiveChunkKeys.add(compositeKey)
+      })
+
+      retain.forEach((chunkKey) => {
+        const compositeKey = `${groundNodeId}|${chunkKey}`
+        // retain doesn't automatically activate, but it prevents unload.
+        // We'll merge retain later by keeping existing active keys if inside retain.
+        if (chunkKeysActive.has(compositeKey)) {
+          nextActiveChunkKeys.add(compositeKey)
+        }
+      })
+
+      // Collect active nodeIds for the next chunk key set.
+      // (We do this after finalizing nextActiveChunkKeys to avoid iterating buckets multiple times.)
+      // Note: nodeIds will be filled after we compute the full set across grounds.
+    }
+
+    // Diff and apply chunk activation changes with a per-update budget.
+    let chunkChanges = 0
+
+    // Unload chunks leaving the retain window.
+    for (const compositeKey of Array.from(chunkKeysActive.values())) {
+      if (nextActiveChunkKeys.has(compositeKey)) {
+        continue
+      }
+      if (chunkChanges >= maxChunkChangesPerUpdate) {
+        break
+      }
+      chunkChanges += 1
+      chunkKeysActive.delete(compositeKey)
+      const nodeIds = runtimeInstancesByChunkKey.get(compositeKey) ?? []
+      for (const nodeId of nodeIds) {
+        if (allocatedNodeIds.has(nodeId)) {
+          releaseModelInstance(nodeId)
+          allocatedNodeIds.delete(nodeId)
+          visibleNodeIds.delete(nodeId)
+        }
+        chunkStreamingActiveNodeIds.delete(nodeId)
+        lastVisibleAt.delete(nodeId)
+      }
+    }
+
+    // Activate desired chunks.
+    for (const compositeKey of Array.from(nextActiveChunkKeys.values())) {
+      if (chunkKeysActive.has(compositeKey)) {
+        continue
+      }
+      if (chunkChanges >= maxChunkChangesPerUpdate) {
+        break
+      }
+      chunkChanges += 1
+      chunkKeysActive.add(compositeKey)
+      const nodeIds = runtimeInstancesByChunkKey.get(compositeKey) ?? []
+      for (const nodeId of nodeIds) {
+        chunkStreamingActiveNodeIds.add(nodeId)
+      }
+    }
+
+    // Refresh active node id set from currently active chunks.
+    // This avoids leaving stale nodeIds around if an earlier budget-limited diff skipped some unloads.
+    // (Costs: O(activeNodes) rather than O(totalNodes)).
+    for (const compositeKey of chunkKeysActive.values()) {
+      const nodeIds = runtimeInstancesByChunkKey.get(compositeKey) ?? []
+      for (const nodeId of nodeIds) {
+        nextActiveNodeIds.add(nodeId)
+      }
+    }
+    chunkStreamingActiveNodeIds.clear()
+    nextActiveNodeIds.forEach((nodeId) => chunkStreamingActiveNodeIds.add(nodeId))
+  }
+
   function computeVisibleScatterIds(
     camera: THREE.Camera,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
@@ -437,6 +653,38 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
     const visibleIds = new Set<string>()
+
+    const iterateIds = chunkStreamingEnabled ? Array.from(chunkStreamingActiveNodeIds.values()) : null
+    if (iterateIds) {
+      for (const nodeId of iterateIds) {
+        const runtime = runtimeInstances.get(nodeId)
+        if (!runtime) {
+          continue
+        }
+        const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
+        if (!groundMesh) {
+          continue
+        }
+
+        const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+        scatterWorldPositionHelper.setFromMatrixPosition(matrix)
+
+        const boundAssetId = runtime.boundAssetId
+        const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
+        const scale = runtime.instance.localScale
+        const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+        const radius =
+          baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
+
+        scatterCullingSphere.center.copy(scatterWorldPositionHelper)
+        scatterCullingSphere.radius = radius
+
+        if (scatterCullingFrustum.intersectsSphere(scatterCullingSphere)) {
+          visibleIds.add(nodeId)
+        }
+      }
+      return visibleIds
+    }
 
     runtimeInstances.forEach((runtime, nodeId) => {
       const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
@@ -546,7 +794,12 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       return
     }
 
-    for (const runtime of runtimeInstances.values()) {
+    const allocatedSnapshot = Array.from(allocatedNodeIds.values())
+    for (const nodeId of allocatedSnapshot) {
+      const runtime = runtimeInstances.get(nodeId)
+      if (!runtime) {
+        continue
+      }
       // Frustum culling is applied each frame in `update()`. Here we only handle LOD switching,
       // and must not resurrect instances that have been culled since the last visibility update.
       if (!allocatedNodeIds.has(runtime.nodeId)) {
@@ -609,6 +862,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     // Fast path: update frustum culling + visible matrices (sync) at its own cadence.
     if (now - lastVisibilityUpdateAt >= visibilityUpdateIntervalMs) {
       lastVisibilityUpdateAt = now
+      updateChunkStreamingActiveWindow(camera, resolveGroundMeshObject)
       const visibleIds = computeVisibleScatterIds(camera, resolveGroundMeshObject)
       applyCullingAndUpdateVisibleMatrices(visibleIds, resolveGroundMeshObject)
     }

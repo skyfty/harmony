@@ -2216,6 +2216,9 @@ const groundEditor = createGroundEditor({
   scatterDensityPercent,
   activeBuildTool,
   scatterEraseModeActive,
+  scatterChunkStreaming: {
+    enabled: true,
+  },
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,

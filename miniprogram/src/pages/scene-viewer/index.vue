@@ -1453,6 +1453,9 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
   cullGraceMs: 300,
   cullRadiusMultiplier: 1.2,
   maxBindingChangesPerUpdate: 200,
+  chunkStreaming: {
+    enabled: true,
+  },
 });
 const instancedCullingLastVisibleAt = new Map<string, number>();
 
