@@ -21,6 +21,7 @@ import {
   type WallModelOrientation,
   type WallComponentProps,
 } from '@schema/components'
+import { getCachedModelObject } from '@schema/modelObjectCache'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
@@ -30,6 +31,16 @@ const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 const localIsAirWall = ref<boolean>(false)
+
+const localJointTrimMode = ref<'auto' | 'manual'>('auto')
+const localJointTrimStart = ref<number>(0)
+const localJointTrimEnd = ref<number>(0)
+const jointTrimFeedbackMessage = ref<string | null>(null)
+
+const JOINT_TRIM_MODE_ITEMS: Array<{ title: string; value: 'auto' | 'manual' }> = [
+  { title: 'Auto', value: 'auto' },
+  { title: 'Manual', value: 'manual' },
+]
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -260,6 +271,13 @@ watch(
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
     localIsAirWall.value = Boolean((props as any).isAirWall)
+    localJointTrimMode.value = (props as any).jointTrimMode === 'manual' ? 'manual' : 'auto'
+    localJointTrimStart.value = Number.isFinite(Number((props as any).jointTrimManual?.start))
+      ? Math.max(0, Number((props as any).jointTrimManual.start))
+      : 0
+    localJointTrimEnd.value = Number.isFinite(Number((props as any).jointTrimManual?.end))
+      ? Math.max(0, Number((props as any).jointTrimManual.end))
+      : 0
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
@@ -269,6 +287,107 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+function applyJointTrimUpdate() {
+  const component = wallComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  if (isSyncingFromScene.value) {
+    return
+  }
+
+  const mode = localJointTrimMode.value === 'manual' ? 'manual' : 'auto'
+  const start = Math.max(0, Number(localJointTrimStart.value) || 0)
+  const end = Math.max(0, Number(localJointTrimEnd.value) || 0)
+
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+    jointTrimMode: mode,
+    jointTrimManual: { start, end },
+  } as any)
+}
+
+function computeCachedAssetHorizontalRadius(assetId: string): number | null {
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const bbox = (cached as any).boundingBox
+  const min = bbox?.min
+  const max = bbox?.max
+  if (!min || !max) {
+    return null
+  }
+  const maxAbsX = Math.max(Math.abs(Number(min.x)), Math.abs(Number(max.x)))
+  const maxAbsZ = Math.max(Math.abs(Number(min.z)), Math.abs(Number(max.z)))
+  if (!Number.isFinite(maxAbsX) || !Number.isFinite(maxAbsZ)) {
+    return null
+  }
+  const radius = Math.sqrt(maxAbsX * maxAbsX + maxAbsZ * maxAbsZ)
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return null
+  }
+  return radius
+}
+
+function recommendJointTrim(): void {
+  const component = wallComponent.value
+  if (!component) {
+    return
+  }
+  jointTrimFeedbackMessage.value = null
+
+  const cornerAssetIds = new Set<string>()
+  for (const rule of cornerModels.value) {
+    const bodyId = (rule as any)?.bodyAssetId
+    const headId = (rule as any)?.headAssetId
+    if (typeof bodyId === 'string' && bodyId.trim().length) {
+      cornerAssetIds.add(bodyId.trim())
+    }
+    if (typeof headId === 'string' && headId.trim().length) {
+      cornerAssetIds.add(headId.trim())
+    }
+  }
+
+  if (cornerAssetIds.size === 0) {
+    jointTrimFeedbackMessage.value = 'No corner models configured; nothing to recommend.'
+    return
+  }
+
+  let maxRadius = 0
+  let cachedCount = 0
+  for (const assetId of cornerAssetIds) {
+    const radius = computeCachedAssetHorizontalRadius(assetId)
+    if (radius != null) {
+      cachedCount += 1
+      maxRadius = Math.max(maxRadius, radius)
+    }
+  }
+
+  const thickness = Number((component.props as any)?.thickness)
+  const width = Number((component.props as any)?.width)
+  const fallback = Math.max(
+    0,
+    Math.min(2, Math.max(
+      Number.isFinite(thickness) ? thickness : WALL_DEFAULT_THICKNESS,
+      Number.isFinite(width) ? width : WALL_DEFAULT_WIDTH,
+    ) * 0.5),
+  )
+
+  let recommended = maxRadius > 0 ? maxRadius : fallback
+  recommended = Math.max(0, Math.min(5, recommended))
+  recommended = Math.round(recommended * 100) / 100
+
+  localJointTrimMode.value = 'manual'
+  localJointTrimStart.value = recommended
+  localJointTrimEnd.value = recommended
+  applyJointTrimUpdate()
+
+  jointTrimFeedbackMessage.value = cachedCount > 0
+    ? `Recommended from ${cachedCount} cached corner model(s).`
+    : 'Corner models not loaded yet; used a conservative fallback.'
+}
 
 watch(selectedNode, () => {
   bodyDropActive.value = false
@@ -281,6 +400,7 @@ watch(selectedNode, () => {
   headDropProcessing.value = false
   headCapDropProcessing.value = false
   wallPresetFeedbackMessage.value = null
+  jointTrimFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
   capFeedbackMessage.value = null
   headFeedbackMessage.value = null
@@ -918,6 +1038,61 @@ function applyAirWallUpdate(rawValue: unknown) {
             hide-details
             @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
           />
+
+          <v-select
+            density="compact"
+            variant="underlined"
+            label="Joint Trim"
+            :items="JOINT_TRIM_MODE_ITEMS"
+            item-title="title"
+            item-value="value"
+            hide-details
+            v-model="localJointTrimMode"
+            @update:modelValue="applyJointTrimUpdate"
+          />
+
+          <v-text-field
+            v-model.number="localJointTrimStart"
+            label="Trim Start (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.01"
+            min="0"
+            :disabled="localJointTrimMode !== 'manual'"
+            @blur="applyJointTrimUpdate"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyJointTrimUpdate"
+          />
+
+          <v-text-field
+            v-model.number="localJointTrimEnd"
+            label="Trim End (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.01"
+            min="0"
+            :disabled="localJointTrimMode !== 'manual'"
+            @blur="applyJointTrimUpdate"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyJointTrimUpdate"
+          />
+
+          <div class="wall-joint-trim-actions">
+            <v-btn
+              v-if="wallComponent"
+              density="compact"
+              variant="text"
+              size="small"
+              @click="recommendJointTrim"
+            >
+              推荐值
+            </v-btn>
+            <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
+          </div>
         </div>
 
         <div class="wall-asset-section">
@@ -1250,70 +1425,72 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @blur="() => updateCornerModel(index, {})"
                   />
                 </div>
-
-                <div class="wall-corner-orientation-inputs">
-                  <v-select
-                    density="compact"
-                    variant="underlined"
-                    label="Body Forward"
-                    :items="FORWARD_AXIS_ITEMS"
-                    item-title="title"
-                    item-value="value"
-                    hide-details
-                    :model-value="(entry as any).bodyForwardAxis"
-                    @update:modelValue="(value) => updateCornerModel(index, { bodyForwardAxis: value as any } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Body Yaw"
-                    hide-details
-                    step="1"
-                    min="-180"
-                    max="180"
-                    :model-value="(entry as any).bodyYawDeg"
-                    @update:modelValue="(value) => updateCornerModel(index, { bodyYawDeg: Number(value) } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                  <v-select
-                    density="compact"
-                    variant="underlined"
-                    label="Head Forward"
-                    :items="FORWARD_AXIS_ITEMS"
-                    item-title="title"
-                    item-value="value"
-                    hide-details
-                    :model-value="(entry as any).headForwardAxis"
-                    @update:modelValue="(value) => updateCornerModel(index, { headForwardAxis: value as any } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Head Yaw"
-                    hide-details
-                    step="1"
-                    min="-180"
-                    max="180"
-                    :model-value="(entry as any).headYawDeg"
-                    @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                </div>
               </div>
             </div>
 
-            <v-btn
-              icon="mdi-delete"
-              size="x-small"
-              density="compact"
-              variant="text"
-              @click.stop="removeCornerModel(index)"
-              :disabled="!wallComponent"
-            />
+            <div class="wall-corner-actions">
+              <v-btn
+                icon="mdi-delete"
+                size="x-small"
+                density="compact"
+                variant="text"
+                @click.stop="removeCornerModel(index)"
+                :disabled="!wallComponent"
+              />
+            </div>
+
+            <div class="wall-corner-orientation-inputs">
+              <v-select
+                density="compact"
+                variant="underlined"
+                label="Body Forward"
+                :items="FORWARD_AXIS_ITEMS"
+                item-title="title"
+                item-value="value"
+                hide-details
+                :model-value="(entry as any).bodyForwardAxis"
+                @update:modelValue="(value) => updateCornerModel(index, { bodyForwardAxis: value as any } as any)"
+                @blur="() => updateCornerModel(index, {})"
+              />
+              <v-text-field
+                density="compact"
+                variant="underlined"
+                type="number"
+                label="Body Yaw"
+                hide-details
+                step="1"
+                min="-180"
+                max="180"
+                :model-value="(entry as any).bodyYawDeg"
+                @update:modelValue="(value) => updateCornerModel(index, { bodyYawDeg: Number(value) } as any)"
+                @blur="() => updateCornerModel(index, {})"
+              />
+              <v-select
+                density="compact"
+                variant="underlined"
+                label="Head Forward"
+                :items="FORWARD_AXIS_ITEMS"
+                item-title="title"
+                item-value="value"
+                hide-details
+                :model-value="(entry as any).headForwardAxis"
+                @update:modelValue="(value) => updateCornerModel(index, { headForwardAxis: value as any } as any)"
+                @blur="() => updateCornerModel(index, {})"
+              />
+              <v-text-field
+                density="compact"
+                variant="underlined"
+                type="number"
+                label="Head Yaw"
+                hide-details
+                step="1"
+                min="-180"
+                max="180"
+                :model-value="(entry as any).headYawDeg"
+                @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
+                @blur="() => updateCornerModel(index, {})"
+              />
+            </div>
           </div>
         </div>
         </div>
@@ -1388,10 +1565,10 @@ function applyAirWallUpdate(rawValue: unknown) {
 }
 
 .wall-corner-orientation-inputs {
+  grid-area: orientation;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.4rem;
-  margin-top: 0.25rem;
 }
 
 .wall-field-labels {
@@ -1521,7 +1698,11 @@ function applyAirWallUpdate(rawValue: unknown) {
 .wall-corner-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 0.75rem;
+  grid-template-areas:
+    'assets fields actions'
+    'orientation orientation orientation';
+  column-gap: 0.75rem;
+  row-gap: 0.4rem;
   align-items: start;
   padding-top: 0.4rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -1533,10 +1714,12 @@ function applyAirWallUpdate(rawValue: unknown) {
 }
 
 .wall-corner-assets {
+  grid-area: assets;
   display: grid;
   grid-template-columns: auto auto;
   gap: 0.35rem;
   align-items: center;
+  margin-bottom: 0;
 }
 
 .wall-corner-asset {
@@ -1586,9 +1769,16 @@ function applyAirWallUpdate(rawValue: unknown) {
 }
 
 .wall-corner-fields {
+  grid-area: fields;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.wall-corner-actions {
+  grid-area: actions;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .wall-corner-angle-fields {
@@ -1676,6 +1866,13 @@ function applyAirWallUpdate(rawValue: unknown) {
 .asset-feedback {
   font-size: 0.75rem;
   color: #f97316;
+}
+
+.wall-joint-trim-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 .wall-panel-drop-surface.is-wall-preset-active {

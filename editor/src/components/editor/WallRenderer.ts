@@ -379,7 +379,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyOrientation)
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -396,7 +399,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'head', wallProps.headOrientation)
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'head', wallProps.headOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -597,6 +603,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head',
     orientation: WallModelOrientation,
+    trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
   ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
     if (!definition.segments.length) {
@@ -610,19 +617,79 @@ export function createWallRenderer(options: WallRendererOptions) {
     const templateHeight = resolveWallModelHeight(bounds)
     const minY = bounds.min.y
 
-    definition.segments.forEach((segment) => {
+    const segments = Array.isArray(definition.segments) ? definition.segments : []
+    const distanceSqXZRaw = (a: { x: number; z: number }, b: { x: number; z: number }): number => {
+      const dx = Number(a.x) - Number(b.x)
+      const dz = Number(a.z) - Number(b.z)
+      return dx * dx + dz * dz
+    }
+    const isClosedChain = (() => {
+      if (segments.length < 2) {
+        return false
+      }
+      const first = segments[0] as any
+      const last = segments[segments.length - 1] as any
+      if (!first?.start || !last?.end) {
+        return false
+      }
+      return distanceSqXZRaw(first.start as any, last.end as any) <= WALL_SYNC_EPSILON
+    })()
+
+    const manualTrimActive = trimOptions?.mode === 'manual'
+      && (trimOptions.manual.start > WALL_SYNC_EPSILON || trimOptions.manual.end > WALL_SYNC_EPSILON)
+
+    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+      const segment = segments[segmentIndex] as any
       wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
       wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
       wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
       wallSyncLocalDirHelper.y = 0
       const lengthLocal = wallSyncLocalDirHelper.length()
       if (lengthLocal <= WALL_SYNC_EPSILON) {
-        return
+        continue
       }
 
       wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
 
-      const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
+      // Optional manual trimming to create clearance at interior joints.
+      let trimStart = 0
+      let trimEnd = 0
+      if (manualTrimActive) {
+        const prev = segmentIndex > 0 ? (segments[segmentIndex - 1] as any) : null
+        const next = segmentIndex < segments.length - 1 ? (segments[segmentIndex + 1] as any) : null
+
+        const connectedPrev = prev && prev.end && segment.start
+          ? distanceSqXZRaw(prev.end as any, segment.start as any) <= WALL_SYNC_EPSILON
+          : false
+        const connectedNext = next && segment.end && next.start
+          ? distanceSqXZRaw(segment.end as any, next.start as any) <= WALL_SYNC_EPSILON
+          : false
+
+        const hasIncomingJoint = connectedPrev || (isClosedChain && segmentIndex === 0)
+        const hasOutgoingJoint = connectedNext || (isClosedChain && segmentIndex === segments.length - 1)
+
+        trimStart = hasIncomingJoint ? Math.max(0, trimOptions!.manual.start) : 0
+        trimEnd = hasOutgoingJoint ? Math.max(0, trimOptions!.manual.end) : 0
+      }
+
+      if (trimStart > WALL_SYNC_EPSILON) {
+        wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
+      }
+      if (trimEnd > WALL_SYNC_EPSILON) {
+        wallSyncLocalEndHelper.addScaledVector(wallSyncLocalUnitDirHelper, -trimEnd)
+      }
+
+      const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
+      if (trimmedLengthLocal <= WALL_SYNC_EPSILON) {
+        continue
+      }
+
+      // Do not place tiles for segments shorter than a single tile (avoids overshoot).
+      if (trimmedLengthLocal < tileLengthLocal - WALL_SYNC_EPSILON) {
+        continue
+      }
+
+      const instanceCount = Math.max(1, Math.ceil(trimmedLengthLocal / tileLengthLocal - 1e-9))
       const quatLocal = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalUnitDirHelper)
       if (orientation.yawDeg) {
         wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
@@ -658,7 +725,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
         matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
       }
-    })
+    }
 
     return matrices
   }

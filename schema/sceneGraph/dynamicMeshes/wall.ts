@@ -82,6 +82,8 @@ export async function buildWallMesh(
       headOrientation: wallProps.headOrientation,
       bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
       headEndCapOrientation: wallProps.headEndCapOrientation,
+      jointTrimMode: wallProps.jointTrimMode,
+      jointTrimManual: wallProps.jointTrimManual,
     },
   );
   group.name = node.name ?? (group.name || 'Wall');

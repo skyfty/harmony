@@ -11590,7 +11590,11 @@ export const useSceneStore = defineStore('scene', {
 
       const runtime = getRuntimeObject(nodeId)
       if (runtime) {
-        updateWallGroup(runtime, build.definition, { smoothing: resolveWallSmoothing(node) })
+        updateWallGroup(runtime, build.definition, {
+          smoothing: resolveWallSmoothing(node),
+          jointTrimMode: nextProps.jointTrimMode,
+          jointTrimManual: nextProps.jointTrimManual,
+        } as any)
       }
       return true
     },
@@ -11917,6 +11921,8 @@ export const useSceneStore = defineStore('scene', {
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
+        const hasJointTrimMode = Object.prototype.hasOwnProperty.call(typedPatch, 'jointTrimMode')
+        const hasJointTrimManual = Object.prototype.hasOwnProperty.call(typedPatch, 'jointTrimManual')
 
         const orientationsEqual = (a: any, b: any): boolean => {
           const axisA = typeof a?.forwardAxis === 'string' ? a.forwardAxis : null
@@ -11996,6 +12002,12 @@ export const useSceneStore = defineStore('scene', {
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
+          jointTrimMode: hasJointTrimMode
+            ? (typedPatch.jointTrimMode as any)
+            : currentProps.jointTrimMode,
+          jointTrimManual: hasJointTrimManual
+            ? (typedPatch.jointTrimManual as any)
+            : currentProps.jointTrimManual,
           isAirWall: hasIsAirWall
             ? (typedPatch.isAirWall as boolean | undefined)
             : currentProps.isAirWall,
@@ -12033,6 +12045,9 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
+          (currentProps.jointTrimMode ?? 'auto') === (merged.jointTrimMode ?? 'auto') &&
+          Math.abs((currentProps.jointTrimManual?.start ?? 0) - (merged.jointTrimManual?.start ?? 0)) <= 1e-6 &&
+          Math.abs((currentProps.jointTrimManual?.end ?? 0) - (merged.jointTrimManual?.end ?? 0)) <= 1e-6 &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&

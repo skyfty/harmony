@@ -49,6 +49,11 @@ export type WallRenderOptions = {
   materialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
 
+  /** Joint trim strategy used to avoid overlaps between body tiles and corner models. */
+  jointTrimMode?: 'auto' | 'manual'
+  /** Manual trim distances (used when jointTrimMode === 'manual'). */
+  jointTrimManual?: { start: number; end: number }
+
   // Part orientations.
   bodyOrientation?: WallModelOrientation
   headOrientation?: WallModelOrientation
@@ -304,6 +309,7 @@ function computeWallAlongAxisInstanceMatrices(
   template: InstancedAssetTemplate,
   mode: 'body' | 'head',
   orientation: WallModelOrientation,
+  trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
 
@@ -326,7 +332,24 @@ function computeWallAlongAxisInstanceMatrices(
   const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
   const templateMinY = template.bounds.min.y
 
-  for (const segment of definition.segments ?? []) {
+  const segments = Array.isArray(definition.segments) ? definition.segments : []
+  const isClosedChain = (() => {
+    if (segments.length < 2) {
+      return false
+    }
+    const first = segments[0] as any
+    const last = segments[segments.length - 1] as any
+    if (!first?.start || !last?.end) {
+      return false
+    }
+    return wallDistanceSqXZ(first.start as any, last.end as any) <= WALL_EPSILON
+  })()
+
+  const manualTrimActive = trimOptions?.mode === 'manual'
+    && (trimOptions.manual.start > WALL_EPSILON || trimOptions.manual.end > WALL_EPSILON)
+
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+    const segment = segments[segmentIndex] as any
     start.set(segment.start.x, segment.start.y, segment.start.z)
     end.set(segment.end.x, segment.end.y, segment.end.z)
 
@@ -351,13 +374,31 @@ function computeWallAlongAxisInstanceMatrices(
 
     unitDir.copy(dir).multiplyScalar(1 / lengthLocal)
 
+    // Optional manual trimming to create clearance at interior joints.
+    const hasIncomingJoint = manualTrimActive && (segmentIndex > 0 || isClosedChain)
+    const hasOutgoingJoint = manualTrimActive && (segmentIndex < segments.length - 1 || isClosedChain)
+    const trimStart = hasIncomingJoint ? Math.max(0, trimOptions!.manual.start) : 0
+    const trimEnd = hasOutgoingJoint ? Math.max(0, trimOptions!.manual.end) : 0
+
+    if (trimStart > WALL_EPSILON) {
+      start.addScaledVector(unitDir, trimStart)
+    }
+    if (trimEnd > WALL_EPSILON) {
+      end.addScaledVector(unitDir, -trimEnd)
+    }
+
+    const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
+    if (trimmedLengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
+      continue
+    }
+
     // Do not place tiles for segments shorter than a single tile (avoids overshoot).
-    if (lengthLocal < tileLengthLocal - WALL_INSTANCING_DIR_EPSILON) {
+    if (trimmedLengthLocal < tileLengthLocal - WALL_INSTANCING_DIR_EPSILON) {
       continue
     }
 
     // Strict endpoint coverage without scaling: last tile aligns its max-face to the segment end.
-    const instanceCount = Math.max(1, Math.ceil(lengthLocal / tileLengthLocal - 1e-9))
+    const instanceCount = Math.max(1, Math.ceil(trimmedLengthLocal / tileLengthLocal - 1e-9))
 
     quat.setFromUnitVectors(localForward, unitDir)
     if (orientation.yawDeg) {
@@ -1147,7 +1188,11 @@ function rebuildWallGroup(
 
   if (bodyTemplate) {
     const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body', bodyOrientation))
+    const trimMode = options.jointTrimMode === 'manual' ? 'manual' : 'auto'
+    const manual = options.jointTrimManual ?? { start: 0, end: 0 }
+    const localMatrices = chainDefinitions.flatMap((entry) =>
+      computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body', bodyOrientation, { mode: trimMode, manual }),
+    )
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyInstances'
@@ -1163,7 +1208,11 @@ function rebuildWallGroup(
 
   if (bodyTemplate && headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head', headOrientation))
+    const trimMode = options.jointTrimMode === 'manual' ? 'manual' : 'auto'
+    const manual = options.jointTrimManual ?? { start: 0, end: 0 }
+    const localMatrices = chainDefinitions.flatMap((entry) =>
+      computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head', headOrientation, { mode: trimMode, manual }),
+    )
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headTemplate.geometry, headTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadInstances'

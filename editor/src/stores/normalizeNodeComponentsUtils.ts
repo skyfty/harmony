@@ -127,6 +127,8 @@ export function normalizeNodeComponents(
         width: (existing?.props as { width?: number })?.width ?? baseProps.width,
         thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
         smoothing: (existingProps as { smoothing?: number }).smoothing ?? baseProps.smoothing,
+        jointTrimMode: (existingProps as any).jointTrimMode ?? (baseProps as any).jointTrimMode,
+        jointTrimManual: (existingProps as any).jointTrimManual ?? (baseProps as any).jointTrimManual,
         isAirWall: (existingProps as { isAirWall?: boolean }).isAirWall ?? baseProps.isAirWall,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,

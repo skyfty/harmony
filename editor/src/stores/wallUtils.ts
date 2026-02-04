@@ -282,7 +282,11 @@ export function applyWallComponentPropsToNode(
     runtime.traverse((child: Object3D & { type?: string; name?: string; userData?: Record<string, unknown> | undefined }) => {
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData?.dynamicMeshType === 'Wall') {
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
-          deps.updateWallGroup(child, node.dynamicMesh, { smoothing: resolveWallSmoothing(node) })
+          deps.updateWallGroup(child, node.dynamicMesh, {
+            smoothing: resolveWallSmoothing(node),
+            jointTrimMode: normalized.jointTrimMode,
+            jointTrimManual: normalized.jointTrimManual,
+          } as any)
         }
         return
       }
