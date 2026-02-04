@@ -3613,7 +3613,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera())
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -3983,7 +3983,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera())
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4268,7 +4268,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)

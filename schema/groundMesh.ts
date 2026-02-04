@@ -20,6 +20,8 @@ type GroundChunkSpec = {
 
 type GroundChunkRuntime = {
   key: GroundChunkKey
+  chunkRow: number
+  chunkColumn: number
   spec: GroundChunkSpec
   mesh: THREE.Mesh
 }
@@ -29,6 +31,16 @@ type GroundRuntimeState = {
   chunkCells: number
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   lastChunkUpdateAt: number
+
+  desiredSignature: string
+  lastCameraLocalX: number
+  lastCameraLocalZ: number
+
+  pendingCreates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }>
+  pendingDestroys: Array<{ key: GroundChunkKey; distSq: number }>
+
+  meshPool: Map<string, THREE.Mesh[]>
+  poolMaxPerSize: number
 }
 
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
@@ -419,6 +431,19 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
       // Materials are managed externally (SceneGraph/editor), do not dispose here.
       entry.mesh.removeFromParent()
     })
+
+    existing.meshPool.forEach((entries) => {
+      entries.forEach((mesh) => {
+        try {
+          ;(mesh.geometry as any)?.dispose?.()
+        } catch (_error) {
+          /* noop */
+        }
+      })
+    })
+    existing.meshPool.clear()
+    existing.pendingCreates = []
+    existing.pendingDestroys = []
   }
 
   const next: GroundRuntimeState = {
@@ -426,9 +451,45 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunkCells,
     chunks: new Map(),
     lastChunkUpdateAt: 0,
+
+    desiredSignature: '',
+    lastCameraLocalX: 0,
+    lastCameraLocalZ: 0,
+
+    pendingCreates: [],
+    pendingDestroys: [],
+
+    meshPool: new Map(),
+    poolMaxPerSize: 8,
   }
   groundRuntimeStateMap.set(root, next)
   return next
+}
+
+function chunkPoolKey(spec: GroundChunkSpec): string {
+  const rows = Math.max(1, Math.trunc(spec.rows))
+  const columns = Math.max(1, Math.trunc(spec.columns))
+  return `${rows}x${columns}`
+}
+
+function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRuntime): void {
+  const geometry = runtime.mesh.geometry
+  if (!(geometry instanceof THREE.BufferGeometry)) {
+    disposeChunk(runtime)
+    return
+  }
+
+  const key = chunkPoolKey(runtime.spec)
+  const bucket = state.meshPool.get(key) ?? []
+  if (bucket.length >= Math.max(0, Math.trunc(state.poolMaxPerSize))) {
+    disposeChunk(runtime)
+    return
+  }
+
+  runtime.mesh.removeFromParent()
+  runtime.mesh.visible = false
+  bucket.push(runtime.mesh)
+  state.meshPool.set(key, bucket)
 }
 
 function ensureChunkMesh(
@@ -444,7 +505,6 @@ function ensureChunkMesh(
     return existing
   }
   const spec = computeChunkSpec(definition, chunkRow, chunkColumn, state.chunkCells)
-  const geometry = buildGroundChunkGeometry(definition, spec)
   const cachedMaterialValue = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
   const cachedMaterial = Array.isArray(cachedMaterialValue)
     ? (cachedMaterialValue[0] as THREE.Material | undefined)
@@ -472,14 +532,41 @@ function ensureChunkMesh(
       metalness: 0.05,
     })
   }
-  const mesh = new THREE.Mesh(geometry, material)
+
+  const poolKey = chunkPoolKey(spec)
+  const pool = state.meshPool.get(poolKey)
+  const pooledMesh = pool && pool.length ? pool.pop() : undefined
+  if (pool && pool.length === 0) {
+    state.meshPool.delete(poolKey)
+  }
+
+  const mesh = pooledMesh ?? new THREE.Mesh(buildGroundChunkGeometry(definition, spec), material)
+  if (mesh.material !== material) {
+    mesh.material = material
+  }
+
+  // If we reused a pooled mesh, refresh its geometry for the new chunk spec.
+  if (pooledMesh) {
+    const bufferGeometry = mesh.geometry
+    if (bufferGeometry instanceof THREE.BufferGeometry) {
+      const ok = updateChunkGeometry(bufferGeometry, definition, spec)
+      if (!ok) {
+        bufferGeometry.dispose()
+        mesh.geometry = buildGroundChunkGeometry(definition, spec)
+      }
+    } else {
+      mesh.geometry = buildGroundChunkGeometry(definition, spec)
+    }
+  }
+
   mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
   mesh.receiveShadow = true
   mesh.castShadow = false
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
+  mesh.visible = true
   root.add(mesh)
-  const runtime: GroundChunkRuntime = { key, spec, mesh }
+  const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
   state.chunks.set(key, runtime)
   return runtime
 }
@@ -494,6 +581,12 @@ function disposeChunk(runtime: GroundChunkRuntime): void {
 }
 
 const sculptNoise = createPerlinNoise(911)
+
+type GroundChunkBudget = {
+  maxCreatePerUpdate?: number
+  maxDestroyPerUpdate?: number
+  maxMs?: number
+}
 
 export function applyGroundGeneration(
   definition: GroundDynamicMesh,
@@ -911,7 +1004,13 @@ export function updateGroundChunks(
   target: THREE.Object3D,
   definition: GroundDynamicMesh,
   camera: THREE.Camera | null,
-  options: { radius?: number } = {},
+  options: {
+    radius?: number
+    budget?: GroundChunkBudget | null
+    force?: boolean
+    minIntervalMs?: number
+    minCameraMoveMeters?: number
+  } = {},
 ): void {  
   const root = resolveGroundRuntimeGroup(target)
   if (!root) {
@@ -921,11 +1020,8 @@ export function updateGroundChunks(
   const terrainPaintSettings = (root.userData as any)?.__terrainPaintSettings ?? undefined
   const state = ensureGroundRuntimeState(root, definition)
   const now = Date.now()
-  // Throttle chunk churn a bit.
-  if (now - state.lastChunkUpdateAt < 120) {
-    return
-  }
-  state.lastChunkUpdateAt = now
+  const force = options.force === true
+  const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))
 
   const chunkCells = state.chunkCells
   const rows = Math.max(1, Math.trunc(definition.rows))
@@ -953,6 +1049,15 @@ export function updateGroundChunks(
     localZ = cameraLocal.z
   }
 
+  const dxMoved = localX - (state.lastCameraLocalX ?? 0)
+  const dzMoved = localZ - (state.lastCameraLocalZ ?? 0)
+  const movedSq = dxMoved * dxMoved + dzMoved * dzMoved
+  const chunkWorldSize = Math.max(1, chunkCells) * cellSize
+  const moveThreshold = Number.isFinite(options.minCameraMoveMeters as number)
+    ? Math.max(0, Number(options.minCameraMoveMeters))
+    : Math.max(cellSize * 2, chunkWorldSize * 0.25)
+  const moveThresholdSq = moveThreshold * moveThreshold
+
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns)
@@ -975,19 +1080,138 @@ export function updateGroundChunks(
   const minUnloadChunkRow = clampInclusive(Math.floor(minUnloadRow / chunkCells), 0, maxChunkRowIndex)
   const maxUnloadChunkRow = clampInclusive(Math.floor(maxUnloadRow / chunkCells), 0, maxChunkRowIndex)
 
-  const keep = new Set<GroundChunkKey>()
+  const nextDesiredSignature = [
+    chunkCells,
+    minLoadChunkRow,
+    maxLoadChunkRow,
+    minLoadChunkColumn,
+    maxLoadChunkColumn,
+    minUnloadChunkRow,
+    maxUnloadChunkRow,
+    minUnloadChunkColumn,
+    maxUnloadChunkColumn,
+    Math.round(loadRadius * 1000),
+  ].join('|')
+  const desiredWindowChanged = nextDesiredSignature !== state.desiredSignature
+  const hasPendingWork = state.pendingCreates.length > 0 || state.pendingDestroys.length > 0
 
-  // Keep already-loaded chunks within the unload radius.
-  for (let cr = minUnloadChunkRow; cr <= maxUnloadChunkRow; cr += 1) {
-    for (let cc = minUnloadChunkColumn; cc <= maxUnloadChunkColumn; cc += 1) {
-      const key = groundChunkKey(cr, cc)
-      if (state.chunks.has(key)) {
-        keep.add(key)
-      }
+  // Force mode should at least guarantee the camera's core chunk exists.
+  let allowBypassInterval = false
+  if (force && camera) {
+    const cameraColumn = clampInclusive(Math.floor((localX + halfWidth) / cellSize), 0, columns)
+    const cameraRow = clampInclusive(Math.floor((localZ + halfDepth) / cellSize), 0, rows)
+    const cameraChunkColumn = clampInclusive(Math.floor(cameraColumn / chunkCells), 0, maxChunkColumnIndex)
+    const cameraChunkRow = clampInclusive(Math.floor(cameraRow / chunkCells), 0, maxChunkRowIndex)
+    const coreKey = groundChunkKey(cameraChunkRow, cameraChunkColumn)
+    if (!state.chunks.has(coreKey)) {
+      allowBypassInterval = true
     }
   }
 
-  // Load chunks within the tighter load radius.
+  if (!allowBypassInterval && now - state.lastChunkUpdateAt < minIntervalMs) {
+    return
+  }
+
+  if (!force) {
+    // Only update when the camera moved enough (or when we have pending work).
+    if (!hasPendingWork && !desiredWindowChanged && movedSq < moveThresholdSq) {
+      return
+    }
+  }
+
+  state.lastChunkUpdateAt = now
+  state.lastCameraLocalX = localX
+  state.lastCameraLocalZ = localZ
+
+  // Rebuild pending queues when the desired window changes.
+  if (nextDesiredSignature !== state.desiredSignature) {
+    state.desiredSignature = nextDesiredSignature
+
+    // Create queue (nearest-first).
+    const creates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }> = []
+
+    // Prefer a 3x3 core around the camera chunk in force mode.
+    let forceCore: Set<string> | null = null
+    if (force && camera) {
+      const cameraColumn = clampInclusive(Math.floor((localX + halfWidth) / cellSize), 0, columns)
+      const cameraRow = clampInclusive(Math.floor((localZ + halfDepth) / cellSize), 0, rows)
+      const cameraChunkColumn = clampInclusive(Math.floor(cameraColumn / chunkCells), 0, maxChunkColumnIndex)
+      const cameraChunkRow = clampInclusive(Math.floor(cameraRow / chunkCells), 0, maxChunkRowIndex)
+      forceCore = new Set<string>()
+      for (let dr = -1; dr <= 1; dr += 1) {
+        for (let dc = -1; dc <= 1; dc += 1) {
+          const cr = cameraChunkRow + dr
+          const cc = cameraChunkColumn + dc
+          if (cr < minLoadChunkRow || cr > maxLoadChunkRow || cc < minLoadChunkColumn || cc > maxLoadChunkColumn) {
+            continue
+          }
+          forceCore.add(groundChunkKey(cr, cc))
+        }
+      }
+    }
+
+    for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
+      for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
+        const key = groundChunkKey(cr, cc)
+        if (state.chunks.has(key)) {
+          continue
+        }
+
+        const spec = computeChunkSpec(definition, cr, cc, chunkCells)
+        const centerX = -halfWidth + (spec.startColumn + spec.columns * 0.5) * cellSize
+        const centerZ = -halfDepth + (spec.startRow + spec.rows * 0.5) * cellSize
+        const dx = centerX - localX
+        const dz = centerZ - localZ
+        const priority = forceCore && forceCore.has(key) ? -1 : 0
+        creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
+      }
+    }
+
+    creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))
+    state.pendingCreates = creates
+
+    // Destroy queue (farthest-first outside unload radius).
+    const destroys: Array<{ key: GroundChunkKey; distSq: number }> = []
+    state.chunks.forEach((entry, key) => {
+      if (
+        entry.chunkRow >= minUnloadChunkRow &&
+        entry.chunkRow <= maxUnloadChunkRow &&
+        entry.chunkColumn >= minUnloadChunkColumn &&
+        entry.chunkColumn <= maxUnloadChunkColumn
+      ) {
+        return
+      }
+      const spec = entry.spec
+      const centerX = -halfWidth + (spec.startColumn + spec.columns * 0.5) * cellSize
+      const centerZ = -halfDepth + (spec.startRow + spec.rows * 0.5) * cellSize
+      const dx = centerX - localX
+      const dz = centerZ - localZ
+      destroys.push({ key, distSq: dx * dx + dz * dz })
+    })
+    destroys.sort((a, b) => b.distSq - a.distSq)
+    state.pendingDestroys = destroys
+  } else {
+    // Drop stale pending work.
+    if (state.pendingCreates.length) {
+      state.pendingCreates = state.pendingCreates.filter((entry) => !state.chunks.has(entry.key))
+    }
+    if (state.pendingDestroys.length) {
+      state.pendingDestroys = state.pendingDestroys.filter((entry) => state.chunks.has(entry.key))
+    }
+  }
+
+  const defaultBudget: GroundChunkBudget | null = camera
+    ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
+    : null
+  const effectiveBudget: GroundChunkBudget | null = options.budget === undefined ? defaultBudget : (options.budget as GroundChunkBudget | null)
+  const maxCreate = effectiveBudget ? (Number.isFinite(effectiveBudget.maxCreatePerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxCreatePerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
+  const maxDestroy = effectiveBudget ? (Number.isFinite(effectiveBudget.maxDestroyPerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxDestroyPerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
+  const maxMs = effectiveBudget ? (Number.isFinite(effectiveBudget.maxMs as number) ? Math.max(0, Number(effectiveBudget.maxMs)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
+  const budgetStart = Date.now()
+
+  const withinTimeBudget = () => (Date.now() - budgetStart) <= maxMs
+
+  // Load chunks within the tighter load radius (nearest-first).
   let stitchRegion: GroundGeometryUpdateRegion | null = null
   let needsTerrainPaintRebind = false
   const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
@@ -1002,40 +1226,65 @@ export function updateGroundChunks(
     }
   }
 
-  for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
-    for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
-      const key = groundChunkKey(cr, cc)
-      const existed = state.chunks.has(key)
-      const runtime = ensureChunkMesh(root, state, definition, cr, cc)
-      keep.add(runtime.key)
-      if (!existed) {
-        stitchRegion = mergeRegion(stitchRegion, {
-          minRow: runtime.spec.startRow,
-          maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
-          minColumn: runtime.spec.startColumn,
-          maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
-        })
+  let createdCount = 0
+  if (state.pendingCreates.length && maxCreate > 0) {
+    const pending = state.pendingCreates
+    let processed = 0
+    for (processed = 0; processed < pending.length; processed += 1) {
+      if (createdCount >= maxCreate || !withinTimeBudget()) {
+        break
+      }
+      const entry = pending[processed]!
+      if (state.chunks.has(entry.key)) {
+        continue
+      }
+      const runtime = ensureChunkMesh(root, state, definition, entry.chunkRow, entry.chunkColumn)
+      createdCount += 1
 
-        // Newly streamed-in chunk meshes won't have terrain paint preview bindings yet.
-        // Re-run installer once per update (not per chunk) when terrain paint is active.
-        if (terrainPaintSettings) {
-          needsTerrainPaintRebind = true
-        }
+      stitchRegion = mergeRegion(stitchRegion, {
+        minRow: runtime.spec.startRow,
+        maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
+        minColumn: runtime.spec.startColumn,
+        maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
+      })
+
+      if (terrainPaintSettings) {
+        needsTerrainPaintRebind = true
       }
     }
+
+    // Keep remaining items (and drop any that got created).
+    state.pendingCreates = pending
+      .slice(processed)
+      .filter((entry) => !state.chunks.has(entry.key))
   }
 
   if (needsTerrainPaintRebind) {
     ensureTerrainPaintPreviewInstalled(root, definition, terrainPaintSettings)
   }
 
-  state.chunks.forEach((chunk, key) => {
-    if (keep.has(key)) {
-      return
+  // Unload chunks outside the unload radius with a budget.
+  let destroyedCount = 0
+  if (state.pendingDestroys.length && maxDestroy > 0) {
+    const pending = state.pendingDestroys
+    let processed = 0
+    for (processed = 0; processed < pending.length; processed += 1) {
+      if (destroyedCount >= maxDestroy || !withinTimeBudget()) {
+        break
+      }
+      const entry = pending[processed]!
+      const runtime = state.chunks.get(entry.key)
+      if (!runtime) {
+        continue
+      }
+      releaseChunkToPool(state, runtime)
+      state.chunks.delete(entry.key)
+      destroyedCount += 1
     }
-    disposeChunk(chunk)
-    state.chunks.delete(key)
-  })
+    state.pendingDestroys = pending
+      .slice(processed)
+      .filter((entry) => state.chunks.has(entry.key))
+  }
 
   // Newly created chunks compute normals in isolation; stitch boundaries to avoid visible seams.
   if (stitchRegion) {
