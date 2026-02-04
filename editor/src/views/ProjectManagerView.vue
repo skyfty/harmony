@@ -8,6 +8,9 @@ import { useScenesStore } from '@/stores/scenesStore'
 import LoginDialog from '@/components/layout/LoginDialog.vue'
 import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
 // OpenProjectDialog removed — opening projects is handled on the Project Manager page
+import {type ProjectCreateParams} from '@/types/project-summary'
+
+import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
@@ -76,10 +79,8 @@ function openLogin() {
   loginOpen.value = true
 }
 
-async function handleCreateProject(payload: { name: string }) {
-  await projectsStore.initialize()
-  const project = await projectsStore.createProject(payload.name)
-  // Opening the project will create default scene if missing.
+async function handleCreateProject(payload: ProjectCreateParams) {
+  const { project } = await createProjectWithDefaultScene(payload)
   await router.push({ path: '/editor', query: { projectId: project.id } })
   overlayClose?.()
 }
