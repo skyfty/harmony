@@ -9,6 +9,8 @@ const props = withDefaults(
     title?: string
     message?: string
     closable?: boolean
+    cancelable?: boolean
+    cancelText?: string
   }>(),
   {
     mode: 'indeterminate',
@@ -16,11 +18,14 @@ const props = withDefaults(
     title: '正在加载',
     message: '请稍候…',
     closable: false,
+    cancelable: false,
+    cancelText: '取消',
   },
 )
 
 const emit = defineEmits<{
   close: []
+  cancel: []
 }>()
 
 const safeProgress = computed(() => {
@@ -34,6 +39,11 @@ const percentLabel = computed(() => `${Math.round(safeProgress.value)}%`)
 function handleClose() {
   if (!props.closable) return
   emit('close')
+}
+
+function handleCancel() {
+  if (!props.cancelable) return
+  emit('cancel')
 }
 </script>
 
@@ -72,6 +82,16 @@ function handleClose() {
                 striped
               />
             </div>
+
+            <div v-if="cancelable" class="overlay-actions">
+              <v-btn
+                variant="tonal"
+                color="error"
+                @click="handleCancel"
+              >
+                {{ cancelText }}
+              </v-btn>
+            </div>
           </section>
         </div>
       </div>
@@ -98,8 +118,9 @@ function handleClose() {
 
 .overlay-card {
   position: relative;
-  min-width: 320px;
-  max-width: min(480px, 90vw);
+  /* 固定宽度以避免内容（如进度数字）变化时导致弹窗宽度抖动 */
+  width: 420px;
+  max-width: 90vw; /* 在窄屏时允许收缩 */
   border-radius: 16px;
   padding: 28px 32px;
   background: linear-gradient(145deg, rgba(36, 43, 56, 0.95), rgba(20, 23, 31, 0.98));
@@ -146,6 +167,14 @@ function handleClose() {
   font-weight: 600;
   text-align: center;
   letter-spacing: 0.05em;
+  /* 使用等宽数字以减少从 9/99 到 100 等变化引起的宽度抖动 */
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: center;
 }
 
 .overlay-fade-enter-active,

@@ -138,6 +138,7 @@ export type ConvertPlanningToSceneOptions = {
   planningData: PlanningSceneData
   overwriteExisting: boolean
   onProgress?: (payload: PlanningConversionProgress) => void
+  signal?: AbortSignal
 }
 
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
@@ -586,6 +587,38 @@ function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatter
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
   options.onProgress?.({ step, progress: clampProgress(progress) })
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+  if (!signal?.aborted) return
+  // DOMException gives a stable .name === 'AbortError' across browsers.
+  throw new DOMException('Aborted', 'AbortError')
+}
+
+async function yieldToMainThread(signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal)
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  throwIfAborted(signal)
+}
+
+function nowMs(): number {
+  // performance.now is monotonic and high-resolution in browsers.
+  const p = (globalThis as any)?.performance
+  return typeof p?.now === 'function' ? p.now() : Date.now()
+}
+
+function createYieldController(options: { signal?: AbortSignal; minIntervalMs?: number }) {
+  const minIntervalMs = Math.max(0, options.minIntervalMs ?? 12)
+  let lastYieldAt = nowMs()
+  return {
+    async maybeYield(force = false) {
+      throwIfAborted(options.signal)
+      const t = nowMs()
+      if (!force && t - lastYieldAt < minIntervalMs) return
+      lastYieldAt = t
+      await yieldToMainThread(options.signal)
+    },
+  }
 }
 
 function clampProgress(value: number) {
@@ -1180,7 +1213,7 @@ function normalizeNoiseSettings(raw: any) {
   return { enabled, mode, seed, noiseScale, noiseAmplitude, noiseStrength, detailScale, detailAmplitude, edgeFalloff }
 }
 
-function applyPlanningTerrainToGround(options: {
+async function applyPlanningTerrainToGround(options: {
   sceneStore: ConvertPlanningToSceneOptions['sceneStore']
   planningData: PlanningSceneData
   planningUnitsToMeters: number
@@ -1188,8 +1221,15 @@ function applyPlanningTerrainToGround(options: {
   groundDefinition: GroundDynamicMesh
   groundWidth: number
   groundDepth: number
+  signal?: AbortSignal
+  onProgress?: (payload: PlanningConversionProgress) => void
+  progressRange?: { start: number; end: number }
 }) {
   const { sceneStore, planningData, planningUnitsToMeters, groundNode, groundDefinition, groundWidth, groundDepth } = options
+  const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
+  const progressStart = options.progressRange?.start ?? 18
+  const progressEnd = options.progressRange?.end ?? 20
+
   const terrain = (planningData as any)?.terrain as any
   if (!terrain || typeof terrain !== 'object') {
     return { definition: groundDefinition, limited: false }
@@ -1240,17 +1280,94 @@ function applyPlanningTerrainToGround(options: {
 
   const heightMap: Record<string, number> = {}
 
+  const emitTerrainProgress = (message: string, fraction: number) => {
+    const clamped = Math.min(1, Math.max(0, fraction))
+    const p = progressStart + (progressEnd - progressStart) * clamped
+    options.onProgress?.({ step: message, progress: clampProgress(p) })
+  }
+
   const controlPoints: Array<any> = Array.isArray(terrain?.controlPoints) ? terrain.controlPoints : []
-  controlPoints
+  // Estimate work for progress reporting.
+  let estimatedWorkTotal = 0
+  for (const cp of controlPoints) {
+    const x = Number(cp?.x) * planningUnitsToMeters
+    const y = Number(cp?.y) * planningUnitsToMeters
+    const radius = Number(cp?.radius)
+    const targetHeight = Number(cp?.height)
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0 || !Number.isFinite(targetHeight)) {
+      continue
+    }
+    const localX = x - halfWidth
+    const localZ = y - halfDepth
+    const minCol = pointToGridIndex(localX - radius, clampedCellSize, halfWidth, columns)
+    const maxCol = pointToGridIndex(localX + radius, clampedCellSize, halfWidth, columns)
+    const minRow = pointToGridIndex(localZ - radius, clampedCellSize, halfDepth, rows)
+    const maxRow = pointToGridIndex(localZ + radius, clampedCellSize, halfDepth, rows)
+    const colsSpan = Math.max(0, maxCol - minCol + 1)
+    const rowsSpan = Math.max(0, maxRow - minRow + 1)
+    estimatedWorkTotal = Math.min(1e9, estimatedWorkTotal + colsSpan * rowsSpan)
+  }
+
+  const lines: Array<any> = Array.isArray(terrain?.ridgeValleyLines) ? terrain.ridgeValleyLines : []
+  for (const line of lines) {
+    const kind = line?.kind === 'ridge' || line?.kind === 'valley' ? line.kind : null
+    const width = Number(line?.width)
+    const strength = Number(line?.strength)
+    const pointsRaw = Array.isArray(line?.points) ? line.points : null
+    if (!kind || !Number.isFinite(width) || width <= 0 || !Number.isFinite(strength) || !pointsRaw || pointsRaw.length < 2) {
+      continue
+    }
+    const points = pointsRaw
+      .map((p: any) => {
+        const x = Number(p?.x) * planningUnitsToMeters
+        const y = Number(p?.y) * planningUnitsToMeters
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+        return { x: x - halfWidth, z: y - halfDepth }
+      })
+      .filter((p: any) => !!p)
+    if (points.length < 2) continue
+
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minZ = Number.POSITIVE_INFINITY
+    let maxZ = Number.NEGATIVE_INFINITY
+    for (const p of points) {
+      minX = Math.min(minX, p.x)
+      maxX = Math.max(maxX, p.x)
+      minZ = Math.min(minZ, p.z)
+      maxZ = Math.max(maxZ, p.z)
+    }
+    minX -= width
+    maxX += width
+    minZ -= width
+    maxZ += width
+
+    const minCol = pointToGridIndex(minX, clampedCellSize, halfWidth, columns)
+    const maxCol = pointToGridIndex(maxX, clampedCellSize, halfWidth, columns)
+    const minRow = pointToGridIndex(minZ, clampedCellSize, halfDepth, rows)
+    const maxRow = pointToGridIndex(maxZ, clampedCellSize, halfDepth, rows)
+    const colsSpan = Math.max(0, maxCol - minCol + 1)
+    const rowsSpan = Math.max(0, maxRow - minRow + 1)
+    estimatedWorkTotal = Math.min(1e9, estimatedWorkTotal + colsSpan * rowsSpan)
+  }
+
+  if (estimatedWorkTotal <= 0) {
+    estimatedWorkTotal = 1
+  }
+  let estimatedWorkDone = 0
+  emitTerrainProgress('Applying terrain…', 0)
+
+  const sortedControlPoints = controlPoints
     .slice()
     .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
-    .forEach((cp) => {
+
+  for (const cp of sortedControlPoints) {
       const x = Number(cp?.x) * planningUnitsToMeters
       const y = Number(cp?.y) * planningUnitsToMeters
       const radius = Number(cp?.radius)
       const targetHeight = Number(cp?.height)
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0 || !Number.isFinite(targetHeight)) {
-        return
+        continue
       }
       const localX = x - halfWidth
       const localZ = y - halfDepth
@@ -1262,7 +1379,12 @@ function applyPlanningTerrainToGround(options: {
 
       for (let row = minRow; row <= maxRow; row += 1) {
         const vz = -halfDepth + row * clampedCellSize
+        if ((row & 15) === 0) {
+          emitTerrainProgress('Applying terrain…', estimatedWorkDone / estimatedWorkTotal)
+          await yieldController.maybeYield()
+        }
         for (let col = minCol; col <= maxCol; col += 1) {
+          estimatedWorkDone += 1
           const vx = -halfWidth + col * clampedCellSize
           const dx = vx - localX
           const dz = vz - localZ
@@ -1278,19 +1400,23 @@ function applyPlanningTerrainToGround(options: {
           setAbsoluteOverride(nextDefinition, heightMap, row, col, nextHeight)
         }
       }
-    })
+  }
 
-  const lines: Array<any> = Array.isArray(terrain?.ridgeValleyLines) ? terrain.ridgeValleyLines : []
-  lines
+  await yieldController.maybeYield(true)
+  emitTerrainProgress('Applying terrain…', estimatedWorkDone / estimatedWorkTotal)
+
+  // NOTE: lines declared above for progress estimation.
+  const sortedLines = lines
     .slice()
     .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
-    .forEach((line) => {
+
+  for (const line of sortedLines) {
       const kind = line?.kind === 'ridge' || line?.kind === 'valley' ? line.kind : null
       const width = Number(line?.width)
       const strength = Number(line?.strength)
       const pointsRaw = Array.isArray(line?.points) ? line.points : null
       if (!kind || !Number.isFinite(width) || width <= 0 || !Number.isFinite(strength) || !pointsRaw || pointsRaw.length < 2) {
-        return
+        continue
       }
       const points = pointsRaw
         .map((p: any) => {
@@ -1300,7 +1426,7 @@ function applyPlanningTerrainToGround(options: {
           return { x: x - halfWidth, z: y - halfDepth }
         })
         .filter((p: any) => !!p)
-      if (points.length < 2) return
+      if (points.length < 2) continue
 
       // Bounding box in local space expanded by width
       let minX = Number.POSITIVE_INFINITY
@@ -1326,7 +1452,12 @@ function applyPlanningTerrainToGround(options: {
 
       for (let row = minRow; row <= maxRow; row += 1) {
         const vz = -halfDepth + row * clampedCellSize
+        if ((row & 15) === 0) {
+          emitTerrainProgress('Applying terrain…', estimatedWorkDone / estimatedWorkTotal)
+          await yieldController.maybeYield()
+        }
         for (let col = minCol; col <= maxCol; col += 1) {
+          estimatedWorkDone += 1
           const vx = -halfWidth + col * clampedCellSize
 
           let minDist = Number.POSITIVE_INFINITY
@@ -1348,7 +1479,10 @@ function applyPlanningTerrainToGround(options: {
           setAbsoluteOverride(nextDefinition, heightMap, row, col, nextHeight)
         }
       }
-    })
+  }
+
+  await yieldController.maybeYield(true)
+  emitTerrainProgress('Applying terrain…', estimatedWorkDone / estimatedWorkTotal)
 
   // A: absolute brush overrides (always highest priority, applied last).
   const overrideCells = terrain?.overrides?.version === 1 && terrain?.overrides?.cells && typeof terrain.overrides.cells === 'object'
@@ -1356,6 +1490,7 @@ function applyPlanningTerrainToGround(options: {
     : null
   if (overrideCells) {
     for (const [key, raw] of Object.entries(overrideCells)) {
+      throwIfAborted(options.signal)
       const height = typeof raw === 'number' ? raw : Number(raw)
       if (!Number.isFinite(height)) continue
       const parts = String(key).split(':')
@@ -1393,7 +1528,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const { sceneStore, planningData } = options
   const assetCacheStore = useAssetCacheStore()
 
+  const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
+
   return await sceneStore.withScenePatchesSuppressed(async () => {
+    throwIfAborted(options.signal)
     emitProgress(options, 'Preparing…', 0)
 
 
@@ -1406,11 +1544,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   if (!findGroundNode(sceneStore.nodes)) {
     emitProgress(options, 'Creating ground…', 5)
     sceneStore.setGroundDimensions({ width: groundWidth, depth: groundDepth })
+    await yieldController.maybeYield(true)
   }
 
   if (options.overwriteExisting) {
     emitProgress(options, 'Removing existing converted content…', 10)
     await clearPlanningGeneratedContent(sceneStore)
+    await yieldController.maybeYield(true)
   }
 
   emitProgress(options, 'Creating root group…', 15)
@@ -1426,6 +1566,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     },
   })
   sceneStore.setNodeLocked(root.id, true)
+  await yieldController.maybeYield(true)
 
   // Collect features
   const rawPolygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
@@ -1454,7 +1595,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   if (referencedScatterAssetIds.size) {
     emitProgress(options, 'Caching scatter models…', 18)
     for (const assetId of referencedScatterAssetIds) {
+      throwIfAborted(options.signal)
       await ensureModelBoundsCachedForAssetId(assetId, assetCacheStore)
+      await yieldController.maybeYield()
     }
   }
 
@@ -1480,7 +1623,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   let groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
 
   if (groundNode && groundDefinition) {
-    const applied = applyPlanningTerrainToGround({
+    const applied = await applyPlanningTerrainToGround({
       sceneStore,
       planningData,
       planningUnitsToMeters,
@@ -1488,8 +1631,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       groundDefinition,
       groundWidth,
       groundDepth,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      progressRange: { start: 18, end: 20 },
     })
     groundDefinition = applied.definition
+    await yieldController.maybeYield(true)
   }
 
   const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
@@ -1498,16 +1645,22 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     removePlanningScatterLayers(store)
   }
 
-  const updateProgressForUnit = (label: string) => {
-    doneUnits += 1
+  const emitUnitProgress = (label: string, unitFraction: number) => {
     const base = 20
     const span = 75
-    const fraction = totalUnits > 0 ? doneUnits / totalUnits : 1
+    const safeUnitFraction = Math.min(1, Math.max(0, unitFraction))
+    const fraction = totalUnits > 0 ? (doneUnits + safeUnitFraction) / totalUnits : 1
     emitProgress(options, label, base + span * fraction)
+  }
+  const updateProgressForUnit = async (label: string) => {
+    doneUnits += 1
+    emitUnitProgress(label, 0)
+    await yieldController.maybeYield()
   }
 
   // Convert layer-by-layer
   for (const layerId of layerOrder) {
+    throwIfAborted(options.signal)
     const kind = resolveLayerKindFromPlanningData(planningData, layerId)
     if (!kind) continue
 
@@ -1519,8 +1672,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
       for (const line of group.polylines) {
-        updateProgressForUnit(`Preparing roads: ${line.name?.trim() || line.id}`)
+        await updateProgressForUnit(`Preparing roads: ${line.name?.trim() || line.id}`)
       }
+
+      // Yield once so the UI can paint the progress message before heavy graph build.
+      emitUnitProgress('Building road network…', 0)
+      await yieldController.maybeYield(true)
 
       const components = buildRoadGraphFromPlanningLayer({
         layerId,
@@ -1529,6 +1686,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         groundDepth,
         roadWidth,
       })
+
+      await yieldController.maybeYield(true)
 
       const baseName = layerName ? `${layerName} Road` : 'Planning Road'
       const roadMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
@@ -1601,72 +1760,81 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
       for (const line of group.polylines) {
-        updateProgressForUnit(`Converting guide route: ${line.name?.trim() || line.id}`)
+        const label = `Converting guide route: ${line.name?.trim() || line.id}`
+        emitUnitProgress(label, 0)
+        try {
+          throwIfAborted(options.signal)
 
-        const names = Array.isArray(line.waypoints) ? line.waypoints : []
-        const points: Array<{ x: number; y: number; z: number }> = []
-        const waypoints: Array<{ name?: string; dock?: boolean }> = []
-        const duplicateEpsilon = 1e-10
+          const names = Array.isArray(line.waypoints) ? line.waypoints : []
+          const points: Array<{ x: number; y: number; z: number }> = []
+          const waypoints: Array<{ name?: string; dock?: boolean }> = []
+          const duplicateEpsilon = 1e-10
 
-        for (let i = 0; i < (line.points ?? []).length; i += 1) {
-          const point = line.points[i]
-          if (!point) continue
-
-          const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-          const y = groundHeightAt(world.x, world.z)
-
-          const previous = points[points.length - 1]
-          if (previous) {
-            const dx = world.x - previous.x
-            const dz = world.z - previous.z
-            if (dx * dx + dz * dz <= duplicateEpsilon) {
-              continue
+          for (let i = 0; i < (line.points ?? []).length; i += 1) {
+            if ((i & 63) === 0) {
+              await yieldController.maybeYield()
             }
+            const point = line.points[i]
+            if (!point) continue
+
+            const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+            const y = groundHeightAt(world.x, world.z)
+
+            const previous = points[points.length - 1]
+            if (previous) {
+              const dx = world.x - previous.x
+              const dz = world.z - previous.z
+              if (dx * dx + dz * dz <= duplicateEpsilon) {
+                continue
+              }
+            }
+
+            points.push({ x: world.x, y, z: world.z })
+            waypoints.push({ name: names[i]?.name, dock: names[i]?.dock === true })
           }
 
-          points.push({ x: world.x, y, z: world.z })
-          waypoints.push({ name: names[i]?.name, dock: names[i]?.dock === true })
+          if (points.length < 2) {
+            continue
+          }
+
+          const nodeName = line.name?.trim()
+            ? line.name.trim()
+            : (layerName ? `${layerName} Guide Route` : 'Planning Guide Route')
+
+          const guideRouteNode = sceneStore.createGuideRouteNode({
+            nodeId: line.id,
+            points,
+            waypoints,
+            name: nodeName,
+          })
+
+          if (!guideRouteNode) {
+            continue
+          }
+
+          sceneStore.moveNode({
+            nodeId: guideRouteNode.id,
+            targetId: root.id,
+            position: 'inside',
+            recenterSkipGroupIds: [root.id],
+          })
+          sceneStore.updateNodeUserData(guideRouteNode.id, {
+            source: PLANNING_CONVERSION_SOURCE,
+            planningLayerId: layerId,
+            kind: 'guide-route',
+            planningFeatureId: line.id,
+          })
+
+          // Safety: ensure guideRoute component exists for identification.
+          const component = guideRouteNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as { id?: string } | undefined
+          if (!component?.id) {
+            sceneStore.addNodeComponent<typeof GUIDE_ROUTE_COMPONENT_TYPE>(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
+          }
+
+          sceneStore.setNodeLocked(guideRouteNode.id, true)
+        } finally {
+          await updateProgressForUnit(label)
         }
-
-        if (points.length < 2) {
-          continue
-        }
-
-        const nodeName = line.name?.trim()
-          ? line.name.trim()
-          : (layerName ? `${layerName} Guide Route` : 'Planning Guide Route')
-
-        const guideRouteNode = sceneStore.createGuideRouteNode({
-          nodeId: line.id,
-          points,
-          waypoints,
-          name: nodeName,
-        })
-
-        if (!guideRouteNode) {
-          continue
-        }
-
-        sceneStore.moveNode({
-          nodeId: guideRouteNode.id,
-          targetId: root.id,
-          position: 'inside',
-          recenterSkipGroupIds: [root.id],
-        })
-        sceneStore.updateNodeUserData(guideRouteNode.id, {
-          source: PLANNING_CONVERSION_SOURCE,
-          planningLayerId: layerId,
-          kind: 'guide-route',
-          planningFeatureId: line.id,
-        })
-
-        // Safety: ensure guideRoute component exists for identification.
-        const component = guideRouteNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as { id?: string } | undefined
-        if (!component?.id) {
-          sceneStore.addNodeComponent<typeof GUIDE_ROUTE_COMPONENT_TYPE>(guideRouteNode.id, GUIDE_ROUTE_COMPONENT_TYPE)
-        }
-
-        sceneStore.setNodeLocked(guideRouteNode.id, true)
       }
     } else if (kind === 'floor') {
       const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
@@ -1675,11 +1843,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const layerFloorPresetId: string | null = null
       const floorPresetCache = new Map<string, import('@/utils/floorPreset').FloorPresetData>()
       for (const poly of group.polygons) {
-        updateProgressForUnit(`Converting floor: ${poly.name?.trim() || poly.id}`)
-        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-        if (worldXZ.length < 3) {
-          continue
-        }
+        const label = `Converting floor: ${poly.name?.trim() || poly.id}`
+        emitUnitProgress(label, 0)
+        try {
+          throwIfAborted(options.signal)
+          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+          if (worldXZ.length < 3) {
+            continue
+          }
 
         const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
         const nodeName = poly.name?.trim()
@@ -1739,15 +1910,21 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           planningFeatureId: poly.id,
         })
         sceneStore.setNodeLocked(floorNode.id, true)
+        } finally {
+          await updateProgressForUnit(label)
+        }
       }
     } else if (kind === 'building') {
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) {
-        updateProgressForUnit(`Converting building: ${poly.name?.trim() || poly.id}`)
-        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-        if (worldXZ.length < 3) {
-          continue
-        }
+        const label = `Converting building: ${poly.name?.trim() || poly.id}`
+        emitUnitProgress(label, 0)
+        try {
+          throwIfAborted(options.signal)
+          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+          if (worldXZ.length < 3) {
+            continue
+          }
 
         const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
         const nodeName = poly.name?.trim()
@@ -1811,16 +1988,22 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           kind: 'building',
         })
         sceneStore.setNodeLocked(floorNode.id, true)
+        } finally {
+          await updateProgressForUnit(label)
+        }
       }
     } else if (kind === 'water') {
       const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) {
-        updateProgressForUnit(`Converting water: ${poly.name?.trim() || poly.id}`)
-        const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-        if (worldXZ.length < 3) {
-          continue
-        }
+        const label = `Converting water: ${poly.name?.trim() || poly.id}`
+        emitUnitProgress(label, 0)
+        try {
+          throwIfAborted(options.signal)
+          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
+          if (worldXZ.length < 3) {
+            continue
+          }
 
         const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
         const nodeName = poly.name?.trim()
@@ -1935,10 +2118,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             segments,
           })
         }
+        } finally {
+          await updateProgressForUnit(label)
+        }
       }
     } else if (kind === 'green') {
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) { 
+        throwIfAborted(options.signal)
+        const unitLabel = `Converting greenery: ${poly.name?.trim() || poly.id}`
+        emitUnitProgress(unitLabel, 0)
+        await yieldController.maybeYield()
+
         if (Boolean((poly as any).airWallEnabled)) {
           const baseName = poly.name?.trim()
             ? poly.name.trim()
@@ -2036,7 +2227,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
               return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
             })
             replaceTerrainScatterInstances(store, layer.id, existing)
-            updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
+            await updateProgressForUnit(unitLabel)
             continue
           }
           if (targetCount > 0) {
@@ -2118,6 +2309,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                 break
               }
 
+              throwIfAborted(options.signal)
+              emitUnitProgress(`${unitLabel} (pass ${pass + 1}/${MAX_PASSES})`, Math.min(0.85, acceptedSamples.length / Math.max(1, targetCount)))
+              await yieldController.maybeYield(true)
+
               const needed = targetCount - acceptedSamples.length
               const randomPoints = buildRandom(hashSeedFromString(`${seedBase}:points:${pass}`))
               const maxAttemptsMultiplier = 4 + pass * 2
@@ -2136,7 +2331,20 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                 continue
               }
 
-              const filtered = candidates.filter((p) => isFarEnough(p as PlanningPoint))
+              await yieldController.maybeYield()
+
+              const filtered: PlanningPoint[] = []
+              for (let i = 0; i < candidates.length; i += 1) {
+                if ((i & 2047) === 0) {
+                  throwIfAborted(options.signal)
+                  emitUnitProgress(unitLabel, Math.min(0.9, acceptedSamples.length / Math.max(1, targetCount)))
+                  await yieldController.maybeYield()
+                }
+                const p = candidates[i] as PlanningPoint
+                if (isFarEnough(p)) {
+                  filtered.push(p)
+                }
+              }
               if (!filtered.length) {
                 continue
               }
@@ -2147,6 +2355,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
               }
 
               for (const sample of selected) {
+                if ((acceptedSamples.length & 127) === 0) {
+                  throwIfAborted(options.signal)
+                  emitUnitProgress(unitLabel, Math.min(0.95, acceptedSamples.length / Math.max(1, targetCount)))
+                  await yieldController.maybeYield()
+                }
                 const localXZ = toWorldPoint(sample as PlanningPoint, groundWidth, groundDepth, 0)
                 const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
                 if (height < minHeight || height > maxHeight) {
@@ -2200,7 +2413,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           }
         }
 
-        updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
+        await updateProgressForUnit(unitLabel)
       }
     } else if (kind === 'wall') {
       const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
@@ -2210,8 +2423,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const wallPresetCache = new Map<string, import('@/utils/wallPreset').WallPresetData>()
 
       for (const line of group.polylines) {
+        throwIfAborted(options.signal)
+        emitUnitProgress(`Converting wall: ${line.name?.trim() || line.id}`, 0)
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
         for (let i = 0; i < line.points.length - 1; i += 1) {
+          if ((i & 63) === 0) {
+            await yieldController.maybeYield()
+          }
           const start = toWorldPoint(line.points[i]!, groundWidth, groundDepth, 0)
           const end = toWorldPoint(line.points[i + 1]!, groundWidth, groundDepth, 0)
           start.y = groundHeightAt(start.x, start.z)
@@ -2278,10 +2496,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             }
           }
         }
-        updateProgressForUnit(`Converting wall: ${line.name?.trim() || line.id}`)
+        await updateProgressForUnit(`Converting wall: ${line.name?.trim() || line.id}`)
       }
 
       for (const poly of group.polygons) {
+        throwIfAborted(options.signal)
+        emitUnitProgress(`Converting wall: ${poly.name?.trim() || poly.id}`, 0)
         const segments = polygonEdges(poly.points).map((edge) => {
           const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
           const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
@@ -2350,7 +2570,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             }
           }
         }
-        updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
+        await updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
       }
     }
   }
@@ -2359,6 +2579,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const finalGround = findGroundNode(sceneStore.nodes)
   if (finalGround?.dynamicMesh?.type === 'Ground') {
     emitProgress(options, 'Applying scatter…', 96)
+    await yieldController.maybeYield(true)
     const previousSnapshot = (finalGround.dynamicMesh as any)?.terrainScatter
     const snapshot = serializeTerrainScatterStore(store)
     snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
@@ -2368,11 +2589,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       terrainScatterInstancesUpdatedAt: Date.now(),
     }
     sceneStore.updateNodeDynamicMesh(finalGround.id, next)
+    await yieldController.maybeYield(true)
   }
 
   // Ensure runtime objects/components are synced so the converted content shows up immediately.
   // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
   emitProgress(options, 'Refreshing scene…', 98)
+  await yieldController.maybeYield(true)
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }

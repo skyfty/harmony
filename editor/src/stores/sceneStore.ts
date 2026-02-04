@@ -82,7 +82,6 @@ import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
-import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
@@ -718,7 +717,7 @@ async function ensureModelAssetCached(assetCache: ReturnType<typeof useAssetCach
   await assetCache.downloaProjectAsset(asset)
   await assetCache.loadFromIndexedDb(asset.id)
   if (!assetCache.hasCache(asset.id)) {
-    throw new Error('模型资源尚未准备就绪')
+    throw new Error('Model asset is not ready')
   }
 }
 
@@ -1528,7 +1527,7 @@ async function textureToBlob(texture: Texture): Promise<{ blob: Blob; mimeType: 
     try {
       ctx.drawImage(image as CanvasImageSource, 0, 0, width, height)
     } catch (error) {
-      console.warn('无法绘制纹理到画布', error)
+      console.warn('Failed to draw texture to canvas', error)
       return null
     }
   }
@@ -1560,7 +1559,7 @@ async function textureToBlob(texture: Texture): Promise<{ blob: Blob; mimeType: 
       }
       resolve(new Blob([bytes], { type: 'image/png' }))
     } catch (error) {
-      console.warn('无法序列化纹理数据', error)
+      console.warn('Failed to serialize texture data', error)
       resolve(null)
     }
   })
@@ -3537,12 +3536,8 @@ function cloneNode(node: SceneNode): SceneNode {
 }
 
 function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
-  const nodes = initialNodes.map((node) => cloneNode(node))
   const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
-  if (!settings) {
-    return ensureEnvironmentNode(ensureSkyNode(nodes), environmentSettings)
-  }
-  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(nodes, settings)), environmentSettings)
+  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode([], settings)), environmentSettings)
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -4149,7 +4144,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
     try {
       blob = dataUrlToBlob(dataUrl)
     } catch (error) {
-      console.warn('无法解析本地资源数据', error)
+      console.warn('Failed to parse local asset data', error)
       nextPackageMap[key] = dataUrl
       continue
     }
@@ -4158,7 +4153,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
     try {
       computedId = await computeBlobHash(blob)
     } catch (error) {
-      console.warn('计算资源哈希失败', error)
+      console.warn('Failed to compute resource hash', error)
     }
 
     const filename = resolveEmbeddedAssetFilename(scene, originalId, blob)
@@ -4176,7 +4171,7 @@ async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument
           downloadUrl: computedId,
         })
       } catch (error) {
-        console.warn('写入本地资源缓存失败', error)
+        console.warn('Failed to write to local asset cache', error)
         nextPackageMap[key] = dataUrl
         continue
       }
@@ -6115,7 +6110,7 @@ export const useSceneStore = defineStore('scene', {
       pendingScenePatches: [],
       workspaceId: '',
       workspaceType: 'local',
-      workspaceLabel: '本地用户',
+      workspaceLabel: 'Local User',
     }
   },
   getters: {
@@ -8751,11 +8746,11 @@ export const useSceneStore = defineStore('scene', {
       assetCache.setError(asset.id, null)
       void assetCache.downloaProjectAsset(asset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
-        if (target) {
-          target.downloadStatus = 'error'
-          target.downloadError = (error as Error).message ?? '资源下载失败'
-          this.queueSceneNodePatch(placeholder.id, ['download'])
-        }
+      if (target) {
+        target.downloadStatus = 'error'
+        target.downloadError = (error as Error).message ?? 'Asset download failed'
+        this.queueSceneNodePatch(placeholder.id, ['download'])
+      }
       })
 
       return { asset, node: placeholder }
@@ -10232,7 +10227,7 @@ export const useSceneStore = defineStore('scene', {
       const assetId = typeof placeholder.sourceAssetId === 'string' ? placeholder.sourceAssetId : ''
       if (!assetId) {
         placeholder.downloadStatus = 'error'
-        placeholder.downloadError = '缺少资源 ID，无法重试'
+        placeholder.downloadError = 'Missing resource ID, cannot retry'
         this.queueSceneNodePatch(nodeId, ['download'])
         return false
       }
@@ -10240,7 +10235,7 @@ export const useSceneStore = defineStore('scene', {
       const asset = this.getAsset(assetId)
       if (!asset) {
         placeholder.downloadStatus = 'error'
-        placeholder.downloadError = '资源不存在，无法重试'
+        placeholder.downloadError = 'Resource not found, cannot retry'
         this.queueSceneNodePatch(nodeId, ['download'])
         return false
       }
@@ -10262,7 +10257,7 @@ export const useSceneStore = defineStore('scene', {
         const target = findNodeById(this.nodes, nodeId)
         if (target) {
           target.downloadStatus = 'error'
-          target.downloadError = (error as Error).message ?? '资源下载失败'
+          target.downloadError = (error as Error).message ?? 'Asset download failed'
           this.queueSceneNodePatch(nodeId, ['download'])
         }
         return false
@@ -10308,7 +10303,7 @@ export const useSceneStore = defineStore('scene', {
         if (!baseObject) {
           const file = assetCache.createFileFromCache(asset.id)
           if (!file) {
-            throw new Error('资源未缓存完成')
+            throw new Error('Resource not fully cached')
           }
           if (shouldCacheModelObject) {
             const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
@@ -10321,7 +10316,7 @@ export const useSceneStore = defineStore('scene', {
         }
 
         if (!baseObject) {
-          throw new Error('资源加载失败')
+          throw new Error('Failed to load resource')
         }
 
         const canUseInstancing = Boolean(modelGroup?.meshes.length) && !placeholder.importMetadata?.objectPath
@@ -10377,7 +10372,7 @@ export const useSceneStore = defineStore('scene', {
 
         const { tree, node: removedPlaceholder } = detachNodeImmutable(this.nodes, nodeId)
         if (!removedPlaceholder) {
-          throw new Error('占位节点不存在')
+          throw new Error('Placeholder node does not exist')
         }
 
         const newNode: SceneNode = {
@@ -10458,10 +10453,10 @@ export const useSceneStore = defineStore('scene', {
         assetCache.touch(asset.id)
 
         commitSceneSnapshot(this)
-      } catch (error) {
+        } catch (error) {
         placeholder.isPlaceholder = true
         placeholder.downloadStatus = 'error'
-        placeholder.downloadError = (error as Error).message ?? '资源加载失败'
+        placeholder.downloadError = (error as Error).message ?? 'Failed to load resource'
         this.queueSceneNodePatch(nodeId, ['download'])
       }
     },
@@ -10481,8 +10476,8 @@ export const useSceneStore = defineStore('scene', {
 
       const file = assetCache.createFileFromCache(asset.id)
       if (!file) {
-        throw new Error('模型资源文件不可用')
-      }
+            throw new Error('Model asset file unavailable')
+          }
 
       const shouldCacheModelObject = asset.type === 'model' || asset.type === 'mesh'
       let modelGroup: ModelInstanceGroup | null = null
@@ -10507,8 +10502,8 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      if (!baseObject) {
-        throw new Error('无法加载模型资源')
+        if (!baseObject) {
+        throw new Error('Failed to load model asset')
       }
 
       const canUseInstancing = Boolean(modelGroup?.meshes.length)
@@ -10522,7 +10517,7 @@ export const useSceneStore = defineStore('scene', {
       runtimeObject = runtimeObject ?? runtimeClone
 
       if (!runtimeObject) {
-        throw new Error('模型资源无法应用到节点')
+        throw new Error('Model asset could not be applied to node')
       }
 
       runtimeObject.name = asset.name ?? runtimeObject.name
@@ -10779,7 +10774,7 @@ export const useSceneStore = defineStore('scene', {
           modelAssetId = ensured.asset.id
           assetCache.touch(modelAssetId)
         } catch (error) {
-          console.warn('缓存导入场景资源失败', error)
+          console.warn('Failed to cache imported scene assets', error)
         }
       }
 
@@ -13163,7 +13158,7 @@ export const useSceneStore = defineStore('scene', {
       const projectsStore = useProjectsStore()
       const projectId = existing?.projectId ?? projectsStore.activeProjectId
       if (!projectId) {
-        throw new Error('必须先打开工程才能保存场景')
+        throw new Error('Project must be opened before saving scene')
       }
       document.projectId = projectId
       await scenesStore.saveSceneDocument(document)
@@ -13177,22 +13172,28 @@ export const useSceneStore = defineStore('scene', {
     },
     async createScene(
       name = 'Untitled Scene',
-      thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
+      options?: GroundSettings | { groundSettings?: Partial<GroundSettings> } | null,
     ) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
       const projectsStore = useProjectsStore()
       const projectId = projectsStore.activeProjectId
       if (!projectId) {
-        throw new Error('必须先打开工程才能创建场景')
+        throw new Error('Project must be opened before creating scene')
       }
       const displayName = name.trim() || 'Untitled Scene'
+
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
-      if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
-        resolvedGroundOptions = thumbnailOrOptions.groundSettings
+      if (options && typeof options === 'object') {
+        if ('groundSettings' in options) {
+          resolvedGroundOptions = (options as { groundSettings?: Partial<GroundSettings> }).groundSettings
+        } else {
+          resolvedGroundOptions = options as Partial<GroundSettings>
+        }
       }
 
       const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
+
       const baseNodes = createDefaultSceneNodes(groundSettings)
       const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
@@ -13223,100 +13224,7 @@ export const useSceneStore = defineStore('scene', {
       await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
-    async createSceneFromTemplate(
-      name: string,
-      template: PresetSceneDocument,
-      options: { groundWidth?: number; groundDepth?: number } = {},
-    ) {
-      const scenesStore = useScenesStore()
-      const projectsStore = useProjectsStore()
-      const projectId = projectsStore.activeProjectId
-      if (!projectId) {
-        throw new Error('必须先打开工程才能创建场景')
-      }
-      const displayName = name.trim() || template.name?.trim() || 'Untitled Scene'
-
-      const fallbackWidth = this.groundSettings.width
-      const fallbackDepth = this.groundSettings.depth
-      const widthCandidate = options.groundWidth ?? template.groundSettings?.width ?? fallbackWidth
-      const depthCandidate = options.groundDepth ?? template.groundSettings?.depth ?? fallbackDepth
-
-      const groundSettings = cloneGroundSettings({
-        width: widthCandidate,
-        depth: depthCandidate,
-      })
-
-      const nodes = Array.isArray(template.nodes) && template.nodes.length
-        ? cloneSceneNodes(template.nodes as SceneNode[])
-        : createDefaultSceneNodes(groundSettings)
-
-      const groundNode = findGroundNode(nodes)
-      if (groundNode) {
-        groundNode.dynamicMesh = createGroundDynamicMeshDefinition(
-          {
-            ...(groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : {}),
-            width: groundSettings.width,
-            depth: groundSettings.depth,
-            cellSize: 1,
-            columns: Math.max(1, Math.round(groundSettings.width)),
-            rows: Math.max(1, Math.round(groundSettings.depth)),
-          },
-          groundSettings,
-        )
-      }
-      const materials = Array.isArray(template.materials) && template.materials.length
-        ? (template.materials as SceneMaterial[])
-        : undefined
-
-      const selectedNodeId = typeof template.selectedNodeId === 'string' ? template.selectedNodeId : null
-      const selectedNodeIds = Array.isArray(template.selectedNodeIds)
-        ? (template.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
-        : undefined
-      const cameraState = normalizeCameraStateInput(template.camera) ?? this.camera
-
-      const sceneDocument = createSceneDocument(displayName, {
-        projectId,
-        nodes,
-        materials,
-        selectedNodeId,
-        selectedNodeIds,
-        camera: cameraState,
-        resourceProviderId: typeof template.resourceProviderId === 'string'
-          ? template.resourceProviderId
-          : this.resourceProviderId,
-        assetCatalog: isAssetCatalog(template.assetCatalog)
-          ? (template.assetCatalog as Record<string, ProjectAsset[]>)
-          : undefined,
-        assetIndex: isAssetIndex(template.assetIndex)
-          ? (template.assetIndex as Record<string, AssetIndexEntry>)
-          : undefined,
-        packageAssetMap: isPackageAssetMap(template.packageAssetMap)
-          ? (template.packageAssetMap as Record<string, string>)
-          : undefined,
-        viewportSettings: normalizeViewportSettingsInput(template.viewportSettings),
-        skybox: template.skybox,
-        shadowsEnabled: template.shadowsEnabled,
-        panelVisibility: normalizePanelVisibilityInput(template.panelVisibility),
-        panelPlacement: normalizePanelPlacementInput(template.panelPlacement),
-        groundSettings,
-        environment: template.environment,
-      })
-
-      const timestamp = new Date().toISOString()
-      sceneDocument.createdAt = timestamp
-      sceneDocument.updatedAt = timestamp
-
-      await scenesStore.saveSceneDocument(sceneDocument)
-
-      this.sceneSwitchToken += 1
-      this.applySceneDocumentToState(sceneDocument)
-      this.isSceneReady = true
-      this.hasUnsavedChanges = false
-
-      await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
-      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
-      return sceneDocument.id
-    },
+    
     async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
@@ -13464,20 +13372,20 @@ export const useSceneStore = defineStore('scene', {
           ? Number(formatVersionRaw)
           : SCENE_BUNDLE_FORMAT_VERSION
       if (!Number.isFinite(formatVersion)) {
-        throw new Error('场景文件版本无效')
+        throw new Error('Invalid scene file version')
       }
       if (formatVersion > SCENE_BUNDLE_FORMAT_VERSION) {
-        throw new Error('暂不支持该版本的场景文件')
+        throw new Error('Scene file version not supported')
       }
       if (!Array.isArray(payload.scenes) || !payload.scenes.length) {
-        throw new Error('场景文件不包含任何场景数据')
+        throw new Error('Scene file does not contain any scene data')
       }
 
       const scenesStore = useScenesStore()
       const projectsStore = useProjectsStore()
       const projectId = projectsStore.activeProjectId
       if (!projectId) {
-        throw new Error('必须先打开工程才能导入场景')
+        throw new Error('Project must be opened before importing scene')
       }
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
@@ -13486,10 +13394,10 @@ export const useSceneStore = defineStore('scene', {
       for (let index = 0; index < payload.scenes.length; index += 1) {
         const entry = payload.scenes[index]
         if (!isPlainObject(entry)) {
-          throw new Error(`场景数据格式错误 (索引 ${index})`)
+          throw new Error(`Scene data format error (index ${index})`)
         }
         if (!Array.isArray(entry.nodes)) {
-          throw new Error(`场景数据缺少节点信息 (索引 ${index})`)
+          throw new Error(`Scene data missing node information (index ${index})`)
         }
 
         const baseName = typeof entry.name === 'string' ? entry.name : `Imported Scene ${index + 1}`
@@ -13536,7 +13444,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (!imported.length) {
-        throw new Error('场景文件不包含任何有效场景')
+        throw new Error('Scene file does not contain any valid scenes')
       }
 
       await scenesStore.saveSceneDocuments(imported)

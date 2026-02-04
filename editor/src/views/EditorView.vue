@@ -16,6 +16,8 @@ import ProjectManagerView from './ProjectManagerView.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
+import { type ProjectCreateParams } from '@/types/project-summary'
+import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 import type { SceneExportOptions } from '@/types/scene-export'
@@ -155,8 +157,8 @@ watch(isProjectManagerOverlayOpen, (open) => {
   }
 })
 
-async function handleCreateProject(payload: { name: string }) {
-  const project = await projectsStore.createProject(payload.name)
+async function handleCreateProject(payload: ProjectCreateParams) {
+  const { project } = await createProjectWithDefaultScene(payload)
   await router.push({ path: '/editor', query: { projectId: project.id } })
 }
 
@@ -1565,19 +1567,15 @@ async function handleCreateScene(payload: {
   }
 
   try {
-    if (payload.presetSceneDocument) {
-      await sceneStore.createSceneFromTemplate(payload.name, payload.presetSceneDocument, {
-        groundWidth: payload.groundWidth,
-        groundDepth: payload.groundDepth,
-      })
-    } else {
-      await sceneStore.createScene(payload.name, {
-        groundSettings: {
-          width: payload.groundWidth,
-          depth: payload.groundDepth,
-        },
-      })
-    }
+    // Template-based scene creation removed; always create a fresh scene with provided ground settings.
+    await sceneStore.createScene(payload.name, {
+      groundSettings: {
+        width: payload.groundWidth,
+        depth: payload.groundDepth,
+      },
+    })
+    // If you need to apply a preset scene in future, reintroduce a dedicated migration or importer.
+    
   } catch (error) {
     console.error('[EditorView] failed to create scene', error)
     return

@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh, TerrainPaintChannel, TerrainPaintSettings } from './index'
 
-const TERRAIN_PAINT_MATERIAL_KEY = '__harmonyTerrainPaintMaterialV1'
 // Debug helpers removed: keep implementation minimal and focused on preview functionality.
+
+const terrainPaintShaderStateByMaterial = new WeakMap<THREE.Material, TerrainPaintShaderState>()
 
 type TerrainPaintShaderState = {
 	shader: any
@@ -38,12 +39,8 @@ function createDefaultWeightmapTexture(): THREE.DataTexture {
 	return texture
 }
 
-function getOrCreateShaderState(material: THREE.Material): TerrainPaintShaderState {
-	const existing = (material.userData as any)[TERRAIN_PAINT_MATERIAL_KEY] as TerrainPaintShaderState | undefined
-	if (existing) {
-		return existing
-	}
-	const state: TerrainPaintShaderState = {
+function createShaderState(): TerrainPaintShaderState {
+	return {
 		shader: null,
 		chunkBounds: new THREE.Vector4(0, 0, 1, 1),
 		layerTextures: {},
@@ -51,7 +48,16 @@ function getOrCreateShaderState(material: THREE.Material): TerrainPaintShaderSta
 		defaultWeightmap: createDefaultWeightmapTexture(),
 		defaultWhite: createDefaultWhiteTexture(),
 	}
-	;(material.userData as any)[TERRAIN_PAINT_MATERIAL_KEY] = state
+}
+
+function getOrCreateShaderState(material: THREE.Material): TerrainPaintShaderState {
+	const existing = terrainPaintShaderStateByMaterial.get(material)
+	if (existing) {
+		return existing
+	}
+
+	const state = createShaderState()
+	terrainPaintShaderStateByMaterial.set(material, state)
 	return state
 }
 

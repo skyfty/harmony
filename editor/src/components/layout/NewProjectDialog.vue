@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import SceneCreatorPane from './SceneCreatorPane.vue'
+import {type ProjectCreateParams} from '@/types/project-summary'
 
 const props = defineProps<{ modelValue: boolean; initialName?: string }>()
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
-  (event: 'confirm', payload: { name: string; defaultScene?: { name: string; groundWidth: number; groundDepth: number } }): void
+  (event: 'confirm', payload: ProjectCreateParams): void
 }>()
 
 const dialogOpen = computed({
