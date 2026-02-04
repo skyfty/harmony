@@ -2,6 +2,7 @@ import {
   Box3,
   BufferGeometry,
   DynamicDrawUsage,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   Mesh,
@@ -13,6 +14,54 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 
 const DEFAULT_INSTANCE_CAPACITY = 2048
+
+export interface ModelObjectCacheConfig {
+  defaultInstanceCapacity: number
+  capacityGrowthFactor: number
+  maxInstanceCapacity: number
+}
+
+const modelObjectCacheConfig: ModelObjectCacheConfig = {
+  defaultInstanceCapacity: DEFAULT_INSTANCE_CAPACITY,
+  capacityGrowthFactor: 2,
+  maxInstanceCapacity: 65536,
+}
+
+export function configureModelObjectCache(config: Partial<ModelObjectCacheConfig>): void {
+  if (config.defaultInstanceCapacity !== undefined) {
+    const value = config.defaultInstanceCapacity
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`defaultInstanceCapacity must be a positive integer, got ${value}`)
+    }
+    modelObjectCacheConfig.defaultInstanceCapacity = value
+  }
+
+  if (config.capacityGrowthFactor !== undefined) {
+    const value = config.capacityGrowthFactor
+    if (!Number.isFinite(value) || value <= 1) {
+      throw new Error(`capacityGrowthFactor must be a number > 1, got ${value}`)
+    }
+    modelObjectCacheConfig.capacityGrowthFactor = value
+  }
+
+  if (config.maxInstanceCapacity !== undefined) {
+    const value = config.maxInstanceCapacity
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`maxInstanceCapacity must be a positive integer, got ${value}`)
+    }
+    modelObjectCacheConfig.maxInstanceCapacity = value
+  }
+
+  if (modelObjectCacheConfig.maxInstanceCapacity < modelObjectCacheConfig.defaultInstanceCapacity) {
+    throw new Error(
+      `maxInstanceCapacity (${modelObjectCacheConfig.maxInstanceCapacity}) must be >= defaultInstanceCapacity (${modelObjectCacheConfig.defaultInstanceCapacity})`,
+    )
+  }
+}
+
+export function getModelObjectCacheConfig(): ModelObjectCacheConfig {
+  return { ...modelObjectCacheConfig }
+}
 
 export interface ModelInstanceGroup {
   assetId: string
@@ -123,26 +172,31 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
     let index = handle.freeSlots.pop()
     if (index === undefined) {
       if (handle.nextIndex >= handle.capacity) {
-        console.warn(`Instanced mesh capacity reached for asset ${assetId}`)
-        slots.forEach(({ handleId, index: allocatedIndex }) => {
-          const allocatedHandle = meshHandleLookup.get(handleId)
-          if (!allocatedHandle) {
-            return
-          }
-          allocatedHandle.bindingByIndex.delete(allocatedIndex)
-          allocatedHandle.freeSlots.push(allocatedIndex)
-          if (allocatedIndex === allocatedHandle.mesh.count - 1) {
-            let nextCount = allocatedHandle.mesh.count - 1
-            while (nextCount > 0 && !allocatedHandle.bindingByIndex.has(nextCount - 1)) {
-              nextCount -= 1
+        const expanded = expandInstancedMeshHandleCapacity(handle, handle.nextIndex + 1)
+        if (!expanded) {
+          console.warn(
+            `Instanced mesh capacity reached for asset ${assetId} (capacity=${handle.capacity}, max=${modelObjectCacheConfig.maxInstanceCapacity})`,
+          )
+          slots.forEach(({ handleId, index: allocatedIndex }) => {
+            const allocatedHandle = meshHandleLookup.get(handleId)
+            if (!allocatedHandle) {
+              return
             }
-            if (allocatedHandle.mesh.count !== nextCount) {
-              allocatedHandle.mesh.count = nextCount
-              markInstancedBoundsDirty(allocatedHandle.mesh)
+            allocatedHandle.bindingByIndex.delete(allocatedIndex)
+            allocatedHandle.freeSlots.push(allocatedIndex)
+            if (allocatedIndex === allocatedHandle.mesh.count - 1) {
+              let nextCount = allocatedHandle.mesh.count - 1
+              while (nextCount > 0 && !allocatedHandle.bindingByIndex.has(nextCount - 1)) {
+                nextCount -= 1
+              }
+              if (allocatedHandle.mesh.count !== nextCount) {
+                allocatedHandle.mesh.count = nextCount
+                markInstancedBoundsDirty(allocatedHandle.mesh)
+              }
             }
-          }
-        })
-        return null
+          })
+          return null
+        }
       }
       index = handle.nextIndex
       handle.nextIndex += 1
@@ -377,8 +431,10 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
   const radius = boundingBox.getSize(new Vector3()).length() * 0.5
   const submeshes = extractSubmeshes(prepared)
 
+  const initialCapacity = modelObjectCacheConfig.defaultInstanceCapacity
+
   const handles = submeshes.map((submesh, index) => {
-    const mesh = new InstancedMesh(submesh.geometry, submesh.material, DEFAULT_INSTANCE_CAPACITY)
+    const mesh = new InstancedMesh(submesh.geometry, submesh.material, initialCapacity)
     mesh.name = `Instanced:${assetId}:${index}`
     mesh.instanceMatrix.setUsage(DynamicDrawUsage)
     mesh.count = 0
@@ -391,7 +447,7 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     const handle: InstancedMeshHandle = {
       id: handleId,
       mesh,
-      capacity: DEFAULT_INSTANCE_CAPACITY,
+      capacity: initialCapacity,
       nextIndex: 0,
       freeSlots: [],
       bindingByIndex: new Map(),
@@ -408,6 +464,64 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     radius,
     handles,
     meshes: handles.map((handle) => handle.mesh),
+  }
+}
+
+function expandInstancedMeshHandleCapacity(handle: InstancedMeshHandle, minCapacity: number): boolean {
+  if (handle.capacity >= minCapacity) {
+    return true
+  }
+
+  const expandedCapacity = computeExpandedInstanceCapacity(handle.capacity, minCapacity)
+  if (expandedCapacity <= 0) {
+    return false
+  }
+
+  resizeInstancedMesh(handle.mesh, expandedCapacity)
+  handle.capacity = expandedCapacity
+  return true
+}
+
+function computeExpandedInstanceCapacity(current: number, minRequired: number): number {
+  const maxCapacity = modelObjectCacheConfig.maxInstanceCapacity
+  if (minRequired > maxCapacity) {
+    return 0
+  }
+
+  let next = Math.max(1, current)
+  const growthFactor = modelObjectCacheConfig.capacityGrowthFactor
+  while (next < minRequired && next < maxCapacity) {
+    next = Math.min(maxCapacity, Math.ceil(next * growthFactor))
+    if (next === maxCapacity) {
+      break
+    }
+  }
+
+  return next >= minRequired ? next : 0
+}
+
+function resizeInstancedMesh(mesh: InstancedMesh, capacity: number): void {
+  const oldMatrixAttr = mesh.instanceMatrix
+  const oldMatrixArray = oldMatrixAttr.array as Float32Array
+  const newMatrixArray = new Float32Array(capacity * 16)
+  newMatrixArray.set(oldMatrixArray.subarray(0, Math.min(oldMatrixArray.length, newMatrixArray.length)))
+
+  const newMatrixAttr = new InstancedBufferAttribute(newMatrixArray, 16)
+  newMatrixAttr.setUsage(oldMatrixAttr.usage)
+  mesh.instanceMatrix = newMatrixAttr
+  mesh.geometry.setAttribute('instanceMatrix', newMatrixAttr)
+  mesh.instanceMatrix.needsUpdate = true
+
+  if (mesh.instanceColor) {
+    const oldColorAttr = mesh.instanceColor
+    const oldColorArray = oldColorAttr.array as Float32Array
+    const newColorArray = new Float32Array(capacity * 3)
+    newColorArray.set(oldColorArray.subarray(0, Math.min(oldColorArray.length, newColorArray.length)))
+    const newColorAttr = new InstancedBufferAttribute(newColorArray, 3)
+    newColorAttr.setUsage(oldColorAttr.usage)
+    mesh.instanceColor = newColorAttr
+    mesh.geometry.setAttribute('instanceColor', newColorAttr)
+    mesh.instanceColor.needsUpdate = true
   }
 }
 
