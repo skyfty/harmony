@@ -229,6 +229,8 @@ const statusMessage = ref('Waiting for scene data...')
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
 
+// LOD debug helpers removed
+
 function switchToLivePreviewMode(): void {
 	if (typeof window === 'undefined') {
 		return
@@ -2207,8 +2209,10 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): stri
 			break
 		}
 	}
-	const chosenModelAssetId = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId : null
-	return chosenModelAssetId ?? baseAssetId
+	const chosenModelAssetId =
+		chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId.trim() : null
+	const normalizedBase = typeof baseAssetId === 'string' ? baseAssetId.trim() : null
+	return chosenModelAssetId || normalizedBase
 }
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
@@ -7628,8 +7632,9 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		if (!nodeId) {
 			return
 		}
-		const assetId = target.userData?.instancedAssetId as string | undefined
-		if (!assetId) {
+			const assetIdRaw = target.userData?.instancedAssetId as string | undefined
+			const assetId = typeof assetIdRaw === 'string' ? assetIdRaw.trim() : ''
+			if (!assetId) {
 			return
 		}
 		const node = resolveNodeById(nodeId)
@@ -7639,10 +7644,22 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
 		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 		const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
-		if (resolvedAssetId && resolvedAssetId !== assetId) {
-			// Asset changed; allow the normal document sync pipeline to rebuild this proxy.
-			return
-		}
+			if (resolvedAssetId && resolvedAssetId !== assetId) {
+				// Asset changed; normally allow the document sync pipeline to rebuild this proxy.
+				// Exception: LOD switches intentionally swap instancedAssetId at runtime; still need to apply matrices.
+				const lodComponent = resolveLodComponent(node)
+				if (!lodComponent) {
+					return
+				}
+				const props = clampLodComponentProps(lodComponent.props)
+				const isKnownLodAsset = props.levels.some((level) => {
+					const levelAssetId = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+					return Boolean(levelAssetId) && levelAssetId === assetId
+				})
+				if (!isKnownLodAsset) {
+					return
+				}
+			}
 		const group = getCachedModelObject(assetId)
 		if (!group) {
 			return
