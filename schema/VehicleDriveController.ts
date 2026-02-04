@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import { FollowCameraController } from './followCameraController'
+import {
+  FollowCameraController,
+  type CameraFollowContext,
+  type CameraFollowPlacement,
+  type CameraFollowState,
+} from './followCameraController'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
 type SceneNodeComponentState<T> = { props: T } | null | undefined
@@ -30,12 +35,40 @@ export type VehicleDriveRuntimeState = {
   active: boolean
   nodeId: string | null
   token: string | null
-  vehicle: CANNON.RaycastVehicle | null
+  vehicle: VehicleDriveVehicle | null
   steerableWheelIndices: number[]
   wheelCount: number
   seatNodeId: string | null
   sourceEvent: unknown | null
 }
+
+export type VehicleDriveVehicle = {
+  chassisBody: VehicleDriveChassisBody
+  wheelInfos: unknown[]
+  applyEngineForce: (force: number, wheelIndex: number) => void
+  setSteeringValue: (value: number, wheelIndex: number) => void
+  setBrake: (brake: number, wheelIndex: number) => void
+}
+
+export type VehicleDriveChassisBody = {
+  position: VehicleDriveVec3
+  velocity: VehicleDriveVec3
+  angularVelocity: VehicleDriveVec3
+  quaternion: VehicleDriveQuaternion
+  allowSleep?: boolean
+  sleepSpeedLimit?: number
+  sleepTimeLimit?: number
+}
+
+export type VehicleDriveVec3 = {
+  x: number
+  y: number
+  z: number
+  set: (x: number, y: number, z: number) => unknown
+  lengthSquared: () => number
+}
+
+export type VehicleDriveQuaternion = { x: number; y: number; z: number; w: number }
 
 export type VehicleDriveCameraRestoreState = {
   hasSnapshot: boolean
@@ -50,36 +83,15 @@ export type VehicleDriveCameraRestoreState = {
   purposeMode?: string | null
 }
 
-export type VehicleDriveCameraFollowState = {
-  desiredPosition: THREE.Vector3
-  desiredTarget: THREE.Vector3
-  currentPosition: THREE.Vector3
-  currentTarget: THREE.Vector3
-  desiredAnchor: THREE.Vector3
-  currentAnchor: THREE.Vector3
-  anchorHoldSeconds: number
-  lastVelocityDirection: THREE.Vector3
-  heading: THREE.Vector3
-  initialized: boolean
-  localOffset: THREE.Vector3
-  hasLocalOffset: boolean
-  shouldHoldAnchorForReverse: boolean
-  motionDistanceBlend: number
-  lookaheadOffset: THREE.Vector3
-}
+export type VehicleDriveCameraFollowState = CameraFollowState
 
-export type VehicleFollowPlacement = {
-  distance: number
-  heightOffset: number
-  targetLift: number
-  targetForward: number
-}
+export type VehicleFollowPlacement = CameraFollowPlacement
 
 export type VehicleAxisBasis = { right: THREE.Vector3; up: THREE.Vector3; forward: THREE.Vector3 }
 
 export type VehicleInstance = {
   nodeId: string
-  vehicle: CANNON.RaycastVehicle
+  vehicle: VehicleDriveVehicle
   wheelCount: number
   steerableWheelIndices: number[]
   wheelBindings?: unknown[]
@@ -107,14 +119,14 @@ export type VehicleDriveControllerDeps = {
   ensurePhysicsWorld: () => void
   ensureVehicleBindingForNode: (nodeId: string) => void
   normalizeNodeId: (id: string | null | undefined) => string | null
-  setCameraViewState?: (mode: unknown, targetId?: string | null) => void
+  setCameraViewState?: (mode: string, targetId?: string | null) => void
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
   withControlsVerticalFreedom?: <T>(controls: any, callback: () => T) => T
   lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
   syncLastFirstPersonStateFromCamera?: () => void
   updateOrbitLookTween?: (delta: number) => void
   onToast?: (message: string) => void
-  onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution | { type: string; message?: string }) => void
+  onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution) => void
   followCameraDistanceScale?: number | (() => number)
 }
 
@@ -133,11 +145,9 @@ export type VehicleDriveControllerBindings = {
 }
 
 export type VehicleDriveCameraContext = {
-  camera: THREE.PerspectiveCamera | null
-  mapControls?: { target: THREE.Vector3; update: () => void; enablePan?: boolean; minDistance?: number; maxDistance?: number }
   firstPersonControls?: { object: THREE.Object3D }
   desiredOrbitTarget?: THREE.Vector3
-}
+} & CameraFollowContext
 // 车辆引擎最大推力
 const VEHICLE_ENGINE_FORCE = 320
 // 车辆最大刹车力
@@ -529,7 +539,7 @@ export class VehicleDriveController {
     return { success: true }
   }
 
-  stopDrive(options: { resolution?: { type: string; message?: string }; preserveCamera?: boolean } = {}, ctx?: VehicleDriveCameraContext): void {
+  stopDrive(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}, ctx?: VehicleDriveCameraContext): void {
     const state = this.state
     if (!state.active) {
       return
@@ -567,7 +577,7 @@ export class VehicleDriveController {
         chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
         chassisBody.velocity.set(0, 0, 0)
         chassisBody.angularVelocity.set(0, 0, 0)
-        ;(chassisBody as any).sleep?.()
+        ;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
       } catch {
         // best-effort
       }
@@ -582,7 +592,7 @@ export class VehicleDriveController {
         body.sleepTimeLimit = Math.max(0.05, body.sleepTimeLimit ?? 0)
         body.velocity.set(0, 0, 0)
         body.angularVelocity.set(0, 0, 0)
-        ;(body as any).sleep?.()
+        ;(body as CANNON.Body & { sleep?: () => void }).sleep?.()
       } catch {
         // best-effort
       }
@@ -665,7 +675,8 @@ export class VehicleDriveController {
         }
       }
       if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ) {
-        velocity.scale(1 - VEHICLE_SPEED_LIMIT_DAMPING, velocity)
+		const factor = 1 - VEHICLE_SPEED_LIMIT_DAMPING
+		velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
       } else if (Math.abs(throttle) < 0.05) {
         let damping = VEHICLE_COASTING_DAMPING
         if (smoothStop.active) {
@@ -677,7 +688,8 @@ export class VehicleDriveController {
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
-        velocity.scale(1 - clampedDamping, velocity)
+		const factor = 1 - clampedDamping
+		velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()
           if (nextSpeedSq <= VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ) {
@@ -892,20 +904,22 @@ export class VehicleDriveController {
 
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
 
+    const updateOrbitLookTween = this.deps.updateOrbitLookTween
+
     return this.followCameraController.update({
-      follow: follow as any,
+      follow,
       placement,
       anchorWorld: temp.followAnchor,
       desiredForwardWorld: temp.seatForward,
-      velocityWorld: vehicleVelocity as any,
+      velocityWorld: vehicleVelocity,
       deltaSeconds,
-      ctx: ctx as any,
+      ctx,
       worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
-      applyOrbitTween: options.applyOrbitTween,
-      followControlsDirty: options.followControlsDirty,
-      immediate: options.immediate,
-      onUpdateOrbitLookTween: this.deps.updateOrbitLookTween,
+      applyOrbitTween: options.applyOrbitTween ?? false,
+      followControlsDirty: options.followControlsDirty ?? false,
+      immediate: options.immediate ?? false,
+      ...(updateOrbitLookTween ? { onUpdateOrbitLookTween: updateOrbitLookTween } : {}),
     })
   }
 

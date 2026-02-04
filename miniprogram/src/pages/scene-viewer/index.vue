@@ -436,6 +436,7 @@ import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
   createAutoTourRuntime,
+  createScenePreviewPerfController,
 
   forEachInstanceWorldMatrix,
   getInstanceLayoutBindingId,
@@ -904,7 +905,7 @@ function syncInstancingDebugCounters(lodTotal: number, lodVisible: number): void
   let activeMeshes = 0;
   let instanceCountSum = 0;
   instancedMeshes.forEach((mesh) => {
-    const count = typeof (mesh as any).count === 'number' ? (mesh as any).count as number : 0;
+    const count = Number.isFinite(mesh.count) ? mesh.count : 0;
     if (count > 0) {
       activeMeshes += 1;
       instanceCountSum += count;
@@ -951,10 +952,10 @@ function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: 
 
   const loadedKeys = new Set<string>();
   groundObject.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (!mesh || !(mesh as any).isMesh) {
+    if (!(object instanceof THREE.Mesh)) {
       return;
     }
+    const mesh = object;
     const chunk = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null;
     if (!chunk || typeof chunk.chunkRow !== 'number' || typeof chunk.chunkColumn !== 'number') {
       return;
@@ -1472,9 +1473,22 @@ const instancedCullingLastVisibleAt = new Map<string, number>();
 
 const INSTANCED_CULL_GRACE_MS = 250;
 const INSTANCED_CULL_RADIUS_MULTIPLIER = 1.15;
+
+const scenePreviewPerf = createScenePreviewPerfController({ isWeChatMiniProgram });
+
+function markInstancedCullingDirty(): void {
+  scenePreviewPerf.markInstancedCullingDirty();
+}
+
+function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean {
+  return scenePreviewPerf.shouldRunInstancedCulling(camera, nowMs);
+}
+
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+let protagonistNodeId: string | null = null;
+
 const airWallBodies = new Map<string, CANNON.Body>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
@@ -1494,6 +1508,25 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
+
+type CannonSleepExtensions = {
+  sleep?: () => void;
+  sleepState?: number;
+};
+
+function trySleepBody(body: CANNON.Body | null | undefined): void {
+  if (!body) {
+    return;
+  }
+  (body as CANNON.Body & CannonSleepExtensions).sleep?.();
+}
+
+function getBodySleepState(body: CANNON.Body | null | undefined): number | undefined {
+  if (!body) {
+    return undefined;
+  }
+  return (body as CANNON.Body & CannonSleepExtensions).sleepState;
+}
 
 const wheelForwardHelper = new THREE.Vector3();
 const wheelAxisHelper = new THREE.Vector3();
@@ -1760,7 +1793,7 @@ const vehicleSpeedGaugeStyle = computed(() => ({
 }));
 
 // Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
-const vehicleDriveStateBridge = {
+const vehicleDriveStateBridge: import('@schema/VehicleDriveController').VehicleDriveRuntimeState = {
   get active() {
     return vehicleDriveActive.value;
   },
@@ -1809,7 +1842,7 @@ const vehicleDriveStateBridge = {
   set sourceEvent(value: unknown) {
     activeVehicleDriveEvent.value = value as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null;
   },
-} as const;
+};
 
 const vehicleDriveUi = computed(() => {
   const override = vehicleDriveUiOverride.value;
@@ -1910,10 +1943,10 @@ const vehicleDriveController = new VehicleDriveController(
     lockControlsPitchToCurrent,
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
-    onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution as any),
+    onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
   },
   {
-    state: vehicleDriveStateBridge as any,
+    state: vehicleDriveStateBridge,
     inputFlags: vehicleDriveInputFlags,
     input: vehicleDriveInput,
     cameraMode: vehicleDriveCameraMode,
@@ -3336,7 +3369,7 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D, camer
     return baseAssetId;
   }
   object.getWorldPosition(instancedCullingWorldPosition);
-  const distance = instancedCullingWorldPosition.distanceTo((camera as any).position ?? instancedCullingWorldPosition);
+  const distance = instancedCullingWorldPosition.distanceTo(camera.position);
   let chosen: (typeof levels)[number] | null = null;
   for (let i = levels.length - 1; i >= 0; i -= 1) {
     const candidate = levels[i];
@@ -3722,7 +3755,7 @@ const autoTourRuntime = createAutoTourRuntime({
     }
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
-    entry.body.sleep?.();
+    trySleepBody(entry.body);
   },
 });
 
@@ -3757,8 +3790,9 @@ function indexSceneObjects(root: THREE.Object3D) {
         updateBehaviorVisibility(nodeId, object.visible);
       }
 
-      const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined;
-      const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall);
+      const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<unknown> | undefined;
+      const wallProps = wallState?.props as { isAirWall?: unknown } | undefined;
+      const isAirWall = Boolean(wallState?.enabled !== false && wallProps?.isAirWall === true);
       if (isAirWall) {
         object.visible = false;
         updateBehaviorVisibility(nodeId, false);
@@ -3813,8 +3847,9 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       updateBehaviorVisibility(nodeId, object.visible);
     }
 
-    const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined;
-    const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall);
+    const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<unknown> | undefined;
+    const wallProps = wallState?.props as { isAirWall?: unknown } | undefined;
+    const isAirWall = Boolean(wallState?.enabled !== false && wallProps?.isAirWall === true);
     if (isAirWall) {
       object.visible = false;
       updateBehaviorVisibility(nodeId, false);
@@ -3940,6 +3975,8 @@ function resetPhysicsWorld(): void {
   vehicleInstances.clear();
   vehicleRaycastInWorld.clear();
   rigidbodyInstances.clear();
+  protagonistNodeId = null;
+  scenePreviewPerf.reset();
   airWallBodies.clear();
   physicsWorld = null;
   groundHeightfieldCache.clear();
@@ -3989,6 +4026,10 @@ function removeRigidbodyInstance(nodeId: string): void {
   }
   removeRigidbodyInstanceBodies(physicsWorld, entry);
   rigidbodyInstances.delete(nodeId);
+  scenePreviewPerf.notifyRemovedNode(nodeId);
+  if (protagonistNodeId === nodeId) {
+    protagonistNodeId = null;
+  }
   groundHeightfieldCache.delete(nodeId);
   wallTrimeshCache.delete(nodeId);
   removeVehicleInstance(nodeId);
@@ -4226,6 +4267,7 @@ function removeVehicleInstance(nodeId: string): void {
   }
   vehicleInstances.delete(nodeId);
   vehicleRaycastInWorld.delete(nodeId);
+  scenePreviewPerf.notifyRemovedNode(nodeId);
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
@@ -4271,6 +4313,14 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   if (existing) {
     existing.object = object;
     syncSharedBodyFromObject(existing.body, object, existing.orientationAdjustment);
+
+    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+      nodeId,
+      body: existing.body,
+      isVehicle: Boolean(resolveVehicleComponent(node)),
+      isProtagonist: Boolean(object.userData?.protagonist),
+    });
+
     ensureVehicleBindingForNode(nodeId);
     return;
   }
@@ -4278,6 +4328,14 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   if (!bodyEntry) {
     return;
   }
+
+  scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+    nodeId,
+    body: bodyEntry.body,
+    isVehicle: Boolean(resolveVehicleComponent(node)),
+    isProtagonist: Boolean(object.userData?.protagonist),
+  });
+
   physicsWorld.addBody(bodyEntry.body);
   rigidbodyInstances.set(nodeId, {
     nodeId,
@@ -4377,11 +4435,20 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     if (existing) {
       removeRigidbodyInstanceBodies(world, existing);
       rigidbodyInstances.delete(node.id);
+      scenePreviewPerf.notifyRemovedNode(node.id);
     }
     const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object);
     if (!bodyEntry) {
       return;
     }
+
+    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+      nodeId: node.id,
+      body: bodyEntry.body,
+      isVehicle: Boolean(resolveVehicleComponent(node)),
+      isProtagonist: Boolean(object.userData?.protagonist),
+    });
+
     world.addBody(bodyEntry.body);
     rigidbodyInstances.set(node.id, {
       nodeId: node.id,
@@ -4395,6 +4462,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     if (!desiredIds.has(nodeId)) {
       removeRigidbodyInstanceBodies(world, entry);
       rigidbodyInstances.delete(nodeId);
+      scenePreviewPerf.notifyRemovedNode(nodeId);
     }
   });
   groundHeightfieldCache.forEach((_entry, nodeId) => {
@@ -4448,7 +4516,7 @@ function stepPhysicsWorld(delta: number): void {
           chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
           chassisBody.velocity.set(0, 0, 0);
           chassisBody.angularVelocity.set(0, 0, 0);
-          (chassisBody as any).sleep?.();
+          trySleepBody(chassisBody);
         } catch {
           // best-effort
         }
@@ -4486,7 +4554,7 @@ function stepPhysicsWorld(delta: number): void {
     const wz = chassisBody.angularVelocity?.z ?? 0;
     const speedSq = vx * vx + vy * vy + vz * vz;
     const angSq = wx * wx + wy * wy + wz * wz;
-    const sleepState = (chassisBody as any).sleepState as number | undefined;
+    const sleepState = getBodySleepState(chassisBody);
     const drifting = speedSq > 1e-10 || angSq > 1e-10;
     const awake = sleepState === 0;
     if (!drifting && !awake) {
@@ -4502,7 +4570,7 @@ function stepPhysicsWorld(delta: number): void {
       chassisBody.allowSleep = true;
       chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
       chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
-      const wheelCount = Math.max(0, (instance as any).wheelCount ?? (instance.vehicle as any)?.wheelInfos?.length ?? 0);
+      const wheelCount = Math.max(0, instance.wheelCount || instance.vehicle.wheelInfos.length || 0);
       for (let index = 0; index < wheelCount; index += 1) {
         instance.vehicle.applyEngineForce(0, index);
         instance.vehicle.setSteeringValue(0, index);
@@ -4510,7 +4578,7 @@ function stepPhysicsWorld(delta: number): void {
       }
       chassisBody.velocity.set(0, 0, 0);
       chassisBody.angularVelocity.set(0, 0, 0);
-      (chassisBody as any).sleep?.();
+      trySleepBody(chassisBody);
     } catch {
       // best-effort
     }
@@ -4519,6 +4587,11 @@ function stepPhysicsWorld(delta: number): void {
     if (entry.syncObjectFromBody === false) {
       return;
     }
+
+    if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
+      return;
+    }
+
     // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics
     // unless the tour is actually active for this node.
     const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId);
@@ -4534,11 +4607,12 @@ function stepPhysicsWorld(delta: number): void {
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
-
   // Only update when time advances and vehicle instances exist.
   if (!Number.isFinite(delta) || delta <= 0 || !vehicleInstances.size) {
     return;
   }
+
+  const nowMs = Date.now();
 
   vehicleInstances.forEach((instance) => {
     const wheelBindings = instance.wheelBindings as VehicleWheelBinding[];
@@ -4548,6 +4622,13 @@ function updateVehicleWheelVisuals(delta: number): void {
 
     const chassisBody = instance.vehicle.chassisBody;
     if (!chassisBody) {
+      return;
+    }
+
+    const nodeId = instance.nodeId ?? null;
+    const manualActive = vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle;
+    const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId);
+    if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
       return;
     }
 
@@ -4578,7 +4659,7 @@ function updateVehicleWheelVisuals(delta: number): void {
     instance.lastChassisPosition.copy(wheelChassisPositionHelper);
     instance.hasChassisPositionSample = true;
 
-    const wheelInfos = (instance.vehicle as any).wheelInfos as Array<{ steering?: number }> | undefined;
+    const wheelInfos = instance.vehicle.wheelInfos as Array<{ steering?: number }>;
 
     wheelBindings.forEach((binding: VehicleWheelBinding) => {
       if (!binding.nodeId) {
@@ -5107,10 +5188,10 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 
 function prepareImportedObjectForPreview(object: THREE.Object3D): void {
   object.traverse((child) => {
-    const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] };
-    if (!(mesh as any).isMesh && !(mesh as any).isSkinnedMesh) {
+    if (!(child instanceof THREE.Mesh)) {
       return;
     }
+    const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] };
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -5217,13 +5298,10 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
         // Mark any associated InstancedMesh objects as dirty so their bounding spheres
         // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
         try {
-          const binding = getModelInstanceBinding(bindingId) as any | null;
-          if (binding && Array.isArray(binding.slots)) {
+          const binding = getModelInstanceBinding(bindingId);
+          if (binding) {
             for (const slot of binding.slots) {
-              const mesh = slot?.mesh as THREE.InstancedMesh | null;
-              if (mesh && (mesh as any).isInstancedMesh) {
-                addInstancedBoundsMesh(mesh);
-              }
+              addInstancedBoundsMesh(slot.mesh);
             }
           }
         } catch (_error) {
@@ -5477,11 +5555,24 @@ function setCameraCaging(enabled: boolean): void {
 
 function resetProtagonistPoseState(): void {
   protagonistPoseSynced = false;
+  scenePreviewPerf.clearProtagonist();
+  protagonistNodeId = null;
+}
+
+function registerProtagonistObject(object: THREE.Object3D): void {
+  const id = object.userData?.nodeId as string | undefined;
+  if (!id) {
+    return;
+  }
+  protagonistNodeId = id;
+  const rigidbody = rigidbodyInstances.get(id) ?? null;
+  scenePreviewPerf.registerProtagonist(id, rigidbody?.body ?? null);
 }
 
 function findProtagonistObject(): THREE.Object3D | null {
   for (const object of nodeObjectMap.values()) {
     if (object.userData?.protagonist) {
+      registerProtagonistObject(object);
       return object;
     }
   }
@@ -5502,6 +5593,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   if (!protagonistObject) {
     return false;
   }
+  registerProtagonistObject(protagonistObject);
   protagonistObject.getWorldPosition(protagonistPosePosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
   protagonistPoseDirection.set(1, 0, 0).applyQuaternion(protagonistPoseQuaternion);
@@ -5570,6 +5662,7 @@ function applyCameraWatchTween(deltaSeconds: number): void {
     });
     lockControlsPitchToCurrent(controls, camera);
     activeCameraWatchTween = null;
+    markInstancedCullingDirty();
   }
 }
 
@@ -6121,6 +6214,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
       });
     });
     lockControlsPitchToCurrent(controls, camera);
+    markInstancedCullingDirty();
     return finishSuccess();
   }
 
@@ -6137,6 +6231,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
       });
     });
     lockControlsPitchToCurrent(controls, camera);
+    markInstancedCullingDirty();
     return finishSuccess();
   }
 
@@ -6147,6 +6242,8 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     duration: CAMERA_WATCH_DURATION,
     elapsed: 0,
   };
+
+  markInstancedCullingDirty();
 
   return finishSuccess();
 }
@@ -6213,6 +6310,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   }
   const { camera, controls } = context;
   activeCameraWatchTween = null;
+  markInstancedCullingDirty();
   setCameraCaging(false);
   camera.position.y = HUMAN_EYE_HEIGHT;
   const startTarget = controls.target.clone();
@@ -6244,6 +6342,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     duration: CAMERA_LEVEL_DURATION,
     elapsed: 0,
   };
+  markInstancedCullingDirty();
   return finishSuccess();
 }
 
@@ -7024,10 +7123,10 @@ function applyAutoTourVehicleHoldBrake(nodeId: string): void {
   const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
   holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
   try {
-    const chassisBody = (vehicleInstance as any).vehicle.chassisBody;
+    const chassisBody = vehicleInstance.vehicle.chassisBody;
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
-    chassisBody.sleep?.();
+    trySleepBody(chassisBody);
   } catch {
     // best-effort
   }
@@ -7104,7 +7203,7 @@ function handleVehicleAutoTourStartTap(): void {
     // Resolve behavior token so scripts continue.
     if (event.token) {
       resolveBehaviorToken(event.token, { type: 'continue' });
-      pendingVehicleDriveEvent.value = { ...event, token: '' } as any;
+      pendingVehicleDriveEvent.value = { ...event, token: '' };
     }
   } finally {
     vehicleDrivePromptBusy.value = false;
@@ -8274,13 +8373,15 @@ function decodeZipBase64ToArrayBuffer(base64: string): ArrayBuffer {
     return new ArrayBuffer(0);
   }
 
-  if (typeof (uni as any)?.base64ToArrayBuffer === 'function') {
-    return (uni as any).base64ToArrayBuffer(trimmed) as ArrayBuffer;
+  type Base64Decoder = { base64ToArrayBuffer: (payload: string) => ArrayBuffer };
+  const uniDecoder = uni as unknown as Partial<Base64Decoder>;
+  if (typeof uniDecoder.base64ToArrayBuffer === 'function') {
+    return uniDecoder.base64ToArrayBuffer(trimmed);
   }
 
-  const wxAny = typeof wx !== 'undefined' ? (wx as any) : null;
-  if (wxAny && typeof wxAny.base64ToArrayBuffer === 'function') {
-    return wxAny.base64ToArrayBuffer(trimmed) as ArrayBuffer;
+  const wxDecoder = (typeof wx !== 'undefined' ? wx : null) as unknown as Partial<Base64Decoder> | null;
+  if (wxDecoder && typeof wxDecoder.base64ToArrayBuffer === 'function') {
+    return wxDecoder.base64ToArrayBuffer(trimmed);
   }
 
   // Web fallback
@@ -8293,9 +8394,11 @@ function decodeZipBase64ToArrayBuffer(base64: string): ArrayBuffer {
     return out.buffer;
   }
 
-  const G: any = globalThis as any;
-  if (G && typeof G.Buffer !== 'undefined') {
-    const buf = G.Buffer.from(trimmed, 'base64');
+  type NodeBufferLike = { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
+  type NodeBufferCtorLike = { from: (payload: string, encoding: 'base64') => NodeBufferLike };
+  const bufferCtor = (globalThis as typeof globalThis & { Buffer?: NodeBufferCtorLike }).Buffer;
+  if (bufferCtor) {
+    const buf = bufferCtor.from(trimmed, 'base64');
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   }
 
@@ -8304,7 +8407,17 @@ function decodeZipBase64ToArrayBuffer(base64: string): ArrayBuffer {
 
 function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackageProjectData {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
-  const projectConfig = JSON.parse(projectText) as any;
+  type ScenePackageProjectConfig = {
+    id?: unknown;
+    name?: unknown;
+    defaultSceneId?: unknown;
+    lastEditedSceneId?: unknown;
+    sceneOrder?: unknown;
+  };
+
+  const projectConfigRaw: unknown = JSON.parse(projectText);
+  const projectConfig: ScenePackageProjectConfig =
+    projectConfigRaw && typeof projectConfigRaw === 'object' ? (projectConfigRaw as ScenePackageProjectConfig) : {};
 
   const scenes: ScenePackageSceneEntry[] = [];
   pkg.manifest.scenes.forEach((sceneEntry) => {
@@ -8314,13 +8427,14 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = sceneRaw as SceneJsonExportDocument;
+    const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     const id = sceneEntry.sceneId;
     scenes.push({
       kind: 'embedded',
       id,
       name: document.name || id,
-      createdAt: (document as any).createdAt ?? null,
-      updatedAt: (document as any).updatedAt ?? null,
+      createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
+      updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
     });
   });
@@ -8339,8 +8453,8 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<void> {
   const pkg = unzipScenePackage(buffer);
-  activeScenePackagePkg = pkg as ScenePackageUnzipped;
-  activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any;
+  activeScenePackagePkg = pkg;
+  activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
   await loadProjectFromBundle(projectData);
 }
@@ -8546,7 +8660,8 @@ function disposeObject(object: THREE.Object3D) {
     }
     if ((child as THREE.Light).isLight) {
       const light = child as THREE.Light;
-      (light.shadow as any)?.map?.dispose?.();
+      const shadow = (light as THREE.DirectionalLight | THREE.SpotLight).shadow;
+      shadow?.map?.dispose?.();
     }
   });
 }
@@ -8587,7 +8702,12 @@ function translateCamera(forwardDelta: number, rightDelta: number): void {
   controls.target.add(tempMovementVec);
 }
 
-function setupWheelControls(canvas: any): void {
+type WheelEventTarget = {
+  addEventListener(type: 'wheel', listener: (event: WheelEvent) => void, options?: AddEventListenerOptions | boolean): void;
+  removeEventListener(type: 'wheel', listener: (event: WheelEvent) => void, options?: EventListenerOptions | boolean): void;
+};
+
+function setupWheelControls(canvas: WheelEventTarget | null | undefined): void {
   teardownWheelControls();
   if (!canvas || typeof canvas.addEventListener !== 'function') {
     return;
@@ -8983,7 +9103,7 @@ function mountGraphAndSyncSubsystems(
   payload: ScenePreviewPayload,
   root: THREE.Object3D,
   resourceCache: ResourceCache | null,
-  canvas: any,
+  canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
 ): void {
   sceneGraphRoot = root;
@@ -8995,7 +9115,7 @@ function mountGraphAndSyncSubsystems(
   refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(root);
-  ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
+  ensureBehaviorTapHandler(canvas, camera);
   initializeLazyPlaceholders(payload.document);
   syncPhysicsBodiesForDocument(payload.document);
   syncTerrainScatterInstances(payload.document, resourceCache);
@@ -9117,7 +9237,12 @@ function startRenderLoop(
 
         updateLazyPlaceholders(deltaSeconds);
         terrainScatterRuntime.update(camera, resolveGroundMeshObject);
-        updateInstancedCullingAndLod();
+        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+        if (shouldRunInstancedCulling(camera, instancingNow)) {
+          updateInstancedCullingAndLod();
+        }
         cloudRenderer?.update(deltaSeconds);
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
@@ -9279,6 +9404,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 6: apply view settings (camera alignment, skybox, environment, projection).
   applyDocumentViewSettings(payload.document, camera);
+  markInstancedCullingDirty();
 
   // Phase 7: start the render loop.
   startRenderLoop(result, renderer, scene, camera, controls);
@@ -9300,6 +9426,7 @@ const handleResize: WindowResizeCallback = (_result) => {
     renderContext!.renderer.setSize(width, height, false);
     renderContext!.camera.aspect = width / height;
     renderContext!.camera.updateProjectionMatrix();
+    markInstancedCullingDirty();
   });
 };
 
@@ -9308,9 +9435,10 @@ onLoad((query) => {
     DISPLAY_BOARD_RESOLVER_KEY
   ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
+  const queryRecord = (query ?? {}) as Record<string, unknown>;
   const projectIdParam = typeof query?.projectId === 'string' ? query.projectId : '';
-  const packageUrlParam = typeof (query as any)?.packageUrl === 'string'
-    ? String((query as any).packageUrl)
+  const packageUrlParam = typeof queryRecord.packageUrl === 'string'
+    ? String(queryRecord.packageUrl)
     : '';
 
   error.value = null;
@@ -9373,7 +9501,7 @@ onUnload(() => {
   resetSceneDownloadState();
   sharedResourceCache = null;
   lanternViewerInstance = null;
-  delete (globalThis as any)[DISPLAY_BOARD_RESOLVER_KEY];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
 });
 
 onUnmounted(() => {
@@ -9390,7 +9518,7 @@ onUnmounted(() => {
   }
   resetSceneDownloadState();
   sharedResourceCache = null;
-  delete (globalThis as any)[DISPLAY_BOARD_RESOLVER_KEY];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
 });
 
 </script>
