@@ -649,36 +649,52 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     camera: THREE.Camera,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
   ): Set<string> {
+    // 更新相机的世界矩阵（确保 matrixWorld 与 matrixWorldInverse 正确）
     camera.updateMatrixWorld(true)
+    // 计算裁剪用的投影-视图矩阵：projection * view
     scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    // 根据投影-视图矩阵初始化视锥体（用于快速的球体裁剪测试）
     scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+    // 准备返回的可见实例 id 集合
     const visibleIds = new Set<string>()
 
+    // 如果启用了分块流式（chunk streaming），我们只对当前活跃块的实例做裁剪；
+    // 这样可以避免对整个地面上所有散布实例遍历，提升性能。
     const iterateIds = chunkStreamingEnabled ? Array.from(chunkStreamingActiveNodeIds.values()) : null
     if (iterateIds) {
+      // 快速路径：仅遍历 activate window 内的实例 id
       for (const nodeId of iterateIds) {
         const runtime = runtimeInstances.get(nodeId)
+        // 若运行时实例缺失（可能因同步/卸载延迟），跳过
         if (!runtime) {
           continue
         }
+        // 解析该实例对应的地面网格对象；若无法找到则跳过
         const groundMesh = resolveGroundMeshObject(runtime.groundNodeId)
         if (!groundMesh) {
           continue
         }
 
+        // 计算实例的世界变换矩阵（groundMesh.matrixWorld * instanceLocalMatrix）
         const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+        // 从矩阵提取世界位置用于包围球中心
         scatterWorldPositionHelper.setFromMatrixPosition(matrix)
 
+        // 计算用于裁剪的包围球半径：基于模型基础半径、实例缩放以及全局 cull 半径乘数
         const boundAssetId = runtime.boundAssetId
+        // 尝试从缓存模型对象读取基础半径；若不存在则使用默认 0.5
         const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
         const scale = runtime.instance.localScale
+        // 以最大的轴向缩放为尺度因子（保守估计）
         const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
         const radius =
           baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
 
+        // 设置裁剪用球体（中心 + 半径）
         scatterCullingSphere.center.copy(scatterWorldPositionHelper)
         scatterCullingSphere.radius = radius
 
+        // 进行视锥体与球体的相交测试：若相交则认为可见并添加到集合中
         if (scatterCullingFrustum.intersectsSphere(scatterCullingSphere)) {
           visibleIds.add(nodeId)
         }
@@ -691,10 +707,13 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       if (!groundMesh) {
         return
       }
-
+      // 与上面分块流式路径完全相同的处理逻辑，但这里遍历的是全部 runtimeInstances（非仅活跃块）
+      // 1) 合成实例世界矩阵
       const matrix = composeScatterMatrix(runtime.instance, groundMesh, scatterMatrixHelper)
+      // 2) 提取世界位置
       scatterWorldPositionHelper.setFromMatrixPosition(matrix)
 
+      // 3) 计算包围球半径（基于缓存模型半径、实例缩放与全局乘数）
       const boundAssetId = runtime.boundAssetId
       const baseRadius = getCachedModelObject(boundAssetId)?.radius ?? 0.5
       const scale = runtime.instance.localScale
@@ -702,6 +721,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       const radius =
         baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * cullRadiusMultiplier
 
+      // 4) 填充用于裁剪的球体，并测试是否与视锥体相交
       scatterCullingSphere.center.copy(scatterWorldPositionHelper)
       scatterCullingSphere.radius = radius
 
