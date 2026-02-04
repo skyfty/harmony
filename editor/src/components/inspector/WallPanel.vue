@@ -1351,6 +1351,42 @@ function applyAirWallUpdate(rawValue: unknown) {
             :key="`corner-${index}`"
             class="wall-corner-row"
           >
+            <div class="wall-corner-fields">
+              <div class="wall-corner-angle-fields">
+                <div class="wall-corner-angle-label">
+                </div>
+                <div class="wall-corner-angle-inputs">
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Interior Angle (°)"
+                    :model-value="(entry as any).angle ?? 90"
+                    min="0"
+                    max="180"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { angle: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Tolerance (°)"
+                    :model-value="(entry as any).tolerance ?? 5"
+                    min="0"
+                    max="90"
+                    step="1"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                </div>
+              </div>
+            </div>
             <div class="wall-corner-model-row wall-corner-model-row--body">
               <div
                 class="wall-corner-model-picker"
@@ -1456,43 +1492,7 @@ function applyAirWallUpdate(rawValue: unknown) {
               </div>
             </div>
 
-            <div class="wall-corner-fields">
-              <div class="wall-corner-angle-fields">
-                <div class="wall-corner-angle-label">
-                  Interior: {{ Math.round((entry as any).angle ?? 90) }}° ± {{ Math.round((entry as any).tolerance ?? 5) }}°
-                </div>
-                <div class="wall-corner-angle-inputs">
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Interior Angle (°)"
-                    :model-value="(entry as any).angle ?? 90"
-                    min="0"
-                    max="180"
-                    step="1"
-                    inputmode="decimal"
-                    hide-details
-                    @update:modelValue="(value) => updateCornerModel(index, { angle: Number(value) } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Tolerance (°)"
-                    :model-value="(entry as any).tolerance ?? 5"
-                    min="0"
-                    max="90"
-                    step="1"
-                    inputmode="decimal"
-                    hide-details
-                    @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
-                    @blur="() => updateCornerModel(index, {})"
-                  />
-                </div>
-              </div>
-            </div>
+            
 
             <div class="wall-corner-actions">
               <v-btn
@@ -1712,12 +1712,12 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: grid;
   grid-template-columns: auto 1fr auto;
   grid-template-areas:
+    'fields fields fields'
     'body body actions'
-    'head head actions'
-    'fields fields fields';
+    'head head actions';
   column-gap: 0.75rem;
   row-gap: 0.4rem;
-  align-items: start;
+  align-items: center;
   padding-top: 0.4rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1731,7 +1731,7 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.6rem;
-  align-items: start;
+  align-items: center;
 }
 
 .wall-corner-model-row--body {
@@ -1754,8 +1754,9 @@ function applyAirWallUpdate(rawValue: unknown) {
 
 .wall-corner-orientation-stack {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
+  align-items: center;
 }
 
 .asset-pair-grid {
@@ -1805,6 +1806,7 @@ function applyAirWallUpdate(rawValue: unknown) {
   grid-area: actions;
   display: flex;
   justify-content: flex-end;
+  align-self: center;
 }
 
 .wall-corner-angle-fields {
