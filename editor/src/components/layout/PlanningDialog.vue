@@ -1764,10 +1764,9 @@ async function handleConvertTo3DScene() {
   const planningData = sceneStore.planningData
   convertingTo3DScene.value = true
 
+  const abortController = new AbortController()
+
   try {
-    // Always clear previously generated conversion output.
-    // Conversion recreates nodes each time, but node ids remain stable.
-    await clearPlanningGeneratedContent(sceneStore as any)
     if (!planningData) {
       dialogOpen.value = false
       return
@@ -1777,6 +1776,18 @@ async function handleConvertTo3DScene() {
     // We still keep overwriteExisting=true so conversion can prune orphaned generated nodes.
     const overwriteExisting = true
 
+    uiStore.showLoadingOverlay({
+      mode: 'determinate',
+      progress: 0,
+      title: '转换到 3D 场景',
+      message: '准备中…',
+      closable: false,
+      cancelable: true,
+      cancelText: '取消',
+      autoClose: false,
+    })
+    uiStore.setLoadingOverlayCancelHandler(() => abortController.abort())
+
     // Close dialog first, then start conversion.
     dialogOpen.value = false
     await nextTick()
@@ -1785,7 +1796,9 @@ async function handleConvertTo3DScene() {
       sceneStore: sceneStore as any,
       planningData,
       overwriteExisting,
+      signal: abortController.signal,
       onProgress: ({ step, progress }) => {
+        if (abortController.signal.aborted) return
         uiStore.updateLoadingOverlay({
           mode: 'determinate',
           progress,
@@ -1801,10 +1814,32 @@ async function handleConvertTo3DScene() {
       progress: 100,
       message: 'Conversion complete.',
       closable: true,
+      cancelable: false,
       autoClose: true,
       autoCloseDelay: 1200,
     })
   } catch (error) {
+    const isAbort = (error as any)?.name === 'AbortError'
+    if (isAbort) {
+      // Best-effort cleanup of partial conversion output.
+      try {
+        await clearPlanningGeneratedContent(sceneStore as any)
+      } catch {
+        // ignore
+      }
+
+      uiStore.updateLoadingOverlay({
+        mode: 'determinate',
+        progress: 100,
+        message: '已取消',
+        closable: true,
+        cancelable: false,
+        autoClose: true,
+        autoCloseDelay: 600,
+      })
+      return
+    }
+
     console.error('Failed to convert planning to 3D scene', error)
     const message = error instanceof Error ? error.message : 'Conversion failed.'
     uiStore.updateLoadingOverlay({
@@ -1812,9 +1847,11 @@ async function handleConvertTo3DScene() {
       progress: 100,
       message,
       closable: true,
+      cancelable: false,
       autoClose: false,
     })
   } finally {
+    uiStore.setLoadingOverlayCancelHandler(null)
     convertingTo3DScene.value = false
   }
 }

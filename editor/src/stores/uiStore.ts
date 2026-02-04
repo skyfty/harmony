@@ -8,6 +8,8 @@ export interface LoadingOverlayOptions {
   title?: string
   message?: string
   closable?: boolean
+  cancelable?: boolean
+  cancelText?: string
   autoClose?: boolean
   autoCloseDelay?: number
 }
@@ -19,6 +21,8 @@ interface LoadingOverlayState {
   title: string
   message: string
   closable: boolean
+  cancelable: boolean
+  cancelText: string
   autoClose: boolean
   autoCloseDelay: number
 }
@@ -38,9 +42,13 @@ const defaultOverlayState: LoadingOverlayState = {
   title: '加载中…',
   message: '请稍候…',
   closable: false,
+  cancelable: false,
+  cancelText: '取消',
   autoClose: true,
   autoCloseDelay: 600,
 }
+
+let loadingOverlayCancelHandler: (() => void) | null = null
 
 export const useUiStore = defineStore('ui', {
   state: (): UiState & { activeSelectionContext: ActiveSelectionContext } => ({
@@ -71,6 +79,8 @@ export const useUiStore = defineStore('ui', {
         title: options.title ?? defaultOverlayState.title,
         message: options.message ?? defaultOverlayState.message,
         closable: options.closable ?? defaultOverlayState.closable,
+        cancelable: options.cancelable ?? defaultOverlayState.cancelable,
+        cancelText: options.cancelText ?? defaultOverlayState.cancelText,
         autoClose: options.autoClose ?? defaultOverlayState.autoClose,
         autoCloseDelay: options.autoCloseDelay ?? defaultOverlayState.autoCloseDelay,
       }
@@ -86,6 +96,8 @@ export const useUiStore = defineStore('ui', {
         title: options.title ?? this.loadingOverlay.title,
         message: options.message ?? this.loadingOverlay.message,
         closable: options.closable ?? this.loadingOverlay.closable,
+        cancelable: options.cancelable ?? this.loadingOverlay.cancelable,
+        cancelText: options.cancelText ?? this.loadingOverlay.cancelText,
         autoClose: options.autoClose ?? this.loadingOverlay.autoClose,
         autoCloseDelay: options.autoCloseDelay ?? this.loadingOverlay.autoCloseDelay,
       }
@@ -110,6 +122,7 @@ export const useUiStore = defineStore('ui', {
     },
     hideLoadingOverlay(immediate = false) {
       this.clearAutoCloseTimer()
+      loadingOverlayCancelHandler = null
       if (immediate) {
         this.loadingOverlay = { ...defaultOverlayState }
         return
@@ -123,6 +136,30 @@ export const useUiStore = defineStore('ui', {
     requestClose() {
       if (!this.loadingOverlay.closable) return
       this.hideLoadingOverlay(true)
+    },
+
+    setLoadingOverlayCancelHandler(handler: (() => void) | null) {
+      loadingOverlayCancelHandler = handler
+    },
+
+    requestCancelLoadingOverlay() {
+      if (!this.loadingOverlay.cancelable) return
+
+      // Idempotent: disable cancel immediately and clear handler to avoid races.
+      this.loadingOverlay.cancelable = false
+      if (this.loadingOverlay.visible) {
+        this.loadingOverlay.closable = false
+        this.loadingOverlay.autoClose = false
+        this.loadingOverlay.message = '正在取消…'
+      }
+
+      const handler = loadingOverlayCancelHandler
+      loadingOverlayCancelHandler = null
+      try {
+        handler?.()
+      } catch {
+        // noop
+      }
     },
     handleAutoClose() {
       if (!this.loadingOverlay.autoClose) {

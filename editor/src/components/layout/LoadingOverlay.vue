@@ -9,6 +9,8 @@ const props = withDefaults(
     title?: string
     message?: string
     closable?: boolean
+    cancelable?: boolean
+    cancelText?: string
   }>(),
   {
     mode: 'indeterminate',
@@ -16,11 +18,14 @@ const props = withDefaults(
     title: '正在加载',
     message: '请稍候…',
     closable: false,
+    cancelable: false,
+    cancelText: '取消',
   },
 )
 
 const emit = defineEmits<{
   close: []
+  cancel: []
 }>()
 
 const safeProgress = computed(() => {
@@ -34,6 +39,11 @@ const percentLabel = computed(() => `${Math.round(safeProgress.value)}%`)
 function handleClose() {
   if (!props.closable) return
   emit('close')
+}
+
+function handleCancel() {
+  if (!props.cancelable) return
+  emit('cancel')
 }
 </script>
 
@@ -71,6 +81,16 @@ function handleClose() {
                 rounded
                 striped
               />
+            </div>
+
+            <div v-if="cancelable" class="overlay-actions">
+              <v-btn
+                variant="tonal"
+                color="error"
+                @click="handleCancel"
+              >
+                {{ cancelText }}
+              </v-btn>
             </div>
           </section>
         </div>
@@ -146,6 +166,12 @@ function handleClose() {
   font-weight: 600;
   text-align: center;
   letter-spacing: 0.05em;
+}
+
+.overlay-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: center;
 }
 
 .overlay-fade-enter-active,

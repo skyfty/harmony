@@ -21,7 +21,10 @@ function handleOverlayClose() {
       :title="loadingOverlay.title"
       :message="loadingOverlay.message"
       :closable="loadingOverlay.closable"
+      :cancelable="loadingOverlay.cancelable"
+      :cancel-text="loadingOverlay.cancelText"
       @close="handleOverlayClose"
+      @cancel="uiStore.requestCancelLoadingOverlay()"
     />
   </v-app>
 </template>
