@@ -82,7 +82,6 @@ import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
-import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
@@ -3537,12 +3536,8 @@ function cloneNode(node: SceneNode): SceneNode {
 }
 
 function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
-  const nodes = initialNodes.map((node) => cloneNode(node))
   const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
-  if (!settings) {
-    return ensureEnvironmentNode(ensureSkyNode(nodes), environmentSettings)
-  }
-  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(nodes, settings)), environmentSettings)
+  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode([], settings)), environmentSettings)
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -13177,7 +13172,7 @@ export const useSceneStore = defineStore('scene', {
     },
     async createScene(
       name = 'Untitled Scene',
-      thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
+      options?: GroundSettings | { groundSettings?: Partial<GroundSettings> } | null,
     ) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
@@ -13187,12 +13182,18 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('必须先打开工程才能创建场景')
       }
       const displayName = name.trim() || 'Untitled Scene'
+
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
-      if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
-        resolvedGroundOptions = thumbnailOrOptions.groundSettings
+      if (options && typeof options === 'object') {
+        if ('groundSettings' in options) {
+          resolvedGroundOptions = (options as { groundSettings?: Partial<GroundSettings> }).groundSettings
+        } else {
+          resolvedGroundOptions = options as Partial<GroundSettings>
+        }
       }
 
       const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
+
       const baseNodes = createDefaultSceneNodes(groundSettings)
       const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
@@ -13223,100 +13224,7 @@ export const useSceneStore = defineStore('scene', {
       await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
-    async createSceneFromTemplate(
-      name: string,
-      template: PresetSceneDocument,
-      options: { groundWidth?: number; groundDepth?: number } = {},
-    ) {
-      const scenesStore = useScenesStore()
-      const projectsStore = useProjectsStore()
-      const projectId = projectsStore.activeProjectId
-      if (!projectId) {
-        throw new Error('必须先打开工程才能创建场景')
-      }
-      const displayName = name.trim() || template.name?.trim() || 'Untitled Scene'
-
-      const fallbackWidth = this.groundSettings.width
-      const fallbackDepth = this.groundSettings.depth
-      const widthCandidate = options.groundWidth ?? template.groundSettings?.width ?? fallbackWidth
-      const depthCandidate = options.groundDepth ?? template.groundSettings?.depth ?? fallbackDepth
-
-      const groundSettings = cloneGroundSettings({
-        width: widthCandidate,
-        depth: depthCandidate,
-      })
-
-      const nodes = Array.isArray(template.nodes) && template.nodes.length
-        ? cloneSceneNodes(template.nodes as SceneNode[])
-        : createDefaultSceneNodes(groundSettings)
-
-      const groundNode = findGroundNode(nodes)
-      if (groundNode) {
-        groundNode.dynamicMesh = createGroundDynamicMeshDefinition(
-          {
-            ...(groundNode.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : {}),
-            width: groundSettings.width,
-            depth: groundSettings.depth,
-            cellSize: 1,
-            columns: Math.max(1, Math.round(groundSettings.width)),
-            rows: Math.max(1, Math.round(groundSettings.depth)),
-          },
-          groundSettings,
-        )
-      }
-      const materials = Array.isArray(template.materials) && template.materials.length
-        ? (template.materials as SceneMaterial[])
-        : undefined
-
-      const selectedNodeId = typeof template.selectedNodeId === 'string' ? template.selectedNodeId : null
-      const selectedNodeIds = Array.isArray(template.selectedNodeIds)
-        ? (template.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
-        : undefined
-      const cameraState = normalizeCameraStateInput(template.camera) ?? this.camera
-
-      const sceneDocument = createSceneDocument(displayName, {
-        projectId,
-        nodes,
-        materials,
-        selectedNodeId,
-        selectedNodeIds,
-        camera: cameraState,
-        resourceProviderId: typeof template.resourceProviderId === 'string'
-          ? template.resourceProviderId
-          : this.resourceProviderId,
-        assetCatalog: isAssetCatalog(template.assetCatalog)
-          ? (template.assetCatalog as Record<string, ProjectAsset[]>)
-          : undefined,
-        assetIndex: isAssetIndex(template.assetIndex)
-          ? (template.assetIndex as Record<string, AssetIndexEntry>)
-          : undefined,
-        packageAssetMap: isPackageAssetMap(template.packageAssetMap)
-          ? (template.packageAssetMap as Record<string, string>)
-          : undefined,
-        viewportSettings: normalizeViewportSettingsInput(template.viewportSettings),
-        skybox: template.skybox,
-        shadowsEnabled: template.shadowsEnabled,
-        panelVisibility: normalizePanelVisibilityInput(template.panelVisibility),
-        panelPlacement: normalizePanelPlacementInput(template.panelPlacement),
-        groundSettings,
-        environment: template.environment,
-      })
-
-      const timestamp = new Date().toISOString()
-      sceneDocument.createdAt = timestamp
-      sceneDocument.updatedAt = timestamp
-
-      await scenesStore.saveSceneDocument(sceneDocument)
-
-      this.sceneSwitchToken += 1
-      this.applySceneDocumentToState(sceneDocument)
-      this.isSceneReady = true
-      this.hasUnsavedChanges = false
-
-      await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
-      await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
-      return sceneDocument.id
-    },
+    
     async selectScene(sceneId: string, options: { setLastEdited?: boolean } = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1

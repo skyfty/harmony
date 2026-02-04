@@ -1567,19 +1567,15 @@ async function handleCreateScene(payload: {
   }
 
   try {
-    if (payload.presetSceneDocument) {
-      await sceneStore.createSceneFromTemplate(payload.name, payload.presetSceneDocument, {
-        groundWidth: payload.groundWidth,
-        groundDepth: payload.groundDepth,
-      })
-    } else {
-      await sceneStore.createScene(payload.name, {
-        groundSettings: {
-          width: payload.groundWidth,
-          depth: payload.groundDepth,
-        },
-      })
-    }
+    // Template-based scene creation removed; always create a fresh scene with provided ground settings.
+    await sceneStore.createScene(payload.name, {
+      groundSettings: {
+        width: payload.groundWidth,
+        depth: payload.groundDepth,
+      },
+    })
+    // If you need to apply a preset scene in future, reintroduce a dedicated migration or importer.
+    
   } catch (error) {
     console.error('[EditorView] failed to create scene', error)
     return
