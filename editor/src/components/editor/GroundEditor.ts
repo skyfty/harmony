@@ -108,6 +108,8 @@ export type GroundEditorOptions = {
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
+	// Editor-only: keep scatter instances visible/streaming, but never switch LOD tiers; always bind to the preset base asset.
+	lockScatterLodToBaseAsset?: boolean
 	// Optional: enable chunk-based scatter streaming for large grounds.
 	scatterChunkStreaming?: {
 		enabled?: boolean
@@ -1110,6 +1112,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
 
 	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
+	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
 	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
 	const scatterChunkStreamingPaddingOverride = clampFinite(options.scatterChunkStreaming?.unloadPaddingMeters, Number.NaN)
 	const scatterChunkStreamingMaxChunkChangesPerUpdate =
@@ -1148,6 +1151,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const scatterLodPresetCache = new Map<string, Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>> | null>()
 	const pendingScatterLodPresetLoads = new Map<string, Promise<void>>()
 	let lastScatterLodUpdateAt = 0
+	let scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 	const scatterLodCameraPosition = new THREE.Vector3()
 
 	const TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS = 160
@@ -1264,6 +1268,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const stopScatterSelectionWatch = watch(
 		() => ({ asset: options.scatterAsset.value, category: options.scatterCategory.value }),
 		({ asset, category }) => {
+			scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 			cancelScatterPlacement()
 			cancelScatterErase()
 			scatterLayer = null
@@ -1405,6 +1410,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
 		lastScatterChunkStreamingVisibilityUpdateAt = 0
 		lastScatterChunkStreamingUpdateAt = 0
+		lastScatterLodUpdateAt = 0
+		scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 
 		try {
 			cancelScatterPlacement()
@@ -3706,7 +3713,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function updateScatterLod(): void {
+	function updateScatterLod({ force = false }: { force?: boolean } = {}): void {
 		const camera = options.getCamera()
 		if (!camera) {
 			return
@@ -3719,9 +3726,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// Keep chunk streaming + per-instance visibility responsive even when LOD switching is throttled.
 		updateScatterChunkStreamingVisibilityAndGrace()
 		const now = Date.now()
-		if (now - lastScatterLodUpdateAt < 200) {
+		if (!force && !scatterLodImmediateSyncNeeded && now - lastScatterLodUpdateAt < 200) {
 			return
 		}
+		scatterLodImmediateSyncNeeded = false
 		lastScatterLodUpdateAt = now
 		scatterLodCameraPosition.copy(camera.position)
 
@@ -3757,7 +3765,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 				const distance = worldPos.distanceTo(scatterLodCameraPosition)
-				const desired = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+				const desired = lockScatterLodToBaseAsset
+					? resolveLodBindingAssetId(preset)
+					: chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
 				if (!desired) {
 					continue
 				}
@@ -3805,7 +3815,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
 			centerTarget.copy(worldPos)
-			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? resolveLodBindingAssetId(entry.preset)
+			const baseBindingAssetId = resolveLodBindingAssetId(entry.preset)
+			const boundAssetId = lockScatterLodToBaseAsset
+				? (baseBindingAssetId ?? scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
+				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? baseBindingAssetId)
 			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
 			const scale = entry.instance.localScale
 			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
@@ -3821,7 +3834,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
 			const distance = worldPos.distanceTo(scatterLodCameraPosition)
-			const desired = chooseLodModelAssetId(entry.preset, distance) ?? resolveLodBindingAssetId(entry.preset)
+			const desired = lockScatterLodToBaseAsset
+				? resolveLodBindingAssetId(entry.preset)
+				: chooseLodModelAssetId(entry.preset, distance) ?? resolveLodBindingAssetId(entry.preset)
 			if (!desired) {
 				continue
 			}

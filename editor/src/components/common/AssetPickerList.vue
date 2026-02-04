@@ -49,6 +49,27 @@ const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
 const gridRef = ref<HTMLDivElement | null>(null)
 
+function isAssetDownloading(asset: ProjectAsset): boolean {
+  if (!asset?.id) {
+    return false
+  }
+  return assetCacheStore.isDownloading(asset.id) || selectingAssetId.value === asset.id
+}
+
+function assetDownloadProgress(asset: ProjectAsset): number {
+  if (!asset?.id) {
+    return 0
+  }
+  return assetCacheStore.getProgress(asset.id)
+}
+
+function assetDownloadError(asset: ProjectAsset): string | null {
+  if (!asset?.id) {
+    return null
+  }
+  return assetCacheStore.getError(asset.id)
+}
+
 function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): ProjectAsset[] {
   if (!catalog) {
     return []
@@ -425,6 +446,21 @@ onMounted(() => {
                     {{ resolveInitials(asset) }}
                   </div>
                 </div>
+
+                <div v-if="isAssetDownloading(asset)" class="asset-picker-list__progress-overlay">
+                  <v-progress-circular
+                    :model-value="assetDownloadProgress(asset)"
+                    color="primary"
+                    size="34"
+                    width="4"
+                  />
+                </div>
+                <div
+                  v-else-if="assetDownloadError(asset)"
+                  class="asset-picker-list__error-overlay"
+                >
+                  <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
+                </div>
               </div>
             </template>
             <div>{{ asset.name }}</div>
@@ -510,6 +546,17 @@ onMounted(() => {
   height: 100%;
   background: radial-gradient(circle at 30% 20%, rgba(77, 208, 225, 0.18), rgba(33, 150, 243, 0.06) 55%, rgba(0, 0, 0, 0.08));
   overflow: hidden;
+}
+
+.asset-picker-list__progress-overlay,
+.asset-picker-list__error-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 10, 16, 0.55);
+  pointer-events: none;
 }
 
 .asset-picker-list__img {
