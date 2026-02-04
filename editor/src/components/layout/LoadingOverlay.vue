@@ -118,8 +118,9 @@ function handleCancel() {
 
 .overlay-card {
   position: relative;
-  min-width: 320px;
-  max-width: min(480px, 90vw);
+  /* 固定宽度以避免内容（如进度数字）变化时导致弹窗宽度抖动 */
+  width: 420px;
+  max-width: 90vw; /* 在窄屏时允许收缩 */
   border-radius: 16px;
   padding: 28px 32px;
   background: linear-gradient(145deg, rgba(36, 43, 56, 0.95), rgba(20, 23, 31, 0.98));
@@ -166,6 +167,8 @@ function handleCancel() {
   font-weight: 600;
   text-align: center;
   letter-spacing: 0.05em;
+  /* 使用等宽数字以减少从 9/99 到 100 等变化引起的宽度抖动 */
+  font-variant-numeric: tabular-nums;
 }
 
 .overlay-actions {
