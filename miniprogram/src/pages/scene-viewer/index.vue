@@ -353,6 +353,7 @@
         <text class="viewer-debug-line">Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}</text>
         <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
         <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
+        <text class="viewer-debug-line">Ground size (W × D): {{ debugGroundDims.width }} m × {{ debugGroundDims.depth }} m</text>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -777,6 +778,16 @@ const groundChunkDebug = reactive({
   unloaded: 0,
 });
 
+const debugGroundDims = computed(() => {
+  const cached = dynamicGroundCache;
+  if (!cached || !cached.dynamicMesh) {
+    return { width: '0.00', depth: '0.00' };
+  }
+  const def = cached.dynamicMesh;
+  const w = Number.isFinite(def.width) ? def.width : 0;
+  const d = Number.isFinite(def.depth) ? def.depth : 0;
+  return { width: w.toFixed(2), depth: d.toFixed(2) };
+});
 let debugFpsFrames = 0;
 let debugFpsAccumSeconds = 0;
 let debugFpsLastSyncAt = 0;
