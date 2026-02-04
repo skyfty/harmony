@@ -41,6 +41,10 @@ function createDefaultWeightmapTexture(): THREE.DataTexture {
 function getOrCreateShaderState(material: THREE.Material): TerrainPaintShaderState {
 	const existing = (material.userData as any)[TERRAIN_PAINT_MATERIAL_KEY] as TerrainPaintShaderState | undefined
 	if (existing) {
+		
+				if (typeof existing.chunkBounds.copy!== 'function') {
+					console.assert(false, 'Invalid chunkBounds in terrain paint shader state')
+				}
 		return existing
 	}
 	const state: TerrainPaintShaderState = {
@@ -52,6 +56,9 @@ function getOrCreateShaderState(material: THREE.Material): TerrainPaintShaderSta
 		defaultWhite: createDefaultWhiteTexture(),
 	}
 	;(material.userData as any)[TERRAIN_PAINT_MATERIAL_KEY] = state
+				if (typeof state.chunkBounds.copy!== 'function') {
+					console.assert(false, 'Invalid chunkBounds in terrain paint shader state')
+				}
 	return state
 }
 
@@ -222,6 +229,9 @@ export function ensureTerrainPaintPreviewInstalled(
 			}
 			const bounds = computeChunkBounds(def, mesh)
 			if (bounds) {
+				if (typeof state.chunkBounds.copy!== 'function') {
+					console.assert(false, 'Invalid chunkBounds in terrain paint shader state')
+				}
 				state.chunkBounds.copy(bounds)
 			}
 			const key = resolveChunkKeyFromMesh(mesh)
