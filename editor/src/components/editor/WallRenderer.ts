@@ -1381,7 +1381,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
         const localMatrices = wallProps
-          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyOrientation)
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
           : []
         if (localMatrices.length > 0) {
           // bounds 合并：将每个实例的变换 bbox 并入整体 bbox。
@@ -1408,7 +1411,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：通常用于墙顶装饰/压顶，沿墙段铺设。
         const localMatrices = wallProps
-          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'head', wallProps.headOrientation)
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'head', wallProps.headOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
           : []
         if (localMatrices.length > 0) {
           for (const localMatrix of localMatrices) {

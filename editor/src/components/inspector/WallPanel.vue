@@ -1039,60 +1039,6 @@ function applyAirWallUpdate(rawValue: unknown) {
             @update:modelValue="(value) => { localIsAirWall = Boolean(value); applyAirWallUpdate(value) }"
           />
 
-          <v-select
-            density="compact"
-            variant="underlined"
-            label="Joint Trim"
-            :items="JOINT_TRIM_MODE_ITEMS"
-            item-title="title"
-            item-value="value"
-            hide-details
-            v-model="localJointTrimMode"
-            @update:modelValue="applyJointTrimUpdate"
-          />
-
-          <v-text-field
-            v-model.number="localJointTrimStart"
-            label="Trim Start (m)"
-            type="number"
-            density="compact"
-            variant="underlined"
-            class="slider-input"
-            step="0.01"
-            min="0"
-            :disabled="localJointTrimMode !== 'manual'"
-            @blur="applyJointTrimUpdate"
-            inputmode="decimal"
-            @keydown.enter.prevent="applyJointTrimUpdate"
-          />
-
-          <v-text-field
-            v-model.number="localJointTrimEnd"
-            label="Trim End (m)"
-            type="number"
-            density="compact"
-            variant="underlined"
-            class="slider-input"
-            step="0.01"
-            min="0"
-            :disabled="localJointTrimMode !== 'manual'"
-            @blur="applyJointTrimUpdate"
-            inputmode="decimal"
-            @keydown.enter.prevent="applyJointTrimUpdate"
-          />
-
-          <div class="wall-joint-trim-actions">
-            <v-btn
-              v-if="wallComponent"
-              density="compact"
-              variant="text"
-              size="small"
-              @click="recommendJointTrim"
-            >
-              推荐值
-            </v-btn>
-            <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
-          </div>
         </div>
 
         <div class="wall-asset-section">
@@ -1321,6 +1267,63 @@ function applyAirWallUpdate(rawValue: unknown) {
           </div>
 
         <div class="corner-models-panel">
+          <div class="wall-corner-models">
+
+          <v-select
+            density="compact"
+            variant="underlined"
+            label="Joint Trim"
+            :items="JOINT_TRIM_MODE_ITEMS"
+            item-title="title"
+            item-value="value"
+            hide-details
+            v-model="localJointTrimMode"
+            @update:modelValue="applyJointTrimUpdate"
+          />
+
+          <v-text-field
+            v-model.number="localJointTrimStart"
+            label="Trim Start (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.01"
+            min="0"
+            :disabled="localJointTrimMode !== 'manual'"
+            @blur="applyJointTrimUpdate"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyJointTrimUpdate"
+          />
+
+          <v-text-field
+            v-model.number="localJointTrimEnd"
+            label="Trim End (m)"
+            type="number"
+            density="compact"
+            variant="underlined"
+            class="slider-input"
+            step="0.01"
+            min="0"
+            :disabled="localJointTrimMode !== 'manual'"
+            @blur="applyJointTrimUpdate"
+            inputmode="decimal"
+            @keydown.enter.prevent="applyJointTrimUpdate"
+          />
+
+          <div class="wall-joint-trim-actions">
+            <v-btn
+              v-if="wallComponent"
+              density="compact"
+              variant="text"
+              size="small"
+              @click="recommendJointTrim"
+            >
+              推荐值
+            </v-btn>
+            <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
+          </div>
+          </div>
         <div class="wall-corner-models">
           <div class="wall-corner-header">
             <div class="wall-corner-title">Corner Models</div>
