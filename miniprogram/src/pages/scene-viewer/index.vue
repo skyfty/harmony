@@ -477,6 +477,7 @@ import {
   vehicleComponentDefinition,
   waterComponentDefinition,
   protagonistComponentDefinition,
+  lodComponentDefinition,
   onlineComponentDefinition,
   guideRouteComponentDefinition,
   autoTourComponentDefinition,
@@ -1433,6 +1434,7 @@ previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
+previewComponentManager.registerDefinition(lodComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
