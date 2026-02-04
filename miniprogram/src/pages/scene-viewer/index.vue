@@ -378,6 +378,7 @@ import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import { useProjectStore } from '@/stores/projectStore';
+import { loadScenePackageZip, type ScenePackagePointer } from '@/utils/scenePackageStorage';
 import {
   buildSceneGraph,
   createTerrainScatterLodRuntime,
@@ -387,7 +388,7 @@ import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCull
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@schema/assetDownloadMirrors';
-import { isGroundDynamicMesh } from '@schema/groundHeightfield';
+import { isGroundDynamicMesh, buildGroundHeightfieldData } from '@schema/groundHeightfield';
 import { updateGroundChunks } from '@schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@schema/airWall';
 import {
@@ -785,7 +786,16 @@ const debugGroundDims = computed(() => {
   if (!cached || !cached.dynamicMesh) {
     return { width: '0.00', depth: '0.00' };
   }
-  const def = cached.dynamicMesh;
+  // Try to resolve the scene node so we can compute accurate width/depth
+  const node = previewNodeMap.get(cached.nodeId) ?? null;
+  if (node) {
+    const data = buildGroundHeightfieldData(node, cached.dynamicMesh);
+    if (data) {
+      return { width: data.width.toFixed(2), depth: data.depth.toFixed(2) };
+    }
+  }
+  // Fallback: if mesh already contains width/depth fields, use them; otherwise show 0
+  const def = cached.dynamicMesh as any;
   const w = Number.isFinite(def.width) ? def.width : 0;
   const d = Number.isFinite(def.depth) ? def.depth : 0;
   return { width: w.toFixed(2), depth: d.toFixed(2) };
@@ -8369,44 +8379,6 @@ async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
   }
 }
 
-function decodeZipBase64ToArrayBuffer(base64: string): ArrayBuffer {
-  const trimmed = (base64 ?? '').trim();
-  if (!trimmed) {
-    return new ArrayBuffer(0);
-  }
-
-  type Base64Decoder = { base64ToArrayBuffer: (payload: string) => ArrayBuffer };
-  const uniDecoder = uni as unknown as Partial<Base64Decoder>;
-  if (typeof uniDecoder.base64ToArrayBuffer === 'function') {
-    return uniDecoder.base64ToArrayBuffer(trimmed);
-  }
-
-  const wxDecoder = (typeof wx !== 'undefined' ? wx : null) as unknown as Partial<Base64Decoder> | null;
-  if (wxDecoder && typeof wxDecoder.base64ToArrayBuffer === 'function') {
-    return wxDecoder.base64ToArrayBuffer(trimmed);
-  }
-
-  // Web fallback
-  if (typeof atob === 'function') {
-    const binary = atob(trimmed);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      out[i] = binary.charCodeAt(i);
-    }
-    return out.buffer;
-  }
-
-  type NodeBufferLike = { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-  type NodeBufferCtorLike = { from: (payload: string, encoding: 'base64') => NodeBufferLike };
-  const bufferCtor = (globalThis as typeof globalThis & { Buffer?: NodeBufferCtorLike }).Buffer;
-  if (bufferCtor) {
-    const buf = bufferCtor.from(trimmed, 'base64');
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  }
-
-  throw new Error('当前环境不支持 base64 解码');
-}
-
 function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackageProjectData {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
   type ScenePackageProjectConfig = {
@@ -8461,13 +8433,13 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
   await loadProjectFromBundle(projectData);
 }
 
-async function loadProjectFromScenePackageBase64(base64: string): Promise<void> {
+async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
   loading.value = true;
   try {
-    const buffer = decodeZipBase64ToArrayBuffer(base64);
+    const buffer = await loadScenePackageZip(pointer);
     if (!buffer || buffer.byteLength <= 0) {
       throw new Error('项目数据为空，请重新导入');
     }
@@ -9463,7 +9435,7 @@ onLoad((query) => {
     } else {
       loading.value = true;
       // project entry now stores the scene-package zip; load via store entry.
-      void loadProjectFromScenePackageBase64(entry.zipBase64);
+      void loadProjectFromScenePackagePointer(entry.scenePackage);
     }
   } else {
     requestedMode.value = null;
