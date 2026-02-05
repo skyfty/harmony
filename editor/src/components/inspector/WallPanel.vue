@@ -1057,44 +1057,43 @@ function applyAirWallUpdate(rawValue: unknown) {
                   @drop="(e) => assignWallAsset(e, 'body')"
                 >
                   <div class="asset-pair-label">Body</div>
-                  <div v-if="bodyAsset" class="asset-summary">
-                    <div
-                      class="asset-thumbnail"
-                      :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
-                      @click.stop="(e) => openWallAssetDialog('body', e)"
-                    />
-                  </div>
-                  <div v-else class="asset-summary empty">
-                    <div
-                      class="asset-thumbnail placeholder"
-                      @click.stop="(e) => openWallAssetDialog('body', e)"
-                    />
-                  </div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !bodyAsset }"
+                        :style="bodyAsset
+                          ? (bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => openWallAssetDialog('body', e)"
+                      />
+                    </div>
 
-                  <div v-if="wallComponent" class="wall-orientation-row">
-                    <v-select
-                      density="compact"
-                      variant="underlined"
-                      label="Forward"
-                      :items="FORWARD_AXIS_ITEMS"
-                      item-title="title"
-                      item-value="value"
-                      hide-details
-                      :model-value="(wallComponent.props as any).bodyOrientation.forwardAxis"
-                      @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { forwardAxis: value as any })"
-                    />
-                    <v-text-field
-                      density="compact"
-                      variant="underlined"
-                      type="number"
-                      label="Yaw (deg)"
-                      hide-details
-                      step="1"
-                      min="-180"
-                      max="180"
-                      :model-value="(wallComponent.props as any).bodyOrientation.yawDeg"
-                      @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { yawDeg: Number(value) })"
-                    />
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).bodyOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).bodyOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
                   </div>
 
                   <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
@@ -1110,44 +1109,43 @@ function applyAirWallUpdate(rawValue: unknown) {
                   @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'head') }"
                 >
                   <div class="asset-pair-label">Head</div>
-                  <div v-if="headAsset" class="asset-summary">
-                    <div
-                      class="asset-thumbnail"
-                      :style="headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined)"
-                      @click.stop="(e) => openWallAssetDialog('head', e)"
-                    />
-                  </div>
-                  <div v-else class="asset-summary empty">
-                    <div
-                      class="asset-thumbnail placeholder"
-                      @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', e) }"
-                    />
-                  </div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !headAsset }"
+                        :style="headAsset
+                          ? (headAsset.thumbnail?.trim() ? { backgroundImage: `url(${headAsset.thumbnail})` } : (headAsset.previewColor ? { backgroundColor: headAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('head', e) }"
+                      />
+                    </div>
 
-                  <div v-if="wallComponent" class="wall-orientation-row">
-                    <v-select
-                      density="compact"
-                      variant="underlined"
-                      label="Forward"
-                      :items="FORWARD_AXIS_ITEMS"
-                      item-title="title"
-                      item-value="value"
-                      hide-details
-                      :model-value="(wallComponent.props as any).headOrientation.forwardAxis"
-                      @update:modelValue="(value) => updateWallOrientation('headOrientation', { forwardAxis: value as any })"
-                    />
-                    <v-text-field
-                      density="compact"
-                      variant="underlined"
-                      type="number"
-                      label="Yaw (deg)"
-                      hide-details
-                      step="1"
-                      min="-180"
-                      max="180"
-                      :model-value="(wallComponent.props as any).headOrientation.yawDeg"
-                      @update:modelValue="(value) => updateWallOrientation('headOrientation', { yawDeg: Number(value) })"
-                    />
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).headOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('headOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).headOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('headOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
                   </div>
 
                   <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
@@ -1169,44 +1167,43 @@ function applyAirWallUpdate(rawValue: unknown) {
                 @drop="(e) => assignWallAsset(e, 'bodyCap')"
               >
                 <div class="asset-pair-label">End Cap (Body)</div>
-                <div v-if="bodyCapAsset" class="asset-summary">
-                  <div
-                    class="asset-thumbnail"
-                    :style="bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined)"
-                    @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
-                  />
-                </div>
-                <div v-else class="asset-summary empty">
-                  <div
-                    class="asset-thumbnail placeholder"
-                    @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
-                  />
-                </div>
+                <div class="wall-asset-model-row">
+                  <div class="wall-asset-model-picker">
+                    <div
+                      class="asset-thumbnail"
+                      :class="{ placeholder: !bodyCapAsset }"
+                      :style="bodyCapAsset
+                        ? (bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined))
+                        : undefined"
+                      @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
+                    />
+                  </div>
 
-                <div v-if="wallComponent" class="wall-orientation-row">
-                  <v-select
-                    density="compact"
-                    variant="underlined"
-                    label="Forward"
-                    :items="FORWARD_AXIS_ITEMS"
-                    item-title="title"
-                    item-value="value"
-                    hide-details
-                    :model-value="(wallComponent.props as any).bodyEndCapOrientation.forwardAxis"
-                    @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { forwardAxis: value as any })"
-                  />
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Yaw (deg)"
-                    hide-details
-                    step="1"
-                    min="-180"
-                    max="180"
-                    :model-value="(wallComponent.props as any).bodyEndCapOrientation.yawDeg"
-                    @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
-                  />
+                  <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                    <v-select
+                      density="compact"
+                      variant="underlined"
+                      label="Forward"
+                      :items="FORWARD_AXIS_ITEMS"
+                      item-title="title"
+                      item-value="value"
+                      hide-details
+                      :model-value="(wallComponent.props as any).bodyEndCapOrientation.forwardAxis"
+                      @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { forwardAxis: value as any })"
+                    />
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Yaw (deg)"
+                      hide-details
+                      step="1"
+                      min="-180"
+                      max="180"
+                      :model-value="(wallComponent.props as any).bodyEndCapOrientation.yawDeg"
+                      @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
+                    />
+                  </div>
                 </div>
 
                 <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
@@ -1222,44 +1219,43 @@ function applyAirWallUpdate(rawValue: unknown) {
                 @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'headCap') }"
               >
                 <div class="asset-pair-label">End Cap (Head)</div>
-                <div v-if="headCapAsset" class="asset-summary">
-                  <div
-                    class="asset-thumbnail"
-                    :style="headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined)"
-                    @click.stop="(e) => openWallAssetDialog('headCap', e)"
-                  />
-                </div>
-                <div v-else class="asset-summary empty">
-                  <div
-                    class="asset-thumbnail placeholder"
-                    @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
-                  />
-                </div>
+                <div class="wall-asset-model-row">
+                  <div class="wall-asset-model-picker">
+                    <div
+                      class="asset-thumbnail"
+                      :class="{ placeholder: !headCapAsset }"
+                      :style="headCapAsset
+                        ? (headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined))
+                        : undefined"
+                      @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
+                    />
+                  </div>
 
-                <div v-if="wallComponent" class="wall-orientation-row">
-                  <v-select
-                    density="compact"
-                    variant="underlined"
-                    label="Forward"
-                    :items="FORWARD_AXIS_ITEMS"
-                    item-title="title"
-                    item-value="value"
-                    hide-details
-                    :model-value="(wallComponent.props as any).headEndCapOrientation.forwardAxis"
-                    @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { forwardAxis: value as any })"
-                  />
-                  <v-text-field
-                    density="compact"
-                    variant="underlined"
-                    type="number"
-                    label="Yaw (deg)"
-                    hide-details
-                    step="1"
-                    min="-180"
-                    max="180"
-                    :model-value="(wallComponent.props as any).headEndCapOrientation.yawDeg"
-                    @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
-                  />
+                  <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                    <v-select
+                      density="compact"
+                      variant="underlined"
+                      label="Forward"
+                      :items="FORWARD_AXIS_ITEMS"
+                      item-title="title"
+                      item-value="value"
+                      hide-details
+                      :model-value="(wallComponent.props as any).headEndCapOrientation.forwardAxis"
+                      @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { forwardAxis: value as any })"
+                    />
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Yaw (deg)"
+                      hide-details
+                      step="1"
+                      min="-180"
+                      max="180"
+                      :model-value="(wallComponent.props as any).headEndCapOrientation.yawDeg"
+                      @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
+                    />
+                  </div>
                 </div>
 
                 <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
@@ -1577,6 +1573,26 @@ function applyAirWallUpdate(rawValue: unknown) {
   margin-top: 0.25rem;
 }
 
+.wall-asset-model-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  align-items: center;
+  width: 100%;
+}
+
+.wall-asset-model-picker {
+  display: flex;
+  align-items: center;
+}
+
+.wall-asset-orientation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  align-items: center;
+}
+
 .wall-corner-orientation-inputs {
   grid-area: orientation;
   display: grid;
@@ -1614,14 +1630,11 @@ function applyAirWallUpdate(rawValue: unknown) {
 .asset-pair-panel, .corner-models-panel {
   border: 1px solid rgba(255,255,255,0.04);
   border-radius: 6px;
-  padding: 6px 8px;
-  margin-bottom: 0.5rem;
 }
 .asset-pair-panel summary, .corner-models-panel summary {
   list-style: none;
   cursor: pointer;
   font-weight: 600;
-  margin-bottom: 6px;
 }
 .asset-pair-grid {
   display: flex;
@@ -1643,7 +1656,6 @@ function applyAirWallUpdate(rawValue: unknown) {
 .asset-pair-panel {
   border-top: 1px solid rgba(255,255,255,0.06);
   padding-top: 12px;
-  margin-bottom: 8px;
 }
 
 .asset-pair-label {
@@ -1681,7 +1693,7 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin: 0.75rem 5px 0;
+  margin: 0;
 }
 
 .wall-corner-models {
