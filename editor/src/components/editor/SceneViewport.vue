@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { cloneGeometryForMirroredInstance } from '@schema/mirror'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
@@ -3028,6 +3028,179 @@ function handlePlaceholderCancelDelete(nodeId: string) {
 
 // Some TS configs don't count template refs as usage.
 void overlayContainerRef
+
+type WallLengthHudLabel = {
+  visible: boolean
+  x: number
+  y: number
+  text: string
+}
+
+const wallLengthHud = reactive<{ visible: boolean; left: WallLengthHudLabel; right: WallLengthHudLabel }>({
+  visible: false,
+  left: { visible: false, x: 0, y: 0, text: '' },
+  right: { visible: false, x: 0, y: 0, text: '' },
+})
+
+const wallLengthHudProjectHelper = new THREE.Vector3()
+const wallLengthHudMidpointHelper = new THREE.Vector3()
+const wallLengthHudMidpointHelper2 = new THREE.Vector3()
+
+function clearWallLengthHud() {
+  wallLengthHud.visible = false
+  wallLengthHud.left.visible = false
+  wallLengthHud.right.visible = false
+  wallLengthHud.left.text = ''
+  wallLengthHud.right.text = ''
+}
+
+function distanceXZ(a: THREE.Vector3, b: THREE.Vector3): number {
+  const dx = a.x - b.x
+  const dz = a.z - b.z
+  return Math.hypot(dx, dz)
+}
+
+function formatWallLengthMeters(valueMeters: number): string {
+  if (!Number.isFinite(valueMeters)) {
+    return ''
+  }
+  const abs = Math.abs(valueMeters)
+  let decimals = 2
+  if (abs >= 100) {
+    decimals = 0
+  } else if (abs >= 10) {
+    decimals = 1
+  }
+  const factor = 10 ** decimals
+  const rounded = Math.round(valueMeters * factor) / factor
+  const fixed = decimals > 0 ? rounded.toFixed(decimals) : String(Math.round(rounded))
+  const trimmed = fixed.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
+  return `${trimmed} m`
+}
+
+function projectWorldToOverlay(world: THREE.Vector3): { visible: boolean; x: number; y: number } {
+  if (!camera || !overlayContainerRef.value) {
+    return { visible: false, x: 0, y: 0 }
+  }
+  const bounds = overlayContainerRef.value.getBoundingClientRect()
+  if (bounds.width === 0 || bounds.height === 0) {
+    return { visible: false, x: 0, y: 0 }
+  }
+
+  wallLengthHudProjectHelper.copy(world).project(camera)
+  if (wallLengthHudProjectHelper.z < -1 || wallLengthHudProjectHelper.z > 1) {
+    return { visible: false, x: 0, y: 0 }
+  }
+
+  const x = (wallLengthHudProjectHelper.x * 0.5 + 0.5) * bounds.width
+  const y = (-wallLengthHudProjectHelper.y * 0.5 + 0.5) * bounds.height
+  return { visible: true, x, y }
+}
+
+function updateWallLengthHudFromWallDrag() {
+  // Default to hidden and only enable when a wall drag is active.
+  clearWallLengthHud()
+
+  if (!camera || !overlayContainerRef.value) {
+    return
+  }
+
+  // Prefer joint drag over endpoint drag if both exist (shouldn't happen, but be defensive).
+  if (wallJointDragState && wallJointDragState.moved) {
+    const state = wallJointDragState
+    const i = Math.trunc(state.jointIndex)
+    const segL = state.workingSegmentsWorld[i]
+    const segR = state.workingSegmentsWorld[i + 1]
+    if (!segL || !segR) {
+      return
+    }
+
+    const lenL = distanceXZ(segL.start, segL.end)
+    const lenR = distanceXZ(segR.start, segR.end)
+
+    const midL = wallLengthHudMidpointHelper.copy(segL.start).add(segL.end).multiplyScalar(0.5)
+    const pL = projectWorldToOverlay(midL)
+    const midR = wallLengthHudMidpointHelper2.copy(segR.start).add(segR.end).multiplyScalar(0.5)
+    const pR = projectWorldToOverlay(midR)
+
+    wallLengthHud.visible = pL.visible || pR.visible
+    wallLengthHud.left.visible = pL.visible
+    wallLengthHud.left.x = pL.x
+    wallLengthHud.left.y = pL.y
+    wallLengthHud.left.text = `左 ${formatWallLengthMeters(lenL)}`
+
+    wallLengthHud.right.visible = pR.visible
+    wallLengthHud.right.x = pR.x
+    wallLengthHud.right.y = pR.y
+    wallLengthHud.right.text = `右 ${formatWallLengthMeters(lenR)}`
+    return
+  }
+
+  if (wallEndpointDragState && wallEndpointDragState.moved) {
+    const state = wallEndpointDragState
+    const segIndex = state.endpointKind === 'start' ? state.chainStartIndex : state.chainEndIndex
+    const seg = state.workingSegmentsWorld[segIndex]
+    if (!seg) {
+      return
+    }
+    const len = distanceXZ(seg.start, seg.end)
+    const mid = wallLengthHudMidpointHelper.copy(seg.start).add(seg.end).multiplyScalar(0.5)
+    const projected = projectWorldToOverlay(mid)
+    if (!projected.visible) {
+      return
+    }
+    wallLengthHud.visible = true
+    wallLengthHud.left.visible = true
+    wallLengthHud.left.x = projected.x
+    wallLengthHud.left.y = projected.y
+    wallLengthHud.left.text = `长度 ${formatWallLengthMeters(len)}`
+  }
+}
+
+function updateWallLengthHudFromWallBuild() {
+  // Default to hidden and only enable when a wall build drag is active.
+  clearWallLengthHud()
+
+  if (!camera || !overlayContainerRef.value) {
+    return
+  }
+
+  // Only show while the wall build tool is active.
+  if (activeBuildTool.value !== 'wall') {
+    return
+  }
+
+  const session = wallBuildTool.getSession()
+  if (!session) {
+    return
+  }
+
+  // For rectangle/circle draft, skip length HUD (we only show for polygon segment dragging).
+  if ((session as any).shapeDraft) {
+    return
+  }
+
+  if (!session.dragStart || !session.dragEnd) {
+    return
+  }
+
+  const len = distanceXZ(session.dragStart, session.dragEnd)
+  if (!Number.isFinite(len)) {
+    return
+  }
+
+  const mid = wallLengthHudMidpointHelper.copy(session.dragStart).add(session.dragEnd).multiplyScalar(0.5)
+  const projected = projectWorldToOverlay(mid)
+  if (!projected.visible) {
+    return
+  }
+
+  wallLengthHud.visible = true
+  wallLengthHud.left.visible = true
+  wallLengthHud.left.x = projected.x
+  wallLengthHud.left.y = projected.y
+  wallLengthHud.left.text = `长度 ${formatWallLengthMeters(len)}`
+}
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -8619,6 +8792,12 @@ async function handlePointerDown(event: PointerEvent) {
     floorShapeMenuOpen.value = false
   }
 
+  // If the wall shape menu is open, close it when the user starts drawing in the viewport.
+  // This prevents the menu from covering the scene while placing wall points.
+  if (event.button === 0 && activeBuildTool.value === 'wall' && wallShapeMenuOpen.value) {
+    wallShapeMenuOpen.value = false
+  }
+
   const tools = handlePointerDownTools(event, {
     activeBuildTool: activeBuildTool.value,
     wallBuildShape: wallBuildShape.value,
@@ -8806,8 +8985,12 @@ function handlePointerMove(event: PointerEvent) {
   _moveDragCtx.setFloorNodeThickness = (nodeId: string, thickness: number, options?: { captureHistory?: boolean }) =>
     sceneStore.setFloorNodeThickness(nodeId, thickness, options)
 
+  // Default to hidden unless a wall drag is actively updating.
+  clearWallLengthHud()
+
   const roadVertex = handlePointerMoveDrag(event, _moveDragCtx)
   if (roadVertex) {
+    updateWallLengthHudFromWallDrag()
     applyPointerMoveResult(roadVertex)
     return
   }
@@ -8854,6 +9037,7 @@ function handlePointerMove(event: PointerEvent) {
     roadBuildToolHandlePointerMove: (e) => roadBuildTool.handlePointerMove(e),
   })
   if (buildTools) {
+    updateWallLengthHudFromWallBuild()
     applyPointerMoveResult(buildTools)
     return
   }
@@ -8963,6 +9147,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (result.stopImmediatePropagation) {
         event.stopImmediatePropagation()
       }
+
+      // Any pointer-up ends active wall drag measurements.
+      clearWallLengthHud()
     }
 
     // Canvas-only safety: only allow scene-modifying interactions (build/road/floor/scatter)
@@ -9223,6 +9410,7 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  clearWallLengthHud()
   deactivateVOverride()
   // Ensure any selection-hover preview is hidden when pointer is cancelled.
   stopSelectionPreviewVisibilityMonitor()
@@ -12643,6 +12831,23 @@ defineExpose<SceneViewportHandle>({
           @retry="handlePlaceholderRetry"
           @cancel-delete="handlePlaceholderCancelDelete"
         />
+
+        <div v-if="wallLengthHud.visible" class="wall-length-hud">
+          <div
+            v-if="wallLengthHud.left.visible"
+            class="wall-length-hud__label"
+            :style="{ left: wallLengthHud.left.x + 'px', top: wallLengthHud.left.y + 'px' }"
+          >
+            {{ wallLengthHud.left.text }}
+          </div>
+          <div
+            v-if="wallLengthHud.right.visible"
+            class="wall-length-hud__label"
+            :style="{ left: wallLengthHud.right.x + 'px', top: wallLengthHud.right.y + 'px' }"
+          >
+            {{ wallLengthHud.right.text }}
+          </div>
+        </div>
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -12754,6 +12959,27 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   z-index: 6;
   font-size: 12px;
+}
+
+.wall-length-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.wall-length-hud__label {
+  position: absolute;
+  transform: translate(-50%, -115%);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(12, 15, 21, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(236, 241, 248, 0.95);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  user-select: none;
 }
 
 
