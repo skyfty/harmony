@@ -83,6 +83,34 @@ export type WallEndpointDragState = {
   previewSignature: string | null
 }
 
+export type WallJointDragState = {
+  pointerId: number
+  nodeId: string
+  chainStartIndex: number
+  chainEndIndex: number
+  /** Segment index i where the joint is between segments[i].end and segments[i+1].start */
+  jointIndex: number
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  dragMode: EndpointGizmoDragMode
+  axisWorld: THREE.Vector3 | null
+  dragPlane: THREE.Plane
+
+  containerObject: THREE.Object3D
+
+  dimensions: { height: number; width: number; thickness: number }
+  baseSegmentsWorld: WallWorldSegment[]
+  workingSegmentsWorld: WallWorldSegment[]
+
+  startJointWorld: THREE.Vector3
+
+  previewGroup: THREE.Group | null
+  previewSignature: string | null
+}
+
 export type WallHeightDragState = {
   pointerId: number
   nodeId: string
@@ -153,6 +181,7 @@ export type PointerDownResult = {
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextFloorThicknessDragState?: FloorThicknessDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
+  nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
 }
 
@@ -180,6 +209,7 @@ export type PointerUpResult = {
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextFloorThicknessDragState?: FloorThicknessDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
+  nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
   clearFloorEdgeDragState?: boolean
 }

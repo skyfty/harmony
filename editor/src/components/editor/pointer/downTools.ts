@@ -7,6 +7,7 @@ import type {
   PointerDownResult,
   RoadVertexDragState,
   WallEndpointDragState,
+  WallJointDragState,
   WallHeightDragState,
 } from './types'
 
@@ -57,7 +58,10 @@ export function handlePointerDownTools(
       nodeId: string
       chainStartIndex: number
       chainEndIndex: number
-      endpointKind: 'start' | 'end'
+    } & (
+      | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
+      | { handleKind: 'joint'; jointIndex: number }
+    ) & {
       gizmoKind: 'center' | 'axis'
       gizmoAxis?: THREE.Vector3
       gizmoPart: any
@@ -66,7 +70,10 @@ export function handlePointerDownTools(
       nodeId: string
       chainStartIndex: number
       chainEndIndex: number
-      endpointKind: 'start' | 'end'
+    } & (
+      | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
+      | { handleKind: 'joint'; jointIndex: number }
+    ) & {
       gizmoPart: any
     } | null) => void
 
@@ -144,13 +151,27 @@ export function handlePointerDownTools(
 
           const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
-          const endpointKind = handleHit.endpointKind === 'end' ? 'end' : 'start'
+
+          const handleKind = handleHit.handleKind
+          let endpointKind: 'start' | 'end' = 'start'
+          let jointIndex = -1
+
+          if (handleKind === 'endpoint') {
+            endpointKind = handleHit.endpointKind === 'end' ? 'end' : 'start'
+          } else {
+            jointIndex = Math.max(chainStartIndex, Math.trunc(Number(handleHit.jointIndex)))
+          }
 
           const startSeg = workingSegmentsWorld[chainStartIndex]
           const endSeg = workingSegmentsWorld[chainEndIndex]
           if (startSeg && endSeg) {
             const startEndpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
             const anchorPointWorld = endpointKind === 'start' ? startSeg.end.clone() : endSeg.start.clone()
+
+            const startJointWorld =
+              handleKind === 'joint' && workingSegmentsWorld[jointIndex]
+                ? workingSegmentsWorld[jointIndex]!.end.clone()
+                : null
 
             const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
             const axisWorld =
@@ -170,7 +191,7 @@ export function handlePointerDownTools(
 
             if (isYAxisDrag) {
               const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
-              const startPointWorld = startEndpointWorld.clone()
+              const startPointWorld = (startJointWorld ?? startEndpointWorld).clone()
               startPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
 
               const wallHeightDragState: WallHeightDragState = {
@@ -203,7 +224,9 @@ export function handlePointerDownTools(
                 nodeId: handleHit.nodeId,
                 chainStartIndex,
                 chainEndIndex,
-                endpointKind,
+                ...(handleKind === 'joint'
+                  ? { handleKind: 'joint' as const, jointIndex }
+                  : { handleKind: 'endpoint' as const, endpointKind }),
                 gizmoPart: handleHit.gizmoPart,
               })
 
@@ -211,8 +234,72 @@ export function handlePointerDownTools(
                 handled: true,
                 clearPointerTrackingState: true,
                 nextWallEndpointDragState: null,
+                nextWallJointDragState: null,
                 nextWallHeightDragState: wallHeightDragState,
                 capturePointerId: event.pointerId,
+                preventDefault: true,
+                stopPropagation: true,
+                stopImmediatePropagation: true,
+              }
+            }
+
+            if (handleKind === 'joint') {
+              // Joint drag: move the shared vertex between two adjacent segments.
+              const clampedJointIndex = Math.min(chainEndIndex - 1, Math.max(chainStartIndex, jointIndex))
+              const jointSeg = workingSegmentsWorld[clampedJointIndex]
+              const nextSeg = workingSegmentsWorld[clampedJointIndex + 1]
+              if (jointSeg && nextSeg) {
+                const startJointWorld = jointSeg.end.clone()
+                const wallJointDragState: WallJointDragState = {
+                  pointerId: event.pointerId,
+                  nodeId: handleHit.nodeId,
+                  chainStartIndex,
+                  chainEndIndex,
+                  jointIndex: clampedJointIndex,
+                  startX: event.clientX,
+                  startY: event.clientY,
+                  moved: false,
+                  dragMode: effectiveDragMode,
+                  axisWorld: effectiveAxisWorld,
+                  dragPlane: ctx.createEndpointDragPlane({
+                    mode: effectiveDragMode,
+                    axisWorld: effectiveAxisWorld,
+                    startPointWorld: startJointWorld,
+                    freePlaneNormal: new THREE.Vector3(0, 1, 0),
+                  }),
+                  containerObject: runtime,
+                  dimensions,
+                  baseSegmentsWorld,
+                  workingSegmentsWorld,
+                  startJointWorld,
+                  previewGroup: null,
+                  previewSignature: null,
+                }
+
+                ctx.setActiveWallEndpointHandle({
+                  nodeId: handleHit.nodeId,
+                  chainStartIndex,
+                  chainEndIndex,
+                  handleKind: 'joint',
+                  jointIndex: clampedJointIndex,
+                  gizmoPart: handleHit.gizmoPart,
+                })
+
+                return {
+                  handled: true,
+                  clearPointerTrackingState: true,
+                  nextWallEndpointDragState: null,
+                  nextWallJointDragState: wallJointDragState,
+                  capturePointerId: event.pointerId,
+                  preventDefault: true,
+                  stopPropagation: true,
+                  stopImmediatePropagation: true,
+                }
+              }
+
+              return {
+                handled: true,
+                clearPointerTrackingState: true,
                 preventDefault: true,
                 stopPropagation: true,
                 stopImmediatePropagation: true,
@@ -250,6 +337,7 @@ export function handlePointerDownTools(
               nodeId: handleHit.nodeId,
               chainStartIndex,
               chainEndIndex,
+              handleKind: 'endpoint',
               endpointKind,
               gizmoPart: handleHit.gizmoPart,
             })
@@ -258,6 +346,7 @@ export function handlePointerDownTools(
               handled: true,
               clearPointerTrackingState: true,
               nextWallEndpointDragState: wallEndpointDragState,
+              nextWallJointDragState: null,
               capturePointerId: event.pointerId,
               preventDefault: true,
               stopPropagation: true,

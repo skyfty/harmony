@@ -25,6 +25,12 @@ export type EndpointGizmoBuildOptions = {
   depthWrite?: boolean
   opacity?: number
   centerColor?: number
+
+  /**
+   * When true, the gizmo's normal state is fully invisible (but still raycastable).
+   * Hover/active states remain visible.
+   */
+  hideNormalState?: boolean
 }
 
 const DEFAULT_AXIS_ENABLED: Record<EndpointGizmoAxis, boolean> = { x: true, y: true, z: true }
@@ -89,17 +95,31 @@ export function createEndpointGizmoMaterials(options?: {
   depthTest?: boolean
   depthWrite?: boolean
   centerColor?: number
+  hideNormalState?: boolean
 }): EndpointGizmoMaterials {
-  const opacity = typeof options?.opacity === 'number' ? THREE.MathUtils.clamp(options.opacity, 0.1, 1) : 0.9
+  const baseOpacity = typeof options?.opacity === 'number' ? THREE.MathUtils.clamp(options.opacity, 0.1, 1) : 0.9
+  const hideNormalState = options?.hideNormalState ?? false
   const depthTest = options?.depthTest ?? false
   const depthWrite = options?.depthWrite ?? false
   const centerColor = typeof options?.centerColor === 'number' ? options.centerColor : 0xffc107
 
-  const makeStates = (color: number) => ({
-    normal: createEmissiveMaterial({ color, emissiveIntensity: 0.15, opacity, depthTest, depthWrite }),
-    hover: createEmissiveMaterial({ color, emissiveIntensity: 0.9, opacity: Math.min(1, opacity + 0.05), depthTest, depthWrite }),
-    active: createEmissiveMaterial({ color, emissiveIntensity: 1.5, opacity: 1, depthTest, depthWrite }),
-  })
+  const makeStates = (color: number) => {
+    const normalOpacity = hideNormalState ? 0 : baseOpacity
+    const normal = createEmissiveMaterial({ color, emissiveIntensity: 0.15, opacity: normalOpacity, depthTest, depthWrite })
+    if (hideNormalState) {
+      // Keep raycastable while fully invisible.
+      normal.transparent = true
+      normal.opacity = 0
+      normal.depthWrite = false
+      normal.colorWrite = false
+    }
+
+    return {
+      normal,
+      hover: createEmissiveMaterial({ color, emissiveIntensity: 0.9, opacity: Math.min(1, baseOpacity + 0.05), depthTest, depthWrite }),
+      active: createEmissiveMaterial({ color, emissiveIntensity: 1.5, opacity: 1, depthTest, depthWrite }),
+    }
+  }
 
   return {
     center: makeStates(centerColor),
@@ -126,12 +146,14 @@ export function createEndpointGizmoObject(options?: EndpointGizmoBuildOptions): 
   const depthTest = options?.depthTest ?? false
   const depthWrite = options?.depthWrite ?? false
   const opacity = typeof options?.opacity === 'number' ? THREE.MathUtils.clamp(options.opacity, 0.1, 1) : 0.9
+  const hideNormalState = options?.hideNormalState ?? false
 
   const materials = createEndpointGizmoMaterials({
     opacity,
     depthTest,
     depthWrite,
     centerColor: typeof options?.centerColor === 'number' ? options.centerColor : undefined,
+    hideNormalState,
   })
 
   const root = new THREE.Group()

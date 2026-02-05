@@ -19,6 +19,7 @@ import type {
   FloorThicknessDragState,
   RoadVertexDragState,
   WallEndpointDragState,
+  WallJointDragState,
   WallHeightDragState,
   PointerMoveResult,
 } from './types'
@@ -46,6 +47,7 @@ export function handlePointerMoveDrag(
     floorVertexDragState: FloorVertexDragState | null
     floorThicknessDragState: FloorThicknessDragState | null
     wallEndpointDragState: WallEndpointDragState | null
+    wallJointDragState: WallJointDragState | null
     wallHeightDragState: WallHeightDragState | null
 
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
@@ -204,15 +206,28 @@ export function handlePointerMoveDrag(
     if (handles?.isGroup) {
       const yOffset = Math.max(0.05, quantized * 0.5)
       for (const child of handles.children) {
-        const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+        const handleKind = child?.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
         const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
         const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
         const startSeg = state.workingSegmentsWorld[chainStartIndex]
         const endSeg = state.workingSegmentsWorld[chainEndIndex]
-        if (!startSeg || !endSeg) continue
 
-        const endpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
-        const local = state.containerObject.worldToLocal(endpointWorld)
+        let pointWorld: THREE.Vector3 | null = null
+        if (handleKind === 'joint') {
+          const jointIndex = Math.trunc(Number(child?.userData?.jointIndex))
+          const seg = state.workingSegmentsWorld[jointIndex]
+          if (seg) {
+            pointWorld = seg.end.clone()
+          }
+        } else {
+          const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+          if (startSeg && endSeg) {
+            pointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+          }
+        }
+        if (!pointWorld) continue
+
+        const local = state.containerObject.worldToLocal(pointWorld)
 
         child.userData.yOffset = yOffset
         child.position.set(local.x, local.y + yOffset, local.z)
@@ -349,6 +364,138 @@ export function handlePointerMoveDrag(
           (kind === state.endpointKind) &&
           startIndex === state.chainStartIndex &&
           endIndex === state.chainEndIndex
+        )
+      }) as THREE.Object3D | undefined
+      if (handleMesh) {
+        const yOffset = Number(handleMesh.userData?.yOffset)
+        handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
+      }
+    }
+
+    return { handled: true }
+  }
+
+  if (ctx.wallJointDragState && event.pointerId === ctx.wallJointDragState.pointerId) {
+    const state = ctx.wallJointDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) >= ctx.clickDragThresholdPx) {
+      state.moved = true
+    }
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    let constrained: THREE.Vector3 | null = null
+
+    if (state.dragMode === 'axis' && state.axisWorld) {
+      if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+        return { handled: true }
+      }
+      const axis = state.axisWorld.clone().normalize()
+      const delta = tmpIntersection.clone().sub(state.startJointWorld)
+      const t = axis.dot(delta)
+      constrained = state.startJointWorld.clone().add(axis.multiplyScalar(t))
+    } else {
+      if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
+        return { handled: true }
+      }
+
+      const rawPointer = ctx.groundPointerHelper.clone()
+      const target = rawPointer.clone()
+      target.y = state.startJointWorld.y
+
+      const working = state.workingSegmentsWorld
+      const i = state.jointIndex
+      const prevSeg = working[i]
+      const nextSeg = working[i + 1]
+
+      const prevAnchor = prevSeg?.start?.clone?.() ?? null
+      const nextAnchor = nextSeg?.end?.clone?.() ?? null
+
+      const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
+      if (prevAnchor) {
+        prevAnchor.y = state.startJointWorld.y
+        const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
+        snapped.y = state.startJointWorld.y
+        const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+        candidates.push({ point: snapped, distSq: dSq })
+      }
+      if (nextAnchor) {
+        nextAnchor.y = state.startJointWorld.y
+        const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
+        snapped.y = state.startJointWorld.y
+        const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+        candidates.push({ point: snapped, distSq: dSq })
+      }
+
+      if (candidates.length) {
+        candidates.sort((a, b) => a.distSq - b.distSq)
+        // Stability: if very close, prefer the first candidate (prev anchor if present).
+        constrained = candidates[0]!.point
+      } else {
+        constrained = target.clone()
+        constrained.y = state.startJointWorld.y
+      }
+    }
+
+    const working = state.workingSegmentsWorld
+    const i = state.jointIndex
+    const segA = working[i]
+    const segB = working[i + 1]
+    if (!segA || !segB || !constrained) {
+      return { handled: true }
+    }
+
+    segA.end.copy(constrained)
+    segB.start.copy(constrained)
+
+    if (constrained && !state.moved) {
+      const dd = constrained.clone().sub(state.startJointWorld)
+      if (dd.lengthSq() > 1e-8) {
+        state.moved = true
+      }
+    }
+
+    const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
+    const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
+    if (nextSignature !== state.previewSignature) {
+      state.previewSignature = nextSignature
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      if (build) {
+        if (!state.previewGroup) {
+          const preview = createWallGroup(build.definition)
+          applyWallPreviewStyling(preview)
+          preview.userData.isWallJointDragPreview = true
+          state.previewGroup = preview
+          ctx.rootGroup.add(preview)
+        } else {
+          updateWallGroup(state.previewGroup, build.definition)
+          applyWallPreviewStyling(state.previewGroup)
+          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
+            ctx.rootGroup.add(state.previewGroup)
+          }
+        }
+        state.previewGroup!.position.copy(build.center)
+      }
+    }
+
+    // Update joint handle position in local space for immediate feedback.
+    const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      const local = state.containerObject.worldToLocal(constrained.clone())
+      const handleMesh = handles.children.find((child) => {
+        const kind = child?.userData?.handleKind
+        const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+        const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+        const j = Math.trunc(Number(child?.userData?.jointIndex))
+        return (
+          kind === 'joint' &&
+          startIndex === state.chainStartIndex &&
+          endIndex === state.chainEndIndex &&
+          j === state.jointIndex
         )
       }) as THREE.Object3D | undefined
       if (handleMesh) {

@@ -34,6 +34,7 @@ import type {
   FloorVertexDragState,
   RoadVertexDragState,
   WallEndpointDragState,
+  WallJointDragState,
   WallHeightDragState,
 } from './pointer/types'
 
@@ -3108,6 +3109,7 @@ let roadVertexDragState: RoadVertexDragState | null = null
 let floorVertexDragState: FloorVertexDragState | null = null
 let floorThicknessDragState: FloorThicknessDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
+let wallJointDragState: WallJointDragState | null = null
 let wallHeightDragState: WallHeightDragState | null = null
 
 type FloorEdgeDragState = {
@@ -8490,6 +8492,9 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
       wallEndpointDragState = result.nextWallEndpointDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextWallJointDragState')) {
+      wallJointDragState = (result as any).nextWallJointDragState ?? null
+    }
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
       wallHeightDragState = result.nextWallHeightDragState ?? null
     }
@@ -8758,6 +8763,7 @@ function handlePointerMove(event: PointerEvent) {
     !floorVertexDragState &&
     !floorThicknessDragState &&
     !wallEndpointDragState &&
+    !wallJointDragState &&
     !wallHeightDragState &&
     isStrictPointOnCanvas(event.clientX, event.clientY)
 
@@ -8781,6 +8787,7 @@ function handlePointerMove(event: PointerEvent) {
     floorVertexDragState,
     floorThicknessDragState,
     wallEndpointDragState,
+    wallJointDragState,
     wallHeightDragState,
     raycastGroundPoint,
     raycastPlanePoint,
@@ -8934,6 +8941,9 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextWallJointDragState')) {
+        wallJointDragState = (result as any).nextWallJointDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
         wallHeightDragState = result.nextWallHeightDragState ?? null
       }
@@ -8967,6 +8977,7 @@ async function handlePointerUp(event: PointerEvent) {
         floorVertexDragState?.pointerId === event.pointerId ||
         floorThicknessDragState?.pointerId === event.pointerId ||
         wallEndpointDragState?.pointerId === event.pointerId ||
+        wallJointDragState?.pointerId === event.pointerId ||
         wallHeightDragState?.pointerId === event.pointerId ||
         floorEdgeDragState?.pointerId === event.pointerId ||
         instancedEraseDragState?.pointerId === event.pointerId ||
@@ -8993,6 +9004,7 @@ async function handlePointerUp(event: PointerEvent) {
         floorVertexDragState,
         floorThicknessDragState,
         wallEndpointDragState,
+        wallJointDragState,
         wallHeightDragState,
         floorEdgeDragState,
         findSceneNode,
@@ -9259,6 +9271,7 @@ function handlePointerCancel(event: PointerEvent) {
     const state = wallEndpointDragState
     wallEndpointDragState = null
     pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWallEndpointHandle(null)
 
     try {
       if (state.previewGroup) {
@@ -9295,6 +9308,49 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
+  if (wallJointDragState && event.pointerId === wallJointDragState.pointerId) {
+    const state = wallJointDragState
+    wallJointDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWallEndpointHandle(null)
+
+    try {
+      if (state.previewGroup) {
+        const preview = state.previewGroup
+        state.previewGroup = null
+        preview.removeFromParent()
+        disposeWallPreviewGroup(preview)
+      }
+
+      const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (handles?.isGroup) {
+        const mesh = handles.children.find((child) => {
+          const kind = child?.userData?.handleKind
+          const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+          const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+          const j = Math.trunc(Number(child?.userData?.jointIndex))
+          return (
+            kind === 'joint' &&
+            startIndex === state.chainStartIndex &&
+            endIndex === state.chainEndIndex &&
+            j === state.jointIndex
+          )
+        }) as THREE.Object3D | undefined
+        if (mesh) {
+          const local = state.containerObject.worldToLocal(state.startJointWorld.clone())
+          mesh.position.set(local.x, local.y + WALL_ENDPOINT_HANDLE_Y_OFFSET, local.z)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (wallHeightDragState && event.pointerId === wallHeightDragState.pointerId) {
     const state = wallHeightDragState
     wallHeightDragState = null
@@ -9313,15 +9369,26 @@ function handlePointerCancel(event: PointerEvent) {
       if (handles?.isGroup) {
         const yOffset = Math.max(0.05, state.startHeight * 0.5)
         for (const child of handles.children) {
-          const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+          const handleKind = child?.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
           const chainStartIndex = Math.max(0, Math.trunc(Number(child?.userData?.chainStartIndex)))
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(Number(child?.userData?.chainEndIndex)))
           const startSeg = state.baseSegmentsWorld[chainStartIndex]
           const endSeg = state.baseSegmentsWorld[chainEndIndex]
-          if (!startSeg || !endSeg) continue
-
-          const endpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
-          const local = state.containerObject.worldToLocal(endpointWorld)
+          let pointWorld: THREE.Vector3 | null = null
+          if (handleKind === 'joint') {
+            const jointIndex = Math.trunc(Number(child?.userData?.jointIndex))
+            const seg = state.baseSegmentsWorld[jointIndex]
+            if (seg) {
+              pointWorld = seg.end.clone()
+            }
+          } else {
+            const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+            if (startSeg && endSeg) {
+              pointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
+            }
+          }
+          if (!pointWorld) continue
+          const local = state.containerObject.worldToLocal(pointWorld)
           child.userData.yOffset = yOffset
           child.position.set(local.x, local.y + yOffset, local.z)
         }

@@ -14,7 +14,17 @@ export type WallEndpointHandlePickResult = {
   nodeId: string
   chainStartIndex: number
   chainEndIndex: number
-  endpointKind: 'start' | 'end'
+} & (
+  | {
+      handleKind: 'endpoint'
+      endpointKind: 'start' | 'end'
+    }
+  | {
+      handleKind: 'joint'
+      /** Segment index i where the joint is between segments[i].end and segments[i+1].start */
+      jointIndex: number
+    }
+) & {
   gizmoPart: EndpointGizmoPart
   gizmoKind: 'center' | 'axis'
   gizmoAxis?: THREE.Vector3
@@ -28,7 +38,10 @@ export type WallEndpointRenderer = {
     nodeId: string
     chainStartIndex: number
     chainEndIndex: number
-    endpointKind: 'start' | 'end'
+  } & (
+    | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
+    | { handleKind: 'joint'; jointIndex: number }
+  ) & {
     gizmoPart: EndpointGizmoPart
   } | null): void
   updateHover(options: {
@@ -151,7 +164,10 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     nodeId: string
     chainStartIndex: number
     chainEndIndex: number
-    endpointKind: 'start' | 'end'
+  } & (
+    | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
+    | { handleKind: 'joint'; jointIndex: number }
+  ) & {
     gizmoPart: EndpointGizmoPart
   } | null) {
     if (!state) {
@@ -163,7 +179,10 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       refreshHighlight()
       return
     }
-    const handleKey = `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:${next.endpointKind}`
+    const handleKey =
+      next.handleKind === 'joint'
+        ? `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:joint:${next.jointIndex}`
+        : `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:endpoint:${next.endpointKind}`
     active = { handleKey, gizmoPart: next.gizmoPart }
     refreshHighlight()
   }
@@ -175,10 +194,20 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       if (!gizmo?.clearStates || !gizmo?.setState) continue
       gizmo.clearStates()
       const key = typeof handle.userData?.handleKey === 'string' ? handle.userData.handleKey : ''
+
+      const allParts: EndpointGizmoPart[] = ['center', 'px', 'nx', 'py', 'ny', 'pz', 'nz']
+
       if (active && key === active.handleKey) {
+        // Ensure the full gizmo is visible (important for joint handles where normal is hidden),
+        // while still emphasizing the active part.
+        for (const part of allParts) {
+          gizmo.setState(part, 'hover')
+        }
         gizmo.setState(active.gizmoPart, 'active')
       } else if (hovered && key === hovered.handleKey) {
-        gizmo.setState(hovered.gizmoPart, 'hover')
+        for (const part of allParts) {
+          gizmo.setState(part, 'hover')
+        }
       }
     }
   }
@@ -256,7 +285,18 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         return
       }
 
-      const addHandle = (kind: 'start' | 'end', point: any) => {
+      const addHandle = (options: {
+        handleKind: 'endpoint'
+        endpointKind: 'start' | 'end'
+        point: any
+        hideNormalState?: boolean
+      } | {
+        handleKind: 'joint'
+        jointIndex: number
+        point: any
+        hideNormalState?: boolean
+      }) => {
+        const point = options.point
         const x = Number(point?.x)
         const y = Number(point?.y)
         const z = Number(point?.z)
@@ -271,9 +311,14 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
           depthTest: false,
           depthWrite: false,
           opacity: 0.9,
+          hideNormalState: options.hideNormalState ?? false,
         })
         const handle = gizmo.root
-        handle.name = `WallEndpointHandle_${chainIndex + 1}_${kind}`
+        if (options.handleKind === 'endpoint') {
+          handle.name = `WallEndpointHandle_${chainIndex + 1}_${options.endpointKind}`
+        } else {
+          handle.name = `WallJointHandle_${chainIndex + 1}_${options.jointIndex}`
+        }
         handle.position.set(x, (Number.isFinite(y) ? y : 0) + yOffset, z)
         handle.layers.enableAll()
         handle.userData.editorOnly = true
@@ -281,10 +326,18 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         handle.userData.nodeId = selectedNodeId
         handle.userData.chainStartIndex = range.startIndex
         handle.userData.chainEndIndex = range.endIndex
-        handle.userData.endpointKind = kind
+        handle.userData.handleKind = options.handleKind
+        if (options.handleKind === 'endpoint') {
+          handle.userData.endpointKind = options.endpointKind
+        } else {
+          handle.userData.jointIndex = options.jointIndex
+        }
         handle.userData.baseDiameter = gizmo.baseDiameter
         handle.userData.endpointGizmo = gizmo
-        handle.userData.handleKey = `${selectedNodeId}:${range.startIndex}:${range.endIndex}:${kind}`
+        handle.userData.handleKey =
+          options.handleKind === 'joint'
+            ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:joint:${options.jointIndex}`
+            : `${selectedNodeId}:${range.startIndex}:${range.endIndex}:endpoint:${options.endpointKind}`
         handle.userData.yOffset = yOffset
 
         handle.traverse((child) => {
@@ -295,14 +348,28 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
           mesh.userData.nodeId = selectedNodeId
           mesh.userData.chainStartIndex = range.startIndex
           mesh.userData.chainEndIndex = range.endIndex
-          mesh.userData.endpointKind = kind
+          mesh.userData.handleKind = options.handleKind
+          if (options.handleKind === 'endpoint') {
+            mesh.userData.endpointKind = options.endpointKind
+          } else {
+            mesh.userData.jointIndex = options.jointIndex
+          }
         })
 
         group.add(handle)
       }
 
-      addHandle('start', start)
-      addHandle('end', end)
+      addHandle({ handleKind: 'endpoint', endpointKind: 'start', point: start })
+      addHandle({ handleKind: 'endpoint', endpointKind: 'end', point: end })
+
+      // Joint handles: one per internal vertex between contiguous segments.
+      // Hide in normal state; show only on hover/active.
+      for (let i = range.startIndex; i < range.endIndex; i += 1) {
+        const seg = segments[i] as any
+        const joint = seg?.end
+        if (!joint) continue
+        addHandle({ handleKind: 'joint', jointIndex: i, point: joint, hideNormalState: true })
+      }
     })
 
     runtimeObject.add(group)
@@ -427,14 +494,26 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
+    const handleKind = target.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
+    const jointIndex = Math.trunc(Number(target.userData?.jointIndex))
     const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
     if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex || !gizmoPart) {
       clearHover()
       return
     }
 
-    const handleKey = `${nodeId}:${chainStartIndex}:${chainEndIndex}:${endpointKind}`
+    if (handleKind === 'joint') {
+      if (!Number.isFinite(jointIndex) || jointIndex < chainStartIndex || jointIndex >= chainEndIndex) {
+        clearHover()
+        return
+      }
+    }
+
+    const handleKey =
+      handleKind === 'joint'
+        ? `${nodeId}:${chainStartIndex}:${chainEndIndex}:joint:${jointIndex}`
+        : `${nodeId}:${chainStartIndex}:${chainEndIndex}:endpoint:${endpointKind}`
     if (hovered && hovered.handleKey === handleKey && hovered.gizmoPart === gizmoPart) {
       return
     }
@@ -475,7 +554,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
+    const handleKind = target.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
+    const jointIndex = Math.trunc(Number(target.userData?.jointIndex))
     const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
     const partInfo = getEndpointGizmoPartInfoFromObject(target)
 
@@ -483,10 +564,28 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
       return null
     }
 
+    if (handleKind === 'joint') {
+      if (!Number.isFinite(jointIndex) || jointIndex < chainStartIndex || jointIndex >= chainEndIndex) {
+        return null
+      }
+      return {
+        nodeId,
+        chainStartIndex,
+        chainEndIndex,
+        handleKind: 'joint',
+        jointIndex,
+        gizmoPart,
+        gizmoKind: partInfo.kind,
+        gizmoAxis: partInfo.kind === 'axis' ? partInfo.axis.clone() : undefined,
+        point: first.point.clone(),
+      }
+    }
+
     return {
       nodeId,
       chainStartIndex,
       chainEndIndex,
+      handleKind: 'endpoint',
       endpointKind,
       gizmoPart,
       gizmoKind: partInfo.kind,
