@@ -3147,12 +3147,12 @@ function updateWallLengthHudFromWallDrag() {
     wallLengthHud.left.visible = pL.visible
     wallLengthHud.left.x = pL.x
     wallLengthHud.left.y = pL.y
-    wallLengthHud.left.text = `左 ${formatWallLengthMeters(lenL)}`
+    wallLengthHud.left.text = `Left ${formatWallLengthMeters(lenL)}`
 
     wallLengthHud.right.visible = pR.visible
     wallLengthHud.right.x = pR.x
     wallLengthHud.right.y = pR.y
-    wallLengthHud.right.text = `右 ${formatWallLengthMeters(lenR)}`
+    wallLengthHud.right.text = `Right ${formatWallLengthMeters(lenR)}`
     return
   }
 
@@ -3173,7 +3173,7 @@ function updateWallLengthHudFromWallDrag() {
     wallLengthHud.left.visible = true
     wallLengthHud.left.x = projected.x
     wallLengthHud.left.y = projected.y
-    wallLengthHud.left.text = `长度 ${formatWallLengthMeters(len)}`
+    wallLengthHud.left.text = `Length ${formatWallLengthMeters(len)}`
   }
 }
 
@@ -3219,7 +3219,7 @@ function updateWallLengthHudFromWallBuild() {
   wallLengthHud.left.visible = true
   wallLengthHud.left.x = projected.x
   wallLengthHud.left.y = projected.y
-  wallLengthHud.left.text = `长度 ${formatWallLengthMeters(len)}`
+  wallLengthHud.left.text = `Length ${formatWallLengthMeters(len)}`
 }
 
 const floorSizeHudTmpWorld = new THREE.Vector3()
@@ -3287,7 +3287,7 @@ function updateFloorSizeHudFromFloorDrag() {
     floorSizeHud.label.visible = true
     floorSizeHud.label.x = projected.x
     floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `宽 ${formatWallLengthMeters(width)}  深 ${formatWallLengthMeters(depth)}`
+    floorSizeHud.label.text = `Width ${formatWallLengthMeters(width)}  Depth ${formatWallLengthMeters(depth)}`
     return
   }
 
@@ -3302,7 +3302,7 @@ function updateFloorSizeHudFromFloorDrag() {
   floorSizeHud.label.visible = true
   floorSizeHud.label.x = projected.x
   floorSizeHud.label.y = projected.y
-  floorSizeHud.label.text = `半径 ${formatWallLengthMeters(radius)}  直径 ${formatWallLengthMeters(diameter)}`
+  floorSizeHud.label.text = `Radius ${formatWallLengthMeters(radius)}  Diameter ${formatWallLengthMeters(diameter)}`
 }
 
 function updateFloorSizeHudFromFloorBuild() {
@@ -3340,7 +3340,7 @@ function updateFloorSizeHudFromFloorBuild() {
     floorSizeHud.label.visible = true
     floorSizeHud.label.x = projected.x
     floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `宽 ${formatWallLengthMeters(width)}  深 ${formatWallLengthMeters(depth)}`
+    floorSizeHud.label.text = `Width ${formatWallLengthMeters(width)}  Depth ${formatWallLengthMeters(depth)}`
     return
   }
 
@@ -3360,7 +3360,7 @@ function updateFloorSizeHudFromFloorBuild() {
     floorSizeHud.label.visible = true
     floorSizeHud.label.x = projected.x
     floorSizeHud.label.y = projected.y
-    floorSizeHud.label.text = `半径 ${formatWallLengthMeters(radius)}  直径 ${formatWallLengthMeters(diameter)}`
+    floorSizeHud.label.text = `Radius ${formatWallLengthMeters(radius)}  Diameter ${formatWallLengthMeters(diameter)}`
   }
 }
 
@@ -5502,17 +5502,19 @@ function computeWorldAabbBottomAlignedPoint(
     return null
   }
 
-  // 如果没有预览根节点或其没有子对象，无法计算包围盒底部对齐点
+  // If there's no preview root node or it has no children, we cannot compute
+  // a bottom-aligned point for the bounding box.
   if (!previewRoot.children || previewRoot.children.length === 0) {
     return null
   }
 
-  // 确保预览对象的世界变换是最新的（更新 matrixWorld）
-  // 第一个参数 true 表示更新 localMatrix，第二个参数 true 表示更新 worldMatrix
+  // Ensure the preview object's world transform is up-to-date (update matrixWorld).
+  // The first parameter `true` updates the localMatrix, the second `true` updates worldMatrix.
   previewRoot.updateWorldMatrix(true, true)
 
-  // 计算预览对象在世界空间下的轴对齐包围盒，并将结果写入预先分配的辅助变量
-  // 这样我们可以得到包围盒的 min/max，以便找到模型在世界空间中的底部 y 值
+  // Compute the axis-aligned bounding box of the preview object in world space
+  // and write the result into preallocated helper variables so we can read the
+  // box min/max and determine the model's bottom Y in world space.
   setBoundingBoxFromObject(previewRoot, dragPreviewBoundingBoxHelper)
 
   // 如果包围盒为空（例如 geometry 丢失或没有可见几何体），则无法对齐
