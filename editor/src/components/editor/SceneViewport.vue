@@ -8621,6 +8621,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   const tools = handlePointerDownTools(event, {
     activeBuildTool: activeBuildTool.value,
+    wallBuildShape: wallBuildShape.value,
     isAltOverrideActive,
     nodePickerActive: nodePickerStore.isActive,
     nodePickerCompletePick: (nodeId) => nodePickerStore.completePick(nodeId),

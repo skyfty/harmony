@@ -1,9 +1,23 @@
 import type * as THREE from 'three'
 import type { FloorDynamicMesh, RoadDynamicMesh } from '@harmony/schema'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 import type { WallWorldSegment } from '../wallPreviewGroupUtils'
 
 export type EndpointGizmoDragMode = 'free' | 'axis'
+
+export type RectangleCornerSide = { x: 'min' | 'max'; z: 'min' | 'max' }
+
+export type RectangleEditConstraint = {
+  cornerSides: [
+    RectangleCornerSide,
+    RectangleCornerSide,
+    RectangleCornerSide,
+    RectangleCornerSide,
+  ]
+  draggedCornerIndex: 0 | 1 | 2 | 3
+  oppositeCornerWorld: THREE.Vector3
+}
 
 export type InstancedEraseDragState = {
   pointerId: number
@@ -62,6 +76,9 @@ export type WallEndpointDragState = {
   chainEndIndex: number
   endpointKind: 'start' | 'end'
 
+  wallBuildShape: WallBuildShape
+  rectangleConstraint: RectangleEditConstraint | null
+
   startX: number
   startY: number
   moved: boolean
@@ -90,6 +107,9 @@ export type WallJointDragState = {
   chainEndIndex: number
   /** Segment index i where the joint is between segments[i].end and segments[i+1].start */
   jointIndex: number
+
+  wallBuildShape: WallBuildShape
+  rectangleConstraint: RectangleEditConstraint | null
 
   startX: number
   startY: number

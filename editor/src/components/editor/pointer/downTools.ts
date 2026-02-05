@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
+import type { WallBuildShape } from '@/types/wall-build-shape'
 import type {
   FloorVertexDragState,
   FloorThicknessDragState,
@@ -9,6 +10,7 @@ import type {
   WallEndpointDragState,
   WallJointDragState,
   WallHeightDragState,
+  RectangleEditConstraint,
 } from './types'
 
 import {
@@ -20,10 +22,99 @@ import {
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@harmony/schema'
 
+type WallWorldSegmentLike = { start: THREE.Vector3; end: THREE.Vector3 }
+
+const RECTANGLE_CHAIN_EPS = 1e-3
+
+function distSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
+  const dx = a.x - b.x
+  const dz = a.z - b.z
+  return dx * dx + dz * dz
+}
+
+function isAxisAlignedEdge(a: THREE.Vector3, b: THREE.Vector3, eps = RECTANGLE_CHAIN_EPS): boolean {
+  return Math.abs(a.x - b.x) <= eps || Math.abs(a.z - b.z) <= eps
+}
+
+function sideOf(value: number, min: number, max: number, eps = RECTANGLE_CHAIN_EPS): 'min' | 'max' {
+  const dMin = Math.abs(value - min)
+  const dMax = Math.abs(value - max)
+  if (dMin <= eps && dMax <= eps) {
+    // Degenerate rectangle; choose deterministically.
+    return 'min'
+  }
+  if (dMin <= eps) return 'min'
+  if (dMax <= eps) return 'max'
+  return dMin <= dMax ? 'min' : 'max'
+}
+
+function tryCreateRectangleEditConstraint(options: {
+  segmentsWorld: WallWorldSegmentLike[]
+  chainStartIndex: number
+  chainEndIndex: number
+  draggedCornerIndex: 0 | 1 | 2 | 3
+}): RectangleEditConstraint | null {
+  const { segmentsWorld, chainStartIndex, chainEndIndex, draggedCornerIndex } = options
+  if (chainEndIndex - chainStartIndex !== 3) {
+    return null
+  }
+
+  const seg0 = segmentsWorld[chainStartIndex]
+  const seg1 = segmentsWorld[chainStartIndex + 1]
+  const seg2 = segmentsWorld[chainStartIndex + 2]
+  const seg3 = segmentsWorld[chainStartIndex + 3]
+  if (!seg0 || !seg1 || !seg2 || !seg3) {
+    return null
+  }
+
+  const v0 = seg0.start
+  const v1 = seg0.end
+  const v2 = seg1.end
+  const v3 = seg2.end
+
+  // Continuity + closure (XZ only; Y can vary slightly due to floating point).
+  if (distSqXZ(seg1.start, v1) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
+  if (distSqXZ(seg2.start, v2) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
+  if (distSqXZ(seg3.start, v3) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
+  if (distSqXZ(seg3.end, v0) > RECTANGLE_CHAIN_EPS * RECTANGLE_CHAIN_EPS) return null
+
+  // Axis-aligned rectangle perimeter.
+  if (!isAxisAlignedEdge(v0, v1)) return null
+  if (!isAxisAlignedEdge(v1, v2)) return null
+  if (!isAxisAlignedEdge(v2, v3)) return null
+  if (!isAxisAlignedEdge(v3, v0)) return null
+
+  const corners = [v0, v1, v2, v3] as const
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const c of corners) {
+    minX = Math.min(minX, c.x)
+    maxX = Math.max(maxX, c.x)
+    minZ = Math.min(minZ, c.z)
+    maxZ = Math.max(maxZ, c.z)
+  }
+
+  const cornerSides = corners.map((c) => ({
+    x: sideOf(c.x, minX, maxX),
+    z: sideOf(c.z, minZ, maxZ),
+  })) as unknown as RectangleEditConstraint['cornerSides']
+
+  const oppositeCornerWorld = corners[(draggedCornerIndex ^ 2) as 0 | 1 | 2 | 3].clone()
+
+  return {
+    cornerSides,
+    draggedCornerIndex,
+    oppositeCornerWorld,
+  }
+}
+
 export function handlePointerDownTools(
   event: PointerEvent,
   ctx: {
     activeBuildTool: string | null
+    wallBuildShape: WallBuildShape
     isAltOverrideActive: boolean
 
     // Node picker
@@ -152,6 +243,8 @@ export function handlePointerDownTools(
           const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))
           const chainEndIndex = Math.max(chainStartIndex, Math.trunc(handleHit.chainEndIndex))
 
+          const wallBuildShape = ctx.wallBuildShape ?? 'polygon'
+
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
           let jointIndex = -1
@@ -250,12 +343,27 @@ export function handlePointerDownTools(
               const nextSeg = workingSegmentsWorld[clampedJointIndex + 1]
               if (jointSeg && nextSeg) {
                 const startJointWorld = jointSeg.end.clone()
+
+                const draggedCornerIndex = Math.max(1, Math.min(3, clampedJointIndex - chainStartIndex + 1)) as 1 | 2 | 3
+                const rectangleConstraint = wallBuildShape === 'rectangle'
+                  ? tryCreateRectangleEditConstraint({
+                    segmentsWorld: baseSegmentsWorld,
+                    chainStartIndex,
+                    chainEndIndex,
+                    draggedCornerIndex: draggedCornerIndex as 0 | 1 | 2 | 3,
+                  })
+                  : null
+
                 const wallJointDragState: WallJointDragState = {
                   pointerId: event.pointerId,
                   nodeId: handleHit.nodeId,
                   chainStartIndex,
                   chainEndIndex,
                   jointIndex: clampedJointIndex,
+
+                  wallBuildShape,
+                  rectangleConstraint,
+
                   startX: event.clientX,
                   startY: event.clientY,
                   moved: false,
@@ -312,6 +420,18 @@ export function handlePointerDownTools(
               chainStartIndex,
               chainEndIndex,
               endpointKind,
+
+              wallBuildShape,
+              rectangleConstraint: wallBuildShape === 'rectangle'
+                ? tryCreateRectangleEditConstraint({
+                  segmentsWorld: baseSegmentsWorld,
+                  chainStartIndex,
+                  chainEndIndex,
+                  // Closed rectangles have coincident start/end points; treat both endpoint handles as corner 0.
+                  draggedCornerIndex: 0,
+                })
+                : null,
+
               startX: event.clientX,
               startY: event.clientY,
               moved: false,

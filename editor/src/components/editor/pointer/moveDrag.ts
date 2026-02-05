@@ -24,6 +24,165 @@ import type {
   PointerMoveResult,
 } from './types'
 
+const rectDragCornersTmp = [
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+] as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]
+
+const rectDraggedCornerTmp = new THREE.Vector3()
+const wallHandleWorldTmp = new THREE.Vector3()
+
+function snapToMajorGridXZ(point: THREE.Vector3, y: number): THREE.Vector3 {
+  point.x = Math.round(point.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  point.z = Math.round(point.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  point.y = y
+  return point
+}
+
+function applySameNodeEndpointMagnet(options: {
+  constrained: THREE.Vector3
+  y: number
+  workingSegmentsWorld: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+  chainStartIndex: number
+  chainEndIndex: number
+}): void {
+  const { constrained, y, workingSegmentsWorld, chainStartIndex, chainEndIndex } = options
+
+  const snapDistance = GRID_MAJOR_SPACING * 0.35
+  const snapDistanceSq = snapDistance * snapDistance
+  const chains = splitWallSegmentsIntoChains(workingSegmentsWorld as any[])
+
+  let best: THREE.Vector3 | null = null
+  let bestDistSq = Number.POSITIVE_INFINITY
+  for (const chain of chains) {
+    if (chain.startIndex === chainStartIndex && chain.endIndex === chainEndIndex) {
+      continue
+    }
+    const startSeg = workingSegmentsWorld[chain.startIndex]
+    const endSeg = workingSegmentsWorld[chain.endIndex]
+    if (!startSeg || !endSeg) {
+      continue
+    }
+    const candidates = [startSeg.start, endSeg.end]
+    for (const candidate of candidates) {
+      const distSq = distanceSqXZ(constrained.x, constrained.z, candidate.x, candidate.z)
+      if (distSq <= snapDistanceSq && distSq < bestDistSq) {
+        bestDistSq = distSq
+        best = candidate
+      }
+    }
+  }
+  if (best) {
+    constrained.copy(best)
+    constrained.y = y
+  }
+}
+
+function applyRectangleConstraintToChain(options: {
+  workingSegmentsWorld: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+  chainStartIndex: number
+  chainEndIndex: number
+  constraint: {
+    cornerSides: Array<{ x: 'min' | 'max'; z: 'min' | 'max' }>
+    draggedCornerIndex: 0 | 1 | 2 | 3
+    oppositeCornerWorld: THREE.Vector3
+  }
+  desiredCornerWorld: THREE.Vector3
+  y: number
+  outDraggedCornerWorld: THREE.Vector3
+}): boolean {
+  const { workingSegmentsWorld, chainStartIndex, chainEndIndex, constraint, desiredCornerWorld, y, outDraggedCornerWorld } = options
+  if (chainEndIndex - chainStartIndex !== 3) {
+    return false
+  }
+
+  const seg0 = workingSegmentsWorld[chainStartIndex]
+  const seg1 = workingSegmentsWorld[chainStartIndex + 1]
+  const seg2 = workingSegmentsWorld[chainStartIndex + 2]
+  const seg3 = workingSegmentsWorld[chainStartIndex + 3]
+  if (!seg0 || !seg1 || !seg2 || !seg3) {
+    return false
+  }
+
+  const moved = desiredCornerWorld
+  const opposite = constraint.oppositeCornerWorld
+
+  const minX = Math.min(moved.x, opposite.x)
+  const maxX = Math.max(moved.x, opposite.x)
+  const minZ = Math.min(moved.z, opposite.z)
+  const maxZ = Math.max(moved.z, opposite.z)
+
+  for (let i = 0; i < 4; i += 1) {
+    const side = constraint.cornerSides[i]!
+    const corner = rectDragCornersTmp[i]!
+    corner.set(side.x === 'min' ? minX : maxX, y, side.z === 'min' ? minZ : maxZ)
+  }
+
+  // Rebuild only the currently dragged chain (keeps other chains intact).
+  seg0.start.copy(rectDragCornersTmp[0])
+  seg0.end.copy(rectDragCornersTmp[1])
+  seg1.start.copy(rectDragCornersTmp[1])
+  seg1.end.copy(rectDragCornersTmp[2])
+  seg2.start.copy(rectDragCornersTmp[2])
+  seg2.end.copy(rectDragCornersTmp[3])
+  seg3.start.copy(rectDragCornersTmp[3])
+  seg3.end.copy(rectDragCornersTmp[0])
+
+  outDraggedCornerWorld.copy(rectDragCornersTmp[constraint.draggedCornerIndex])
+  return true
+}
+
+function updateWallHandleMeshesForChain(options: {
+  handles: THREE.Group
+  containerObject: THREE.Object3D
+  workingSegmentsWorld: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+  chainStartIndex: number
+  chainEndIndex: number
+}): void {
+  const { handles, containerObject, workingSegmentsWorld, chainStartIndex, chainEndIndex } = options
+  const startSeg = workingSegmentsWorld[chainStartIndex]
+  const endSeg = workingSegmentsWorld[chainEndIndex]
+  if (!startSeg || !endSeg) {
+    return
+  }
+
+  for (const child of handles.children) {
+    const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+    const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+    if (startIndex !== chainStartIndex || endIndex !== chainEndIndex) {
+      continue
+    }
+
+    const handleKind = child?.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
+    let pointWorld: THREE.Vector3 | null = null
+    if (handleKind === 'joint') {
+      const jointIndex = Math.trunc(Number(child?.userData?.jointIndex))
+      const seg = workingSegmentsWorld[jointIndex]
+      if (seg) {
+        pointWorld = seg.end
+      }
+    } else {
+      const endpointKind = child?.userData?.endpointKind === 'end' ? 'end' : 'start'
+      pointWorld = endpointKind === 'start' ? startSeg.start : endSeg.end
+    }
+
+    if (!pointWorld) {
+      continue
+    }
+
+    wallHandleWorldTmp.copy(pointWorld)
+    const local = containerObject.worldToLocal(wallHandleWorldTmp)
+    const yOffset = Number(child.userData?.yOffset)
+    child.position.set(
+      local.x,
+      local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET),
+      local.z,
+    )
+  }
+}
+
 type FloorEdgeDragStateLike = {
   pointerId: number
   nodeId: string
@@ -251,6 +410,7 @@ export function handlePointerMoveDrag(
     }
 
     let constrained: THREE.Vector3 | null = null
+    const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
@@ -260,51 +420,40 @@ export function handlePointerMoveDrag(
       const delta = tmpIntersection.clone().sub(state.startEndpointWorld)
       const t = axis.dot(delta)
       constrained = state.startEndpointWorld.clone().add(axis.multiplyScalar(t))
+      if (rectangleConstraint) {
+        snapToMajorGridXZ(constrained, state.startEndpointWorld.y)
+      }
     } else {
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
 
       const rawPointer = ctx.groundPointerHelper.clone()
-      const target = rawPointer.clone()
-      target.y = state.startEndpointWorld.y
 
-      const anchor = state.anchorPointWorld.clone()
-      anchor.y = state.startEndpointWorld.y
+      if (rectangleConstraint) {
+        constrained = snapToMajorGridXZ(rawPointer.clone(), state.startEndpointWorld.y)
+      } else {
+        const target = rawPointer.clone()
+        target.y = state.startEndpointWorld.y
 
-      constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
-      constrained.y = state.startEndpointWorld.y
+        const anchor = state.anchorPointWorld.clone()
+        anchor.y = state.startEndpointWorld.y
 
-      // Same-node endpoint magnet: help connect different chains by snapping the dragged endpoint
-      // to the nearest endpoint of other chains within the same wall node.
-      const snapDistance = GRID_MAJOR_SPACING * 0.35
-      const snapDistanceSq = snapDistance * snapDistance
-      const chains = splitWallSegmentsIntoChains(state.workingSegmentsWorld as any[])
-
-      let best: THREE.Vector3 | null = null
-      let bestDistSq = Number.POSITIVE_INFINITY
-      for (const chain of chains) {
-        if (chain.startIndex === state.chainStartIndex && chain.endIndex === state.chainEndIndex) {
-          continue
-        }
-        const startSeg = state.workingSegmentsWorld[chain.startIndex]
-        const endSeg = state.workingSegmentsWorld[chain.endIndex]
-        if (!startSeg || !endSeg) {
-          continue
-        }
-        const candidates = [startSeg.start, endSeg.end]
-        for (const candidate of candidates) {
-          const distSq = distanceSqXZ(constrained.x, constrained.z, candidate.x, candidate.z)
-          if (distSq <= snapDistanceSq && distSq < bestDistSq) {
-            bestDistSq = distSq
-            best = candidate.clone()
-          }
-        }
-      }
-      if (best) {
-        constrained.copy(best)
+        constrained = constrainWallEndPointSoftSnap(anchor, target, rawPointer)
         constrained.y = state.startEndpointWorld.y
       }
+    }
+
+    if (constrained) {
+      // Same-node endpoint magnet: help connect different chains by snapping the dragged endpoint
+      // to the nearest endpoint of other chains within the same wall node.
+      applySameNodeEndpointMagnet({
+        constrained,
+        y: state.startEndpointWorld.y,
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+      })
     }
 
     const working = state.workingSegmentsWorld
@@ -314,7 +463,23 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
 
-    if (constrained) {
+    let rectangleApplied = false
+    if (constrained && rectangleConstraint) {
+      rectangleApplied = applyRectangleConstraintToChain({
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+        constraint: rectangleConstraint,
+        desiredCornerWorld: constrained,
+        y: state.startEndpointWorld.y,
+        outDraggedCornerWorld: rectDraggedCornerTmp,
+      })
+      if (rectangleApplied) {
+        constrained.copy(rectDraggedCornerTmp)
+      }
+    }
+
+    if (constrained && !rectangleApplied) {
       if (state.endpointKind === 'start') {
         startSeg.start.copy(constrained)
       } else {
@@ -352,23 +517,33 @@ export function handlePointerMoveDrag(
       }
     }
 
-    // Update handle position in local space for immediate feedback.
+    // Update handle position(s) in local space for immediate feedback.
     const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
-      const local = state.containerObject.worldToLocal(constrained.clone())
-      const handleMesh = handles.children.find((child) => {
-        const kind = child?.userData?.endpointKind
-        const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
-        const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
-        return (
-          (kind === state.endpointKind) &&
-          startIndex === state.chainStartIndex &&
-          endIndex === state.chainEndIndex
-        )
-      }) as THREE.Object3D | undefined
-      if (handleMesh) {
-        const yOffset = Number(handleMesh.userData?.yOffset)
-        handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
+      if (rectangleApplied) {
+        updateWallHandleMeshesForChain({
+          handles,
+          containerObject: state.containerObject,
+          workingSegmentsWorld: state.workingSegmentsWorld,
+          chainStartIndex: state.chainStartIndex,
+          chainEndIndex: state.chainEndIndex,
+        })
+      } else {
+        const local = state.containerObject.worldToLocal(constrained.clone())
+        const handleMesh = handles.children.find((child) => {
+          const kind = child?.userData?.endpointKind
+          const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+          const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+          return (
+            (kind === state.endpointKind) &&
+            startIndex === state.chainStartIndex &&
+            endIndex === state.chainEndIndex
+          )
+        }) as THREE.Object3D | undefined
+        if (handleMesh) {
+          const yOffset = Number(handleMesh.userData?.yOffset)
+          handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
+        }
       }
     }
 
@@ -389,6 +564,7 @@ export function handlePointerMoveDrag(
     }
 
     let constrained: THREE.Vector3 | null = null
+    const rectangleConstraint = state.wallBuildShape === 'rectangle' ? state.rectangleConstraint : null
 
     if (state.dragMode === 'axis' && state.axisWorld) {
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
@@ -398,6 +574,9 @@ export function handlePointerMoveDrag(
       const delta = tmpIntersection.clone().sub(state.startJointWorld)
       const t = axis.dot(delta)
       constrained = state.startJointWorld.clone().add(axis.multiplyScalar(t))
+      if (rectangleConstraint) {
+        snapToMajorGridXZ(constrained, state.startJointWorld.y)
+      }
     } else {
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
@@ -407,38 +586,53 @@ export function handlePointerMoveDrag(
       const target = rawPointer.clone()
       target.y = state.startJointWorld.y
 
-      const working = state.workingSegmentsWorld
-      const i = state.jointIndex
-      const prevSeg = working[i]
-      const nextSeg = working[i + 1]
-
-      const prevAnchor = prevSeg?.start?.clone?.() ?? null
-      const nextAnchor = nextSeg?.end?.clone?.() ?? null
-
-      const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
-      if (prevAnchor) {
-        prevAnchor.y = state.startJointWorld.y
-        const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
-        snapped.y = state.startJointWorld.y
-        const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
-        candidates.push({ point: snapped, distSq: dSq })
-      }
-      if (nextAnchor) {
-        nextAnchor.y = state.startJointWorld.y
-        const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
-        snapped.y = state.startJointWorld.y
-        const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
-        candidates.push({ point: snapped, distSq: dSq })
-      }
-
-      if (candidates.length) {
-        candidates.sort((a, b) => a.distSq - b.distSq)
-        // Stability: if very close, prefer the first candidate (prev anchor if present).
-        constrained = candidates[0]!.point
+      if (rectangleConstraint) {
+        constrained = snapToMajorGridXZ(target, state.startJointWorld.y)
       } else {
-        constrained = target.clone()
-        constrained.y = state.startJointWorld.y
+
+        const working = state.workingSegmentsWorld
+        const i = state.jointIndex
+        const prevSeg = working[i]
+        const nextSeg = working[i + 1]
+
+        const prevAnchor = prevSeg?.start?.clone?.() ?? null
+        const nextAnchor = nextSeg?.end?.clone?.() ?? null
+
+        const candidates: Array<{ point: THREE.Vector3; distSq: number }> = []
+        if (prevAnchor) {
+          prevAnchor.y = state.startJointWorld.y
+          const snapped = constrainWallEndPointSoftSnap(prevAnchor, target, rawPointer)
+          snapped.y = state.startJointWorld.y
+          const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+          candidates.push({ point: snapped, distSq: dSq })
+        }
+        if (nextAnchor) {
+          nextAnchor.y = state.startJointWorld.y
+          const snapped = constrainWallEndPointSoftSnap(nextAnchor, target, rawPointer)
+          snapped.y = state.startJointWorld.y
+          const dSq = distanceSqXZ(snapped.x, snapped.z, rawPointer.x, rawPointer.z)
+          candidates.push({ point: snapped, distSq: dSq })
+        }
+
+        if (candidates.length) {
+          candidates.sort((a, b) => a.distSq - b.distSq)
+          // Stability: if very close, prefer the first candidate (prev anchor if present).
+          constrained = candidates[0]!.point
+        } else {
+          constrained = target.clone()
+          constrained.y = state.startJointWorld.y
+        }
       }
+    }
+
+    if (constrained && rectangleConstraint) {
+      applySameNodeEndpointMagnet({
+        constrained,
+        y: state.startJointWorld.y,
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+      })
     }
 
     const working = state.workingSegmentsWorld
@@ -449,8 +643,26 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
 
-    segA.end.copy(constrained)
-    segB.start.copy(constrained)
+    let rectangleApplied = false
+    if (rectangleConstraint) {
+      rectangleApplied = applyRectangleConstraintToChain({
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+        constraint: rectangleConstraint,
+        desiredCornerWorld: constrained,
+        y: state.startJointWorld.y,
+        outDraggedCornerWorld: rectDraggedCornerTmp,
+      })
+      if (rectangleApplied) {
+        constrained.copy(rectDraggedCornerTmp)
+      }
+    }
+
+    if (!rectangleApplied) {
+      segA.end.copy(constrained)
+      segB.start.copy(constrained)
+    }
 
     if (constrained && !state.moved) {
       const dd = constrained.clone().sub(state.startJointWorld)
@@ -482,25 +694,35 @@ export function handlePointerMoveDrag(
       }
     }
 
-    // Update joint handle position in local space for immediate feedback.
+    // Update handle position(s) in local space for immediate feedback.
     const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
     if (handles?.isGroup) {
-      const local = state.containerObject.worldToLocal(constrained.clone())
-      const handleMesh = handles.children.find((child) => {
-        const kind = child?.userData?.handleKind
-        const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
-        const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
-        const j = Math.trunc(Number(child?.userData?.jointIndex))
-        return (
-          kind === 'joint' &&
-          startIndex === state.chainStartIndex &&
-          endIndex === state.chainEndIndex &&
-          j === state.jointIndex
-        )
-      }) as THREE.Object3D | undefined
-      if (handleMesh) {
-        const yOffset = Number(handleMesh.userData?.yOffset)
-        handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
+      if (rectangleApplied) {
+        updateWallHandleMeshesForChain({
+          handles,
+          containerObject: state.containerObject,
+          workingSegmentsWorld: state.workingSegmentsWorld,
+          chainStartIndex: state.chainStartIndex,
+          chainEndIndex: state.chainEndIndex,
+        })
+      } else {
+        const local = state.containerObject.worldToLocal(constrained.clone())
+        const handleMesh = handles.children.find((child) => {
+          const kind = child?.userData?.handleKind
+          const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+          const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+          const j = Math.trunc(Number(child?.userData?.jointIndex))
+          return (
+            kind === 'joint' &&
+            startIndex === state.chainStartIndex &&
+            endIndex === state.chainEndIndex &&
+            j === state.jointIndex
+          )
+        }) as THREE.Object3D | undefined
+        if (handleMesh) {
+          const yOffset = Number(handleMesh.userData?.yOffset)
+          handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
+        }
       }
     }
 
