@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
+import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import type {
   FloorVertexDragState,
@@ -166,6 +167,7 @@ export function handlePointerDownTools(
   ctx: {
     activeBuildTool: string | null
     wallBuildShape: WallBuildShape
+    floorBuildShape: FloorBuildShape
     isAltOverrideActive: boolean
 
     // Node picker
@@ -775,6 +777,9 @@ export function handlePointerDownTools(
             startX: event.clientX,
             startY: event.clientY,
             moved: false,
+
+            floorBuildShape: ctx.floorBuildShape,
+            editConstraint: null,
 
             dragMode: effectiveDragMode,
             axisWorld: effectiveAxisWorld,

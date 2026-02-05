@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
+import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
@@ -341,6 +342,90 @@ type FloorEdgeDragStateLike = {
   referencePoint: THREE.Vector2
   initialProjection: number
 }
+
+function sanitizeFloorVertices(vertices: unknown): Array<[number, number]> {
+  if (!Array.isArray(vertices)) {
+    return []
+  }
+
+  return vertices
+    .map((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        return null
+      }
+      const x = Number(entry[0])
+      const z = Number(entry[1])
+      if (!Number.isFinite(x) || !Number.isFinite(z)) {
+        return null
+      }
+      return [x, z] as [number, number]
+    })
+    .filter((v): v is [number, number] => Array.isArray(v))
+}
+
+function computeBoundsXZ(vertices: Array<[number, number]>): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+  if (!vertices.length) {
+    return null
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  for (const [x, z] of vertices) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minZ = Math.min(minZ, z)
+    maxZ = Math.max(maxZ, z)
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+
+  return { minX, maxX, minZ, maxZ }
+}
+
+function buildRectangleVertices(bounds: { minX: number; maxX: number; minZ: number; maxZ: number }): Array<[number, number]> {
+  return [
+    [bounds.minX, bounds.minZ],
+    [bounds.minX, bounds.maxZ],
+    [bounds.maxX, bounds.maxZ],
+    [bounds.maxX, bounds.minZ],
+  ]
+}
+
+function computeMeanCenter(vertices: Array<[number, number]>): { x: number; z: number } | null {
+  if (!vertices.length) {
+    return null
+  }
+  let sumX = 0
+  let sumZ = 0
+  let count = 0
+  for (const [x, z] of vertices) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
+    sumX += x
+    sumZ += z
+    count += 1
+  }
+  if (count <= 0) {
+    return null
+  }
+  return { x: sumX / count, z: sumZ / count }
+}
+
+function buildCircleVertices(options: { centerX: number; centerZ: number; radius: number; segments: number }): Array<[number, number]> {
+  const segments = Math.max(8, Math.min(256, Math.floor(options.segments)))
+  const radius = Math.max(1e-4, options.radius)
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < segments; i += 1) {
+    const t = (i / segments) * Math.PI * 2
+    out.push([options.centerX + Math.cos(t) * radius, options.centerZ + Math.sin(t) * radius])
+  }
+  return out
+}
 export function handlePointerMoveDrag(
   event: PointerEvent,
   ctx: {
@@ -361,12 +446,15 @@ export function handlePointerMoveDrag(
 
     camera: THREE.Camera | null
 
+    floorBuildShape?: FloorBuildShape
+
     rootGroup: THREE.Group
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
 
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
+    forceRebuildFloorVertexHandles?: () => void
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
@@ -1183,21 +1271,89 @@ export function handlePointerMoveDrag(
 
     if (!local) return { handled: true }
 
+    const shape = (state.floorBuildShape ?? ctx.floorBuildShape ?? 'polygon') as FloorBuildShape
     const working = state.workingDefinition
-    const vertices = Array.isArray(working.vertices) ? working.vertices : []
-    if (!vertices[state.vertexIndex]) {
-      return { handled: true }
-    }
-    vertices[state.vertexIndex] = [local.x, local.z]
-    working.vertices = vertices
 
-    if (!state.moved) {
-      const [startVX, startVZ] = state.startVertex
-      const ddx = local.x - startVX
-      const ddz = local.z - startVZ
-      if (ddx * ddx + ddz * ddz > 1e-8) {
-        state.moved = true
+    // Capture shape-specific constraint baseline when drag begins.
+    if ((shape === 'rectangle' || shape === 'circle') && !state.editConstraint) {
+      const baseVerts = sanitizeFloorVertices((state.baseDefinition as any)?.vertices)
+      if (shape === 'rectangle') {
+        if (baseVerts.length !== 4) {
+          // Only constrain to rectangle when the geometry is actually a rectangle (4 corners).
+          // This avoids leaving stale extra handles during drag.
+          state.editConstraint = null
+        } else {
+        const bounds = computeBoundsXZ(baseVerts)
+        if (bounds) {
+          const midX = (bounds.minX + bounds.maxX) * 0.5
+          const midZ = (bounds.minZ + bounds.maxZ) * 0.5
+          const [startVX, startVZ] = state.startVertex
+          state.editConstraint = {
+            kind: 'rectangle',
+            boundsStart: bounds,
+            draggedSide: {
+              x: startVX <= midX ? 'min' : 'max',
+              z: startVZ <= midZ ? 'min' : 'max',
+            },
+          }
+        }
+        }
       }
+
+      if (shape === 'circle') {
+        if (baseVerts.length < 8) {
+          state.editConstraint = null
+        } else {
+        const center = computeMeanCenter(baseVerts) ?? null
+        const segments = Math.max(8, baseVerts.length || 32)
+        if (center) {
+          state.editConstraint = {
+            kind: 'circle',
+            centerLocal: center,
+            segments,
+          }
+        }
+        }
+      }
+    }
+
+    const constraint = state.editConstraint
+
+    if (shape === 'rectangle' && constraint?.kind === 'rectangle') {
+      const eps = 1e-4
+      const b = constraint.boundsStart
+      let minX = b.minX
+      let maxX = b.maxX
+      let minZ = b.minZ
+      let maxZ = b.maxZ
+
+      if (constraint.draggedSide.x === 'min') {
+        minX = Math.min(local.x, maxX - eps)
+      } else {
+        maxX = Math.max(local.x, minX + eps)
+      }
+
+      if (constraint.draggedSide.z === 'min') {
+        minZ = Math.min(local.z, maxZ - eps)
+      } else {
+        maxZ = Math.max(local.z, minZ + eps)
+      }
+
+      working.vertices = buildRectangleVertices({ minX, maxX, minZ, maxZ })
+      ctx.forceRebuildFloorVertexHandles?.()
+    } else if (shape === 'circle' && constraint?.kind === 'circle') {
+      const cx = constraint.centerLocal.x
+      const cz = constraint.centerLocal.z
+      const radius = Math.hypot(local.x - cx, local.z - cz)
+      working.vertices = buildCircleVertices({ centerX: cx, centerZ: cz, radius, segments: constraint.segments })
+      ctx.forceRebuildFloorVertexHandles?.()
+    } else {
+      const vertices = Array.isArray(working.vertices) ? working.vertices : []
+      if (!vertices[state.vertexIndex]) {
+        return { handled: true }
+      }
+      vertices[state.vertexIndex] = [local.x, local.z]
+      working.vertices = vertices
     }
 
     ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)

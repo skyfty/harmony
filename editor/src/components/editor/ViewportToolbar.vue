@@ -803,9 +803,25 @@ function handleBuildToolToggle(tool: BuildTool) {
     return
   }
   const next = activeBuildTool.value === tool ? null : tool
-  // If we're enabling a build tool, immediately clear selection
-  // to avoid accidental operations on the previously selected node.
-  if (next) {
+
+  const selectionIds = sceneStore.selectedNodeIds ?? []
+  const primaryNode = activeNode.value as any
+  const primaryId = primaryNode?.id as string | undefined
+  const isSingleSelection = selectionIds.length === 1 && typeof primaryId === 'string' && selectionIds.includes(primaryId)
+
+  const expectedDynamicMeshType = tool === 'wall' ? 'Wall' : tool === 'floor' ? 'Floor' : tool === 'road' ? 'Road' : null
+  const primaryDynamicMeshType = primaryNode?.dynamicMesh?.type as string | undefined
+  const toolMatchesPrimarySelection = Boolean(expectedDynamicMeshType && primaryDynamicMeshType === expectedDynamicMeshType)
+
+  const selectionLocked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
+  const nodeLocked = Boolean(primaryNode?.locked)
+
+  const shouldKeepSelectionForEdit = Boolean(next && isSingleSelection && toolMatchesPrimarySelection && !selectionLocked && !nodeLocked)
+
+  // By default, when enabling a build tool, clear selection to avoid accidental operations.
+  // Exception: if the primary selection is a single, matching, unlocked node, keep it so the user
+  // immediately enters edit mode for that node.
+  if (next && !shouldKeepSelectionForEdit) {
     sceneStore.setSelection([])
   }
   emit('change-build-tool', next)

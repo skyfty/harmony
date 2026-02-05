@@ -3038,10 +3038,22 @@ type WallLengthHudLabel = {
   text: string
 }
 
+type FloorSizeHudLabel = {
+  visible: boolean
+  x: number
+  y: number
+  text: string
+}
+
 const wallLengthHud = reactive<{ visible: boolean; left: WallLengthHudLabel; right: WallLengthHudLabel }>({
   visible: false,
   left: { visible: false, x: 0, y: 0, text: '' },
   right: { visible: false, x: 0, y: 0, text: '' },
+})
+
+const floorSizeHud = reactive<{ visible: boolean; label: FloorSizeHudLabel }>({
+  visible: false,
+  label: { visible: false, x: 0, y: 0, text: '' },
 })
 
 const wallLengthHudProjectHelper = new THREE.Vector3()
@@ -3054,6 +3066,12 @@ function clearWallLengthHud() {
   wallLengthHud.right.visible = false
   wallLengthHud.left.text = ''
   wallLengthHud.right.text = ''
+}
+
+function clearFloorSizeHud() {
+  floorSizeHud.visible = false
+  floorSizeHud.label.visible = false
+  floorSizeHud.label.text = ''
 }
 
 function distanceXZ(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -3202,6 +3220,148 @@ function updateWallLengthHudFromWallBuild() {
   wallLengthHud.left.x = projected.x
   wallLengthHud.left.y = projected.y
   wallLengthHud.left.text = `长度 ${formatWallLengthMeters(len)}`
+}
+
+const floorSizeHudTmpWorld = new THREE.Vector3()
+const floorSizeHudTmpWorld2 = new THREE.Vector3()
+
+function updateFloorSizeHudFromFloorDrag() {
+  clearFloorSizeHud()
+
+  if (!camera || !overlayContainerRef.value) {
+    return
+  }
+
+  if (!floorVertexDragState || !floorVertexDragState.moved) {
+    return
+  }
+
+  // Only show while floor tool is active; keeps UX consistent with other gizmo overlays.
+  if (activeBuildTool.value !== 'floor') {
+    return
+  }
+
+  const state = floorVertexDragState
+  const runtime = state.runtimeObject
+  const vertices = Array.isArray(state.workingDefinition?.vertices) ? state.workingDefinition.vertices : []
+  if (!vertices.length) {
+    return
+  }
+
+  const shape = floorBuildShape.value ?? 'polygon'
+  if (shape !== 'rectangle' && shape !== 'circle') {
+    return
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  for (const entry of vertices) {
+    if (!Array.isArray(entry) || entry.length < 2) continue
+    const lx = Number(entry[0])
+    const lz = Number(entry[1])
+    if (!Number.isFinite(lx) || !Number.isFinite(lz)) continue
+    const w = runtime.localToWorld(floorSizeHudTmpWorld.set(lx, 0, lz))
+    minX = Math.min(minX, w.x)
+    maxX = Math.max(maxX, w.x)
+    minZ = Math.min(minZ, w.z)
+    maxZ = Math.max(maxZ, w.z)
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return
+  }
+
+  const centerWorld = floorSizeHudTmpWorld2.set((minX + maxX) * 0.5, 0.02, (minZ + maxZ) * 0.5)
+  const projected = projectWorldToOverlay(centerWorld)
+  if (!projected.visible) {
+    return
+  }
+
+  if (shape === 'rectangle') {
+    const width = Math.max(0, maxX - minX)
+    const depth = Math.max(0, maxZ - minZ)
+    floorSizeHud.visible = true
+    floorSizeHud.label.visible = true
+    floorSizeHud.label.x = projected.x
+    floorSizeHud.label.y = projected.y
+    floorSizeHud.label.text = `宽 ${formatWallLengthMeters(width)}  深 ${formatWallLengthMeters(depth)}`
+    return
+  }
+
+  // Circle: show radius/diameter derived from the current geometry bounds.
+  const radius = 0.5 * Math.max(maxX - minX, maxZ - minZ)
+  const diameter = radius * 2
+  if (!Number.isFinite(radius) || radius <= 1e-6) {
+    return
+  }
+
+  floorSizeHud.visible = true
+  floorSizeHud.label.visible = true
+  floorSizeHud.label.x = projected.x
+  floorSizeHud.label.y = projected.y
+  floorSizeHud.label.text = `半径 ${formatWallLengthMeters(radius)}  直径 ${formatWallLengthMeters(diameter)}`
+}
+
+function updateFloorSizeHudFromFloorBuild() {
+  clearFloorSizeHud()
+
+  if (!camera || !overlayContainerRef.value) {
+    return
+  }
+
+  if (activeBuildTool.value !== 'floor') {
+    return
+  }
+
+  const session = floorBuildTool.getSession()
+  if (!session || !session.previewEnd || !session.points?.length) {
+    return
+  }
+
+  if (session.shape === 'rectangle') {
+    const start = session.points[0]
+    const end = session.previewEnd
+    if (!start || !end) return
+    const minX = Math.min(start.x, end.x)
+    const maxX = Math.max(start.x, end.x)
+    const minZ = Math.min(start.z, end.z)
+    const maxZ = Math.max(start.z, end.z)
+    const width = Math.max(0, maxX - minX)
+    const depth = Math.max(0, maxZ - minZ)
+
+    const centerWorld = floorSizeHudTmpWorld2.set((minX + maxX) * 0.5, 0.02, (minZ + maxZ) * 0.5)
+    const projected = projectWorldToOverlay(centerWorld)
+    if (!projected.visible) return
+
+    floorSizeHud.visible = true
+    floorSizeHud.label.visible = true
+    floorSizeHud.label.x = projected.x
+    floorSizeHud.label.y = projected.y
+    floorSizeHud.label.text = `宽 ${formatWallLengthMeters(width)}  深 ${formatWallLengthMeters(depth)}`
+    return
+  }
+
+  if (session.shape === 'circle') {
+    const center = session.points[0]
+    const end = session.previewEnd
+    if (!center || !end) return
+    const radius = Math.hypot(end.x - center.x, end.z - center.z)
+    const diameter = radius * 2
+    if (!Number.isFinite(radius) || radius <= 1e-6) return
+
+    const centerWorld = floorSizeHudTmpWorld2.set(center.x, 0.02, center.z)
+    const projected = projectWorldToOverlay(centerWorld)
+    if (!projected.visible) return
+
+    floorSizeHud.visible = true
+    floorSizeHud.label.visible = true
+    floorSizeHud.label.x = projected.x
+    floorSizeHud.label.y = projected.y
+    floorSizeHud.label.text = `半径 ${formatWallLengthMeters(radius)}  直径 ${formatWallLengthMeters(diameter)}`
+  }
 }
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
@@ -8816,6 +8976,7 @@ async function handlePointerDown(event: PointerEvent) {
   const tools = handlePointerDownTools(event, {
     activeBuildTool: activeBuildTool.value,
     wallBuildShape: wallBuildShape.value,
+    floorBuildShape: floorBuildShape.value,
     isAltOverrideActive,
     nodePickerActive: nodePickerStore.isActive,
     nodePickerCompletePick: (nodeId) => nodePickerStore.completePick(nodeId),
@@ -8993,11 +9154,13 @@ function handlePointerMove(event: PointerEvent) {
     groundPointerHelper,
 
     camera,
+    floorBuildShape: floorBuildShape.value,
     rootGroup,
     resolveRoadRenderOptionsForNodeId,
     updateRoadGroup,
 
     updateFloorGroup,
+    forceRebuildFloorVertexHandles: () => ensureFloorVertexHandlesForSelectedNode({ force: true }),
   }
   _moveDragCtx.setWallNodeDimensions = (nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }) =>
     sceneStore.setWallNodeDimensions(nodeId, dimensions)
@@ -9006,11 +9169,13 @@ function handlePointerMove(event: PointerEvent) {
 
   // Default to hidden unless a wall drag is actively updating.
   clearWallLengthHud()
+  clearFloorSizeHud()
 
-  const roadVertex = handlePointerMoveDrag(event, _moveDragCtx)
-  if (roadVertex) {
+  const dragResult = handlePointerMoveDrag(event, _moveDragCtx)
+  if (dragResult) {
     updateWallLengthHudFromWallDrag()
-    applyPointerMoveResult(roadVertex)
+    updateFloorSizeHudFromFloorDrag()
+    applyPointerMoveResult(dragResult)
     return
   }
 
@@ -9057,6 +9222,7 @@ function handlePointerMove(event: PointerEvent) {
   })
   if (buildTools) {
     updateWallLengthHudFromWallBuild()
+    updateFloorSizeHudFromFloorBuild()
     applyPointerMoveResult(buildTools)
     return
   }
@@ -9175,6 +9341,7 @@ async function handlePointerUp(event: PointerEvent) {
 
       // Any pointer-up ends active wall drag measurements.
       clearWallLengthHud()
+      clearFloorSizeHud()
     }
 
     // Canvas-only safety: only allow scene-modifying interactions (build/road/floor/scatter)
@@ -9440,6 +9607,7 @@ async function handlePointerUp(event: PointerEvent) {
 
 function handlePointerCancel(event: PointerEvent) {
   clearWallLengthHud()
+  clearFloorSizeHud()
   deactivateVOverride()
   // Ensure any selection-hover preview is hidden when pointer is cancelled.
   stopSelectionPreviewVisibilityMonitor()
@@ -9770,9 +9938,30 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (!hit) {
     return
   }
-  const nextSelection = sceneStore.handleNodeDoubleClick(hit.nodeId)
-  const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hit.nodeId]
-  emitSelectionChange(appliedSelection)
+
+  const hitNodeId = hit.nodeId
+  const hitNode: any = sceneStore.getNodeById(hitNodeId)
+  const hitDynamicMeshType = hitNode?.dynamicMesh?.type as string | undefined
+  const toolForNode: BuildTool | null =
+    hitDynamicMeshType === 'Wall'
+      ? 'wall'
+      : hitDynamicMeshType === 'Floor'
+      ? 'floor'
+      : hitDynamicMeshType === 'Road'
+      ? 'road'
+      : null
+
+  const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(hitNodeId)
+
+  // UX: double-click an unlocked Wall/Floor/Road node to immediately enter its edit mode.
+  if (toolForNode && !nodeLocked) {
+    handleBuildToolChange(toolForNode)
+    emitSelectionChange([hitNodeId])
+  } else {
+    const nextSelection = sceneStore.handleNodeDoubleClick(hitNodeId)
+    const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hitNodeId]
+    emitSelectionChange(appliedSelection)
+  }
   event.preventDefault()
   event.stopPropagation()
 }
@@ -12923,6 +13112,16 @@ defineExpose<SceneViewportHandle>({
             {{ wallLengthHud.right.text }}
           </div>
         </div>
+
+        <div v-if="floorSizeHud.visible" class="floor-size-hud">
+          <div
+            v-if="floorSizeHud.label.visible"
+            class="floor-size-hud__label"
+            :style="{ left: floorSizeHud.label.x + 'px', top: floorSizeHud.label.y + 'px' }"
+          >
+            {{ floorSizeHud.label.text }}
+          </div>
+        </div>
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -13045,6 +13244,27 @@ defineExpose<SceneViewportHandle>({
 .wall-length-hud__label {
   position: absolute;
   transform: translate(-50%, -115%);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(12, 15, 21, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(236, 241, 248, 0.95);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  user-select: none;
+}
+
+.floor-size-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.floor-size-hud__label {
+  position: absolute;
+  transform: translate(-50%, -135%);
   padding: 2px 6px;
   border-radius: 6px;
   background: rgba(12, 15, 21, 0.72);
