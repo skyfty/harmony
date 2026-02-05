@@ -334,6 +334,17 @@ function applyJointTrimUpdate() {
   } as any)
 }
 
+// Apply updates immediately when user edits the Trim Start/End values.
+watch([
+  localJointTrimStart,
+  localJointTrimEnd,
+], ([start, end], [prevStart, prevEnd]) => {
+  if (isSyncingFromScene.value) return
+  // Avoid firing when values didn't change
+  if (Number(start) === Number(prevStart) && Number(end) === Number(prevEnd)) return
+  applyJointTrimUpdate()
+})
+
 function computeCachedAssetHorizontalRadius(assetId: string): number | null {
   const cached = getCachedModelObject(assetId)
   if (!cached) {
