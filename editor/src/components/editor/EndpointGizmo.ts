@@ -162,8 +162,8 @@ export function createEndpointGizmoObject(options?: EndpointGizmoBuildOptions): 
 
   // Base diameter used for screen-space scaling in renderers.
   // Shrink center sphere so arrows remain the primary, easier-to-click targets.
-  const baseSphereRadius = 0.35
-  const baseDiameter = baseSphereRadius * 2
+  const baseDiameter = 0.7
+  const baseSphereRadius = 0.15
 
   const sphereGeo = new THREE.SphereGeometry(baseSphereRadius, 18, 14)
   const center = new THREE.Mesh(sphereGeo, materials.center.normal)
