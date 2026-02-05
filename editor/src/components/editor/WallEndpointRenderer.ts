@@ -24,6 +24,10 @@ export type WallEndpointHandlePickResult = {
       /** Segment index i where the joint is between segments[i].end and segments[i+1].start */
       jointIndex: number
     }
+  | {
+      handleKind: 'circle'
+      circleKind: 'center' | 'radius'
+    }
 ) & {
   gizmoPart: EndpointGizmoPart
   gizmoKind: 'center' | 'axis'
@@ -69,6 +73,7 @@ export type WallEndpointRenderer = {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
     diameterPx?: number
+    freezeCircleFacing?: boolean
   }): void
   pick(options: {
     camera: THREE.Camera | null
@@ -85,6 +90,129 @@ export const WALL_ENDPOINT_HANDLE_Y_OFFSET = 0.03
 
 const WALL_ENDPOINT_HANDLE_RENDER_ORDER = 1001
 const WALL_ENDPOINT_HANDLE_SCREEN_DIAMETER_PX = 36
+
+// Circle edit mode heuristics (lenient by default).
+const WALL_CIRCLE_EDIT_MIN_SEGMENTS = 10
+const WALL_CIRCLE_EDIT_CLOSURE_EPS = 0.05 // meters (XZ)
+const WALL_CIRCLE_EDIT_RADIUS_CV_MAX = 0.1
+
+// Circle handle visibility tweaks.
+const WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y = 0.15
+const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MIN = 0.1
+const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MAX = 0.5
+const WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_RATIO = 0.15
+
+function distanceSqXZPoints(a: any, b: any): number {
+  const ax = Number(a?.x) || 0
+  const az = Number(a?.z) || 0
+  const bx = Number(b?.x) || 0
+  const bz = Number(b?.z) || 0
+  const dx = ax - bx
+  const dz = az - bz
+  return dx * dx + dz * dz
+}
+
+function tryGetCircleEditInfoForChainLocal(segments: any[], range: { startIndex: number; endIndex: number }): {
+  centerLocal: { x: number; y: number; z: number }
+  radius: number
+} | null {
+  const count = Math.max(0, Math.trunc(range.endIndex) - Math.trunc(range.startIndex) + 1)
+  if (count < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+    return null
+  }
+
+  const startSeg = segments[range.startIndex] as any
+  const endSeg = segments[range.endIndex] as any
+  const first = startSeg?.start
+  const last = endSeg?.end
+  if (!first || !last) {
+    return null
+  }
+
+  // Closed loop (XZ) with lenient threshold.
+  const closureEpsSq = WALL_CIRCLE_EDIT_CLOSURE_EPS * WALL_CIRCLE_EDIT_CLOSURE_EPS
+  if (distanceSqXZPoints(first, last) > closureEpsSq) {
+    return null
+  }
+
+  // Collect vertices: first start + each segment end.
+  const points: Array<{ x: number; y: number; z: number }> = []
+  const pushPoint = (p: any) => {
+    const x = Number(p?.x)
+    const y = Number(p?.y)
+    const z = Number(p?.z)
+    if (!Number.isFinite(x + y + z)) return
+    points.push({ x, y, z })
+  }
+
+  pushPoint(first)
+  for (let i = range.startIndex; i <= range.endIndex; i += 1) {
+    const seg = segments[i] as any
+    pushPoint(seg?.end)
+  }
+
+  if (points.length < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+    return null
+  }
+
+  // Drop the duplicated last vertex if it coincides with the first.
+  if (points.length >= 2) {
+    const a = points[0]!
+    const b = points[points.length - 1]!
+    const dx = a.x - b.x
+    const dz = a.z - b.z
+    if (dx * dx + dz * dz <= closureEpsSq) {
+      points.pop()
+    }
+  }
+
+  if (points.length < WALL_CIRCLE_EDIT_MIN_SEGMENTS) {
+    return null
+  }
+
+  // Estimate center as average of vertices (works well for evenly-sampled circles).
+  let sumX = 0
+  let sumY = 0
+  let sumZ = 0
+  for (const p of points) {
+    sumX += p.x
+    sumY += p.y
+    sumZ += p.z
+  }
+  const inv = 1 / Math.max(1, points.length)
+  const centerLocal = { x: sumX * inv, y: sumY * inv, z: sumZ * inv }
+
+  // Radius consistency: coefficient of variation of radii around the estimated center.
+  const radii: number[] = []
+  let mean = 0
+  for (const p of points) {
+    const r = Math.hypot(p.x - centerLocal.x, p.z - centerLocal.z)
+    if (!Number.isFinite(r)) continue
+    radii.push(r)
+    mean += r
+  }
+  if (!radii.length) {
+    return null
+  }
+  mean /= radii.length
+  if (!Number.isFinite(mean) || mean < 1e-3) {
+    return null
+  }
+
+  let variance = 0
+  for (const r of radii) {
+    const d = r - mean
+    variance += d * d
+  }
+  variance /= Math.max(1, radii.length)
+  const std = Math.sqrt(Math.max(0, variance))
+  const cv = std / Math.max(1e-6, mean)
+  if (!Number.isFinite(cv) || cv > WALL_CIRCLE_EDIT_RADIUS_CV_MAX) {
+    return null
+  }
+
+  return { centerLocal, radius: mean }
+}
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
@@ -138,6 +266,8 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
   let state: WallEndpointHandleState | null = null
   const tmpWorldPos = new THREE.Vector3()
   const tmpCameraWorldPos = new THREE.Vector3()
+  const tmpCameraLocalPos = new THREE.Vector3()
+  const tmpLocalPos = new THREE.Vector3()
   const tmpParentWorldScale = new THREE.Vector3(1, 1, 1)
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
@@ -167,6 +297,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
   } & (
     | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
     | { handleKind: 'joint'; jointIndex: number }
+    | { handleKind: 'circle'; circleKind: 'center' | 'radius' }
   ) & {
     gizmoPart: EndpointGizmoPart
   } | null) {
@@ -182,7 +313,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const handleKey =
       next.handleKind === 'joint'
         ? `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:joint:${next.jointIndex}`
-        : `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:endpoint:${next.endpointKind}`
+        : next.handleKind === 'circle'
+          ? `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:circle:${next.circleKind}`
+          : `${next.nodeId}:${next.chainStartIndex}:${next.chainEndIndex}:endpoint:${next.endpointKind}`
     active = { handleKey, gizmoPart: next.gizmoPart }
     refreshHighlight()
   }
@@ -285,17 +418,28 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         return
       }
 
-      const addHandle = (options: {
-        handleKind: 'endpoint'
-        endpointKind: 'start' | 'end'
-        point: any
-        hideNormalState?: boolean
-      } | {
-        handleKind: 'joint'
-        jointIndex: number
-        point: any
-        hideNormalState?: boolean
-      }) => {
+      const circleInfo = tryGetCircleEditInfoForChainLocal(segments as any[], range)
+
+      const addHandle = (options:
+        | {
+            handleKind: 'endpoint'
+            endpointKind: 'start' | 'end'
+            point: any
+            hideNormalState?: boolean
+          }
+        | {
+            handleKind: 'joint'
+            jointIndex: number
+            point: any
+            hideNormalState?: boolean
+          }
+        | {
+            handleKind: 'circle'
+            circleKind: 'center' | 'radius'
+            point: any
+            hideNormalState?: boolean
+          }
+      ) => {
         const point = options.point
         const x = Number(point?.x)
         const y = Number(point?.y)
@@ -305,8 +449,10 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         }
 
         const gizmo = createEndpointGizmoObject({
-          axes: { x: true, y: true, z: true },
-          showNegativeAxes: true,
+          axes: options.handleKind === 'circle'
+            ? (options.circleKind === 'center' ? { x: false, y: false, z: false } : { x: true, y: false, z: false })
+            : { x: true, y: true, z: true },
+          showNegativeAxes: options.handleKind === 'circle' ? false : true,
           renderOrder: WALL_ENDPOINT_HANDLE_RENDER_ORDER,
           depthTest: false,
           depthWrite: false,
@@ -317,7 +463,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         if (options.handleKind === 'endpoint') {
           handle.name = `WallEndpointHandle_${chainIndex + 1}_${options.endpointKind}`
         } else {
-          handle.name = `WallJointHandle_${chainIndex + 1}_${options.jointIndex}`
+          handle.name = options.handleKind === 'joint'
+            ? `WallJointHandle_${chainIndex + 1}_${options.jointIndex}`
+            : `WallCircleHandle_${chainIndex + 1}_${options.circleKind}`
         }
         handle.position.set(x, (Number.isFinite(y) ? y : 0) + yOffset, z)
         handle.layers.enableAll()
@@ -329,6 +477,12 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         handle.userData.handleKind = options.handleKind
         if (options.handleKind === 'endpoint') {
           handle.userData.endpointKind = options.endpointKind
+        } else if (options.handleKind === 'circle') {
+          handle.userData.circleKind = options.circleKind
+          if (circleInfo) {
+            handle.userData.circleCenterLocal = { ...circleInfo.centerLocal }
+            handle.userData.circleRadius = circleInfo.radius
+          }
         } else {
           handle.userData.jointIndex = options.jointIndex
         }
@@ -337,6 +491,8 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         handle.userData.handleKey =
           options.handleKind === 'joint'
             ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:joint:${options.jointIndex}`
+            : options.handleKind === 'circle'
+              ? `${selectedNodeId}:${range.startIndex}:${range.endIndex}:circle:${options.circleKind}`
             : `${selectedNodeId}:${range.startIndex}:${range.endIndex}:endpoint:${options.endpointKind}`
         handle.userData.yOffset = yOffset
 
@@ -351,12 +507,31 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
           mesh.userData.handleKind = options.handleKind
           if (options.handleKind === 'endpoint') {
             mesh.userData.endpointKind = options.endpointKind
+          } else if (options.handleKind === 'circle') {
+            mesh.userData.circleKind = options.circleKind
+            if (circleInfo) {
+              mesh.userData.circleCenterLocal = { ...circleInfo.centerLocal }
+              mesh.userData.circleRadius = circleInfo.radius
+            }
           } else {
             mesh.userData.jointIndex = options.jointIndex
           }
         })
 
         group.add(handle)
+      }
+
+      // Circle edit mode: hide all segment handles, show only center + radius.
+      if (circleInfo) {
+        const centerPoint = circleInfo.centerLocal
+        const radiusPoint = {
+          x: circleInfo.centerLocal.x + circleInfo.radius,
+          y: circleInfo.centerLocal.y,
+          z: circleInfo.centerLocal.z,
+        }
+        addHandle({ handleKind: 'circle', circleKind: 'center', point: centerPoint })
+        addHandle({ handleKind: 'circle', circleKind: 'radius', point: radiusPoint })
+        return
       }
 
       addHandle({ handleKind: 'endpoint', endpointKind: 'start', point: start })
@@ -402,6 +577,7 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
     diameterPx?: number
+    freezeCircleFacing?: boolean
   }) {
     if (!state || !options.camera || !options.canvas) {
       return
@@ -419,6 +595,66 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     state.group.updateWorldMatrix(true, true)
 
     options.camera.getWorldPosition(tmpCameraWorldPos)
+
+    // Circle radius handle: place at the nearest-to-camera point on the circle (XZ)
+    // to reduce occlusion. Skip while a circle drag is active so moveDrag can own
+    // the handle placement without fighting this per-frame update.
+    if (!options.freezeCircleFacing) {
+      const runtimeObject = (state.group.parent as THREE.Object3D | null) ?? null
+      if (runtimeObject) {
+        tmpCameraLocalPos.copy(tmpCameraWorldPos)
+        runtimeObject.worldToLocal(tmpCameraLocalPos)
+
+        for (const child of state.group.children) {
+          const handleKind = child?.userData?.handleKind
+          if (handleKind !== 'circle') continue
+          const circleKind = child?.userData?.circleKind
+          if (circleKind !== 'radius' && circleKind !== 'center') continue
+          const centerLocalRaw = child?.userData?.circleCenterLocal as { x: number; y: number; z: number } | undefined
+          const radiusRaw = Number(child?.userData?.circleRadius)
+          if (!centerLocalRaw || !Number.isFinite(radiusRaw) || radiusRaw <= 1e-6) continue
+
+          const centerLocal = tmpLocalPos.set(centerLocalRaw.x, centerLocalRaw.y, centerLocalRaw.z)
+          const yOffset = Number(child.userData?.yOffset)
+
+          if (circleKind === 'center') {
+            const dir = tmpCameraLocalPos.clone().sub(centerLocal)
+            dir.y = 0
+            if (dir.lengthSq() < 1e-10) {
+              dir.set(1, 0, 0)
+            } else {
+              dir.normalize()
+            }
+            const frontOffset = THREE.MathUtils.clamp(
+              radiusRaw * WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_RATIO,
+              WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MIN,
+              WALL_CIRCLE_CENTER_HANDLE_FRONT_OFFSET_MAX,
+            )
+            const frontPosLocal = centerLocal.clone().add(dir.multiplyScalar(frontOffset))
+            child.position.set(
+              frontPosLocal.x,
+              frontPosLocal.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET) + WALL_CIRCLE_CENTER_HANDLE_EXTRA_Y,
+              frontPosLocal.z,
+            )
+            continue
+          }
+
+          const dir = tmpCameraLocalPos.clone().sub(centerLocal)
+          dir.y = 0
+          if (dir.lengthSq() < 1e-10) {
+            dir.set(1, 0, 0)
+          } else {
+            dir.normalize()
+          }
+          const radiusPosLocal = centerLocal.clone().add(dir.multiplyScalar(radiusRaw))
+          child.position.set(
+            radiusPosLocal.x,
+            radiusPosLocal.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET),
+            radiusPosLocal.z,
+          )
+        }
+      }
+    }
 
     for (const child of state.group.children) {
       const handle = child as THREE.Object3D
@@ -494,9 +730,15 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
-    const handleKind = target.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
+    const handleKind =
+      target.userData?.handleKind === 'joint'
+        ? 'joint'
+        : target.userData?.handleKind === 'circle'
+          ? 'circle'
+          : 'endpoint'
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
     const jointIndex = Math.trunc(Number(target.userData?.jointIndex))
+    const circleKind = target.userData?.circleKind === 'radius' ? 'radius' : 'center'
     const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
     if (!nodeId || chainStartIndex < 0 || chainEndIndex < chainStartIndex || !gizmoPart) {
       clearHover()
@@ -513,7 +755,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const handleKey =
       handleKind === 'joint'
         ? `${nodeId}:${chainStartIndex}:${chainEndIndex}:joint:${jointIndex}`
-        : `${nodeId}:${chainStartIndex}:${chainEndIndex}:endpoint:${endpointKind}`
+        : handleKind === 'circle'
+          ? `${nodeId}:${chainStartIndex}:${chainEndIndex}:circle:${circleKind}`
+          : `${nodeId}:${chainStartIndex}:${chainEndIndex}:endpoint:${endpointKind}`
     if (hovered && hovered.handleKey === handleKey && hovered.gizmoPart === gizmoPart) {
       return
     }
@@ -554,9 +798,15 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
     const chainStartIndex = Math.trunc(Number(target.userData?.chainStartIndex))
     const chainEndIndex = Math.trunc(Number(target.userData?.chainEndIndex))
-    const handleKind = target.userData?.handleKind === 'joint' ? 'joint' : 'endpoint'
+    const handleKind =
+      target.userData?.handleKind === 'joint'
+        ? 'joint'
+        : target.userData?.handleKind === 'circle'
+          ? 'circle'
+          : 'endpoint'
     const endpointKind = target.userData?.endpointKind === 'end' ? 'end' : 'start'
     const jointIndex = Math.trunc(Number(target.userData?.jointIndex))
+    const circleKind = target.userData?.circleKind === 'radius' ? 'radius' : 'center'
     const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
     const partInfo = getEndpointGizmoPartInfoFromObject(target)
 
@@ -574,6 +824,20 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
         chainEndIndex,
         handleKind: 'joint',
         jointIndex,
+        gizmoPart,
+        gizmoKind: partInfo.kind,
+        gizmoAxis: partInfo.kind === 'axis' ? partInfo.axis.clone() : undefined,
+        point: first.point.clone(),
+      }
+    }
+
+    if (handleKind === 'circle') {
+      return {
+        nodeId,
+        chainStartIndex,
+        chainEndIndex,
+        handleKind: 'circle',
+        circleKind,
         gizmoPart,
         gizmoKind: partInfo.kind,
         gizmoAxis: partInfo.kind === 'axis' ? partInfo.axis.clone() : undefined,

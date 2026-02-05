@@ -10,6 +10,8 @@ import type {
   WallEndpointDragState,
   WallJointDragState,
   WallHeightDragState,
+  WallCircleCenterDragState,
+  WallCircleRadiusDragState,
   RectangleEditConstraint,
 } from './types'
 
@@ -110,6 +112,55 @@ function tryCreateRectangleEditConstraint(options: {
   }
 }
 
+function computeChainCenterAndRadiusWorld(options: {
+  segmentsWorld: WallWorldSegmentLike[]
+  chainStartIndex: number
+  chainEndIndex: number
+}): { centerWorld: THREE.Vector3; radius: number } | null {
+  const { segmentsWorld, chainStartIndex, chainEndIndex } = options
+  const startSeg = segmentsWorld[chainStartIndex]
+  const endSeg = segmentsWorld[chainEndIndex]
+  if (!startSeg || !endSeg) {
+    return null
+  }
+
+  // Vertices: first start + each end.
+  const points: THREE.Vector3[] = []
+  points.push(startSeg.start.clone())
+  for (let i = chainStartIndex; i <= chainEndIndex; i += 1) {
+    const seg = segmentsWorld[i]
+    if (!seg) continue
+    points.push(seg.end.clone())
+  }
+
+  if (points.length < 2) {
+    return null
+  }
+
+  let sumX = 0
+  let sumY = 0
+  let sumZ = 0
+  for (const p of points) {
+    sumX += p.x
+    sumY += p.y
+    sumZ += p.z
+  }
+  const inv = 1 / Math.max(1, points.length)
+  const centerWorld = new THREE.Vector3(sumX * inv, sumY * inv, sumZ * inv)
+
+  let radius = 0
+  for (const p of points) {
+    radius += Math.hypot(p.x - centerWorld.x, p.z - centerWorld.z)
+  }
+  radius /= Math.max(1, points.length)
+
+  if (!Number.isFinite(radius) || radius < 1e-4) {
+    return null
+  }
+
+  return { centerWorld, radius }
+}
+
 export function handlePointerDownTools(
   event: PointerEvent,
   ctx: {
@@ -152,6 +203,7 @@ export function handlePointerDownTools(
     } & (
       | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
       | { handleKind: 'joint'; jointIndex: number }
+      | { handleKind: 'circle'; circleKind: 'center' | 'radius' }
     ) & {
       gizmoKind: 'center' | 'axis'
       gizmoAxis?: THREE.Vector3
@@ -164,6 +216,7 @@ export function handlePointerDownTools(
     } & (
       | { handleKind: 'endpoint'; endpointKind: 'start' | 'end' }
       | { handleKind: 'joint'; jointIndex: number }
+      | { handleKind: 'circle'; circleKind: 'center' | 'radius' }
     ) & {
       gizmoPart: any
     } | null) => void
@@ -248,9 +301,12 @@ export function handlePointerDownTools(
           const handleKind = handleHit.handleKind
           let endpointKind: 'start' | 'end' = 'start'
           let jointIndex = -1
+          let circleKind: 'center' | 'radius' = 'center'
 
           if (handleKind === 'endpoint') {
             endpointKind = handleHit.endpointKind === 'end' ? 'end' : 'start'
+          } else if (handleKind === 'circle') {
+            circleKind = handleHit.circleKind === 'radius' ? 'radius' : 'center'
           } else {
             jointIndex = Math.max(chainStartIndex, Math.trunc(Number(handleHit.jointIndex)))
           }
@@ -258,6 +314,128 @@ export function handlePointerDownTools(
           const startSeg = workingSegmentsWorld[chainStartIndex]
           const endSeg = workingSegmentsWorld[chainEndIndex]
           if (startSeg && endSeg) {
+            // Circle edit mode: center + radius handles only (hide all segment handles).
+            if (handleKind === 'circle') {
+              const computed = computeChainCenterAndRadiusWorld({
+                segmentsWorld: baseSegmentsWorld,
+                chainStartIndex,
+                chainEndIndex,
+              })
+              if (computed) {
+                const centerWorld = computed.centerWorld
+                const radius = computed.radius
+
+                const radiusPointWorld = centerWorld.clone().add(new THREE.Vector3(radius, 0, 0))
+                const startPointWorld = (circleKind === 'radius' ? radiusPointWorld : centerWorld).clone()
+                const dragPlane = ctx.createEndpointDragPlane({
+                  mode: 'free',
+                  axisWorld: null,
+                  startPointWorld,
+                  freePlaneNormal: new THREE.Vector3(0, 1, 0),
+                })
+
+                ctx.setActiveWallEndpointHandle({
+                  nodeId: handleHit.nodeId,
+                  chainStartIndex,
+                  chainEndIndex,
+                  handleKind: 'circle',
+                  circleKind,
+                  gizmoPart: handleHit.gizmoPart,
+                })
+
+                if (circleKind === 'center') {
+                  const wallCircleCenterDragState: WallCircleCenterDragState = {
+                    pointerId: event.pointerId,
+                    nodeId: handleHit.nodeId,
+                    chainStartIndex,
+                    chainEndIndex,
+
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    moved: false,
+
+                    dragPlane,
+                    startPointWorld,
+                    startHitWorld: null,
+
+                    containerObject: runtime,
+
+                    dimensions,
+                    baseSegmentsWorld,
+                    workingSegmentsWorld,
+
+                    startCenterWorld: centerWorld.clone(),
+
+                    previewGroup: null,
+                    previewSignature: null,
+                  }
+
+                  return {
+                    handled: true,
+                    clearPointerTrackingState: true,
+                    nextWallEndpointDragState: null,
+                    nextWallJointDragState: null,
+                    nextWallHeightDragState: null,
+                    nextWallCircleCenterDragState: wallCircleCenterDragState,
+                    nextWallCircleRadiusDragState: null,
+                    capturePointerId: event.pointerId,
+                    preventDefault: true,
+                    stopPropagation: true,
+                    stopImmediatePropagation: true,
+                  }
+                }
+
+                const wallCircleRadiusDragState: WallCircleRadiusDragState = {
+                  pointerId: event.pointerId,
+                  nodeId: handleHit.nodeId,
+                  chainStartIndex,
+                  chainEndIndex,
+
+                  startX: event.clientX,
+                  startY: event.clientY,
+                  moved: false,
+
+                  dragPlane,
+                  startPointWorld,
+                  startHitWorld: null,
+
+                  containerObject: runtime,
+
+                  dimensions,
+                  baseSegmentsWorld,
+                  workingSegmentsWorld,
+
+                  centerWorld: centerWorld.clone(),
+                  startRadius: radius,
+
+                  previewGroup: null,
+                  previewSignature: null,
+                }
+
+                return {
+                  handled: true,
+                  clearPointerTrackingState: true,
+                  nextWallEndpointDragState: null,
+                  nextWallJointDragState: null,
+                  nextWallHeightDragState: null,
+                  nextWallCircleCenterDragState: null,
+                  nextWallCircleRadiusDragState: wallCircleRadiusDragState,
+                  capturePointerId: event.pointerId,
+                  preventDefault: true,
+                  stopPropagation: true,
+                  stopImmediatePropagation: true,
+                }
+              }
+
+              return {
+                handled: true,
+                clearPointerTrackingState: true,
+                preventDefault: true,
+                stopPropagation: true,
+                stopImmediatePropagation: true,
+              }
+            }
+
             const startEndpointWorld = endpointKind === 'start' ? startSeg.start.clone() : endSeg.end.clone()
             const anchorPointWorld = endpointKind === 'start' ? startSeg.end.clone() : endSeg.start.clone()
 
@@ -329,6 +507,8 @@ export function handlePointerDownTools(
                 nextWallEndpointDragState: null,
                 nextWallJointDragState: null,
                 nextWallHeightDragState: wallHeightDragState,
+                nextWallCircleCenterDragState: null,
+                nextWallCircleRadiusDragState: null,
                 capturePointerId: event.pointerId,
                 preventDefault: true,
                 stopPropagation: true,
@@ -398,6 +578,8 @@ export function handlePointerDownTools(
                   clearPointerTrackingState: true,
                   nextWallEndpointDragState: null,
                   nextWallJointDragState: wallJointDragState,
+                  nextWallCircleCenterDragState: null,
+                  nextWallCircleRadiusDragState: null,
                   capturePointerId: event.pointerId,
                   preventDefault: true,
                   stopPropagation: true,
@@ -467,6 +649,8 @@ export function handlePointerDownTools(
               clearPointerTrackingState: true,
               nextWallEndpointDragState: wallEndpointDragState,
               nextWallJointDragState: null,
+              nextWallCircleCenterDragState: null,
+              nextWallCircleRadiusDragState: null,
               capturePointerId: event.pointerId,
               preventDefault: true,
               stopPropagation: true,

@@ -161,6 +161,59 @@ export type WallHeightDragState = {
   previewSignature: string | null
 }
 
+export type WallCircleCenterDragState = {
+  pointerId: number
+  nodeId: string
+  chainStartIndex: number
+  chainEndIndex: number
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+
+  containerObject: THREE.Object3D
+
+  dimensions: { height: number; width: number; thickness: number }
+  baseSegmentsWorld: WallWorldSegment[]
+  workingSegmentsWorld: WallWorldSegment[]
+
+  startCenterWorld: THREE.Vector3
+
+  previewGroup: THREE.Group | null
+  previewSignature: string | null
+}
+
+export type WallCircleRadiusDragState = {
+  pointerId: number
+  nodeId: string
+  chainStartIndex: number
+  chainEndIndex: number
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+
+  containerObject: THREE.Object3D
+
+  dimensions: { height: number; width: number; thickness: number }
+  baseSegmentsWorld: WallWorldSegment[]
+  workingSegmentsWorld: WallWorldSegment[]
+
+  centerWorld: THREE.Vector3
+  startRadius: number
+
+  previewGroup: THREE.Group | null
+  previewSignature: string | null
+}
+
 export type FloorThicknessDragState = {
   pointerId: number
   nodeId: string
@@ -203,6 +256,8 @@ export type PointerDownResult = {
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
+  nextWallCircleCenterDragState?: WallCircleCenterDragState | null
+  nextWallCircleRadiusDragState?: WallCircleRadiusDragState | null
 }
 
 export type PointerMoveResult = {
@@ -231,5 +286,7 @@ export type PointerUpResult = {
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
+  nextWallCircleCenterDragState?: WallCircleCenterDragState | null
+  nextWallCircleRadiusDragState?: WallCircleRadiusDragState | null
   clearFloorEdgeDragState?: boolean
 }

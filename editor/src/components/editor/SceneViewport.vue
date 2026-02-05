@@ -36,6 +36,8 @@ import type {
   WallEndpointDragState,
   WallJointDragState,
   WallHeightDragState,
+  WallCircleCenterDragState,
+  WallCircleRadiusDragState,
 } from './pointer/types'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
@@ -3284,6 +3286,8 @@ let floorThicknessDragState: FloorThicknessDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
 let wallJointDragState: WallJointDragState | null = null
 let wallHeightDragState: WallHeightDragState | null = null
+let wallCircleCenterDragState: WallCircleCenterDragState | null = null
+let wallCircleRadiusDragState: WallCircleRadiusDragState | null = null
 
 type FloorEdgeDragState = {
   pointerId: number
@@ -7717,7 +7721,12 @@ function animate() {
   floorBuildTool.flushPreviewIfNeeded(scene)
   // Endpoint gizmos: keep a large, click-friendly on-screen size.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })
-  wallEndpointRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 36 })
+  wallEndpointRenderer.updateScreenSize({
+    camera,
+    canvas: canvasRef.value,
+    diameterPx: 36,
+    freezeCircleFacing: !!wallCircleCenterDragState || !!wallCircleRadiusDragState,
+  })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   updateVertexSnapHintPulse(performance.now())
   updatePlacementSideSnapHintPulse(performance.now())
@@ -8671,6 +8680,12 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
       wallHeightDragState = result.nextWallHeightDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleCenterDragState')) {
+      wallCircleCenterDragState = (result as any).nextWallCircleCenterDragState ?? null
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleRadiusDragState')) {
+      wallCircleRadiusDragState = (result as any).nextWallCircleRadiusDragState ?? null
+    }
     if (result.preventDefault) {
       event.preventDefault()
     }
@@ -8942,6 +8957,8 @@ function handlePointerMove(event: PointerEvent) {
     !roadVertexDragState &&
     !floorVertexDragState &&
     !floorThicknessDragState &&
+    !wallCircleCenterDragState &&
+    !wallCircleRadiusDragState &&
     !wallEndpointDragState &&
     !wallJointDragState &&
     !wallHeightDragState &&
@@ -8969,6 +8986,8 @@ function handlePointerMove(event: PointerEvent) {
     wallEndpointDragState,
     wallJointDragState,
     wallHeightDragState,
+    wallCircleCenterDragState,
+    wallCircleRadiusDragState,
     raycastGroundPoint,
     raycastPlanePoint,
     groundPointerHelper,
@@ -9132,6 +9151,12 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallHeightDragState')) {
         wallHeightDragState = result.nextWallHeightDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleCenterDragState')) {
+        wallCircleCenterDragState = (result as any).nextWallCircleCenterDragState ?? null
+      }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextWallCircleRadiusDragState')) {
+        wallCircleRadiusDragState = (result as any).nextWallCircleRadiusDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextInstancedEraseDragState')) {
         instancedEraseDragState = result.nextInstancedEraseDragState ?? null
       }
@@ -9164,6 +9189,8 @@ async function handlePointerUp(event: PointerEvent) {
         roadVertexDragState?.pointerId === event.pointerId ||
         floorVertexDragState?.pointerId === event.pointerId ||
         floorThicknessDragState?.pointerId === event.pointerId ||
+        wallCircleCenterDragState?.pointerId === event.pointerId ||
+        wallCircleRadiusDragState?.pointerId === event.pointerId ||
         wallEndpointDragState?.pointerId === event.pointerId ||
         wallJointDragState?.pointerId === event.pointerId ||
         wallHeightDragState?.pointerId === event.pointerId ||
@@ -9194,6 +9221,8 @@ async function handlePointerUp(event: PointerEvent) {
         wallEndpointDragState,
         wallJointDragState,
         wallHeightDragState,
+        wallCircleCenterDragState,
+        wallCircleRadiusDragState,
         floorEdgeDragState,
         findSceneNode,
         nodes: sceneStore.nodes,
@@ -9450,6 +9479,52 @@ function handlePointerCancel(event: PointerEvent) {
     } catch {
       /* noop */
     }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (wallCircleCenterDragState && event.pointerId === wallCircleCenterDragState.pointerId) {
+    const state = wallCircleCenterDragState
+    wallCircleCenterDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWallEndpointHandle(null)
+
+    try {
+      if (state.previewGroup) {
+        const preview = state.previewGroup
+        state.previewGroup = null
+        preview.removeFromParent()
+        disposeWallPreviewGroup(preview)
+      }
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (wallCircleRadiusDragState && event.pointerId === wallCircleRadiusDragState.pointerId) {
+    const state = wallCircleRadiusDragState
+    wallCircleRadiusDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWallEndpointHandle(null)
+
+    try {
+      if (state.previewGroup) {
+        const preview = state.previewGroup
+        state.previewGroup = null
+        preview.removeFromParent()
+        disposeWallPreviewGroup(preview)
+      }
+    } catch {
+      /* noop */
+    }
+
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()

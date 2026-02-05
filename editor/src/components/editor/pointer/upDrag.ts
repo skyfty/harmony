@@ -11,6 +11,8 @@ import type {
   WallEndpointDragState,
   WallJointDragState,
   WallHeightDragState,
+  WallCircleCenterDragState,
+  WallCircleRadiusDragState,
   PointerUpResult,
 } from './types'
 
@@ -33,6 +35,8 @@ export function handlePointerUpDrag(
     wallEndpointDragState: WallEndpointDragState | null
     wallJointDragState: WallJointDragState | null
     wallHeightDragState: WallHeightDragState | null
+    wallCircleCenterDragState: WallCircleCenterDragState | null
+    wallCircleRadiusDragState: WallCircleRadiusDragState | null
     floorEdgeDragState: FloorEdgeDragStateLike | null
 
     findSceneNode: (nodes: SceneNode[], nodeId: string) => SceneNode | null
@@ -250,6 +254,98 @@ export function handlePointerUpDrag(
     return {
       handled: true,
       nextFloorVertexDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.wallCircleCenterDragState && event.pointerId === ctx.wallCircleCenterDragState.pointerId && event.button === 0) {
+    const state = ctx.wallCircleCenterDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveWallEndpointHandle(null)
+
+    if (state.previewGroup) {
+      const preview = state.previewGroup
+      state.previewGroup = null
+      preview.removeFromParent()
+      disposeWallPreviewGroup(preview)
+    }
+
+    if (state.moved) {
+      const segmentsPayload = state.workingSegmentsWorld.map((s) => ({
+        start: { x: s.start.x, y: s.start.y, z: s.start.z },
+        end: { x: s.end.x, y: s.end.y, z: s.end.z },
+      }))
+
+      ctx.sceneStoreUpdateWallNodeGeometry(state.nodeId, {
+        segments: segmentsPayload,
+        dimensions: state.dimensions,
+      })
+
+      ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextWallCircleCenterDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    return {
+      handled: true,
+      nextWallCircleCenterDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.wallCircleRadiusDragState && event.pointerId === ctx.wallCircleRadiusDragState.pointerId && event.button === 0) {
+    const state = ctx.wallCircleRadiusDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveWallEndpointHandle(null)
+
+    if (state.previewGroup) {
+      const preview = state.previewGroup
+      state.previewGroup = null
+      preview.removeFromParent()
+      disposeWallPreviewGroup(preview)
+    }
+
+    if (state.moved) {
+      const segmentsPayload = state.workingSegmentsWorld.map((s) => ({
+        start: { x: s.start.x, y: s.start.y, z: s.start.z },
+        end: { x: s.end.x, y: s.end.y, z: s.end.z },
+      }))
+
+      ctx.sceneStoreUpdateWallNodeGeometry(state.nodeId, {
+        segments: segmentsPayload,
+        dimensions: state.dimensions,
+      })
+
+      ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureWallEndpointHandlesForSelectedNode({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextWallCircleRadiusDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    return {
+      handled: true,
+      nextWallCircleRadiusDragState: null,
       preventDefault: true,
       stopPropagation: true,
       stopImmediatePropagation: true,

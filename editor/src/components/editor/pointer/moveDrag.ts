@@ -21,8 +21,152 @@ import type {
   WallEndpointDragState,
   WallJointDragState,
   WallHeightDragState,
+  WallCircleCenterDragState,
+  WallCircleRadiusDragState,
   PointerMoveResult,
 } from './types'
+
+function computeChainCenterAndRadiusWorldFromSegments(options: {
+  segmentsWorld: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+  chainStartIndex: number
+  chainEndIndex: number
+}): { centerWorld: THREE.Vector3; radius: number } | null {
+  const { segmentsWorld, chainStartIndex, chainEndIndex } = options
+  const startSeg = segmentsWorld[chainStartIndex]
+  const endSeg = segmentsWorld[chainEndIndex]
+  if (!startSeg || !endSeg) {
+    return null
+  }
+
+  const points: THREE.Vector3[] = []
+  points.push(startSeg.start)
+  for (let i = chainStartIndex; i <= chainEndIndex; i += 1) {
+    const seg = segmentsWorld[i]
+    if (!seg) continue
+    points.push(seg.end)
+  }
+  if (points.length < 2) {
+    return null
+  }
+
+  let sumX = 0
+  let sumY = 0
+  let sumZ = 0
+  for (const p of points) {
+    sumX += p.x
+    sumY += p.y
+    sumZ += p.z
+  }
+  const inv = 1 / Math.max(1, points.length)
+  const centerWorld = new THREE.Vector3(sumX * inv, sumY * inv, sumZ * inv)
+
+  let radius = 0
+  for (const p of points) {
+    radius += Math.hypot(p.x - centerWorld.x, p.z - centerWorld.z)
+  }
+  radius /= Math.max(1, points.length)
+
+  if (!Number.isFinite(radius) || radius < 1e-4) {
+    return null
+  }
+
+  return { centerWorld, radius }
+}
+
+function buildCircleSegmentsFixedCount(options: {
+  centerWorld: THREE.Vector3
+  radius: number
+  segmentCount: number
+}): Array<{ start: THREE.Vector3; end: THREE.Vector3 }> {
+  const { centerWorld, radius } = options
+  const segmentCount = Math.max(3, Math.trunc(options.segmentCount))
+  const y = centerWorld.y
+
+  const points: THREE.Vector3[] = []
+  for (let i = 0; i < segmentCount; i += 1) {
+    const t = (i / segmentCount) * Math.PI * 2
+    points.push(new THREE.Vector3(centerWorld.x + Math.cos(t) * radius, y, centerWorld.z + Math.sin(t) * radius))
+  }
+
+  const result: Array<{ start: THREE.Vector3; end: THREE.Vector3 }> = []
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % points.length]!
+    result.push({ start: a, end: b })
+  }
+  return result
+}
+
+function updateWallCircleHandleMeshesForChain(options: {
+  handles: THREE.Group
+  containerObject: THREE.Object3D
+  workingSegmentsWorld: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+  chainStartIndex: number
+  chainEndIndex: number
+  camera: THREE.Camera | null
+}): void {
+  const CENTER_EXTRA_Y = 0.15
+  const FRONT_OFFSET_MIN = 0.1
+  const FRONT_OFFSET_MAX = 0.5
+  const FRONT_OFFSET_RATIO = 0.15
+
+  const computed = computeChainCenterAndRadiusWorldFromSegments({
+    segmentsWorld: options.workingSegmentsWorld,
+    chainStartIndex: options.chainStartIndex,
+    chainEndIndex: options.chainEndIndex,
+  })
+  if (!computed) {
+    return
+  }
+
+  const centerWorld = computed.centerWorld
+  const radiusWorld = computed.radius
+  // Place radius handle at nearest-to-camera point on circle (XZ).
+  const cameraWorld = options.camera ? options.camera.getWorldPosition(new THREE.Vector3()) : null
+  const toCamera = cameraWorld ? cameraWorld.clone().sub(centerWorld) : new THREE.Vector3(1, 0, 0)
+  toCamera.y = 0
+  if (toCamera.lengthSq() < 1e-10) {
+    toCamera.set(1, 0, 0)
+  } else {
+    toCamera.normalize()
+  }
+  const centerFrontOffset = THREE.MathUtils.clamp(
+    radiusWorld * FRONT_OFFSET_RATIO,
+    FRONT_OFFSET_MIN,
+    FRONT_OFFSET_MAX,
+  )
+  const centerHandleWorld = centerWorld.clone().add(toCamera.clone().multiplyScalar(centerFrontOffset))
+  const radiusPointWorld = centerWorld.clone().add(toCamera.multiplyScalar(radiusWorld))
+
+  const centerLocal = options.containerObject.worldToLocal(centerWorld.clone())
+
+  for (const child of options.handles.children) {
+    const startIndex = Math.trunc(Number(child?.userData?.chainStartIndex))
+    const endIndex = Math.trunc(Number(child?.userData?.chainEndIndex))
+    if (startIndex !== options.chainStartIndex || endIndex !== options.chainEndIndex) {
+      continue
+    }
+
+    if (child?.userData?.handleKind !== 'circle') {
+      continue
+    }
+
+    const circleKind = child?.userData?.circleKind === 'radius' ? 'radius' : 'center'
+    const pointWorld = circleKind === 'radius' ? radiusPointWorld : centerHandleWorld
+    const local = options.containerObject.worldToLocal(pointWorld.clone())
+    const yOffset = Number(child.userData?.yOffset)
+
+    // Keep metadata in sync so per-frame camera-facing updates don't jump.
+    child.userData.circleCenterLocal = { x: centerLocal.x, y: centerLocal.y, z: centerLocal.z }
+    child.userData.circleRadius = radiusWorld
+
+    child.position.set(
+      local.x,
+      local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET) + (circleKind === 'center' ? CENTER_EXTRA_Y : 0),
+      local.z,
+    )
+  }
+}
 
 const rectDragCornersTmp = [
   new THREE.Vector3(),
@@ -208,6 +352,8 @@ export function handlePointerMoveDrag(
     wallEndpointDragState: WallEndpointDragState | null
     wallJointDragState: WallJointDragState | null
     wallHeightDragState: WallHeightDragState | null
+    wallCircleCenterDragState: WallCircleCenterDragState | null
+    wallCircleRadiusDragState: WallCircleRadiusDragState | null
 
     raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
     raycastPlanePoint: (event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3) => boolean
@@ -545,6 +691,181 @@ export function handlePointerMoveDrag(
           handleMesh.position.set(local.x, local.y + (Number.isFinite(yOffset) ? yOffset : WALL_ENDPOINT_HANDLE_Y_OFFSET), local.z)
         }
       }
+    }
+
+    return { handled: true }
+  }
+
+  if (ctx.wallCircleCenterDragState && event.pointerId === ctx.wallCircleCenterDragState.pointerId) {
+    const state = ctx.wallCircleCenterDragState
+
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    const isFirstDragSample = !state.startHitWorld
+    if (isFirstDragSample) {
+      state.startHitWorld = tmpIntersection.clone()
+      const computed = computeChainCenterAndRadiusWorldFromSegments({
+        segmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+      })
+      if (computed) {
+        state.startCenterWorld.copy(computed.centerWorld)
+      }
+    }
+
+    const startHit = state.startHitWorld ?? state.startPointWorld
+    const delta = tmpIntersection.clone().sub(startHit)
+    delta.y = 0
+
+    // Reset working to base, then translate only the circle chain.
+    for (let i = 0; i < state.workingSegmentsWorld.length; i += 1) {
+      const base = state.baseSegmentsWorld[i]
+      const working = state.workingSegmentsWorld[i]
+      if (!base || !working) continue
+      working.start.copy(base.start)
+      working.end.copy(base.end)
+    }
+    for (let i = state.chainStartIndex; i <= state.chainEndIndex; i += 1) {
+      const seg = state.workingSegmentsWorld[i]
+      if (!seg) continue
+      seg.start.add(delta)
+      seg.end.add(delta)
+    }
+
+    const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
+    const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
+    if (nextSignature !== state.previewSignature) {
+      state.previewSignature = nextSignature
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      if (build) {
+        if (!state.previewGroup) {
+          const preview = createWallGroup(build.definition)
+          applyWallPreviewStyling(preview)
+          preview.userData.isWallEndpointDragPreview = true
+          state.previewGroup = preview
+          ctx.rootGroup.add(preview)
+        } else {
+          updateWallGroup(state.previewGroup, build.definition)
+          applyWallPreviewStyling(state.previewGroup)
+          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
+            ctx.rootGroup.add(state.previewGroup)
+          }
+        }
+        state.previewGroup!.position.copy(build.center)
+      }
+    }
+
+    const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      updateWallCircleHandleMeshesForChain({
+        handles,
+        containerObject: state.containerObject,
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+        camera: ctx.camera,
+      })
+    }
+
+    return { handled: true }
+  }
+
+  if (ctx.wallCircleRadiusDragState && event.pointerId === ctx.wallCircleRadiusDragState.pointerId) {
+    const state = ctx.wallCircleRadiusDragState
+
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    if (!state.startHitWorld) {
+      state.startHitWorld = tmpIntersection.clone()
+    }
+
+    const newRadius = Math.max(1e-3, Math.hypot(tmpIntersection.x - state.centerWorld.x, tmpIntersection.z - state.centerWorld.z))
+    const segmentCount = Math.max(3, state.chainEndIndex - state.chainStartIndex + 1)
+    const circleSegments = buildCircleSegmentsFixedCount({
+      centerWorld: state.centerWorld,
+      radius: newRadius,
+      segmentCount,
+    })
+
+    // Reset working to base, then overwrite only the circle chain with rebuilt segments.
+    for (let i = 0; i < state.workingSegmentsWorld.length; i += 1) {
+      const base = state.baseSegmentsWorld[i]
+      const working = state.workingSegmentsWorld[i]
+      if (!base || !working) continue
+      working.start.copy(base.start)
+      working.end.copy(base.end)
+    }
+    for (let i = 0; i < circleSegments.length; i += 1) {
+      const segIndex = state.chainStartIndex + i
+      const working = state.workingSegmentsWorld[segIndex]
+      const next = circleSegments[i]
+      if (!working || !next) continue
+      working.start.copy(next.start)
+      working.end.copy(next.end)
+    }
+
+    const mergedForPreview = mergeWallPreviewSegmentChainsByEndpoint(state.workingSegmentsWorld)
+    const nextSignature = computeWallPreviewSignature(mergedForPreview, state.dimensions)
+    if (nextSignature !== state.previewSignature) {
+      state.previewSignature = nextSignature
+      const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
+      if (build) {
+        if (!state.previewGroup) {
+          const preview = createWallGroup(build.definition)
+          applyWallPreviewStyling(preview)
+          preview.userData.isWallEndpointDragPreview = true
+          state.previewGroup = preview
+          ctx.rootGroup.add(preview)
+        } else {
+          updateWallGroup(state.previewGroup, build.definition)
+          applyWallPreviewStyling(state.previewGroup)
+          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
+            ctx.rootGroup.add(state.previewGroup)
+          }
+        }
+        state.previewGroup!.position.copy(build.center)
+      }
+    }
+
+    const handles = state.containerObject.getObjectByName(WALL_ENDPOINT_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (handles?.isGroup) {
+      updateWallCircleHandleMeshesForChain({
+        handles,
+        containerObject: state.containerObject,
+        workingSegmentsWorld: state.workingSegmentsWorld,
+        chainStartIndex: state.chainStartIndex,
+        chainEndIndex: state.chainEndIndex,
+        camera: ctx.camera,
+      })
     }
 
     return { handled: true }
