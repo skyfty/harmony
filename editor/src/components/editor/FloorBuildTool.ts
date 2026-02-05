@@ -6,6 +6,7 @@ import { createFloorPreviewRenderer, type FloorPreviewSession } from './FloorPre
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
+import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 
 export type FloorBuildToolHandle = {
   getSession: () => FloorPreviewSession | null
@@ -182,6 +183,8 @@ export function createFloorBuildTool(options: {
       return
     }
 
+    const buildShape = session.shape ?? 'polygon'
+
     const points = session.points
     if (points.length < 3) {
       clearSession(true)
@@ -193,6 +196,7 @@ export function createFloorBuildTool(options: {
     })
 
     if (created) {
+      options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
       options.sceneStore.selectNode(created.id)
 
       const brush = options.getFloorBrush?.()
@@ -212,6 +216,7 @@ export function createFloorBuildTool(options: {
   }
 
   const finalizeFromVertices = (vertices: THREE.Vector3[]) => {
+    const buildShape = session?.shape ?? 'polygon'
     const points = vertices
       .map((p) => new THREE.Vector3(Number(p.x), 0, Number(p.z)))
       .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z))
@@ -226,6 +231,7 @@ export function createFloorBuildTool(options: {
     })
 
     if (created) {
+      options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
       options.sceneStore.selectNode(created.id)
 
       const brush = options.getFloorBrush?.()

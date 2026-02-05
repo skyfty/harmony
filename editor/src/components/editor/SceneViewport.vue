@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
+import { readFloorBuildShapeFromNode, readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -1497,11 +1498,44 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
+const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
 // Shift modifier in scatter-erase mode means "repair/restore".
 // - Walls: repair a segment (hammer)
 // - InstanceLayout: restore erased instances
 const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
 const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
+
+watch(
+  () => [activeBuildTool.value, sceneStore.selectedNodeId] as const,
+  () => {
+    const node = sceneStore.selectedNode ?? null
+    if (!node) {
+      return
+    }
+
+    if (node.locked || sceneStore.isNodeSelectionLocked(node.id)) {
+      return
+    }
+
+    if (activeBuildTool.value === 'floor' && selectedNodeIsFloor.value) {
+      const restored = readFloorBuildShapeFromNode(node)
+      const floorMesh = node.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
+      const canApplyRectangle = restored !== 'rectangle' || (floorMesh?.vertices?.length ?? 0) === 4
+      if (restored && canApplyRectangle && restored !== floorBuildShape.value) {
+        buildToolsStore.setFloorBuildShape(restored)
+      }
+      return
+    }
+
+    if (activeBuildTool.value === 'wall' && selectedNodeIsWall.value) {
+      const restored = readWallBuildShapeFromNode(node)
+      if (restored && restored !== wallBuildShape.value) {
+        buildToolsStore.setWallBuildShape(restored)
+      }
+    }
+  },
+  { immediate: true },
+)
 
 const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)

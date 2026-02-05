@@ -12,6 +12,7 @@ import { distanceSqXZ, splitWallSegmentsIntoChains } from './wallSegmentUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
+import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -451,6 +452,8 @@ export function createWallBuildTool(options: {
       return false
     }
 
+    options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, kind))
+
     if (shouldApplyBrushPreset && session.brushPresetAssetId) {
       void options.sceneStore
         .applyWallPresetToNode(created.id, session.brushPresetAssetId, session.brushPresetData)
@@ -506,6 +509,9 @@ export function createWallBuildTool(options: {
         cancelDrag()
         return false
       }
+
+      options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, 'polygon'))
+
       nodeId = created.id
       session.nodeId = nodeId
       session.segments = pendingSegments
