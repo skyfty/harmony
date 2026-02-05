@@ -11944,6 +11944,15 @@ export const useSceneStore = defineStore('scene', {
           if (arrA.length !== arrB.length) {
             return false
           }
+          const readOffset = (entry: any, key: 'bodyOffsetLocal' | 'headOffsetLocal'): { x: number; y: number; z: number } => {
+            const record = entry?.[key] && typeof entry[key] === 'object' ? entry[key] : null
+            const read = (axis: 'x' | 'y' | 'z'): number => {
+              const raw = record ? (record as any)[axis] : 0
+              const num = typeof raw === 'number' ? raw : Number(raw)
+              return Number.isFinite(num) ? num : 0
+            }
+            return { x: read('x'), y: read('y'), z: read('z') }
+          }
           for (let i = 0; i < arrA.length; i += 1) {
             const entryA = arrA[i] as any
             const entryB = arrB[i] as any
@@ -11965,6 +11974,11 @@ export const useSceneStore = defineStore('scene', {
             const headForwardAxisB = typeof entryB?.headForwardAxis === 'string' ? entryB.headForwardAxis : null
             const headYawDegA = typeof entryA?.headYawDeg === 'number' ? entryA.headYawDeg : Number(entryA?.headYawDeg)
             const headYawDegB = typeof entryB?.headYawDeg === 'number' ? entryB.headYawDeg : Number(entryB?.headYawDeg)
+
+            const bodyOffsetA = readOffset(entryA, 'bodyOffsetLocal')
+            const bodyOffsetB = readOffset(entryB, 'bodyOffsetLocal')
+            const headOffsetA = readOffset(entryA, 'headOffsetLocal')
+            const headOffsetB = readOffset(entryB, 'headOffsetLocal')
 
             if ((bodyAssetA ?? null) !== (bodyAssetB ?? null)) {
               return false
@@ -11989,6 +12003,13 @@ export const useSceneStore = defineStore('scene', {
               return false
             }
             if (!Number.isFinite(headYawDegA) || !Number.isFinite(headYawDegB) || Math.abs(headYawDegA - headYawDegB) > 1e-6) {
+              return false
+            }
+
+            if (Math.abs(bodyOffsetA.x - bodyOffsetB.x) > 1e-6 || Math.abs(bodyOffsetA.y - bodyOffsetB.y) > 1e-6 || Math.abs(bodyOffsetA.z - bodyOffsetB.z) > 1e-6) {
+              return false
+            }
+            if (Math.abs(headOffsetA.x - headOffsetB.x) > 1e-6 || Math.abs(headOffsetA.y - headOffsetB.y) > 1e-6 || Math.abs(headOffsetA.z - headOffsetB.z) > 1e-6) {
               return false
             }
           }
