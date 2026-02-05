@@ -32,35 +32,7 @@ function normalizeToArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
 
 function ensureDirExistsSync(dirPath: string): void {
   const fs = getWxFileSystemManager();
-  const accessSync = fs.accessSync;
-  const mkdirSync = fs.mkdirSync;
-  if (typeof mkdirSync !== 'function') {
-    throw new Error('当前环境不支持 mkdirSync');
-  }
-
-  const parts = dirPath.split('/').filter(Boolean);
-  let current = dirPath.startsWith('/') ? '/' : '';
-  for (const part of parts) {
-    current = current ? `${current.replace(/\/$/, '')}/${part}` : part;
-    try {
-      if (typeof accessSync === 'function') {
-        accessSync(current);
-      } else {
-        // no accessSync: best-effort create and ignore EEXIST
-        mkdirSync(current);
-      }
-    } catch (_e) {
-      try {
-        mkdirSync(current);
-      } catch (mkdirErr: any) {
-        // Ignore already-exists.
-        const msg = mkdirErr && typeof mkdirErr === 'object' && 'errMsg' in mkdirErr ? String(mkdirErr.errMsg) : '';
-        if (!/exist/i.test(msg)) {
-          throw mkdirErr;
-        }
-      }
-    }
-  }
+  fs.mkdirSync(dirPath, true)
 }
 
 const SCENE_PACKAGE_DIR_NAME = 'harmony/scene-packages';

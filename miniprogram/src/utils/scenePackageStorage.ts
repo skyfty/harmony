@@ -112,7 +112,6 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
 
 export async function saveScenePackageZip(bytes: ArrayBuffer | Uint8Array, projectId: string): Promise<ScenePackagePointer> {
   const buffer = toArrayBuffer(bytes);
-
   if (isWeChatFileSystemAvailable()) {
     const filePath = writeScenePackageZipSync(buffer, projectId);
     return { kind: 'wxfs', ref: filePath };
