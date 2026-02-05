@@ -76,6 +76,9 @@ export type {
   CameraFollowTuning,
 } from './followCameraController'
 
+export { createScenePreviewPerfController } from './scenePreviewPerf'
+export type { ScenePreviewPerfController, ScenePreviewPerfOptions } from './scenePreviewPerf'
+
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
 
 export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from './nodeIndexUtils'

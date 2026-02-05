@@ -14,6 +14,7 @@ import {
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
 	createAutoTourRuntime,
+	createScenePreviewPerfController,
 	forEachInstanceWorldMatrix,
 	getInstanceLayoutBindingId,
 	getInstanceLayoutCount,
@@ -145,6 +146,7 @@ import {
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
+import type { VehicleDriveRuntimeState } from '@schema/VehicleDriveController'
 import {
 	FollowCameraController,
 	computeFollowLerpAlpha,
@@ -211,6 +213,9 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 	cullGraceMs: 300,
 	cullRadiusMultiplier: 1.2,
 	maxBindingChangesPerUpdate: 200,
+	chunkStreaming: {
+		enabled: true,
+	},
 	
 });
 
@@ -223,6 +228,8 @@ const statusMessage = ref('Waiting for scene data...')
 
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
+
+// LOD debug helpers removed
 
 function switchToLivePreviewMode(): void {
 	if (typeof window === 'undefined') {
@@ -805,15 +812,15 @@ type VehicleDriveInputState = {
 	brake: number
 }
 
-const vehicleDriveState = reactive({
+const vehicleDriveState = reactive<VehicleDriveRuntimeState>({
 	active: false,
-	nodeId: null as string | null,
-	token: null as string | null,
-	vehicle: null as CANNON.RaycastVehicle | null,
-	steerableWheelIndices: [] as number[],
+	nodeId: null,
+	token: null,
+	vehicle: null,
+	steerableWheelIndices: [],
 	wheelCount: 0,
-	seatNodeId: null as string | null,
-	sourceEvent: null as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+	seatNodeId: null,
+	sourceEvent: null,
 })
 
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
@@ -1223,6 +1230,12 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+
+const scenePreviewPerf = createScenePreviewPerfController({
+	isWeChatMiniProgram: false,
+	nonInteractiveSleep: { visualSyncIntervalMs: 80 },
+	wheelVisuals: { lowSpeedIntervalMs: 100 },
+})
 
 function syncGroundCache(document: SceneJsonExportDocument | null): void {
 	cachedGroundNodeId = null
@@ -1879,13 +1892,16 @@ const vehicleDriveController = new VehicleDriveController(
 		ensurePhysicsWorld,
 		ensureVehicleBindingForNode,
 		normalizeNodeId,
-		setCameraViewState: (mode, targetId) => setCameraViewState(mode as any, targetId ?? null),
+		setCameraViewState: (mode, targetId) => {
+			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
+			setCameraViewState(nextMode, targetId ?? null)
+		},
 		setCameraCaging,
 		updateOrbitLookTween: updateOrbitCameraLookTween,
-		onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution as any),
+		onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
 	},
 	{
-		state: vehicleDriveState as any,
+		state: vehicleDriveState,
 		inputFlags: vehicleDriveInputFlags,
 		input: vehicleDriveInput,
 		cameraMode: vehicleDriveCameraMode,
@@ -2193,8 +2209,10 @@ function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): stri
 			break
 		}
 	}
-	const chosenModelAssetId = chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId : null
-	return chosenModelAssetId ?? baseAssetId
+	const chosenModelAssetId =
+		chosen && typeof chosen.modelAssetId === 'string' ? chosen.modelAssetId.trim() : null
+	const normalizedBase = typeof baseAssetId === 'string' ? baseAssetId.trim() : null
+	return chosenModelAssetId || normalizedBase
 }
 
 const pendingLodModelLoads = new Map<string, Promise<void>>()
@@ -2242,9 +2260,22 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId
 	const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout
 	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 	const desiredCount = getInstanceLayoutCount(layout)
-	const erased = layout.mode === 'grid' && Array.isArray((layout as any).erasedIndices) && (layout as any).erasedIndices.length
-		? new Set<number>((layout as any).erasedIndices as number[])
-		: null
+	const erased = (() => {
+		if (layout.mode !== 'grid') {
+			return null
+		}
+		const erasedIndices = (layout as unknown as { erasedIndices?: unknown }).erasedIndices
+		if (!Array.isArray(erasedIndices) || erasedIndices.length === 0) {
+			return null
+		}
+		const result = new Set<number>()
+		erasedIndices.forEach((value) => {
+			if (typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value)) {
+				result.add(value)
+			}
+		})
+		return result.size > 0 ? result : null
+	})()
 
 	releaseModelInstance(nodeId)
 	const baseBinding = allocateModelInstance(assetId, nodeId)
@@ -3579,14 +3610,18 @@ function applyAutoTourCameraInputPolicy(): void {
 		setCameraCaging(true, { force: true })
 		if (mapControls) {
 			mapControls.enablePan = false
-			;(mapControls as any).enableRotate = false
+			if ('enableRotate' in mapControls) {
+				;(mapControls as unknown as { enableRotate: boolean }).enableRotate = false
+			}
 		}
 		return
 	}
 
 	setCameraCaging(false, { force: true })
 	if (mapControls) {
-		;(mapControls as any).enableRotate = true
+		if ('enableRotate' in mapControls) {
+			;(mapControls as unknown as { enableRotate: boolean }).enableRotate = true
+		}
 		mapControls.enablePan = shouldRotateOnly ? false : MAP_CONTROL_DEFAULTS.enablePan
 	}
 }
@@ -4715,6 +4750,7 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 	}
 	setCameraCaging(Boolean(caging))
 	setCameraViewState('watching', resolvedTarget)
+	scenePreviewPerf.markInstancedCullingDirty()
 	return { success: true }
 }
 
@@ -4803,10 +4839,21 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 	try {
 		const buffer = await fetchArrayBufferFromUrl(trimmed)
 		const pkg = unzipScenePackage(buffer)
-		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg) as any
+		activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg)
 
 		const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path)
-		const projectConfig = JSON.parse(projectText) as any
+		type ScenePackageProjectConfig = {
+			id?: unknown
+			name?: unknown
+			defaultSceneId?: unknown
+			lastEditedSceneId?: unknown
+			sceneOrder?: unknown
+		}
+		const projectConfigRaw: unknown = JSON.parse(projectText)
+		const projectConfig: ScenePackageProjectConfig =
+			projectConfigRaw && typeof projectConfigRaw === 'object'
+				? (projectConfigRaw as ScenePackageProjectConfig)
+				: {}
 
 		const scenes: ScenePreviewSceneEntry[] = []
 		projectSceneIndex.clear()
@@ -4817,13 +4864,14 @@ async function loadScenePackageFromUrl(sourceUrl: string): Promise<void> {
 				throw new Error(`Invalid scene document in package: ${sceneEntry.path}`)
 			}
 			const document = sceneRaw as SceneJsonExportDocument
+				const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown }
 			const id = sceneEntry.sceneId
 			const entry: ScenePreviewSceneEntry = {
 				kind: 'embedded',
 				id,
 				name: document.name || id,
-				createdAt: (document as any).createdAt ?? null,
-				updatedAt: (document as any).updatedAt ?? null,
+					createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
+					updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
 				document,
 			}
 			scenes.push(entry)
@@ -6152,6 +6200,7 @@ function resetCameraToLevelView() {
 		camera.lookAt(tempTarget)
 	}
 	setCameraViewState('level')
+	scenePreviewPerf.markInstancedCullingDirty()
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -6178,6 +6227,7 @@ function updateOrbitCameraLookTween(delta: number): void {
 	if (tween.elapsed >= tween.duration) {
 		mapControls.target.copy(tween.to)
 		activeCameraLookTween = null
+		scenePreviewPerf.markInstancedCullingDirty()
 	}
 }
 
@@ -6197,6 +6247,7 @@ function updateFirstPersonCameraLookTween(delta: number): void {
 		syncFirstPersonOrientation()
 		syncLastFirstPersonStateFromCamera()
 		activeCameraLookTween = null
+		scenePreviewPerf.markInstancedCullingDirty()
 	}
 }
 
@@ -6237,6 +6288,7 @@ function applyControlMode(mode: ControlMode) {
 		mapControls?.update()
 	}
 	updateCameraControlActivation()
+	scenePreviewPerf.markInstancedCullingDirty()
 }
 
 function prepareStatsDom(element: HTMLDivElement, extraClass: string): void {
@@ -6438,6 +6490,7 @@ function handleResize() {
 	renderer.setSize(width, height, false)
 	camera.aspect = width / height
 	camera.updateProjectionMatrix()
+	scenePreviewPerf.markInstancedCullingDirty()
 }
 
 function handleFullscreenChange() {
@@ -6696,7 +6749,9 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		return
 	}
 	terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-	updateInstancedCullingAndLod()
+	if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
+		updateInstancedCullingAndLod()
+	}
 	updateBehaviorProximity()
 	// Keep ground chunk meshes in sync with camera position.
 	if (cachedGroundNodeId && cachedGroundDynamicMesh) {
@@ -7408,23 +7463,23 @@ function disposeObjectResources(object: THREE.Object3D) {
 		return
 	}
 
-	const mesh = object as THREE.Mesh
-	if ((mesh as any).isMesh) {
-		// Instanced meshes (especially those backed by shared asset cache geometry/materials)
-		// must not dispose shared resources here, otherwise later scene rebuilds will render nothing.
-		if ((mesh as any).isInstancedMesh) {
+	if (!(object instanceof THREE.Mesh)) {
+		return
+	}
+	// Instanced meshes (especially those backed by shared asset cache geometry/materials)
+	// must not dispose shared resources here, otherwise later scene rebuilds will render nothing.
+	if (object instanceof THREE.InstancedMesh) {
+		return
+	}
+	object.geometry?.dispose?.()
+	const materials = Array.isArray(object.material) ? object.material : [object.material]
+	materials.forEach((material) => {
+		if (!material) {
 			return
 		}
-		mesh.geometry?.dispose?.()
-		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-		materials.forEach((material) => {
-			if (!material) {
-				return
-			}
-			disposeMaterialTextures(material)
-			material.dispose?.()
-		})
-	}
+		disposeMaterialTextures(material)
+		material.dispose?.()
+	})
 }
 
 function removeNodeSubtree(nodeId: string) {
@@ -7460,7 +7515,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 	object.traverse((child) => {
 		// Keep InstancedMesh visible: default bounding volumes can be too small,
 		// causing frustum culling to hide instances far from origin.
-		if ((child as any).isInstancedMesh) {
+		if (child instanceof THREE.InstancedMesh) {
 			child.layers.enable(LAYER_BEHAVIOR_INTERACTIVE)
 			;(child as THREE.Object3D & { frustumCulled?: boolean }).frustumCulled = false
 		}
@@ -7490,8 +7545,9 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 					nodeId,
 				)
 			}
-			const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
-			const isAirWall = Boolean(wallState?.enabled !== false && (wallState as any)?.props?.isAirWall)
+			const wallState = nodeState?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<unknown> | undefined
+			const wallProps = wallState?.props as { isAirWall?: unknown } | undefined
+			const isAirWall = Boolean(wallState?.enabled !== false && wallProps?.isAirWall === true)
 			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)
 			if (initialVisibility !== null) {
 				child.visible = initialVisibility
@@ -7576,8 +7632,9 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		if (!nodeId) {
 			return
 		}
-		const assetId = target.userData?.instancedAssetId as string | undefined
-		if (!assetId) {
+			const assetIdRaw = target.userData?.instancedAssetId as string | undefined
+			const assetId = typeof assetIdRaw === 'string' ? assetIdRaw.trim() : ''
+			if (!assetId) {
 			return
 		}
 		const node = resolveNodeById(nodeId)
@@ -7587,10 +7644,22 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
 		const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 		const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
-		if (resolvedAssetId && resolvedAssetId !== assetId) {
-			// Asset changed; allow the normal document sync pipeline to rebuild this proxy.
-			return
-		}
+			if (resolvedAssetId && resolvedAssetId !== assetId) {
+				// Asset changed; normally allow the document sync pipeline to rebuild this proxy.
+				// Exception: LOD switches intentionally swap instancedAssetId at runtime; still need to apply matrices.
+				const lodComponent = resolveLodComponent(node)
+				if (!lodComponent) {
+					return
+				}
+				const props = clampLodComponentProps(lodComponent.props)
+				const isKnownLodAsset = props.levels.some((level) => {
+					const levelAssetId = typeof level?.modelAssetId === 'string' ? level.modelAssetId.trim() : ''
+					return Boolean(levelAssetId) && levelAssetId === assetId
+				})
+				if (!isKnownLodAsset) {
+					return
+				}
+			}
 		const group = getCachedModelObject(assetId)
 		if (!group) {
 			return
@@ -7714,6 +7783,7 @@ function resetPhysicsWorld(): void {
 	wallTrimeshCache.clear()
 	rigidbodyMaterialCache.clear()
 	rigidbodyContactMaterialKeys.clear()
+	scenePreviewPerf.reset()
 }
 
 const physicsContactSettings: PhysicsContactSettings = {
@@ -7878,6 +7948,7 @@ function removeRigidbodyInstance(nodeId: string): void {
 	}
 	removeRigidbodyInstanceBodies(physicsWorld, entry)
 	rigidbodyInstances.delete(nodeId)
+	scenePreviewPerf.notifyRemovedNode(nodeId)
 	groundHeightfieldCache.delete(nodeId)
 	wallTrimeshCache.delete(nodeId)
 	roadHeightfieldDebugCache.delete(nodeId)
@@ -8250,8 +8321,10 @@ function buildHeightfieldDebugLines(
 }
 
 function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | null {
-	const vertices = (trimesh as any).vertices as ArrayLike<number> | undefined
-	const indices = (trimesh as any).indices as ArrayLike<number> | undefined
+	type TrimeshRaw = { vertices?: ArrayLike<number>; indices?: ArrayLike<number> }
+	const raw = trimesh as unknown as TrimeshRaw
+	const vertices = raw.vertices
+	const indices = raw.indices
 	if (!vertices || !indices) {
 		return null
 	}
@@ -8279,8 +8352,10 @@ function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | n
 }
 
 function computeTrimeshSignature(trimesh: CANNON.Trimesh): string {
-	const vertices = (trimesh as any).vertices as ArrayLike<number> | undefined
-	const indices = (trimesh as any).indices as ArrayLike<number> | undefined
+	type TrimeshRaw = { vertices?: ArrayLike<number>; indices?: ArrayLike<number> }
+	const raw = trimesh as unknown as TrimeshRaw
+	const vertices = raw.vertices
+	const indices = raw.indices
 	if (!vertices || !indices) {
 		return 'trimesh:0:0:0'
 	}
@@ -8354,9 +8429,8 @@ function removeRigidbodyDebugHelper(nodeId: string): void {
 	}
 	helper.group.parent?.remove(helper.group)
 	helper.group.traverse((child) => {
-		const line = child as THREE.LineSegments
-		if ((line as any).isLineSegments) {
-			line.geometry?.dispose?.()
+		if (child instanceof THREE.LineSegments) {
+			child.geometry?.dispose?.()
 		}
 	})
 	helper.group.clear()
@@ -8483,7 +8557,10 @@ function ensureRoadHeightfieldDebugHelper(
 		lines.renderOrder = 9999
 		const segmentGroup = new THREE.Group()
 		segmentGroup.name = `HeightfieldDebugSegment:${nodeId}:${index}`
-		;(segmentGroup as any).__harmonyRoadSegmentKind = segment.shape.kind
+		segmentGroup.userData = {
+			...(segmentGroup.userData ?? {}),
+			__harmonyRoadSegmentKind: segment.shape.kind,
+		}
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
 	})
@@ -8503,7 +8580,8 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
 	const instance = rigidbodyInstances.get(nodeId) ?? null
-	const isWallNode = Boolean(node && (node.dynamicMesh as any)?.type === 'Wall')
+	type DynamicMeshWithType = { type?: unknown }
+	const isWallNode = Boolean(node && (node.dynamicMesh as unknown as DynamicMeshWithType | null)?.type === 'Wall')
 	const roadEntry =
 		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
 			? { signature: instance.signature, bodies: instance.bodies }
@@ -8593,7 +8671,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 				body.quaternion.z,
 				body.quaternion.w,
 			)
-			const segmentKind = (child as any).__harmonyRoadSegmentKind as string | undefined
+			const segmentKind = (child.userData as { __harmonyRoadSegmentKind?: string } | undefined)?.__harmonyRoadSegmentKind
 			if (segmentKind === 'heightfield') {
 				// Heightfields are rotated -90° around X in physics; undo that here so the debug
 				// geometry (built in render-space convention) lies on the surface.
@@ -8800,6 +8878,7 @@ function removeVehicleInstance(nodeId: string): void {
 	}
 	vehicleInstances.delete(nodeId)
 	vehicleRaycastInWorld.delete(nodeId)
+	scenePreviewPerf.notifyRemovedNode(nodeId)
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
@@ -8846,6 +8925,12 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	if (existing) {
 		existing.object = object
 		syncSharedBodyFromObject(existing.body, object, existing.orientationAdjustment)
+		scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+			nodeId,
+			body: existing.body,
+			isVehicle: Boolean(resolveVehicleComponent(node)),
+			isProtagonist: Boolean(object.userData?.protagonist),
+		})
 		ensureVehicleBindingForNode(nodeId)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
@@ -8854,6 +8939,12 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	if (!bodyEntry) {
 		return
 	}
+	scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+		nodeId,
+		body: bodyEntry.body,
+		isVehicle: Boolean(resolveVehicleComponent(node)),
+		isProtagonist: Boolean(object.userData?.protagonist),
+	})
 	physicsWorld.addBody(bodyEntry.body)
 	rigidbodyInstances.set(nodeId, {
 		nodeId,
@@ -8962,11 +9053,18 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		if (existing) {
 			removeRigidbodyInstanceBodies(world, existing)
 			rigidbodyInstances.delete(node.id)
+			scenePreviewPerf.notifyRemovedNode(node.id)
 		}
 		const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
 		if (!bodyEntry) {
 			return
 		}
+		scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
+			nodeId: node.id,
+			body: bodyEntry.body,
+			isVehicle: Boolean(resolveVehicleComponent(node)),
+			isProtagonist: Boolean(object.userData?.protagonist),
+		})
 		world.addBody(bodyEntry.body)
 		rigidbodyInstances.set(node.id, {
 			nodeId: node.id,
@@ -8981,6 +9079,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		if (!desiredIds.has(nodeId)) {
 			removeRigidbodyInstanceBodies(world, entry)
 			rigidbodyInstances.delete(nodeId)
+			scenePreviewPerf.notifyRemovedNode(nodeId)
 			removeRigidbodyDebugHelper(nodeId)
 		}
 	})
@@ -9035,7 +9134,7 @@ function stepPhysicsWorld(delta: number): void {
 					chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
 					chassisBody.velocity.set(0, 0, 0)
 					chassisBody.angularVelocity.set(0, 0, 0)
-					;(chassisBody as any).sleep?.()
+					;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
 				} catch {
 					// best-effort
 				}
@@ -9074,7 +9173,8 @@ function stepPhysicsWorld(delta: number): void {
 		// forces/torque not needed here
 		const speedSq = vx * vx + vy * vy + vz * vz
 		const angSq = wx * wx + wy * wy + wz * wz
-		const sleepState = (chassisBody as any).sleepState as number | undefined
+		type SleepStateBody = CANNON.Body & { sleepState?: number }
+		const sleepState = (chassisBody as SleepStateBody).sleepState
 		const drifting = speedSq > 1e-10 || angSq > 1e-10
 		const awake = sleepState === 0
 		if (!drifting && !awake) {
@@ -9097,13 +9197,16 @@ function stepPhysicsWorld(delta: number): void {
 			}
 			chassisBody.velocity.set(0, 0, 0)
 			chassisBody.angularVelocity.set(0, 0, 0)
-			;(chassisBody as any).sleep?.()
+			;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
 		} catch {
 			// best-effort
 		}
 	})
 	rigidbodyInstances.forEach((entry) => {
 		if (entry.syncObjectFromBody === false) {
+			return
+		}
+		if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
 			return
 		}
 		// AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
@@ -9124,7 +9227,12 @@ function updateVehicleWheelVisuals(delta: number): void {
 	if (delta <= 0 || !vehicleInstances.size) {
 		return
 	}
+
+	const nowMs = Date.now()
 	vehicleInstances.forEach((instance) => {
+		const nodeId = instance.nodeId ?? null
+		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
+		const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId)
 		const { vehicle, wheelBindings } = instance
 		// No wheel bindings, nothing to update.
 		if (!wheelBindings.length) {
@@ -9132,6 +9240,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 		}
 		const chassisBody = vehicle.chassisBody
 		if (!chassisBody) {
+			return
+		}
+		if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
 			return
 		}
 
@@ -9162,7 +9273,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 		instance.hasChassisPositionSample = true
 
-		const wheelInfos = (vehicle as any).wheelInfos as Array<{ steering?: number }> | undefined
+		const wheelInfos = vehicle.wheelInfos as Array<{ steering?: number }>
 
 		wheelBindings.forEach((binding) => {
 			if (!binding.nodeId) {
@@ -9640,10 +9751,10 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
 
 function prepareImportedObjectForPreview(object: THREE.Object3D): void {
 	object.traverse((child) => {
-		const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] }
-		if (!(mesh as any).isMesh && !(mesh as any).isSkinnedMesh) {
+		if (!(child instanceof THREE.Mesh)) {
 			return
 		}
+		const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] }
 		mesh.castShadow = true
 		mesh.receiveShadow = true
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]

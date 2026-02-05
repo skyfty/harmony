@@ -1,5 +1,6 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { ref, type Ref } from 'vue';
 import { defineStore } from 'pinia';
+import { removeScenePackageZip, type ScenePackagePointer } from '@/utils/scenePackageStorage';
 
 export interface ProjectConfig {
 	id: string;
@@ -13,7 +14,7 @@ export interface StoredProjectEntry {
 	id: string;
 	savedAt: string;
 	origin?: string;
-	zipBase64: string;
+	scenePackage: ScenePackagePointer;
 	project: {
 		id: string;
 		name: string;
@@ -24,7 +25,7 @@ export interface StoredProjectEntry {
 	sceneCount: number;
 }
 
-const STORAGE_KEY = 'PROJECT_LIBRARY_V2';
+const STORAGE_KEY = 'PROJECT_LIBRARY_V3';
 
 function generateId(prefix = 'project'): string {
 	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -44,12 +45,12 @@ function isProjectConfig(raw: unknown): raw is ProjectConfig {
 }
 
 export function createProjectEntryFromScenePackage(payload: {
-	zipBase64: string;
+	scenePackage: ScenePackagePointer;
 	project: ProjectConfig;
 	sceneCount: number;
 }, origin?: string): StoredProjectEntry {
-	const zipBase64 = (payload.zipBase64 ?? '').trim();
-	if (!zipBase64) {
+	const scenePackage = payload.scenePackage;
+	if (!scenePackage || typeof scenePackage !== 'object') {
 		throw new Error('场景包数据为空');
 	}
 	const projectConfig = payload.project;
@@ -65,7 +66,7 @@ export function createProjectEntryFromScenePackage(payload: {
 		id: projectId,
 		savedAt: new Date().toISOString(),
 		...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-		zipBase64,
+		scenePackage,
 		project: {
 			id: projectId,
 			name: String(projectConfig.name ?? ''),
@@ -81,7 +82,7 @@ type ProjectStoreSetup = {
 	currentProject: Ref<StoredProjectEntry | null>;
 	initialized: Ref<boolean>;
 	bootstrap: () => void;
-	setProject: (payload: { zipBase64: string; project: ProjectConfig; sceneCount: number }, origin?: string) => StoredProjectEntry;
+	setProject: (payload: { scenePackage: ScenePackagePointer; project: ProjectConfig; sceneCount: number }, origin?: string) => StoredProjectEntry;
 	clearProject: () => void;
 	getProject: () => StoredProjectEntry | undefined;
 };
@@ -108,8 +109,19 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 			if (!entry || typeof entry !== 'object') {
 				return null;
 			}
-			const { id, savedAt, origin, zipBase64, project, sceneCount } = entry as StoredProjectEntry;
-			if (typeof id !== 'string' || typeof savedAt !== 'string' || typeof zipBase64 !== 'string') {
+			const { id, savedAt, origin, scenePackage, project, sceneCount } = entry as StoredProjectEntry;
+			if (typeof id !== 'string' || typeof savedAt !== 'string') {
+				return null;
+			}
+			if (!scenePackage || typeof scenePackage !== 'object') {
+				return null;
+			}
+			if (!('kind' in (scenePackage as any)) || !('ref' in (scenePackage as any))) {
+				return null;
+			}
+			const kind = (scenePackage as any).kind;
+			const ref = (scenePackage as any).ref;
+			if ((kind !== 'wxfs' && kind !== 'idb') || typeof ref !== 'string' || !ref.trim()) {
 				return null;
 			}
 			const rawProject = project as unknown;
@@ -121,7 +133,7 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 				id,
 				savedAt,
 				...(normalizedOrigin ? { origin: normalizedOrigin } : {}),
-				zipBase64,
+				scenePackage: { kind, ref } as ScenePackagePointer,
 				project: {
 					id: typeof (rawProject as any).id === 'string' ? (rawProject as any).id : id,
 					name: typeof (rawProject as any).name === 'string' ? (rawProject as any).name : '',
@@ -146,7 +158,7 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 	}
 
 	function setProject(
-		payload: { zipBase64: string; project: ProjectConfig; sceneCount: number },
+		payload: { scenePackage: ScenePackagePointer; project: ProjectConfig; sceneCount: number },
 		origin?: string,
 	): StoredProjectEntry {
 		const entry = createProjectEntryFromScenePackage(payload, origin);
@@ -156,8 +168,10 @@ export const useProjectStore = defineStore('projectStore', (): ProjectStoreSetup
 	}
 
 	function clearProject(): void {
+		const entry = currentProject.value;
 		currentProject.value = null;
 		persistProject(null);
+		void removeScenePackageZip(entry?.scenePackage);
 	}
 
 	function getProject(): StoredProjectEntry | undefined {
