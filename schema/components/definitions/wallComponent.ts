@@ -33,12 +33,16 @@ export type WallModelOrientation = {
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
   bodyAssetId: string | null
+  /** Local positional offset (meters) applied to the body corner instance, in the model's local frame (Option A). */
+  bodyOffsetLocal: { x: number; y: number; z: number }
   /** Local forward axis for the body corner model. */
   bodyForwardAxis: WallForwardAxis
   /** Extra yaw offset in degrees for the body corner model. */
   bodyYawDeg: number
   /** Asset id of the upper wall head corner/joint model to be instanced. */
   headAssetId: string | null
+  /** Local positional offset (meters) applied to the head corner instance, in the model's local frame (Option A). */
+  headOffsetLocal: { x: number; y: number; z: number }
   /** Local forward axis for the head corner model. */
   headForwardAxis: WallForwardAxis
   /** Extra yaw offset in degrees for the head corner model. */
@@ -195,6 +199,16 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     throw new Error('WallComponentProps missing/invalid cornerModels')
   }
 
+  const normalizeCornerOffsetLocal = (value: unknown): { x: number; y: number; z: number } => {
+    const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+    const read = (key: 'x' | 'y' | 'z'): number => {
+      const raw = record ? record[key] : 0
+      const num = typeof raw === 'number' ? raw : Number(raw)
+      return Number.isFinite(num) ? num : 0
+    }
+    return { x: read('x'), y: read('y'), z: read('z') }
+  }
+
   const cornerModels = rawCornerModels.map((entry: unknown, index: number) => {
     if (!entry || typeof entry !== 'object') {
       throw new Error(`WallComponentProps cornerModels[${index}] invalid`)
@@ -216,6 +230,8 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     return {
       bodyAssetId,
       headAssetId,
+      bodyOffsetLocal: normalizeCornerOffsetLocal(record.bodyOffsetLocal),
+      headOffsetLocal: normalizeCornerOffsetLocal(record.headOffsetLocal),
       bodyForwardAxis: requiredForwardAxis(record.bodyForwardAxis, `cornerModels[${index}].bodyForwardAxis`),
       bodyYawDeg: requiredYawDeg(record.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`),
       headForwardAxis: requiredForwardAxis(record.headForwardAxis, `cornerModels[${index}].headForwardAxis`),
@@ -339,6 +355,16 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       ? props.cornerModels.map((entry) => ({
         bodyAssetId: typeof entry?.bodyAssetId === 'string' ? entry.bodyAssetId : null,
         headAssetId: typeof entry?.headAssetId === 'string' ? entry.headAssetId : null,
+        bodyOffsetLocal: {
+          x: Number((entry as any)?.bodyOffsetLocal?.x) || 0,
+          y: Number((entry as any)?.bodyOffsetLocal?.y) || 0,
+          z: Number((entry as any)?.bodyOffsetLocal?.z) || 0,
+        },
+        headOffsetLocal: {
+          x: Number((entry as any)?.headOffsetLocal?.x) || 0,
+          y: Number((entry as any)?.headOffsetLocal?.y) || 0,
+          z: Number((entry as any)?.headOffsetLocal?.z) || 0,
+        },
         bodyForwardAxis: entry.bodyForwardAxis,
         bodyYawDeg: entry.bodyYawDeg,
         headForwardAxis: entry.headForwardAxis,

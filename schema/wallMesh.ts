@@ -30,6 +30,11 @@ export type WallCornerModelRule = {
   angle: number
   tolerance: number
 
+  /** Local positional offset (meters) applied to the body corner instance, in the model's local frame (Option A). */
+  bodyOffsetLocal?: { x: number; y: number; z: number }
+  /** Local positional offset (meters) applied to the head corner instance, in the model's local frame (Option A). */
+  headOffsetLocal?: { x: number; y: number; z: number }
+
   // Per-part orientation overrides (Option B).
   bodyForwardAxis: WallForwardAxis
   bodyYawDeg: number
@@ -526,8 +531,22 @@ function computeWallCornerInstanceMatricesByAsset(
   const quat = new THREE.Quaternion()
   const yawQuat = new THREE.Quaternion()
   const pos = new THREE.Vector3()
+  const offsetLocal = new THREE.Vector3()
+  const offsetWorld = new THREE.Vector3()
   const scale = new THREE.Vector3(1, 1, 1)
   const localMatrix = new THREE.Matrix4()
+
+  const readOffsetLocal = (rule: WallCornerModelRule): THREE.Vector3 => {
+    const raw = mode === 'body' ? (rule as any)?.bodyOffsetLocal : (rule as any)?.headOffsetLocal
+    const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
+    const read = (key: 'x' | 'y' | 'z'): number => {
+      const value = record ? record[key] : 0
+      const num = typeof value === 'number' ? value : Number(value)
+      return Number.isFinite(num) ? num : 0
+    }
+    offsetLocal.set(read('x'), read('y'), read('z'))
+    return offsetLocal
+  }
 
   const push = (assetId: string, matrix: THREE.Matrix4) => {
     const bucket = matricesByAssetId.get(assetId) ?? []
@@ -614,6 +633,9 @@ function computeWallCornerInstanceMatricesByAsset(
     }
 
     pos.set(cornerX, anchoredY, cornerZ)
+    // Option A: apply per-rule local offset in the model's local frame, rotated by the final corner orientation.
+    offsetWorld.copy(readOffsetLocal(rule)).applyQuaternion(quat)
+    pos.add(offsetWorld)
     localMatrix.compose(pos, quat, scale)
     localMatrix.multiply(template.meshToRoot)
     push(assetId, new THREE.Matrix4().copy(localMatrix))

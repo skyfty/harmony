@@ -210,7 +210,31 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const headForwardAxis = normalizeForwardAxis((row as any)?.headForwardAxis, '+z')
   const headYawDeg = clampYawDeg((row as any)?.headYawDeg, 0)
 
-  return { bodyAssetId, headAssetId, bodyForwardAxis, bodyYawDeg, headForwardAxis, headYawDeg, angle, tolerance } as WallCornerModelRow
+  const normalizeOffsetLocal = (value: unknown): { x: number; y: number; z: number } => {
+    const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+    const read = (key: 'x' | 'y' | 'z'): number => {
+      const raw = record ? record[key] : 0
+      const num = typeof raw === 'number' ? raw : Number(raw)
+      return Number.isFinite(num) ? num : 0
+    }
+    return { x: read('x'), y: read('y'), z: read('z') }
+  }
+
+  const bodyOffsetLocal = normalizeOffsetLocal((row as any)?.bodyOffsetLocal)
+  const headOffsetLocal = normalizeOffsetLocal((row as any)?.headOffsetLocal)
+
+  return {
+    bodyAssetId,
+    headAssetId,
+    bodyOffsetLocal,
+    headOffsetLocal,
+    bodyForwardAxis,
+    bodyYawDeg,
+    headForwardAxis,
+    headYawDeg,
+    angle,
+    tolerance,
+  } as WallCornerModelRow
 }
 
 function commitCornerModels(next: WallCornerModelRow[]): void {
@@ -227,6 +251,8 @@ function addCornerModel(): void {
   const next = [...cornerModels.value, normalizeCornerModelRow({
     bodyAssetId: null,
     headAssetId: null,
+    bodyOffsetLocal: { x: 0, y: 0, z: 0 },
+    headOffsetLocal: { x: 0, y: 0, z: 0 },
     bodyForwardAxis: '+z',
     bodyYawDeg: 0,
     headForwardAxis: '+z',
@@ -1426,7 +1452,48 @@ function applyAirWallUpdate(rawValue: unknown) {
                   @blur="() => updateCornerModel(index, {})"
                 />
               </div>
+
+              <div class="wall-corner-offset-grid">
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset X"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).bodyOffsetLocal?.x ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { bodyOffsetLocal: { ...((entry as any).bodyOffsetLocal ?? { x: 0, y: 0, z: 0 }), x: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Y"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).bodyOffsetLocal?.y ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { bodyOffsetLocal: { ...((entry as any).bodyOffsetLocal ?? { x: 0, y: 0, z: 0 }), y: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Z"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).bodyOffsetLocal?.z ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { bodyOffsetLocal: { ...((entry as any).bodyOffsetLocal ?? { x: 0, y: 0, z: 0 }), z: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
             </div>
+
+            <v-divider class="wall-corner-divider" />
 
             <div
               class="wall-corner-model-row wall-corner-model-row--head"
@@ -1477,6 +1544,45 @@ function applyAirWallUpdate(rawValue: unknown) {
                   max="180"
                   :model-value="(entry as any).headYawDeg"
                   @update:modelValue="(value) => updateCornerModel(index, { headYawDeg: Number(value) } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
+
+              <div class="wall-corner-offset-grid">
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset X"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).headOffsetLocal?.x ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { headOffsetLocal: { ...((entry as any).headOffsetLocal ?? { x: 0, y: 0, z: 0 }), x: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Y"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).headOffsetLocal?.y ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { headOffsetLocal: { ...((entry as any).headOffsetLocal ?? { x: 0, y: 0, z: 0 }), y: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Z"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).headOffsetLocal?.z ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { headOffsetLocal: { ...((entry as any).headOffsetLocal ?? { x: 0, y: 0, z: 0 }), z: Number(value) } } as any)"
                   @blur="() => updateCornerModel(index, {})"
                 />
               </div>
@@ -1720,17 +1826,19 @@ function applyAirWallUpdate(rawValue: unknown) {
   grid-template-areas:
     'fields fields fields'
     'body body actions'
+    'divider divider actions'
     'head head actions';
   column-gap: 0.75rem;
   row-gap: 0.4rem;
   align-items: center;
-  padding-top: 0.4rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
 }
 
-.wall-corner-row:first-of-type {
-  border-top: none;
-  padding-top: 0;
+.wall-corner-divider {
+  grid-area: divider;
+  opacity: 0.8;
 }
 
 .wall-corner-model-row {
@@ -1763,6 +1871,13 @@ function applyAirWallUpdate(rawValue: unknown) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
   align-items: center;
+}
+
+.wall-corner-offset-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
 }
 
 .asset-pair-grid {

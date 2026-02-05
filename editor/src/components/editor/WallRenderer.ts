@@ -918,6 +918,19 @@ export function createWallRenderer(options: WallRendererOptions) {
       // 10) 组成最终的局部变换矩阵：位置 = 拐角点，旋转 = 计算出的四元数，缩放 = 单位缩放
       wallSyncScaleHelper.set(1, scaleY, 1)
       wallSyncPosHelper.set(corner.x, posY, corner.z)
+
+      // Option A: per-rule local offset in the model's local frame, rotated by the final corner orientation.
+      const rawOffset = options.mode === 'body' ? (rule as any)?.bodyOffsetLocal : (rule as any)?.headOffsetLocal
+      const offsetRecord = rawOffset && typeof rawOffset === 'object' ? (rawOffset as Record<string, unknown>) : null
+      const readOffset = (key: 'x' | 'y' | 'z'): number => {
+        const raw = offsetRecord ? offsetRecord[key] : 0
+        const num = typeof raw === 'number' ? raw : Number(raw)
+        return Number.isFinite(num) ? num : 0
+      }
+      wallSyncLocalOffsetHelper.set(readOffset('x'), readOffset('y'), readOffset('z'))
+      wallSyncLocalOffsetHelper.applyQuaternion(quat)
+      wallSyncPosHelper.add(wallSyncLocalOffsetHelper)
+
       wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
 
       // 11) 将计算出的矩阵打包并推入对应 assetId 的矩阵数组中
