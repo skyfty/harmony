@@ -38,7 +38,7 @@ import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useProjectStore } from '@/stores/projectStore';
 import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema';
-import { Base64 } from 'js-base64';
+import { saveScenePackageZip } from '@/utils/scenePackageStorage';
 
 const projectStore = useProjectStore();
 const { currentProject } = storeToRefs(projectStore);
@@ -89,29 +89,33 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
     return input;
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
-    return Base64.fromUint8Array(bytes);
+function generateId(prefix = 'project'): string {
+    if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+        return (crypto as any).randomUUID();
+    }
+    const random = Math.random().toString(36).slice(2, 10);
+    const time = Date.now().toString(36);
+    return `${prefix}-${time}-${random}`;
 }
 
-async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<ArrayBuffer | Uint8Array> {
+async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResultFile): Promise<ArrayBuffer> {
     const anyFile = file as any;
     const fs = typeof uni.getFileSystemManager === 'function' ? uni.getFileSystemManager() : null;
     const filePath: string | undefined = anyFile.path || anyFile.tempFilePath || anyFile.url;
 
-    // 1) 小程序端：使用文件系统管理器读取 base64 再转换
+    // 1) 小程序端：使用文件系统管理器直接读取二进制
     if (fs && filePath) {
         try {
-            const base64 = await new Promise<string>((resolve, reject) =>
+            const buffer = await new Promise<ArrayBuffer>((resolve, reject) =>
                 fs.readFile({
                     filePath,
-                    encoding: 'base64',
-                    success: (res: any) => resolve(res.data as string),
+                    success: (res: any) => resolve(res.data as ArrayBuffer),
                     fail: reject,
                 }),
             );
-            const bytes = base64ToUint8Array(base64);
-            return bytes;
+            if (buffer && typeof (buffer as any).byteLength === 'number') {
+                return buffer;
+            }
         } catch (err) {
             console.warn('uni.getFileSystemManager 读取二进制失败，尝试其他方式', err);
         }
@@ -121,15 +125,16 @@ async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResul
     const wxFileManager = typeof wx !== 'undefined' && typeof wx.getFileSystemManager === 'function' ? wx.getFileSystemManager() : null;
     if (wxFileManager && filePath) {
         try {
-            const base64 = await new Promise<string>((resolve, reject) =>
+            const buffer = await new Promise<ArrayBuffer>((resolve, reject) =>
                 wxFileManager.readFile({
                     filePath,
-                    encoding: 'base64',
-                    success: (res: any) => resolve(res.data as string),
+                    success: (res: any) => resolve(res.data as ArrayBuffer),
                     fail: reject,
                 }),
             );
-            return base64ToUint8Array(base64);
+            if (buffer && typeof (buffer as any).byteLength === 'number') {
+                return buffer;
+            }
         } catch (err) {
             console.warn('wx.getFileSystemManager 读取二进制失败，尝试其他方式', err);
         }
@@ -145,7 +150,7 @@ async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResul
     }
     if (blob) {
         if (typeof (blob as any).arrayBuffer === 'function') {
-            return await (blob as any).arrayBuffer();
+            return (await (blob as any).arrayBuffer()) as ArrayBuffer;
         }
         return await new Promise<ArrayBuffer>((resolve, reject) => {
             const reader = new FileReader();
@@ -164,13 +169,6 @@ async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResul
     throw new Error('当前平台暂不支持以二进制读取所选文件');
 }
 
-function base64ToUint8Array(base64: string): Uint8Array {
-    if (!base64) {
-        return new Uint8Array(0);
-    }
-    return Base64.toUint8Array(base64);
-}
-
 async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: string) {
     const pkg = unzipScenePackage(zip);
     const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
@@ -180,15 +178,17 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
         throw new Error('项目文件格式不正确');
     }
 
+    const projectId =
+        typeof projectConfig.id === 'string' && projectConfig.id.trim().length ? projectConfig.id.trim() : generateId('project');
     const ab = toArrayBuffer(zip as any);
-    const zipBase64 = arrayBufferToBase64(ab);
+    const scenePackage = await saveScenePackageZip(ab, projectId);
     const sceneCount = Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.length : 0;
 
     const newProject = projectStore.setProject(
         {
-            zipBase64,
+            scenePackage,
             project: {
-                id: String(projectConfig.id ?? ''),
+                id: projectId,
                 name: String(projectConfig.name ?? ''),
                 sceneOrder: Array.isArray(projectConfig.sceneOrder)
                     ? projectConfig.sceneOrder

@@ -108,6 +108,16 @@ export type GroundEditorOptions = {
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
+	// Editor-only: keep scatter instances visible/streaming, but never switch LOD tiers; always bind to the preset base asset.
+	lockScatterLodToBaseAsset?: boolean
+	// Optional: enable chunk-based scatter streaming for large grounds.
+	scatterChunkStreaming?: {
+		enabled?: boolean
+		radiusMeters?: number
+		unloadPaddingMeters?: number
+		maxChunkChangesPerUpdate?: number
+		maxBindingChangesPerUpdate?: number
+	}
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
@@ -599,6 +609,56 @@ function getScatterChunkKeyFromLocal(
 	return { key: `${chunkRow}:${chunkColumn}`, chunkRow, chunkColumn }
 }
 
+const DEFAULT_SCATTER_CHUNK_RADIUS_METERS = 200
+
+function resolveScatterChunkStreamingRadiusMeters(definition: GroundDynamicMesh): number {
+	const width = Number.isFinite(definition.width) ? definition.width : 0
+	const depth = Number.isFinite(definition.depth) ? definition.depth : 0
+	const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5
+	return Math.max(80, Math.min(2000, Math.min(DEFAULT_SCATTER_CHUNK_RADIUS_METERS, halfDiagonal)))
+}
+
+function computeScatterChunkKeysInRadius(
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+	localX: number,
+	localZ: number,
+	radius: number,
+): Set<string> {
+	const effectiveRadius = clampFinite(radius, 0)
+	if (!(effectiveRadius > 0)) {
+		return new Set([getScatterChunkKeyFromLocal(definition, chunkCells, localX, localZ).key])
+	}
+
+	const chunkCellCount = Math.max(1, Math.round(chunkCells))
+	const halfWidth = definition.width * 0.5
+	const halfDepth = definition.depth * 0.5
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+
+	const minColumnUnclamped = Math.floor((localX - effectiveRadius + halfWidth) / cellSize)
+	const maxColumnUnclamped = Math.ceil((localX + effectiveRadius + halfWidth) / cellSize)
+	const minRowUnclamped = Math.floor((localZ - effectiveRadius + halfDepth) / cellSize)
+	const maxRowUnclamped = Math.ceil((localZ + effectiveRadius + halfDepth) / cellSize)
+
+	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
+	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
+	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+
+	const minChunkColumn = Math.floor(minColumn / chunkCellCount)
+	const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)
+	const minChunkRow = Math.floor(minRow / chunkCellCount)
+	const maxChunkRow = Math.floor(maxRow / chunkCellCount)
+
+	const keys = new Set<string>()
+	for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+		for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+			keys.add(`${chunkRow}:${chunkColumn}`)
+		}
+	}
+	return keys
+}
+
 function buildScatterNeighborIndex(layer: TerrainScatterLayer, definition: GroundDynamicMesh, chunkCells: number) {
 	const map = new Map<string, TerrainScatterInstance[]>()
 	for (const instance of layer.instances) {
@@ -1050,10 +1110,48 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterAssetLoadToken = 0
 	let scatterSnapshotUpdatedAt: number | null = null
 	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
+
+	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
+	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
+	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
+	const scatterChunkStreamingPaddingOverride = clampFinite(options.scatterChunkStreaming?.unloadPaddingMeters, Number.NaN)
+	const scatterChunkStreamingMaxChunkChangesPerUpdate =
+		Number.isFinite(options.scatterChunkStreaming?.maxChunkChangesPerUpdate) && (options.scatterChunkStreaming?.maxChunkChangesPerUpdate as number) > 0
+			? Number(options.scatterChunkStreaming?.maxChunkChangesPerUpdate)
+			: Number.POSITIVE_INFINITY
+	const scatterChunkStreamingMaxBindingChangesPerUpdate =
+		Number.isFinite(options.scatterChunkStreaming?.maxBindingChangesPerUpdate) && (options.scatterChunkStreaming?.maxBindingChangesPerUpdate as number) > 0
+			? Number(options.scatterChunkStreaming?.maxBindingChangesPerUpdate)
+			: 500
+	const scatterChunkStreamingVisibilityUpdateIntervalMs = 33
+	const scatterChunkStreamingCullGraceMs = 300
+	const scatterChunkStreamingCullRadiusMultiplier = 1.2
+
+	let scatterChunkIndexDirty = true
+	let scatterChunkIndex: Map<string, Array<{ layer: TerrainScatterLayer; instance: TerrainScatterInstance }>> = new Map()
+	let scatterChunkEntryByNodeId: Map<string, { chunkKey: string; layer: TerrainScatterLayer; instance: TerrainScatterInstance }> = new Map()
+	let scatterActiveChunkKeys = new Set<string>()
+	let scatterChunkStreamingToken = 0
+	const pendingScatterChunkBindings = new Map<string, Promise<void>>()
+	const scatterChunkStreamingPendingBindIds = new Set<string>()
+	const scatterChunkStreamingAllocatedNodeIds = new Set<string>()
+	const scatterChunkStreamingLastVisibleAt = new Map<string, number>()
+	let scatterChunkStreamingLastFrustumVisibleIds: Set<string> = new Set<string>()
+	let lastScatterChunkStreamingVisibilityUpdateAt = 0
+	let lastScatterChunkStreamingUpdateAt = 0
+	const scatterChunkStreamingLocalCameraHelper = new THREE.Vector3()
+	const scatterChunkStreamingMatrixHelper = new THREE.Matrix4()
+	const scatterChunkStreamingWorldCameraHelper = new THREE.Vector3()
+	const scatterChunkStreamingGroupPromises = new Map<string, Promise<ModelInstanceGroup | null>>()
+	const scatterChunkStreamingBindingResolutionCache = new Map<
+		string,
+		{ bindingAssetId: string | null; lodPresetAssetId: string | null }
+	>()
 	const pendingScatterModelLoads = new Map<string, Promise<void>>()
 	const scatterLodPresetCache = new Map<string, Awaited<ReturnType<typeof options.sceneStore.loadLodPreset>> | null>()
 	const pendingScatterLodPresetLoads = new Map<string, Promise<void>>()
 	let lastScatterLodUpdateAt = 0
+	let scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 	const scatterLodCameraPosition = new THREE.Vector3()
 
 	const TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS = 160
@@ -1170,6 +1268,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const stopScatterSelectionWatch = watch(
 		() => ({ asset: options.scatterAsset.value, category: options.scatterCategory.value }),
 		({ asset, category }) => {
+			scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 			cancelScatterPlacement()
 			cancelScatterErase()
 			scatterLayer = null
@@ -1297,6 +1396,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resetScatterStoreState(reason: string) {
+		scatterChunkIndexDirty = true
+		scatterChunkIndex = new Map()
+		scatterChunkEntryByNodeId = new Map()
+		scatterActiveChunkKeys = new Set()
+		scatterChunkStreamingToken += 1
+		pendingScatterChunkBindings.clear()
+		scatterChunkStreamingGroupPromises.clear()
+		scatterChunkStreamingBindingResolutionCache.clear()
+		scatterChunkStreamingPendingBindIds.clear()
+		scatterChunkStreamingAllocatedNodeIds.clear()
+		scatterChunkStreamingLastVisibleAt.clear()
+		scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
+		lastScatterChunkStreamingVisibilityUpdateAt = 0
+		lastScatterChunkStreamingUpdateAt = 0
+		lastScatterLodUpdateAt = 0
+		scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
+
 		try {
 			cancelScatterPlacement()
 			cancelScatterErase()
@@ -1877,17 +1993,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		updateGroundChunks(groundMesh, definition, options.getCamera())
 
-		const resolveSelectionAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
-			const candidates = [instance.assetId, layer.assetId, instance.profileId, layer.profileId]
-			for (const candidate of candidates) {
-				if (typeof candidate === 'string') {
-					const trimmed = candidate.trim()
-					if (trimmed.length) {
-						return trimmed
+		if (scatterChunkStreamingEnabled) {
+			// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
+			for (const layer of store.layers.values()) {
+				const lodPresetId = getScatterLayerLodPresetId(layer)
+				if (!lodPresetId) {
+					continue
+				}
+				await ensureScatterLodPresetCached(lodPresetId)
+				if (scatterLodPresetCache.get(lodPresetId)) {
+					const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
+						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
+						: ({} as Record<string, unknown>)
+					if (payload.lodPresetAssetId !== lodPresetId) {
+						payload.lodPresetAssetId = lodPresetId
+						upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
 					}
 				}
 			}
-			return null
+			updateScatterChunkStreaming(true)
+			return
+		}
+
+		const resolveSelectionAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
+			return resolveScatterSelectionAssetId(instance, layer)
 		}
 
 		const resolveBindingAssetId = async (selectionAssetId: string): Promise<{ bindingAssetId: string | null; lodPresetAssetId: string | null }> => {
@@ -2017,15 +2146,429 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			try {
 				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
 				scatterSnapshotUpdatedAt = snapshotUpdatedAt
+				scatterChunkIndexDirty = true
+				scatterChunkIndex = new Map()
+				scatterChunkEntryByNodeId = new Map()
+				scatterActiveChunkKeys = new Set()
+				scatterChunkStreamingToken += 1
+				pendingScatterChunkBindings.clear()
+				scatterChunkStreamingGroupPromises.clear()
+				scatterChunkStreamingBindingResolutionCache.clear()
+				scatterChunkStreamingPendingBindIds.clear()
+				scatterChunkStreamingAllocatedNodeIds.clear()
+				scatterChunkStreamingLastVisibleAt.clear()
+				scatterChunkStreamingLastFrustumVisibleIds = new Set<string>()
+				lastScatterChunkStreamingVisibilityUpdateAt = 0
+				lastScatterChunkStreamingUpdateAt = 0
 			} catch (error) {
 				console.warn('载入地面散布快照失败', error)
 				scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
+				scatterChunkIndexDirty = true
 			}
 		}
 		if (!scatterStore) {
 			scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
+			scatterChunkIndexDirty = true
 		}
 		return scatterStore
+	}
+
+	function rebuildScatterChunkIndexForStore(store: TerrainScatterStore, definition: GroundDynamicMesh, chunkCells: number): void {
+		const next = new Map<string, Array<{ layer: TerrainScatterLayer; instance: TerrainScatterInstance }>>()
+		const nextByNodeId = new Map<string, { chunkKey: string; layer: TerrainScatterLayer; instance: TerrainScatterInstance }>()
+		for (const layer of store.layers.values()) {
+			if (!layer.instances?.length) {
+				continue
+			}
+			for (const instance of layer.instances) {
+				const local = instance.localPosition
+				const { key } = getScatterChunkKeyFromLocal(definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
+				const bucket = next.get(key)
+				if (bucket) {
+					bucket.push({ layer, instance })
+				} else {
+					next.set(key, [{ layer, instance }])
+				}
+				const nodeId = buildScatterNodeId(layer.id, instance.id)
+				nextByNodeId.set(nodeId, { chunkKey: key, layer, instance })
+			}
+		}
+		scatterChunkIndex = next
+		scatterChunkEntryByNodeId = nextByNodeId
+		scatterChunkIndexDirty = false
+	}
+
+	function resolveScatterSelectionAssetId(instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null {
+		const candidates = [instance.assetId, layer.assetId, instance.profileId, layer.profileId]
+		for (const candidate of candidates) {
+			if (typeof candidate === 'string') {
+				const trimmed = candidate.trim()
+				if (trimmed.length) {
+					return trimmed
+				}
+			}
+		}
+		return null
+	}
+
+	async function resolveScatterBindingAssetId(selectionAssetId: string): Promise<{ bindingAssetId: string | null; lodPresetAssetId: string | null }> {
+		const normalized = typeof selectionAssetId === 'string' ? selectionAssetId.trim() : ''
+		if (!normalized) {
+			return { bindingAssetId: null, lodPresetAssetId: null }
+		}
+		const cached = scatterChunkStreamingBindingResolutionCache.get(normalized)
+		if (cached) {
+			return cached
+		}
+		const asset = options.sceneStore.getAsset(normalized)
+		if (asset?.type === 'prefab') {
+			await ensureScatterLodPresetCached(normalized)
+			const preset = scatterLodPresetCache.get(normalized) ?? null
+			const base = resolveLodBindingAssetId(preset)
+			const result = { bindingAssetId: base, lodPresetAssetId: preset ? normalized : null }
+			scatterChunkStreamingBindingResolutionCache.set(normalized, result)
+			return result
+		}
+		const result = { bindingAssetId: normalized, lodPresetAssetId: null }
+		scatterChunkStreamingBindingResolutionCache.set(normalized, result)
+		return result
+	}
+
+	function ensureScatterChunkStreamingModelGroup(bindingAssetId: string): Promise<ModelInstanceGroup | null> {
+		const normalized = typeof bindingAssetId === 'string' ? bindingAssetId.trim() : ''
+		if (!normalized) {
+			return Promise.resolve(null)
+		}
+		const existing = scatterChunkStreamingGroupPromises.get(normalized)
+		if (existing) {
+			return existing
+		}
+		const promise = (async () => {
+			const asset = options.sceneStore.getAsset(normalized)
+			if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+				return null
+			}
+			try {
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.loadFromIndexedDb(normalized)
+				}
+				if (!assetCacheStore.hasCache(normalized)) {
+					await assetCacheStore.downloaProjectAsset(asset)
+				}
+			} catch (error) {
+				console.warn('缓存地面散布资源失败', normalized, error)
+			}
+			try {
+				return await loadScatterModelGroup(asset)
+			} catch (error) {
+				console.warn('载入地面散布资源失败', normalized, error)
+				return null
+			}
+		})().finally(() => {
+			// keep promise cached
+		})
+		scatterChunkStreamingGroupPromises.set(normalized, promise)
+		return promise
+	}
+
+	function nowMs(): number {
+		return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+	}
+
+	function computeScatterChunkStreamingVisibleIds(groundMesh: THREE.Object3D, camera: THREE.Camera): Set<string> {
+		camera.updateMatrixWorld(true)
+		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+		scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
+
+		const candidateIds: string[] = []
+		for (const chunkKey of scatterActiveChunkKeys.values()) {
+			const bucket = scatterChunkIndex.get(chunkKey)
+			if (!bucket?.length) {
+				continue
+			}
+			for (const entry of bucket) {
+				candidateIds.push(buildScatterNodeId(entry.layer.id, entry.instance.id))
+			}
+		}
+		if (!candidateIds.length) {
+			return new Set<string>()
+		}
+		candidateIds.sort()
+		scatterFrustumCuller.setIds(candidateIds)
+
+		const visibleIds = scatterFrustumCuller.updateAndQueryVisible(scatterCullingFrustum, (nodeId, centerTarget) => {
+			const entry = scatterChunkEntryByNodeId.get(nodeId)
+			if (!entry) {
+				return null
+			}
+			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
+			centerTarget.copy(worldPos)
+			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null
+			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
+			const scale = entry.instance.localScale
+			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
+			const radius = baseRadius * (Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1) * scatterChunkStreamingCullRadiusMultiplier
+			return { radius }
+		})
+
+		return visibleIds
+	}
+
+	async function bindScatterChunkStreamingNodeId(nodeId: string, token: number): Promise<void> {
+		if (token !== scatterChunkStreamingToken) {
+			return
+		}
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!groundMesh || !definition) {
+			return
+		}
+		const entry = scatterChunkEntryByNodeId.get(nodeId)
+		if (!entry) {
+			return
+		}
+		if (!scatterActiveChunkKeys.has(entry.chunkKey)) {
+			return
+		}
+		if (!scatterChunkStreamingLastFrustumVisibleIds.has(nodeId)) {
+			return
+		}
+		if (scatterChunkStreamingAllocatedNodeIds.has(nodeId) || entry.instance.binding?.nodeId) {
+			scatterChunkStreamingAllocatedNodeIds.add(nodeId)
+			return
+		}
+		const selectionAssetId = resolveScatterSelectionAssetId(entry.instance, entry.layer)
+		if (!selectionAssetId) {
+			return
+		}
+		entry.instance.assetId = entry.instance.assetId ?? selectionAssetId
+		entry.instance.layerId = entry.instance.layerId ?? entry.layer.id
+		if (!entry.instance.profileId) {
+			entry.instance.profileId = entry.layer.profileId ?? selectionAssetId
+		}
+		resetScatterInstanceBinding(entry.instance)
+		const resolved = await resolveScatterBindingAssetId(selectionAssetId)
+		const bindingAssetId = resolved.bindingAssetId
+		if (!bindingAssetId) {
+			return
+		}
+		const group = await ensureScatterChunkStreamingModelGroup(bindingAssetId)
+		if (!group) {
+			return
+		}
+		if (token !== scatterChunkStreamingToken) {
+			return
+		}
+		if (!scatterActiveChunkKeys.has(entry.chunkKey)) {
+			return
+		}
+		if (!scatterChunkStreamingLastFrustumVisibleIds.has(nodeId)) {
+			return
+		}
+		const matrix = composeScatterMatrix(entry.instance, groundMesh, scatterWorldMatrixHelper)
+		if (!bindScatterInstance(entry.instance, matrix, group.assetId)) {
+			return
+		}
+		scatterRuntimeAssetIdByNodeId.set(nodeId, group.assetId)
+		scatterChunkStreamingAllocatedNodeIds.add(nodeId)
+	}
+
+	function updateScatterChunkStreamingVisibilityAndGrace(): void {
+		if (!scatterChunkStreamingEnabled) {
+			return
+		}
+		const camera = options.getCamera()
+		const groundMesh = getGroundObject()
+		const store = scatterStore ?? ensureScatterStoreRef()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!camera || !groundMesh || !definition || store.layers.size === 0) {
+			return
+		}
+
+		// Ensure active chunks are up to date.
+		updateScatterChunkStreaming(false)
+
+		const now = nowMs()
+		if (now - lastScatterChunkStreamingVisibilityUpdateAt < scatterChunkStreamingVisibilityUpdateIntervalMs) {
+			return
+		}
+		lastScatterChunkStreamingVisibilityUpdateAt = now
+
+		if (scatterChunkIndexDirty) {
+			const chunkCells = resolveChunkCellsForDefinition(definition)
+			rebuildScatterChunkIndexForStore(store, definition, chunkCells)
+		}
+
+		const visibleIds = computeScatterChunkStreamingVisibleIds(groundMesh, camera)
+		scatterChunkStreamingLastFrustumVisibleIds = visibleIds
+		visibleIds.forEach((id) => {
+			scatterChunkStreamingLastVisibleAt.set(id, now)
+		})
+
+		// Release allocated instances that are outside frustum beyond grace time.
+		for (const nodeId of Array.from(scatterChunkStreamingAllocatedNodeIds.values())) {
+			if (visibleIds.has(nodeId)) {
+				continue
+			}
+			const lastSeen = scatterChunkStreamingLastVisibleAt.get(nodeId) ?? 0
+			if (scatterChunkStreamingCullGraceMs > 0 && now - lastSeen < scatterChunkStreamingCullGraceMs) {
+				continue
+			}
+			const entry = scatterChunkEntryByNodeId.get(nodeId)
+			if (entry) {
+				scatterRuntimeAssetIdByNodeId.delete(nodeId)
+				releaseScatterInstance(entry.instance)
+			}
+			scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
+		}
+
+		// Enqueue visible-but-unbound instances for lazy binding.
+		visibleIds.forEach((nodeId) => {
+			if (scatterChunkStreamingAllocatedNodeIds.has(nodeId)) {
+				return
+			}
+			const entry = scatterChunkEntryByNodeId.get(nodeId)
+			if (!entry || !scatterActiveChunkKeys.has(entry.chunkKey)) {
+				return
+			}
+			if (entry.instance.binding?.nodeId) {
+				scatterChunkStreamingAllocatedNodeIds.add(nodeId)
+				return
+			}
+			scatterChunkStreamingPendingBindIds.add(nodeId)
+		})
+
+		// Start async bind tasks with a per-tick budget.
+		let started = 0
+		const token = scatterChunkStreamingToken
+		for (const nodeId of Array.from(scatterChunkStreamingPendingBindIds.values())) {
+			if (started >= scatterChunkStreamingMaxBindingChangesPerUpdate) {
+				break
+			}
+			if (pendingScatterChunkBindings.has(nodeId)) {
+				continue
+			}
+			started += 1
+			const task = bindScatterChunkStreamingNodeId(nodeId, token)
+				.catch((error) => {
+					console.warn('绑定可见散件失败', nodeId, error)
+				})
+				.finally(() => {
+					pendingScatterChunkBindings.delete(nodeId)
+					scatterChunkStreamingPendingBindIds.delete(nodeId)
+				})
+			pendingScatterChunkBindings.set(nodeId, task)
+		}
+	}
+
+	function updateScatterChunkStreaming(force = false): void {
+		if (!scatterChunkStreamingEnabled) {
+			return
+		}
+		const camera = options.getCamera()
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		const store = scatterStore ?? ensureScatterStoreRef()
+		if (!camera || !groundMesh || !definition || store.layers.size === 0) {
+			return
+		}
+
+		const now = Date.now()
+		if (!force && now - lastScatterChunkStreamingUpdateAt < 80) {
+			return
+		}
+		lastScatterChunkStreamingUpdateAt = now
+
+		const chunkCells = resolveChunkCellsForDefinition(definition)
+		if (scatterChunkIndexDirty) {
+			rebuildScatterChunkIndexForStore(store, definition, chunkCells)
+		}
+
+		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+		const chunkWorldSize = Math.max(1, Math.round(chunkCells)) * cellSize
+		const radius = Number.isFinite(scatterChunkStreamingRadiusOverride)
+			? Math.max(0, scatterChunkStreamingRadiusOverride)
+			: resolveScatterChunkStreamingRadiusMeters(definition)
+		const padding = Number.isFinite(scatterChunkStreamingPaddingOverride)
+			? Math.max(0, scatterChunkStreamingPaddingOverride)
+			: chunkWorldSize
+
+		const cameraPosition = (camera as any)?.position as THREE.Vector3 | undefined
+		if (!cameraPosition) {
+			return
+		}
+		scatterChunkStreamingWorldCameraHelper.copy(cameraPosition)
+		groundMesh.updateMatrixWorld(true)
+		scatterChunkStreamingMatrixHelper.copy(groundMesh.matrixWorld).invert()
+		scatterChunkStreamingLocalCameraHelper.copy(scatterChunkStreamingWorldCameraHelper).applyMatrix4(scatterChunkStreamingMatrixHelper)
+
+		const desired = computeScatterChunkKeysInRadius(
+			definition,
+			chunkCells,
+			scatterChunkStreamingLocalCameraHelper.x,
+			scatterChunkStreamingLocalCameraHelper.z,
+			radius,
+		)
+		const retain = computeScatterChunkKeysInRadius(
+			definition,
+			chunkCells,
+			scatterChunkStreamingLocalCameraHelper.x,
+			scatterChunkStreamingLocalCameraHelper.z,
+			radius + padding,
+		)
+
+		const nextActive = new Set<string>()
+		desired.forEach((key) => nextActive.add(key))
+		scatterActiveChunkKeys.forEach((key) => {
+			if (retain.has(key)) {
+				nextActive.add(key)
+			}
+		})
+
+		let chunkChanges = 0
+		let didChange = false
+
+		// Unload chunks outside retain window.
+		for (const key of Array.from(scatterActiveChunkKeys.values())) {
+			if (nextActive.has(key)) {
+				continue
+			}
+			if (chunkChanges >= scatterChunkStreamingMaxChunkChangesPerUpdate) {
+				break
+			}
+			didChange = true
+			chunkChanges += 1
+			scatterActiveChunkKeys.delete(key)
+			const bucket = scatterChunkIndex.get(key) ?? []
+			for (const entry of bucket) {
+				const nodeId = buildScatterNodeId(entry.layer.id, entry.instance.id)
+				scatterChunkStreamingPendingBindIds.delete(nodeId)
+				scatterChunkStreamingAllocatedNodeIds.delete(nodeId)
+				scatterChunkStreamingLastVisibleAt.delete(nodeId)
+				scatterRuntimeAssetIdByNodeId.delete(nodeId)
+				releaseScatterInstance(entry.instance)
+			}
+		}
+
+		// Activate desired chunks and schedule binding.
+		for (const key of Array.from(nextActive.values())) {
+			if (scatterActiveChunkKeys.has(key)) {
+				continue
+			}
+			if (!desired.has(key)) {
+				continue
+			}
+			if (chunkChanges >= scatterChunkStreamingMaxChunkChangesPerUpdate) {
+				break
+			}
+			didChange = true
+			chunkChanges += 1
+			scatterActiveChunkKeys.add(key)
+		}
+
+		if (didChange) {
+			scatterChunkStreamingToken += 1
+		}
 	}
 
 	function listScatterLayersForCategory(category: TerrainScatterCategory): TerrainScatterLayer[] {
@@ -2150,6 +2693,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (result) {
 			syncTerrainScatterSnapshotToScene(store, { bumpInstancesUpdatedAt: true })
+			scatterChunkIndexDirty = true
 		}
 		return result
 	}
@@ -3076,7 +3620,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera())
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -3169,7 +3713,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function updateScatterLod(): void {
+	function updateScatterLod({ force = false }: { force?: boolean } = {}): void {
 		const camera = options.getCamera()
 		if (!camera) {
 			return
@@ -3179,10 +3723,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundMesh || !store.layers.size) {
 			return
 		}
+		// Keep chunk streaming + per-instance visibility responsive even when LOD switching is throttled.
+		updateScatterChunkStreamingVisibilityAndGrace()
 		const now = Date.now()
-		if (now - lastScatterLodUpdateAt < 200) {
+		if (!force && !scatterLodImmediateSyncNeeded && now - lastScatterLodUpdateAt < 200) {
 			return
 		}
+		scatterLodImmediateSyncNeeded = false
 		lastScatterLodUpdateAt = now
 		scatterLodCameraPosition.copy(camera.position)
 
@@ -3190,11 +3737,59 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
 		scatterCullingFrustum.setFromProjectionMatrix(scatterCullingProjView)
 
+		if (scatterChunkStreamingEnabled) {
+			// In chunk streaming mode, visibility (including grace keep) is handled by
+			// updateScatterChunkStreamingVisibilityAndGrace(). Only do LOD switching for
+			// instances that are currently frustum-visible.
+			for (const nodeId of scatterChunkStreamingLastFrustumVisibleIds.values()) {
+				const entry = scatterChunkEntryByNodeId.get(nodeId)
+				if (!entry) {
+					continue
+				}
+				const layer = entry.layer
+				const presetId = getScatterLayerLodPresetId(layer)
+				if (!presetId) {
+					continue
+				}
+				if (!scatterLodPresetCache.has(presetId)) {
+					void ensureScatterLodPresetCached(presetId)
+					continue
+				}
+				const preset = scatterLodPresetCache.get(presetId)
+				if (!preset) {
+					continue
+				}
+				const instance = entry.instance
+				if (!instance.binding?.nodeId) {
+					continue
+				}
+				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
+				const distance = worldPos.distanceTo(scatterLodCameraPosition)
+				const desired = lockScatterLodToBaseAsset
+					? resolveLodBindingAssetId(preset)
+					: chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
+				if (!desired) {
+					continue
+				}
+				const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
+				if (current === desired) {
+					continue
+				}
+				if (!ensureScatterModelCached(desired)) {
+					continue
+				}
+				releaseScatterInstance(instance)
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				if (!bindScatterInstance(instance, matrix, desired)) {
+					continue
+				}
+				scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
+			}
+			return
+		}
+
 		const scatterCandidateIds: string[] = []
-		const scatterCandidateByNodeId = new Map<
-			string,
-			{ layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }
-		>()
+		const scatterCandidateByNodeId = new Map<string, { layer: TerrainScatterLayer; instance: TerrainScatterInstance; preset: any }>()
 		for (const layer of store.layers.values()) {
 			const presetId = getScatterLayerLodPresetId(layer)
 			if (!presetId) {
@@ -3220,7 +3815,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
 			centerTarget.copy(worldPos)
-			const boundAssetId = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? resolveLodBindingAssetId(entry.preset)
+			const baseBindingAssetId = resolveLodBindingAssetId(entry.preset)
+			const boundAssetId = lockScatterLodToBaseAsset
+				? (baseBindingAssetId ?? scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null)
+				: (scatterRuntimeAssetIdByNodeId.get(nodeId) ?? baseBindingAssetId)
 			const baseRadius = boundAssetId ? (getCachedModelObject(boundAssetId)?.radius ?? 0.5) : 0.5
 			const scale = entry.instance.localScale
 			const scaleFactor = Math.max(scale?.x ?? 1, scale?.y ?? 1, scale?.z ?? 1)
@@ -3228,51 +3826,36 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return { radius }
 		})
 
-		for (const layer of store.layers.values()) {
-			const presetId = getScatterLayerLodPresetId(layer)
-			if (!presetId) {
+		for (const [nodeId, entry] of scatterCandidateByNodeId.entries()) {
+			const instance = entry.instance
+			if (!visibleScatterIds.has(nodeId)) {
+				releaseScatterInstance(instance)
 				continue
 			}
-			if (!scatterLodPresetCache.has(presetId)) {
-				void ensureScatterLodPresetCached(presetId)
+			const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
+			const distance = worldPos.distanceTo(scatterLodCameraPosition)
+			const desired = lockScatterLodToBaseAsset
+				? resolveLodBindingAssetId(entry.preset)
+				: chooseLodModelAssetId(entry.preset, distance) ?? resolveLodBindingAssetId(entry.preset)
+			if (!desired) {
 				continue
 			}
-			const preset = scatterLodPresetCache.get(presetId)
-			if (!preset) {
+			const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
+			const hasBinding = Boolean(instance.binding?.nodeId)
+			if (current === desired && hasBinding) {
 				continue
 			}
-			if (!layer.instances?.length) {
+			if (!ensureScatterModelCached(desired)) {
 				continue
 			}
-			for (const instance of layer.instances) {
-				const nodeId = buildScatterNodeId(layer.id, instance.id)
-				if (!visibleScatterIds.has(nodeId)) {
-					releaseScatterInstance(instance)
-					continue
-				}
-				const worldPos = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
-				const distance = worldPos.distanceTo(scatterLodCameraPosition)
-				const desired = chooseLodModelAssetId(preset, distance) ?? resolveLodBindingAssetId(preset)
-				if (!desired) {
-					continue
-				}
-				const current = scatterRuntimeAssetIdByNodeId.get(nodeId)
-				const hasBinding = Boolean(instance.binding?.nodeId)
-				if (current === desired && hasBinding) {
-					continue
-				}
-				if (!ensureScatterModelCached(desired)) {
-					continue
-				}
-				if (current !== desired) {
-					releaseScatterInstance(instance)
-				}
-				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
-				if (!bindScatterInstance(instance, matrix, desired)) {
-					continue
-				}
-				scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
+			if (current !== desired) {
+				releaseScatterInstance(instance)
 			}
+			const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+			if (!bindScatterInstance(instance, matrix, desired)) {
+				continue
+			}
+			scatterRuntimeAssetIdByNodeId.set(nodeId, desired)
 		}
 	}
 
@@ -3415,7 +3998,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera())
+		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -3700,7 +4283,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)

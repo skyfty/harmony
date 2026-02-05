@@ -2216,6 +2216,10 @@ const groundEditor = createGroundEditor({
   scatterDensityPercent,
   activeBuildTool,
   scatterEraseModeActive,
+  lockScatterLodToBaseAsset: true,
+  scatterChunkStreaming: {
+    enabled: true,
+  },
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -3712,13 +3716,12 @@ const instancedCullingFrustum = new THREE.Frustum()
 const instancedCullingProjView = new THREE.Matrix4()
 const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
-const instancedCullingWorldPosition = new THREE.Vector3()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
-const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
+const instancedCullingFrustumCuller = createInstancedBvhFrustumCuller()
 
-const pendingLodModelLoads = new Map<string, Promise<void>>()
+const pendingModelPreloads = new Map<string, Promise<void>>()
 
 type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
 
@@ -3736,8 +3739,8 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
   if (getCachedModelObject(assetId)) {
     return
   }
-  if (pendingLodModelLoads.has(assetId)) {
-    await pendingLodModelLoads.get(assetId)
+  if (pendingModelPreloads.has(assetId)) {
+    await pendingModelPreloads.get(assetId)
     return
   }
 
@@ -3759,41 +3762,29 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     ensureInstancedMeshesRegistered(asset.id)
   })()
     .catch((error) => {
-      console.warn('[SceneViewport] Failed to preload LOD model asset', assetId, error)
+      console.warn('[SceneViewport] Failed to preload model asset', assetId, error)
     })
     .finally(() => {
-      pendingLodModelLoads.delete(assetId)
+      pendingModelPreloads.delete(assetId)
     })
 
-  pendingLodModelLoads.set(assetId, task)
+  pendingModelPreloads.set(assetId, task)
   await task
 }
 
-function resolveDesiredLodAssetId(node: SceneNode, object: THREE.Object3D): string | null {
-  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
-  const baseAssetId = (typeof object.userData?.instancedAssetId === 'string' ? object.userData.instancedAssetId : null) ?? (node.sourceAssetId ?? null)
-  if (!component) {
-    return baseAssetId
+function resolveBaseInstancedAssetId(node: SceneNode, object: THREE.Object3D): string | null {
+  const templateAssetIdRaw = object.userData?.__harmonyInstanceLayoutTemplateAssetId
+  const templateAssetId = typeof templateAssetIdRaw === 'string' ? templateAssetIdRaw.trim() : ''
+  if (templateAssetId) {
+    return templateAssetId
   }
-
-  const props = clampLodComponentProps(component.props)
-  const levels = props.levels
-  if (!levels.length) {
-    return baseAssetId
+  const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (sourceAssetId) {
+    return sourceAssetId
   }
-  object.getWorldPosition(instancedCullingWorldPosition)
-  const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
-
-  let chosen: (typeof levels)[number] | undefined
-  for (let i = levels.length - 1; i >= 0; i -= 1) {
-    const candidate = levels[i]
-    if (candidate && distance >= candidate.distance) {
-      chosen = candidate
-      break
-    }
-  }
-
-  return chosen?.modelAssetId ?? baseAssetId
+  const currentAssetIdRaw = object.userData?.instancedAssetId
+  const currentAssetId = typeof currentAssetIdRaw === 'string' ? currentAssetIdRaw.trim() : ''
+  return currentAssetId || null
 }
 
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, assetId: string): void {
@@ -3867,7 +3858,7 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
   return radius
 }
 
-function updateInstancedCullingAndLod(): void {
+function updateInstancedCullingAndBinding(): void {
   if (!camera) {
     return
   }
@@ -3902,8 +3893,8 @@ function updateInstancedCullingAndLod(): void {
   })
 
   candidateIds.sort()
-  instancedLodFrustumCuller.setIds(candidateIds)
-  const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id: string, centerTarget: THREE.Vector3) => {
+  instancedCullingFrustumCuller.setIds(candidateIds)
+  const visibleIds = instancedCullingFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id: string, centerTarget: THREE.Vector3) => {
     const object = candidateObjects.get(id)
     if (!object) {
       return null
@@ -3937,7 +3928,7 @@ function updateInstancedCullingAndLod(): void {
     }
 
     object.userData.__harmonyCulled = false
-    const desiredAssetId = resolveDesiredLodAssetId(node, object)
+    const desiredAssetId = resolveBaseInstancedAssetId(node, object)
     if (!desiredAssetId) {
       return
     }
@@ -7590,7 +7581,7 @@ function animate() {
 
   const t0_scatter = performance.now()
   updateScatterLod()
-  updateInstancedCullingAndLod()
+  updateInstancedCullingAndBinding()
   prof.scatterAndCulling = performance.now() - t0_scatter
   // make building labels face the camera and follow their parent container
   if (buildingLabelMeshes.size > 0 && camera) {
