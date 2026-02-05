@@ -1046,7 +1046,7 @@ function applyAirWallUpdate(rawValue: unknown) {
         <div class="wall-asset-section">
           <div class="asset-model-panel asset-model-panel--no-border">
             <div class="asset-pair-panel">
-              <div class="asset-pair-grid">
+              <div class="asset-pair-grid asset-pair-grid--stacked">
                 <div
                   class="asset-pair-item"
                   ref="bodyDropAreaRef"
@@ -1150,116 +1150,110 @@ function applyAirWallUpdate(rawValue: unknown) {
 
                   <p v-if="headFeedbackMessage" class="asset-feedback">{{ headFeedbackMessage }}</p>
                 </div>
-              </div>
-            </div>
-          </div>
 
-          <div class="asset-model-panel asset-model-panel--no-border">
-            <div class="asset-pair-panel">
-              <div class="asset-pair-grid">
-              <div
-                class="asset-pair-item"
-                ref="capDropAreaRef"
-                :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
-                @dragenter.prevent="capDropActive = true"
-                @dragover.prevent="capDropActive = true"
-                @dragleave="(e) => { if (shouldDeactivateDropArea(capDropAreaRef, e)) capDropActive = false }"
-                @drop="(e) => assignWallAsset(e, 'bodyCap')"
-              >
-                <div class="asset-pair-label">End Cap (Body)</div>
-                <div class="wall-asset-model-row">
-                  <div class="wall-asset-model-picker">
-                    <div
-                      class="asset-thumbnail"
-                      :class="{ placeholder: !bodyCapAsset }"
-                      :style="bodyCapAsset
-                        ? (bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined))
-                        : undefined"
-                      @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
-                    />
+                <div
+                  class="asset-pair-item"
+                  ref="capDropAreaRef"
+                  :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
+                  @dragenter.prevent="capDropActive = true"
+                  @dragover.prevent="capDropActive = true"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(capDropAreaRef, e)) capDropActive = false }"
+                  @drop="(e) => assignWallAsset(e, 'bodyCap')"
+                >
+                  <div class="asset-pair-label">End Cap (Body)</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !bodyCapAsset }"
+                        :style="bodyCapAsset
+                          ? (bodyCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyCapAsset.thumbnail})` } : (bodyCapAsset.previewColor ? { backgroundColor: bodyCapAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => openWallAssetDialog('bodyCap', e)"
+                      />
+                    </div>
+
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).bodyEndCapOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).bodyEndCapOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
                   </div>
 
-                  <div v-if="wallComponent" class="wall-asset-orientation-grid">
-                    <v-select
-                      density="compact"
-                      variant="underlined"
-                      label="Forward"
-                      :items="FORWARD_AXIS_ITEMS"
-                      item-title="title"
-                      item-value="value"
-                      hide-details
-                      :model-value="(wallComponent.props as any).bodyEndCapOrientation.forwardAxis"
-                      @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { forwardAxis: value as any })"
-                    />
-                    <v-text-field
-                      density="compact"
-                      variant="underlined"
-                      type="number"
-                      label="Yaw (deg)"
-                      hide-details
-                      step="1"
-                      min="-180"
-                      max="180"
-                      :model-value="(wallComponent.props as any).bodyEndCapOrientation.yawDeg"
-                      @update:modelValue="(value) => updateWallOrientation('bodyEndCapOrientation', { yawDeg: Number(value) })"
-                    />
-                  </div>
+                  <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
                 </div>
 
-                <p v-if="capFeedbackMessage" class="asset-feedback">{{ capFeedbackMessage }}</p>
-              </div>
+                <div
+                  class="asset-pair-item"
+                  ref="headCapDropAreaRef"
+                  :class="{ 'is-active': headCapDropActive, 'is-processing': headCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
+                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
+                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(headCapDropAreaRef, e)) headCapDropActive = false }"
+                  @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'headCap') }"
+                >
+                  <div class="asset-pair-label">End Cap (Head)</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !headCapAsset }"
+                        :style="headCapAsset
+                          ? (headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
+                      />
+                    </div>
 
-              <div
-                class="asset-pair-item"
-                ref="headCapDropAreaRef"
-                :class="{ 'is-active': headCapDropActive, 'is-processing': headCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
-                @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
-                @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; headCapDropActive = true }"
-                @dragleave="(e) => { if (shouldDeactivateDropArea(headCapDropAreaRef, e)) headCapDropActive = false }"
-                @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'headCap') }"
-              >
-                <div class="asset-pair-label">End Cap (Head)</div>
-                <div class="wall-asset-model-row">
-                  <div class="wall-asset-model-picker">
-                    <div
-                      class="asset-thumbnail"
-                      :class="{ placeholder: !headCapAsset }"
-                      :style="headCapAsset
-                        ? (headCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${headCapAsset.thumbnail})` } : (headCapAsset.previewColor ? { backgroundColor: headCapAsset.previewColor } : undefined))
-                        : undefined"
-                      @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('headCap', e) }"
-                    />
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).headEndCapOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).headEndCapOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
                   </div>
 
-                  <div v-if="wallComponent" class="wall-asset-orientation-grid">
-                    <v-select
-                      density="compact"
-                      variant="underlined"
-                      label="Forward"
-                      :items="FORWARD_AXIS_ITEMS"
-                      item-title="title"
-                      item-value="value"
-                      hide-details
-                      :model-value="(wallComponent.props as any).headEndCapOrientation.forwardAxis"
-                      @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { forwardAxis: value as any })"
-                    />
-                    <v-text-field
-                      density="compact"
-                      variant="underlined"
-                      type="number"
-                      label="Yaw (deg)"
-                      hide-details
-                      step="1"
-                      min="-180"
-                      max="180"
-                      :model-value="(wallComponent.props as any).headEndCapOrientation.yawDeg"
-                      @update:modelValue="(value) => updateWallOrientation('headEndCapOrientation', { yawDeg: Number(value) })"
-                    />
-                  </div>
+                  <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
                 </div>
-
-                <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
-              </div>
               </div>
             </div>
           </div>
@@ -1775,6 +1769,14 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
+}
+
+.asset-pair-grid--stacked {
+  grid-template-columns: 1fr;
+}
+
+.asset-pair-grid--stacked .asset-pair-item {
+  width: 100%;
 }
 
 .asset-pair-item {
