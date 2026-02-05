@@ -1317,10 +1317,11 @@ function applyAirWallUpdate(rawValue: unknown) {
               size="small"
               @click="recommendJointTrim"
             >
-              推荐值
+              Recommend
             </v-btn>
           </div>
-
+                    <div class="wall-joint-trim-row">
+                      </div>
           <div class="wall-joint-trim-row">
             <v-text-field
               v-model.number="localJointTrimStart"
@@ -1352,7 +1353,6 @@ function applyAirWallUpdate(rawValue: unknown) {
               @keydown.enter.prevent="applyJointTrimUpdate"
             />
           </div>
-          <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
           </div>
         <div class="wall-corner-models">
           <div class="wall-corner-header">
