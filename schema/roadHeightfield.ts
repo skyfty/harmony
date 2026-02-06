@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from '@harmony/schema'
+import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './index'
 
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'

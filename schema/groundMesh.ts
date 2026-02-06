@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from '@harmony/schema'
+import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from './index'
 
 import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
 import { computeGroundBaseHeightAtVertex, normalizeGroundGenerationSettings } from './groundGeneration'

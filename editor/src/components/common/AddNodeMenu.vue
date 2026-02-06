@@ -2002,9 +2002,12 @@ function handleAddLight(type: LightNodeType) {
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
         </template>
         <v-list class="add-submenu-list">
+          <v-list-item title="Ambient Light" @click="handleAddLight('Ambient')" />
           <v-list-item title="Directional Light" @click="handleAddLight('Directional')" />
           <v-list-item title="Point Light" @click="handleAddLight('Point')" />
           <v-list-item title="Spot Light" @click="handleAddLight('Spot')" />
+          <v-list-item title="Hemisphere Light" @click="handleAddLight('Hemisphere')" />
+          <v-list-item title="RectArea Light" @click="handleAddLight('RectArea')" />
         </v-list>
       </v-menu>
       <v-menu  transition="none" location="end" offset="8">

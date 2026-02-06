@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from '@harmony/schema'
+import type { RoadDynamicMesh } from './index'
 
 const EPSILON = 1e-6
 

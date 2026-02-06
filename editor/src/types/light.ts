@@ -16,6 +16,7 @@ export function normalizeLightNodeType(input: LightNodeType | string | null | un
     if (legacy) {
       return legacy
     }
+    // Accept new/extended light types as-is.
     return input as LightNodeType
   }
   return input

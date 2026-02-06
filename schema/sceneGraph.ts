@@ -20,11 +20,11 @@ import type {
   GuideRouteDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
-} from '@harmony/schema';
+} from './index';
 import {
   createPrimitiveGeometry,
-} from '@harmony/schema';
-import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@harmony/schema'
+} from './index';
+import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
@@ -55,6 +55,7 @@ import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshe
 import { buildRoadMesh as buildRoadDynamicMesh } from './sceneGraph/dynamicMeshes/road';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
 import { buildGuideRouteMesh as buildGuideRouteDynamicMesh } from './sceneGraph/dynamicMeshes/guideRoute';
+import { createThreeLightFromLightNode } from './lightsRuntime';
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -952,58 +953,15 @@ class SceneGraphBuilder {
       return null;
     }
 
-    const color = new THREE.Color(props.color ?? '#ffffff');
-    const intensity = Number.isFinite(props.intensity) ? Number(props.intensity) : 1;
-    let light: THREE.Light | null = null;
-
-    switch (props.type) {
-      case 'Directional': {
-        const directional = new THREE.DirectionalLight(color, intensity);
-        directional.castShadow = !!props.castShadow;
-        directional.shadow.mapSize.set(2048, 2048);
-        directional.shadow.camera.near = 0.1;
-        directional.shadow.camera.far = 200;
-        directional.shadow.bias = -0.0002;
-        light = directional;
-        break;
-      }
-      case 'Point': {
-        light = new THREE.PointLight(color, intensity, props.distance ?? 0, props.decay ?? 1);
-        light.castShadow = !!props.castShadow;
-        break;
-      }
-      case 'Spot': {
-        const spot = new THREE.SpotLight(
-          color,
-          intensity,
-          props.distance ?? 0,
-          props.angle ?? Math.PI / 4,
-          props.penumbra ?? 0,
-          props.decay ?? 1,
-        );
-        spot.castShadow = !!props.castShadow;
-        spot.shadow.mapSize.set(1024, 1024);
-        light = spot;
-        break;
-      }
-      case 'Ambient':
-      default:
-        light = new THREE.AmbientLight(color, intensity);
-        break;
-    }
-
-    if (!light) {
-      return null;
-    }
+    const created = createThreeLightFromLightNode(props);
+    const light = created.light;
     light.name = node.name ?? 'Light';
     this.applyTransform(light, node);
     this.applyVisibility(light, node);
 
-    if (props.target && 'target' in light) {
-      const target = new THREE.Object3D();
-      target.position.set(props.target.x, props.target.y, props.target.z);
-      this.root.add(target);
-      (light as THREE.DirectionalLight | THREE.SpotLight).target = target;
+    if (created.target && 'target' in (light as any)) {
+      this.root.add(created.target);
+      (light as THREE.DirectionalLight | THREE.SpotLight).target = created.target;
     }
 
     return light;

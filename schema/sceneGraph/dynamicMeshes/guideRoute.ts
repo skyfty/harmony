@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GuideRouteDynamicMesh, SceneNodeMaterial } from '@harmony/schema'
+import type { GuideRouteDynamicMesh, SceneNodeMaterial } from '../../index'
 import type { SceneNodeWithExtras } from '../types'
 import { createGuideRouteRenderGroup } from '../../guideRouteMesh'
 import { applyMaterialConfigAssignment, buildMaterialConfigMap } from '../materialAssignment'

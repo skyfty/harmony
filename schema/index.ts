@@ -672,13 +672,18 @@ export interface SceneNodeImportMetadata {
   objectPath?: number[] | null
 }
 
-export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient'
+export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere' | 'RectArea'
 export type CameraControlMode = 'orbit' | 'map'
 export type CameraProjection = 'perspective' | 'orthographic'
 
 export interface LightNodeProperties {
   type: LightNodeType
   color: string
+  /**
+   * Secondary color used by some light types.
+   * - Hemisphere: ground color (sky color uses `color`).
+   */
+  groundColor?: string
   intensity: number
   distance?: number
   angle?: number
@@ -686,6 +691,10 @@ export interface LightNodeProperties {
   penumbra?: number
   target?: Vector3Like
   castShadow?: boolean
+  /** RectAreaLight width (only when type === 'RectArea') */
+  width?: number
+  /** RectAreaLight height (only when type === 'RectArea') */
+  height?: number
 }
 export interface SceneNode { 
   id: string;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SceneNodeComponentState, WallDynamicMesh } from '@harmony/schema';
+import type { SceneNodeComponentState, WallDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import type { WallComponentProps } from '../../components/definitions/wallComponent';
 import { WALL_COMPONENT_TYPE, clampWallProps } from '../../components/definitions/wallComponent';

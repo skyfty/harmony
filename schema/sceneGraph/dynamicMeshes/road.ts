@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { RoadDynamicMesh, SceneNodeComponentState, SceneNodeMaterial } from '@harmony/schema';
+import type { RoadDynamicMesh, SceneNodeComponentState, SceneNodeMaterial } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import type { RoadComponentProps } from '../../components/definitions/roadComponent';
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from '../../components/definitions/roadComponent';

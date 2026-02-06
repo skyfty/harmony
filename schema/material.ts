@@ -10,7 +10,7 @@ import type {
   SceneMaterialType,
   SceneNodeMaterial,
   SceneResourceSummaryEntry,
-} from '@harmony/schema';
+} from './index';
 import type { AssetCacheEntry } from './assetCache';
 import type ResourceCache from './ResourceCache';
 import { hashString, stableSerialize } from './stableSerialize';

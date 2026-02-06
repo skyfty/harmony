@@ -5,7 +5,7 @@ import type {
 	SceneNodeComponentState,
 	GroundDynamicMesh,
 	WallDynamicMesh,
-} from '@harmony/schema'
+} from './index'
 import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,

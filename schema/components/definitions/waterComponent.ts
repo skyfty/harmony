@@ -20,7 +20,7 @@ import {
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
-import { isGeometryType } from '@harmony/schema'
+import { isGeometryType } from '../../index'
 
 export const WATER_COMPONENT_TYPE = 'water'
 export const WATER_DEFAULT_TEXTURE_WIDTH = 512

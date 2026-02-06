@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FloorDynamicMesh, SceneNodeMaterial } from '@harmony/schema';
+import type { FloorDynamicMesh, SceneNodeMaterial } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import { createFloorRenderGroup } from '../../floorMesh';
 import { applyMaterialConfigAssignment, buildMaterialConfigMap } from '../materialAssignment';

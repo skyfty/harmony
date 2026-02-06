@@ -32,7 +32,6 @@ const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMod
 ]
 
 const backgroundColorMenuOpen = ref(false)
-const ambientColorMenuOpen = ref(false)
 
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
@@ -205,19 +204,6 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hexValue.toLowerCase()}`
 }
 
-watch(
-  () => environmentSettings.value.ambientLightColor,
-  (value) => {
-    const currentFogColor = environmentSettings.value.fogColor
-    const normalized = normalizeHexColor(value, currentFogColor)
-    if (normalized === currentFogColor) {
-      return
-    }
-    sceneStore.patchEnvironmentSettings({ fogColor: normalized })
-  },
-  { immediate: true },
-)
-
 function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
@@ -232,7 +218,7 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   })
 }
 
-function handleHexColorChange(target: 'background' | 'ambient', value: string | null) {
+function handleHexColorChange(target: 'background', value: string | null) {
   if (typeof value !== 'string') {
     return
   }
@@ -249,20 +235,10 @@ function handleHexColorChange(target: 'background' | 'ambient', value: string | 
         hdriAssetId: environmentSettings.value.background.hdriAssetId,
       },
     })
-    return
-  }
-  if (target === 'ambient') {
-    const current = environmentSettings.value.ambientLightColor
-    const normalized = normalizeHexColor(value, current)
-    if (normalized === current) {
-      return
-    }
-    sceneStore.patchEnvironmentSettings({ ambientLightColor: normalized, fogColor: normalized })
-    return
   }
 }
 
-function handleColorPickerInput(target: 'background' | 'ambient', value: string | null) {
+function handleColorPickerInput(target: 'background', value: string | null) {
   handleHexColorChange(target, value)
 }
 
@@ -296,25 +272,6 @@ function clearEnvironmentAsset() {
     return
   }
   sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'skybox', hdriAssetId: null } })
-}
-
-function handleAmbientIntensityInput(value: unknown) {
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  const clamped = Math.max(0, Math.min(10, numeric))
-  if (Math.abs(clamped - environmentSettings.value.ambientLightIntensity) < 1e-3) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ ambientLightIntensity: clamped })
-}
-
-function formatAmbientIntensity(): string {
-  return environmentSettings.value.ambientLightIntensity.toFixed(2)
 }
 
 function handleShadowsToggle(enabled: boolean | null) {
@@ -973,66 +930,6 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
         </section>
-        <section class="environment-section">
-          <div class="section-title">Ambient Light</div>
-          <div class="material-color">
-            <div class="color-input">
-              <v-text-field
-                label="Ambient Color"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                hide-details
-                :model-value="environmentSettings.ambientLightColor"
-                @update:model-value="(value) => handleHexColorChange('ambient', value)"
-              />
-              <v-menu
-                v-model="ambientColorMenuOpen"
-                :close-on-content-click="false"
-                transition="scale-transition"
-                location="bottom start"
-              >
-                <template #activator="{ props: menuProps }">
-                  <button
-                    class="color-swatch"
-                    type="button"
-                    v-bind="menuProps"
-                    :style="{ backgroundColor: environmentSettings.ambientLightColor }"
-                    title="Select ambient color"
-                  >
-                    <span class="sr-only">Select ambient color</span>
-                  </button>
-                </template>
-                <div class="color-picker">
-                  <v-color-picker
-                    :model-value="environmentSettings.ambientLightColor"
-                    mode="hex"
-                    :modes="['hex']"
-                    hide-inputs
-                    @update:model-value="(value) => handleColorPickerInput('ambient', value)"
-                  />
-                </div>
-              </v-menu>
-            </div>
-          </div>
-          <div class="slider-row">
-            <v-text-field
-              class="slider-input"
-              label="Intensity"
-              density="compact"
-              variant="underlined"
-              hide-details
-              type="number"
-              inputmode="decimal"
-              :min="0"
-              :max="10"
-              :step="0.05"
-              :model-value="formatAmbientIntensity()"
-              @update:model-value="handleAmbientIntensityInput"
-            />
-          </div>
-        </section>
-
         <section class="environment-section">
           <div class="section-title">Shadows</div>
           <div class="toggle-row">

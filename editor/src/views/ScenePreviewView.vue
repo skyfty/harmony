@@ -1027,10 +1027,6 @@ const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
 const skySunPosition = new THREE.Vector3()
-const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
-const tempSunDirection = new THREE.Vector3()
-const SKY_SUN_LIGHT_DISTANCE = 150
-const SKY_SUN_LIGHT_MIN_HEIGHT = 10
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const SKY_SCALE = 2500
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
@@ -1098,13 +1094,11 @@ let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
-let sunDirectionalLight: THREE.DirectionalLight | null = null
 let sky: Sky | null = null
 let shouldRenderSkyBackground = true
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let cloudRenderer: SceneCloudRenderer | null = null
-let environmentAmbientLight: THREE.AmbientLight | null = null
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
 let backgroundAssetId: string | null = null
@@ -6410,11 +6404,6 @@ function initRenderer() {
 	scene = new THREE.Scene()
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
-	const ambient = ensureEnvironmentAmbientLight()
-	if (ambient) {
-		ambient.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR)
-		ambient.intensity = DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY
-	}
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
   	camera.position.set(0, CAMERA_HEIGHT, 0)
@@ -6992,76 +6981,6 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
 	} else if (sunUniform) {
 		sunUniform.value = skySunPosition.clone()
 	}
-	applySunDirectionToSunLight()
-}
-
-function ensureSunDirectionalLight(): THREE.DirectionalLight | null {
-	if (!scene) {
-		return null
-	}
-
-	if (!sunDirectionalLight) {
-		const light = new THREE.DirectionalLight(0xffffff, 1.05)
-		light.name = 'SkySunLight'
-		light.castShadow = true
-		light.shadow.mapSize.set(2048, 2048)
-		light.shadow.bias = -0.0001
-		light.shadow.normalBias = 0.02
-		light.shadow.camera.near = 1
-		light.shadow.camera.far = 400
-		light.shadow.camera.left = -200
-		light.shadow.camera.right = 200
-		light.shadow.camera.top = 200
-		light.shadow.camera.bottom = -200
-		sunDirectionalLight = light
-		scene.add(light)
-		scene.add(light.target)
-	} else {
-		if (sunDirectionalLight.parent !== scene) {
-			scene.add(sunDirectionalLight)
-		}
-		if (sunDirectionalLight.target.parent !== scene) {
-			scene.add(sunDirectionalLight.target)
-		}
-	}
-
-	return sunDirectionalLight
-}
-
-function applySunDirectionToSunLight() {
-	const light = ensureSunDirectionalLight()
-	if (!light) {
-		return
-	}
-
-	if (skySunPosition.lengthSq() > 1e-6) {
-		tempSunDirection.copy(skySunPosition)
-	} else {
-		tempSunDirection.copy(DEFAULT_SUN_DIRECTION)
-	}
-
-	light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
-	if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
-		light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT
-	}
-	light.target.position.set(0, 0, 0)
-	light.target.updateMatrixWorld()
-}
-
-function ensureEnvironmentAmbientLight(): THREE.AmbientLight | null {
-	if (!scene) {
-		return null
-	}
-	if (!environmentAmbientLight) {
-		environmentAmbientLight = new THREE.AmbientLight(
-			DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-			DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-		)
-		scene.add(environmentAmbientLight)
-	} else if (environmentAmbientLight.parent !== scene) {
-		scene.add(environmentAmbientLight)
-	}
-	return environmentAmbientLight
 }
 
 function applySkyEnvironmentToScene() {
@@ -7191,15 +7110,6 @@ async function loadEnvironmentTextureFromAsset(
 		console.warn('[ScenePreview] Failed to load environment texture', assetId, error)
 		return null
 	}
-}
-
-function applyAmbientLightSettings(settings: EnvironmentSettings) {
-	const ambient = ensureEnvironmentAmbientLight()
-	if (!ambient) {
-		return
-	}
-	ambient.color.set(settings.ambientLightColor)
-	ambient.intensity = settings.ambientLightIntensity
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
@@ -7350,7 +7260,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	if (!scene) {
 		return
 	}
-	applyAmbientLightSettings(snapshot)
 	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
@@ -7363,11 +7272,6 @@ function disposeEnvironmentResources() {
 	disposeEnvironmentTarget()
 	backgroundLoadToken += 1
 	environmentMapLoadToken += 1
-	if (environmentAmbientLight) {
-		environmentAmbientLight.parent?.remove(environmentAmbientLight)
-		environmentAmbientLight.dispose?.()
-		environmentAmbientLight = null
-	}
 }
 
 function resolveTextureExtension(entry: AssetCacheEntry | null, ref: SceneMaterialTextureRef): string {
@@ -10228,12 +10132,6 @@ onBeforeUnmount(() => {
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
-	}
-	if (sunDirectionalLight) {
-		sunDirectionalLight.parent?.remove(sunDirectionalLight)
-		sunDirectionalLight.target.parent?.remove(sunDirectionalLight.target)
-		sunDirectionalLight.dispose()
-		sunDirectionalLight = null
 	}
 	editorResourceCache = null
 	listener = null

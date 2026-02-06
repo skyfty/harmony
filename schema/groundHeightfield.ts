@@ -1,4 +1,4 @@
-import type { SceneNode, GroundDynamicMesh } from '@harmony/schema'
+import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
 import { computeGroundBaseHeightAtVertex } from './groundGeneration'
 

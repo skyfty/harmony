@@ -1,4 +1,4 @@
-import { type GroundDynamicMesh, type GroundGenerationSettings } from '@harmony/schema'
+import { type GroundDynamicMesh, type GroundGenerationSettings } from './index'
 
 type PerlinNoise3D = (x: number, y: number, z: number) => number
 type VoronoiNoise2D = (x: number, z: number) => number

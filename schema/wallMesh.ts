@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@harmony/schema'
+import type { WallDynamicMesh } from './index'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 export type WallRenderAssetObjects = {

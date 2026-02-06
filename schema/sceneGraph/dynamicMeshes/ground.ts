@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { GroundDynamicMesh } from '@harmony/schema';
+import type { GroundDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import { createGroundMesh, setGroundMaterial, updateGroundMesh } from '../../groundMesh';
 

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
-import type { SceneNodeImportMetadata } from '@harmony/schema'
+import type { SceneNodeImportMetadata } from './index'
 import { loadObjectFromFile } from './assetImport'
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {

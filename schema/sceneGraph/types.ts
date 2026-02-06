@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags } from '@harmony/schema';
+import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags } from '../index';
 
 export type SceneNodeWithExtras = SceneNode & {
   light?: {

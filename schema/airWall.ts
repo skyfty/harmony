@@ -4,7 +4,7 @@ import type {
 	SceneNode,
 	Vector3Like,
 	GroundDynamicMesh,
-} from '@harmony/schema'
+} from './index'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
 export const DEFAULT_AIR_WALL_HEIGHT = 8

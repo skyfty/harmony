@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh } from '@harmony/schema'
+import type { FloorDynamicMesh } from './index'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 export type FloorRenderAssetObjects = {

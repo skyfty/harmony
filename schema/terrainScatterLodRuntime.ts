@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { AssetCacheEntry } from './assetCache'
 import ResourceCache from './ResourceCache'
-import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from '@harmony/schema'
+import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from './index'
 import type { TerrainScatterInstance, TerrainScatterLayer, TerrainScatterStoreSnapshot } from './terrain-scatter'
 import { clampLodComponentProps, type LodComponentProps } from './components'
 import { loadNodeObject } from './modelAssetLoader'

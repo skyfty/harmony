@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MATERIAL_CONFIG_ID_KEY } from '../material';
-import type { SceneNodeMaterial } from '@harmony/schema';
+import type { SceneNodeMaterial } from '../index';
 
 export function buildMaterialConfigMap(
   nodeMaterialConfigs: SceneNodeMaterial[],

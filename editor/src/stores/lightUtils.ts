@@ -86,6 +86,23 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         position: deps.createVector(0, 25, 0),
         extras: {} as Record<string, unknown>,
       }
+    case 'Hemisphere':
+      return {
+        name: 'Hemisphere Light',
+        color: '#ffffff',
+        intensity: 0.6,
+        position: deps.createVector(0, 25, 0),
+        extras: { groundColor: '#444444' } as Record<string, unknown>,
+      }
+    case 'RectArea':
+      return {
+        name: 'RectArea Light',
+        color: '#ffffff',
+        intensity: 3,
+        position: deps.createVector(10, 12, 10),
+        rotation: deps.createVector(0, Math.PI / 4, 0) as any,
+        extras: { width: 10, height: 6 } as Record<string, unknown>,
+      }
   }
 }
 
@@ -94,6 +111,8 @@ export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
   Point: 'mdi-lightbulb-on-outline',
   Spot: 'mdi-spotlight-beam',
   Ambient: 'mdi-weather-night',
+  Hemisphere: 'mdi-weather-sunset',
+  RectArea: 'mdi-rectangle-outline',
 }
 
 export const POINT_LIGHT_HELPER_SIZE = 0.5
@@ -111,8 +130,14 @@ export function resolveLightTypeFromObject(light: Light): LightNodeType {
   if (typed.isSpotLight) {
     return 'Spot'
   }
-  if (typed.isPointLight || typed.isRectAreaLight) {
+  if (typed.isPointLight) {
     return 'Point'
+  }
+  if (typed.isRectAreaLight) {
+    return 'RectArea'
+  }
+  if (typed.isHemisphereLight) {
+    return 'Hemisphere'
   }
   return 'Ambient'
 }

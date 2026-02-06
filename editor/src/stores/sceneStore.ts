@@ -3537,7 +3537,43 @@ function cloneNode(node: SceneNode): SceneNode {
 
 function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
   const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
-  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode([], settings)), environmentSettings)
+  const baseNodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode([], settings)), environmentSettings)
+
+  const ambientPreset = getLightPreset('Ambient')
+  const directionalPreset = getLightPreset('Directional')
+  const hemispherePreset = getLightPreset('Hemisphere')
+
+  const ambient = createLightNode({
+    name: ambientPreset.name,
+    type: 'Ambient',
+    color: ambientPreset.color,
+    intensity: ambientPreset.intensity,
+    position: ambientPreset.position,
+    target: (ambientPreset as any).target,
+    extras: ambientPreset.extras as any,
+  })
+
+  const directional = createLightNode({
+    name: directionalPreset.name,
+    type: 'Directional',
+    color: directionalPreset.color,
+    intensity: directionalPreset.intensity,
+    position: directionalPreset.position,
+    target: (directionalPreset as any).target,
+    extras: directionalPreset.extras as any,
+  })
+
+  const hemisphere = createLightNode({
+    name: hemispherePreset.name,
+    type: 'Hemisphere',
+    color: hemispherePreset.color,
+    intensity: hemispherePreset.intensity,
+    position: hemispherePreset.position,
+    target: (hemispherePreset as any).target,
+    extras: hemispherePreset.extras as any,
+  })
+
+  return [ambient, directional, hemisphere, ...baseNodes]
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {

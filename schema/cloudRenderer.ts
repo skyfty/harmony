@@ -7,7 +7,7 @@ import type {
   SceneCubeTextureCloudSettings,
   SceneSphericalCloudSettings,
   SceneVolumetricCloudSettings,
-} from '@harmony/schema'
+} from './index'
 
 export interface CloudAssetResolution {
   url: string

@@ -1,7 +1,7 @@
 import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
 import type { SceneGraphBuildOptions } from './sceneGraph';
-import type { SceneJsonExportDocument } from '@harmony/schema';
+import type { SceneJsonExportDocument } from './index';
 
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer

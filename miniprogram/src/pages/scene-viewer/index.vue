@@ -1203,7 +1203,6 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
-const SCENE_VIEWER_AMBIENT_INTENSITY_BOOST = 6;
 
 function resolveSceneExposure(exposure: unknown): number {
   const base = clampNumber(exposure, 0, 5, DEFAULT_SKYBOX_SETTINGS.exposure);
@@ -1215,15 +1214,6 @@ function resolveSceneExposure(exposure: unknown): number {
   );
 }
 
-function resolveAmbientLightIntensity(intensity: unknown): number {
-  const base = clampNumber(intensity, 0, 5, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY);
-  return clampNumber(
-    base * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
-    0,
-    5,
-    DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY * SCENE_VIEWER_AMBIENT_INTENSITY_BOOST,
-  );
-}
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff';
@@ -1257,23 +1247,17 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
 };
 const skySunPosition = new THREE.Vector3();
-const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize();
-const tempSunDirection = new THREE.Vector3();
-const SKY_SUN_LIGHT_DISTANCE = 150;
-const SKY_SUN_LIGHT_MIN_HEIGHT = 12;
 
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
 let sky: Sky | null = null;
-let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
 let cloudRenderer: SceneCloudRenderer | null = null;
 let shouldRenderSkyBackground = true;
-let environmentAmbientLight: THREE.AmbientLight | null = null;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
@@ -7801,78 +7785,6 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
   } else if (sunUniform) {
     sunUniform.value = skySunPosition.clone();
   }
-  applySunDirectionToSunLight();
-}
-
-function ensureSunDirectionalLight(): THREE.DirectionalLight | null {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return null;
-  }
-
-  if (!sunDirectionalLight) {
-    const light = new THREE.DirectionalLight('#ffffff', 1);
-    light.name = 'SkySunLight';
-    light.castShadow = true;
-    light.shadow.mapSize.set(2048, 2048);
-    light.shadow.bias = -0.0001;
-    light.shadow.normalBias = 0.02;
-    light.shadow.camera.near = 1;
-    light.shadow.camera.far = 400;
-    light.shadow.camera.left = -200;
-    light.shadow.camera.right = 200;
-    light.shadow.camera.top = 200;
-    light.shadow.camera.bottom = -200;
-    sunDirectionalLight = light;
-    scene.add(light);
-    scene.add(light.target);
-  } else {
-    if (sunDirectionalLight.parent !== scene) {
-      scene.add(sunDirectionalLight);
-    }
-    if (sunDirectionalLight.target.parent !== scene) {
-      scene.add(sunDirectionalLight.target);
-    }
-  }
-
-  return sunDirectionalLight;
-}
-
-function applySunDirectionToSunLight(): void {
-  const light = ensureSunDirectionalLight();
-  if (!light) {
-    return;
-  }
-
-  if (skySunPosition.lengthSq() > 1e-6) {
-    tempSunDirection.copy(skySunPosition);
-  } else {
-    tempSunDirection.copy(DEFAULT_SUN_DIRECTION);
-  }
-
-  light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE);
-  if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
-    light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT;
-  }
-  light.target.position.set(0, 0, 0);
-  light.target.updateMatrixWorld();
-}
-
-function ensureEnvironmentAmbientLight(): THREE.AmbientLight | null {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return null;
-  }
-  if (!environmentAmbientLight) {
-    environmentAmbientLight = new THREE.AmbientLight(
-      DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-      DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-    );
-    scene.add(environmentAmbientLight);
-  } else if (environmentAmbientLight.parent !== scene) {
-    scene.add(environmentAmbientLight);
-  }
-  return environmentAmbientLight;
 }
 
 function applySkyEnvironmentToScene() {
@@ -7959,16 +7871,6 @@ async function loadEnvironmentTextureFromAsset(
     console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
     return null;
   }
-}
-
-function applyAmbientLightSettings(settings: EnvironmentSettings) {
-  const ambient = ensureEnvironmentAmbientLight();
-  if (!ambient) {
-    return;
-  }
-  ambient.color.set(settings.ambientLightColor);
-  ambient.intensity = resolveAmbientLightIntensity(settings.ambientLightIntensity);
-
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
@@ -8113,7 +8015,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     pendingEnvironmentSettings = snapshot;
     return;
   }
-  applyAmbientLightSettings(snapshot);
   applyFogSettings(snapshot);
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
   const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap);
@@ -8130,11 +8031,6 @@ function disposeEnvironmentResources() {
   backgroundLoadToken += 1;
   environmentMapLoadToken += 1;
   pendingEnvironmentSettings = null;
-  if (environmentAmbientLight) {
-    environmentAmbientLight.parent?.remove(environmentAmbientLight);
-    environmentAmbientLight.dispose?.();
-    environmentAmbientLight = null;
-  }
 }
 
 function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
@@ -8789,7 +8685,6 @@ function teardownRenderer() {
   disposeObject(scene);
   disposeMaterialTextureCache();
   renderer.dispose();
-  sunDirectionalLight = null;
   renderContext = null;
   canvasResult = null;
   setActiveMultiuserSceneId(null);
@@ -8937,23 +8832,6 @@ function resetResourcePreloadState(): void {
 }
 
 /**
- * Ensure the baseline lighting/sky objects exist for the new scene.
- * This keeps the scene readable even before environment maps finish loading.
- */
-function setupBaselineSceneLighting(scene: THREE.Scene): void {
-  const ambientLight = ensureEnvironmentAmbientLight();
-  if (ambientLight) {
-    ambientLight.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR);
-    ambientLight.intensity = DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY;
-  }
-  applySunDirectionToSunLight();
-
-  const hemisphericLight = new THREE.HemisphereLight('#d4d8ff', '#f5f2ef', 0.3);
-  scene.add(hemisphericLight);
-
-  ensureSkyExists();
-}
-
 /**
  * Build the SceneGraph (three.js object tree) and keep `resourcePreload` in sync.
  * Returns null when build fails.
@@ -9343,10 +9221,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     });
   }
 
-  // Phase 2: baseline scene lighting and sky.
-  setupBaselineSceneLighting(scene);
-
-  // Phase 3: build the scene graph (loads assets) with UI progress updates.
+  // Phase 2: build the scene graph (loads assets) with UI progress updates.
   resetResourcePreloadState();
   const buildResult = await buildSceneGraphWithProgress(payload);
   if (token !== initializeToken) {
@@ -9363,7 +9238,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     warnings.value = graph.warnings;
   }
 
-  // Phase 4: instancing preparation (skip lazy placeholders).
+  // Phase 3: instancing preparation (skip lazy placeholders).
   const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
   await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
 
@@ -9372,14 +9247,14 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     return;
   }
 
-  // Phase 5: mount graph and sync subsystems that depend on it.
+  // Phase 4: mount graph and sync subsystems that depend on it.
   mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
 
-  // Phase 6: apply view settings (camera alignment, skybox, environment, projection).
+  // Phase 5: apply view settings (camera alignment, skybox, environment, projection).
   applyDocumentViewSettings(payload.document, camera);
   markInstancedCullingDirty();
 
-  // Phase 7: start the render loop.
+  // Phase 6: start the render loop.
   startRenderLoop(result, renderer, scene, camera, controls);
 }
 

@@ -46,6 +46,9 @@ import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
+import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHelper.js'
+
+import { ensureRectAreaLightSupport } from '@schema/lightsRuntime'
 
 import type {
   SceneNode,
@@ -256,13 +259,7 @@ import {
   DEFAULT_BACKGROUND_COLOR,
   GROUND_NODE_ID,
   SKY_ENVIRONMENT_INTENSITY,
-  FALLBACK_AMBIENT_INTENSITY,
-  FALLBACK_DIRECTIONAL_INTENSITY,
-  FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE,
   SKY_SCALE,
-  SKY_FALLBACK_LIGHT_DISTANCE,
-  SKY_SUN_LIGHT_DISTANCE,
-  SKY_SUN_LIGHT_MIN_HEIGHT,
   CLICK_DRAG_THRESHOLD_PX,
   ASSET_DRAG_MIME,
   MIN_CAMERA_HEIGHT,
@@ -767,15 +764,11 @@ let transformControlsDirty = false
 let gizmoControls: ViewportGizmo | null = null
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let environmentAmbientLight: THREE.AmbientLight | null = null
-let sunDirectionalLight: THREE.DirectionalLight | null = null
-let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 let stats: Stats | null = null
 let statsPointerHandler: (() => void) | null = null
 let statsPanelIndex = 0
 let stopInstancedMeshSubscription: (() => void) | null = null
 let gridHighlight: THREE.Group | null = null
-let isSunLightSuppressed = false
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let latestFogSettings: EnvironmentSettings | null = null
 let shouldRenderSkyBackground = true
@@ -802,8 +795,6 @@ const postprocessing = useViewportPostprocessing({
   getCamera: () => camera,
 })
 const skySunPosition = new THREE.Vector3()
-const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
-const tempSunDirection = new THREE.Vector3()
 let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
 let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
@@ -1148,9 +1139,6 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
-  if (sunDirectionalLight) {
-    sunDirectionalLight.castShadow = castShadows
-  }
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -5184,7 +5172,6 @@ function removeNodeObjects(removedIds: Set<string>): void {
   attachSelection(props.selectedNodeId, props.activeTool)
   updateOutlineSelectionTargets()
   updateSelectionHighlights()
-  ensureFallbackLighting()
   refreshEffectRuntimeTickers()
 }
 
@@ -5470,7 +5457,6 @@ const terrainGridController = useTerrainGridController({
   computeSignature: computeGroundDynamicMeshSignature,
   nowMs,
 })
-let fallbackLightGroup: THREE.Group | null = null
 let isSelectDragOrbitDisabled = false
 let isGroundSelectionOrbitDisabled = false
 let orbitDisableCount = 0
@@ -7129,13 +7115,6 @@ function initScene() {
   scene.fog = null
 
   const initialEnvironment = environmentSettings.value
-  environmentAmbientLight = new THREE.AmbientLight(
-    initialEnvironment.ambientLightColor,
-    initialEnvironment.ambientLightIntensity,
-  )
-  scene.add(environmentAmbientLight)
-
-  applySunDirectionToSunLight()
 
   ensureSkyExists()
   scene.add(rootGroup)
@@ -7158,7 +7137,6 @@ function initScene() {
   // face snap effects disabled
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
-  ensureFallbackLighting()
   clearInstancedMeshes()
   instancedMeshRevision.value += 1
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
@@ -7330,8 +7308,6 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
     sunUniform.value = skySunPosition.clone()
   }
 
-  applySunDirectionToFallbackLight()
-
   if (!pmremGenerator) {
     return
   }
@@ -7350,99 +7326,6 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
     scene.environment = skyEnvironmentTarget.texture
     scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
   }
-}
-
-function ensureSunLight(): THREE.DirectionalLight | null {
-  if (!scene) {
-    return null
-  }
-
-  if (!sunDirectionalLight) {
-    const light = new THREE.DirectionalLight(0xffffff, 1.05)
-    light.name = 'SkySunLight'
-    light.castShadow = Boolean(shadowsActiveInViewport.value)
-    light.shadow.mapSize.set(512, 512)
-    light.shadow.bias = -0.0001
-    light.shadow.normalBias = 0.02
-    light.shadow.camera.near = 1
-    light.shadow.camera.far = 400
-    light.shadow.camera.left = -200
-    light.shadow.camera.right = 200
-    light.shadow.camera.top = 200
-    light.shadow.camera.bottom = -200
-    sunDirectionalLight = light
-    scene.add(light)
-    scene.add(light.target)
-  } else {
-    if (sunDirectionalLight.parent !== scene) {
-      scene.add(sunDirectionalLight)
-    }
-    if (sunDirectionalLight.target.parent !== scene) {
-      scene.add(sunDirectionalLight.target)
-    }
-  }
-
-  sunDirectionalLight.castShadow = Boolean(shadowsActiveInViewport.value)
-  return sunDirectionalLight
-}
-
-function updateSunLightVisibility() {
-  if (sunDirectionalLight) {
-    sunDirectionalLight.visible = !isSunLightSuppressed
-  }
-}
-
-function setSunLightSuppressed(suppressed: boolean) {
-  if (isSunLightSuppressed === suppressed) {
-    return
-  }
-  isSunLightSuppressed = suppressed
-  if (!suppressed) {
-    applySunDirectionToSunLight()
-  } else {
-    updateSunLightVisibility()
-  }
-}
-
-function applySunDirectionToSunLight() {
-  if (isSunLightSuppressed) {
-    updateSunLightVisibility()
-    return
-  }
-
-  const light = ensureSunLight()
-  if (!light) {
-    return
-  }
-
-  if (skySunPosition.lengthSq() > 1e-6) {
-    tempSunDirection.copy(skySunPosition)
-  } else {
-    tempSunDirection.copy(DEFAULT_SUN_DIRECTION)
-  }
-
-  light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
-  if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
-    light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT
-  }
-
-  light.target.position.set(0, 0, 0)
-  light.target.updateMatrixWorld()
-  updateSunLightVisibility()
-}
-
-function applySunDirectionToFallbackLight() {
-  applySunDirectionToSunLight()
-  if (!fallbackDirectionalLight) {
-    return
-  }
-
-  fallbackDirectionalLight.position.copy(skySunPosition).multiplyScalar(SKY_FALLBACK_LIGHT_DISTANCE)
-  if (fallbackDirectionalLight.position.y < 10) {
-    fallbackDirectionalLight.position.y = 10
-  }
-  fallbackDirectionalLight.target.position.set(0, 0, 0)
-  fallbackDirectionalLight.target.updateMatrixWorld()
 }
 
 function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): EnvironmentSettings {
@@ -7642,9 +7525,6 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
     return false
   }
 
-  const shouldSuppressSunLight = mapSettings.mode !== 'skybox' && Boolean(mapSettings.hdriAssetId)
-  setSunLightSuppressed(shouldSuppressSunLight)
-
   if (mapSettings.mode === 'skybox') {
     disposeCustomEnvironmentTarget()
     applySkyEnvironment()
@@ -7687,14 +7567,6 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   scene.environment = target.texture
   scene.environmentIntensity = 1
   return true
-}
-
-function applyAmbientLightSettings(settings: EnvironmentSettings) {
-  if (!environmentAmbientLight) {
-    return
-  }
-  environmentAmbientLight.color.set(settings.ambientLightColor)
-  environmentAmbientLight.intensity = settings.ambientLightIntensity
 }
 
 function applyFogSettings(settings: EnvironmentSettings) {
@@ -7756,8 +7628,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     pendingEnvironmentSettings = snapshot
     return
   }
-
-  applyAmbientLightSettings(snapshot)
 
   const backgroundApplied = await applyBackgroundSettings(snapshot.background)
   const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
@@ -8049,20 +7919,6 @@ function disposeScene() {
 
   clearLightHelpers()
   disposeSkyResources()
-
-  if (sunDirectionalLight) {
-    sunDirectionalLight.parent?.remove(sunDirectionalLight)
-    sunDirectionalLight.target.parent?.remove(sunDirectionalLight.target)
-    sunDirectionalLight.dispose()
-    sunDirectionalLight = null
-  }
-
-  if (scene && fallbackLightGroup) {
-    scene.remove(fallbackLightGroup)
-    fallbackLightGroup.clear()
-  }
-  fallbackLightGroup = null
-  fallbackDirectionalLight = null
 
   if (gizmoControls) {
     gizmoControls.dispose()
@@ -11354,7 +11210,11 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
 
   light.color.set(config.color)
   light.intensity = config.intensity
-  light.castShadow = config.castShadow ?? light.castShadow
+
+  // Only some light types support shadows.
+  if ('castShadow' in (light as any) && typeof (config as any).castShadow === 'boolean') {
+    ;(light as any).castShadow = (config as any).castShadow
+  }
 
   if (light instanceof THREE.PointLight) {
     light.distance = config.distance ?? light.distance
@@ -11385,7 +11245,23 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
         container.add(light.target)
       }
     }
-    light.castShadow = config.castShadow ?? light.castShadow
+    if (typeof config.castShadow === 'boolean') {
+      light.castShadow = config.castShadow
+    }
+  } else if (light instanceof THREE.HemisphereLight) {
+    const ground = (config as any).groundColor
+    if (typeof ground === 'string' && ground.length) {
+      light.groundColor.set(ground)
+    }
+  } else if (light instanceof THREE.RectAreaLight) {
+    const width = (config as any).width
+    const height = (config as any).height
+    if (Number.isFinite(width)) {
+      light.width = Math.max(0, Number(width))
+    }
+    if (Number.isFinite(height)) {
+      light.height = Math.max(0, Number(height))
+    }
   }
 
   container.userData.lightType = config.type
@@ -11909,7 +11785,6 @@ function syncSceneGraph() {
 
   refreshPlaceholderOverlays()
   terrainGridController.refresh()
-  ensureFallbackLighting()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
 }
@@ -11997,14 +11872,14 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       requiresHelperUpdate = true
       break
     }
-  case 'Point': {
+    case 'Point': {
       const point = new THREE.PointLight(config.color, config.intensity, config.distance ?? 0, config.decay ?? 1)
       point.castShadow = config.castShadow ?? false
       light = point
       helper = new THREE.PointLightHelper(point, POINT_LIGHT_HELPER_SIZE, config.color)
       break
     }
-  case 'Spot': {
+    case 'Spot': {
       const spot = new THREE.SpotLight(
         config.color,
         config.intensity,
@@ -12027,6 +11902,24 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       requiresHelperUpdate = true
       break
     }
+    case 'Hemisphere': {
+      const ground = (config as any).groundColor ?? '#444444'
+      const hemi = new THREE.HemisphereLight(config.color, ground, config.intensity)
+      light = hemi
+      helper = new THREE.HemisphereLightHelper(hemi, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
+      requiresHelperUpdate = true
+      break
+    }
+    case 'RectArea': {
+      ensureRectAreaLightSupport()
+      const width = Number.isFinite((config as any).width) ? Math.max(0, Number((config as any).width)) : 10
+      const height = Number.isFinite((config as any).height) ? Math.max(0, Number((config as any).height)) : 10
+      const rect = new THREE.RectAreaLight(config.color, config.intensity, width, height)
+      light = rect
+      helper = new RectAreaLightHelper(rect)
+      requiresHelperUpdate = true
+      break
+    }
   case 'Ambient':
     default: {
       light = new THREE.AmbientLight(config.color, config.intensity)
@@ -12045,46 +11938,6 @@ function createLightObject(node: SceneNode): THREE.Object3D {
   }
 
   return container
-}
-
-function ensureFallbackLighting() {
-  if (!scene) {
-    return
-  }
-
-  if (!fallbackLightGroup) {
-    fallbackLightGroup = new THREE.Group()
-    fallbackLightGroup.name = 'FallbackLights'
-    scene.add(fallbackLightGroup)
-  }
-
-  fallbackLightGroup.clear()
-  fallbackDirectionalLight = null
-
-  let hasLight = false
-  rootGroup.traverse((child) => {
-    const candidate = child as THREE.Light & { isLight?: boolean }
-    if (candidate?.isLight) {
-      hasLight = true
-    }
-  })
-
-  if (!hasLight) {
-    const ambient = new THREE.AmbientLight(0xffffff, FALLBACK_AMBIENT_INTENSITY)
-    fallbackLightGroup.add(ambient)
-    if (!sunDirectionalLight && !isSunLightSuppressed) {
-      const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
-      directional.castShadow = true
-      directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
-      directional.shadow.normalBias = 0.02
-      directional.shadow.bias = -0.0001
-      directional.target.position.set(0, 0, 0)
-      fallbackLightGroup.add(directional)
-      fallbackLightGroup.add(directional.target)
-      fallbackDirectionalLight = directional
-    }
-    applySunDirectionToFallbackLight()
-  }
 }
 
 function ensureUvDebugMaterialsForMissingMeshes(
