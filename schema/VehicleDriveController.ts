@@ -156,10 +156,6 @@ const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_SPEED_SOFT_CAP = 8.5
 // 车辆速度硬上限（m/s，约45km/h），绝对不能超过
 const VEHICLE_SPEED_HARD_CAP = 12.5
-const VEHICLE_SPEED_SOFT_CAP_SQ = VEHICLE_SPEED_SOFT_CAP * VEHICLE_SPEED_SOFT_CAP
-const VEHICLE_SPEED_HARD_CAP_SQ = VEHICLE_SPEED_HARD_CAP * VEHICLE_SPEED_HARD_CAP
-// 超速时的速度阻尼
-const VEHICLE_SPEED_LIMIT_DAMPING = 0.08
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -261,6 +257,8 @@ export class VehicleDriveController {
   private readonly deps: VehicleDriveControllerDeps
   private readonly bindings: VehicleDriveControllerBindings
   private readonly followCameraController = new FollowCameraController()
+  private speedGovernorScale = 1
+  private speedGovernorBrakeAssist = 0
   private readonly temp = {
     box: new THREE.Box3(),
     size: new THREE.Vector3(),
@@ -624,7 +622,7 @@ export class VehicleDriveController {
     // stopDrive: end (debug logs removed)
   }
 
-  applyForces(): void {
+  applyForces(deltaSeconds?: number): void {
     const state = this.state
     if (!state.active || !state.nodeId) {
       return
@@ -640,44 +638,76 @@ export class VehicleDriveController {
     const steeringInput = this.input.steering
     const brakeInput = this.input.brake
     const smoothStop = this.smoothStopState
+
     if (Math.abs(throttle) > 0.05) {
       smoothStop.active = false
     }
-    let engineForce = throttle * VEHICLE_ENGINE_FORCE
+    const engineForceRaw = throttle * VEHICLE_ENGINE_FORCE
+    let engineForce = engineForceRaw
     let speedSq = 0
+    let forwardVelocity: number | null = null
+    let forwardSpeedAbs = 0
+    let sameDirection: boolean | null = null
+
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
       const throttleSign = Math.sign(throttle)
-      if (throttleSign !== 0 && speedSq > VEHICLE_SPEED_SOFT_CAP_SQ) {
-        const speed = Math.sqrt(speedSq)
-        const range = Math.max(0.1, VEHICLE_SPEED_HARD_CAP - VEHICLE_SPEED_SOFT_CAP)
-        const excess = Math.min(Math.max(0, speed - VEHICLE_SPEED_SOFT_CAP), range)
-        const slowRatio = Math.min(1, excess / range)
-        this.temp.tempQuaternion.set(
-          chassisBody.quaternion.x,
-          chassisBody.quaternion.y,
-          chassisBody.quaternion.z,
-          chassisBody.quaternion.w,
-        )
-        const forwardWorld = this.temp.cameraForward
-        forwardWorld.copy(instance.axisForward).normalize()
-        if (forwardWorld.lengthSq() < 1e-6) {
-          forwardWorld.set(0, 0, 1)
-        }
-        forwardWorld.applyQuaternion(this.temp.tempQuaternion).normalize()
-        const forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
-        const sameDirection = Math.sign(forwardVelocity) === throttleSign
-        if (sameDirection) {
-          engineForce *= 1 - 0.7 * slowRatio
-          if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ && throttleSign > 0) {
-            engineForce = 0
-          }
-        }
+
+      const dt = typeof deltaSeconds === 'number' && Number.isFinite(deltaSeconds)
+        ? Math.max(0, Math.min(0.25, deltaSeconds))
+        : 1 / 60
+
+      // Compute forward velocity once. Using total speed (|v|) for limiting can cause oscillation
+      // if there's small lateral/vertical velocity noise at high speed.
+      this.temp.tempQuaternion.set(
+        chassisBody.quaternion.x,
+        chassisBody.quaternion.y,
+        chassisBody.quaternion.z,
+        chassisBody.quaternion.w,
+      )
+      const forwardWorld = this.temp.cameraForward
+      forwardWorld.copy(instance.axisForward).normalize()
+      if (forwardWorld.lengthSq() < 1e-6) {
+        forwardWorld.set(0, 0, 1)
       }
-      if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ) {
-		const factor = 1 - VEHICLE_SPEED_LIMIT_DAMPING
-		velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
-      } else if (Math.abs(throttle) < 0.05) {
+      forwardWorld.applyQuaternion(this.temp.tempQuaternion).normalize()
+      forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
+      forwardSpeedAbs = Math.abs(forwardVelocity)
+
+      // forwardSpeedAbs can be used for conditional logic if needed
+
+      // Smooth speed governor (preferred over directly editing velocity):
+      // - scales engine force down to 0 when approaching hard cap
+      // - applies a gentle brake assist only when above hard cap
+      // This avoids a physics "fight" that can cause oscillation under constant throttle.
+      sameDirection = throttleSign !== 0 ? Math.sign(forwardVelocity) === throttleSign : null
+      const acceleratingForward = !!(sameDirection && throttleSign !== 0)
+      if (acceleratingForward) {
+        const range = Math.max(0.1, VEHICLE_SPEED_HARD_CAP - VEHICLE_SPEED_SOFT_CAP)
+        const excess = Math.max(0, forwardSpeedAbs - VEHICLE_SPEED_SOFT_CAP)
+        const t = Math.min(1, excess / range)
+        // Smoothstep (0..1), then invert to get scale (1..0)
+        const smooth = t * t * (3 - 2 * t)
+        const scaleTarget = Math.max(0, 1 - smooth)
+        const scaleAlpha = 1 - Math.exp(-10 * dt)
+        this.speedGovernorScale += (scaleTarget - this.speedGovernorScale) * scaleAlpha
+        engineForce *= this.speedGovernorScale
+
+        // Brake assist kicks in only after crossing hard cap, and ramps smoothly.
+        const over = Math.max(0, forwardSpeedAbs - VEHICLE_SPEED_HARD_CAP)
+        const brakeBand = 0.9 // m/s (~3.2km/h)
+        const brakeRatio = Math.min(1, over / brakeBand)
+        const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * 0.35
+        const brakeAlpha = 1 - Math.exp(-8 * dt)
+        this.speedGovernorBrakeAssist += (brakeTarget - this.speedGovernorBrakeAssist) * brakeAlpha
+      } else {
+        // Relax governor when not accelerating forward.
+        const relaxAlpha = 1 - Math.exp(-6 * dt)
+        this.speedGovernorScale += (1 - this.speedGovernorScale) * relaxAlpha
+        this.speedGovernorBrakeAssist += (0 - this.speedGovernorBrakeAssist) * relaxAlpha
+      }
+
+      if (Math.abs(throttle) < 0.05) {
         let damping = VEHICLE_COASTING_DAMPING
         if (smoothStop.active) {
           const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
@@ -688,8 +718,8 @@ export class VehicleDriveController {
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
-		const factor = 1 - clampedDamping
-		velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
+        const factor = 1 - clampedDamping
+        velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()
           if (nextSpeedSq <= VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ) {
@@ -703,6 +733,7 @@ export class VehicleDriveController {
           speedSq = velocity.lengthSquared()
         }
       }
+
     }
     let steeringValue = steeringInput * VEHICLE_STEER_ANGLE
     if (speedSq > VEHICLE_STEER_SOFT_CAP_SQ) {
@@ -712,7 +743,8 @@ export class VehicleDriveController {
       const slowRatio = Math.min(1, excess / range)
       steeringValue *= 1 - 0.65 * slowRatio
     }
-    const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
+    const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
+    const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))
     for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
       vehicle.setBrake(brakeForce, index)
     }

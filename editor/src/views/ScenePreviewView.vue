@@ -5414,11 +5414,11 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 	setVehicleDriveUiOverride('hide')
 }
 
-function applyVehicleDriveForces(): void {
+function applyVehicleDriveForces(deltaSeconds: number): void {
 	if (!vehicleDriveState.active || !vehicleDriveState.vehicle) {
 		return
 	}
-	vehicleDriveController.applyForces()
+	vehicleDriveController.applyForces(deltaSeconds)
 }
 
 function updateVehicleSpeedFromVehicle(): void {
@@ -6617,7 +6617,7 @@ function updatePlaybackSystemsForFrame(delta: number): void {
 	} else {
 		autoTourRuntime.update(delta)
 	}
-	applyVehicleDriveForces()
+	applyVehicleDriveForces(delta)
 	stepPhysicsWorld(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)

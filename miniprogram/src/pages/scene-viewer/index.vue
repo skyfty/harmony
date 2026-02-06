@@ -6880,9 +6880,8 @@ function startVehicleDriveMode(
   return result;
 }
 
-function applyVehicleDriveForces(): void {
-
-  vehicleDriveController.applyForces();
+function applyVehicleDriveForces(deltaSeconds: number): void {
+  vehicleDriveController.applyForces(deltaSeconds);
 }
 
 function updateVehicleSpeedFromVehicle(): void {
@@ -9179,7 +9178,7 @@ function startRenderLoop(
             autoTourRuntime.update(deltaSeconds);
           }
           if (vehicleDriveActive.value) {
-            applyVehicleDriveForces();
+            applyVehicleDriveForces(deltaSeconds);
           }
           stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
