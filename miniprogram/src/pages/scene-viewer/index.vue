@@ -416,7 +416,6 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
-import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
@@ -1042,7 +1041,6 @@ function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: 
 }
 
 const rgbeLoader = new RGBELoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
-const exrLoader = new EXRLoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
@@ -1472,13 +1470,12 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
     }
 
     const extension = resolveTextureExtension(entry, ref);
-    try {
+      try {
       let texture: THREE.Texture;
-      if (extension === 'exr') {
-        texture = await exrLoader.loadAsync(source);
-      } else if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+      if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
         texture = await rgbeLoader.loadAsync(source);
       } else {
+        // EXR is not available in all module environments; fall back to image loader.
         texture = await textureLoader.loadAsync(source);
       }
       texture.name = ref.name ?? entry.filename ?? cacheKey;
@@ -8290,7 +8287,8 @@ async function loadEnvironmentTextureFromAsset(
   const mimeType = resolve.mimeType ?? null;
   try {
     if (extension === 'exr' || (mimeType && mimeType.toLowerCase().includes('exr'))) {
-      const texture = await exrLoader.loadAsync(resolve.url);
+      // EXR not supported in this environment; use texture loader fallback.
+      const texture = await textureLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.magFilter = THREE.NearestFilter;

@@ -75,7 +75,6 @@ const EDITOR_HELPER_TYPES = new Set<string>([
     'PointLightHelper',
     'SpotLightHelper',
     'DirectionalLightHelper',
-    'RectAreaLightHelper',
     'HemisphereLightHelper',
     'TransformControls',
     'TransformControlsGizmo',

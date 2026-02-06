@@ -45,10 +45,8 @@ import type {
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHelper.js'
 
-import { ensureRectAreaLightSupport } from '@schema/lightsRuntime'
+// RectAreaLight support removed; no import from lightsRuntime required.
 
 import type {
   SceneNode,
@@ -1112,7 +1110,6 @@ const protagonistPreview = useProtagonistPreview({
 const textureLoader = new THREE.TextureLoader()
 const cubeTextureLoader = new THREE.CubeTextureLoader()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
-const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
@@ -7525,27 +7522,21 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
 
   const { url, extension } = resolved
 
-  try {
-    if (extension === 'exr') {
-      const texture = await exrLoader.loadAsync(url)
+    try {
+      if (isHdriLikeExtension(extension)) {
+        const texture = await rgbeLoader.loadAsync(url)
+        texture.mapping = THREE.EquirectangularReflectionMapping
+        texture.needsUpdate = true
+        return texture
+      }
+      // EXR not supported in all module environments; fall back to image loader.
+      const texture = await textureLoader.loadAsync(url)
       texture.mapping = THREE.EquirectangularReflectionMapping
+      texture.colorSpace = THREE.SRGBColorSpace
       texture.flipY = false
       texture.needsUpdate = true
       return texture
-    }
-    if (isHdriLikeExtension(extension)) {
-      const texture = await rgbeLoader.loadAsync(url)
-      texture.mapping = THREE.EquirectangularReflectionMapping
-      texture.needsUpdate = true
-      return texture
-    }
-    const texture = await textureLoader.loadAsync(url)
-    texture.mapping = THREE.EquirectangularReflectionMapping
-    texture.colorSpace = THREE.SRGBColorSpace
-    texture.flipY = false
-    texture.needsUpdate = true
-    return texture
-  } catch (error) {
+    } catch (error) {
     console.warn('Failed to load environment texture', assetId, error)
     return null
   }
@@ -11397,15 +11388,6 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
     if (typeof ground === 'string' && ground.length) {
       light.groundColor.set(ground)
     }
-  } else if (light instanceof THREE.RectAreaLight) {
-    const width = (config as any).width
-    const height = (config as any).height
-    if (Number.isFinite(width)) {
-      light.width = Math.max(0, Number(width))
-    }
-    if (Number.isFinite(height)) {
-      light.height = Math.max(0, Number(height))
-    }
   }
 
   container.userData.lightType = config.type
@@ -12131,13 +12113,8 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       break
     }
     case 'RectArea': {
-      ensureRectAreaLightSupport()
-      const width = Number.isFinite((config as any).width) ? Math.max(0, Number((config as any).width)) : 10
-      const height = Number.isFinite((config as any).height) ? Math.max(0, Number((config as any).height)) : 10
-      const rect = new THREE.RectAreaLight(config.color, config.intensity, width, height)
-      light = rect
-      helper = new RectAreaLightHelper(rect)
-      requiresHelperUpdate = true
+      // RectAreaLight not supported — fall back to AmbientLight.
+      light = new THREE.AmbientLight(config.color, config.intensity)
       break
     }
   case 'Ambient':

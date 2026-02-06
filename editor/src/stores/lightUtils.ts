@@ -81,28 +81,20 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
     default:
       return {
         name: 'Ambient Light',
-        color: '#ffffff',
-        intensity: 0.35,
+        color: '#404040', //0x404040
+        intensity: 0.15,
         position: deps.createVector(0, 8, 0),
         extras: {} as Record<string, unknown>,
       }
     case 'Hemisphere':
       return {
         name: 'Hemisphere Light',
-        color: '#ffffff',
-        intensity: 0.6,
+        color: '#87CEEB', //0x87CEEB (sky blue)
+        intensity: 0.4,
         position: deps.createVector(0, 8, 0),
-        extras: { groundColor: '#444444' } as Record<string, unknown>,
+        extras: { groundColor: '#556B2F' } as Record<string, unknown>,  //0x556B2F (dark olive green)
       }
-    case 'RectArea':
-      return {
-        name: 'RectArea Light',
-        color: '#ffffff',
-        intensity: 3,
-        position: deps.createVector(8, 10, 8),
-        rotation: deps.createVector(0, Math.PI / 4, 0) as any,
-        extras: { width: 10, height: 6 } as Record<string, unknown>,
-      }
+    // RectArea presets removed — fall back handled elsewhere
   }
 }
 
@@ -112,7 +104,6 @@ export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
   Spot: 'mdi-spotlight-beam',
   Ambient: 'mdi-weather-night',
   Hemisphere: 'mdi-weather-sunset',
-  RectArea: 'mdi-rectangle-outline',
 }
 
 export const POINT_LIGHT_HELPER_SIZE = 0.5
@@ -132,9 +123,6 @@ export function resolveLightTypeFromObject(light: Light): LightNodeType {
   }
   if (typed.isPointLight) {
     return 'Point'
-  }
-  if (typed.isRectAreaLight) {
-    return 'RectArea'
   }
   if (typed.isHemisphereLight) {
     return 'Hemisphere'

@@ -2037,7 +2037,7 @@ function handleAddSky() {
           <v-list-item title="Point Light" @click="handleAddLight('Point')" />
           <v-list-item title="Spot Light" @click="handleAddLight('Spot')" />
           <v-list-item title="Hemisphere Light" @click="handleAddLight('Hemisphere')" />
-          <v-list-item title="RectArea Light" @click="handleAddLight('RectArea')" />
+          <!-- RectArea Light removed -->
         </v-list>
       </v-menu>
       <v-menu  transition="none" location="end" offset="8">

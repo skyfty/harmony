@@ -672,7 +672,7 @@ export interface SceneNodeImportMetadata {
   objectPath?: number[] | null
 }
 
-export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere' | 'RectArea'
+export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere'
 export type CameraControlMode = 'orbit' | 'map'
 export type CameraProjection = 'perspective' | 'orthographic'
 
@@ -710,9 +710,9 @@ export interface LightNodeProperties {
   castShadow?: boolean
   /** Shadow tuning parameters (only used when `castShadow` is true and light type supports shadows). */
   shadow?: LightShadowProperties
-  /** RectAreaLight width (only when type === 'RectArea') */
+  /** (RectAreaLight removed) width originally used by RectArea light */
   width?: number
-  /** RectAreaLight height (only when type === 'RectArea') */
+  /** (RectAreaLight removed) height originally used by RectArea light */
   height?: number
 }
 export interface SceneNode { 

@@ -1,16 +1,10 @@
 import * as THREE from 'three'
-import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js'
 
 import type { LightNodeProperties } from './index'
 
-let rectAreaLightSupportInitialized = false
-
+// RectAreaLight support removed: no-op placeholder kept for compatibility.
 export function ensureRectAreaLightSupport(): void {
-  if (rectAreaLightSupportInitialized) {
-    return
-  }
-  RectAreaLightUniformsLib.init()
-  rectAreaLightSupportInitialized = true
+  // Intentionally empty — RectAreaLight support removed.
 }
 
 export type CreatedThreeLight = {
@@ -144,14 +138,6 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
       const ground = new THREE.Color(props.groundColor ?? '#444444')
       const hemi = new THREE.HemisphereLight(color, ground, intensity)
       return { light: hemi }
-    }
-
-    case 'RectArea': {
-      ensureRectAreaLightSupport()
-      const width = Number.isFinite(props.width) ? Math.max(0, Number(props.width)) : 10
-      const height = Number.isFinite(props.height) ? Math.max(0, Number(props.height)) : 10
-      const rect = new THREE.RectAreaLight(color, intensity, width, height)
-      return { light: rect }
     }
 
     case 'Ambient':

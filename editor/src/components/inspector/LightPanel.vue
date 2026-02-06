@@ -42,7 +42,6 @@ const supportsAngle = computed(() => lightType.value === 'Spot')
 const supportsShadow = computed(() => lightType.value === 'Directional' || lightType.value === 'Point' || lightType.value === 'Spot')
 const supportsTarget = computed(() => lightType.value === 'Directional' || lightType.value === 'Spot')
 const supportsGroundColor = computed(() => lightType.value === 'Hemisphere')
-const supportsRectSize = computed(() => lightType.value === 'RectArea')
 
 function toDegrees(radians: number) {
   return (radians * 180) / Math.PI
@@ -239,22 +238,6 @@ function handleShadowOrthoSizeChange(value: string | number) {
   patchShadow({ orthoSize: clamped })
 }
 
-function handleRectWidthChange(value: number | number[]) {
-  const numeric = coerceNumber(value)
-  if (numeric === null) return
-  const clamped = Math.max(0, numeric)
-  lightForm.width = clamped
-  patchLight({ width: clamped } as any)
-}
-
-function handleRectHeightChange(value: number | number[]) {
-  const numeric = coerceNumber(value)
-  if (numeric === null) return
-  const clamped = Math.max(0, numeric)
-  lightForm.height = clamped
-  patchLight({ height: clamped } as any)
-}
-
 function patchTarget() {
   if (!supportsTarget.value) {
     return
@@ -322,42 +305,7 @@ function patchTarget() {
           <div class="slider-value">{{ lightForm.intensity.toFixed(2) }}</div>
         </div>
       </div>
-      <template v-if="supportsRectSize">
-        <div class="section-block material-row">
-          <span class="row-label">Width</span>
-          <div class="row-controls">
-            <v-slider
-              :model-value="lightForm.width"
-              min="0"
-              max="50"
-              step="0.5"
-              hide-details
-              class="slider"
-              size="small"
-              :disabled="props.disabled"
-              @update:model-value="handleRectWidthChange"
-            />
-            <div class="slider-value">{{ lightForm.width.toFixed(1) }}</div>
-          </div>
-        </div>
-        <div class="section-block material-row">
-          <span class="row-label">Height</span>
-          <div class="row-controls">
-            <v-slider
-              :model-value="lightForm.height"
-              min="0"
-              max="50"
-              step="0.5"
-              hide-details
-              class="slider"
-              size="small"
-              :disabled="props.disabled"
-              @update:model-value="handleRectHeightChange"
-            />
-            <div class="slider-value">{{ lightForm.height.toFixed(1) }}</div>
-          </div>
-        </div>
-      </template>
+      
       <template v-if="supportsDistance">
         <div class="section-block material-row">
           <span class="row-label">Distance</span>

@@ -6,7 +6,6 @@ import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonCont
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
@@ -942,7 +941,6 @@ const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThresho
 
 
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
-const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
@@ -7599,13 +7597,12 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
 		const extension = resolveTextureExtension(entry, ref)
 		try {
 			let texture: THREE.Texture
-			if (extension === 'exr') {
-				texture = await exrLoader.loadAsync(source)
-			} else if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
-				texture = await rgbeLoader.loadAsync(source)
-			} else {
-				texture = await textureLoader.loadAsync(source)
-			}
+				if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+					texture = await rgbeLoader.loadAsync(source)
+				} else {
+					// EXR is not supported in all module runtimes; fall back to the image loader.
+					texture = await textureLoader.loadAsync(source)
+				}
 			texture.name = ref.name ?? entry.filename ?? cacheKey
 			texture.colorSpace = THREE.LinearSRGBColorSpace
 			texture.needsUpdate = true
