@@ -9209,6 +9209,8 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   pmremGenerator?.dispose();
   pmremGenerator = new THREE.PMREMGenerator(renderer);
 
