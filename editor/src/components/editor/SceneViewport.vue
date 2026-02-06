@@ -1531,7 +1531,7 @@ const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const cloudPreviewEnabled = computed(() => sceneStore.cloudPreviewEnabled)
 const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
-const shadowsActiveInViewport = computed(() => shadowsEnabled.value && isEnvironmentNodeSelected.value)
+const shadowsActiveInViewport = computed(() => shadowsEnabled.value)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
   if (!primaryId) {
