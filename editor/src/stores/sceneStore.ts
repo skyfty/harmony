@@ -10603,6 +10603,11 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.nodes = [node, ...this.nodes]
       this.setSelection([node.id])
+
+      // SceneViewport only applies pending patches when `sceneNodePropertyVersion` bumps.
+      // Queue a patch so the viewport incrementally creates the runtime light object.
+      this.queueSceneNodePatch(node.id, ['transform', 'light'])
+
       commitSceneSnapshot(this)
       return node
     },
