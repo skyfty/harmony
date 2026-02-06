@@ -1,13 +1,44 @@
 export async function computeBlobHash(blob: Blob, algorithm: 'SHA-256' = 'SHA-256'): Promise<string> {
-  if (!('crypto' in globalThis) || !globalThis.crypto?.subtle) {
-    throw new Error('SubtleCrypto is not available in this environment')
+  const buffer = await blob.arrayBuffer()
+
+  // Prefer SubtleCrypto (browser or Node's global `crypto.webcrypto.subtle`).
+  const subtle = (globalThis as any).crypto?.subtle || (globalThis as any).crypto?.webkitSubtle || (globalThis as any).crypto?.webcrypto?.subtle || null
+  if (subtle) {
+    const hashBuffer = await subtle.digest(algorithm, buffer)
+    const hashBytes = Array.from(new Uint8Array(hashBuffer))
+    const hex = hashBytes.map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    return `sha256-${hex}`
   }
 
-  const buffer = await blob.arrayBuffer()
-  const hashBuffer = await globalThis.crypto.subtle.digest(algorithm, buffer)
-  const hashBytes = Array.from(new Uint8Array(hashBuffer))
-  const hex = hashBytes.map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `sha256-${hex}`
+  // If running under Node.js, try to use Node's crypto module.
+  const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node)
+  if (isNode) {
+    try {
+      // Dynamic import keeps bundlers happy for browser builds.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const nodeCrypto = await import('crypto')
+
+      // Prefer the Web Crypto API exposed by Node (`crypto.webcrypto.subtle`) when available.
+      const nodeSubtle = (nodeCrypto as any).webcrypto?.subtle
+      if (nodeSubtle) {
+        const hashBuffer = await nodeSubtle.digest(algorithm, buffer)
+        const hashBytes = Array.from(new Uint8Array(hashBuffer))
+        const hex = hashBytes.map((byte) => byte.toString(16).padStart(2, '0')).join('')
+        return `sha256-${hex}`
+      }
+
+      // Fall back to Node's synchronous `createHash` implementation.
+      const hash = nodeCrypto.createHash('sha256')
+      hash.update(Buffer.from(buffer))
+      const hex = hash.digest('hex')
+      return `sha256-${hex}`
+    } catch (err) {
+      // If import failed, continue to final error.
+    }
+  }
+
+  // No available hashing implementation in this environment.
+  throw new Error('SubtleCrypto is not available in this environment and no Node.js fallback was found')
 }
 
 export function dataUrlToBlob(dataUrl: string): Blob {
