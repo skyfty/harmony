@@ -1253,6 +1253,8 @@ const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
 let sky: Sky | null = null;
+let skySunLight: THREE.DirectionalLight | null = null;
+let skySunLightTarget: THREE.Object3D | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
@@ -1277,6 +1279,64 @@ let canvasResult: UseCanvasResult | null = null;
 let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
+
+const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight';
+const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget';
+const SKY_SUN_LIGHT_DISTANCE = 1000;
+
+function ensureSkySunLightExists(): THREE.DirectionalLight | null {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return null;
+  }
+
+  if (skySunLight && skySunLightTarget) {
+    if (skySunLight.parent !== scene) {
+      scene.add(skySunLight);
+    }
+    if (skySunLightTarget.parent !== scene) {
+      scene.add(skySunLightTarget);
+    }
+    return skySunLight;
+  }
+
+  skySunLightTarget = new THREE.Object3D();
+  skySunLightTarget.name = SKY_SUN_LIGHT_TARGET_NAME;
+  skySunLightTarget.userData = { ...(skySunLightTarget.userData ?? {}), editorOnly: true };
+  skySunLightTarget.position.set(0, 0, 0);
+
+  skySunLight = new THREE.DirectionalLight(0xffffff, 1);
+  skySunLight.name = SKY_SUN_LIGHT_NAME;
+  skySunLight.userData = { ...(skySunLight.userData ?? {}), editorOnly: true };
+  skySunLight.castShadow = true;
+  skySunLight.target = skySunLightTarget;
+
+  (skySunLight as any).raycast = () => {};
+  (skySunLightTarget as any).raycast = () => {};
+
+  scene.add(skySunLightTarget);
+  scene.add(skySunLight);
+  return skySunLight;
+}
+
+function disposeSkySunLight(): void {
+  skySunLight?.removeFromParent();
+  skySunLightTarget?.removeFromParent();
+  skySunLight = null;
+  skySunLightTarget = null;
+}
+
+function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
+  const light = ensureSkySunLightExists();
+  if (!light || !skySunLightTarget) {
+    return;
+  }
+  light.position.copy(skySunPosition).multiplyScalar(SKY_SUN_LIGHT_DISTANCE);
+  skySunLightTarget.position.set(0, 0, 0);
+  skySunLightTarget.updateMatrixWorld(true);
+  const exposure = resolveSceneExposure(settings.exposure);
+  light.intensity = clampNumber(exposure, 0, 20, resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure));
+}
 
 function supportsFloatTextureLinearFiltering(): boolean {
   const renderer = renderContext?.renderer ?? null;
@@ -7785,6 +7845,9 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
   } else if (sunUniform) {
     sunUniform.value = skySunPosition.clone();
   }
+
+  // Keep the internal Sky sun light in sync.
+  syncSkySunLightFromSkyboxSettings(settings);
 }
 
 function applySkyEnvironmentToScene() {
@@ -8033,15 +8096,24 @@ function disposeEnvironmentResources() {
   pendingEnvironmentSettings = null;
 }
 
-function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
+function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive: boolean) {
   const context = renderContext;
   if (!context) {
-    pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null;
+    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
     return;
   }
   const { renderer, scene } = context;
   if (!renderer || !scene) {
-    pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null;
+    pendingSkyboxSettings = settings && skyNodeActive ? cloneSkyboxSettings(settings) : null;
+    return;
+  }
+  if (!skyNodeActive) {
+    disposeSkyResources();
+    applySkyEnvironmentToScene();
+    renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
+    cloudRenderer?.setSkyboxSettings(null);
+    pendingSkyboxSettings = null;
+    disposeSkySunLight();
     return;
   }
   if (!settings) {
@@ -8050,8 +8122,10 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
+    disposeSkySunLight();
     return;
   }
+  ensureSkySunLightExists();
   ensureSkyExists();
   if (!sky) {
     pendingSkyboxSettings = cloneSkyboxSettings(settings);
@@ -8129,6 +8203,26 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   }
 
   throw new Error('场景数据格式不正确');
+}
+
+function hasSkyNode(nodes: SceneNode[] | undefined | null): boolean {
+  if (!Array.isArray(nodes)) {
+    return false;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.nodeType === 'Sky') {
+      return true;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return false;
 }
 
 let projectSceneSwitchToken = 0;
@@ -8432,7 +8526,7 @@ watch(
     }
     if (!payload) {
       teardownRenderer();
-      applySkyboxSettings(null);
+      applySkyboxSettings(null, false);
       warnings.value = [];
       return;
     }
@@ -8444,14 +8538,15 @@ watch(
 function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
     teardownRenderer();
-    applySkyboxSettings(null);
+    applySkyboxSettings(null, false);
     warnings.value = [];
     return;
   }
   error.value = null;
   warnings.value = [];
   const skyboxSettings = resolveSceneSkybox(payload.document);
-  applySkyboxSettings(skyboxSettings);
+  const skyNodeActive = hasSkyNode(payload.document.nodes);
+  applySkyboxSettings(skyboxSettings, skyNodeActive);
   pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(resolveDocumentEnvironment(payload.document));
   try {
     uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
@@ -8671,6 +8766,7 @@ function teardownRenderer() {
   controls.dispose();
   disposeEnvironmentResources();
   disposeSkyResources();
+  disposeSkySunLight();
   cloudRenderer?.dispose();
   cloudRenderer = null;
   pmremGenerator?.dispose();
@@ -8976,7 +9072,8 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
 
   const skyboxSettings = resolveSceneSkybox(document);
-  applySkyboxSettings(skyboxSettings);
+  const skyNodeActive = hasSkyNode(document.nodes);
+  applySkyboxSettings(skyboxSettings, skyNodeActive);
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
   // into `pendingEnvironmentSettings` when the render context is not ready.
@@ -9320,7 +9417,7 @@ onLoad((query) => {
     handlePreviewPayload(previewPayload.value);
   } else {
     teardownRenderer();
-    applySkyboxSettings(null);
+    applySkyboxSettings(null, false);
   }
 });
 

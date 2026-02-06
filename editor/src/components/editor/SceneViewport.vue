@@ -773,6 +773,8 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let latestFogSettings: EnvironmentSettings | null = null
 let shouldRenderSkyBackground = true
 let sky: Sky | null = null
+let skySunLight: THREE.DirectionalLight | null = null
+let skySunLightTarget: THREE.Object3D | null = null
 let resizeObserver: ResizeObserver | null = null
 
 const normalizedPointerGuard = createNormalizedPointerGuard({
@@ -802,6 +804,76 @@ let environmentMapAssetId: string | null = null
 let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
+
+const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight'
+const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget'
+const SKY_SUN_LIGHT_DISTANCE = 1000
+
+function ensureSkySunLightExists(): THREE.DirectionalLight | null {
+  if (!scene) {
+    return null
+  }
+  if (!hasSkyNode.value) {
+    return null
+  }
+
+  if (skySunLight && skySunLightTarget) {
+    if (skySunLight.parent !== scene) {
+      scene.add(skySunLight)
+    }
+    if (skySunLightTarget.parent !== scene) {
+      scene.add(skySunLightTarget)
+    }
+    return skySunLight
+  }
+
+  skySunLightTarget = new THREE.Object3D()
+  skySunLightTarget.name = SKY_SUN_LIGHT_TARGET_NAME
+  skySunLightTarget.userData = { ...(skySunLightTarget.userData ?? {}), editorOnly: true }
+  skySunLightTarget.position.set(0, 0, 0)
+
+  skySunLight = new THREE.DirectionalLight(0xffffff, 1)
+  skySunLight.name = SKY_SUN_LIGHT_NAME
+  skySunLight.userData = { ...(skySunLight.userData ?? {}), editorOnly: true }
+  skySunLight.castShadow = true
+  skySunLight.target = skySunLightTarget
+
+  // Keep it out of picking even if a raycast path reaches it.
+  ;(skySunLight as any).raycast = () => {}
+  ;(skySunLightTarget as any).raycast = () => {}
+
+  scene.add(skySunLightTarget)
+  scene.add(skySunLight)
+
+  return skySunLight
+}
+
+function disposeSkySunLight(): void {
+  if (skySunLight) {
+    skySunLight.removeFromParent()
+  }
+  if (skySunLightTarget) {
+    skySunLightTarget.removeFromParent()
+  }
+  skySunLight = null
+  skySunLightTarget = null
+}
+
+function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
+  const light = ensureSkySunLightExists()
+  if (!light || !skySunLightTarget) {
+    return
+  }
+
+  // Direction: place the light “at the sun” and aim at the world origin.
+  light.position.copy(skySunPosition).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
+  skySunLightTarget.position.set(0, 0, 0)
+  skySunLightTarget.updateMatrixWorld(true)
+
+  // Intensity: follow sky exposure (simple, predictable mapping).
+  const exposure = typeof settings.exposure === 'number' ? settings.exposure : 1
+  light.intensity = clampNumber(exposure, 0, 20)
+}
 
 // Building label font/meshes (planning-conversion buildings)
 const buildingLabelMeshes = new Map<string, THREE.Mesh>()
@@ -6632,9 +6704,11 @@ const environmentSignature = computed(() => {
 watch([skyboxSignature, hasSkyNode], () => {
   if (!hasSkyNode.value) {
     disposeSkyResources()
+    disposeSkySunLight()
     disposeCloudRenderer()
     return
   }
+  ensureSkySunLightExists()
   applySkyboxSettingsToScene(skyboxSettings.value)
   syncCloudRendererSettings()
 }, { immediate: true })
@@ -7137,6 +7211,7 @@ function initScene() {
   const initialEnvironment = environmentSettings.value
 
   ensureSkyExists()
+  ensureSkySunLightExists()
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
   scene.add(instancedOutlineGroup)
@@ -7332,6 +7407,9 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
   } else if (sunUniform) {
     sunUniform.value = skySunPosition.clone()
   }
+
+  // Keep the internal Sky sun light in sync.
+  syncSkySunLightFromSkyboxSettings(settings)
 
   if (!pmremGenerator) {
     return
@@ -7965,6 +8043,7 @@ function disposeScene() {
 
   clearLightHelpers()
   disposeSkyResources()
+  disposeSkySunLight()
 
   if (gizmoControls) {
     gizmoControls.dispose()
