@@ -8722,11 +8722,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
     alpha: true,
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = !isWeChatMiniProgram;
+  renderer.shadowMap.enabled = true
   pmremGenerator?.dispose();
   pmremGenerator = new THREE.PMREMGenerator(renderer);
 

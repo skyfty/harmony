@@ -5557,7 +5557,9 @@ function createSceneDocument(
   const environmentSettings = cloneEnvironmentSettings(
     options.environment ?? (existingEnvironmentNode ? extractEnvironmentSettings(existingEnvironmentNode) : DEFAULT_ENVIRONMENT_SETTINGS),
   )
-  const nodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(clonedNodes, groundSettings)), environmentSettings)
+  const groundedNodes = ensureGroundNode(clonedNodes, groundSettings)
+  // Sky node is optional: only auto-create it for new scenes without explicit nodes.
+  const nodes = ensureEnvironmentNode(groundedNodes, environmentSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
   const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isSkyNode(node))?.id ?? null
   let selectedNodeId = options.selectedNodeId !== undefined
@@ -5647,7 +5649,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const meta = store.currentSceneMeta!
   const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
   const environment = cloneEnvironmentSettings(store.environment)
-  const nodes = ensureEnvironmentNode(ensureSkyNode(cloneSceneNodes(store.nodes)),environment)
+  const nodes = ensureEnvironmentNode(cloneSceneNodes(store.nodes), environment)
 
   const planningData = store.planningData
   const normalizedPlanningData = planningData && isPlanningDataEmpty(planningData) ? null : planningData
@@ -5725,7 +5727,7 @@ function commitSceneSnapshot(
     return
   }
 
-  const normalizedNodes = ensureEnvironmentNode(ensureSkyNode(store.nodes),store.environment)
+  const normalizedNodes = ensureEnvironmentNode(store.nodes, store.environment)
   if (normalizedNodes !== store.nodes) {
     store.nodes = normalizedNodes
   }
@@ -6085,7 +6087,7 @@ export const useSceneStore = defineStore('scene', {
       ? cloneEnvironmentSettings(initialSceneDocument.environment)
       : extractEnvironmentSettings(findNodeById(clonedNodes, ENVIRONMENT_NODE_ID))
     clonedNodes = ensureEnvironmentNode(
-      ensureSkyNode(ensureGroundNode(clonedNodes, initialSceneDocument.groundSettings)),
+      ensureGroundNode(clonedNodes, initialSceneDocument.groundSettings),
       initialEnvironment,
     )
     componentManager.reset()
@@ -6826,7 +6828,7 @@ export const useSceneStore = defineStore('scene', {
         applyHistoryEntry(this, entry)
         // Keep excluded state (environment/skybox/shadows/etc.) out of undo.
         this.nodes = ensureEnvironmentNode(
-          ensureSkyNode(ensureGroundNode(this.nodes, this.groundSettings)),
+          ensureGroundNode(this.nodes, this.groundSettings),
           this.environment,
         )
 
@@ -6860,7 +6862,7 @@ export const useSceneStore = defineStore('scene', {
 
         applyHistoryEntry(this, entry)
         this.nodes = ensureEnvironmentNode(
-          ensureSkyNode(ensureGroundNode(this.nodes, this.groundSettings)),
+          ensureGroundNode(this.nodes, this.groundSettings),
           this.environment,
         )
 
@@ -6977,7 +6979,7 @@ export const useSceneStore = defineStore('scene', {
         )
       }
       const updatedNodes = ensureEnvironmentNode(
-        ensureSkyNode(ensureGroundNode(clonedNodes, normalized)),
+        ensureGroundNode(clonedNodes, normalized),
         this.environment,
       )
       this.nodes = updatedNodes
@@ -10602,6 +10604,26 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
 
+    addSkyNode() {
+      if (findNodeById(this.nodes, SKY_NODE_ID)) {
+        return null
+      }
+
+      const skyNode = createSkySceneNodeImported(SKY_NODE_ID)
+
+      this.captureHistorySnapshot()
+
+      const next = [...this.nodes]
+      const groundIndex = next.findIndex((node) => node.id === GROUND_NODE_ID)
+      const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
+      next.splice(insertIndex, 0, skyNode)
+
+      this.nodes = ensureEnvironmentNode(next, this.environment)
+      this.setSelection([skyNode.id], { primaryId: skyNode.id })
+      commitSceneSnapshot(this)
+      return skyNode
+    },
+
     async addModelNode(payload: {
       object?: Object3D
       asset?: ProjectAsset
@@ -12467,7 +12489,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       const existingIds = ids.filter(
-        (id) =>  id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
+        (id) => id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
       )
       if (!existingIds.length) {
         return
@@ -12512,6 +12534,20 @@ export const useSceneStore = defineStore('scene', {
 
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
+
+      if (removed.includes(SKY_NODE_ID)) {
+        if (this.cloudPreviewEnabled) {
+          this.cloudPreviewEnabled = false
+        }
+        const nextEnvironment = cloneEnvironmentSettings(this.environment)
+        if (nextEnvironment.background.mode === 'skybox') {
+          nextEnvironment.background = { ...nextEnvironment.background, mode: 'solidColor' }
+        }
+        if (nextEnvironment.environmentMap.mode === 'skybox') {
+          nextEnvironment.environmentMap = { ...nextEnvironment.environmentMap, mode: 'custom' }
+        }
+        this.environment = nextEnvironment
+      }
 
       if (removed.length) {
         this.queueSceneRemovePatch(removed, 'removeSceneNodes')

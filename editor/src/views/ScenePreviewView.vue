@@ -6392,8 +6392,6 @@ function initRenderer() {
 	setupStatsPanels()
 	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
-	renderer.toneMapping = THREE.ACESFilmicToneMapping
-	renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFSoftShadowMap
 	renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))

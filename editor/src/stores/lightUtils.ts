@@ -56,7 +56,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         name: 'Directional Light',
         color: '#ffffff',
         intensity: 1.2,
-        position: deps.createVector(20, 40, 20),
+        position: deps.createVector(15, 20, 15),
         target: deps.createVector(0, 0, 0),
         extras: { castShadow: true } as Record<string, unknown>,
       }
@@ -73,7 +73,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         name: 'Spot Light',
         color: '#ffffff',
         intensity: 1,
-        position: deps.createVector(12, 18, 12),
+        position: deps.createVector(10, 14, 10),
         target: deps.createVector(0, 0, 0),
         extras: { angle: Math.PI / 5, penumbra: 0.35, distance: 80, decay: 2, castShadow: true } as Record<string, unknown>,
       }
@@ -83,7 +83,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         name: 'Ambient Light',
         color: '#ffffff',
         intensity: 0.35,
-        position: deps.createVector(0, 25, 0),
+        position: deps.createVector(0, 8, 0),
         extras: {} as Record<string, unknown>,
       }
     case 'Hemisphere':
@@ -91,7 +91,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         name: 'Hemisphere Light',
         color: '#ffffff',
         intensity: 0.6,
-        position: deps.createVector(0, 25, 0),
+        position: deps.createVector(0, 8, 0),
         extras: { groundColor: '#444444' } as Record<string, unknown>,
       }
     case 'RectArea':
@@ -99,7 +99,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
         name: 'RectArea Light',
         color: '#ffffff',
         intensity: 3,
-        position: deps.createVector(10, 12, 10),
+        position: deps.createVector(8, 10, 8),
         rotation: deps.createVector(0, Math.PI / 4, 0) as any,
         extras: { width: 10, height: 6 } as Record<string, unknown>,
       }

@@ -6590,6 +6590,23 @@ const skyboxSignature = computed(() => {
   })
 })
 
+const hasSkyNode = computed(() => {
+  const stack = Array.isArray(sceneStore.nodes) ? [...sceneStore.nodes] : []
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.nodeType === 'Sky') {
+      return true
+    }
+    if (node.children?.length) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+})
+
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   return JSON.stringify({
@@ -6612,7 +6629,12 @@ const environmentSignature = computed(() => {
   })
 })
 
-watch(skyboxSignature, () => {
+watch([skyboxSignature, hasSkyNode], () => {
+  if (!hasSkyNode.value) {
+    disposeSkyResources()
+    disposeCloudRenderer()
+    return
+  }
   applySkyboxSettingsToScene(skyboxSettings.value)
   syncCloudRendererSettings()
 }, { immediate: true })
@@ -7103,8 +7125,6 @@ function initScene() {
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = skyboxSettings.value.exposure
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   pmremGenerator?.dispose()
@@ -7247,6 +7267,11 @@ function ensureSkyExists() {
 
 function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
   if (!settings) {
+    return
+  }
+
+  if (!hasSkyNode.value) {
+    disposeSkyResources()
     return
   }
 
@@ -7458,6 +7483,11 @@ function applySkyEnvironment() {
   if (!scene) {
     return
   }
+  if (!hasSkyNode.value) {
+    scene.environment = null
+    scene.environmentIntensity = 1
+    return
+  }
   if (environmentSettings.value.environmentMap.mode !== 'skybox') {
     return
   }
@@ -7479,6 +7509,12 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   }
 
   if (background.mode === 'skybox') {
+    if (!hasSkyNode.value) {
+      setSkyBackgroundEnabled(false)
+      disposeBackgroundResources()
+      scene.background = new THREE.Color(background.solidColor)
+      return true
+    }
     disposeBackgroundResources()
     setSkyBackgroundEnabled(true)
     scene.background = null
@@ -7526,6 +7562,12 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   }
 
   if (mapSettings.mode === 'skybox') {
+    if (!hasSkyNode.value) {
+      disposeCustomEnvironmentTarget()
+      scene.environment = null
+      scene.environmentIntensity = 1
+      return true
+    }
     disposeCustomEnvironmentTarget()
     applySkyEnvironment()
     return true
@@ -7665,6 +7707,10 @@ function disposeCloudRenderer() {
 }
 
 function syncCloudRendererSettings() {
+  if (!hasSkyNode.value) {
+    disposeCloudRenderer()
+    return
+  }
   if (!cloudPreviewEnabled.value) {
     disposeCloudRenderer()
     return

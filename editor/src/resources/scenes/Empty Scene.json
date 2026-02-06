@@ -123,17 +123,7 @@
     "showAxes": false,
     "cameraProjection": "perspective",
     "cameraControlMode": "orbit",
-    "shadowsEnabled": false,
-    "skybox": {
-      "presetId": "clear-day",
-      "exposure": 0.6,
-      "turbidity": 4,
-      "rayleigh": 1.25,
-      "mieCoefficient": 0.0025,
-      "mieDirectionalG": 0.75,
-      "elevation": 22,
-      "azimuth": 145
-    }
+    "shadowsEnabled": false
   },
   "groundSettings": {
     "width": 100,

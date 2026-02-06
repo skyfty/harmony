@@ -199,7 +199,6 @@ function patchTarget() {
           density="compact"
           hide-details
           size="small"
-          inset
           color="primary"
           :disabled="props.disabled || !selectedNodeId"
           @update:model-value="setEnabled(Boolean($event))"
@@ -391,7 +390,6 @@ function patchTarget() {
           density="compact"
           hide-details
           size="small"
-          inset
           color="primary"
           :disabled="props.disabled"
           @update:model-value="handleCastShadowChange"

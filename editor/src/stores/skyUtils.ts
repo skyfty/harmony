@@ -11,7 +11,7 @@ export function createSkySceneNode(id: string, overrides: { visible?: boolean; u
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
     visible: overrides.visible ?? true,
-    locked: true,
+    locked: false,
     editorFlags: { editorOnly: true },
     userData: overrides.userData ?? null,
   }

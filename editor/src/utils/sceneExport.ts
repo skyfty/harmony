@@ -3,7 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@harmony/schema'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
@@ -288,13 +288,51 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
 
 export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
 
+  const hasSkyNode = (() => {
+    const stack: SceneNode[] = Array.isArray(snapshot.nodes) ? [...snapshot.nodes] : []
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) {
+        continue
+      }
+      if (node.nodeType === 'Sky') {
+        return true
+      }
+      if (node.children?.length) {
+        stack.push(...node.children)
+      }
+    }
+    return false
+  })()
+
+  const environment: EnvironmentSettings | undefined = (() => {
+    const base = snapshot.environment
+    if (!base) {
+      return undefined
+    }
+    if (hasSkyNode) {
+      return base
+    }
+    const background = base.background.mode === 'skybox'
+      ? { ...base.background, mode: 'solidColor' as const }
+      : base.background
+    const environmentMap = base.environmentMap.mode === 'skybox'
+      ? { ...base.environmentMap, mode: 'custom' as const }
+      : base.environmentMap
+    return {
+      ...base,
+      background,
+      environmentMap,
+    }
+  })()
+
   const exportDocument: SceneJsonExportDocument = {
     id: snapshot.id,
     name: snapshot.name,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
     skybox: snapshot.skybox,
-    environment: snapshot.environment,
+    environment,
     nodes: snapshot.nodes,
     materials: snapshot.materials,
     groundSettings: snapshot.groundSettings,
