@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import {
   FollowCameraController,
+  computeFollowLerpAlpha,
   type CameraFollowContext,
   type CameraFollowPlacement,
   type CameraFollowState,
@@ -259,6 +260,12 @@ export class VehicleDriveController {
   private readonly followCameraController = new FollowCameraController()
   private speedGovernorScale = 1
   private speedGovernorBrakeAssist = 0
+
+  private followCameraVelocityHasSample = false
+  private readonly followCameraVelocity = new THREE.Vector3()
+  private readonly followCameraVelocityScratch = new THREE.Vector3()
+  private readonly followCameraLastAnchor = new THREE.Vector3()
+
   private readonly temp = {
     box: new THREE.Box3(),
     size: new THREE.Vector3(),
@@ -606,6 +613,8 @@ export class VehicleDriveController {
     this.bindings.cameraFollowState.initialized = false
     this.resetFollowCameraOffset()
     this.clearSmoothStop()
+    this.followCameraVelocityHasSample = false
+    this.followCameraVelocity.set(0, 0, 0)
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
@@ -932,9 +941,30 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
     const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
-    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
 
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
+
+    // Camera velocity: use anchor differencing (planar) + smoothing instead of raw chassis velocity.
+    // Physics velocity can include wheel-contact noise which becomes visible as camera micro-jitter.
+    if (options.immediate) {
+      this.followCameraVelocityHasSample = false
+      this.followCameraVelocity.set(0, 0, 0)
+      this.followCameraLastAnchor.copy(temp.followAnchor)
+      this.followCameraVelocityHasSample = true
+    } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
+      const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
+      this.followCameraVelocityScratch
+        .copy(temp.followAnchor)
+        .sub(this.followCameraLastAnchor)
+        .multiplyScalar(1 / dt)
+      this.followCameraVelocityScratch.y = 0
+      const alpha = computeFollowLerpAlpha(dt, 8)
+      this.followCameraVelocity.lerp(this.followCameraVelocityScratch, alpha)
+    } else if (!this.followCameraVelocityHasSample && deltaSeconds > 0) {
+      this.followCameraVelocity.set(0, 0, 0)
+      this.followCameraVelocityHasSample = true
+    }
+    this.followCameraLastAnchor.copy(temp.followAnchor)
 
     const updateOrbitLookTween = this.deps.updateOrbitLookTween
 
@@ -943,7 +973,7 @@ export class VehicleDriveController {
       placement,
       anchorWorld: temp.followAnchor,
       desiredForwardWorld: temp.seatForward,
-      velocityWorld: vehicleVelocity,
+      velocityWorld: this.followCameraVelocity,
       deltaSeconds,
       ctx,
       worldUp: VEHICLE_CAMERA_WORLD_UP,
