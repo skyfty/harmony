@@ -808,6 +808,9 @@ let cloudRenderer: SceneCloudRenderer | null = null
 const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight'
 const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget'
 const SKY_SUN_LIGHT_DISTANCE = 1000
+const SKY_SUN_SHADOW_FRUSTUM_SIZE = 2000
+const SKY_SUN_SHADOW_NEAR = 0.5
+const SKY_SUN_SHADOW_FAR = 5000
 
 function ensureSkySunLightExists(): THREE.DirectionalLight | null {
   if (!scene) {
@@ -837,6 +840,20 @@ function ensureSkySunLightExists(): THREE.DirectionalLight | null {
   skySunLight.userData = { ...(skySunLight.userData ?? {}), editorOnly: true }
   skySunLight.castShadow = true
   skySunLight.target = skySunLightTarget
+
+  const shadowCam = skySunLight.shadow.camera as THREE.OrthographicCamera
+  const half = SKY_SUN_SHADOW_FRUSTUM_SIZE * 0.5
+  shadowCam.left = -half
+  shadowCam.right = half
+  shadowCam.top = half
+  shadowCam.bottom = -half
+  shadowCam.near = SKY_SUN_SHADOW_NEAR
+  shadowCam.far = SKY_SUN_SHADOW_FAR
+  shadowCam.updateProjectionMatrix()
+
+  skySunLight.shadow.mapSize.set(2048, 2048)
+  skySunLight.shadow.bias = -0.0001
+  skySunLight.shadow.normalBias = 0.02
 
   // Keep it out of picking even if a raycast path reaches it.
   ;(skySunLight as any).raycast = () => {}

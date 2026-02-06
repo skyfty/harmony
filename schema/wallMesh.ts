@@ -1173,6 +1173,8 @@ function rebuildWallGroup(
     mesh.name = chainDefinitions.length > 1 ? `WallMesh:${chainIndex}` : 'WallMesh'
     mesh.userData.dynamicMeshType = 'Wall'
     mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
+    mesh.castShadow = true
+    mesh.receiveShadow = true
     group.add(mesh)
   }
 
@@ -1220,6 +1222,8 @@ function rebuildWallGroup(
       instanced.name = 'WallBodyInstances'
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
@@ -1240,6 +1244,8 @@ function rebuildWallGroup(
       instanced.name = 'WallHeadInstances'
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
@@ -1256,6 +1262,8 @@ function rebuildWallGroup(
       instanced.name = 'WallBodyEndCapInstances'
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
@@ -1272,6 +1280,8 @@ function rebuildWallGroup(
       instanced.name = 'WallHeadEndCapInstances'
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
@@ -1304,6 +1314,8 @@ function rebuildWallGroup(
       instanced.name = `WallCornerInstances:${assetId}`
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }
@@ -1335,6 +1347,8 @@ function rebuildWallGroup(
       instanced.name = `WallHeadCornerInstances:${assetId}`
       instanced.userData.dynamicMeshType = 'WallAsset'
       instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+      instanced.castShadow = true
+      instanced.receiveShadow = true
       for (let i = 0; i < localMatrices.length; i += 1) {
         instanced.setMatrixAt(i, localMatrices[i]!)
       }

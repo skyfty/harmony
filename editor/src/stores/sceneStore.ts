@@ -53,7 +53,7 @@ import type {
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
-import { createSkySceneNode as createSkySceneNodeImported, ensureSkyNode as ensureSkyNodeImported } from './skyUtils'
+import { createSkySceneNode as createSkySceneNodeImported } from './skyUtils'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import lightUtils from './lightUtils'
@@ -1353,10 +1353,6 @@ function isSkyNode(node: SceneNode): boolean {
   return node.id === SKY_NODE_ID
 }
 
-function ensureSkyNode(nodes: SceneNode[]): SceneNode[] {
-  return ensureSkyNodeImported(nodes, isGroundNode, (n: SceneNode) => n.id === SKY_NODE_ID, (overrides?: any) => createSkySceneNodeImported(SKY_NODE_ID, overrides))
-}
-
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = environmentUtils.cloneEnvironmentSettings(undefined)
 
 const cloneEnvironmentSettings = environmentUtils.cloneEnvironmentSettings
@@ -2021,7 +2017,7 @@ const initialMaterials: SceneMaterial[] = [
   }, { id: DEFAULT_SCENE_MATERIAL_ID }),
 ]
 
-const initialNodes: SceneNode[] = ensureEnvironmentNode(ensureSkyNode([createGroundSceneNode()]), DEFAULT_ENVIRONMENT_SETTINGS)
+const initialNodes: SceneNode[] = ensureEnvironmentNode([createGroundSceneNode()], DEFAULT_ENVIRONMENT_SETTINGS)
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
 
@@ -3537,7 +3533,7 @@ function cloneNode(node: SceneNode): SceneNode {
 
 function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
   const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
-  const baseNodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode([], settings)), environmentSettings)
+  const baseNodes = ensureEnvironmentNode(ensureGroundNode([], settings), environmentSettings)
 
   const ambientPreset = getLightPreset('Ambient')
   const directionalPreset = getLightPreset('Directional')

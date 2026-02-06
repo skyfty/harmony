@@ -36,6 +36,8 @@ const localForward = ref<Vector3Like>({ ...INSTANCE_LAYOUT_DEFAULT_FORWARD })
 const localUp = ref<Vector3Like>({ ...INSTANCE_LAYOUT_DEFAULT_UP })
 const localRollDegrees = ref(INSTANCE_LAYOUT_DEFAULT_ROLL_DEGREES)
 
+type VectorAxis = 'x' | 'y' | 'z'
+
 const isSyncingFromScene = ref(false)
 
 watch(
@@ -116,6 +118,24 @@ function commitLayout(): void {
   // Clamp/sanitize once more before writing to the scene.
   const sanitized = clampSceneNodeInstanceLayout(nextLayout)
   sceneStore.updateNodeInstanceLayout(nodeId, sanitized)
+}
+
+function handleForwardAxis(axis: VectorAxis, value: string): void {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  localForward.value = { ...localForward.value, [axis]: numeric }
+  commitLayout()
+}
+
+function handleUpAxis(axis: VectorAxis, value: string): void {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  localUp.value = { ...localUp.value, [axis]: numeric }
+  commitLayout()
 }
 
 function handleReset(): void {
@@ -236,14 +256,14 @@ function handleReset(): void {
 
           <template v-if="localBasisMode === 'vector'">
             <InspectorVectorControls
-              v-model="localForward"
               label="Forward"
-              @update:model-value="commitLayout"
+              :model-value="localForward"
+              @update:axis="handleForwardAxis"
             />
             <InspectorVectorControls
-              v-model="localUp"
               label="Up"
-              @update:model-value="commitLayout"
+              :model-value="localUp"
+              @update:axis="handleUpAxis"
             />
             <v-text-field
               v-model.number="localRollDegrees"
