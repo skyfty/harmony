@@ -494,8 +494,6 @@ import {
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
-  type AssetOverrideValue,
-  type AssetOverrideBytes,
   type EnvironmentSettings,
   type SceneNode,
   type SceneNodeComponentState,
@@ -3114,64 +3112,6 @@ function inferMimeTypeFromUrl(url: string): string | null {
 	return inferMimeTypeFromAssetId(cleaned)
 }
 
-function buildResolvedAssetUrlFromScenePackageOverride(
-  assetId: string,
-  override: AssetOverrideValue,
-): ResolvedAssetUrl | null {
-  if (typeof override === 'string') {
-    const url = override.trim();
-    if (!url.length) {
-      return null;
-    }
-    if (url.startsWith('data:') || isExternalAssetReference(url) || url.startsWith('/')) {
-      return { url, mimeType: inferMimeTypeFromUrl(url) };
-    }
-    // If override points at an internal file path inside the currently loaded scene package.
-    if (activeScenePackagePkg && activeScenePackagePkg.files?.[url]) {
-      const bytes = activeScenePackagePkg.files[url]!;
-      const mimeType = inferMimeTypeFromAssetId(url) ?? 'application/octet-stream';
-      const objectUrl = getOrCreateObjectUrl(url, getArrayBufferView(bytes), mimeType);
-      return { url: objectUrl, mimeType };
-    }
-    if (url !== assetId) {
-      // Treat as another assetId reference.
-      return null;
-    }
-    return { url, mimeType: inferMimeTypeFromUrl(url) };
-  }
-
-  if (override instanceof ArrayBuffer) {
-    const mimeType = inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream';
-    const objectUrl = getOrCreateObjectUrl(assetId, override, mimeType);
-    return { url: objectUrl, mimeType };
-  }
-
-  if (override && typeof override === 'object' && 'bytes' in override) {
-    const payload = override as AssetOverrideBytes;
-    const filename = payload.filename?.trim() || assetId;
-    const mimeType =
-      (payload.mimeType ?? null) || inferMimeTypeFromAssetId(filename) || inferMimeTypeFromAssetId(assetId) || 'application/octet-stream';
-    const rawBytes = payload.bytes;
-    const data = rawBytes instanceof Uint8Array ? getArrayBufferView(rawBytes) : rawBytes;
-    const objectUrl = getOrCreateObjectUrl(assetId, data, mimeType);
-    return { url: objectUrl, mimeType };
-  }
-
-  return null;
-}
-
-function resolveScenePackageAssetOverride(assetId: string): ResolvedAssetUrl | null {
-  const overrides = activeScenePackageAssetOverrides as Record<string, AssetOverrideValue> | null;
-  if (!overrides) {
-    return null;
-  }
-  const override = overrides[assetId];
-  if (!override) {
-    return null;
-  }
-  return buildResolvedAssetUrlFromScenePackageOverride(assetId, override);
-}
-
 function normalizeDisplayBoardAssetId(candidate: string): string {
   const trimmed = candidate.trim()
   if (!trimmed.length) {
@@ -3189,23 +3129,17 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
   if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed) || trimmed.startsWith('/')) {
 		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
 	}
-	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length).trim() : trimmed
-  if (!assetId.length) {
-    return null
-  }
-  const overrideResolved = resolveScenePackageAssetOverride(assetId)
-  if (overrideResolved) {
-    return overrideResolved
-  }
   // scene-package internal path (e.g. scenes/<id>/resources/<assetId>.<ext>)
-  if (activeScenePackagePkg && activeScenePackagePkg.files?.[assetId]) {
-    const bytes = activeScenePackagePkg.files[assetId]!
-    const mimeType = inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream'
-    const url = getOrCreateObjectUrl(assetId, getArrayBufferView(bytes), mimeType)
+  if (activeScenePackagePkg && activeScenePackagePkg.files?.[trimmed]) {
+    const bytes = activeScenePackagePkg.files[trimmed]!
+    const mimeType = inferMimeTypeFromAssetId(trimmed) ?? 'application/octet-stream'
+    const url = getOrCreateObjectUrl(trimmed, getArrayBufferView(bytes), mimeType)
     return { url, mimeType }
   }
+	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
 	return await resolveAssetUrlFromCache(assetId)
 }
+
 
 
 async function resolveDisplayBoardMediaSource(candidate: string): Promise<ResolvedAssetUrl | null> {
