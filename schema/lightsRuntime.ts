@@ -19,6 +19,73 @@ export type CreatedThreeLight = {
   target?: THREE.Object3D
 }
 
+function coerceFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  return value
+}
+
+function applyShadowSettings(light: THREE.Light, props: LightNodeProperties): void {
+  const shadowProps = props.shadow
+  if (!shadowProps) {
+    return
+  }
+
+  const anyLight = light as any
+  const shadow = anyLight.shadow as THREE.LightShadow | undefined
+  if (!shadow) {
+    return
+  }
+
+  const shadowCamera = shadow.camera as THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
+
+  const mapSize = coerceFiniteNumber(shadowProps.mapSize)
+  if (mapSize !== null && mapSize > 0) {
+    const size = Math.max(1, Math.round(mapSize))
+    shadow.mapSize.set(size, size)
+  }
+
+  const bias = coerceFiniteNumber(shadowProps.bias)
+  if (bias !== null) {
+    shadow.bias = bias
+  }
+
+  const normalBias = coerceFiniteNumber(shadowProps.normalBias)
+  if (normalBias !== null) {
+    ;(shadow as any).normalBias = normalBias
+  }
+
+  const radius = coerceFiniteNumber(shadowProps.radius)
+  if (radius !== null) {
+    shadow.radius = radius
+  }
+
+  const cameraNear = coerceFiniteNumber(shadowProps.cameraNear)
+  if (cameraNear !== null && shadowCamera) {
+    shadowCamera.near = cameraNear
+  }
+
+  const cameraFar = coerceFiniteNumber(shadowProps.cameraFar)
+  if (cameraFar !== null && shadowCamera) {
+    shadowCamera.far = cameraFar
+  }
+
+  if (props.type === 'Directional') {
+    const orthoSize = coerceFiniteNumber(shadowProps.orthoSize)
+    const camera = shadowCamera as THREE.OrthographicCamera | undefined
+    if (orthoSize !== null && camera && (camera as any).isOrthographicCamera) {
+      const s = Math.max(0.01, orthoSize)
+      camera.left = -s
+      camera.right = s
+      camera.top = s
+      camera.bottom = -s
+    }
+  }
+
+  shadowCamera?.updateProjectionMatrix?.()
+}
+
 export function createThreeLightFromLightNode(props: LightNodeProperties): CreatedThreeLight {
   const color = new THREE.Color(props.color ?? '#ffffff')
   const intensity = Number.isFinite(props.intensity) ? Number(props.intensity) : 1
@@ -31,6 +98,7 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
       directional.shadow.camera.near = 0.1
       directional.shadow.camera.far = 200
       directional.shadow.bias = -0.0002
+      applyShadowSettings(directional, props)
 
       if (props.target) {
         const target = new THREE.Object3D()
@@ -45,6 +113,7 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
     case 'Point': {
       const point = new THREE.PointLight(color, intensity, props.distance ?? 0, props.decay ?? 1)
       point.castShadow = Boolean(props.castShadow)
+      applyShadowSettings(point, props)
       return { light: point }
     }
 
@@ -59,6 +128,7 @@ export function createThreeLightFromLightNode(props: LightNodeProperties): Creat
       )
       spot.castShadow = Boolean(props.castShadow)
       spot.shadow.mapSize.set(1024, 1024)
+      applyShadowSettings(spot, props)
 
       if (props.target) {
         const target = new THREE.Object3D()

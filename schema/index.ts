@@ -676,6 +676,23 @@ export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemi
 export type CameraControlMode = 'orbit' | 'map'
 export type CameraProjection = 'perspective' | 'orthographic'
 
+export interface LightShadowProperties {
+  /** Shadow map resolution (power of two recommended). */
+  mapSize?: number
+  /** Shadow bias to reduce acne. */
+  bias?: number
+  /** Shadow normal bias to reduce acne on low-angle surfaces. */
+  normalBias?: number
+  /** Blur radius (used by PCFSoftShadowMap). */
+  radius?: number
+  /** Shadow camera near plane. */
+  cameraNear?: number
+  /** Shadow camera far plane. */
+  cameraFar?: number
+  /** DirectionalLight only: orthographic half-extent (left/right/top/bottom = ±orthoSize). */
+  orthoSize?: number
+}
+
 export interface LightNodeProperties {
   type: LightNodeType
   color: string
@@ -691,6 +708,8 @@ export interface LightNodeProperties {
   penumbra?: number
   target?: Vector3Like
   castShadow?: boolean
+  /** Shadow tuning parameters (only used when `castShadow` is true and light type supports shadows). */
+  shadow?: LightShadowProperties
   /** RectAreaLight width (only when type === 'RectArea') */
   width?: number
   /** RectAreaLight height (only when type === 'RectArea') */

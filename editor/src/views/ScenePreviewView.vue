@@ -1289,6 +1289,193 @@ const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 
+type PreviewDebugLightOption = { title: string; value: string; type: string }
+
+function coerceFiniteNumber(value: unknown): number | null {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return null
+	}
+	return value
+}
+
+function resolveRuntimeLightFromNodeId(nodeId: string | null): THREE.Light | null {
+	if (!nodeId) {
+		return null
+	}
+	const container = nodeObjectMap.get(nodeId) ?? null
+	if (!container) {
+		return null
+	}
+	const anyContainer = container as any
+	if (anyContainer.isLight) {
+		return anyContainer as THREE.Light
+	}
+	const direct = container.children?.find((child) => (child as any)?.isLight) as THREE.Light | undefined
+	return direct ?? null
+}
+
+function applyShadowConfigToRuntimeLight(light: THREE.Light, config: SceneNode['light']): void {
+	if (!config) {
+		return
+	}
+
+	const anyLight = light as any
+	if ('castShadow' in anyLight) {
+		anyLight.castShadow = Boolean((config as any).castShadow)
+	}
+
+	const shadow = anyLight.shadow as THREE.LightShadow | undefined
+	const shadowConfig = (config as any).shadow as Record<string, unknown> | undefined
+	if (!shadow || !shadowConfig) {
+		return
+	}
+
+	const shadowCamera = shadow.camera as THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
+
+	const mapSize = coerceFiniteNumber(shadowConfig.mapSize)
+	if (mapSize !== null && mapSize > 0) {
+		const size = Math.max(1, Math.round(mapSize))
+		if (shadow.mapSize.x !== size || shadow.mapSize.y !== size) {
+			shadow.mapSize.set(size, size)
+			;(shadow as any).map?.dispose?.()
+			;(shadow as any).map = null
+		}
+	}
+
+	const bias = coerceFiniteNumber(shadowConfig.bias)
+	if (bias !== null) {
+		shadow.bias = bias
+	}
+
+	const normalBias = coerceFiniteNumber(shadowConfig.normalBias)
+	if (normalBias !== null) {
+		;(shadow as any).normalBias = normalBias
+	}
+
+	const radius = coerceFiniteNumber(shadowConfig.radius)
+	if (radius !== null) {
+		shadow.radius = radius
+	}
+
+	const cameraNear = coerceFiniteNumber(shadowConfig.cameraNear)
+	if (cameraNear !== null && shadowCamera) {
+		shadowCamera.near = cameraNear
+	}
+
+	const cameraFar = coerceFiniteNumber(shadowConfig.cameraFar)
+	if (cameraFar !== null && shadowCamera) {
+		shadowCamera.far = cameraFar
+	}
+
+	if (config.type === 'Directional') {
+		const orthoSize = coerceFiniteNumber(shadowConfig.orthoSize)
+		const camera = shadowCamera as THREE.OrthographicCamera | undefined
+		if (orthoSize !== null && camera && (camera as any).isOrthographicCamera) {
+			const s = Math.max(0.01, orthoSize)
+			camera.left = -s
+			camera.right = s
+			camera.top = s
+			camera.bottom = -s
+		}
+	}
+
+	shadowCamera?.updateProjectionMatrix?.()
+}
+
+const debugLightShadowOptions = computed<PreviewDebugLightOption[]>(() => {
+	const options: PreviewDebugLightOption[] = []
+	for (const node of previewNodeMap.values()) {
+		if (node?.nodeType !== 'Light' || !node.light) {
+			continue
+		}
+		const type = node.light.type ?? ''
+		const name = typeof node.name === 'string' && node.name.trim().length ? node.name.trim() : node.id
+		options.push({ title: `${name} (${type})`, value: node.id, type })
+	}
+	return options
+})
+
+const debugSelectedLightNodeId = ref<string | null>(null)
+const debugSelectedLightType = computed(() => {
+	const id = debugSelectedLightNodeId.value
+	if (!id) return null
+	const node = resolveNodeById(id)
+	return node?.light?.type ?? null
+})
+
+const debugShadowForm = reactive({
+	castShadow: false,
+	mapSize: 1024,
+	bias: 0,
+	normalBias: 0,
+	radius: 1,
+	cameraNear: 0.1,
+	cameraFar: 200,
+	orthoSize: 20,
+})
+
+const debugShadowMapSizeOptions = [256, 512, 1024, 2048, 4096]
+
+function syncDebugShadowFormFromNode(): void {
+	const id = debugSelectedLightNodeId.value
+	const node = id ? resolveNodeById(id) : null
+	if (!node?.light) {
+		return
+	}
+	const light = node.light
+	const shadow = light.shadow ?? {}
+	debugShadowForm.castShadow = Boolean(light.castShadow)
+	debugShadowForm.mapSize = Number(shadow.mapSize ?? (light.type === 'Directional' ? 2048 : light.type === 'Spot' ? 1024 : 512))
+	debugShadowForm.bias = Number(shadow.bias ?? (light.type === 'Directional' ? -0.0002 : 0))
+	debugShadowForm.normalBias = Number(shadow.normalBias ?? 0)
+	debugShadowForm.radius = Number(shadow.radius ?? 1)
+	debugShadowForm.cameraNear = Number(shadow.cameraNear ?? 0.1)
+	debugShadowForm.cameraFar = Number(shadow.cameraFar ?? 200)
+	debugShadowForm.orthoSize = Number(shadow.orthoSize ?? 20)
+}
+
+function updateDebugSelectedLightConfig(patch: Partial<SceneNode['light']> & { shadow?: Record<string, unknown> }): void {
+	const id = debugSelectedLightNodeId.value
+	const node = id ? resolveNodeById(id) : null
+	if (!node?.light) {
+		return
+	}
+
+	const nextShadow = patch.shadow ? { ...(node.light.shadow ?? {}), ...patch.shadow } : node.light.shadow
+	node.light = {
+		...node.light,
+		...patch,
+		...(patch.shadow ? { shadow: nextShadow as any } : {}),
+	} as any
+
+	const runtimeLight = resolveRuntimeLightFromNodeId(id)
+	if (runtimeLight) {
+		applyShadowConfigToRuntimeLight(runtimeLight, node.light)
+	}
+}
+
+watch(
+	() => debugSelectedLightNodeId.value,
+	() => {
+		syncDebugShadowFormFromNode()
+	},
+)
+
+watch(
+	debugLightShadowOptions,
+	(next) => {
+		if (!next.length) {
+			debugSelectedLightNodeId.value = null
+			return
+		}
+		if (!debugSelectedLightNodeId.value) {
+			debugSelectedLightNodeId.value = next[0]!.value
+		}
+		syncDebugShadowFormFromNode()
+	},
+	{ immediate: true },
+)
+
 const scenePreviewPerf = createScenePreviewPerfController({
 	isWeChatMiniProgram: false,
 	nonInteractiveSleep: { visualSyncIntervalMs: 80 },
@@ -10414,6 +10601,115 @@ onBeforeUnmount(() => {
 								density="compact"
 								color="warning"
 								@update:model-value="toggleOtherRigidbodyWireframeDebug"
+							/>
+						</v-list-item>
+						<v-divider class="my-2" />
+						<v-list-subheader>Light shadows</v-list-subheader>
+						<v-list-item>
+							<v-select
+								:items="debugLightShadowOptions"
+								item-title="title"
+								item-value="value"
+								label="Light"
+								density="compact"
+								hide-details
+								v-model="debugSelectedLightNodeId"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-switch
+								label="Cast shadow"
+								density="compact"
+								hide-details
+								color="primary"
+								:model-value="debugShadowForm.castShadow"
+								@update:model-value="(v) => { debugShadowForm.castShadow = Boolean(v); updateDebugSelectedLightConfig({ castShadow: Boolean(v) }) }"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-select
+								:items="debugShadowMapSizeOptions"
+								label="Map size"
+								density="compact"
+								hide-details
+								:disabled="!debugShadowForm.castShadow"
+								:model-value="debugShadowForm.mapSize"
+								@update:model-value="(v) => { const size = Math.max(1, Math.round(Number(v) || 0)); debugShadowForm.mapSize = size; updateDebugSelectedLightConfig({ shadow: { mapSize: size } }) }"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<div class="scene-preview__debug-slider">
+								<div class="scene-preview__debug-slider__label">Bias</div>
+								<v-slider
+									:min="-0.005"
+									:max="0.005"
+									:step="0.00005"
+									:disabled="!debugShadowForm.castShadow"
+									hide-details
+									density="compact"
+									:model-value="debugShadowForm.bias"
+									@update:model-value="(v) => { debugShadowForm.bias = Number(v) || 0; updateDebugSelectedLightConfig({ shadow: { bias: debugShadowForm.bias } }) }"
+								/>
+							</div>
+						</v-list-item>
+						<v-list-item>
+							<div class="scene-preview__debug-slider">
+								<div class="scene-preview__debug-slider__label">Normal bias</div>
+								<v-slider
+									:min="0"
+									:max="0.2"
+									:step="0.001"
+									:disabled="!debugShadowForm.castShadow"
+									hide-details
+									density="compact"
+									:model-value="debugShadowForm.normalBias"
+									@update:model-value="(v) => { debugShadowForm.normalBias = Math.max(0, Number(v) || 0); updateDebugSelectedLightConfig({ shadow: { normalBias: debugShadowForm.normalBias } }) }"
+								/>
+							</div>
+						</v-list-item>
+						<v-list-item>
+							<div class="scene-preview__debug-slider">
+								<div class="scene-preview__debug-slider__label">Radius</div>
+								<v-slider
+									:min="0"
+									:max="10"
+									:step="0.1"
+									:disabled="!debugShadowForm.castShadow"
+									hide-details
+									density="compact"
+									:model-value="debugShadowForm.radius"
+									@update:model-value="(v) => { debugShadowForm.radius = Math.max(0, Number(v) || 0); updateDebugSelectedLightConfig({ shadow: { radius: debugShadowForm.radius } }) }"
+								/>
+							</div>
+						</v-list-item>
+						<v-list-item>
+							<div class="scene-preview__debug-nearfar">
+								<v-text-field
+									label="Near"
+									density="compact"
+									hide-details
+									:disabled="!debugShadowForm.castShadow"
+									:model-value="debugShadowForm.cameraNear"
+									@update:model-value="(v) => { const near = Math.max(0.001, Number(v) || 0.1); debugShadowForm.cameraNear = near; updateDebugSelectedLightConfig({ shadow: { cameraNear: near } }) }"
+								/>
+								<v-text-field
+									label="Far"
+									density="compact"
+									hide-details
+									:disabled="!debugShadowForm.castShadow"
+									:model-value="debugShadowForm.cameraFar"
+									@update:model-value="(v) => { const far = Math.max(0.01, Number(v) || 200); debugShadowForm.cameraFar = far; updateDebugSelectedLightConfig({ shadow: { cameraFar: far } }) }"
+								/>
+							</div>
+						</v-list-item>
+						<v-list-item v-if="debugSelectedLightType === 'Directional'">
+							<v-text-field
+								label="Ortho size"
+								density="compact"
+								hide-details
+								:disabled="!debugShadowForm.castShadow"
+								:model-value="debugShadowForm.orthoSize"
+								@update:model-value="(v) => { const size = Math.max(0.01, Number(v) || 20); debugShadowForm.orthoSize = size; updateDebugSelectedLightConfig({ shadow: { orthoSize: size } }) }"
 							/>
 						</v-list-item>
 					</v-list>

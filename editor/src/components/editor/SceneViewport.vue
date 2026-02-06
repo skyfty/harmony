@@ -11358,6 +11358,8 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
     ;(light as any).castShadow = (config as any).castShadow
   }
 
+  applyLightShadowConfig(light, config)
+
   if (light instanceof THREE.PointLight) {
     light.distance = config.distance ?? light.distance
     light.decay = config.decay ?? light.decay
@@ -11981,6 +11983,79 @@ function unregisterLightHelpersForNode(nodeId: string) {
   }
 }
 
+function coerceFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  return value
+}
+
+function applyLightShadowConfig(light: THREE.Light, config: SceneNode['light']): void {
+  if (!config) {
+    return
+  }
+
+  const anyLight = light as any
+  const shadow = anyLight.shadow as THREE.LightShadow | undefined
+  const shadowConfig = (config as any).shadow as Record<string, unknown> | undefined
+  if (!shadow || !shadowConfig) {
+    return
+  }
+
+  const shadowCamera = shadow.camera as THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
+
+  const mapSize = coerceFiniteNumber(shadowConfig.mapSize)
+  if (mapSize !== null && mapSize > 0) {
+    const size = Math.max(1, Math.round(mapSize))
+    const currentX = shadow.mapSize?.x ?? 0
+    const currentY = shadow.mapSize?.y ?? 0
+    if (currentX !== size || currentY !== size) {
+      shadow.mapSize.set(size, size)
+      ;(shadow as any).map?.dispose?.()
+      ;(shadow as any).map = null
+    }
+  }
+
+  const bias = coerceFiniteNumber(shadowConfig.bias)
+  if (bias !== null) {
+    shadow.bias = bias
+  }
+
+  const normalBias = coerceFiniteNumber(shadowConfig.normalBias)
+  if (normalBias !== null) {
+    ;(shadow as any).normalBias = normalBias
+  }
+
+  const radius = coerceFiniteNumber(shadowConfig.radius)
+  if (radius !== null) {
+    shadow.radius = radius
+  }
+
+  const cameraNear = coerceFiniteNumber(shadowConfig.cameraNear)
+  if (cameraNear !== null && shadowCamera) {
+    shadowCamera.near = cameraNear
+  }
+
+  const cameraFar = coerceFiniteNumber(shadowConfig.cameraFar)
+  if (cameraFar !== null && shadowCamera) {
+    shadowCamera.far = cameraFar
+  }
+
+  if (config.type === 'Directional') {
+    const orthoSize = coerceFiniteNumber(shadowConfig.orthoSize)
+    const camera = shadowCamera as THREE.OrthographicCamera | undefined
+    if (orthoSize !== null && camera && (camera as any).isOrthographicCamera) {
+      const s = Math.max(0.01, orthoSize)
+      camera.left = -s
+      camera.right = s
+      camera.top = s
+      camera.bottom = -s
+    }
+  }
+
+  shadowCamera?.updateProjectionMatrix?.()
+}
+
 function createLightObject(node: SceneNode): THREE.Object3D {
   const container = new THREE.Group()
   container.name = `${node.name}-Light`
@@ -12000,6 +12075,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
     case 'Directional': {
       const directional = new THREE.DirectionalLight(config.color, config.intensity)
       directional.castShadow = config.castShadow ?? false
+      applyLightShadowConfig(directional, config)
       light = directional
       const target = directional.target
       if (config.target) {
@@ -12017,6 +12093,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
     case 'Point': {
       const point = new THREE.PointLight(config.color, config.intensity, config.distance ?? 0, config.decay ?? 1)
       point.castShadow = config.castShadow ?? false
+      applyLightShadowConfig(point, config)
       light = point
       helper = new THREE.PointLightHelper(point, POINT_LIGHT_HELPER_SIZE, config.color)
       break
@@ -12031,6 +12108,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
         config.decay ?? 1,
       )
       spot.castShadow = config.castShadow ?? false
+      applyLightShadowConfig(spot, config)
       if (config.target) {
         spot.target.position.set(
           config.target.x - node.position.x,

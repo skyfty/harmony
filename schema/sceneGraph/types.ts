@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags } from '../index';
+import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags, LightShadowProperties } from '../index';
 
 export type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -11,6 +11,7 @@ export type SceneNodeWithExtras = SceneNode & {
     angle?: number;
     penumbra?: number;
     castShadow?: boolean;
+    shadow?: LightShadowProperties;
     target?: THREE.Vector3;
   };
   dynamicMesh?: any;

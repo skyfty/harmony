@@ -8178,6 +8178,13 @@ export const useSceneStore = defineStore('scene', {
           ...node.light,
           ...properties,
         }
+
+        if (properties.shadow) {
+          next.shadow = {
+            ...(node.light?.shadow ?? {}),
+            ...properties.shadow,
+          }
+        }
         if (properties.target) {
           next.target = cloneVector(properties.target)
         } else if (properties.target === null) {

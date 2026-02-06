@@ -354,6 +354,50 @@
         <text class="viewer-debug-line">Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}</text>
         <text class="viewer-debug-line">Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}</text>
         <text class="viewer-debug-line">Ground size (W × D): {{ debugGroundDims.width }} m × {{ debugGroundDims.depth }} m</text>
+
+        <view class="viewer-debug-shadow" v-if="debugShadowLightLabels.length">
+          <text class="viewer-debug-line">[Light Shadow]</text>
+          <picker :range="debugShadowLightLabels" :value="debugShadowSelectedLightIndex" @change="handleDebugShadowLightPick">
+            <text class="viewer-debug-line">Light: {{ debugShadowSelectedLightLabel }}</text>
+          </picker>
+          <view class="viewer-debug-line">
+            <text>Cast Shadow: </text>
+            <switch
+              :checked="debugShadowForm.castShadow"
+              :disabled="debugShadowCastShadowDisabled"
+              @change="handleDebugShadowCastShadowChange"
+            />
+            <text v-if="debugShadowPointShadowPolicyActive"> (Point shadow disabled)</text>
+          </view>
+          <view class="viewer-debug-line">
+            <text>Map Size: </text>
+            <picker :range="debugShadowMapSizeLabels" :value="debugShadowSelectedMapSizeIndex" @change="handleDebugShadowMapSizePick">
+              <text>{{ debugShadowMapSizeLabels[debugShadowSelectedMapSizeIndex] }}</text>
+            </picker>
+          </view>
+          <view class="viewer-debug-line">
+            <text>Bias: {{ debugShadowForm.bias.toFixed(5) }}</text>
+            <slider min="-0.005" max="0.005" step="0.00005" :value="debugShadowForm.bias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowBiasChange" />
+          </view>
+          <view class="viewer-debug-line">
+            <text>NormalBias: {{ debugShadowForm.normalBias.toFixed(3) }}</text>
+            <slider min="0" max="0.2" step="0.001" :value="debugShadowForm.normalBias" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowNormalBiasChange" />
+          </view>
+          <view class="viewer-debug-line">
+            <text>Radius: {{ debugShadowForm.radius.toFixed(1) }}</text>
+            <slider min="0" max="10" step="0.1" :value="debugShadowForm.radius" :disabled="debugShadowParamsDisabled" @change="handleDebugShadowRadiusChange" />
+          </view>
+          <view class="viewer-debug-line">
+            <text>Near: </text>
+            <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraNear" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowNearInput" />
+            <text> Far: </text>
+            <input class="viewer-debug-input" type="number" :value="debugShadowForm.cameraFar" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowFarInput" />
+          </view>
+          <view class="viewer-debug-line" v-if="debugShadowSelectedLightType === 'Directional'">
+            <text>Ortho Size: </text>
+            <input class="viewer-debug-input" type="number" :value="debugShadowForm.orthoSize" :disabled="debugShadowParamsDisabled" @input="handleDebugShadowOrthoSizeInput" />
+          </view>
+        </view>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -1543,6 +1587,263 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 }
 
 const nodeObjectMap = new Map<string, THREE.Object3D>();
+
+type DebugShadowLightOption = { id: string; label: string; type: string };
+
+function coerceFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function resolveRuntimeLightFromNodeId(nodeId: string | null): THREE.Light | null {
+  if (!nodeId) {
+    return null;
+  }
+  const container = nodeObjectMap.get(nodeId) ?? null;
+  if (!container) {
+    return null;
+  }
+  const anyContainer = container as any;
+  if (anyContainer.isLight) {
+    return anyContainer as THREE.Light;
+  }
+  const direct = container.children?.find((child) => (child as any)?.isLight) as THREE.Light | undefined;
+  return direct ?? null;
+}
+
+function applyShadowConfigToRuntimeLight(light: THREE.Light, config: SceneNode['light']): void {
+  if (!config) {
+    return;
+  }
+
+  const anyLight = light as any;
+  if ('castShadow' in anyLight) {
+    anyLight.castShadow = Boolean((config as any).castShadow);
+  }
+
+  // Enforce miniprogram policy.
+  if (isWeChatMiniProgram && anyLight.isPointLight) {
+    anyLight.castShadow = false;
+  }
+
+  const shadow = anyLight.shadow as THREE.LightShadow | undefined;
+  const shadowConfig = (config as any).shadow as Record<string, unknown> | undefined;
+  if (!shadow || !shadowConfig) {
+    return;
+  }
+
+  const shadowCamera = shadow.camera as THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined;
+
+  const mapSize = coerceFiniteNumber(shadowConfig.mapSize);
+  if (mapSize !== null && mapSize > 0) {
+    const desired = Math.max(1, Math.round(mapSize));
+    const size = isWeChatMiniProgram ? Math.min(WECHAT_SHADOW_MAX_MAP_SIZE, desired) : desired;
+    if (shadow.mapSize.x !== size || shadow.mapSize.y !== size) {
+      shadow.mapSize.set(size, size);
+      (shadow as any).map?.dispose?.();
+      (shadow as any).map = null;
+    }
+  }
+
+  const bias = coerceFiniteNumber(shadowConfig.bias);
+  if (bias !== null) {
+    shadow.bias = bias;
+  }
+
+  const normalBias = coerceFiniteNumber(shadowConfig.normalBias);
+  if (normalBias !== null) {
+    (shadow as any).normalBias = normalBias;
+  }
+
+  const radius = coerceFiniteNumber(shadowConfig.radius);
+  if (radius !== null) {
+    shadow.radius = radius;
+  }
+
+  const cameraNear = coerceFiniteNumber(shadowConfig.cameraNear);
+  if (cameraNear !== null && shadowCamera) {
+    shadowCamera.near = cameraNear;
+  }
+
+  const cameraFar = coerceFiniteNumber(shadowConfig.cameraFar);
+  if (cameraFar !== null && shadowCamera) {
+    shadowCamera.far = cameraFar;
+  }
+
+  if (config.type === 'Directional') {
+    const orthoSize = coerceFiniteNumber(shadowConfig.orthoSize);
+    const camera = shadowCamera as THREE.OrthographicCamera | undefined;
+    if (orthoSize !== null && camera && (camera as any).isOrthographicCamera) {
+      const s = Math.max(0.01, orthoSize);
+      camera.left = -s;
+      camera.right = s;
+      camera.top = s;
+      camera.bottom = -s;
+    }
+  }
+
+  shadowCamera?.updateProjectionMatrix?.();
+}
+
+const debugShadowMapSizes = [256, 512, 1024] as const;
+const debugShadowMapSizeLabels = debugShadowMapSizes.map((size) => String(size));
+
+const debugShadowLightOptions = computed<DebugShadowLightOption[]>(() => {
+  const options: DebugShadowLightOption[] = [];
+  for (const node of previewNodeMap.values()) {
+    if (node?.nodeType !== 'Light' || !node.light) {
+      continue;
+    }
+    const type = node.light.type ?? '';
+    const name = typeof node.name === 'string' && node.name.trim().length ? node.name.trim() : node.id;
+    options.push({ id: node.id, label: `${name} (${type})`, type });
+  }
+  return options;
+});
+
+const debugShadowLightLabels = computed(() => debugShadowLightOptions.value.map((entry) => entry.label));
+const debugShadowSelectedLightIndex = ref(0);
+const debugShadowSelectedLightNodeId = computed(() => debugShadowLightOptions.value[debugShadowSelectedLightIndex.value]?.id ?? null);
+const debugShadowSelectedLightLabel = computed(() => debugShadowLightLabels.value[debugShadowSelectedLightIndex.value] ?? '(none)');
+const debugShadowSelectedLightType = computed(() => debugShadowLightOptions.value[debugShadowSelectedLightIndex.value]?.type ?? null);
+const debugShadowSelectedMapSizeIndex = ref(2);
+
+const debugShadowForm = reactive({
+  castShadow: false,
+  bias: 0,
+  normalBias: 0,
+  radius: 1,
+  cameraNear: 0.1,
+  cameraFar: 200,
+  orthoSize: 20,
+});
+
+const debugShadowPointShadowPolicyActive = computed(() => isWeChatMiniProgram && debugShadowSelectedLightType.value === 'Point');
+const debugShadowCastShadowDisabled = computed(() => debugShadowPointShadowPolicyActive.value);
+const debugShadowParamsDisabled = computed(() => !debugShadowForm.castShadow || debugShadowPointShadowPolicyActive.value);
+
+function syncDebugShadowFormFromNode(): void {
+  const nodeId = debugShadowSelectedLightNodeId.value;
+  const node = nodeId ? previewNodeMap.get(nodeId) ?? null : null;
+  if (!node?.light) {
+    return;
+  }
+  const light = node.light;
+  const shadow = light.shadow ?? {};
+
+  debugShadowForm.castShadow = Boolean(light.castShadow);
+  debugShadowForm.bias = Number(shadow.bias ?? (light.type === 'Directional' ? -0.0002 : 0));
+  debugShadowForm.normalBias = Number(shadow.normalBias ?? 0);
+  debugShadowForm.radius = Number(shadow.radius ?? 1);
+  debugShadowForm.cameraNear = Number(shadow.cameraNear ?? 0.1);
+  debugShadowForm.cameraFar = Number(shadow.cameraFar ?? 200);
+  debugShadowForm.orthoSize = Number(shadow.orthoSize ?? 20);
+
+  const rawSize = Number(shadow.mapSize ?? (light.type === 'Spot' ? 1024 : light.type === 'Directional' ? 1024 : 512));
+  const clamped = isWeChatMiniProgram ? Math.min(WECHAT_SHADOW_MAX_MAP_SIZE, Math.max(256, Math.round(rawSize))) : Math.round(rawSize);
+  const sizeIndex = debugShadowMapSizes.findIndex((s) => s === clamped);
+  debugShadowSelectedMapSizeIndex.value = sizeIndex >= 0 ? sizeIndex : 2;
+}
+
+function updateDebugShadowNodeConfig(patch: Partial<SceneNode['light']> & { shadow?: Record<string, unknown> }): void {
+  const nodeId = debugShadowSelectedLightNodeId.value;
+  const node = nodeId ? previewNodeMap.get(nodeId) ?? null : null;
+  if (!node?.light) {
+    return;
+  }
+
+  const nextShadow = patch.shadow
+    ? { ...(node.light.shadow ?? {}), ...patch.shadow }
+    : (node.light.shadow ?? undefined);
+
+  node.light = {
+    ...node.light,
+    ...patch,
+    ...(patch.shadow ? { shadow: nextShadow as any } : {}),
+  } as any;
+
+  const runtimeLight = resolveRuntimeLightFromNodeId(nodeId);
+  if (runtimeLight) {
+    applyShadowConfigToRuntimeLight(runtimeLight, node.light);
+  }
+}
+
+function handleDebugShadowLightPick(event: any) {
+  const idx = Number(event?.detail?.value ?? 0);
+  debugShadowSelectedLightIndex.value = Number.isFinite(idx) ? Math.max(0, idx) : 0;
+  syncDebugShadowFormFromNode();
+}
+
+function handleDebugShadowCastShadowChange(event: any) {
+  const value = Boolean(event?.detail?.value);
+  debugShadowForm.castShadow = value;
+  if (debugShadowPointShadowPolicyActive.value) {
+    updateDebugShadowNodeConfig({ castShadow: false });
+    return;
+  }
+  updateDebugShadowNodeConfig({ castShadow: value });
+}
+
+function handleDebugShadowMapSizePick(event: any) {
+  const idx = Number(event?.detail?.value ?? 0);
+  const index = Number.isFinite(idx) ? Math.max(0, Math.min(debugShadowMapSizes.length - 1, idx)) : 2;
+  debugShadowSelectedMapSizeIndex.value = index;
+  const size = debugShadowMapSizes[index] ?? 1024;
+  updateDebugShadowNodeConfig({ shadow: { mapSize: size } });
+}
+
+function handleDebugShadowBiasChange(event: any) {
+  const v = Number(event?.detail?.value);
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.bias = v;
+  updateDebugShadowNodeConfig({ shadow: { bias: v } });
+}
+
+function handleDebugShadowNormalBiasChange(event: any) {
+  const v = Number(event?.detail?.value);
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.normalBias = v;
+  updateDebugShadowNodeConfig({ shadow: { normalBias: v } });
+}
+
+function handleDebugShadowRadiusChange(event: any) {
+  const v = Number(event?.detail?.value);
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.radius = v;
+  updateDebugShadowNodeConfig({ shadow: { radius: v } });
+}
+
+function handleDebugShadowNearInput(event: any) {
+  const v = Number(event?.detail?.value ?? (event?.target?.value ?? ''));
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.cameraNear = v;
+  updateDebugShadowNodeConfig({ shadow: { cameraNear: Math.max(0.001, v) } });
+}
+
+function handleDebugShadowFarInput(event: any) {
+  const v = Number(event?.detail?.value ?? (event?.target?.value ?? ''));
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.cameraFar = v;
+  updateDebugShadowNodeConfig({ shadow: { cameraFar: Math.max(0.01, v) } });
+}
+
+function handleDebugShadowOrthoSizeInput(event: any) {
+  const v = Number(event?.detail?.value ?? (event?.target?.value ?? ''));
+  if (!Number.isFinite(v)) return;
+  debugShadowForm.orthoSize = v;
+  updateDebugShadowNodeConfig({ shadow: { orthoSize: Math.max(0.01, v) } });
+}
+
+watch(debugShadowLightOptions, (next) => {
+  if (!next.length) {
+    debugShadowSelectedLightIndex.value = 0;
+    return;
+  }
+  if (debugShadowSelectedLightIndex.value >= next.length) {
+    debugShadowSelectedLightIndex.value = 0;
+  }
+  syncDebugShadowFormFromNode();
+}, { immediate: true });
+
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
@@ -3242,6 +3543,15 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   assetNodeIdMap.clear();
   rebuildSceneNodeIndex(nodes ?? null, previewNodeMap, previewParentMap);
   for (const node of previewNodeMap.values()) {
+    if (isWeChatMiniProgram && node.nodeType === 'Light' && node.light) {
+      if (node.light.type === 'Point') {
+        node.light.castShadow = false;
+      }
+      if (node.light.shadow?.mapSize && node.light.shadow.mapSize > WECHAT_SHADOW_MAX_MAP_SIZE) {
+        node.light.shadow.mapSize = WECHAT_SHADOW_MAX_MAP_SIZE;
+      }
+    }
+
     if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length) {
       const assetId = node.sourceAssetId.trim();
       let bucket = assetNodeIdMap.get(assetId);
@@ -9119,6 +9429,40 @@ async function prepareInstancedNodesIfPossible(
   }
 }
 
+const WECHAT_SHADOW_MAX_MAP_SIZE = 1024;
+
+function applyWeChatShadowPolicy(root: THREE.Object3D): void {
+  if (!isWeChatMiniProgram) {
+    return;
+  }
+
+  root.traverse((object) => {
+    const anyObject = object as any;
+    if (!anyObject?.isLight) {
+      return;
+    }
+
+    // Default: disable PointLight shadows on mini-program for performance.
+    if (anyObject.isPointLight) {
+      anyObject.castShadow = false;
+    }
+
+    const shadow = anyObject.shadow as THREE.LightShadow | undefined;
+    if (!shadow?.mapSize) {
+      return;
+    }
+
+    const sizeX = Math.max(1, Math.round(Number(shadow.mapSize.x || 0)));
+    const sizeY = Math.max(1, Math.round(Number(shadow.mapSize.y || 0)));
+    const clamped = Math.min(WECHAT_SHADOW_MAX_MAP_SIZE, Math.max(sizeX, sizeY));
+    if (shadow.mapSize.x !== clamped || shadow.mapSize.y !== clamped) {
+      shadow.mapSize.set(clamped, clamped);
+      (shadow as any).map?.dispose?.();
+      (shadow as any).map = null;
+    }
+  });
+}
+
 /**
  * Mount the graph into the scene and sync all subsystems that depend on the object tree.
  */
@@ -9135,6 +9479,7 @@ function mountGraphAndSyncSubsystems(
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(root);
+  applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(root);
@@ -9677,12 +10022,28 @@ onUnmounted(() => {
   color: rgba(245, 250, 255, 0.92);
   font-size: 12px;
   line-height: 1.45;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .viewer-debug-line {
   display: block;
   white-space: nowrap;
+}
+
+.viewer-debug-shadow {
+  margin-top: 8px;
+}
+
+.viewer-debug-input {
+  display: inline-block;
+  width: 74px;
+  padding: 2px 6px;
+  margin: 0 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(245, 250, 255, 0.92);
+  font-size: 12px;
 }
 
 .viewer-canvas {
