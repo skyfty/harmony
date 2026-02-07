@@ -1,3 +1,15 @@
+function normalizeNullableHexColor(value: unknown): string | null {
+	if (typeof value === 'string') {
+		const sanitized = value.trim()
+		if (!sanitized.length) {
+			return null
+		}
+		if (HEX_COLOR_PATTERN.test(sanitized)) {
+			return `#${sanitized.slice(1).toLowerCase()}`
+		}
+	}
+	return null
+}
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
@@ -3329,6 +3341,13 @@ function cloneEnvironmentSettingsLocal(
 		background: {
 			mode: backgroundMode,
 			solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
+			...(backgroundMode === 'solidColor'
+				? {
+					gradientTopColor: normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null),
+					gradientOffset: clampNumber((backgroundSource as any)?.gradientOffset, 0, 100000, 33),
+					gradientExponent: clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, 0.6),
+				}
+				: {}),
 			hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
 			skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
 			skycubeZipAssetId:
