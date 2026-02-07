@@ -1,15 +1,3 @@
-function normalizeNullableHexColor(value: unknown): string | null {
-	if (typeof value === 'string') {
-		const sanitized = value.trim()
-		if (!sanitized.length) {
-			return null
-		}
-		if (HEX_COLOR_PATTERN.test(sanitized)) {
-			return `#${sanitized.slice(1).toLowerCase()}`
-		}
-	}
-	return null
-}
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
@@ -21,7 +9,11 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
-	ENVIRONMENT_NODE_ID,
+	DEFAULT_ENVIRONMENT_GRAVITY,
+	DEFAULT_ENVIRONMENT_RESTITUTION,
+	DEFAULT_ENVIRONMENT_FRICTION,
+	cloneEnvironmentSettings,
+	resolveDocumentEnvironment,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
 	createAutoTourRuntime,
@@ -59,7 +51,6 @@ import {
 	disposeMaterialTextures,
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
-import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
@@ -1056,46 +1047,6 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	elevation: 22,
 	azimuth: 145,
 	clouds: null,
-}
-const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
-const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'
-const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
-const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6
-const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
-const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
-const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
-const DEFAULT_ENVIRONMENT_FOG_FAR = 50
-const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
-const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
-const DEFAULT_ENVIRONMENT_FRICTION = 0.3
-const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
-const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
-const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
-	background: {
-		mode: 'skybox',
-		solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
-		hdriAssetId: null,
-		skycubeFormat: 'faces',
-		skycubeZipAssetId: null,
-		positiveXAssetId: null,
-		negativeXAssetId: null,
-		positiveYAssetId: null,
-		negativeYAssetId: null,
-		positiveZAssetId: null,
-		negativeZAssetId: null,
-	},
-	environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
-	environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
-	ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-	ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-	fogMode: 'none',
-	fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
-	fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
-	fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
-	fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-	gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
-	collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
-	collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
 }
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
@@ -2993,16 +2944,6 @@ function extractRigidbodyShape(
 	return payload?.shape ?? null
 }
 
-function normalizeHexColor(value: unknown, fallback: string): string {
-	if (typeof value === 'string') {
-		const sanitized = value.trim()
-		if (HEX_COLOR_PATTERN.test(sanitized)) {
-			return `#${sanitized.slice(1).toLowerCase()}`
-		}
-	}
-	return fallback
-}
-
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
 	const numeric = typeof value === 'number' ? value : Number(value)
 	if (!Number.isFinite(numeric)) {
@@ -3017,14 +2958,6 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 	return numeric
 }
 
-function normalizeAssetId(value: unknown): string | null {
-	if (typeof value !== 'string') {
-		return null
-	}
-	const trimmed = value.trim()
-	return trimmed.length ? trimmed : null
-}
-
 function normalizeNodeId(value: unknown): string | null {
 	if (typeof value !== 'string') {
 		return null
@@ -3033,9 +2966,6 @@ function normalizeNodeId(value: unknown): string | null {
 	return trimmed.length ? trimmed : null
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
 	const map = new Map<string, SceneNode[]>()
@@ -3256,175 +3186,6 @@ function clearInstancedMeshes() {
 
 }
 
-function extractEnvironmentSettingsFromNodes(
-	sourceNodes: SceneNode[] | null | undefined,
-): EnvironmentSettings | null {
-	if (!Array.isArray(sourceNodes) || !sourceNodes.length) {
-		return null
-	}
-	const stack: SceneNode[] = [...sourceNodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (node.id === ENVIRONMENT_NODE_ID || node.nodeType === 'Environment') {
-			const payload = isPlainRecord(node.userData)
-				? ((node.userData as Record<string, unknown>).environment as
-						| EnvironmentSettings
-						| Partial<EnvironmentSettings>
-						| null
-						| undefined)
-				: null
-			return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS)
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return null
-}
-
-function cloneEnvironmentSettingsLocal(
-	source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
-): EnvironmentSettings {
-	const backgroundSource = source?.background ?? null
-
-	const normalizeSkycubeFormat = (value: unknown) => (value === 'zip' ? 'zip' : 'faces')
-
-	const normalizeOrientationPreset = (value: unknown) => {
-		if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
-			return value as EnvironmentSettings['environmentOrientationPreset']
-		}
-		return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
-	}
-
-	const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
-		if (preset === 'zUp') {
-			return { x: -90, y: 0, z: 0 }
-		}
-		if (preset === 'xUp') {
-			return { x: 0, y: 0, z: 90 }
-		}
-		return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
-	}
-
-	let backgroundMode: EnvironmentBackgroundMode = 'skybox'
-	if (backgroundSource?.mode === 'hdri') {
-		backgroundMode = 'hdri'
-	} else if (backgroundSource?.mode === 'skycube') {
-		backgroundMode = 'skycube'
-	} else if (backgroundSource?.mode === 'solidColor') {
-		backgroundMode = 'solidColor'
-	}
-	let fogMode: EnvironmentSettings['fogMode'] = 'none'
-	if (source?.fogMode === 'linear') {
-		fogMode = 'linear'
-	} else if (source?.fogMode === 'exp') {
-		fogMode = 'exp'
-	}
-
-	const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
-	const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
-	const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
-
-	const preset = normalizeOrientationPreset((source as any)?.environmentOrientationPreset)
-	const presetRotation = resolvePresetRotationDegrees(preset)
-	const rotationSource = (source as any)?.environmentRotationDegrees ?? null
-	const environmentRotationDegrees = {
-		x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
-		y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
-		z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
-	}
-
-	return {
-		background: {
-			mode: backgroundMode,
-			solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
-			...(backgroundMode === 'solidColor'
-				? {
-					gradientTopColor: normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null),
-					gradientOffset: clampNumber((backgroundSource as any)?.gradientOffset, 0, 100000, 33),
-					gradientExponent: clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, 0.6),
-				}
-				: {}),
-			hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-			skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
-			skycubeZipAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null)
-					: null,
-			positiveXAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
-					: null,
-			negativeXAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null)
-					: null,
-			positiveYAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null)
-					: null,
-			negativeYAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null)
-					: null,
-			positiveZAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null)
-					: null,
-			negativeZAssetId:
-				backgroundMode === 'skycube'
-					? normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null)
-					: null,
-		},
-		environmentOrientationPreset: preset,
-		environmentRotationDegrees,
-		ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
-		ambientLightIntensity: clampNumber(
-			source?.ambientLightIntensity,
-			0,
-			10,
-			DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-		),
-		fogMode,
-		fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
-		fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
-		fogNear,
-		fogFar: normalizedFogFar,
-		gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
-		collisionRestitution: clampNumber(
-			source?.collisionRestitution,
-			0,
-			1,
-			DEFAULT_ENVIRONMENT_RESTITUTION,
-		),
-		collisionFriction: clampNumber(
-			source?.collisionFriction,
-			0,
-			1,
-			DEFAULT_ENVIRONMENT_FRICTION,
-		),
-	}
-}
-
-function resolveDocumentEnvironment(document: SceneJsonExportDocument | null | undefined): EnvironmentSettings {
-	if (!document) {
-		return cloneEnvironmentSettingsLocal(DEFAULT_ENVIRONMENT_SETTINGS)
-	}
-	const payload = (document as SceneJsonExportDocument & {
-		environment?: Partial<EnvironmentSettings> | EnvironmentSettings | null
-	}).environment
-	if (payload) {
-		return cloneEnvironmentSettingsLocal(payload)
-	}
-	const derived = extractEnvironmentSettingsFromNodes(document.nodes)
-	if (derived) {
-		return derived
-	}
-	return cloneEnvironmentSettingsLocal(DEFAULT_ENVIRONMENT_SETTINGS)
-}
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
 	let candidate: THREE.Object3D | null | undefined = object ?? null
@@ -7843,7 +7604,7 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 }
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
-	const snapshot = cloneEnvironmentSettingsLocal(settings)
+	const snapshot = cloneEnvironmentSettings(settings)
 	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
 		return
