@@ -6758,21 +6758,29 @@ const environmentSignature = computed(() => {
   const background = settings.background
   const environmentMap = settings.environmentMap
 
+  const skycubeFormat = background.mode === 'skycube' && background.skycubeFormat === 'zip' ? 'zip' : 'faces'
+
   const hdriBackgroundKey =
     background.mode === 'hdri' && background.hdriAssetId
       ? computeEnvironmentAssetReloadKey(background.hdriAssetId)
       : null
 
-  const skyCubeKeys = background.mode === 'skycube'
-    ? [
-      computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
-      computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
-      computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
-      computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
-      computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
-      computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
-    ]
-    : null
+  const skyCubeKeys =
+    background.mode === 'skycube' && skycubeFormat !== 'zip'
+      ? [
+          computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
+          computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
+          computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
+          computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
+          computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
+          computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
+        ]
+      : null
+
+  const skycubeZipKey =
+    background.mode === 'skycube' && skycubeFormat === 'zip' && background.skycubeZipAssetId
+      ? computeEnvironmentAssetReloadKey(background.skycubeZipAssetId)
+      : null
 
   const environmentMapKey =
     environmentMap.mode === 'custom' && environmentMap.hdriAssetId
@@ -6785,6 +6793,9 @@ const environmentSignature = computed(() => {
       solidColor: background.solidColor,
       hdriAssetId: background.hdriAssetId ?? null,
       hdriKey: hdriBackgroundKey,
+      skycubeFormat: background.mode === 'skycube' ? skycubeFormat : null,
+      skycubeZipAssetId: background.mode === 'skycube' ? (background.skycubeZipAssetId ?? null) : null,
+      skycubeZipKey,
       positiveXAssetId: background.mode === 'skycube' ? (background.positiveXAssetId ?? null) : null,
       negativeXAssetId: background.mode === 'skycube' ? (background.negativeXAssetId ?? null) : null,
       positiveYAssetId: background.mode === 'skycube' ? (background.positiveYAssetId ?? null) : null,
