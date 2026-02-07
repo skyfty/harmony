@@ -237,54 +237,7 @@ export default class Loader {
         break;
       }
 
-      case 'pcd': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as ArrayBuffer;
-          if (!contents) return;
-
-          const { PCDLoader } = await safeImport(
-            'three/examples/jsm/loaders/PCDLoader.js',
-            () => import('three/examples/jsm/loaders/PCDLoader.js'),
-          );
-
-          const points = new PCDLoader().parse(contents);
-          points.name = filename;
-          this.emit('loaded', points);
-        });
-        reader.readAsArrayBuffer(file);
-        break;
-      }
-
-      case 'ply': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as ArrayBuffer;
-          if (!contents) return;
-
-          const { PLYLoader } = await safeImport(
-            'three/examples/jsm/loaders/PLYLoader.js',
-            () => import('three/examples/jsm/loaders/PLYLoader.js'),
-          );
-
-          const geometry = new PLYLoader().parse(contents);
-          let object: LoaderLoadedPayload;
-
-          if (geometry.index !== null) {
-            const material = new THREE.MeshStandardMaterial();
-
-            object = new THREE.Mesh(geometry, material);
-          } else {
-            const material = new THREE.PointsMaterial({ size: 0.01 });
-            material.vertexColors = geometry.hasAttribute('color');
-
-            object = new THREE.Points(geometry, material);
-          }
-
-          object.name = filename;
-          this.emit('loaded', object);
-        });
-        reader.readAsArrayBuffer(file);
-        break;
-      }
+      // Note: PCD and PLY loaders removed — support for .pcd/.ply deprecated.
 
 
       default:
