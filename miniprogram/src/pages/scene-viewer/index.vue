@@ -1854,7 +1854,8 @@ const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
 const PHYSICS_FIXED_TIMESTEP = 1 / 60;
-const PHYSICS_MAX_SUB_STEPS = 5;
+// WeChat mini-program frames can have bigger dt spikes; allow more fixed substeps to avoid dropping sim time.
+const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 8 : 5;
 const PHYSICS_SOLVER_ITERATIONS = 18
 const PHYSICS_SOLVER_TOLERANCE = 5e-4
 const vehicleIdleFreezeLastLogMs = new Map<string, number>();
@@ -2318,6 +2319,45 @@ const vehicleDriveController = new VehicleDriveController(
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+
+    // WeChat-specific follow camera tuning to reduce visible micro-jitter.
+    followCameraVelocityLerpSpeed: () => (isWeChatMiniProgram ? 4.5 : 8),
+    followCameraTuning: () => (
+      isWeChatMiniProgram
+        ? {
+          lookaheadTime: 0.12,
+          lookaheadDistanceMax: 2,
+          lookaheadMinSpeedSq: 1.6,
+          lookaheadBlendStart: 0.35,
+        }
+        : {}
+    ),
+
+    // Provide interpolated chassis position for camera anchor (when physics interpolation is enabled).
+    resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
+      if (!physicsInterpolationEnabled) {
+        return false;
+      }
+      // Only apply when resolving the currently driven vehicle.
+      if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
+        return false;
+      }
+      resolveInterpolatedBodyPosition(chassisBody as unknown as CANNON.Body, target);
+      return true;
+    },
+
+    // Provide physics velocity directly (less sensitive to render-alpha changes than finite differencing).
+    resolveChassisWorldVelocity: (nodeId, chassisBody, target) => {
+      if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
+        return false;
+      }
+      const v = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null;
+      if (!v) {
+        return false;
+      }
+      target.set(Number(v.x) || 0, Number(v.y) || 0, Number(v.z) || 0);
+      return true;
+    },
   },
   {
     state: vehicleDriveStateBridge,
@@ -4975,6 +5015,10 @@ function stepPhysicsWorld(delta: number): void {
     });
     try {
       while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+        if (vehicleDriveActive.value) {
+          // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
+          applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
+        }
         world.step(PHYSICS_FIXED_TIMESTEP);
         physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
         subSteps += 1;
@@ -4998,6 +5042,9 @@ function stepPhysicsWorld(delta: number): void {
     }
   } else {
     try {
+      if (vehicleDriveActive.value) {
+        applyVehicleDriveForces(delta);
+      }
       physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
     } catch (error) {
       console.warn('[SceneViewer] Physics step failed', error);
@@ -5096,7 +5143,7 @@ function stepPhysicsWorld(delta: number): void {
     if (nowMs - physicsDebugLastLogMs >= PHYSICS_DEBUG_LOG_INTERVAL_MS) {
       physicsDebugLastLogMs = nowMs;
       const alpha = physicsInterpolationEnabled ? physicsInterpolationAlpha : 0;
-      console.debug('[SceneViewer] physics', {
+      console.log('[SceneViewer] physics', {
         delta: Number.isFinite(delta) ? Number(delta.toFixed(4)) : delta,
         subSteps: physicsDebugLastSubSteps,
         alpha: Number(alpha.toFixed(3)),
@@ -9642,9 +9689,6 @@ function startRenderLoop(
           } else {
             autoTourRuntime.update(deltaSeconds);
           }
-          if (vehicleDriveActive.value) {
-            applyVehicleDriveForces(deltaSeconds);
-          }
           stepPhysicsWorld(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
@@ -9884,9 +9928,20 @@ onLoad((query) => {
 
   physicsInterpolationEnabled = isWeChatMiniProgram
     && (physInterpParam === '' || (physInterpParam !== '0' && physInterpParam.toLowerCase() !== 'false'));
-  physicsDebugEnabled = physDebugParam === '1' || physDebugParam.toLowerCase() === 'true';
+
+  physicsDebugEnabled = true;
   physicsAccumulator = 0;
   physicsInterpolationAlpha = 0;
+  physicsDebugLastLogMs = 0;
+
+  if (physicsDebugEnabled) {
+    console.log('[SceneViewer] physdebug enabled', {
+      interpolationEnabled: physicsInterpolationEnabled,
+      fixedTimestep: PHYSICS_FIXED_TIMESTEP,
+      maxSubSteps: PHYSICS_MAX_SUB_STEPS,
+      maxAccumulator: PHYSICS_MAX_ACCUMULATOR,
+    });
+  }
 
   error.value = null;
 
