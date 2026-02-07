@@ -2076,24 +2076,12 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 	return null
 }
 
-function hasSkyNode(nodes: SceneNode[] | undefined | null): boolean {
-	if (!Array.isArray(nodes)) {
+function shouldUseSkybox(document: SceneJsonExportDocument | null | undefined): boolean {
+	const env = (document as any)?.environment
+	if (!env || !env.background) {
 		return false
 	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (node.nodeType === 'Sky') {
-			return true
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return false
+	return env.background.mode === 'skybox'
 }
 
 function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
@@ -10581,7 +10569,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetProtagonistPoseState()
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
-	const skyNodeActive = hasSkyNode(document.nodes)
+	const skyNodeActive = shouldUseSkybox(document)
 	applySkyboxSettings(skyboxSettings, skyNodeActive)
 	const environmentSettings = resolveDocumentEnvironment(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false

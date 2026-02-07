@@ -287,43 +287,7 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
 
 export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
 
-  const hasSkyNode = (() => {
-    const stack: SceneNode[] = Array.isArray(snapshot.nodes) ? [...snapshot.nodes] : []
-    while (stack.length) {
-      const node = stack.pop()
-      if (!node) {
-        continue
-      }
-      if (node.nodeType === 'Sky') {
-        return true
-      }
-      if (node.children?.length) {
-        stack.push(...node.children)
-      }
-    }
-    return false
-  })()
-
-  const environment: EnvironmentSettings | undefined = (() => {
-    const base = snapshot.environment
-    if (!base) {
-      return undefined
-    }
-    if (hasSkyNode) {
-      return base
-    }
-    const background = base.background.mode === 'skybox'
-      ? { ...base.background, mode: 'solidColor' as const }
-      : base.background
-    const environmentMap = base.environmentMap.mode === 'skybox'
-      ? { ...base.environmentMap, mode: 'custom' as const }
-      : base.environmentMap
-    return {
-      ...base,
-      background,
-      environmentMap,
-    }
-  })()
+  const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
 
   const exportDocument: SceneJsonExportDocument = {
     id: snapshot.id,
@@ -463,7 +427,7 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
   if (!options.includeLights && (node.nodeType === 'Light' || Boolean(node.light))) {
     return true
   }
-  if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+  if (node.nodeType === 'Environment') {
     return true
   }
   return false
@@ -1034,7 +998,7 @@ function shouldIncludeNodeForAssetPreload(node: SceneNode): boolean {
   if (node.nodeType === 'Light' || Boolean(node.light)) {
     return false
   }
-  if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+  if (node.nodeType === 'Environment') {
     return false
   }
   return true

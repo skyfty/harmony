@@ -6,7 +6,6 @@ import {
   type HierarchyDropPosition,
   PREFAB_SOURCE_METADATA_KEY,
   GROUND_NODE_ID,
-  SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
@@ -469,7 +468,7 @@ watch(
 // Global visibility toggle: exclude system nodes and skip selection-locked nodes.
 const visibilityCandidates = computed(() =>
   flattenedHierarchyItems.value.filter(
-    (item) => item.id !== GROUND_NODE_ID && item.id !== SKY_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
+    (item) => item.id !== GROUND_NODE_ID && item.id !== ENVIRONMENT_NODE_ID,
   ),
 )
 const visibilityToggleItems = computed(() => visibilityCandidates.value)
@@ -552,7 +551,7 @@ function isNormalNodeType(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
-  return node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
+  return node.id !== GROUND_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
 }
 
 const canSavePrefab = computed(() => {
@@ -678,7 +677,7 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
   if (!targetId) {
     return null
   }
-  const protectedIds = new Set<string>([GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID])
+  const protectedIds = new Set<string>([GROUND_NODE_ID, ENVIRONMENT_NODE_ID])
   if (protectedIds.has(targetId)) {
     return null
   }

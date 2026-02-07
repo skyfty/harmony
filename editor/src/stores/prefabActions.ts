@@ -94,7 +94,6 @@ export type PrefabActionsDeps = {
   NODE_PREFAB_PREVIEW_COLOR: string
   BEHAVIOR_PREFAB_PREVIEW_COLOR: string
 
-  SKY_NODE_ID: string
   ENVIRONMENT_NODE_ID: string
 
   PREFAB_PLACEMENT_EPSILON: number
@@ -1132,7 +1131,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
       }
 
       let parentId = options.parentId ?? null
-      if (parentId === deps.SKY_NODE_ID || parentId === deps.ENVIRONMENT_NODE_ID) {
+      if (parentId === deps.ENVIRONMENT_NODE_ID) {
         parentId = null
       }
       if (parentId) {
@@ -1297,7 +1296,7 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
 
       const parentMap = deps.buildParentMap(store.nodes)
       let parentId = options.parentId ?? null
-      if (parentId === deps.SKY_NODE_ID || parentId === deps.ENVIRONMENT_NODE_ID) {
+      if (parentId === deps.ENVIRONMENT_NODE_ID) {
         parentId = null
       }
       while (parentId) {

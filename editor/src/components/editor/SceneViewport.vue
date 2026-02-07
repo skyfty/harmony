@@ -6746,20 +6746,7 @@ const skyboxSignature = computed(() => {
 })
 
 const hasSkyNode = computed(() => {
-  const stack = Array.isArray(sceneStore.nodes) ? [...sceneStore.nodes] : []
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.nodeType === 'Sky') {
-      return true
-    }
-    if (node.children?.length) {
-      stack.push(...node.children)
-    }
-  }
-  return false
+  return sceneStore.environmentSettings?.background?.mode === 'skybox'
 })
 
 const environmentSignature = computed(() => {
@@ -12838,7 +12825,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     perspectiveCamera.name = node.name
     perspectiveCamera.userData.nodeId = node.id
     object = perspectiveCamera
-  } else if (nodeType === 'Sky' || nodeType === 'Environment') {
+  } else if (nodeType === 'Environment') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
       container.userData.usesRuntimeObject = true

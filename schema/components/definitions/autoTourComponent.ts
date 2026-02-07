@@ -79,7 +79,7 @@ const autoTourComponentDefinition: ComponentDefinition<AutoTourComponentProps> =
   inspector: [],
   canAttach(node: SceneNode) {
     const nodeType = node.nodeType?.toLowerCase?.() ?? ''
-    if (nodeType === 'light' || nodeType === 'sky' || nodeType === 'environment') {
+    if (nodeType === 'light' || nodeType === 'environment') {
       return false
     }
     return true
