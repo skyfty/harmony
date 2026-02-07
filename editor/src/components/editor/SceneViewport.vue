@@ -826,6 +826,8 @@ let cloudRenderer: SceneCloudRenderer | null = null
 function disposeGradientBackgroundResources() {
   disposeGradientBackgroundDome(gradientBackgroundDome)
   gradientBackgroundDome = null
+}
+
 function buildObjectUrlsFromSkycubeZipFaces(
   facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
