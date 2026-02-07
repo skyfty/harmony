@@ -22,6 +22,8 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
+    skycubeFormat: 'faces',
+    skycubeZipAssetId: null,
     positiveXAssetId: null,
     negativeXAssetId: null,
     positiveYAssetId: null,
@@ -94,6 +96,10 @@ function normalizeEnvironmentOrientationPreset(value: unknown): EnvironmentSetti
   return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
 }
 
+function normalizeSkycubeFormat(value: unknown): EnvironmentSettings['background']['skycubeFormat'] {
+  return value === 'zip' ? 'zip' : 'faces'
+}
+
 function resolvePresetRotationDegrees(preset: EnvironmentSettings['environmentOrientationPreset']): { x: number; y: number; z: number } {
   if (preset === 'zUp') {
     return { x: -90, y: 0, z: 0 }
@@ -155,6 +161,9 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
         DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
       ),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+      skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
+      skycubeZipAssetId:
+        backgroundMode === 'skycube' ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null) : null,
       positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
       negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
       positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
@@ -266,6 +275,8 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs((a.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET) - (b.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET)) <= epsilon &&
     Math.abs((a.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT) - (b.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)) <= epsilon &&
     a.background.hdriAssetId === b.background.hdriAssetId &&
+    a.background.skycubeFormat === b.background.skycubeFormat &&
+    a.background.skycubeZipAssetId === b.background.skycubeZipAssetId &&
     a.background.positiveXAssetId === b.background.positiveXAssetId &&
     a.background.negativeXAssetId === b.background.negativeXAssetId &&
     a.background.positiveYAssetId === b.background.positiveYAssetId &&

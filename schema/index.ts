@@ -21,8 +21,15 @@ export {
   normalizeSkyCubeUrls,
   loadSkyCubeTexture,
   disposeSkyCubeTexture,
+  extractSkycubeZipFaces,
 } from './skyCubeTexture'
-export type { SkyCubeFaceKey, SkyCubeTextureLoadOptions, SkyCubeTextureLoadResult } from './skyCubeTexture'
+export type {
+  SkyCubeFaceKey,
+  SkyCubeTextureLoadOptions,
+  SkyCubeTextureLoadResult,
+  SkycubeZipFaceBytes,
+  ExtractSkycubeZipFacesResult,
+} from './skyCubeTexture'
 
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
@@ -925,6 +932,8 @@ export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
+export type SkyCubeBackgroundFormat = 'faces' | 'zip'
+
 export interface EnvironmentRotationDegrees {
   /** Degrees */
   x: number
@@ -948,6 +957,10 @@ export interface EnvironmentBackgroundSettings {
   /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
   gradientExponent?: number
   hdriAssetId: string | null
+  /** How SkyCube background sources its faces. */
+  skycubeFormat: SkyCubeBackgroundFormat
+  /** When skycubeFormat === 'zip', points to a .skycube zip asset containing 6 face images. */
+  skycubeZipAssetId: string | null
   /**
    * SkyCube faces in fixed Three.js CubeTextureLoader order:
    * +X, -X, +Y, -Y, +Z, -Z.
