@@ -490,6 +490,8 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  disposeSkyCubeTexture,
+  loadSkyCubeTexture,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,
@@ -1267,12 +1269,22 @@ const DEFAULT_ENVIRONMENT_FOG_FAR = 50;
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81;
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2;
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3;
+const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const;
+const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 };
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
-  },
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
+  } as EnvironmentSettings['background'],
+  environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
+  environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   fogMode: 'none',
@@ -1305,6 +1317,9 @@ let shouldRenderSkyBackground = true;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
+let skyCubeTexture: THREE.CubeTexture | null = null;
+let skyCubeFaceAssetIds: Array<string | null> | null = null;
+let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
 let backgroundLoadToken = 0;
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
 let environmentMapAssetId: string | null = null;
@@ -2691,9 +2706,28 @@ function cloneEnvironmentSettingsLocal(
   const backgroundSource = source?.background ?? null;
   const environmentMapSource = source?.environmentMap ?? null;
 
+  const normalizeOrientationPreset = (value: unknown) => {
+    if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
+      return value as EnvironmentSettings['environmentOrientationPreset'];
+    }
+    return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET;
+  };
+
+  const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
+    if (preset === 'zUp') {
+      return { x: -90, y: 0, z: 0 };
+    }
+    if (preset === 'xUp') {
+      return { x: 0, y: 0, z: 90 };
+    }
+    return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES };
+  };
+
   let backgroundMode: EnvironmentSettings['background']['mode'] = 'skybox';
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri';
+  } else if (backgroundSource?.mode === 'skycube') {
+    backgroundMode = 'skycube';
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor';
   }
@@ -2709,12 +2743,47 @@ function cloneEnvironmentSettingsLocal(
   const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR);
   const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001;
 
+  const preset = normalizeOrientationPreset((source as any)?.environmentOrientationPreset);
+  const presetRotation = resolvePresetRotationDegrees(preset);
+  const rotationSource = (source as any)?.environmentRotationDegrees ?? null;
+  const environmentRotationDegrees = {
+    x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
+    y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
+    z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
+  };
+
   return {
     background: {
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-    },
+      positiveXAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
+          : null,
+      negativeXAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null)
+          : null,
+      positiveYAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null)
+          : null,
+      negativeYAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null)
+          : null,
+      positiveZAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null)
+          : null,
+      negativeZAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null)
+          : null,
+    } as EnvironmentSettings['background'],
+    environmentOrientationPreset: preset,
+    environmentRotationDegrees,
     ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
     ambientLightIntensity: clampNumber(
       source?.ambientLightIntensity,
@@ -8354,7 +8423,7 @@ function applySkyEnvironmentToScene() {
   }
 }
 
-function disposeBackgroundResources() {
+function disposeHdriBackgroundResources() {
   const scene = renderContext?.scene ?? null;
   const previousTexture = backgroundTexture;
   if (previousTexture) {
@@ -8367,6 +8436,29 @@ function disposeBackgroundResources() {
   backgroundTextureCleanup?.();
   backgroundTextureCleanup = null;
   backgroundAssetId = null;
+}
+
+function disposeSkyCubeBackgroundResources() {
+  const scene = renderContext?.scene ?? null;
+  if (skyCubeTexture) {
+    if (scene && scene.background === skyCubeTexture) {
+      scene.background = null;
+    }
+    disposeSkyCubeTexture(skyCubeTexture);
+  }
+  skyCubeTexture = null;
+  skyCubeFaceAssetIds = null;
+  if (skyCubeFaceTextureCleanup) {
+    for (const dispose of skyCubeFaceTextureCleanup) {
+      dispose?.();
+    }
+  }
+  skyCubeFaceTextureCleanup = null;
+}
+
+function disposeBackgroundResources() {
+  disposeHdriBackgroundResources();
+  disposeSkyCubeBackgroundResources();
 }
 
 function disposeEnvironmentTarget() {
@@ -8495,6 +8587,77 @@ async function applyBackgroundSettings(
     return true;
   }
   setSkyBackgroundEnabled(false);
+  if (background.mode === 'skycube') {
+    const faceAssetIds: Array<string | null> = [
+      background.positiveXAssetId ?? null,
+      background.negativeXAssetId ?? null,
+      background.positiveYAssetId ?? null,
+      background.negativeYAssetId ?? null,
+      background.positiveZAssetId ?? null,
+      background.negativeZAssetId ?? null,
+    ];
+    const hasAnyFace = faceAssetIds.some(Boolean);
+    if (!hasAnyFace) {
+      disposeBackgroundResources();
+      scene.background = new THREE.Color(background.solidColor);
+      return true;
+    }
+    if (
+      skyCubeTexture &&
+      skyCubeFaceAssetIds &&
+      faceAssetIds.length === skyCubeFaceAssetIds.length &&
+      faceAssetIds.every((assetId, index) => assetId === skyCubeFaceAssetIds?.[index])
+    ) {
+      scene.background = skyCubeTexture;
+      return true;
+    }
+    const resolvedFaces = await Promise.all(
+      faceAssetIds.map(async (assetId) => {
+        if (!assetId) {
+          return null;
+        }
+        return await resolveAssetUrlReference(assetId);
+      }),
+    );
+    const faceUrls = resolvedFaces.map((resolved) => resolved?.url ?? null);
+    const cleanup = resolvedFaces.map((resolved) => resolved?.dispose ?? null);
+    const loaded = await loadSkyCubeTexture(faceUrls);
+    if (token !== backgroundLoadToken) {
+      if (loaded.texture) {
+        disposeSkyCubeTexture(loaded.texture);
+      }
+      for (const dispose of cleanup) {
+        dispose?.();
+      }
+      return false;
+    }
+    if (!loaded.texture) {
+      for (const dispose of cleanup) {
+        dispose?.();
+      }
+      disposeBackgroundResources();
+      scene.background = new THREE.Color(background.solidColor);
+      return true;
+    }
+    if (loaded.missingFaces.length) {
+      console.warn('[SceneViewer] SkyCube missing faces:', loaded.missingFaces);
+      try {
+        uni.showToast({
+          title: `SkyCube 缺失: ${loaded.missingFaces.join(', ')}`,
+          icon: 'none',
+          duration: 2200,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    disposeBackgroundResources();
+    skyCubeTexture = loaded.texture;
+    skyCubeFaceAssetIds = faceAssetIds;
+    skyCubeFaceTextureCleanup = cleanup;
+    scene.background = skyCubeTexture;
+    return true;
+  }
   if (background.mode !== 'hdri' || !background.hdriAssetId) {
     disposeBackgroundResources();
     scene.background = new THREE.Color(background.solidColor);
@@ -8583,6 +8746,16 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   applyFogSettings(snapshot);
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
   const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap);
+
+  const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
+  const euler = new THREE.Euler(
+    (rot.x * Math.PI) / 180,
+    (rot.y * Math.PI) / 180,
+    (rot.z * Math.PI) / 180,
+    'XYZ',
+  );
+  scene.backgroundRotation.copy(euler);
+  scene.environmentRotation.copy(euler);
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null;
   } else {

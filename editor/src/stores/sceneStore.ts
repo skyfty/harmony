@@ -4246,6 +4246,14 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
     if (mode !== 'hdri') {
       delete section.hdriAssetId
     }
+    if (key === 'background' && mode !== 'skycube') {
+      delete section.positiveXAssetId
+      delete section.negativeXAssetId
+      delete section.positiveYAssetId
+      delete section.negativeYAssetId
+      delete section.positiveZAssetId
+      delete section.negativeZAssetId
+    }
     clone[key] = section
   }
 

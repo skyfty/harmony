@@ -11,13 +11,23 @@ export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
+export const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
+export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
   },
+  environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
+  environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   fogMode: 'none',
@@ -60,6 +70,23 @@ function normalizeAssetId(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function normalizeEnvironmentOrientationPreset(value: unknown): EnvironmentSettings['environmentOrientationPreset'] {
+  if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
+    return value
+  }
+  return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
+}
+
+function resolvePresetRotationDegrees(preset: EnvironmentSettings['environmentOrientationPreset']): { x: number; y: number; z: number } {
+  if (preset === 'zUp') {
+    return { x: -90, y: 0, z: 0 }
+  }
+  if (preset === 'xUp') {
+    return { x: 0, y: 0, z: 90 }
+  }
+  return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
+}
+
 export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | EnvironmentSettings | null): EnvironmentSettings {
   const backgroundSource = source?.background ?? null
   const environmentMapSource = source?.environmentMap ?? null
@@ -67,6 +94,8 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
   let backgroundMode: any = 'skybox'
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri'
+  } else if (backgroundSource?.mode === 'skycube') {
+    backgroundMode = 'skycube'
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor'
   }
@@ -82,12 +111,29 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
   const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
   const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
+  const preset = normalizeEnvironmentOrientationPreset((source as any)?.environmentOrientationPreset)
+  const presetRotation = resolvePresetRotationDegrees(preset)
+  const rotationSource = (source as any)?.environmentRotationDegrees ?? null
+  const environmentRotationDegrees = {
+    x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
+    y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
+    z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
+  }
+
   return {
     background: {
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+      positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
+      negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
+      positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
+      negativeYAssetId: normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null),
+      positiveZAssetId: normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null),
+      negativeZAssetId: normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null),
     },
+    environmentOrientationPreset: preset,
+    environmentRotationDegrees,
     ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
     ambientLightIntensity: clampNumber(source?.ambientLightIntensity, 0, 10, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY),
     fogMode,
@@ -187,6 +233,17 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     a.background.mode === b.background.mode &&
     a.background.solidColor === b.background.solidColor &&
     a.background.hdriAssetId === b.background.hdriAssetId &&
+    a.background.positiveXAssetId === b.background.positiveXAssetId &&
+    a.background.negativeXAssetId === b.background.negativeXAssetId &&
+    a.background.positiveYAssetId === b.background.positiveYAssetId &&
+    a.background.negativeYAssetId === b.background.negativeYAssetId &&
+    a.background.positiveZAssetId === b.background.positiveZAssetId &&
+    a.background.negativeZAssetId === b.background.negativeZAssetId &&
+    (a.environmentOrientationPreset ?? DEFAULT_ENVIRONMENT_ORIENTATION_PRESET) ===
+      (b.environmentOrientationPreset ?? DEFAULT_ENVIRONMENT_ORIENTATION_PRESET) &&
+    Math.abs((a.environmentRotationDegrees?.x ?? 0) - (b.environmentRotationDegrees?.x ?? 0)) <= epsilon &&
+    Math.abs((a.environmentRotationDegrees?.y ?? 0) - (b.environmentRotationDegrees?.y ?? 0)) <= epsilon &&
+    Math.abs((a.environmentRotationDegrees?.z ?? 0) - (b.environmentRotationDegrees?.z ?? 0)) <= epsilon &&
     a.ambientLightColor === b.ambientLightColor &&
     Math.abs(a.ambientLightIntensity - b.ambientLightIntensity) <= epsilon &&
     a.fogMode === b.fogMode &&

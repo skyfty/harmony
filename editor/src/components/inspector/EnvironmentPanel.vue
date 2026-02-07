@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
   EnvironmentFogMode,
   EnvironmentMapMode,
+  EnvironmentOrientationPreset,
+  EnvironmentRotationDegrees,
 } from '@/types/environment'
-import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension } from '@harmony/schema'
+import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -24,6 +26,14 @@ const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackground
   { title: 'Skybox', value: 'skybox' },
   { title: 'Solid Color', value: 'solidColor' },
   { title: 'HDRI', value: 'hdri' },
+  { title: 'SkyCube', value: 'skycube' },
+]
+
+const orientationPresetOptions: Array<{ title: string; value: EnvironmentOrientationPreset }> = [
+  { title: '+Y Up (Three default)', value: 'yUp' },
+  { title: '+Z Up (Z-up assets)', value: 'zUp' },
+  { title: '+X Up (X-up assets)', value: 'xUp' },
+  { title: 'Custom', value: 'custom' },
 ]
 
 const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMode }> = [
@@ -36,15 +46,44 @@ const backgroundColorMenuOpen = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogTarget = ref<'background' | 'environment' | null>(null)
+type SkyCubeFaceKey = 'positiveXAssetId' | 'negativeXAssetId' | 'positiveYAssetId' | 'negativeYAssetId' | 'positiveZAssetId' | 'negativeZAssetId'
+type AssetDialogTarget = 'background' | 'environment' | SkyCubeFaceKey
+const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
+const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
+
+const skyCubeFaceDescriptors: Array<{ key: SkyCubeFaceKey; label: string; description: string }> = [
+  { key: 'positiveXAssetId', label: 'px', description: 'Right' },
+  { key: 'negativeXAssetId', label: 'nx', description: 'Left' },
+  { key: 'positiveYAssetId', label: 'py', description: 'Top' },
+  { key: 'negativeYAssetId', label: 'ny', description: 'Bottom' },
+  { key: 'positiveZAssetId', label: 'pz', description: 'Front' },
+  { key: 'negativeZAssetId', label: 'nz', description: 'Back' },
+]
+
+const skyCubeFaceDropState = reactive<Record<SkyCubeFaceKey, boolean>>({
+  positiveXAssetId: false,
+  negativeXAssetId: false,
+  positiveYAssetId: false,
+  negativeYAssetId: false,
+  positiveZAssetId: false,
+  negativeZAssetId: false,
+})
 
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
+
+const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
+const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
+const showOrientationControls = computed(() => {
+  const bgMode = environmentSettings.value.background.mode
+  const envMode = environmentSettings.value.environmentMap.mode
+  return bgMode === 'hdri' || bgMode === 'skycube' || envMode === 'custom'
+})
 
 const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
   { title: 'No Fog', value: 'none' },
@@ -175,7 +214,23 @@ const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'environment') {
     return 'Select Environment Map'
   }
+  if (assetDialogTarget.value) {
+    const descriptor = skyCubeFaceDescriptors.find((entry) => entry.key === assetDialogTarget.value)
+    if (descriptor) {
+      return `Select SkyCube ${descriptor.label} Face (${descriptor.description})`
+    }
+  }
   return 'Select Asset'
+})
+
+const assetDialogAssetType = computed(() => {
+  if (!assetDialogTarget.value) {
+    return HDRI_ASSET_TYPE
+  }
+  if (assetDialogTarget.value === 'background' || assetDialogTarget.value === 'environment') {
+    return HDRI_ASSET_TYPE
+  }
+  return SKYCUBE_ASSET_TYPE
 })
 
 watch(assetDialogVisible, (open) => {
@@ -214,6 +269,50 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
       mode,
       solidColor: environmentSettings.value.background.solidColor,
       hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
+}
+
+function resolvePresetRotationDegrees(preset: EnvironmentOrientationPreset): EnvironmentRotationDegrees {
+  if (preset === 'zUp') {
+    return { x: -90, y: 0, z: 0 }
+  }
+  if (preset === 'xUp') {
+    return { x: 0, y: 0, z: 90 }
+  }
+  return { x: 0, y: 0, z: 0 }
+}
+
+function updateOrientationPreset(preset: EnvironmentOrientationPreset | null) {
+  if (!preset) {
+    return
+  }
+  if (preset === orientationPreset.value && environmentSettings.value.environmentRotationDegrees) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    environmentOrientationPreset: preset,
+    environmentRotationDegrees: resolvePresetRotationDegrees(preset),
+  })
+}
+
+function handleRotationDegreesInput(axis: keyof EnvironmentRotationDegrees, value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(-360, Math.min(360, numeric))
+  const current = rotationDegrees.value
+  if (Math.abs((current[axis] ?? 0) - clamped) < 1e-6) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    environmentRotationDegrees: {
+      ...current,
+      [axis]: clamped,
     },
   })
 }
@@ -547,6 +646,10 @@ function isHdrExtension(extension: string | null): boolean {
   return isHdriLikeExtension(extension)
 }
 
+function isImageExtension(extension: string | null): boolean {
+  return isImageLikeExtension(extension)
+}
+
 function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (!asset) {
     return false
@@ -559,6 +662,44 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   }
   return false
 }
+
+function isSkyCubeFaceAsset(asset: ProjectAsset | null): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  if (asset.type === 'image' || asset.type === 'texture') {
+    return true
+  }
+  if (asset.type === 'file') {
+    return isImageExtension(inferAssetExtension(asset))
+  }
+  return false
+}
+
+const skyCubeFaceEntries = computed(() => {
+  const background = environmentSettings.value.background
+  return skyCubeFaceDescriptors.map((descriptor) => {
+    const assetId = background[descriptor.key]
+    const asset = assetId ? sceneStore.getAsset(assetId) ?? null : null
+    return {
+      ...descriptor,
+      assetId: assetId ?? null,
+      asset,
+      previewStyle: resolveAssetPreviewStyle(asset),
+      hasValue: Boolean(assetId && String(assetId).trim().length),
+    }
+  })
+})
+
+const missingSkyCubeFaces = computed(() => {
+  if (environmentSettings.value.background.mode !== 'skycube') {
+    return [] as Array<{ key: SkyCubeFaceKey; label: string; description: string }>
+  }
+  return skyCubeFaceDescriptors.filter((descriptor) => {
+    const value = environmentSettings.value.background[descriptor.key]
+    return !value || !String(value).trim().length
+  })
+})
 
 function handleBackgroundDragEnter(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
@@ -681,8 +822,56 @@ function openAssetDialog(target: 'background' | 'environment', event?: MouseEven
   assetDialogVisible.value = true
 }
 
+function openSkyCubeFaceDialog(face: SkyCubeFaceKey, event?: MouseEvent) {
+  if (event) {
+    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  } else {
+    assetDialogAnchor.value = null
+  }
+  assetDialogTarget.value = face
+  assetDialogSelectedId.value = environmentSettings.value.background[face] ?? ''
+  assetDialogVisible.value = true
+}
+
+function clearSkyCubeFace(face: SkyCubeFaceKey) {
+  if (environmentSettings.value.background.mode !== 'skycube') {
+    return
+  }
+  if (!environmentSettings.value.background[face]) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      [face]: null,
+    },
+  })
+}
+
 function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   if (!assetDialogTarget.value) {
+    return
+  }
+  if (
+    assetDialogTarget.value !== 'background' &&
+    assetDialogTarget.value !== 'environment'
+  ) {
+    const faceKey = assetDialogTarget.value
+    if (!asset) {
+      sceneStore.patchEnvironmentSettings({ background: { [faceKey]: null } })
+      assetDialogVisible.value = false
+      return
+    }
+    if (!isSkyCubeFaceAsset(asset)) {
+      console.warn('Selected asset is not a supported SkyCube face texture')
+      return
+    }
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: 'skycube',
+        [faceKey]: asset.id,
+      },
+    })
+    assetDialogVisible.value = false
     return
   }
   if (!asset) {
@@ -711,6 +900,61 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   }
   applyEnvironmentAsset(assetDialogTarget.value, asset)
   assetDialogVisible.value = false
+}
+
+function handleSkyCubeFaceDragEnter(face: SkyCubeFaceKey, event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  if (!isSkyCubeFaceAsset(asset)) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  skyCubeFaceDropState[face] = true
+}
+
+function handleSkyCubeFaceDragOver(face: SkyCubeFaceKey, event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  if (!isSkyCubeFaceAsset(asset)) {
+    if (skyCubeFaceDropState[face]) {
+      skyCubeFaceDropState[face] = false
+    }
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  skyCubeFaceDropState[face] = true
+}
+
+function handleSkyCubeFaceDragLeave(face: SkyCubeFaceKey, event: DragEvent) {
+  if (!skyCubeFaceDropState[face]) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  skyCubeFaceDropState[face] = false
+}
+
+function handleSkyCubeFaceDrop(face: SkyCubeFaceKey, event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  skyCubeFaceDropState[face] = false
+  if (!isSkyCubeFaceAsset(asset)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: 'skycube',
+      [face]: asset.id,
+    },
+  })
 }
 
 function handleAssetDialogCancel() {
@@ -758,6 +1002,60 @@ function handleEnvironmentDrop(event: DragEvent) {
             class="section-select"
             @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
           />
+
+          <div v-if="showOrientationControls" class="orientation-controls">
+            <v-select
+              :items="orientationPresetOptions"
+              :model-value="orientationPreset"
+              density="compact"
+              hide-details
+              variant="underlined"
+              class="section-select"
+              label="Up Axis / Preset"
+              @update:model-value="(value) => updateOrientationPreset(value as EnvironmentOrientationPreset | null)"
+            />
+            <div class="orientation-rotation-grid">
+              <v-text-field
+                label="Rot X (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.x"
+                @update:model-value="(value) => handleRotationDegreesInput('x', value)"
+              />
+              <v-text-field
+                label="Rot Y (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.y"
+                @update:model-value="(value) => handleRotationDegreesInput('y', value)"
+              />
+              <v-text-field
+                label="Rot Z (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.z"
+                @update:model-value="(value) => handleRotationDegreesInput('z', value)"
+              />
+            </div>
+          </div>
           <div
             v-if="environmentSettings.background.mode === 'skybox'"
             class="environment-placeholder"
@@ -811,6 +1109,77 @@ function handleEnvironmentDrop(event: DragEvent) {
               </v-menu>
             </div>
           </div>
+          <template v-else-if="environmentSettings.background.mode === 'skycube'">
+            <div class="cube-face-grid">
+              <div
+                v-for="face in skyCubeFaceEntries"
+                :key="face.key"
+                class="asset-tile cube-face-tile"
+                :class="{
+                  'is-active-drop': skyCubeFaceDropState[face.key],
+                  'is-empty': !face.hasValue,
+                }"
+                @dragenter="(event) => handleSkyCubeFaceDragEnter(face.key, event)"
+                @dragover="(event) => handleSkyCubeFaceDragOver(face.key, event)"
+                @dragleave="(event) => handleSkyCubeFaceDragLeave(face.key, event)"
+                @drop="(event) => handleSkyCubeFaceDrop(face.key, event)"
+              >
+                <div
+                  class="asset-thumb"
+                  :class="{ 'asset-thumb--empty': !face.asset }"
+                  :style="face.previewStyle"
+                  role="button"
+                  tabindex="0"
+                  :title="`Select ${face.label} face texture`"
+                  @click="(event) => openSkyCubeFaceDialog(face.key, event)"
+                  @keydown.enter.prevent="openSkyCubeFaceDialog(face.key)"
+                  @keydown.space.prevent="openSkyCubeFaceDialog(face.key)"
+                >
+                  <span v-if="!face.asset" class="cube-face-thumb-label">{{ face.label }}</span>
+                </div>
+                <div
+                  class="asset-info"
+                  role="button"
+                  tabindex="0"
+                  @click="(event) => openSkyCubeFaceDialog(face.key, event)"
+                  @keydown.enter.prevent="openSkyCubeFaceDialog(face.key)"
+                  @keydown.space.prevent="openSkyCubeFaceDialog(face.key)"
+                >
+                  <div class="asset-face-label">
+                    <span class="asset-face-axis">{{ face.label }}</span>
+                    <span
+                      v-if="face.description"
+                      class="asset-face-description"
+                    >{{ face.description }}</span>
+                  </div>
+                  <div v-if="!face.hasValue" class="asset-hint">Select texture</div>
+                </div>
+                <div class="asset-actions">
+                  <v-btn
+                    class="asset-action"
+                    icon="mdi-close"
+                    size="x-small"
+                    variant="text"
+                    :disabled="!face.hasValue"
+                    title="Clear face texture"
+                    @click.stop="clearSkyCubeFace(face.key)"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <v-alert
+              v-if="missingSkyCubeFaces.length"
+              class="mt-3"
+              density="compact"
+              type="warning"
+              variant="tonal"
+            >
+              Missing faces: {{ missingSkyCubeFaces.map((face) => face.label).join(', ') }}. Partial SkyCube is allowed.
+            </v-alert>
+
+   
+          </template>
           <div
             v-else
             class="asset-tile"
@@ -1087,7 +1456,7 @@ function handleEnvironmentDrop(event: DragEvent) {
       <AssetPickerDialog
         v-model="assetDialogVisible"
         :asset-id="assetDialogSelectedId"
-        :asset-type="HDRI_ASSET_TYPE"
+        :asset-type="assetDialogAssetType"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"
         confirm-text="Select"
@@ -1126,6 +1495,18 @@ function handleEnvironmentDrop(event: DragEvent) {
 
 .section-select :deep(.v-field__input) {
   font-size: 0.82rem;
+}
+
+.orientation-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.orientation-rotation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .material-color {
@@ -1228,6 +1609,20 @@ function handleEnvironmentDrop(event: DragEvent) {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
+.cube-face-tile {
+  grid-template-columns: 32px 1fr;
+  position: relative;
+  padding-right: 36px;
+}
+
+.cube-face-tile .asset-actions {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  grid-column: auto;
+  grid-row: auto;
+}
+
 .asset-tile.is-inactive {
   opacity: 0.65;
 }
@@ -1235,6 +1630,16 @@ function handleEnvironmentDrop(event: DragEvent) {
 .asset-tile.is-active-drop {
   border-color: rgba(107, 152, 255, 0.85);
   background: rgba(56, 86, 160, 0.38);
+}
+
+.asset-tile.is-empty {
+  border-style: dashed;
+}
+
+.cube-face-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .asset-thumb {
@@ -1263,6 +1668,13 @@ function handleEnvironmentDrop(event: DragEvent) {
   box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.3);
 }
 
+.cube-face-thumb-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.78);
+}
+
 .asset-info {
   grid-column: 2;
   grid-row: 1 / span 2;
@@ -1280,6 +1692,26 @@ function handleEnvironmentDrop(event: DragEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.asset-face-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(233, 236, 241, 0.62);
+}
+
+.asset-face-axis {
+  font-weight: 700;
+  color: rgba(233, 236, 241, 0.92);
+}
+
+.asset-face-description {
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.55);
 }
 
 .asset-hint {

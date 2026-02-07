@@ -23,6 +23,7 @@ import {
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
 	type EnvironmentSettings,
+	disposeSkyCubeTexture,
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
@@ -34,7 +35,8 @@ import {
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
 	type Vector3Like,
-} from '@harmony/schema'
+	loadSkyCubeTexture,
+} from '@schema/index'
  
 import {
 	applyMaterialOverrides,
@@ -1050,12 +1052,22 @@ const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3
+const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
+const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	background: {
 		mode: 'skybox',
 		solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
 		hdriAssetId: null,
+		positiveXAssetId: null,
+		negativeXAssetId: null,
+		positiveYAssetId: null,
+		negativeYAssetId: null,
+		positiveZAssetId: null,
+		negativeZAssetId: null,
 	},
+	environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
+	environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
 	ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
 	ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
 	fogMode: 'none',
@@ -1164,9 +1176,15 @@ function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void 
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
 let backgroundAssetId: string | null = null
+let backgroundAssetKey: string | null = null
+let skyCubeTexture: THREE.CubeTexture | null = null
+let skyCubeFaceAssetIds: Array<string | null> | null = null
+let skyCubeFaceKeys: Array<string | null> | null = null
+let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null
 let backgroundLoadToken = 0
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
+let environmentMapAssetKey: string | null = null
 let environmentMapLoadToken = 0
 let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
@@ -1190,6 +1208,19 @@ let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
+
+const environmentAssetRefreshTick = ref(0)
+
+function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
+	const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+	if (!trimmed) {
+		return null
+	}
+	const entry = assetCacheStore.entries?.[trimmed]
+	const serverUpdatedAt = entry?.serverUpdatedAt ?? null
+	const blobUrl = entry?.blobUrl ?? null
+	return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}`
+}
 
 const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02
 const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON
@@ -3226,9 +3257,28 @@ function cloneEnvironmentSettingsLocal(
 	const backgroundSource = source?.background ?? null
 	const environmentMapSource = source?.environmentMap ?? null
 
+	const normalizeOrientationPreset = (value: unknown) => {
+		if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
+			return value as EnvironmentSettings['environmentOrientationPreset']
+		}
+		return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
+	}
+
+	const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
+		if (preset === 'zUp') {
+			return { x: -90, y: 0, z: 0 }
+		}
+		if (preset === 'xUp') {
+			return { x: 0, y: 0, z: 90 }
+		}
+		return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
+	}
+
 	let backgroundMode: EnvironmentBackgroundMode = 'skybox'
 	if (backgroundSource?.mode === 'hdri') {
 		backgroundMode = 'hdri'
+	} else if (backgroundSource?.mode === 'skycube') {
+		backgroundMode = 'skycube'
 	} else if (backgroundSource?.mode === 'solidColor') {
 		backgroundMode = 'solidColor'
 	}
@@ -3244,12 +3294,47 @@ function cloneEnvironmentSettingsLocal(
 	const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
 	const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
+	const preset = normalizeOrientationPreset((source as any)?.environmentOrientationPreset)
+	const presetRotation = resolvePresetRotationDegrees(preset)
+	const rotationSource = (source as any)?.environmentRotationDegrees ?? null
+	const environmentRotationDegrees = {
+		x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
+		y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
+		z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
+	}
+
 	return {
 		background: {
 			mode: backgroundMode,
 			solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
 			hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+			positiveXAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
+					: null,
+			negativeXAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null)
+					: null,
+			positiveYAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null)
+					: null,
+			negativeYAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null)
+					: null,
+			positiveZAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null)
+					: null,
+			negativeZAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null)
+					: null,
 		},
+		environmentOrientationPreset: preset,
+		environmentRotationDegrees,
 		ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
 		ambientLightIntensity: clampNumber(
 			source?.ambientLightIntensity,
@@ -7348,7 +7433,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
 	}
 }
 
-function disposeBackgroundResources() {
+function disposeHdriBackgroundResources() {
 	const previousTexture = backgroundTexture
 	if (previousTexture) {
 		if (scene && scene.background === previousTexture) {
@@ -7360,6 +7445,30 @@ function disposeBackgroundResources() {
 	backgroundTextureCleanup?.()
 	backgroundTextureCleanup = null
 	backgroundAssetId = null
+	backgroundAssetKey = null
+}
+
+function disposeSkyCubeBackgroundResources() {
+	if (skyCubeTexture) {
+		if (scene && scene.background === skyCubeTexture) {
+			scene.background = null
+		}
+	disposeSkyCubeTexture(skyCubeTexture)
+	}
+	skyCubeTexture = null
+	skyCubeFaceAssetIds = null
+	skyCubeFaceKeys = null
+	if (skyCubeFaceTextureCleanup) {
+		for (const dispose of skyCubeFaceTextureCleanup) {
+			dispose?.()
+		}
+	}
+	skyCubeFaceTextureCleanup = null
+}
+
+function disposeBackgroundResources() {
+	disposeHdriBackgroundResources()
+	disposeSkyCubeBackgroundResources()
 }
 
 function disposeEnvironmentTarget() {
@@ -7372,6 +7481,7 @@ function disposeEnvironmentTarget() {
 	}
 	environmentMapTarget = null
 	environmentMapAssetId = null
+	environmentMapAssetKey = null
 }
 
 async function loadEnvironmentTextureFromAsset(
@@ -7461,12 +7571,79 @@ async function applyBackgroundSettings(
 		return true
 	}
 	setSkyBackgroundEnabled(false)
+	if (background.mode === 'skycube') {
+		const faceAssetIds: Array<string | null> = [
+			background.positiveXAssetId ?? null,
+			background.negativeXAssetId ?? null,
+			background.positiveYAssetId ?? null,
+			background.negativeYAssetId ?? null,
+			background.positiveZAssetId ?? null,
+			background.negativeZAssetId ?? null,
+		]
+		const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
+		const hasAnyFace = faceAssetIds.some(Boolean)
+		if (!hasAnyFace) {
+			disposeBackgroundResources()
+			scene.background = new THREE.Color(background.solidColor)
+			return true
+		}
+		if (
+			skyCubeTexture &&
+			skyCubeFaceAssetIds &&
+			skyCubeFaceKeys &&
+			faceAssetIds.length === skyCubeFaceAssetIds.length &&
+			faceAssetIds.every((assetId, index) => assetId === skyCubeFaceAssetIds?.[index]) &&
+			faceKeys.every((key, index) => key === skyCubeFaceKeys?.[index])
+		) {
+			scene.background = skyCubeTexture
+			return true
+		}
+		const resolvedFaces = await Promise.all(
+			faceAssetIds.map(async (assetId) => {
+				if (!assetId) {
+					return null
+				}
+				return await resolveAssetUrlReference(assetId)
+			}),
+		)
+		const faceUrls = resolvedFaces.map((resolved) => resolved?.url ?? null)
+		const cleanup = resolvedFaces.map((resolved) => resolved?.dispose ?? null)
+		const loaded = await loadSkyCubeTexture(faceUrls)
+		if (token !== backgroundLoadToken) {
+			if (loaded.texture) {
+				disposeSkyCubeTexture(loaded.texture)
+			}
+			for (const dispose of cleanup) {
+				dispose?.()
+			}
+			return false
+		}
+		if (!loaded.texture) {
+			for (const dispose of cleanup) {
+				dispose?.()
+			}
+			disposeBackgroundResources()
+			scene.background = new THREE.Color(background.solidColor)
+			return true
+		}
+		if (loaded.missingFaces.length) {
+			console.warn('[ScenePreview] SkyCube missing faces:', loaded.missingFaces)
+		}
+		disposeBackgroundResources()
+		skyCubeTexture = loaded.texture
+		skyCubeFaceAssetIds = faceAssetIds
+		skyCubeFaceKeys = faceKeys
+		skyCubeFaceTextureCleanup = cleanup
+		scene.background = skyCubeTexture
+		return true
+	}
 	if (background.mode !== 'hdri' || !background.hdriAssetId) {
 		disposeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)
 		return true
 	}
-	if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+	const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
+	if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
 		scene.background = backgroundTexture
 		return true
 	}
@@ -7481,6 +7658,7 @@ async function applyBackgroundSettings(
 	disposeBackgroundResources()
 	backgroundTexture = loaded.texture
 	backgroundAssetId = background.hdriAssetId
+	backgroundAssetKey = hdriKey
 	backgroundTextureCleanup = loaded.dispose ?? null
 	scene.background = backgroundTexture
 	return true
@@ -7507,7 +7685,8 @@ async function applyEnvironmentMapSettings(
 	if (!pmremGenerator || !renderer) {
 		return false
 	}
-	if (environmentMapTarget && environmentMapAssetId === mapSettings.hdriAssetId) {
+	const envKey = computeEnvironmentAssetReloadKey(mapSettings.hdriAssetId)
+	if (environmentMapTarget && environmentMapAssetId === mapSettings.hdriAssetId && environmentMapAssetKey === envKey) {
 		scene.environment = environmentMapTarget.texture
 		scene.environmentIntensity = 1
 		return true
@@ -7530,6 +7709,7 @@ async function applyEnvironmentMapSettings(
 	disposeEnvironmentTarget()
 	environmentMapTarget = target
 	environmentMapAssetId = mapSettings.hdriAssetId
+	environmentMapAssetKey = envKey
 	scene.environment = target.texture
 	scene.environmentIntensity = 1
 	return true
@@ -7544,9 +7724,69 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+
+	const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
+	const euler = new THREE.Euler(
+		(rot.x * Math.PI) / 180,
+		(rot.y * Math.PI) / 180,
+		(rot.z * Math.PI) / 180,
+		'XYZ',
+	)
+	scene.backgroundRotation.copy(euler)
+	scene.environmentRotation.copy(euler)
+
 	void backgroundApplied
 	void environmentApplied
 }
+
+const environmentAssetSignature = computed(() => {
+	// Tie to a reactive tick because currentDocument itself is a non-reactive local.
+	void environmentAssetRefreshTick.value
+	if (!currentDocument) {
+		return ''
+	}
+	const settings = resolveDocumentEnvironment(currentDocument)
+	const background = settings.background
+	const environmentMap = settings.environmentMap
+	return JSON.stringify({
+		background: {
+			mode: background.mode,
+			hdriKey:
+				background.mode === 'hdri' && background.hdriAssetId
+					? computeEnvironmentAssetReloadKey(background.hdriAssetId)
+					: null,
+			skycubeKeys:
+				background.mode === 'skycube'
+					? [
+						computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
+						computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
+						computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
+						computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
+						computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
+						computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
+					]
+					: null,
+		},
+		environmentMap: {
+			mode: environmentMap.mode,
+			hdriKey:
+				environmentMap.mode === 'custom' && environmentMap.hdriAssetId
+					? computeEnvironmentAssetReloadKey(environmentMap.hdriAssetId)
+					: null,
+		},
+	})
+})
+
+watch(
+	environmentAssetSignature,
+	() => {
+		if (!currentDocument) {
+			return
+		}
+		// Re-apply environment when referenced assets are updated/removed/replaced.
+		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(currentDocument))
+	},
+)
 
 function disposeEnvironmentResources() {
 	disposeBackgroundResources()
@@ -10099,6 +10339,7 @@ async function applyInitialDocumentGraph(
 		syncRigidbodyDebugHelpers()
 	}
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	environmentAssetRefreshTick.value += 1
 }
 
 async function applyIncrementalDocumentGraph(
@@ -10134,6 +10375,7 @@ async function applyIncrementalDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	environmentAssetRefreshTick.value += 1
 	// (instancing trace removed)
 }
 
@@ -10151,6 +10393,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	if (!scene || !rootGroup) {
 		return
 	}
+	environmentAssetRefreshTick.value += 1
 	const previewRoot = rootGroup
 	resourceProgress.active = true
 	resourceProgress.loaded = 0

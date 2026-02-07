@@ -14,6 +14,16 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
 
+export {
+  SKY_CUBE_FACE_KEYS,
+  SKY_CUBE_FACE_ORDER,
+  SKY_CUBE_FACE_LABELS,
+  normalizeSkyCubeUrls,
+  loadSkyCubeTexture,
+  disposeSkyCubeTexture,
+} from './skyCubeTexture'
+export type { SkyCubeFaceKey, SkyCubeTextureLoadOptions, SkyCubeTextureLoadResult } from './skyCubeTexture'
+
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
 export { TerrainScatterCategories } from './terrain-scatter'
@@ -906,14 +916,35 @@ export interface SceneSkyboxSettings {
   clouds?: SceneCloudSettings | null
 }
 
-export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
+export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
+
+export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
+
+export interface EnvironmentRotationDegrees {
+  /** Degrees */
+  x: number
+  /** Degrees */
+  y: number
+  /** Degrees */
+  z: number
+}
 
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
   hdriAssetId: string | null
+  /**
+   * SkyCube faces in fixed Three.js CubeTextureLoader order:
+   * +X, -X, +Y, -Y, +Z, -Z.
+   */
+  positiveXAssetId: string | null
+  negativeXAssetId: string | null
+  positiveYAssetId: string | null
+  negativeYAssetId: string | null
+  positiveZAssetId: string | null
+  negativeZAssetId: string | null
 }
 
 export interface EnvironmentMapSettings {
@@ -923,6 +954,13 @@ export interface EnvironmentMapSettings {
 
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
+  /**
+   * Optional orientation helper for environment textures (HDRI / SkyCube).
+   * Used by the editor UI to adapt cubemaps authored with different up axes.
+   */
+  environmentOrientationPreset?: EnvironmentOrientationPreset
+  /** Rotation applied to scene.background / scene.environment in degrees. */
+  environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string
   ambientLightIntensity: number
   fogMode: EnvironmentFogMode
