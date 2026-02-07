@@ -171,6 +171,8 @@ const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
 const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
 // 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
+const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
+  && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
 // 最大转向角（弧度）
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
 // 转向开始衰减的速度（m/s）
@@ -727,7 +729,9 @@ export class VehicleDriveController {
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
-        const factor = 1 - clampedDamping
+        const factor = isWeChatMiniProgram
+          ? Math.exp(-Math.max(0, -Math.log(1 - clampedDamping) * 60) * dt)
+          : 1 - clampedDamping
         velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()

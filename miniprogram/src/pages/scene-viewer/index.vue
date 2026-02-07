@@ -1862,6 +1862,26 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
+const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS;
+const PHYSICS_DEBUG_LOG_INTERVAL_MS = 1000;
+
+type PhysicsInterpolationState = {
+  prevPos: THREE.Vector3;
+  prevQuat: THREE.Quaternion;
+  currPos: THREE.Vector3;
+  currQuat: THREE.Quaternion;
+  hasSample: boolean;
+};
+
+const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolationState>();
+const physicsInterpolationPos = new THREE.Vector3();
+const physicsInterpolationQuat = new THREE.Quaternion();
+let physicsInterpolationEnabled = false;
+let physicsInterpolationAlpha = 0;
+let physicsAccumulator = 0;
+let physicsDebugEnabled = false;
+let physicsDebugLastLogMs = 0;
+let physicsDebugLastSubSteps = 0;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -4655,6 +4675,52 @@ function ensureVehicleBindingForNode(nodeId: string): void {
   }
 }
 
+function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationState {
+  let state = physicsInterpolationStates.get(body);
+  if (!state) {
+    state = {
+      prevPos: new THREE.Vector3(),
+      prevQuat: new THREE.Quaternion(),
+      currPos: new THREE.Vector3(),
+      currQuat: new THREE.Quaternion(),
+      hasSample: false,
+    };
+    physicsInterpolationStates.set(body, state);
+  }
+  return state;
+}
+
+function syncObjectFromInterpolated(
+  entry: Pick<RigidbodyInstance, 'object' | 'orientationAdjustment'>,
+  position: THREE.Vector3,
+  quaternion: THREE.Quaternion,
+  afterSync?: (object: THREE.Object3D) => void,
+): void {
+  const { object, orientationAdjustment } = entry;
+  if (!object) {
+    return;
+  }
+  object.position.copy(position);
+  physicsInterpolationQuat.copy(quaternion);
+  if (orientationAdjustment) {
+    physicsInterpolationQuat.multiply(orientationAdjustment.threeInverse);
+  }
+  object.quaternion.copy(physicsInterpolationQuat);
+  object.updateMatrixWorld(true);
+  afterSync?.(object);
+}
+
+function resolveInterpolatedBodyPosition(body: CANNON.Body, target: THREE.Vector3): THREE.Vector3 {
+  if (!physicsInterpolationEnabled) {
+    return target.set(body.position.x, body.position.y, body.position.z);
+  }
+  const state = physicsInterpolationStates.get(body);
+  if (!state || !state.hasSample) {
+    return target.set(body.position.x, body.position.y, body.position.z);
+  }
+  return target.copy(state.prevPos).lerp(state.currPos, physicsInterpolationAlpha);
+}
+
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
   if (!physicsWorld || !currentDocument) {
     return;
@@ -4887,11 +4953,57 @@ function stepPhysicsWorld(delta: number): void {
       }
     }
   });
-  try {
-    physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
-  } catch (error) {
-    console.warn('[SceneViewer] Physics step failed', error);
+  let subSteps = 0;
+  if (physicsInterpolationEnabled) {
+    const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
+    physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
+    const world = physicsWorld;
+    // Prepare previous state before stepping.
+    rigidbodyInstances.forEach((entry) => {
+      const body = entry.body;
+      const state = getPhysicsInterpolationState(body);
+      if (!state.hasSample) {
+        state.prevPos.set(body.position.x, body.position.y, body.position.z);
+        state.currPos.copy(state.prevPos);
+        state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+        state.currQuat.copy(state.prevQuat);
+        state.hasSample = true;
+      } else {
+        state.prevPos.copy(state.currPos);
+        state.prevQuat.copy(state.currQuat);
+      }
+    });
+    try {
+      while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+        world.step(PHYSICS_FIXED_TIMESTEP);
+        physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
+        subSteps += 1;
+      }
+    } catch (error) {
+      console.warn('[SceneViewer] Physics step failed', error);
+    }
+    if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+      physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+    }
+    physicsInterpolationAlpha = PHYSICS_FIXED_TIMESTEP > 0
+      ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
+      : 0;
+    if (subSteps > 0) {
+      rigidbodyInstances.forEach((entry) => {
+        const body = entry.body;
+        const state = getPhysicsInterpolationState(body);
+        state.currPos.set(body.position.x, body.position.y, body.position.z);
+        state.currQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+      });
+    }
+  } else {
+    try {
+      physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
+    } catch (error) {
+      console.warn('[SceneViewer] Physics step failed', error);
+    }
   }
+  physicsDebugLastSubSteps = subSteps;
 
   // Ensure vehicles are truly static after exiting drive/auto-tour.
   // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
@@ -4966,8 +5078,31 @@ function stepPhysicsWorld(delta: number): void {
         return;
       }
     }
+    if (physicsInterpolationEnabled) {
+      const body = entry.body;
+      const state = physicsInterpolationStates.get(body);
+      if (state && state.hasSample) {
+        physicsInterpolationPos.copy(state.prevPos).lerp(state.currPos, physicsInterpolationAlpha);
+        physicsInterpolationQuat.copy(state.prevQuat).slerp(state.currQuat, physicsInterpolationAlpha);
+        syncObjectFromInterpolated(entry, physicsInterpolationPos, physicsInterpolationQuat, syncInstancedTransform);
+        return;
+      }
+    }
     syncSharedObjectFromBody(entry, syncInstancedTransform);
   });
+
+  if (physicsDebugEnabled) {
+    const nowMs = Date.now();
+    if (nowMs - physicsDebugLastLogMs >= PHYSICS_DEBUG_LOG_INTERVAL_MS) {
+      physicsDebugLastLogMs = nowMs;
+      const alpha = physicsInterpolationEnabled ? physicsInterpolationAlpha : 0;
+      console.debug('[SceneViewer] physics', {
+        delta: Number.isFinite(delta) ? Number(delta.toFixed(4)) : delta,
+        subSteps: physicsDebugLastSubSteps,
+        alpha: Number(alpha.toFixed(3)),
+      });
+    }
+  }
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -4996,7 +5131,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       return;
     }
 
-    wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
+    resolveInterpolatedBodyPosition(chassisBody as CANNON.Body, wheelChassisPositionHelper);
     wheelQuaternionHelper
       .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
       .normalize();
@@ -9740,6 +9875,18 @@ onLoad((query) => {
   const packageUrlParam = typeof queryRecord.packageUrl === 'string'
     ? String(queryRecord.packageUrl)
     : '';
+  const physInterpParam = typeof queryRecord.physinterp === 'string'
+    ? String(queryRecord.physinterp).trim()
+    : '';
+  const physDebugParam = typeof queryRecord.physdebug === 'string'
+    ? String(queryRecord.physdebug).trim()
+    : '';
+
+  physicsInterpolationEnabled = isWeChatMiniProgram
+    && (physInterpParam === '' || (physInterpParam !== '0' && physInterpParam.toLowerCase() !== 'false'));
+  physicsDebugEnabled = physDebugParam === '1' || physDebugParam.toLowerCase() === 'true';
+  physicsAccumulator = 0;
+  physicsInterpolationAlpha = 0;
 
   error.value = null;
 
