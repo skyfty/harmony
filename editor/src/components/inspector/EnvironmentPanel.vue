@@ -5,6 +5,8 @@ import type {
   EnvironmentBackgroundMode,
   EnvironmentFogMode,
   EnvironmentMapMode,
+  EnvironmentOrientationPreset,
+  EnvironmentRotationDegrees,
 } from '@/types/environment'
 import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -25,6 +27,13 @@ const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackground
   { title: 'Solid Color', value: 'solidColor' },
   { title: 'HDRI', value: 'hdri' },
   { title: 'SkyCube', value: 'skycube' },
+]
+
+const orientationPresetOptions: Array<{ title: string; value: EnvironmentOrientationPreset }> = [
+  { title: '+Y Up (Three default)', value: 'yUp' },
+  { title: '+Z Up (Z-up assets)', value: 'zUp' },
+  { title: '+X Up (X-up assets)', value: 'xUp' },
+  { title: 'Custom', value: 'custom' },
 ]
 
 const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMode }> = [
@@ -67,6 +76,14 @@ const isEnvironmentDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
+
+const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
+const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
+const showOrientationControls = computed(() => {
+  const bgMode = environmentSettings.value.background.mode
+  const envMode = environmentSettings.value.environmentMap.mode
+  return bgMode === 'hdri' || bgMode === 'skycube' || envMode === 'custom'
+})
 
 const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
   { title: 'No Fog', value: 'none' },
@@ -252,6 +269,50 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
       mode,
       solidColor: environmentSettings.value.background.solidColor,
       hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
+}
+
+function resolvePresetRotationDegrees(preset: EnvironmentOrientationPreset): EnvironmentRotationDegrees {
+  if (preset === 'zUp') {
+    return { x: -90, y: 0, z: 0 }
+  }
+  if (preset === 'xUp') {
+    return { x: 0, y: 0, z: 90 }
+  }
+  return { x: 0, y: 0, z: 0 }
+}
+
+function updateOrientationPreset(preset: EnvironmentOrientationPreset | null) {
+  if (!preset) {
+    return
+  }
+  if (preset === orientationPreset.value && environmentSettings.value.environmentRotationDegrees) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    environmentOrientationPreset: preset,
+    environmentRotationDegrees: resolvePresetRotationDegrees(preset),
+  })
+}
+
+function handleRotationDegreesInput(axis: keyof EnvironmentRotationDegrees, value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(-360, Math.min(360, numeric))
+  const current = rotationDegrees.value
+  if (Math.abs((current[axis] ?? 0) - clamped) < 1e-6) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    environmentRotationDegrees: {
+      ...current,
+      [axis]: clamped,
     },
   })
 }
@@ -941,6 +1002,60 @@ function handleEnvironmentDrop(event: DragEvent) {
             class="section-select"
             @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
           />
+
+          <div v-if="showOrientationControls" class="orientation-controls">
+            <v-select
+              :items="orientationPresetOptions"
+              :model-value="orientationPreset"
+              density="compact"
+              hide-details
+              variant="underlined"
+              class="section-select"
+              label="Up Axis / Preset"
+              @update:model-value="(value) => updateOrientationPreset(value as EnvironmentOrientationPreset | null)"
+            />
+            <div class="orientation-rotation-grid">
+              <v-text-field
+                label="Rot X (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.x"
+                @update:model-value="(value) => handleRotationDegreesInput('x', value)"
+              />
+              <v-text-field
+                label="Rot Y (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.y"
+                @update:model-value="(value) => handleRotationDegreesInput('y', value)"
+              />
+              <v-text-field
+                label="Rot Z (deg)"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="-360"
+                :max="360"
+                :step="1"
+                :model-value="rotationDegrees.z"
+                @update:model-value="(value) => handleRotationDegreesInput('z', value)"
+              />
+            </div>
+          </div>
           <div
             v-if="environmentSettings.background.mode === 'skybox'"
             class="environment-placeholder"
@@ -1380,6 +1495,18 @@ function handleEnvironmentDrop(event: DragEvent) {
 
 .section-select :deep(.v-field__input) {
   font-size: 0.82rem;
+}
+
+.orientation-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.orientation-rotation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .material-color {

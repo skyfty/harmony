@@ -6757,6 +6757,10 @@ const environmentSignature = computed(() => {
       negativeZAssetId: background.mode === 'skycube' ? (background.negativeZAssetId ?? null) : null,
       skycubeKeys: skyCubeKeys,
     },
+    orientation: {
+      preset: settings.environmentOrientationPreset ?? 'yUp',
+      rotationDegrees: settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 },
+    },
     environmentMap: {
       mode: environmentMap.mode,
       hdriAssetId: environmentMap.hdriAssetId ?? null,
@@ -6771,6 +6775,25 @@ const environmentSignature = computed(() => {
     fogDensity: settings.fogDensity,
   })
 })
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180
+}
+
+function applyEnvironmentTextureRotation(settings: EnvironmentSettings) {
+  if (!scene) {
+    return
+  }
+  const rot = settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
+  const euler = new THREE.Euler(
+    degreesToRadians(rot.x ?? 0),
+    degreesToRadians(rot.y ?? 0),
+    degreesToRadians(rot.z ?? 0),
+    'XYZ',
+  )
+  scene.backgroundRotation.copy(euler)
+  scene.environmentRotation.copy(euler)
+}
 
 watch([skyboxSignature, hasSkyNode], () => {
   if (!hasSkyNode.value) {
@@ -7905,6 +7928,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 
   const backgroundApplied = await applyBackgroundSettings(snapshot.background)
   const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+
+  applyEnvironmentTextureRotation(snapshot)
 
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null

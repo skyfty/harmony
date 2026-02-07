@@ -920,6 +920,17 @@ export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skyc
 export type EnvironmentMapMode = 'skybox' | 'custom'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 
+export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
+
+export interface EnvironmentRotationDegrees {
+  /** Degrees */
+  x: number
+  /** Degrees */
+  y: number
+  /** Degrees */
+  z: number
+}
+
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
@@ -943,6 +954,13 @@ export interface EnvironmentMapSettings {
 
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
+  /**
+   * Optional orientation helper for environment textures (HDRI / SkyCube).
+   * Used by the editor UI to adapt cubemaps authored with different up axes.
+   */
+  environmentOrientationPreset?: EnvironmentOrientationPreset
+  /** Rotation applied to scene.background / scene.environment in degrees. */
+  environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string
   ambientLightIntensity: number
   fogMode: EnvironmentFogMode

@@ -2,6 +2,14 @@ export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skyc
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 
+export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
+
+export interface EnvironmentRotationDegrees {
+  x: number
+  y: number
+  z: number
+}
+
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
@@ -22,6 +30,8 @@ export interface EnvironmentMapSettings {
 
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
+  environmentOrientationPreset?: EnvironmentOrientationPreset
+  environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string
   ambientLightIntensity: number
   fogMode: EnvironmentFogMode

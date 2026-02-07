@@ -1052,6 +1052,8 @@ const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 const DEFAULT_ENVIRONMENT_FRICTION = 0.3
+const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
+const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	background: {
 		mode: 'skybox',
@@ -1064,6 +1066,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 		positiveZAssetId: null,
 		negativeZAssetId: null,
 	},
+	environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
+	environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
 	ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
 	ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
 	fogMode: 'none',
@@ -3253,6 +3257,23 @@ function cloneEnvironmentSettingsLocal(
 	const backgroundSource = source?.background ?? null
 	const environmentMapSource = source?.environmentMap ?? null
 
+	const normalizeOrientationPreset = (value: unknown) => {
+		if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
+			return value as EnvironmentSettings['environmentOrientationPreset']
+		}
+		return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
+	}
+
+	const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
+		if (preset === 'zUp') {
+			return { x: -90, y: 0, z: 0 }
+		}
+		if (preset === 'xUp') {
+			return { x: 0, y: 0, z: 90 }
+		}
+		return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
+	}
+
 	let backgroundMode: EnvironmentBackgroundMode = 'skybox'
 	if (backgroundSource?.mode === 'hdri') {
 		backgroundMode = 'hdri'
@@ -3272,6 +3293,15 @@ function cloneEnvironmentSettingsLocal(
 	const fogNear = clampNumber(source?.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
 	const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
 	const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
+
+	const preset = normalizeOrientationPreset((source as any)?.environmentOrientationPreset)
+	const presetRotation = resolvePresetRotationDegrees(preset)
+	const rotationSource = (source as any)?.environmentRotationDegrees ?? null
+	const environmentRotationDegrees = {
+		x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
+		y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
+		z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
+	}
 
 	return {
 		background: {
@@ -3303,6 +3333,8 @@ function cloneEnvironmentSettingsLocal(
 					? normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null)
 					: null,
 		},
+		environmentOrientationPreset: preset,
+		environmentRotationDegrees,
 		ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
 		ambientLightIntensity: clampNumber(
 			source?.ambientLightIntensity,
@@ -7692,6 +7724,17 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+
+	const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
+	const euler = new THREE.Euler(
+		(rot.x * Math.PI) / 180,
+		(rot.y * Math.PI) / 180,
+		(rot.z * Math.PI) / 180,
+		'XYZ',
+	)
+	scene.backgroundRotation.copy(euler)
+	scene.environmentRotation.copy(euler)
+
 	void backgroundApplied
 	void environmentApplied
 }
