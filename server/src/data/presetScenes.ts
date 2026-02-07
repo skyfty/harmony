@@ -1,4 +1,4 @@
-import { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID } from '@harmony/schema'
+import { GROUND_NODE_ID, ENVIRONMENT_NODE_ID } from '@harmony/schema'
 import type { PresetSceneDetail } from '@/types/presetScene'
 
 const SCENE_TIMESTAMP = '2024-01-01T00:00:00.000Z'
@@ -81,31 +81,19 @@ type SceneNodeDetail = {
   [key: string]: unknown
 }
 
-const createSkyNode = (): SceneNodeDetail => ({
-  id: SKY_NODE_ID,
-  name: 'Sky',
-  nodeType: 'Group',
-  position: vec3(0, 0, 0),
-  rotation: vec3(0, 0, 0),
-  scale: vec3(1, 1, 1),
-  offset: vec3(0, 0, 0),
-  visible: true,
-  locked: true,
-  children: [],
-  materials: [],
-})
-
 const DEFAULT_ENVIRONMENT_SETTINGS = {
   background: {
-    mode: 'solidColor' as const,
+    mode: 'skybox' as const,
     solidColor: '#516175',
     hdriAssetId: null,
   },
   ambientLightColor: '#ffffff',
-  ambientLightIntensity: 0.6,
+  ambientLightIntensity: 3.2,
   fogMode: 'none' as const,
   fogColor: '#516175',
   fogDensity: 0.02,
+  fogNear: 1,
+  fogFar: 50,
   environmentMap: {
     mode: 'skybox' as const,
     hdriAssetId: null,
@@ -134,38 +122,26 @@ const createEnvironmentNode = (): SceneNodeDetail => ({
 
 const withEnvironmentNodes = (nodes?: SceneNodeDetail[] | null): SceneNodeDetail[] => {
   const source = Array.isArray(nodes) ? nodes : []
-  let skyNode: SceneNodeDetail | null = null
   let environmentNode: SceneNodeDetail | null = null
   const others: SceneNodeDetail[] = []
 
   source.forEach((node) => {
-    if (!skyNode && node.id === SKY_NODE_ID) {
-      skyNode = createSkyNode()
-      return
-    }
     if (!environmentNode && node.id === ENVIRONMENT_NODE_ID) {
       environmentNode = createEnvironmentNode()
       return
     }
-    if (node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
+    if (node.id !== ENVIRONMENT_NODE_ID) {
       others.push(node)
     }
   })
 
   const result = [...others]
 
-  if (!skyNode) {
-    skyNode = createSkyNode()
-  }
-  const groundIndex = result.findIndex((node) => node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground')
-  const skyInsertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
-  result.splice(skyInsertIndex, 0, skyNode)
-
   if (!environmentNode) {
     environmentNode = createEnvironmentNode()
   }
-  const updatedSkyIndex = result.findIndex((node) => node.id === SKY_NODE_ID)
-  const environmentInsertIndex = updatedSkyIndex >= 0 ? updatedSkyIndex + 1 : skyInsertIndex
+  const groundIndex = result.findIndex((node) => node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground')
+  const environmentInsertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
   result.splice(environmentInsertIndex, 0, environmentNode)
 
   return result

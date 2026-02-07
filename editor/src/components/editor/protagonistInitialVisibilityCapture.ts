@@ -83,7 +83,7 @@ function shouldExcludeNode(node: SceneNode): boolean {
   if (node.nodeType === 'Light' || Boolean(node.light)) {
     return true
   }
-  if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+  if (node.nodeType === 'Environment') {
     return true
   }
   return false

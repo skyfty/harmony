@@ -14,9 +14,7 @@ import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
-import SkyPanel from '@/components/inspector/SkyPanel.vue'
 import WaterPanel from '@/components/inspector/WaterPanel.vue'
-import CloudPanel from '@/components/inspector/CloudPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
@@ -29,7 +27,7 @@ import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
 import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
 import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
-import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
+import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@harmony/schema'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
@@ -102,7 +100,6 @@ const placementTitle = computed(() => (floating.value ? 'Dock to right' : 'Float
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
-const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
 const isMultiuserNode = computed(() => selectedNode.value?.id === MULTIUSER_NODE_ID)
 const isProtagonistNode = computed(() =>
@@ -112,8 +109,7 @@ const showMaterialPanel = computed(
   () => !isLightNode.value && !isProtagonistNode.value && !isMultiuserNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID && 
-  selectedNode.value?.id !== GROUND_NODE_ID && 
+  return selectedNode.value?.id !== GROUND_NODE_ID && 
   selectedNode.value?.id !== MULTIUSER_NODE_ID &&
   selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
 })
@@ -128,8 +124,7 @@ const showAssetModelPanel = computed(() => {
 })
 
 const showAddComponentButton = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID && 
-  selectedNode.value?.id !== ENVIRONMENT_NODE_ID && 
+  return selectedNode.value?.id !== ENVIRONMENT_NODE_ID && 
   selectedNode.value?.id !== MULTIUSER_NODE_ID && 
   selectedNode.value?.id !== PROTAGONIST_NODE_ID;
 
@@ -161,8 +156,6 @@ function computeDefaultExpandedPanels() {
 
   if (node?.id === ENVIRONMENT_NODE_ID) {
     panels.push('environment')
-  } else if (node?.id === SKY_NODE_ID) {
-    panels.push('sky')
   } else if (node?.id === GROUND_NODE_ID) {
     panels.push('ground')
   } else if (node?.nodeType === 'Light') {
@@ -223,14 +216,6 @@ watch(
     }
   },
   { immediate: true },
-)
-
-watch(
-  () => ({ panels: expandedPanels.value.slice(), isSky: isSkyNode.value }),
-  ({ panels, isSky }) => {
-    sceneStore.setCloudPreviewEnabled(isSky && panels.includes('clouds'))
-  },
-  { immediate: true, deep: true },
 )
 
 onBeforeUnmount(() => {
@@ -398,9 +383,7 @@ watch(
     if ((components.length > 0) || !selectedNode.value) {
       defaults.add('components')
     }
-    if (selectedNode.value?.id === SKY_NODE_ID) {
-      defaults.add('sky')
-    } else if (selectedNode.value?.id === GROUND_NODE_ID) {
+    if (selectedNode.value?.id === GROUND_NODE_ID) {
       defaults.add('ground')
       defaults.add('ground-terrain')
     } else if (selectedNode.value?.nodeType === 'Light') {
@@ -556,8 +539,6 @@ watch(
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
           <RoadPanel v-if="showRoadPanel" />
-          <SkyPanel v-if="isSkyNode" />
-          <CloudPanel v-if="isSkyNode" />
           <GroundPanel v-if="isGroundNode" />
           <EnvironmentPanel v-if="isEnvironmentNode" />
 

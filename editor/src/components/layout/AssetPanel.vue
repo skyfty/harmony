@@ -7,7 +7,6 @@ import {
   useSceneStore,
   extractProviderIdFromPackageDirectoryId,
   GROUND_NODE_ID,
-  SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -485,7 +484,7 @@ function isNormalSceneNode(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
-  return node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
+  return node.id !== GROUND_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
 }
 
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
@@ -504,7 +503,7 @@ function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
     return null
   }
   if (node.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(node.id)) {
-    if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
+    if (node.id === GROUND_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
       return null
     }
     return node
@@ -522,7 +521,7 @@ function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
   if (!sceneStore.nodeAllowsChildCreation(parentNode.id)) {
     return null
   }
-  if (parentNode.id === GROUND_NODE_ID || parentNode.id === SKY_NODE_ID || parentNode.id === ENVIRONMENT_NODE_ID) {
+  if (parentNode.id === GROUND_NODE_ID || parentNode.id === ENVIRONMENT_NODE_ID) {
     return null
   }
   return parentNode

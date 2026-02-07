@@ -6,7 +6,6 @@ import type { AssetType } from './asset-types'
 import { createUvDebugMaterial } from './debugTextures'
 
 export const GROUND_NODE_ID = 'harmony:ground'
-export const SKY_NODE_ID = 'harmony:sky'
 export const ENVIRONMENT_NODE_ID = 'harmony:environment'
 export const MULTIUSER_NODE_ID = 'harmony:multiuser'
 export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
@@ -187,7 +186,7 @@ export type GeometryType =
   | 'TorusKnot'
   | 'Empty';
 
-export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | 'Sky' | 'Environment' | 'Empty' | 'WarpGate' | 'Guideboard' | GeometryType;
+export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | 'Environment' | 'Empty' | 'WarpGate' | 'Guideboard' | GeometryType;
 
 export type PrimitiveNodeLike = GeometryType | SceneNodeType | string | null | undefined
 

@@ -471,7 +471,7 @@ const vehicleComponentDefinition: ComponentDefinition<VehicleComponentProps> = {
   ],
   canAttach(node: SceneNode) {
     const nodeType = node.nodeType?.toLowerCase?.() ?? ''
-    return nodeType !== 'light' && nodeType !== 'sky' && nodeType !== 'environment'
+    return nodeType !== 'light' && nodeType !== 'environment'
   },
   createDefaultProps(_node: SceneNode) {
     return clampVehicleComponentProps(null)

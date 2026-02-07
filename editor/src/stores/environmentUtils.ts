@@ -201,7 +201,6 @@ export function normalizeEnvironmentSceneNode(node: SceneNode | null | undefined
 export function ensureEnvironmentNode(
   nodes: SceneNode[],
   id: string,
-  isSkyNodePred: (n: SceneNode) => boolean,
   isGroundNodePred: (n: SceneNode) => boolean,
   override?: EnvironmentSettings,
 ): SceneNode[] {
@@ -223,9 +222,8 @@ export function ensureEnvironmentNode(
   }
 
   const result = [...others]
-  const skyIndex = result.findIndex((node) => isSkyNodePred(node))
   const groundIndex = result.findIndex((node) => isGroundNodePred(node))
-  const insertIndex = skyIndex >= 0 ? skyIndex + 1 : groundIndex >= 0 ? groundIndex + 1 : 0
+  const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
   result.splice(insertIndex, 0, environment)
   return result
 }

@@ -21,7 +21,6 @@ import {
 import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@/types/environment'
 import {
   GROUND_NODE_ID,
-  SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
@@ -53,7 +52,6 @@ import type {
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
-import { createSkySceneNode as createSkySceneNodeImported } from './skyUtils'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import lightUtils from './lightUtils'
@@ -99,7 +97,7 @@ import {
   type TerrainScatterStoreSnapshot,
 } from '@harmony/schema/terrain-scatter'
 
-export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
+export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
@@ -521,7 +519,6 @@ const prefabDeps: PrefabActionsDeps = {
   NODE_PREFAB_PREVIEW_COLOR,
   BEHAVIOR_PREFAB_PREVIEW_COLOR,
 
-  SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
 
   PREFAB_PLACEMENT_EPSILON,
@@ -1349,16 +1346,12 @@ function isGroundNode(node: SceneNode): boolean {
 
 import environmentUtils from './environmentUtils'
 
-function isSkyNode(node: SceneNode): boolean {
-  return node.id === SKY_NODE_ID
-}
-
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = environmentUtils.cloneEnvironmentSettings(undefined)
 
 const cloneEnvironmentSettings = environmentUtils.cloneEnvironmentSettings
 const isEnvironmentNode = (node: SceneNode) => environmentUtils.isEnvironmentNode(node, ENVIRONMENT_NODE_ID)
 const ensureEnvironmentNode = (nodes: SceneNode[], override?: EnvironmentSettings) =>
-  environmentUtils.ensureEnvironmentNode(nodes, ENVIRONMENT_NODE_ID, isSkyNode, isGroundNode, override)
+  environmentUtils.ensureEnvironmentNode(nodes, ENVIRONMENT_NODE_ID, isGroundNode, override)
 const extractEnvironmentSettings = environmentUtils.extractEnvironmentSettings
 const environmentSettingsEqual = environmentUtils.environmentSettingsEqual
 const resolveSceneDocumentEnvironment = (scene: StoredSceneDocument) => environmentUtils.resolveSceneDocumentEnvironment(scene, findNodeById, ENVIRONMENT_NODE_ID)
@@ -2787,7 +2780,7 @@ function collectClipboardPayload(
   const topLevelIds = filterTopLevelNodeIds(uniqueIds, parentMap)
   const entries: ClipboardEntry[] = []
   topLevelIds.forEach((id) => {
-    if (id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+    if (id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) {
       return
     }
     const found = findNodeById(nodes, id)
@@ -5070,7 +5063,7 @@ function insertSubtreeAtLocationImmutable(
   const requestedIndex = Number.isFinite(location.index) ? location.index : 0
 
   // Root insert
-  if (!parentId || parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+  if (!parentId || parentId === ENVIRONMENT_NODE_ID) {
     const next = [...nodes]
     const safeIndex = Math.min(Math.max(requestedIndex, 0), next.length)
     next.splice(safeIndex, 0, cloned)
@@ -5565,7 +5558,7 @@ function createSceneDocument(
   // Sky node is optional: only auto-create it for new scenes without explicit nodes.
   const nodes = ensureEnvironmentNode(groundedNodes, environmentSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
-  const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isSkyNode(node))?.id ?? null
+  const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isEnvironmentNode(node))?.id ?? null
   let selectedNodeId = options.selectedNodeId !== undefined
     ? options.selectedNodeId
     : findDefaultSelectableNode()
@@ -5983,7 +5976,7 @@ function allowsChildNodes(node: SceneNode | null | undefined): boolean {
     return false
   }
   const nodeId = node.id
-  if (nodeId === GROUND_NODE_ID || nodeId === SKY_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
+  if (nodeId === GROUND_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
     return false
   }
   if (node.nodeType !== 'Group') {
@@ -6048,7 +6041,7 @@ function insertNodeMutable(
   for (let index = 0; index < nodes.length; index += 1) {
     const current = nodes[index]!
     if (current.id === targetId) {
-      if ((current.id === SKY_NODE_ID || current.id === ENVIRONMENT_NODE_ID) && position === 'inside') {
+      if ((current.id === ENVIRONMENT_NODE_ID) && position === 'inside') {
         return false
       }
       if (position === 'inside') {
@@ -6446,7 +6439,7 @@ export const useSceneStore = defineStore('scene', {
             .map((id) => id.trim())
             .filter(Boolean),
         ),
-      ).filter((id) => id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+      ).filter((id) => id !== ENVIRONMENT_NODE_ID)
       if (!normalized.length) {
         return false
       }
@@ -8271,7 +8264,7 @@ export const useSceneStore = defineStore('scene', {
 
       const scan = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
-          const isSystemNode = node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID
+          const isSystemNode = node.id === GROUND_NODE_ID || node.id === ENVIRONMENT_NODE_ID
           if (!isSystemNode) {
             const currentVisible = (node as any).visible ?? true
             if (currentVisible !== visible) {
@@ -8332,7 +8325,6 @@ export const useSceneStore = defineStore('scene', {
             }
             return (
               node.id !== GROUND_NODE_ID &&
-              node.id !== SKY_NODE_ID &&
               node.id !== ENVIRONMENT_NODE_ID
             )
           },
@@ -8365,7 +8357,7 @@ export const useSceneStore = defineStore('scene', {
       return node?.locked ?? false
     },
     setNodeSelectionLock(id: string, locked: boolean) {
-      if ((id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) && !locked) {
+      if ((id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) && !locked) {
         return
       }
       let updated = false
@@ -8390,7 +8382,7 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     toggleNodeSelectionLock(id: string) {
-      if (id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+      if (id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) {
         return
       }
       const next = !this.isNodeSelectionLocked(id)
@@ -8408,7 +8400,7 @@ export const useSceneStore = defineStore('scene', {
       const changedIds: string[] = []
       const scan = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
-          if (node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
+          if (node.id !== GROUND_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
             const current = node.locked ?? false
             if (current !== locked) {
               changedIds.push(node.id)
@@ -9951,7 +9943,7 @@ export const useSceneStore = defineStore('scene', {
       const { nodeId, targetId, position } = payload
       if (!nodeId) return false
       if (targetId && nodeId === targetId) return false
-      if (nodeId === GROUND_NODE_ID || nodeId === SKY_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
+      if (nodeId === GROUND_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
         return false
       }
 
@@ -9973,7 +9965,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      if ((targetId === SKY_NODE_ID || targetId === ENVIRONMENT_NODE_ID) && position === 'inside') {
+      if ((targetId === ENVIRONMENT_NODE_ID) && position === 'inside') {
         return false
       }
 
@@ -9995,7 +9987,7 @@ export const useSceneStore = defineStore('scene', {
         newParentId = parentMap.get(targetId) ?? null
       }
 
-      if (newParentId === SKY_NODE_ID || newParentId === ENVIRONMENT_NODE_ID) {
+      if (newParentId === ENVIRONMENT_NODE_ID) {
         return false
       }
 
@@ -10113,7 +10105,7 @@ export const useSceneStore = defineStore('scene', {
   ) {
       const id = generateUuid()
       let parentId = options.parentId ?? null
-      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+      if (parentId === ENVIRONMENT_NODE_ID) {
         parentId = null
       }
       if (parentId) {
@@ -10620,26 +10612,6 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
 
-    addSkyNode() {
-      if (findNodeById(this.nodes, SKY_NODE_ID)) {
-        return null
-      }
-
-      const skyNode = createSkySceneNodeImported(SKY_NODE_ID)
-
-      this.captureHistorySnapshot()
-
-      const next = [...this.nodes]
-      const groundIndex = next.findIndex((node) => node.id === GROUND_NODE_ID)
-      const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
-      next.splice(insertIndex, 0, skyNode)
-
-      this.nodes = ensureEnvironmentNode(next, this.environment)
-      this.setSelection([skyNode.id], { primaryId: skyNode.id })
-      commitSceneSnapshot(this)
-      return skyNode
-    },
-
     async addModelNode(payload: {
       object?: Object3D
       asset?: ProjectAsset
@@ -10673,7 +10645,7 @@ export const useSceneStore = defineStore('scene', {
       let rotation: Vector3Like = { ...baseRotation }
       let scale: Vector3Like = { ...baseScale }
       let targetParentId = payload.parentId ?? null
-      if (targetParentId === SKY_NODE_ID || targetParentId === ENVIRONMENT_NODE_ID) {
+      if (targetParentId === ENVIRONMENT_NODE_ID) {
         targetParentId = null
       }
       const shouldSnapToGrid =
@@ -10968,7 +10940,7 @@ export const useSceneStore = defineStore('scene', {
       componentManager.syncNode(node)
       let nextTree: SceneNode[]
       let parentId = payload.parentId ?? null
-      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+      if (parentId === ENVIRONMENT_NODE_ID) {
         parentId = null
       }
       if (isMultiuserNode(node)) {
@@ -12551,20 +12523,6 @@ export const useSceneStore = defineStore('scene', {
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
 
-      if (removed.includes(SKY_NODE_ID)) {
-        if (this.cloudPreviewEnabled) {
-          this.cloudPreviewEnabled = false
-        }
-        const nextEnvironment = cloneEnvironmentSettings(this.environment)
-        if (nextEnvironment.background.mode === 'skybox') {
-          nextEnvironment.background = { ...nextEnvironment.background, mode: 'solidColor' }
-        }
-        if (nextEnvironment.environmentMap.mode === 'skybox') {
-          nextEnvironment.environmentMap = { ...nextEnvironment.environmentMap, mode: 'custom' }
-        }
-        this.environment = nextEnvironment
-      }
-
       if (removed.length) {
         this.queueSceneRemovePatch(removed, 'removeSceneNodes')
       }
@@ -12593,7 +12551,7 @@ export const useSceneStore = defineStore('scene', {
 
       const parentMap = buildParentMap(this.nodes)
       const validIds = selection.filter((id) => {
-        if (!id || id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+        if (!id || id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) {
           return false
         }
         if (this.isNodeSelectionLocked(id)) {
@@ -12992,7 +12950,7 @@ export const useSceneStore = defineStore('scene', {
 
       const parentMap = buildParentMap(this.nodes)
       const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
-        .filter((id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+        .filter((id) => id !== GROUND_NODE_ID && id !== ENVIRONMENT_NODE_ID)
         .filter((id) => {
           const node = findNodeById(this.nodes, id)
           if (!node) return false
@@ -13023,7 +12981,7 @@ export const useSceneStore = defineStore('scene', {
 
       const parentMap = buildParentMap(this.nodes)
       const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
-        .filter((id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID)
+        .filter((id) => id !== GROUND_NODE_ID && id !== ENVIRONMENT_NODE_ID)
         .filter((id) => {
           const node = findNodeById(this.nodes, id)
           if (!node) return false
@@ -13105,7 +13063,7 @@ export const useSceneStore = defineStore('scene', {
       let parentId = typeof targetId === 'string' ? targetId.trim() : ''
       if (!parentId.length) parentId = ''
       let resolvedParentId: string | null = parentId.length ? parentId : null
-      if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
+      if (resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
       if (resolvedParentId) {
         const targetNode = findNodeById(this.nodes, resolvedParentId)
         if (!targetNode) {
@@ -13119,7 +13077,7 @@ export const useSceneStore = defineStore('scene', {
           if (pasteIntoParent) {
             const parentMap = buildParentMap(this.nodes)
             resolvedParentId = parentMap.get(resolvedParentId) ?? null
-            if (resolvedParentId === SKY_NODE_ID || resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
+            if (resolvedParentId === ENVIRONMENT_NODE_ID) resolvedParentId = null
           }
 
           if (resolvedParentId) {

@@ -22,7 +22,6 @@ import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
 import {
   GROUND_NODE_ID,
-  SKY_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
   type LightNodeType,
@@ -1673,23 +1672,6 @@ const canAddGround = computed(() => {
   return !sceneStore.nodes.some(n => n.dynamicMesh?.type === 'Ground')
 })
 
-const canAddSky = computed(() => {
-  const stack: SceneNode[] = [...sceneStore.nodes]
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.id === SKY_NODE_ID) {
-      return false
-    }
-    if (node.children?.length) {
-      stack.push(...node.children)
-    }
-  }
-  return true
-})
-
 function hasProtagonistNode(nodes: SceneNode[] | null | undefined): boolean {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     return false
@@ -1976,13 +1958,6 @@ function handleAddLight(type: LightNodeType) {
   sceneStore.addLightNode(type)
 }
 
-function handleAddSky() {
-  if (!canAddSky.value) {
-    return
-  }
-  sceneStore.addSkyNode()
-}
-
 </script>
 
 <template>
@@ -2001,11 +1976,6 @@ function handleAddSky() {
         title="Ground"
         @click="handleAddGround()"
         :disabled="!canAddGround"
-      />
-      <v-list-item
-        title="Sky"
-        @click="handleAddSky()"
-        :disabled="!canAddSky"
       />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
