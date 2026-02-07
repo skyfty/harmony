@@ -45,6 +45,12 @@ export interface SkyCubeTextureLoadOptions {
    * Defaults to true.
    */
   assumeSrgb?: boolean
+
+  /**
+   * If true, flips the cube texture vertically.
+   * Defaults to true to match typical image asset orientation in this repo.
+   */
+  flipY?: boolean
 }
 
 const DEFAULT_PLACEHOLDER_PNG =
@@ -97,6 +103,7 @@ export async function loadSkyCubeTexture(
 
   try {
     const texture = await loader.loadAsync(resolvedUrls)
+    texture.flipY = options.flipY ?? true
     if (options.assumeSrgb !== false) {
       texture.colorSpace = THREE.SRGBColorSpace
     }

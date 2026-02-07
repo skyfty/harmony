@@ -45,12 +45,12 @@ const HDRI_ASSET_TYPE = 'hdri' as const
 const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
 
 const skyCubeFaceDescriptors: Array<{ key: SkyCubeFaceKey; label: string; description: string }> = [
-  { key: 'positiveXAssetId', label: '+X', description: 'Right' },
-  { key: 'negativeXAssetId', label: '-X', description: 'Left' },
-  { key: 'positiveYAssetId', label: '+Y', description: 'Top' },
-  { key: 'negativeYAssetId', label: '-Y', description: 'Bottom' },
-  { key: 'positiveZAssetId', label: '+Z', description: 'Front' },
-  { key: 'negativeZAssetId', label: '-Z', description: 'Back' },
+  { key: 'positiveXAssetId', label: 'px', description: 'Right' },
+  { key: 'negativeXAssetId', label: 'nx', description: 'Left' },
+  { key: 'positiveYAssetId', label: 'py', description: 'Top' },
+  { key: 'negativeYAssetId', label: 'ny', description: 'Bottom' },
+  { key: 'positiveZAssetId', label: 'pz', description: 'Front' },
+  { key: 'negativeZAssetId', label: 'nz', description: 'Back' },
 ]
 
 const skyCubeFaceDropState = reactive<Record<SkyCubeFaceKey, boolean>>({
@@ -1480,6 +1480,20 @@ function handleEnvironmentDrop(event: DragEvent) {
   border: 1px dashed rgba(255, 255, 255, 0.16);
   background: rgba(12, 16, 22, 0.45);
   transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cube-face-tile {
+  grid-template-columns: 32px 1fr;
+  position: relative;
+  padding-right: 36px;
+}
+
+.cube-face-tile .asset-actions {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  grid-column: auto;
+  grid-row: auto;
 }
 
 .asset-tile.is-inactive {
