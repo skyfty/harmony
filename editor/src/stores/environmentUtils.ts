@@ -19,8 +19,11 @@ export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
 
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
-    mode: 'skybox',
-    solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
+    mode: 'solidColor',
+    solidColor: '#BECACB',
+    gradientTopColor: '#627897',
+    gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
+    gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
     hdriAssetId: null,
     skycubeFormat: 'faces',
     skycubeZipAssetId: null,

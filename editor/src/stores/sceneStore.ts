@@ -1344,9 +1344,9 @@ function isGroundNode(node: SceneNode): boolean {
   return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground'
 }
 
-import environmentUtils from './environmentUtils'
+import environmentUtils, { DEFAULT_ENVIRONMENT_SETTINGS as DEFAULT_NEW_SCENE_ENVIRONMENT_SETTINGS } from './environmentUtils'
 
-const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = environmentUtils.cloneEnvironmentSettings(undefined)
+const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = environmentUtils.cloneEnvironmentSettings(DEFAULT_NEW_SCENE_ENVIRONMENT_SETTINGS)
 
 const cloneEnvironmentSettings = environmentUtils.cloneEnvironmentSettings
 const isEnvironmentNode = (node: SceneNode) => environmentUtils.isEnvironmentNode(node, ENVIRONMENT_NODE_ID)
