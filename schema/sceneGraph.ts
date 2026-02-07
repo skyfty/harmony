@@ -960,6 +960,12 @@ class SceneGraphBuilder {
     this.applyVisibility(light, node);
 
     if (created.target && 'target' in (light as any)) {
+      const targetPos = props.target ?? { x: 0, y: 0, z: 0 };
+      created.target.position.set(
+        targetPos.x - node.position.x,
+        targetPos.y - node.position.y,
+        targetPos.z - node.position.z,
+      )
       this.root.add(created.target);
       (light as THREE.DirectionalLight | THREE.SpotLight).target = created.target;
     }

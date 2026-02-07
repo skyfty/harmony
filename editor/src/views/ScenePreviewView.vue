@@ -237,6 +237,8 @@ const statusMessage = ref('Waiting for scene data...')
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
 
+let pendingEnvironmentSettings: EnvironmentSettings | null = null
+
 // LOD debug helpers removed
 
 function switchToLivePreviewMode(): void {
@@ -6586,6 +6588,14 @@ function initRenderer() {
 	window.addEventListener('keydown', handleKeyDown)
 	window.addEventListener('keyup', handleKeyUp)
 
+	// Environment settings may arrive before renderer/scene initialization.
+	// Re-apply the latest deferred snapshot so Solid Color / HDRI / SkyCube backgrounds take effect.
+	if (pendingEnvironmentSettings) {
+		void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
+	} else if (currentDocument) {
+		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(currentDocument))
+	}
+
 	startAnimationLoop()
 	rendererInitialized = true
 }
@@ -7607,6 +7617,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
 	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
+		pendingEnvironmentSettings = snapshot
 		return
 	}
 	applyFogSettings(snapshot)
@@ -7623,8 +7634,11 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	scene.backgroundRotation.copy(euler)
 	scene.environmentRotation.copy(euler)
 
-	void backgroundApplied
-	void environmentApplied
+	if (backgroundApplied && environmentApplied) {
+		pendingEnvironmentSettings = null
+	} else {
+		pendingEnvironmentSettings = snapshot
+	}
 }
 
 const environmentAssetSignature = computed(() => {
