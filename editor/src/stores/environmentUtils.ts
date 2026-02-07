@@ -17,6 +17,12 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
   },
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
@@ -67,6 +73,8 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
   let backgroundMode: any = 'skybox'
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri'
+  } else if (backgroundSource?.mode === 'skycube') {
+    backgroundMode = 'skycube'
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor'
   }
@@ -87,6 +95,12 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+      positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
+      negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
+      positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
+      negativeYAssetId: normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null),
+      positiveZAssetId: normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null),
+      negativeZAssetId: normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null),
     },
     ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
     ambientLightIntensity: clampNumber(source?.ambientLightIntensity, 0, 10, DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY),
@@ -187,6 +201,12 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     a.background.mode === b.background.mode &&
     a.background.solidColor === b.background.solidColor &&
     a.background.hdriAssetId === b.background.hdriAssetId &&
+    a.background.positiveXAssetId === b.background.positiveXAssetId &&
+    a.background.negativeXAssetId === b.background.negativeXAssetId &&
+    a.background.positiveYAssetId === b.background.positiveYAssetId &&
+    a.background.negativeYAssetId === b.background.negativeYAssetId &&
+    a.background.positiveZAssetId === b.background.positiveZAssetId &&
+    a.background.negativeZAssetId === b.background.negativeZAssetId &&
     a.ambientLightColor === b.ambientLightColor &&
     Math.abs(a.ambientLightIntensity - b.ambientLightIntensity) <= epsilon &&
     a.fogMode === b.fogMode &&

@@ -490,6 +490,8 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  disposeSkyCubeTexture,
+  loadSkyCubeTexture,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,
@@ -1272,7 +1274,13 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
-  },
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
+  } as EnvironmentSettings['background'],
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   fogMode: 'none',
@@ -1305,6 +1313,9 @@ let shouldRenderSkyBackground = true;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
+let skyCubeTexture: THREE.CubeTexture | null = null;
+let skyCubeFaceAssetIds: Array<string | null> | null = null;
+let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
 let backgroundLoadToken = 0;
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
 let environmentMapAssetId: string | null = null;
@@ -2634,6 +2645,8 @@ function cloneEnvironmentSettingsLocal(
   let backgroundMode: EnvironmentSettings['background']['mode'] = 'skybox';
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri';
+  } else if (backgroundSource?.mode === 'skycube') {
+    backgroundMode = 'skycube';
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor';
   }
@@ -2654,7 +2667,31 @@ function cloneEnvironmentSettingsLocal(
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-    },
+      positiveXAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
+          : null,
+      negativeXAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null)
+          : null,
+      positiveYAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null)
+          : null,
+      negativeYAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null)
+          : null,
+      positiveZAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null)
+          : null,
+      negativeZAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null)
+          : null,
+    } as EnvironmentSettings['background'],
     ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
     ambientLightIntensity: clampNumber(
       source?.ambientLightIntensity,
@@ -8172,7 +8209,7 @@ function applySkyEnvironmentToScene() {
   }
 }
 
-function disposeBackgroundResources() {
+function disposeHdriBackgroundResources() {
   const scene = renderContext?.scene ?? null;
   const previousTexture = backgroundTexture;
   if (previousTexture) {
@@ -8185,6 +8222,29 @@ function disposeBackgroundResources() {
   backgroundTextureCleanup?.();
   backgroundTextureCleanup = null;
   backgroundAssetId = null;
+}
+
+function disposeSkyCubeBackgroundResources() {
+  const scene = renderContext?.scene ?? null;
+  if (skyCubeTexture) {
+    if (scene && scene.background === skyCubeTexture) {
+      scene.background = null;
+    }
+    disposeSkyCubeTexture(skyCubeTexture);
+  }
+  skyCubeTexture = null;
+  skyCubeFaceAssetIds = null;
+  if (skyCubeFaceTextureCleanup) {
+    for (const dispose of skyCubeFaceTextureCleanup) {
+      dispose?.();
+    }
+  }
+  skyCubeFaceTextureCleanup = null;
+}
+
+function disposeBackgroundResources() {
+  disposeHdriBackgroundResources();
+  disposeSkyCubeBackgroundResources();
 }
 
 function disposeEnvironmentTarget() {
@@ -8313,6 +8373,77 @@ async function applyBackgroundSettings(
     return true;
   }
   setSkyBackgroundEnabled(false);
+  if (background.mode === 'skycube') {
+    const faceAssetIds: Array<string | null> = [
+      background.positiveXAssetId ?? null,
+      background.negativeXAssetId ?? null,
+      background.positiveYAssetId ?? null,
+      background.negativeYAssetId ?? null,
+      background.positiveZAssetId ?? null,
+      background.negativeZAssetId ?? null,
+    ];
+    const hasAnyFace = faceAssetIds.some(Boolean);
+    if (!hasAnyFace) {
+      disposeBackgroundResources();
+      scene.background = new THREE.Color(background.solidColor);
+      return true;
+    }
+    if (
+      skyCubeTexture &&
+      skyCubeFaceAssetIds &&
+      faceAssetIds.length === skyCubeFaceAssetIds.length &&
+      faceAssetIds.every((assetId, index) => assetId === skyCubeFaceAssetIds?.[index])
+    ) {
+      scene.background = skyCubeTexture;
+      return true;
+    }
+    const resolvedFaces = await Promise.all(
+      faceAssetIds.map(async (assetId) => {
+        if (!assetId) {
+          return null;
+        }
+        return await resolveAssetUrlReference(assetId);
+      }),
+    );
+    const faceUrls = resolvedFaces.map((resolved) => resolved?.url ?? null);
+    const cleanup = resolvedFaces.map((resolved) => resolved?.dispose ?? null);
+    const loaded = await loadSkyCubeTexture(faceUrls);
+    if (token !== backgroundLoadToken) {
+      if (loaded.texture) {
+        disposeSkyCubeTexture(loaded.texture);
+      }
+      for (const dispose of cleanup) {
+        dispose?.();
+      }
+      return false;
+    }
+    if (!loaded.texture) {
+      for (const dispose of cleanup) {
+        dispose?.();
+      }
+      disposeBackgroundResources();
+      scene.background = new THREE.Color(background.solidColor);
+      return true;
+    }
+    if (loaded.missingFaces.length) {
+      console.warn('[SceneViewer] SkyCube missing faces:', loaded.missingFaces);
+      try {
+        uni.showToast({
+          title: `SkyCube 缺失: ${loaded.missingFaces.join(', ')}`,
+          icon: 'none',
+          duration: 2200,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    disposeBackgroundResources();
+    skyCubeTexture = loaded.texture;
+    skyCubeFaceAssetIds = faceAssetIds;
+    skyCubeFaceTextureCleanup = cleanup;
+    scene.background = skyCubeTexture;
+    return true;
+  }
   if (background.mode !== 'hdri' || !background.hdriAssetId) {
     disposeBackgroundResources();
     scene.background = new THREE.Color(background.solidColor);

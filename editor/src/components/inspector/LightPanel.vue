@@ -40,7 +40,6 @@ const nodeVisible = computed(() => selectedNode.value?.visible ?? true)
 const supportsDistance = computed(() => lightType.value === 'Point' || lightType.value === 'Spot')
 const supportsAngle = computed(() => lightType.value === 'Spot')
 const supportsShadow = computed(() => lightType.value === 'Directional' || lightType.value === 'Point' || lightType.value === 'Spot')
-const supportsTarget = computed(() => lightType.value === 'Directional' || lightType.value === 'Spot')
 const supportsGroundColor = computed(() => lightType.value === 'Hemisphere')
 
 function toDegrees(radians: number) {
@@ -236,19 +235,6 @@ function handleShadowOrthoSizeChange(value: string | number) {
   const clamped = Math.max(0.01, numeric)
   lightForm.shadowOrthoSize = clamped
   patchShadow({ orthoSize: clamped })
-}
-
-function patchTarget() {
-  if (!supportsTarget.value) {
-    return
-  }
-  patchLight({
-    target: {
-      x: Number(lightForm.targetX) || 0,
-      y: Number(lightForm.targetY) || 0,
-      z: Number(lightForm.targetZ) || 0,
-    },
-  })
 }
 </script>
 

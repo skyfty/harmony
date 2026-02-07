@@ -60,8 +60,14 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
-} from '@harmony/schema'
-import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isVideoLikeExtension } from '@harmony/schema'
+} from '@schema/index'
+import {
+  disposeSkyCubeTexture,
+  getLastExtensionFromFilenameOrUrl,
+  isHdriLikeExtension,
+  isVideoLikeExtension,
+  loadSkyCubeTexture,
+} from '@schema/index'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -118,7 +124,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
-import { createPrimitiveMesh } from '@harmony/schema'
+import { createPrimitiveMesh } from '@schema/index'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -797,11 +803,29 @@ const postprocessing = useViewportPostprocessing({
 const skySunPosition = new THREE.Vector3()
 let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
+let backgroundAssetKey: string | null = null
+let skyCubeTexture: THREE.CubeTexture | null = null
+let skyCubeFaceAssetIds: Array<string | null> = [null, null, null, null, null, null]
+let skyCubeFaceKeys: Array<string | null> = [null, null, null, null, null, null]
 let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
+let environmentMapAssetKey: string | null = null
 let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
+
+function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
+  const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!trimmed) {
+    return null
+  }
+  const entry = assetCacheStore.entries?.[trimmed]
+  const asset = sceneStore.getAsset(trimmed)
+  const serverUpdatedAt = entry?.serverUpdatedAt ?? null
+  const blobUrl = entry?.blobUrl ?? null
+  const downloadUrl = asset?.downloadUrl ?? null
+  return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}|${downloadUrl ?? ''}`
+}
 
 const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight'
 const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget'
@@ -6695,15 +6719,48 @@ const hasSkyNode = computed(() => {
 
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
+  const background = settings.background
+  const environmentMap = settings.environmentMap
+
+  const hdriBackgroundKey =
+    background.mode === 'hdri' && background.hdriAssetId
+      ? computeEnvironmentAssetReloadKey(background.hdriAssetId)
+      : null
+
+  const skyCubeKeys = background.mode === 'skycube'
+    ? [
+      computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
+      computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
+      computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
+      computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
+      computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
+      computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
+    ]
+    : null
+
+  const environmentMapKey =
+    environmentMap.mode === 'custom' && environmentMap.hdriAssetId
+      ? computeEnvironmentAssetReloadKey(environmentMap.hdriAssetId)
+      : null
+
   return JSON.stringify({
     background: {
-      mode: settings.background.mode,
-      solidColor: settings.background.solidColor,
-      hdriAssetId: settings.background.hdriAssetId ?? null,
+      mode: background.mode,
+      solidColor: background.solidColor,
+      hdriAssetId: background.hdriAssetId ?? null,
+      hdriKey: hdriBackgroundKey,
+      positiveXAssetId: background.mode === 'skycube' ? (background.positiveXAssetId ?? null) : null,
+      negativeXAssetId: background.mode === 'skycube' ? (background.negativeXAssetId ?? null) : null,
+      positiveYAssetId: background.mode === 'skycube' ? (background.positiveYAssetId ?? null) : null,
+      negativeYAssetId: background.mode === 'skycube' ? (background.negativeYAssetId ?? null) : null,
+      positiveZAssetId: background.mode === 'skycube' ? (background.positiveZAssetId ?? null) : null,
+      negativeZAssetId: background.mode === 'skycube' ? (background.negativeZAssetId ?? null) : null,
+      skycubeKeys: skyCubeKeys,
     },
     environmentMap: {
-      mode: settings.environmentMap.mode,
-      hdriAssetId: settings.environmentMap.hdriAssetId ?? null,
+      mode: environmentMap.mode,
+      hdriAssetId: environmentMap.hdriAssetId ?? null,
+      hdriKey: environmentMapKey,
     },
     ambientLightColor: settings.ambientLightColor,
     ambientLightIntensity: settings.ambientLightIntensity,
@@ -7542,7 +7599,7 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
   }
 }
 
-function disposeBackgroundResources() {
+function disposeHdriBackgroundResources() {
   if (scene && scene.background === backgroundTexture) {
     scene.background = null
   }
@@ -7551,6 +7608,22 @@ function disposeBackgroundResources() {
     backgroundTexture = null
   }
   backgroundAssetId = null
+  backgroundAssetKey = null
+}
+
+function disposeSkyCubeBackgroundResources() {
+  if (scene && scene.background === skyCubeTexture) {
+    scene.background = null
+  }
+  disposeSkyCubeTexture(skyCubeTexture)
+  skyCubeTexture = null
+  skyCubeFaceAssetIds = [null, null, null, null, null, null]
+  skyCubeFaceKeys = [null, null, null, null, null, null]
+}
+
+function disposeBackgroundResources() {
+  disposeHdriBackgroundResources()
+  disposeSkyCubeBackgroundResources()
 }
 
 function disposeCustomEnvironmentTarget() {
@@ -7563,6 +7636,7 @@ function disposeCustomEnvironmentTarget() {
     customEnvironmentTarget = null
   }
   environmentMapAssetId = null
+  environmentMapAssetKey = null
 }
 
 function applySkyEnvironment() {
@@ -7615,13 +7689,74 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     return true
   }
 
+  if (background.mode === 'skycube') {
+    const faceAssetIds: Array<string | null> = [
+      background.positiveXAssetId ?? null,
+      background.negativeXAssetId ?? null,
+      background.positiveYAssetId ?? null,
+      background.negativeYAssetId ?? null,
+      background.positiveZAssetId ?? null,
+      background.negativeZAssetId ?? null,
+    ]
+
+    const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
+
+    const hasAnyFace = faceAssetIds.some((id) => typeof id === 'string' && id.trim().length > 0)
+    if (!hasAnyFace) {
+      disposeBackgroundResources()
+      scene.background = new THREE.Color(background.solidColor)
+      return true
+    }
+
+    const sameAsPrevious =
+      skyCubeTexture &&
+      faceAssetIds.every((id, index) => (id ?? null) === (skyCubeFaceAssetIds[index] ?? null)) &&
+      faceKeys.every((key, index) => (key ?? null) === (skyCubeFaceKeys[index] ?? null))
+    if (sameAsPrevious && skyCubeTexture) {
+      scene.background = skyCubeTexture
+      return true
+    }
+
+    const faceUrls: Array<string | null> = await Promise.all(
+      faceAssetIds.map(async (assetId) => {
+        if (!assetId) {
+          return null
+        }
+        const resolved = await resolveEnvironmentAssetUrl(assetId)
+        return resolved?.url ?? null
+      }),
+    )
+
+    const loaded = await loadSkyCubeTexture(faceUrls)
+    if (!loaded.texture || token !== backgroundLoadToken) {
+      disposeSkyCubeTexture(loaded.texture)
+      if (loaded.error) {
+        console.warn('[SceneViewport] Failed to load SkyCube background', loaded.error)
+      }
+      return false
+    }
+
+    if (loaded.missingFaces.length) {
+      console.warn('[SceneViewport] SkyCube background missing faces', loaded.missingFaces)
+    }
+
+    disposeBackgroundResources()
+    skyCubeTexture = loaded.texture
+    skyCubeFaceAssetIds = faceAssetIds
+    skyCubeFaceKeys = faceKeys
+    scene.background = skyCubeTexture
+    return true
+  }
+
   if (!background.hdriAssetId) {
     disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
   }
 
-  if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+  const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
+
+  if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
     scene.background = backgroundTexture
     return true
   }
@@ -7635,6 +7770,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   disposeBackgroundResources()
   backgroundTexture = texture
   backgroundAssetId = background.hdriAssetId
+  backgroundAssetKey = hdriKey
   scene.background = texture
   return true
 }
@@ -7670,7 +7806,9 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
     return false
   }
 
-  if (customEnvironmentTarget && environmentMapAssetId === mapSettings.hdriAssetId) {
+  const envKey = computeEnvironmentAssetReloadKey(mapSettings.hdriAssetId)
+
+  if (customEnvironmentTarget && environmentMapAssetId === mapSettings.hdriAssetId && environmentMapAssetKey === envKey) {
     scene.environment = customEnvironmentTarget.texture
     scene.environmentIntensity = 1
     return true
@@ -7692,6 +7830,7 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   disposeCustomEnvironmentTarget()
   customEnvironmentTarget = target
   environmentMapAssetId = mapSettings.hdriAssetId
+  environmentMapAssetKey = envKey
   scene.environment = target.texture
   scene.environmentIntensity = 1
   return true
@@ -12112,12 +12251,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       requiresHelperUpdate = true
       break
     }
-    case 'RectArea': {
-      // RectAreaLight not supported — fall back to AmbientLight.
-      light = new THREE.AmbientLight(config.color, config.intensity)
-      break
-    }
-  case 'Ambient':
+    case 'Ambient':
     default: {
       light = new THREE.AmbientLight(config.color, config.intensity)
       break

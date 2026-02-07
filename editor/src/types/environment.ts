@@ -1,4 +1,4 @@
-export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
+export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 
@@ -6,6 +6,13 @@ export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
   hdriAssetId: string | null
+  /** SkyCube faces in fixed Three.js CubeTextureLoader order: +X, -X, +Y, -Y, +Z, -Z. */
+  positiveXAssetId: string | null
+  negativeXAssetId: string | null
+  positiveYAssetId: string | null
+  negativeYAssetId: string | null
+  positiveZAssetId: string | null
+  negativeZAssetId: string | null
 }
 
 export interface EnvironmentMapSettings {
@@ -28,7 +35,7 @@ export interface EnvironmentSettings {
   collisionFriction: number
 }
 
-export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
+export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background' | 'environmentMap'>> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
