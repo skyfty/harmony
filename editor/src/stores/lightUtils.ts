@@ -82,7 +82,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
       return {
         name: 'Ambient Light',
         color: '#404040', //0x404040
-        intensity: 0.15,
+        intensity: 0.2,
         position: deps.createVector(0, 8, 0),
         extras: {} as Record<string, unknown>,
       }
@@ -90,7 +90,7 @@ export function getLightPresetWithDeps(deps: Pick<LightDeps, 'createVector'>, ty
       return {
         name: 'Hemisphere Light',
         color: '#87CEEB', //0x87CEEB (sky blue)
-        intensity: 0.4,
+        intensity:0.8,
         position: deps.createVector(0, 8, 0),
         extras: { groundColor: '#556B2F' } as Record<string, unknown>,  //0x556B2F (dark olive green)
       }

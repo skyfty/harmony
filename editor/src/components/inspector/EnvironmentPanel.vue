@@ -1145,6 +1145,13 @@ function handleEnvironmentDrop(event: DragEvent) {
                   @keydown.enter.prevent="openSkyCubeFaceDialog(face.key)"
                   @keydown.space.prevent="openSkyCubeFaceDialog(face.key)"
                 >
+                  <div
+                    v-if="face.asset"
+                    class="asset-name"
+                    :title="face.asset.name?.trim().length ? face.asset.name : face.asset.id"
+                  >
+                    {{ face.asset.name?.trim().length ? face.asset.name : face.asset.id }}
+                  </div>
                   <div class="asset-face-label">
                     <span class="asset-face-axis">{{ face.label }}</span>
                     <span
@@ -1204,7 +1211,7 @@ function handleEnvironmentDrop(event: DragEvent) {
               @keydown.enter.prevent="openAssetDialog('background')"
               @keydown.space.prevent="openAssetDialog('background')"
             >
-              <div class="asset-name">{{ backgroundAssetLabel }}</div>
+              <div class="asset-name" :title="backgroundAssetLabel">{{ backgroundAssetLabel }}</div>
               <div class="asset-hint">{{ backgroundAssetHint }}</div>
             </div>
             <div class="asset-actions">
@@ -1264,7 +1271,7 @@ function handleEnvironmentDrop(event: DragEvent) {
               @keydown.enter.prevent="openAssetDialog('environment')"
               @keydown.space.prevent="openAssetDialog('environment')"
             >
-              <div class="asset-name">{{ environmentAssetLabel }}</div>
+              <div class="asset-name" :title="environmentAssetLabel">{{ environmentAssetLabel }}</div>
               <div class="asset-hint">{{ environmentAssetHint }}</div>
             </div>
             <div class="asset-actions">
@@ -1601,17 +1608,13 @@ function handleEnvironmentDrop(event: DragEvent) {
 }
 
 .cube-face-tile {
-  grid-template-columns: 32px 1fr;
-  position: relative;
-  padding-right: 36px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  min-height: 60px;
 }
 
-.cube-face-tile .asset-actions {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  grid-column: auto;
-  grid-row: auto;
+.cube-face-tile .asset-thumb {
+  width: 48px;
+  height: 48px;
 }
 
 .asset-tile.is-inactive {
@@ -1629,8 +1632,30 @@ function handleEnvironmentDrop(event: DragEvent) {
 
 .cube-face-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
+}
+
+.cube-face-tile .asset-info {
+  min-width: 0;
+  overflow: visible;
+}
+
+.cube-face-tile .asset-hint {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.cube-face-tile .asset-face-label {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.cube-face-tile .asset-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .asset-thumb {
