@@ -33,7 +33,7 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     assetType: 'model',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-models`,
     label: 'Models',
-    extensions: ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.dae', '.3ds', '.ply', '.usdz', '.blend', '.3mf'],
+    extensions: ['.glb', '.gltf', '.fbx'],
   },
   {
     key: 'meshes',
@@ -47,7 +47,7 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     assetType: 'image',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-images`,
     label: 'Images',
-    extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.svg', '.hdr', '.exr'],
+    extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.svg', '.hdr'],
   },
   {
     key: 'textures',
