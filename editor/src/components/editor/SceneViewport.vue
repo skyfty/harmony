@@ -7690,6 +7690,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   }
 
   if (background.mode === 'skycube') {
+    const faceTags = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const
     const faceAssetIds: Array<string | null> = [
       background.positiveXAssetId ?? null,
       background.negativeXAssetId ?? null,
@@ -7726,6 +7727,12 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
         return resolved?.url ?? null
       }),
     )
+
+    for (let i = 0; i < faceUrls.length; i += 1) {
+      if (faceAssetIds[i] && !faceUrls[i]) {
+        console.warn('[SceneViewport] SkyCube face URL unavailable', faceTags[i], faceAssetIds[i])
+      }
+    }
 
     const loaded = await loadSkyCubeTexture(faceUrls)
     if (!loaded.texture || token !== backgroundLoadToken) {
