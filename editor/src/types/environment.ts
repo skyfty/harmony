@@ -1,6 +1,5 @@
 export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
-export type EnvironmentMapMode = 'skybox' | 'custom'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
@@ -33,11 +32,6 @@ export interface EnvironmentBackgroundSettings {
   negativeZAssetId: string | null
 }
 
-export interface EnvironmentMapSettings {
-  mode: EnvironmentMapMode
-  hdriAssetId: string | null
-}
-
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
   environmentOrientationPreset?: EnvironmentOrientationPreset
@@ -49,13 +43,11 @@ export interface EnvironmentSettings {
   fogDensity: number
   fogNear: number
   fogFar: number
-  environmentMap: EnvironmentMapSettings
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
 }
 
-export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background' | 'environmentMap'>> & {
+export type EnvironmentSettingsPatch = Partial<Omit<EnvironmentSettings, 'background'>> & {
   background?: Partial<EnvironmentBackgroundSettings>
-  environmentMap?: Partial<EnvironmentMapSettings>
 }

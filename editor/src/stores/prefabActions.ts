@@ -182,7 +182,7 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
 
   const clone: Record<string, unknown> = { ...(value as any) }
 
-  const stripHdriAsset = (raw: unknown, key: 'background' | 'environmentMap'): void => {
+  const stripHdriAsset = (raw: unknown): void => {
     if (!isPlainObject(raw)) {
       return
     }
@@ -191,7 +191,7 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
     if (mode !== 'hdri') {
       delete section.hdriAssetId
     }
-    if (key === 'background' && mode !== 'skycube') {
+    if (mode !== 'skycube') {
       delete section.positiveXAssetId
       delete section.negativeXAssetId
       delete section.positiveYAssetId
@@ -199,11 +199,10 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
       delete section.positiveZAssetId
       delete section.negativeZAssetId
     }
-    clone[key] = section
+    clone.background = section
   }
 
-  stripHdriAsset(clone.background, 'background')
-  stripHdriAsset(clone.environmentMap, 'environmentMap')
+  stripHdriAsset(clone.background)
 
   return clone as T
 }

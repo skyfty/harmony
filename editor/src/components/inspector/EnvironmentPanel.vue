@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
   EnvironmentFogMode,
-  EnvironmentMapMode,
   EnvironmentOrientationPreset,
   EnvironmentRotationDegrees,
   SkyCubeBackgroundFormat,
@@ -79,11 +78,6 @@ const orientationPresetOptions: Array<{ title: string; value: EnvironmentOrienta
   { title: 'Custom', value: 'custom' },
 ]
 
-const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMode }> = [
-  { title: 'Use Skybox', value: 'skybox' },
-  { title: 'Custom HDRI', value: 'custom' },
-]
-
 const backgroundColorMenuOpen = ref(false)
 const gradientTopColorMenuOpen = ref(false)
 
@@ -94,7 +88,7 @@ const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 type SkyCubeFaceKey = 'positiveXAssetId' | 'negativeXAssetId' | 'positiveYAssetId' | 'negativeYAssetId' | 'positiveZAssetId' | 'negativeZAssetId'
-type AssetDialogTarget = 'background' | 'environment' | 'skycubeZip' | SkyCubeFaceKey
+type AssetDialogTarget = 'background' | 'skycubeZip' | SkyCubeFaceKey
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
@@ -124,7 +118,6 @@ const skyCubeFaceDropState = reactive<Record<SkyCubeFaceKey, boolean>>({
 })
 
 const isBackgroundDropActive = ref(false)
-const isEnvironmentDropActive = ref(false)
 const isSkyCubeZipDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
@@ -134,8 +127,7 @@ const orientationPreset = computed<EnvironmentOrientationPreset>(() => environme
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
 const showOrientationControls = computed(() => {
   const bgMode = environmentSettings.value.background.mode
-  const envMode = environmentSettings.value.environmentMap.mode
-  return bgMode === 'hdri' || bgMode === 'skycube' || envMode === 'custom'
+  return bgMode === 'hdri' || bgMode === 'skycube'
 })
 
 const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
@@ -217,14 +209,6 @@ const backgroundAsset = computed(() => {
   return sceneStore.getAsset(assetId) ?? null
 })
 
-const environmentMapAsset = computed(() => {
-  const assetId = environmentSettings.value.environmentMap.hdriAssetId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.getAsset(assetId) ?? null
-})
-
 const backgroundAssetLabel = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
@@ -241,31 +225,11 @@ const backgroundAssetHint = computed(() => {
   return asset.id
 })
 
-const environmentAssetLabel = computed(() => {
-  const asset = environmentMapAsset.value
-  if (!asset) {
-    return 'Drag HDRI asset here'
-  }
-  return asset.name?.trim().length ? asset.name : asset.id
-})
-
-const environmentAssetHint = computed(() => {
-  const asset = environmentMapAsset.value
-  if (!asset) {
-    return 'Overrides skybox reflections when set'
-  }
-  return asset.id
-})
-
 const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
-const environmentPreviewStyle = computed(() => resolveAssetPreviewStyle(environmentMapAsset.value))
 
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'background') {
     return 'Select Background HDRI'
-  }
-  if (assetDialogTarget.value === 'environment') {
-    return 'Select Environment Map'
   }
   if (assetDialogTarget.value === 'skycubeZip') {
     return 'Select SkyCube .skycube Zip'
@@ -283,7 +247,7 @@ const assetDialogAssetType = computed(() => {
   if (!assetDialogTarget.value) {
     return HDRI_ASSET_TYPE
   }
-  if (assetDialogTarget.value === 'background' || assetDialogTarget.value === 'environment') {
+  if (assetDialogTarget.value === 'background') {
     return HDRI_ASSET_TYPE
   }
   return SKYCUBE_ASSET_TYPE
@@ -516,24 +480,6 @@ function clearBackgroundAsset() {
   })
 }
 
-function updateEnvironmentMapMode(mode: EnvironmentMapMode | null) {
-  if (!mode || mode === environmentSettings.value.environmentMap.mode) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({
-    environmentMap: {
-      mode,
-      hdriAssetId: environmentSettings.value.environmentMap.hdriAssetId,
-    },
-  })
-}
-
-function clearEnvironmentAsset() {
-  if (environmentSettings.value.environmentMap.mode === 'skybox' && !environmentSettings.value.environmentMap.hdriAssetId) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'skybox', hdriAssetId: null } })
-}
 
 function handleShadowsToggle(enabled: boolean | null) {
   if (typeof enabled !== 'boolean') {
@@ -1029,91 +975,30 @@ function handleBackgroundDragLeave(event: DragEvent) {
   isBackgroundDropActive.value = false
 }
 
-function handleEnvironmentDragEnter(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isEnvironmentAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isEnvironmentDropActive.value = true
-}
-
-function handleEnvironmentDragOver(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isEnvironmentAsset(asset)) {
-    if (isEnvironmentDropActive.value) {
-      isEnvironmentDropActive.value = false
-    }
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isEnvironmentDropActive.value = true
-}
-
-function handleEnvironmentDragLeave(event: DragEvent) {
-  if (!isEnvironmentDropActive.value) {
-    return
-  }
-  const target = event.currentTarget as HTMLElement | null
-  const related = event.relatedTarget as Node | null
-  if (target && related && target.contains(related)) {
-    return
-  }
-  isEnvironmentDropActive.value = false
-}
-
 function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
-  if (target === 'background') {
-    const shouldLinkEnvironment = !environmentSettings.value.environmentMap.hdriAssetId
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: 'hdri',
-        solidColor: environmentSettings.value.background.solidColor,
-        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-        hdriAssetId: asset.id,
-      },
-    })
-    if (shouldLinkEnvironment) {
-      sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
-    }
+  if (target !== 'background') {
     return
   }
-  const shouldLinkBackground =
-    environmentSettings.value.background.mode !== 'hdri' || !environmentSettings.value.background.hdriAssetId
-  sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
-  if (shouldLinkBackground) {
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: 'hdri',
-        solidColor: environmentSettings.value.background.solidColor,
-        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-        hdriAssetId: asset.id,
-      },
-    })
-  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: 'hdri',
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: asset.id,
+    },
+  })
 }
 
-function openAssetDialog(target: 'background' | 'environment', event?: MouseEvent) {
+function openAssetDialog(target: 'background', event?: MouseEvent) {
   if (event) {
     assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
   } else {
     assetDialogAnchor.value = null
   }
   assetDialogTarget.value = target
-  assetDialogSelectedId.value =
-    target === 'background'
-      ? environmentSettings.value.background.hdriAssetId ?? ''
-      : environmentSettings.value.environmentMap.hdriAssetId ?? ''
+  assetDialogSelectedId.value = environmentSettings.value.background.hdriAssetId ?? ''
   assetDialogVisible.value = true
 }
 
@@ -1166,10 +1051,7 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     assetDialogVisible.value = false
     return
   }
-  if (
-    assetDialogTarget.value !== 'background' &&
-    assetDialogTarget.value !== 'environment'
-  ) {
+  if (assetDialogTarget.value !== 'background') {
     const faceKey = assetDialogTarget.value
     if (!asset) {
       sceneStore.patchEnvironmentSettings({ background: { [faceKey]: null } })
@@ -1190,22 +1072,13 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     return
   }
   if (!asset) {
-    if (assetDialogTarget.value === 'background') {
-      sceneStore.patchEnvironmentSettings({
-        background: {
-          mode: environmentSettings.value.background.mode,
-          solidColor: environmentSettings.value.background.solidColor,
-          hdriAssetId: '',
-        },
-      })
-    } else {
-      sceneStore.patchEnvironmentSettings({
-        environmentMap: {
-          mode: environmentSettings.value.environmentMap.mode,
-          hdriAssetId: '',
-        },
-      })
-    }
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: environmentSettings.value.background.mode,
+        solidColor: environmentSettings.value.background.solidColor,
+        hdriAssetId: '',
+      },
+    })
     assetDialogVisible.value = false
     return
   }
@@ -1213,7 +1086,9 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     console.warn('Selected asset is not a supported environment asset')
     return
   }
-  applyEnvironmentAsset(assetDialogTarget.value, asset)
+  if (assetDialogTarget.value === 'background') {
+    applyEnvironmentAsset('background', asset)
+  }
   assetDialogVisible.value = false
 }
 
@@ -1287,16 +1162,7 @@ function handleBackgroundDrop(event: DragEvent) {
   applyEnvironmentAsset('background', asset)
 }
 
-function handleEnvironmentDrop(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  isEnvironmentDropActive.value = false
-  if (!isEnvironmentAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  applyEnvironmentAsset('environment', asset)
-}
+// Environment map selection has been removed; reflections follow background.
 </script>
 
 <template>
@@ -1744,76 +1610,6 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
         </section>
-<section class="environment-section">
-          <div class="section-title">Environment Map</div>
-          <v-select
-            :items="environmentMapModeOptions"
-            :model-value="environmentSettings.environmentMap.mode"
-            density="compact"
-            hide-details
-            variant="underlined"
-            class="section-select"
-            @update:model-value="(mode) => updateEnvironmentMapMode(mode as EnvironmentMapMode | null)"
-          />
-          <div
-            v-if="environmentSettings.environmentMap.mode === 'custom'"
-            class="asset-tile"
-            :class="{
-              'is-active-drop': isEnvironmentDropActive,
-              'is-inactive': environmentSettings.environmentMap.mode !== 'custom',
-            }"
-            @dragenter="handleEnvironmentDragEnter"
-            @dragover="handleEnvironmentDragOver"
-            @dragleave="handleEnvironmentDragLeave"
-            @drop="handleEnvironmentDrop"
-          >
-            <div
-              class="asset-thumb"
-              :class="{ 'asset-thumb--empty': !environmentMapAsset }"
-              :style="environmentPreviewStyle"
-              role="button"
-              tabindex="0"
-              :title="environmentMapAsset ? 'Change environment map' : 'Select environment map'"
-              @click="openAssetDialog('environment', $event)"
-              @keydown.enter.prevent="openAssetDialog('environment')"
-              @keydown.space.prevent="openAssetDialog('environment')"
-            >
-              <v-icon v-if="!environmentMapAsset" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
-            </div>
-            <div
-              class="asset-info"
-              role="button"
-              tabindex="0"
-              @click="openAssetDialog('environment', $event)"
-              @keydown.enter.prevent="openAssetDialog('environment')"
-              @keydown.space.prevent="openAssetDialog('environment')"
-            >
-              <div class="asset-name" :title="environmentAssetLabel">{{ environmentAssetLabel }}</div>
-              <div class="asset-hint">{{ environmentAssetHint }}</div>
-            </div>
-            <div class="asset-actions">
-              <v-btn
-                class="asset-action"
-                icon="mdi-close"
-                size="x-small"
-                variant="text"
-                :disabled="!environmentMapAsset"
-                title="Clear environment map"
-                @click.stop="clearEnvironmentAsset"
-              />
-            </div>
-          </div>
-          <div
-            v-else
-            class="environment-placeholder"
-          >
-            <v-icon size="30" color="rgba(233, 236, 241, 0.45)">mdi-weather-partly-cloudy</v-icon>
-            <div class="placeholder-text">
-              <div class="placeholder-title">Using Skybox Reflections</div>
-              <div class="placeholder-hint">Environment map derives from the active skybox</div>
-            </div>
-          </div>
-        </section>
         <section class="environment-section">
           <div class="section-title">Shadows</div>
           <div class="toggle-row">
@@ -2016,19 +1812,19 @@ function handleEnvironmentDrop(event: DragEvent) {
 .orientation-controls {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 17px;
 }
 
 .orientation-rotation-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 17px;
 }
 
 .material-color {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 16px;
 }
 
 .material-color.is-disabled {

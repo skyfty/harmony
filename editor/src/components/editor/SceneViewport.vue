@@ -816,11 +816,7 @@ let gradientBackgroundDome: GradientBackgroundDome | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
-let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let environmentMapAssetId: string | null = null
-let environmentMapAssetKey: string | null = null
 let backgroundLoadToken = 0
-let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
 
 function disposeGradientBackgroundResources() {
@@ -6752,7 +6748,6 @@ const hasSkyNode = computed(() => {
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   const background = settings.background
-  const environmentMap = settings.environmentMap
 
   const skycubeFormat = background.mode === 'skycube' && background.skycubeFormat === 'zip' ? 'zip' : 'faces'
 
@@ -6778,11 +6773,6 @@ const environmentSignature = computed(() => {
       ? computeEnvironmentAssetReloadKey(background.skycubeZipAssetId)
       : null
 
-  const environmentMapKey =
-    environmentMap.mode === 'custom' && environmentMap.hdriAssetId
-      ? computeEnvironmentAssetReloadKey(environmentMap.hdriAssetId)
-      : null
-
   return JSON.stringify({
     background: {
       mode: background.mode,
@@ -6806,11 +6796,6 @@ const environmentSignature = computed(() => {
     orientation: {
       preset: settings.environmentOrientationPreset ?? 'yUp',
       rotationDegrees: settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 },
-    },
-    environmentMap: {
-      mode: environmentMap.mode,
-      hdriAssetId: environmentMap.hdriAssetId ?? null,
-      hdriKey: environmentMapKey,
     },
     ambientLightColor: settings.ambientLightColor,
     ambientLightIntensity: settings.ambientLightIntensity,
@@ -7701,19 +7686,6 @@ function disposeBackgroundResources() {
   disposeGradientBackgroundResources()
 }
 
-function disposeCustomEnvironmentTarget() {
-  if (customEnvironmentTarget) {
-    if (scene && scene.environment === customEnvironmentTarget.texture) {
-      scene.environment = null
-      scene.environmentIntensity = 1
-    }
-    customEnvironmentTarget.dispose()
-    customEnvironmentTarget = null
-  }
-  environmentMapAssetId = null
-  environmentMapAssetKey = null
-}
-
 function applySkyEnvironment() {
   if (!scene) {
     return
@@ -7723,9 +7695,6 @@ function applySkyEnvironment() {
     scene.environmentIntensity = 1
     return
   }
-  if (environmentSettings.value.environmentMap.mode !== 'skybox') {
-    return
-  }
   if (skyEnvironmentTarget) {
     scene.environment = skyEnvironmentTarget.texture
     scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
@@ -7733,6 +7702,20 @@ function applySkyEnvironment() {
     scene.environment = null
     scene.environmentIntensity = 1
   }
+}
+
+function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
+  if (!scene) {
+    return false
+  }
+  if (background.mode === 'skybox') {
+    applySkyEnvironment()
+    return true
+  }
+  // Reflections follow Background: only Skybox produces reflections.
+  scene.environment = null
+  scene.environmentIntensity = 1
+  return true
 }
 
 async function applyBackgroundSettings(background: EnvironmentSettings['background']): Promise<boolean> {
@@ -7976,67 +7959,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   return true
 }
 
-async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['environmentMap']): Promise<boolean> {
-  environmentMapLoadToken += 1
-  const token = environmentMapLoadToken
-
-  if (!scene) {
-    return false
-  }
-
-  if (mapSettings.mode === 'skybox') {
-    if (!hasSkyNode.value) {
-      disposeCustomEnvironmentTarget()
-      scene.environment = null
-      scene.environmentIntensity = 1
-      return true
-    }
-    disposeCustomEnvironmentTarget()
-    applySkyEnvironment()
-    return true
-  }
-
-  if (!mapSettings.hdriAssetId) {
-    disposeCustomEnvironmentTarget()
-    scene.environment = null
-    scene.environmentIntensity = 1
-    return true
-  }
-
-  if (!pmremGenerator || !renderer) {
-    return false
-  }
-
-  const envKey = computeEnvironmentAssetReloadKey(mapSettings.hdriAssetId)
-
-  if (customEnvironmentTarget && environmentMapAssetId === mapSettings.hdriAssetId && environmentMapAssetKey === envKey) {
-    scene.environment = customEnvironmentTarget.texture
-    scene.environmentIntensity = 1
-    return true
-  }
-
-  const texture = await loadEnvironmentTextureFromAsset(mapSettings.hdriAssetId)
-  if (!texture || token !== environmentMapLoadToken) {
-    texture?.dispose()
-    return false
-  }
-
-  const target = pmremGenerator.fromEquirectangular(texture)
-  texture.dispose()
-  if (!target || token !== environmentMapLoadToken) {
-    target?.dispose()
-    return false
-  }
-
-  disposeCustomEnvironmentTarget()
-  customEnvironmentTarget = target
-  environmentMapAssetId = mapSettings.hdriAssetId
-  environmentMapAssetKey = envKey
-  scene.environment = target.texture
-  scene.environmentIntensity = 1
-  return true
-}
-
 function applyFogSettings(settings: EnvironmentSettings) {
   if (!scene) {
     return
@@ -8098,7 +8020,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
 
   const backgroundApplied = await applyBackgroundSettings(snapshot.background)
-  const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+  const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
 
   applyEnvironmentTextureRotation(snapshot)
 
@@ -8398,7 +8320,6 @@ function disposeScene() {
   disposeSkyResources()
   disposeSkySunLight()
   disposeBackgroundResources()
-  disposeCustomEnvironmentTarget()
 
   if (gizmoControls) {
     gizmoControls.dispose()

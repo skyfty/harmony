@@ -1081,10 +1081,6 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
 	fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
 	fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-	environmentMap: {
-		mode: 'skybox',
-		hdriAssetId: null,
-	},
 	gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
 	collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
 	collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
@@ -1193,10 +1189,6 @@ let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
-let environmentMapTarget: THREE.WebGLRenderTarget | null = null
-let environmentMapAssetId: string | null = null
-let environmentMapAssetKey: string | null = null
-let environmentMapLoadToken = 0
 let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
 let followCameraControlActive = false
@@ -3285,7 +3277,6 @@ function cloneEnvironmentSettingsLocal(
 	source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
 ): EnvironmentSettings {
 	const backgroundSource = source?.background ?? null
-	const environmentMapSource = source?.environmentMap ?? null
 
 	const normalizeSkycubeFormat = (value: unknown) => (value === 'zip' ? 'zip' : 'faces')
 
@@ -3314,7 +3305,6 @@ function cloneEnvironmentSettingsLocal(
 	} else if (backgroundSource?.mode === 'solidColor') {
 		backgroundMode = 'solidColor'
 	}
-	const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
 	let fogMode: EnvironmentSettings['fogMode'] = 'none'
 	if (source?.fogMode === 'linear') {
 		fogMode = 'linear'
@@ -3384,10 +3374,6 @@ function cloneEnvironmentSettingsLocal(
 		fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
 		fogNear,
 		fogFar: normalizedFogFar,
-		environmentMap: {
-			mode: environmentMapMode,
-			hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
-		},
 		gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
 		collisionRestitution: clampNumber(
 			source?.collisionRestitution,
@@ -7518,19 +7504,6 @@ function disposeBackgroundResources() {
 	gradientBackgroundDome = null
 }
 
-function disposeEnvironmentTarget() {
-	if (environmentMapTarget) {
-		if (scene && scene.environment === environmentMapTarget.texture) {
-			scene.environment = null
-			scene.environmentIntensity = 1
-		}
-		environmentMapTarget.dispose()
-	}
-	environmentMapTarget = null
-	environmentMapAssetId = null
-	environmentMapAssetKey = null
-}
-
 async function loadEnvironmentTextureFromAsset(
 	assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
@@ -7836,53 +7809,16 @@ async function applyBackgroundSettings(
 	return true
 }
 
-async function applyEnvironmentMapSettings(
-	mapSettings: EnvironmentSettings['environmentMap'],
-): Promise<boolean> {
-	environmentMapLoadToken += 1
-	const token = environmentMapLoadToken
+function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
 	if (!scene) {
 		return false
 	}
-	if (mapSettings.mode !== 'custom' || !mapSettings.hdriAssetId) {
-		disposeEnvironmentTarget()
-		if (mapSettings.mode === 'skybox') {
-			applySkyEnvironmentToScene()
-		} else {
-			scene.environment = null
-			scene.environmentIntensity = 1
-		}
+	if (background.mode === 'skybox') {
+		applySkyEnvironmentToScene()
 		return true
 	}
-	if (!pmremGenerator || !renderer) {
-		return false
-	}
-	const envKey = computeEnvironmentAssetReloadKey(mapSettings.hdriAssetId)
-	if (environmentMapTarget && environmentMapAssetId === mapSettings.hdriAssetId && environmentMapAssetKey === envKey) {
-		scene.environment = environmentMapTarget.texture
-		scene.environmentIntensity = 1
-		return true
-	}
-	const loaded = await loadEnvironmentTextureFromAsset(mapSettings.hdriAssetId)
-	if (!loaded || token !== environmentMapLoadToken) {
-		if (loaded) {
-			loaded.texture.dispose()
-			loaded.dispose?.()
-		}
-		return false
-	}
-	const target = pmremGenerator.fromEquirectangular(loaded.texture)
-	loaded.dispose?.()
-	loaded.texture.dispose()
-	if (!target || token !== environmentMapLoadToken) {
-		target?.dispose()
-		return false
-	}
-	disposeEnvironmentTarget()
-	environmentMapTarget = target
-	environmentMapAssetId = mapSettings.hdriAssetId
-	environmentMapAssetKey = envKey
-	scene.environment = target.texture
+	// Reflections follow Background: only Skybox produces reflections.
+	scene.environment = null
 	scene.environmentIntensity = 1
 	return true
 }
@@ -7895,7 +7831,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	}
 	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
-	const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+	const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
 
 	const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
 	const euler = new THREE.Euler(
@@ -7919,7 +7855,6 @@ const environmentAssetSignature = computed(() => {
 	}
 	const settings = resolveDocumentEnvironment(currentDocument)
 	const background = settings.background
-	const environmentMap = settings.environmentMap
 	return JSON.stringify({
 		background: {
 			mode: background.mode,
@@ -7951,13 +7886,6 @@ const environmentAssetSignature = computed(() => {
 					? computeEnvironmentAssetReloadKey((background as any).skycubeZipAssetId)
 					: null,
 		},
-		environmentMap: {
-			mode: environmentMap.mode,
-			hdriKey:
-				environmentMap.mode === 'custom' && environmentMap.hdriAssetId
-					? computeEnvironmentAssetReloadKey(environmentMap.hdriAssetId)
-					: null,
-		},
 	})
 })
 
@@ -7974,9 +7902,7 @@ watch(
 
 function disposeEnvironmentResources() {
 	disposeBackgroundResources()
-	disposeEnvironmentTarget()
 	backgroundLoadToken += 1
-	environmentMapLoadToken += 1
 }
 
 function resolveTextureExtension(entry: AssetCacheEntry | null, ref: SceneMaterialTextureRef): string {

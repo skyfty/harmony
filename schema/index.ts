@@ -926,7 +926,6 @@ export interface SceneSkyboxSettings {
 }
 
 export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri' | 'skycube'
-export type EnvironmentMapMode = 'skybox' | 'custom'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
@@ -972,11 +971,6 @@ export interface EnvironmentBackgroundSettings {
   negativeZAssetId: string | null
 }
 
-export interface EnvironmentMapSettings {
-  mode: EnvironmentMapMode
-  hdriAssetId: string | null
-}
-
 export interface EnvironmentSettings {
   background: EnvironmentBackgroundSettings
   /**
@@ -993,7 +987,6 @@ export interface EnvironmentSettings {
   fogDensity: number
   fogNear: number
   fogFar: number
-  environmentMap: EnvironmentMapSettings
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
@@ -1001,7 +994,6 @@ export interface EnvironmentSettings {
 
 export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
-  environmentMap?: Partial<EnvironmentMapSettings>
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'GuideRoute'
 

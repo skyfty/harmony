@@ -94,10 +94,6 @@ const DEFAULT_ENVIRONMENT_SETTINGS = {
   fogDensity: 0.02,
   fogNear: 1,
   fogFar: 50,
-  environmentMap: {
-    mode: 'skybox' as const,
-    hdriAssetId: null,
-  },
   gravityStrength: 9.81,
   collisionRestitution: 0.2,
   collisionFriction: 0.3,

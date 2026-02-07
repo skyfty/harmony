@@ -1298,10 +1298,6 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
   fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
   fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-  environmentMap: {
-    mode: 'skybox',
-    hdriAssetId: null,
-  },
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
@@ -1331,9 +1327,6 @@ let gradientBackgroundDome: GradientBackgroundDome | null = null;
 let skyCubeZipAssetId: string | null = null;
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
 let backgroundLoadToken = 0;
-let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
-let environmentMapAssetId: string | null = null;
-let environmentMapLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
@@ -2724,7 +2717,6 @@ function cloneEnvironmentSettingsLocal(
   source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
 ): EnvironmentSettings {
   const backgroundSource = source?.background ?? null;
-  const environmentMapSource = source?.environmentMap ?? null;
 
   type OrientationPreset = NonNullable<EnvironmentSettings['environmentOrientationPreset']>;
 
@@ -2755,7 +2747,6 @@ function cloneEnvironmentSettingsLocal(
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor';
   }
-  const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox';
   let fogMode: EnvironmentSettings['fogMode'] = 'none';
   if (source?.fogMode === 'linear') {
     fogMode = 'linear';
@@ -2837,10 +2828,6 @@ function cloneEnvironmentSettingsLocal(
     fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
     fogNear,
     fogFar: normalizedFogFar,
-    environmentMap: {
-      mode: environmentMapMode,
-      hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
-    },
     gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
     collisionRestitution: clampNumber(
       source?.collisionRestitution,
@@ -8566,19 +8553,6 @@ function disposeBackgroundResources() {
   gradientBackgroundDome = null;
 }
 
-function disposeEnvironmentTarget() {
-  const scene = renderContext?.scene ?? null;
-  if (environmentMapTarget) {
-    if (scene && scene.environment === environmentMapTarget.texture) {
-      scene.environment = null;
-      scene.environmentIntensity = 1;
-    }
-    environmentMapTarget.dispose();
-  }
-  environmentMapTarget = null;
-  environmentMapAssetId = null;
-}
-
 function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetUrl | null): string {
   const target = (resolve?.url ?? assetId) ?? '';
   const sanitized = target.split('#')[0]?.split('?')[0] ?? '';
@@ -8912,54 +8886,20 @@ async function applyBackgroundSettings(
   return true;
 }
 
-async function applyEnvironmentMapSettings(
-  mapSettings: EnvironmentSettings['environmentMap'],
-): Promise<boolean> {
+let lastAppliedBackground: EnvironmentSettings['background'] | null = null;
+
+function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
   const scene = renderContext?.scene ?? null;
-  const renderer = renderContext?.renderer ?? null;
-  environmentMapLoadToken += 1;
-  const token = environmentMapLoadToken;
   if (!scene) {
     return false;
   }
-  if (mapSettings.mode !== 'custom' || !mapSettings.hdriAssetId) {
-    disposeEnvironmentTarget();
-    if (mapSettings.mode === 'skybox') {
-      applySkyEnvironmentToScene();
-    } else {
-      scene.environment = null;
-      scene.environmentIntensity = 1;
-    }
+  lastAppliedBackground = { ...background };
+  if (background.mode === 'skybox') {
+    applySkyEnvironmentToScene();
     return true;
   }
-  if (!pmremGenerator || !renderer) {
-    return false;
-  }
-  if (environmentMapTarget && environmentMapAssetId === mapSettings.hdriAssetId) {
-    scene.environment = environmentMapTarget.texture;
-    scene.environmentIntensity = 1;
-    return true;
-  }
-  const loaded = await loadEnvironmentTextureFromAsset(mapSettings.hdriAssetId);
-  if (!loaded || token !== environmentMapLoadToken) {
-    if (loaded) {
-      loaded.texture.dispose();
-      loaded.dispose?.();
-    }
-    return false;
-  }
-  const target = pmremGenerator.fromEquirectangular(loaded.texture);
-  loaded.dispose?.();
-  loaded.texture.dispose();
-  if (!target || token !== environmentMapLoadToken) {
-    target?.dispose();
-    return false;
-  }
-  disposeEnvironmentTarget();
-  environmentMapTarget = target;
-  environmentMapAssetId = mapSettings.hdriAssetId;
-  ensureFloatTextureFilterCompatibility(target.texture);
-  scene.environment = target.texture;
+  // Reflections follow Background: only Skybox produces reflections.
+  scene.environment = null;
   scene.environmentIntensity = 1;
   return true;
 }
@@ -8974,7 +8914,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
   applyFogSettings(snapshot);
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
-  const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap);
+  const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
 
   const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
   const euler = new THREE.Euler(
@@ -8994,9 +8934,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 
 function disposeEnvironmentResources() {
   disposeBackgroundResources();
-  disposeEnvironmentTarget();
   backgroundLoadToken += 1;
-  environmentMapLoadToken += 1;
   pendingEnvironmentSettings = null;
 }
 
@@ -9013,7 +8951,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
   }
   if (!skyNodeActive) {
     disposeSkyResources();
-    applySkyEnvironmentToScene();
+    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
@@ -9022,7 +8960,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
   }
   if (!settings) {
     disposeSkyEnvironment();
-    applySkyEnvironmentToScene();
+    applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SKYBOX_SETTINGS.exposure);
     cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
@@ -9069,7 +9007,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null, skyNodeActive
     sky.visible = previousVisibility;
     syncSkyVisibility();
   }
-  applySkyEnvironmentToScene();
+  applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
   cloudRenderer?.setSunPosition(skySunPosition);
   cloudRenderer?.setSkyboxSettings(settings);
   pendingSkyboxSettings = null;

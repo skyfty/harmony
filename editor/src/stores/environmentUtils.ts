@@ -40,10 +40,6 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
   fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
   fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
-  environmentMap: {
-    mode: 'skybox',
-    hdriAssetId: null,
-  },
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
@@ -112,7 +108,6 @@ function resolvePresetRotationDegrees(preset: EnvironmentSettings['environmentOr
 
 export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | EnvironmentSettings | null): EnvironmentSettings {
   const backgroundSource = source?.background ?? null
-  const environmentMapSource = source?.environmentMap ?? null
 
   let backgroundMode: any = 'skybox'
   if (backgroundSource?.mode === 'hdri') {
@@ -122,7 +117,6 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor'
   }
-  const environmentMapMode: any = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
   let fogMode: any = 'none'
   if (source?.fogMode === 'linear') {
     fogMode = 'linear'
@@ -180,10 +174,6 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
     fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
     fogNear,
     fogFar: normalizedFogFar,
-    environmentMap: {
-      mode: environmentMapMode,
-      hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
-    },
     gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
     collisionRestitution: clampNumber(source?.collisionRestitution, 0, 1, DEFAULT_ENVIRONMENT_RESTITUTION),
     collisionFriction: clampNumber(source?.collisionFriction, 0, 1, DEFAULT_ENVIRONMENT_FRICTION),
@@ -293,8 +283,6 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.fogDensity - b.fogDensity) <= epsilon &&
     Math.abs(a.fogNear - b.fogNear) <= epsilon &&
     Math.abs(a.fogFar - b.fogFar) <= epsilon &&
-    a.environmentMap.mode === b.environmentMap.mode &&
-    a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId &&
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
     Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon
