@@ -6,6 +6,7 @@ import {
   type CameraFollowContext,
   type CameraFollowPlacement,
   type CameraFollowState,
+  type CameraFollowTuning,
 } from './followCameraController'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
@@ -129,6 +130,14 @@ export type VehicleDriveControllerDeps = {
   onToast?: (message: string) => void
   onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution) => void
   followCameraDistanceScale?: number | (() => number)
+
+  // Follow camera fine tuning (optional, typically platform-specific).
+  followCameraVelocityLerpSpeed?: number | (() => number)
+  followCameraTuning?: Partial<CameraFollowTuning> | (() => Partial<CameraFollowTuning>)
+
+  // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
+  resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
+  resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
 }
 
 export type VehicleDriveControllerBindings = {
@@ -149,14 +158,19 @@ export type VehicleDriveCameraContext = {
   firstPersonControls?: { object: THREE.Object3D }
   desiredOrbitTarget?: THREE.Vector3
 } & CameraFollowContext
+
+const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
+  && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
 // 车辆引擎最大推力
-const VEHICLE_ENGINE_FORCE = 320
+// WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
+const VEHICLE_ENGINE_FORCE = isWeChatMiniProgram ? 200 : 320
 // 车辆最大刹车力
 const VEHICLE_BRAKE_FORCE = 42
 // 车辆速度软上限（m/s，约30km/h），超过后逐渐限制
-const VEHICLE_SPEED_SOFT_CAP = 8.5
+// WeChat mini-program: lower top speed to improve stability.
+const VEHICLE_SPEED_SOFT_CAP = isWeChatMiniProgram ? 5.5 : 8.5
 // 车辆速度硬上限（m/s，约45km/h），绝对不能超过
-const VEHICLE_SPEED_HARD_CAP = 12.5
+const VEHICLE_SPEED_HARD_CAP = isWeChatMiniProgram ? 7.8 : 12.5
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -260,6 +274,8 @@ export class VehicleDriveController {
   private readonly followCameraController = new FollowCameraController()
   private speedGovernorScale = 1
   private speedGovernorBrakeAssist = 0
+  private speedGovernorSmoothedForwardSpeedAbs = 0
+  private speedGovernorOverHardCap = false
 
   private followCameraVelocityHasSample = false
   private readonly followCameraVelocity = new THREE.Vector3()
@@ -335,6 +351,24 @@ export class VehicleDriveController {
     }
     // Clamp to a safe range to avoid extreme jumps
     return Math.max(0.5, Math.min(3, resolved))
+  }
+
+  private getFollowCameraVelocityLerpSpeed(): number {
+    const raw = this.deps.followCameraVelocityLerpSpeed
+    const resolved = typeof raw === 'function' ? raw() : raw
+    if (typeof resolved !== 'number' || !Number.isFinite(resolved)) {
+      return 8
+    }
+    return Math.max(0.5, Math.min(30, resolved))
+  }
+
+  private getFollowCameraTuning(): Partial<CameraFollowTuning> | undefined {
+    const raw = this.deps.followCameraTuning
+    const resolved = typeof raw === 'function' ? raw() : raw
+    if (!resolved || typeof resolved !== 'object') {
+      return undefined
+    }
+    return resolved
   }
 
   get orbitMode(): VehicleDriveOrbitMode {
@@ -683,6 +717,11 @@ export class VehicleDriveController {
       forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
       forwardSpeedAbs = Math.abs(forwardVelocity)
 
+      // Smooth speed reading to avoid tiny physics noise causing visible push-pull near caps.
+      const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
+      this.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - this.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
+      const speedForGovernor = this.speedGovernorSmoothedForwardSpeedAbs
+
       // forwardSpeedAbs can be used for conditional logic if needed
 
       // Smooth speed governor (preferred over directly editing velocity):
@@ -693,7 +732,7 @@ export class VehicleDriveController {
       const acceleratingForward = !!(sameDirection && throttleSign !== 0)
       if (acceleratingForward) {
         const range = Math.max(0.1, VEHICLE_SPEED_HARD_CAP - VEHICLE_SPEED_SOFT_CAP)
-        const excess = Math.max(0, forwardSpeedAbs - VEHICLE_SPEED_SOFT_CAP)
+        const excess = Math.max(0, speedForGovernor - VEHICLE_SPEED_SOFT_CAP)
         const t = Math.min(1, excess / range)
         // Smoothstep (0..1), then invert to get scale (1..0)
         const smooth = t * t * (3 - 2 * t)
@@ -703,7 +742,17 @@ export class VehicleDriveController {
         engineForce *= this.speedGovernorScale
 
         // Brake assist kicks in only after crossing hard cap, and ramps smoothly.
-        const over = Math.max(0, forwardSpeedAbs - VEHICLE_SPEED_HARD_CAP)
+        // Add hysteresis around the hard cap to avoid toggling when speed hovers near the threshold.
+        const hardCapEnter = VEHICLE_SPEED_HARD_CAP + 0.15
+        const hardCapExit = VEHICLE_SPEED_HARD_CAP - 0.25
+        if (!this.speedGovernorOverHardCap) {
+          if (speedForGovernor > hardCapEnter) {
+            this.speedGovernorOverHardCap = true
+          }
+        } else if (speedForGovernor < hardCapExit) {
+          this.speedGovernorOverHardCap = false
+        }
+        const over = this.speedGovernorOverHardCap ? Math.max(0, speedForGovernor - VEHICLE_SPEED_HARD_CAP) : 0
         const brakeBand = 0.9 // m/s (~3.2km/h)
         const brakeRatio = Math.min(1, over / brakeBand)
         const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * 0.35
@@ -714,6 +763,7 @@ export class VehicleDriveController {
         const relaxAlpha = 1 - Math.exp(-6 * dt)
         this.speedGovernorScale += (1 - this.speedGovernorScale) * relaxAlpha
         this.speedGovernorBrakeAssist += (0 - this.speedGovernorBrakeAssist) * relaxAlpha
+        this.speedGovernorOverHardCap = false
       }
 
       if (Math.abs(throttle) < 0.05) {
@@ -727,7 +777,9 @@ export class VehicleDriveController {
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
-        const factor = 1 - clampedDamping
+        const factor = isWeChatMiniProgram
+          ? Math.exp(-Math.max(0, -Math.log(1 - clampedDamping) * 60) * dt)
+          : 1 - clampedDamping
         velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()
@@ -953,12 +1005,21 @@ export class VehicleDriveController {
       this.followCameraVelocityHasSample = true
     } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
       const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
-      this.followCameraVelocityScratch
-        .copy(temp.followAnchor)
-        .sub(this.followCameraLastAnchor)
-        .multiplyScalar(1 / dt)
+      const chassisBody = instance?.vehicle?.chassisBody ?? null
+      const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
+      const resolvedNodeId = nodeId ?? null
+      const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
+
+      if (isWeChatMiniProgram && resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
+        // Use host-provided velocity (often more stable than per-frame differencing).
+      } else {
+        this.followCameraVelocityScratch
+          .copy(temp.followAnchor)
+          .sub(this.followCameraLastAnchor)
+          .multiplyScalar(1 / dt)
+      }
       this.followCameraVelocityScratch.y = 0
-      const alpha = computeFollowLerpAlpha(dt, 8)
+      const alpha = computeFollowLerpAlpha(dt, this.getFollowCameraVelocityLerpSpeed())
       this.followCameraVelocity.lerp(this.followCameraVelocityScratch, alpha)
     } else if (!this.followCameraVelocityHasSample && deltaSeconds > 0) {
       this.followCameraVelocity.set(0, 0, 0)
@@ -967,6 +1028,7 @@ export class VehicleDriveController {
     this.followCameraLastAnchor.copy(temp.followAnchor)
 
     const updateOrbitLookTween = this.deps.updateOrbitLookTween
+    const tuning = this.getFollowCameraTuning()
 
     return this.followCameraController.update({
       follow,
@@ -978,6 +1040,7 @@ export class VehicleDriveController {
       ctx,
       worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
+      ...(tuning ? { tuning } : {}),
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
       immediate: options.immediate ?? false,
@@ -1008,7 +1071,13 @@ export class VehicleDriveController {
     fallbackPosition: THREE.Vector3,
     target: THREE.Vector3,
   ): void {
-    const bodyPosition = instance?.vehicle?.chassisBody?.position
+    const chassisBody = instance?.vehicle?.chassisBody ?? null
+    const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
+    const resolvePosition = nodeId && chassisBody ? this.deps.resolveChassisWorldPosition : undefined
+    if (nodeId && chassisBody && resolvePosition && resolvePosition(nodeId, chassisBody, target)) {
+      return
+    }
+    const bodyPosition = chassisBody?.position
     if (bodyPosition) {
       target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
       return
