@@ -1168,16 +1168,7 @@ function handleEnvironmentDrop(event: DragEvent) {
               </div>
             </div>
 
-            <v-alert
-              v-if="missingSkyCubeFaces.length"
-              class="mt-3"
-              density="compact"
-              type="warning"
-              variant="tonal"
-            >
-              Missing faces: {{ missingSkyCubeFaces.map((face) => face.label).join(', ') }}. Partial SkyCube is allowed.
-            </v-alert>
-
+    
    
           </template>
           <div
