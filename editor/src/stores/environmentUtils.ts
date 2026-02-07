@@ -242,6 +242,8 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     a.background.mode === b.background.mode &&
     a.background.solidColor === b.background.solidColor &&
     a.background.hdriAssetId === b.background.hdriAssetId &&
+    a.background.skycubeFormat === b.background.skycubeFormat &&
+    a.background.skycubeZipAssetId === b.background.skycubeZipAssetId &&
     a.background.positiveXAssetId === b.background.positiveXAssetId &&
     a.background.negativeXAssetId === b.background.negativeXAssetId &&
     a.background.positiveYAssetId === b.background.positiveYAssetId &&

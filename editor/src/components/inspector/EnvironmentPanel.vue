@@ -845,19 +845,6 @@ const skyCubeFaceEntries = computed(() => {
   })
 })
 
-const missingSkyCubeFaces = computed(() => {
-  if (environmentSettings.value.background.mode !== 'skycube') {
-    return [] as Array<{ key: SkyCubeFaceKey; label: string; description: string }>
-  }
-  if ((environmentSettings.value.background.skycubeFormat ?? 'faces') === 'zip') {
-    return [] as Array<{ key: SkyCubeFaceKey; label: string; description: string }>
-  }
-  return skyCubeFaceDescriptors.filter((descriptor) => {
-    const value = environmentSettings.value.background[descriptor.key]
-    return !value || !String(value).trim().length
-  })
-})
-
 function handleBackgroundDragEnter(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
   if (!isEnvironmentAsset(asset)) {
