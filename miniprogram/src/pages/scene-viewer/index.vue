@@ -1885,7 +1885,7 @@ const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
 const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS;
-const PHYSICS_DEBUG_LOG_INTERVAL_MS = 1000;
+
 
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
@@ -1901,9 +1901,6 @@ const physicsInterpolationQuat = new THREE.Quaternion();
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
-let physicsDebugEnabled = false;
-let physicsDebugLastLogMs = 0;
-let physicsDebugLastSubSteps = 0;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -5204,7 +5201,6 @@ function stepPhysicsWorld(delta: number): void {
       console.warn('[SceneViewer] Physics step failed', error);
     }
   }
-  physicsDebugLastSubSteps = subSteps;
 
   // Ensure vehicles are truly static after exiting drive/auto-tour.
   // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
@@ -5292,18 +5288,7 @@ function stepPhysicsWorld(delta: number): void {
     syncSharedObjectFromBody(entry, syncInstancedTransform);
   });
 
-  if (physicsDebugEnabled) {
-    const nowMs = Date.now();
-    if (nowMs - physicsDebugLastLogMs >= PHYSICS_DEBUG_LOG_INTERVAL_MS) {
-      physicsDebugLastLogMs = nowMs;
-      const alpha = physicsInterpolationEnabled ? physicsInterpolationAlpha : 0;
-      console.log('[SceneViewer] physics', {
-        delta: Number.isFinite(delta) ? Number(delta.toFixed(4)) : delta,
-        subSteps: physicsDebugLastSubSteps,
-        alpha: Number(alpha.toFixed(3)),
-      });
-    }
-  }
+  
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -10265,26 +10250,11 @@ onLoad((query) => {
   const physInterpParam = typeof queryRecord.physinterp === 'string'
     ? String(queryRecord.physinterp).trim()
     : '';
-  const physDebugParam = typeof queryRecord.physdebug === 'string'
-    ? String(queryRecord.physdebug).trim()
-    : '';
 
   physicsInterpolationEnabled = isWeChatMiniProgram
     && (physInterpParam === '' || (physInterpParam !== '0' && physInterpParam.toLowerCase() !== 'false'));
-
-  physicsDebugEnabled = true;
   physicsAccumulator = 0;
   physicsInterpolationAlpha = 0;
-  physicsDebugLastLogMs = 0;
-
-  if (physicsDebugEnabled) {
-    console.log('[SceneViewer] physdebug enabled', {
-      interpolationEnabled: physicsInterpolationEnabled,
-      fixedTimestep: PHYSICS_FIXED_TIMESTEP,
-      maxSubSteps: PHYSICS_MAX_SUB_STEPS,
-      maxAccumulator: PHYSICS_MAX_ACCUMULATOR,
-    });
-  }
 
   error.value = null;
 
