@@ -23,7 +23,10 @@ import {
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
 	type EnvironmentSettings,
+	createGradientBackgroundDome,
 	disposeSkyCubeTexture,
+	disposeGradientBackgroundDome,
+	type GradientBackgroundDome,
 	type GroundDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
@@ -1185,6 +1188,7 @@ let skyCubeSourceFormat: 'faces' | 'zip' = 'faces'
 let skyCubeFaceAssetIds: Array<string | null> | null = null
 let skyCubeFaceKeys: Array<string | null> | null = null
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null
+let gradientBackgroundDome: GradientBackgroundDome | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
@@ -7222,6 +7226,9 @@ function startAnimationLoop() {
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updatePerFrameDiagnostics(delta)
 		// cloudRenderer?.update(delta)
+		if (gradientBackgroundDome) {
+			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
+		}
 
 		// 4) Render + stats
 		currentRenderer.render(currentScene, activeCamera)
@@ -7507,6 +7514,8 @@ function disposeSkyCubeBackgroundResources() {
 function disposeBackgroundResources() {
 	disposeHdriBackgroundResources()
 	disposeSkyCubeBackgroundResources()
+	disposeGradientBackgroundDome(gradientBackgroundDome)
+	gradientBackgroundDome = null
 }
 
 function disposeEnvironmentTarget() {
@@ -7609,7 +7618,42 @@ async function applyBackgroundSettings(
 		return true
 	}
 	setSkyBackgroundEnabled(false)
+	if (background.mode === 'solidColor') {
+		const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
+		disposeHdriBackgroundResources()
+		disposeSkyCubeBackgroundResources()
+		if (gradientTopColor) {
+			if (!gradientBackgroundDome) {
+				gradientBackgroundDome = createGradientBackgroundDome({
+					topColor: gradientTopColor,
+					bottomColor: background.solidColor,
+					offset: background.gradientOffset ?? 33,
+					exponent: background.gradientExponent ?? 0.6,
+				})
+				;(gradientBackgroundDome.mesh as any).raycast = () => {}
+				scene.add(gradientBackgroundDome.mesh)
+			} else {
+				gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor)
+				gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor)
+				if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
+					gradientBackgroundDome.uniforms.offset.value = background.gradientOffset
+				}
+				if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
+					gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent
+				}
+			}
+			scene.background = null
+			return true
+		}
+
+		disposeGradientBackgroundDome(gradientBackgroundDome)
+		gradientBackgroundDome = null
+		scene.background = new THREE.Color(background.solidColor)
+		return true
+	}
 	if (background.mode === 'skycube') {
+		disposeGradientBackgroundDome(gradientBackgroundDome)
+		gradientBackgroundDome = null
 		const skycubeFormat = (background as any).skycubeFormat === 'zip' ? 'zip' : 'faces'
 		if (skycubeFormat === 'zip') {
 			const zipAssetId = (background as any).skycubeZipAssetId as string | null
@@ -7762,12 +7806,16 @@ async function applyBackgroundSettings(
 		return true
 	}
 	if (background.mode !== 'hdri' || !background.hdriAssetId) {
+		disposeGradientBackgroundDome(gradientBackgroundDome)
+		gradientBackgroundDome = null
 		disposeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)
 		return true
 	}
 	const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
 	if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
+		disposeGradientBackgroundDome(gradientBackgroundDome)
+		gradientBackgroundDome = null
 		scene.background = backgroundTexture
 		return true
 	}
@@ -7875,6 +7923,10 @@ const environmentAssetSignature = computed(() => {
 	return JSON.stringify({
 		background: {
 			mode: background.mode,
+			solidColor: background.solidColor,
+			gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
+			gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
+			gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
 			skycubeFormat:
 				background.mode === 'skycube'
 					? ((background as any).skycubeFormat === 'zip' ? 'zip' : 'faces')

@@ -72,6 +72,9 @@ export type { AssetOverrideBytes, AssetOverrideValue, ScenePackageUnzipped } fro
 
 export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
 
+export { createGradientBackgroundDome, disposeGradientBackgroundDome } from './gradientBackground'
+export type { GradientBackgroundDome, GradientBackgroundSettingsInput } from './gradientBackground'
+
 export { createAutoTourRuntime } from './autoTourRuntime'
 export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourVehicleInstanceLike } from './autoTourRuntime'
 
@@ -942,6 +945,16 @@ export interface EnvironmentRotationDegrees {
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
+  /**
+   * Optional gradient skybox top color.
+   * When provided (valid hex), background renders as a vertical gradient from solidColor (bottom) to gradientTopColor (top).
+   * When omitted/invalid, background falls back to a pure solid color.
+   */
+  gradientTopColor?: string | null
+  /** Vertical gradient offset (matches Three.js shader example semantics). Default: 33. */
+  gradientOffset?: number
+  /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
+  gradientExponent?: number
   hdriAssetId: string | null
   /** How SkyCube background sources its faces. */
   skycubeFormat: SkyCubeBackgroundFormat
