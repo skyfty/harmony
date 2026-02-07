@@ -4,6 +4,8 @@ export type EnvironmentMapMode = 'skybox' | 'custom'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
+export type SkyCubeBackgroundFormat = 'faces' | 'zip'
+
 export interface EnvironmentRotationDegrees {
   x: number
   y: number
@@ -14,6 +16,8 @@ export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
   hdriAssetId: string | null
+  skycubeFormat: SkyCubeBackgroundFormat
+  skycubeZipAssetId: string | null
   /** SkyCube faces in fixed Three.js CubeTextureLoader order: +X, -X, +Y, -Y, +Z, -Z. */
   positiveXAssetId: string | null
   negativeXAssetId: string | null

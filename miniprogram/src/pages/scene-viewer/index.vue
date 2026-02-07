@@ -492,6 +492,7 @@ import {
   resolveEnabledComponentState,
   disposeSkyCubeTexture,
   loadSkyCubeTexture,
+		extractSkycubeZipFaces,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,
@@ -1276,6 +1277,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
+		skycubeFormat: 'faces',
+		skycubeZipAssetId: null,
     positiveXAssetId: null,
     negativeXAssetId: null,
     positiveYAssetId: null,
@@ -1318,8 +1321,11 @@ let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
 let skyCubeTexture: THREE.CubeTexture | null = null;
+let skyCubeSourceFormat: 'faces' | 'zip' = 'faces';
 let skyCubeFaceAssetIds: Array<string | null> | null = null;
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
+let skyCubeZipAssetId: string | null = null;
+let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
 let backgroundLoadToken = 0;
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
 let environmentMapAssetId: string | null = null;
@@ -2706,14 +2712,18 @@ function cloneEnvironmentSettingsLocal(
   const backgroundSource = source?.background ?? null;
   const environmentMapSource = source?.environmentMap ?? null;
 
-  const normalizeOrientationPreset = (value: unknown) => {
+  type OrientationPreset = NonNullable<EnvironmentSettings['environmentOrientationPreset']>;
+
+  const normalizeSkycubeFormat = (value: unknown) => (value === 'zip' ? 'zip' : 'faces');
+
+  const normalizeOrientationPreset = (value: unknown): OrientationPreset => {
     if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
-      return value as EnvironmentSettings['environmentOrientationPreset'];
+      return value as OrientationPreset;
     }
     return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET;
   };
 
-  const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
+  const resolvePresetRotationDegrees = (preset: OrientationPreset) => {
     if (preset === 'zUp') {
       return { x: -90, y: 0, z: 0 };
     }
@@ -2757,6 +2767,11 @@ function cloneEnvironmentSettingsLocal(
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+      skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
+      skycubeZipAssetId:
+        backgroundMode === 'skycube'
+          ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null)
+          : null,
       positiveXAssetId:
         backgroundMode === 'skycube'
           ? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
@@ -3267,6 +3282,76 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
   }
 	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
 	return await resolveAssetUrlFromCache(assetId)
+}
+
+function requestBinaryFromUrl(url: string): Promise<ArrayBuffer> {
+  if (typeof fetch === 'function') {
+    return fetch(url).then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.arrayBuffer();
+    });
+  }
+  return new Promise((resolve, reject) => {
+    uni.request({
+      url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`下载失败（${statusCode}）`));
+          return;
+        }
+        const buffer = res.data as ArrayBuffer;
+        if (!buffer || typeof buffer.byteLength !== 'number') {
+          reject(new Error('下载失败（响应不是二进制数据）'));
+          return;
+        }
+        resolve(buffer);
+      },
+      fail: (requestError) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '下载失败';
+        reject(new Error(message));
+      },
+    });
+  });
+}
+
+function buildObjectUrlsFromSkycubeZipFaces(
+  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+): { urls: Array<string | null>; dispose: () => void } {
+  const urls: Array<string | null> = [];
+  const created: string[] = [];
+  for (const face of facesInOrder) {
+    if (!face) {
+      urls.push(null);
+      continue;
+    }
+    const mimeType = face.mimeType ?? 'application/octet-stream';
+    const bytes = face.bytes as unknown as Uint8Array;
+    const blob = new Blob([bytes], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    created.push(url);
+    urls.push(url);
+  }
+  return {
+    urls,
+    dispose: () => {
+      for (const url of created) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // ignore
+        }
+      }
+    },
+  };
 }
 
 
@@ -8446,8 +8531,12 @@ function disposeSkyCubeBackgroundResources() {
     }
     disposeSkyCubeTexture(skyCubeTexture);
   }
+  skyCubeZipFaceUrlCleanup?.();
+  skyCubeZipFaceUrlCleanup = null;
   skyCubeTexture = null;
+  skyCubeSourceFormat = 'faces';
   skyCubeFaceAssetIds = null;
+  skyCubeZipAssetId = null;
   if (skyCubeFaceTextureCleanup) {
     for (const dispose of skyCubeFaceTextureCleanup) {
       dispose?.();
@@ -8588,6 +8677,84 @@ async function applyBackgroundSettings(
   }
   setSkyBackgroundEnabled(false);
   if (background.mode === 'skycube') {
+    const skycubeFormat = background.skycubeFormat === 'zip' ? 'zip' : 'faces';
+    if (skycubeFormat === 'zip') {
+      const zipAssetId = background.skycubeZipAssetId ?? null;
+      if (!zipAssetId) {
+        disposeBackgroundResources();
+        scene.background = new THREE.Color(background.solidColor);
+        return true;
+      }
+      if (skyCubeTexture && skyCubeSourceFormat === 'zip' && skyCubeZipAssetId === zipAssetId) {
+        scene.background = skyCubeTexture;
+        return true;
+      }
+      const resolvedZip = await resolveAssetUrlReference(zipAssetId);
+      const zipUrl = resolvedZip?.url ?? null;
+      const disposeZipRef = resolvedZip?.dispose ?? null;
+      if (!zipUrl) {
+        disposeZipRef?.();
+        console.warn('[SceneViewer] SkyCube zip URL unavailable', zipAssetId);
+        return false;
+      }
+      let buffer: ArrayBuffer | null = null;
+      try {
+        buffer = await requestBinaryFromUrl(zipUrl);
+      } catch (error) {
+        disposeZipRef?.();
+        console.warn('[SceneViewer] Failed to download SkyCube zip', zipAssetId, error);
+        return false;
+      } finally {
+        disposeZipRef?.();
+      }
+      if (token !== backgroundLoadToken) {
+        return false;
+      }
+      let extracted: ReturnType<typeof extractSkycubeZipFaces>;
+      try {
+        extracted = extractSkycubeZipFaces(buffer);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to unzip SkyCube zip', zipAssetId, error);
+        return false;
+      }
+      if (extracted.missingFaces.length) {
+        console.warn('[SceneViewer] SkyCube zip missing faces:', extracted.missingFaces);
+        try {
+          uni.showToast({
+            title: `SkyCube 缺失: ${extracted.missingFaces.join(', ')}`,
+            icon: 'none',
+            duration: 2200,
+          });
+        } catch {
+          // ignore
+        }
+      }
+      const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder);
+      const loaded = await loadSkyCubeTexture(faceUrls);
+      if (token !== backgroundLoadToken) {
+        if (loaded.texture) {
+          disposeSkyCubeTexture(loaded.texture);
+        }
+        disposeFaceUrls();
+        return false;
+      }
+      if (!loaded.texture) {
+        disposeFaceUrls();
+        disposeBackgroundResources();
+        scene.background = new THREE.Color(background.solidColor);
+        return true;
+      }
+      disposeBackgroundResources();
+      skyCubeTexture = loaded.texture;
+      skyCubeSourceFormat = 'zip';
+      skyCubeZipAssetId = zipAssetId;
+      skyCubeZipFaceUrlCleanup = disposeFaceUrls;
+      skyCubeFaceAssetIds = null;
+      skyCubeFaceTextureCleanup = null;
+      scene.background = skyCubeTexture;
+      return true;
+    }
+
     const faceAssetIds: Array<string | null> = [
       background.positiveXAssetId ?? null,
       background.negativeXAssetId ?? null,
@@ -8653,8 +8820,11 @@ async function applyBackgroundSettings(
     }
     disposeBackgroundResources();
     skyCubeTexture = loaded.texture;
+    skyCubeSourceFormat = 'faces';
     skyCubeFaceAssetIds = faceAssetIds;
     skyCubeFaceTextureCleanup = cleanup;
+    skyCubeZipAssetId = null;
+    skyCubeZipFaceUrlCleanup = null;
     scene.background = skyCubeTexture;
     return true;
   }

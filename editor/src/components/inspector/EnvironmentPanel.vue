@@ -7,6 +7,7 @@ import type {
   EnvironmentMapMode,
   EnvironmentOrientationPreset,
   EnvironmentRotationDegrees,
+  SkyCubeBackgroundFormat,
 } from '@/types/environment'
 import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@harmony/schema'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -47,11 +48,16 @@ const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 type SkyCubeFaceKey = 'positiveXAssetId' | 'negativeXAssetId' | 'positiveYAssetId' | 'negativeYAssetId' | 'positiveZAssetId' | 'negativeZAssetId'
-type AssetDialogTarget = 'background' | 'environment' | SkyCubeFaceKey
+type AssetDialogTarget = 'background' | 'environment' | 'skycubeZip' | SkyCubeFaceKey
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
 const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
+
+const skyCubeFormatOptions: Array<{ title: string; value: SkyCubeBackgroundFormat }> = [
+  { title: 'Six Images', value: 'faces' },
+  { title: '.skycube (zip)', value: 'zip' },
+]
 
 const skyCubeFaceDescriptors: Array<{ key: SkyCubeFaceKey; label: string; description: string }> = [
   { key: 'positiveXAssetId', label: 'px', description: 'Right' },
@@ -73,6 +79,7 @@ const skyCubeFaceDropState = reactive<Record<SkyCubeFaceKey, boolean>>({
 
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
+const isSkyCubeZipDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
@@ -214,6 +221,9 @@ const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'environment') {
     return 'Select Environment Map'
   }
+  if (assetDialogTarget.value === 'skycubeZip') {
+    return 'Select SkyCube .skycube Zip'
+  }
   if (assetDialogTarget.value) {
     const descriptor = skyCubeFaceDescriptors.find((entry) => entry.key === assetDialogTarget.value)
     if (descriptor) {
@@ -231,6 +241,13 @@ const assetDialogAssetType = computed(() => {
     return HDRI_ASSET_TYPE
   }
   return SKYCUBE_ASSET_TYPE
+})
+
+const assetDialogExtensions = computed(() => {
+  if (assetDialogTarget.value === 'skycubeZip') {
+    return ['skycube']
+  }
+  return undefined
 })
 
 watch(assetDialogVisible, (open) => {
@@ -676,6 +693,143 @@ function isSkyCubeFaceAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   return false
 }
 
+function isSkyCubeZipAsset(asset: ProjectAsset | null): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  if (asset.type !== 'file') {
+    return false
+  }
+  const ext = inferAssetExtension(asset)
+  return (ext ?? '').toLowerCase() === 'skycube'
+}
+
+const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'faces')
+
+const skyCubeZipAsset = computed(() => {
+  const assetId = environmentSettings.value.background.skycubeZipAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const skyCubeZipAssetLabel = computed(() => {
+  const asset = skyCubeZipAsset.value
+  if (!asset) {
+    return 'Drag .skycube asset here'
+  }
+  return asset.name?.trim().length ? asset.name : asset.id
+})
+
+const skyCubeZipAssetHint = computed(() => {
+  const asset = skyCubeZipAsset.value
+  if (!asset) {
+    return 'Zip containing px/nx/py/ny/pz/nz face images'
+  }
+  return asset.id
+})
+
+function updateSkyCubeFormat(format: SkyCubeBackgroundFormat | null) {
+  if (!format) {
+    return
+  }
+  if (environmentSettings.value.background.mode !== 'skycube') {
+    return
+  }
+  if (format === environmentSettings.value.background.skycubeFormat) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: 'skycube',
+      skycubeFormat: format,
+      // Keep other fields intact; clearing is handled by user actions.
+    },
+  })
+}
+
+function openSkyCubeZipDialog(event?: MouseEvent) {
+  if (event) {
+    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  } else {
+    assetDialogAnchor.value = null
+  }
+  assetDialogTarget.value = 'skycubeZip'
+  assetDialogSelectedId.value = environmentSettings.value.background.skycubeZipAssetId ?? ''
+  assetDialogVisible.value = true
+}
+
+function clearSkyCubeZipAsset() {
+  if (environmentSettings.value.background.mode !== 'skycube') {
+    return
+  }
+  if (!environmentSettings.value.background.skycubeZipAssetId) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      skycubeZipAssetId: null,
+    },
+  })
+}
+
+function handleSkyCubeZipDragEnter(event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  if (!isSkyCubeZipAsset(asset)) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isSkyCubeZipDropActive.value = true
+}
+
+function handleSkyCubeZipDragOver(event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  if (!isSkyCubeZipAsset(asset)) {
+    if (isSkyCubeZipDropActive.value) {
+      isSkyCubeZipDropActive.value = false
+    }
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isSkyCubeZipDropActive.value = true
+}
+
+function handleSkyCubeZipDragLeave(event: DragEvent) {
+  if (!isSkyCubeZipDropActive.value) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  isSkyCubeZipDropActive.value = false
+}
+
+function handleSkyCubeZipDrop(event: DragEvent) {
+  const asset = resolveDraggedAsset(event)
+  isSkyCubeZipDropActive.value = false
+  if (!isSkyCubeZipAsset(asset)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: 'skycube',
+      skycubeFormat: 'zip',
+      skycubeZipAssetId: asset.id,
+    },
+  })
+}
+
 const skyCubeFaceEntries = computed(() => {
   const background = environmentSettings.value.background
   return skyCubeFaceDescriptors.map((descriptor) => {
@@ -693,6 +847,9 @@ const skyCubeFaceEntries = computed(() => {
 
 const missingSkyCubeFaces = computed(() => {
   if (environmentSettings.value.background.mode !== 'skycube') {
+    return [] as Array<{ key: SkyCubeFaceKey; label: string; description: string }>
+  }
+  if ((environmentSettings.value.background.skycubeFormat ?? 'faces') === 'zip') {
     return [] as Array<{ key: SkyCubeFaceKey; label: string; description: string }>
   }
   return skyCubeFaceDescriptors.filter((descriptor) => {
@@ -849,6 +1006,26 @@ function clearSkyCubeFace(face: SkyCubeFaceKey) {
 
 function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   if (!assetDialogTarget.value) {
+    return
+  }
+  if (assetDialogTarget.value === 'skycubeZip') {
+    if (!asset) {
+      sceneStore.patchEnvironmentSettings({ background: { skycubeZipAssetId: null } })
+      assetDialogVisible.value = false
+      return
+    }
+    if (!isSkyCubeZipAsset(asset)) {
+      console.warn('Selected asset is not a supported .skycube zip')
+      return
+    }
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: 'skycube',
+        skycubeFormat: 'zip',
+        skycubeZipAssetId: asset.id,
+      },
+    })
+    assetDialogVisible.value = false
     return
   }
   if (
@@ -1110,6 +1287,62 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
           <template v-else-if="environmentSettings.background.mode === 'skycube'">
+            <v-select
+              :items="skyCubeFormatOptions"
+              :model-value="skyCubeFormat"
+              density="compact"
+              hide-details
+              variant="underlined"
+              class="section-select"
+              label="Format"
+              @update:model-value="(value) => updateSkyCubeFormat(value as SkyCubeBackgroundFormat | null)"
+            />
+
+            <div
+              v-if="skyCubeFormat === 'zip'"
+              class="asset-tile"
+              :class="{ 'is-active-drop': isSkyCubeZipDropActive }"
+              @dragenter="handleSkyCubeZipDragEnter"
+              @dragover="handleSkyCubeZipDragOver"
+              @dragleave="handleSkyCubeZipDragLeave"
+              @drop="handleSkyCubeZipDrop"
+            >
+              <div
+                class="asset-thumb"
+                :class="{ 'asset-thumb--empty': !skyCubeZipAsset }"
+                role="button"
+                tabindex="0"
+                :title="skyCubeZipAsset ? 'Change .skycube asset' : 'Select .skycube asset'"
+                @click="openSkyCubeZipDialog($event)"
+                @keydown.enter.prevent="openSkyCubeZipDialog()"
+                @keydown.space.prevent="openSkyCubeZipDialog()"
+              >
+                <v-icon size="20" color="rgba(233, 236, 241, 0.4)">mdi-zip-box</v-icon>
+              </div>
+              <div
+                class="asset-info"
+                role="button"
+                tabindex="0"
+                @click="openSkyCubeZipDialog($event)"
+                @keydown.enter.prevent="openSkyCubeZipDialog()"
+                @keydown.space.prevent="openSkyCubeZipDialog()"
+              >
+                <div class="asset-name">{{ skyCubeZipAssetLabel }}</div>
+                <div class="asset-hint">{{ skyCubeZipAssetHint }}</div>
+              </div>
+              <div class="asset-actions">
+                <v-btn
+                  class="asset-action"
+                  icon="mdi-close"
+                  size="x-small"
+                  variant="text"
+                  :disabled="!skyCubeZipAsset"
+                  title="Clear .skycube"
+                  @click.stop="clearSkyCubeZipAsset"
+                />
+              </div>
+            </div>
+
             <div class="cube-face-grid">
               <div
                 v-for="face in skyCubeFaceEntries"
@@ -1123,6 +1356,7 @@ function handleEnvironmentDrop(event: DragEvent) {
                 @dragover="(event) => handleSkyCubeFaceDragOver(face.key, event)"
                 @dragleave="(event) => handleSkyCubeFaceDragLeave(face.key, event)"
                 @drop="(event) => handleSkyCubeFaceDrop(face.key, event)"
+                v-show="skyCubeFormat !== 'zip'"
               >
                 <div
                   class="asset-thumb"
@@ -1457,6 +1691,7 @@ function handleEnvironmentDrop(event: DragEvent) {
         v-model="assetDialogVisible"
         :asset-id="assetDialogSelectedId"
         :asset-type="assetDialogAssetType"
+        :extensions="assetDialogExtensions"
         :title="assetDialogTitle"
         :anchor="assetDialogAnchor"
         confirm-text="Select"

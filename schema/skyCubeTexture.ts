@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { unzipSync } from 'fflate'
+import { inferMimeTypeFromAssetId } from './assetTypeConversion'
 
 export const SKY_CUBE_FACE_KEYS = [
   'positiveX',
@@ -51,6 +53,21 @@ export interface SkyCubeTextureLoadOptions {
    * Defaults to true to match typical image asset orientation in this repo.
    */
   flipY?: boolean
+}
+
+export interface SkycubeZipFaceBytes {
+  key: SkyCubeFaceKey
+  filename: string
+  bytes: Uint8Array
+  mimeType: string | null
+}
+
+export interface ExtractSkycubeZipFacesResult {
+  /** Faces in fixed Three.js CubeTextureLoader order: +X, -X, +Y, -Y, +Z, -Z. */
+  facesInOrder: Array<SkycubeZipFaceBytes | null>
+  missingFaces: SkyCubeFaceKey[]
+  /** Additional candidates that matched a face token but were not selected. */
+  discarded: Array<{ key: SkyCubeFaceKey; filename: string }>
 }
 
 const DEFAULT_PLACEHOLDER_PNG =
@@ -120,6 +137,103 @@ export async function loadSkyCubeTexture(
       failedFaces: [...SKY_CUBE_FACE_KEYS],
       error: (error as Error)?.message ?? String(error),
     }
+  }
+}
+
+function toUint8Array(data: ArrayBuffer | Uint8Array): Uint8Array {
+  return data instanceof Uint8Array ? data : new Uint8Array(data)
+}
+
+function normalizeZipEntryName(name: string): string {
+  return name.replace(/\\/g, '/').toLowerCase()
+}
+
+function containsFaceToken(nameLower: string, token: string): { index: number } | null {
+  // Require non-alphanumeric boundaries to avoid accidental matches (e.g. "complex" containing "px").
+  const re = new RegExp(`(^|[^a-z0-9])${token}([^a-z0-9]|$)`, 'i')
+  const match = re.exec(nameLower)
+  if (!match) {
+    return null
+  }
+  return { index: match.index }
+}
+
+function scoreCandidate(filenameLower: string, tokenIndex: number): number {
+  // Lower score wins.
+  // Prefer earlier token matches and shorter filenames.
+  return tokenIndex * 1000 + filenameLower.length
+}
+
+/**
+ * Extracts SkyCube face images from a `.skycube` zip archive.
+ *
+ * Matching rule: any zip entry whose filename contains `px|nx|py|ny|pz|nz` as a token
+ * (case-insensitive, separated by non-alphanumeric boundaries) is considered.
+ */
+export function extractSkycubeZipFaces(zip: ArrayBuffer | Uint8Array): ExtractSkycubeZipFacesResult {
+  const files = unzipSync(toUint8Array(zip))
+
+  const tokenToKey: Record<string, SkyCubeFaceKey> = {
+    px: 'positiveX',
+    nx: 'negativeX',
+    py: 'positiveY',
+    ny: 'negativeY',
+    pz: 'positiveZ',
+    nz: 'negativeZ',
+  }
+
+  const best: Partial<Record<SkyCubeFaceKey, { filename: string; bytes: Uint8Array; score: number }>> = {}
+  const discarded: Array<{ key: SkyCubeFaceKey; filename: string }> = []
+
+  for (const [rawName, bytes] of Object.entries(files)) {
+    if (!bytes || !(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+      continue
+    }
+    if (rawName.endsWith('/')) {
+      continue
+    }
+    const nameLower = normalizeZipEntryName(rawName)
+    for (const token of Object.keys(tokenToKey)) {
+      const hit = containsFaceToken(nameLower, token)
+      if (!hit) {
+        continue
+      }
+      const key = tokenToKey[token]!
+      const score = scoreCandidate(nameLower, hit.index)
+      const existing = best[key]
+      if (!existing || score < existing.score) {
+        if (existing) {
+          discarded.push({ key, filename: existing.filename })
+        }
+        best[key] = { filename: rawName, bytes, score }
+      } else {
+        discarded.push({ key, filename: rawName })
+      }
+      break
+    }
+  }
+
+  const facesInOrder: Array<SkycubeZipFaceBytes | null> = []
+  const missingFaces: SkyCubeFaceKey[] = []
+  for (const key of SKY_CUBE_FACE_ORDER) {
+    const selected = best[key]
+    if (!selected) {
+      facesInOrder.push(null)
+      missingFaces.push(key)
+      continue
+    }
+    facesInOrder.push({
+      key,
+      filename: selected.filename,
+      bytes: selected.bytes,
+      mimeType: inferMimeTypeFromAssetId(selected.filename),
+    })
+  }
+
+  return {
+    facesInOrder,
+    missingFaces,
+    discarded,
   }
 }
 

@@ -36,6 +36,7 @@ import {
 	type SceneSkyboxSettings,
 	type Vector3Like,
 	loadSkyCubeTexture,
+	extractSkycubeZipFaces,
 } from '@schema/index'
  
 import {
@@ -1059,6 +1060,8 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 		mode: 'skybox',
 		solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
 		hdriAssetId: null,
+		skycubeFormat: 'faces',
+		skycubeZipAssetId: null,
 		positiveXAssetId: null,
 		negativeXAssetId: null,
 		positiveYAssetId: null,
@@ -1178,9 +1181,13 @@ let backgroundTextureCleanup: (() => void) | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
+let skyCubeSourceFormat: 'faces' | 'zip' = 'faces'
 let skyCubeFaceAssetIds: Array<string | null> | null = null
 let skyCubeFaceKeys: Array<string | null> | null = null
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null
+let skyCubeZipAssetId: string | null = null
+let skyCubeZipAssetKey: string | null = null
+let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
@@ -1220,6 +1227,37 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 	const serverUpdatedAt = entry?.serverUpdatedAt ?? null
 	const blobUrl = entry?.blobUrl ?? null
 	return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}`
+}
+
+function buildObjectUrlsFromSkycubeZipFaces(
+	facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+): { urls: Array<string | null>; dispose: () => void } {
+	const urls: Array<string | null> = []
+	const created: string[] = []
+	for (const face of facesInOrder) {
+		if (!face) {
+			urls.push(null)
+			continue
+		}
+		const mimeType = face.mimeType ?? 'application/octet-stream'
+		const bytes = face.bytes as unknown as Uint8Array<ArrayBuffer>
+		const blob = new Blob([bytes], { type: mimeType })
+		const url = URL.createObjectURL(blob)
+		created.push(url)
+		urls.push(url)
+	}
+	return {
+		urls,
+		dispose: () => {
+			for (const url of created) {
+				try {
+					URL.revokeObjectURL(url)
+				} catch (_error) {
+					// ignore
+				}
+			}
+		},
+	}
 }
 
 const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02
@@ -3257,6 +3295,8 @@ function cloneEnvironmentSettingsLocal(
 	const backgroundSource = source?.background ?? null
 	const environmentMapSource = source?.environmentMap ?? null
 
+	const normalizeSkycubeFormat = (value: unknown) => (value === 'zip' ? 'zip' : 'faces')
+
 	const normalizeOrientationPreset = (value: unknown) => {
 		if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
 			return value as EnvironmentSettings['environmentOrientationPreset']
@@ -3308,6 +3348,11 @@ function cloneEnvironmentSettingsLocal(
 			mode: backgroundMode,
 			solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
 			hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+			skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
+			skycubeZipAssetId:
+				backgroundMode === 'skycube'
+					? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null)
+					: null,
 			positiveXAssetId:
 				backgroundMode === 'skycube'
 					? normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null)
@@ -7455,9 +7500,14 @@ function disposeSkyCubeBackgroundResources() {
 		}
 	disposeSkyCubeTexture(skyCubeTexture)
 	}
+	skyCubeZipFaceUrlCleanup?.()
+	skyCubeZipFaceUrlCleanup = null
 	skyCubeTexture = null
+	skyCubeSourceFormat = 'faces'
 	skyCubeFaceAssetIds = null
 	skyCubeFaceKeys = null
+	skyCubeZipAssetId = null
+	skyCubeZipAssetKey = null
 	if (skyCubeFaceTextureCleanup) {
 		for (const dispose of skyCubeFaceTextureCleanup) {
 			dispose?.()
@@ -7572,6 +7622,88 @@ async function applyBackgroundSettings(
 	}
 	setSkyBackgroundEnabled(false)
 	if (background.mode === 'skycube') {
+		const skycubeFormat = (background as any).skycubeFormat === 'zip' ? 'zip' : 'faces'
+		if (skycubeFormat === 'zip') {
+			const zipAssetId = (background as any).skycubeZipAssetId as string | null
+			const normalizedZipAssetId = zipAssetId && typeof zipAssetId === 'string' ? zipAssetId.trim() : ''
+			if (!normalizedZipAssetId.length) {
+				disposeBackgroundResources()
+				scene.background = new THREE.Color(background.solidColor)
+				return true
+			}
+			const zipKey = computeEnvironmentAssetReloadKey(normalizedZipAssetId)
+			if (
+				skyCubeTexture &&
+				skyCubeSourceFormat === 'zip' &&
+				zipKey === skyCubeZipAssetKey &&
+				normalizedZipAssetId === skyCubeZipAssetId
+			) {
+				scene.background = skyCubeTexture
+				return true
+			}
+			const resolved = await resolveAssetUrlReference(normalizedZipAssetId)
+			const zipUrl = resolved?.url ?? null
+			const disposeZipRef = resolved?.dispose ?? null
+			if (!zipUrl) {
+				disposeZipRef?.()
+				console.warn('[ScenePreview] SkyCube zip URL unavailable', normalizedZipAssetId)
+				return false
+			}
+			let buffer: ArrayBuffer | null = null
+			try {
+				const response = await fetch(zipUrl)
+				if (!response.ok) {
+					throw new Error(`HTTP ${response.status}`)
+				}
+				buffer = await response.arrayBuffer()
+			} catch (error) {
+				disposeZipRef?.()
+				console.warn('[ScenePreview] Failed to fetch SkyCube zip', normalizedZipAssetId, error)
+				return false
+			} finally {
+				disposeZipRef?.()
+			}
+			if (token !== backgroundLoadToken) {
+				return false
+			}
+			let extracted: ReturnType<typeof extractSkycubeZipFaces>
+			try {
+				extracted = extractSkycubeZipFaces(buffer)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to unzip SkyCube zip', normalizedZipAssetId, error)
+				return false
+			}
+			if (extracted.missingFaces.length) {
+				console.warn('[ScenePreview] SkyCube zip missing faces:', extracted.missingFaces)
+			}
+			const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
+			const loaded = await loadSkyCubeTexture(faceUrls)
+			if (token !== backgroundLoadToken) {
+				if (loaded.texture) {
+					disposeSkyCubeTexture(loaded.texture)
+				}
+				disposeFaceUrls()
+				return false
+			}
+			if (!loaded.texture) {
+				disposeFaceUrls()
+				disposeBackgroundResources()
+				scene.background = new THREE.Color(background.solidColor)
+				return true
+			}
+			disposeBackgroundResources()
+			skyCubeTexture = loaded.texture
+			skyCubeSourceFormat = 'zip'
+			skyCubeZipAssetId = normalizedZipAssetId
+			skyCubeZipAssetKey = zipKey
+			skyCubeZipFaceUrlCleanup = disposeFaceUrls
+			skyCubeFaceAssetIds = null
+			skyCubeFaceKeys = null
+			skyCubeFaceTextureCleanup = null
+			scene.background = skyCubeTexture
+			return true
+		}
+
 		const faceAssetIds: Array<string | null> = [
 			background.positiveXAssetId ?? null,
 			background.negativeXAssetId ?? null,
@@ -7631,9 +7763,13 @@ async function applyBackgroundSettings(
 		}
 		disposeBackgroundResources()
 		skyCubeTexture = loaded.texture
+		skyCubeSourceFormat = 'faces'
 		skyCubeFaceAssetIds = faceAssetIds
 		skyCubeFaceKeys = faceKeys
 		skyCubeFaceTextureCleanup = cleanup
+		skyCubeZipAssetId = null
+		skyCubeZipAssetKey = null
+		skyCubeZipFaceUrlCleanup = null
 		scene.background = skyCubeTexture
 		return true
 	}
@@ -7751,6 +7887,10 @@ const environmentAssetSignature = computed(() => {
 	return JSON.stringify({
 		background: {
 			mode: background.mode,
+			skycubeFormat:
+				background.mode === 'skycube'
+					? ((background as any).skycubeFormat === 'zip' ? 'zip' : 'faces')
+					: null,
 			hdriKey:
 				background.mode === 'hdri' && background.hdriAssetId
 					? computeEnvironmentAssetReloadKey(background.hdriAssetId)
@@ -7765,6 +7905,10 @@ const environmentAssetSignature = computed(() => {
 						computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
 						computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
 					]
+					: null,
+			skycubeZipKey:
+				background.mode === 'skycube' && (background as any).skycubeZipAssetId
+					? computeEnvironmentAssetReloadKey((background as any).skycubeZipAssetId)
 					: null,
 		},
 		environmentMap: {
