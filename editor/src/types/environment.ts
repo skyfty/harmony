@@ -13,6 +13,12 @@ export interface EnvironmentRotationDegrees {
 export interface EnvironmentBackgroundSettings {
   mode: EnvironmentBackgroundMode
   solidColor: string
+  /** Optional gradient skybox top color (hex). When present, background becomes a vertical gradient. */
+  gradientTopColor?: string | null
+  /** Gradient vertical offset. Default: 33. */
+  gradientOffset?: number
+  /** Gradient exponent. Default: 0.6. */
+  gradientExponent?: number
   hdriAssetId: string | null
   /** SkyCube faces in fixed Three.js CubeTextureLoader order: +X, -X, +Y, -Y, +Z, -Z. */
   positiveXAssetId: string | null

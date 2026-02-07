@@ -14,6 +14,9 @@ export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
 export const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
 export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
 
+export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
+export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
+
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
     mode: 'skybox',
@@ -52,6 +55,20 @@ function normalizeHexColor(value: unknown, fallback: string): string {
     }
   }
   return fallback
+}
+
+function normalizeNullableHexColor(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const sanitized = value.trim()
+  if (!sanitized) {
+    return null
+  }
+  if (/^#(?:[0-9a-fA-F]{6})$/.test(sanitized)) {
+    return sanitized
+  }
+  return null
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -124,6 +141,19 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
     background: {
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
+      gradientTopColor: normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null),
+      gradientOffset: clampNumber(
+        (backgroundSource as any)?.gradientOffset,
+        0,
+        100000,
+        DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
+      ),
+      gradientExponent: clampNumber(
+        (backgroundSource as any)?.gradientExponent,
+        0,
+        10,
+        DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
+      ),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
       positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
       negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
@@ -232,6 +262,9 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
   return (
     a.background.mode === b.background.mode &&
     a.background.solidColor === b.background.solidColor &&
+    (a.background.gradientTopColor ?? null) === (b.background.gradientTopColor ?? null) &&
+    Math.abs((a.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET) - (b.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET)) <= epsilon &&
+    Math.abs((a.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT) - (b.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)) <= epsilon &&
     a.background.hdriAssetId === b.background.hdriAssetId &&
     a.background.positiveXAssetId === b.background.positiveXAssetId &&
     a.background.negativeXAssetId === b.background.negativeXAssetId &&

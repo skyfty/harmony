@@ -490,13 +490,16 @@ import {
   resolveSceneNodeById,
   resolveSceneParentNodeId,
   resolveEnabledComponentState,
+  createGradientBackgroundDome,
   disposeSkyCubeTexture,
+  disposeGradientBackgroundDome,
   loadSkyCubeTexture,
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
   type EnvironmentSettings,
+  type GradientBackgroundDome,
   type SceneNode,
   type SceneNodeComponentState,
   type SceneSkyboxSettings,
@@ -1320,6 +1323,7 @@ let backgroundAssetId: string | null = null;
 let skyCubeTexture: THREE.CubeTexture | null = null;
 let skyCubeFaceAssetIds: Array<string | null> | null = null;
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
+let gradientBackgroundDome: GradientBackgroundDome | null = null;
 let backgroundLoadToken = 0;
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
 let environmentMapAssetId: string | null = null;
@@ -2645,6 +2649,19 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return fallback;
 }
 
+function normalizeNullableHexColor(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const sanitized = value.trim();
+    if (!sanitized.length) {
+      return null;
+    }
+    if (HEX_COLOR_PATTERN.test(sanitized)) {
+      return `#${sanitized.slice(1).toLowerCase()}`;
+    }
+  }
+  return null;
+}
+
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) {
@@ -2706,11 +2723,13 @@ function cloneEnvironmentSettingsLocal(
   const backgroundSource = source?.background ?? null;
   const environmentMapSource = source?.environmentMap ?? null;
 
-  const normalizeOrientationPreset = (value: unknown) => {
+  type OrientationPreset = NonNullable<EnvironmentSettings['environmentOrientationPreset']>;
+
+  const normalizeOrientationPreset = (value: unknown): OrientationPreset => {
     if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
-      return value as EnvironmentSettings['environmentOrientationPreset'];
+      return value as OrientationPreset;
     }
-    return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET;
+    return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET as OrientationPreset;
   };
 
   const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
@@ -2756,6 +2775,18 @@ function cloneEnvironmentSettingsLocal(
     background: {
       mode: backgroundMode,
       solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
+      gradientTopColor:
+        backgroundMode === 'solidColor'
+          ? normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null)
+          : null,
+      gradientOffset:
+        backgroundMode === 'solidColor'
+          ? clampNumber((backgroundSource as any)?.gradientOffset, 0, 100000, 33)
+          : 33,
+      gradientExponent:
+        backgroundMode === 'solidColor'
+          ? clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, 0.6)
+          : 0.6,
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
       positiveXAssetId:
         backgroundMode === 'skycube'
@@ -8459,6 +8490,8 @@ function disposeSkyCubeBackgroundResources() {
 function disposeBackgroundResources() {
   disposeHdriBackgroundResources();
   disposeSkyCubeBackgroundResources();
+  disposeGradientBackgroundDome(gradientBackgroundDome);
+  gradientBackgroundDome = null;
 }
 
 function disposeEnvironmentTarget() {
@@ -8587,7 +8620,46 @@ async function applyBackgroundSettings(
     return true;
   }
   setSkyBackgroundEnabled(false);
+  if (background.mode === 'solidColor') {
+    const gradientTopColor = typeof background.gradientTopColor === 'string'
+      ? background.gradientTopColor.trim()
+      : '';
+
+    disposeHdriBackgroundResources();
+    disposeSkyCubeBackgroundResources();
+
+    if (gradientTopColor) {
+      if (!gradientBackgroundDome) {
+        gradientBackgroundDome = createGradientBackgroundDome({
+          topColor: gradientTopColor,
+          bottomColor: background.solidColor,
+          offset: background.gradientOffset ?? 33,
+          exponent: background.gradientExponent ?? 0.6,
+        });
+        (gradientBackgroundDome.mesh as any).raycast = () => {};
+        scene.add(gradientBackgroundDome.mesh);
+      } else {
+        gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor);
+        gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor);
+        if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
+          gradientBackgroundDome.uniforms.offset.value = background.gradientOffset;
+        }
+        if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
+          gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent;
+        }
+      }
+      scene.background = null;
+      return true;
+    }
+
+    disposeGradientBackgroundDome(gradientBackgroundDome);
+    gradientBackgroundDome = null;
+    scene.background = new THREE.Color(background.solidColor);
+    return true;
+  }
   if (background.mode === 'skycube') {
+    disposeGradientBackgroundDome(gradientBackgroundDome);
+    gradientBackgroundDome = null;
     const faceAssetIds: Array<string | null> = [
       background.positiveXAssetId ?? null,
       background.negativeXAssetId ?? null,
@@ -8659,11 +8731,15 @@ async function applyBackgroundSettings(
     return true;
   }
   if (background.mode !== 'hdri' || !background.hdriAssetId) {
+    disposeGradientBackgroundDome(gradientBackgroundDome);
+    gradientBackgroundDome = null;
     disposeBackgroundResources();
     scene.background = new THREE.Color(background.solidColor);
     return true;
   }
   if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+    disposeGradientBackgroundDome(gradientBackgroundDome);
+    gradientBackgroundDome = null;
     scene.background = backgroundTexture;
     return true;
   }
@@ -9901,6 +9977,9 @@ function startRenderLoop(
         cloudRenderer?.update(deltaSeconds);
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
+        if (gradientBackgroundDome) {
+          gradientBackgroundDome.mesh.position.copy(camera.position);
+        }
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value) {

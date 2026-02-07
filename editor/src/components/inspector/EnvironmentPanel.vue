@@ -42,6 +42,10 @@ const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMod
 ]
 
 const backgroundColorMenuOpen = ref(false)
+const gradientTopColorMenuOpen = ref(false)
+
+const DEFAULT_GRADIENT_OFFSET = 33
+const DEFAULT_GRADIENT_EXPONENT = 0.6
 
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
@@ -268,6 +272,9 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
     background: {
       mode,
       solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: environmentSettings.value.background.hdriAssetId,
     },
   })
@@ -331,6 +338,9 @@ function handleHexColorChange(target: 'background', value: string | null) {
       background: {
         mode: environmentSettings.value.background.mode,
         solidColor: normalized,
+        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
         hdriAssetId: environmentSettings.value.background.hdriAssetId,
       },
     })
@@ -341,6 +351,96 @@ function handleColorPickerInput(target: 'background', value: string | null) {
   handleHexColorChange(target, value)
 }
 
+function handleGradientTopColorChange(value: string | null) {
+  if (value === null || value === undefined) {
+    return
+  }
+  const current = environmentSettings.value.background.gradientTopColor ?? ''
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed.length) {
+    if (!current.length) {
+      return
+    }
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: environmentSettings.value.background.mode,
+        solidColor: environmentSettings.value.background.solidColor,
+        gradientTopColor: null,
+        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+        hdriAssetId: environmentSettings.value.background.hdriAssetId,
+      },
+    })
+    return
+  }
+  const normalized = normalizeHexColor(trimmed, current.length ? current : '#ffffff')
+  if (normalized === (environmentSettings.value.background.gradientTopColor ?? null)) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: environmentSettings.value.background.mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: normalized,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
+}
+
+function handleGradientTopColorPickerInput(value: string | null) {
+  handleGradientTopColorChange(value)
+}
+
+function handleGradientOffsetInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(100000, numeric))
+  if (Math.abs((environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET) - clamped) < 1e-6) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: environmentSettings.value.background.mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: clamped,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
+}
+
+function handleGradientExponentInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(10, numeric))
+  if (Math.abs((environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT) - clamped) < 1e-6) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: environmentSettings.value.background.mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: clamped,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
+}
+
 function clearBackgroundAsset() {
   if (environmentSettings.value.background.mode !== 'hdri') {
     return
@@ -349,6 +449,9 @@ function clearBackgroundAsset() {
     background: {
       mode: 'solidColor',
       solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: null,
     },
   })
@@ -786,6 +889,9 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
       background: {
         mode: 'hdri',
         solidColor: environmentSettings.value.background.solidColor,
+        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
         hdriAssetId: asset.id,
       },
     })
@@ -802,6 +908,9 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
       background: {
         mode: 'hdri',
         solidColor: environmentSettings.value.background.solidColor,
+        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
         hdriAssetId: asset.id,
       },
     })
@@ -1072,7 +1181,7 @@ function handleEnvironmentDrop(event: DragEvent) {
           >
             <div class="color-input">
               <v-text-field
-                label="Solid Color"
+                label="Bottom Color"
                 class="slider-input"
                 density="compact"
                 variant="underlined"
@@ -1092,9 +1201,9 @@ function handleEnvironmentDrop(event: DragEvent) {
                     type="button"
                     v-bind="menuProps"
                     :style="{ backgroundColor: environmentSettings.background.solidColor }"
-                    title="Select solid color"
+                    title="Select bottom color"
                   >
-                    <span class="sr-only">Select solid color</span>
+                    <span class="sr-only">Select bottom color</span>
                   </button>
                 </template>
                 <div class="color-picker">
@@ -1107,6 +1216,74 @@ function handleEnvironmentDrop(event: DragEvent) {
                   />
                 </div>
               </v-menu>
+            </div>
+
+            <div class="color-input">
+              <v-text-field
+                label="Top Color (optional)"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                hide-details
+                :model-value="environmentSettings.background.gradientTopColor ?? ''"
+                @update:model-value="(value) => handleGradientTopColorChange(value as string | null)"
+              />
+              <v-menu
+                v-model="gradientTopColorMenuOpen"
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
+              >
+                <template #activator="{ props: menuProps }">
+                  <button
+                    class="color-swatch"
+                    type="button"
+                    v-bind="menuProps"
+                    :style="{ backgroundColor: environmentSettings.background.gradientTopColor ?? environmentSettings.background.solidColor }"
+                    title="Select top color"
+                  >
+                    <span class="sr-only">Select top color</span>
+                  </button>
+                </template>
+                <div class="color-picker">
+                  <v-color-picker
+                    :model-value="environmentSettings.background.gradientTopColor ?? environmentSettings.background.solidColor"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="(value) => handleGradientTopColorPickerInput(value)"
+                  />
+                </div>
+              </v-menu>
+            </div>
+
+            <div class="orientation-rotation-grid">
+              <v-text-field
+                label="Gradient Offset"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="0"
+                :max="100000"
+                :step="1"
+                :model-value="environmentSettings.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET"
+                @update:model-value="handleGradientOffsetInput"
+              />
+              <v-text-field
+                label="Gradient Exponent"
+                density="compact"
+                variant="underlined"
+                hide-details
+                type="number"
+                inputmode="decimal"
+                :min="0"
+                :max="10"
+                :step="0.05"
+                :model-value="environmentSettings.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT"
+                @update:model-value="handleGradientExponentInput"
+              />
             </div>
           </div>
           <template v-else-if="environmentSettings.background.mode === 'skycube'">

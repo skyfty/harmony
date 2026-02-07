@@ -55,6 +55,7 @@ import type {
   SceneMaterialTextureRef,
   SceneNodeMaterial,
   SceneSkyboxSettings,
+  GradientBackgroundDome,
   GroundDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
@@ -62,6 +63,8 @@ import type {
   WallDynamicMesh,
 } from '@schema/index'
 import {
+  createGradientBackgroundDome,
+  disposeGradientBackgroundDome,
   disposeSkyCubeTexture,
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
@@ -807,12 +810,18 @@ let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
 let skyCubeFaceAssetIds: Array<string | null> = [null, null, null, null, null, null]
 let skyCubeFaceKeys: Array<string | null> = [null, null, null, null, null, null]
+let gradientBackgroundDome: GradientBackgroundDome | null = null
 let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
 let environmentMapAssetKey: string | null = null
 let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
+
+function disposeGradientBackgroundResources() {
+  disposeGradientBackgroundDome(gradientBackgroundDome)
+  gradientBackgroundDome = null
+}
 
 function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
   const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
@@ -6747,6 +6756,9 @@ const environmentSignature = computed(() => {
     background: {
       mode: background.mode,
       solidColor: background.solidColor,
+      gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
+      gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
+      gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
       hdriAssetId: background.hdriAssetId ?? null,
       hdriKey: hdriBackgroundKey,
       positiveXAssetId: background.mode === 'skycube' ? (background.positiveXAssetId ?? null) : null,
@@ -7647,6 +7659,7 @@ function disposeSkyCubeBackgroundResources() {
 function disposeBackgroundResources() {
   disposeHdriBackgroundResources()
   disposeSkyCubeBackgroundResources()
+  disposeGradientBackgroundResources()
 }
 
 function disposeCustomEnvironmentTarget() {
@@ -7707,12 +7720,44 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   setSkyBackgroundEnabled(false)
 
   if (background.mode === 'solidColor') {
-    disposeBackgroundResources()
+    const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
+
+    disposeHdriBackgroundResources()
+    disposeSkyCubeBackgroundResources()
+
+    if (gradientTopColor) {
+      if (!gradientBackgroundDome) {
+        gradientBackgroundDome = createGradientBackgroundDome({
+          topColor: gradientTopColor,
+          bottomColor: background.solidColor,
+          offset: background.gradientOffset ?? 33,
+          exponent: background.gradientExponent ?? 0.6,
+        })
+        gradientBackgroundDome.mesh.userData = { ...(gradientBackgroundDome.mesh.userData ?? {}), editorOnly: true }
+        ;(gradientBackgroundDome.mesh as any).raycast = () => {}
+        scene.add(gradientBackgroundDome.mesh)
+      } else {
+        gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor)
+        gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor)
+        if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
+          gradientBackgroundDome.uniforms.offset.value = background.gradientOffset
+        }
+        if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
+          gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent
+        }
+      }
+
+      scene.background = null
+      return true
+    }
+
+    disposeGradientBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
   }
 
   if (background.mode === 'skycube') {
+    disposeGradientBackgroundResources()
     const faceTags = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const
     const faceAssetIds: Array<string | null> = [
       background.positiveXAssetId ?? null,
@@ -7779,6 +7824,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   }
 
   if (!background.hdriAssetId) {
+    disposeGradientBackgroundResources()
     disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
@@ -7787,6 +7833,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
 
   if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
+    disposeGradientBackgroundResources()
     scene.background = backgroundTexture
     return true
   }
@@ -8104,6 +8151,9 @@ function animate() {
   if (sky) {
     sky.position.copy(camera.position)
   }
+  if (gradientBackgroundDome) {
+    gradientBackgroundDome.mesh.position.copy(camera.position)
+  }
   const t_mid = performance.now()
   prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
@@ -8223,6 +8273,8 @@ function disposeScene() {
   clearLightHelpers()
   disposeSkyResources()
   disposeSkySunLight()
+  disposeBackgroundResources()
+  disposeCustomEnvironmentTarget()
 
   if (gizmoControls) {
     gizmoControls.dispose()
