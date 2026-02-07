@@ -342,44 +342,7 @@ function patchTarget() {
           </div>
         </div>
       </template>
-      <template v-if="supportsTarget">
-        <div class="section-block material-row">
-          <span class="row-label">Target</span>
-          <div class="row-controls">
-            <v-text-field
-              :model-value="lightForm.targetX"
-              type="number"
-              density="compact"
-      variant="underlined"
-              hide-details
-              style="width: 70px"
-              :disabled="props.disabled"
-              @update:model-value="(v) => { lightForm.targetX = Number(v) || 0; patchTarget() }"
-            />
-            <v-text-field
-              :model-value="lightForm.targetY"
-              type="number"
-      variant="underlined"
-              
-              density="compact"
-              hide-details
-              style="width: 70px"
-              :disabled="props.disabled"
-              @update:model-value="(v) => { lightForm.targetY = Number(v) || 0; patchTarget() }"
-            />
-            <v-text-field
-              :model-value="lightForm.targetZ"
-              type="number"
-              density="compact"
-      variant="underlined"
-              hide-details
-              style="width: 70px"
-              :disabled="props.disabled"
-              @update:model-value="(v) => { lightForm.targetZ = Number(v) || 0; patchTarget() }"
-            />
-          </div>
-        </div>
-      </template>
+     
       <template v-if="supportsAngle">
         <div class="section-block material-row">
           <span class="row-label">Angle</span>
