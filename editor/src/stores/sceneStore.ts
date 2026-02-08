@@ -8160,12 +8160,18 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this, { updateNodes: changedNodes })
       return true
     },
-    updateLightProperties(id: string, properties: Partial<LightNodeProperties>) {
+    updateLightProperties(
+      id: string,
+      properties: Partial<LightNodeProperties>,
+      options: { captureHistory?: boolean } = {},
+    ) {
       const target = findNodeById(this.nodes, id)
       if (!target || !target.light) {
         return
       }
-      this.captureHistorySnapshot()
+      if (options.captureHistory !== false) {
+        this.captureHistorySnapshot()
+      }
       visitNode(this.nodes, id, (node) => {
         if (!node.light) {
           return

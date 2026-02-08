@@ -1579,6 +1579,8 @@ const effectPlaybackManager = createEffectPlaybackManager()
 type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
 const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
+
+const lightTargetWorldPositionHelper = new THREE.Vector3()
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
@@ -4562,6 +4564,18 @@ const {
     updatePlaceholderOverlayPositions,
     gizmoControlsUpdate: () => gizmoControls?.update(),
     computeTransformPivotWorld,
+    beforeEmitTransformUpdates: (nodeIds: string[]) => {
+      const captured: CapturedLightTargetUpdate[] = []
+      nodeIds.forEach((id) => {
+        const entry = captureLightTargetWorldPosition(id)
+        if (entry) {
+          captured.push(entry)
+        }
+      })
+      if (captured.length) {
+        queueMicrotask(() => applyCapturedLightTargetUpdates(captured))
+      }
+    },
     getVertexSnapDelta: ({ drag, event }) => {
       const active = vertexSnapMode.value === 'vertex' || event.shiftKey
       if (!active) {
@@ -4604,6 +4618,9 @@ function emitTransformUpdates(updates: TransformUpdatePayload[]) {
     return
   }
 
+  // Capture light targets before emitting; apply after the transform updates hit the store.
+  const capturedLightTargets = captureLightTargetsForTransformUpdates(updates)
+
   const normalized = updates.map((update) => {
     const entry: TransformUpdatePayload = { id: update.id }
     if (update.position) {
@@ -4619,6 +4636,8 @@ function emitTransformUpdates(updates: TransformUpdatePayload[]) {
   })
 
   emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
+
+  applyCapturedLightTargetUpdates(capturedLightTargets)
 }
 
 
@@ -4752,8 +4771,12 @@ function rotateActiveSelection(nodeId: string) {
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
 
+  const capturedLightTargets = captureLightTargetsForTransformUpdates(updates)
+
   const transformPayload = updates.length === 1 ? updates[0]! : updates
   emit('updateNodeTransform', transformPayload)
+
+  applyCapturedLightTargetUpdates(capturedLightTargets)
 }
 
 function updateMapControlsEnabled() {
@@ -11661,8 +11684,8 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
   container.userData.lightType = config.type
   light.userData = { ...(light.userData ?? {}), nodeId: node.id }
 
-  const helper = container.children.find((child) => (child as LightHelperObject).update && child.userData?.nodeId === node.id) as LightHelperObject | undefined
-  helper?.update?.()
+  const helpers = container.children.filter((child) => (child as LightHelperObject).update && child.userData?.nodeId === node.id) as LightHelperObject[]
+  helpers.forEach((entry) => entry.update?.())
 }
 
 function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
@@ -12207,6 +12230,74 @@ function registerLightHelper(nodeId: string, helper: LightHelperObject, requires
   if (requiresContinuousUpdate) {
     lightHelpersNeedingUpdate.add(helper)
   }
+}
+
+type CapturedLightTargetUpdate = { nodeId: string; target: { x: number; y: number; z: number } }
+
+function captureLightTargetWorldPosition(nodeId: string): CapturedLightTargetUpdate | null {
+  const node = sceneStore.getNodeById(nodeId)
+  const config = node?.light
+  if (!config) {
+    return null
+  }
+  if (config.type !== 'Directional' && config.type !== 'Spot') {
+    return null
+  }
+  if (!config.target) {
+    return null
+  }
+
+  const container = objectMap.get(nodeId)
+  if (!container) {
+    return null
+  }
+
+  const light = container.children.find((child) => (child as THREE.Light).isLight) as
+    | THREE.DirectionalLight
+    | THREE.SpotLight
+    | undefined
+  if (!light || !('target' in (light as any)) || !(light as any).target) {
+    return null
+  }
+
+  try {
+    ;(light as any).target.updateMatrixWorld(true)
+    ;(light as any).target.getWorldPosition(lightTargetWorldPositionHelper)
+    return {
+      nodeId,
+      target: {
+        x: lightTargetWorldPositionHelper.x,
+        y: lightTargetWorldPositionHelper.y,
+        z: lightTargetWorldPositionHelper.z,
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+function captureLightTargetsForTransformUpdates(updates: TransformUpdatePayload[]): CapturedLightTargetUpdate[] {
+  const captured: CapturedLightTargetUpdate[] = []
+  for (const update of updates) {
+    const entry = captureLightTargetWorldPosition(update.id)
+    if (entry) {
+      captured.push(entry)
+    }
+  }
+  return captured
+}
+
+function applyCapturedLightTargetUpdates(updates: CapturedLightTargetUpdate[]) {
+  if (!updates.length) {
+    return
+  }
+  updates.forEach((entry) => {
+    ;(sceneStore as any).updateLightProperties(
+      entry.nodeId,
+      { target: entry.target },
+      { captureHistory: false },
+    )
+  })
 }
 
 function clearLightHelpers() {

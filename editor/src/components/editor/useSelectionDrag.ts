@@ -30,6 +30,7 @@ export function useSelectionDrag(
     gizmoControlsUpdate: () => void
     getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
     computeTransformPivotWorld?: (object: THREE.Object3D, out: THREE.Vector3) => void
+    beforeEmitTransformUpdates?: (nodeIds: string[]) => void
   }
 ) {
   const sceneStore = useSceneStore()
@@ -203,6 +204,8 @@ export function useSelectionDrag(
         position: companion.object.position.clone(),
       })
     })
+
+    callbacks.beforeEmitTransformUpdates?.(updates.map((update) => update.id))
 
     const normalized = updates.map((update) => {
       const entry: TransformUpdatePayload = { id: update.id }
