@@ -13035,10 +13035,15 @@ function applyLightShadowConfig(light: THREE.Light, config: SceneNode['light']):
   shadowCamera?.updateProjectionMatrix?.()
 }
 
-function ensureDirectionalLightTargetHandle(target: THREE.Object3D, color: THREE.ColorRepresentation): void {
+function ensureDirectionalLightTargetHandle(
+  target: THREE.Object3D,
+  color: THREE.ColorRepresentation,
+  directionInTargetLocal?: THREE.Vector3,
+): void {
   directionalLightTargetHandleManager.ensure(target, {
     color,
     helperSize: DIRECTIONAL_LIGHT_HELPER_SIZE,
+    direction: directionInTargetLocal,
   })
 }
 
@@ -13074,7 +13079,11 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       container.add(target)
       // Visible, selectable target handle (Unity-like “sun” icon near the scene).
       // Marked editorOnly so it doesn't interfere with placement/snap surfaces, but still pickable.
-      ensureDirectionalLightTargetHandle(target, config.color)
+      // Compute direction from target -> light, expressed in target-local space, for orienting the rays.
+      const dirTargetToLightLocal = new THREE.Vector3().copy(directional.position).sub(target.position)
+      const invTargetQuat = target.quaternion.clone().invert()
+      dirTargetToLightLocal.applyQuaternion(invTargetQuat)
+      ensureDirectionalLightTargetHandle(target, config.color, dirTargetToLightLocal)
       helper = new THREE.DirectionalLightHelper(directional, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
       requiresHelperUpdate = true
       break
