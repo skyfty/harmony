@@ -251,6 +251,7 @@ import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
 import { createDirectionalLightTargetHandleManager } from './DirectionalLightTargetHandle'
 import { lockDirectionalLightTargetWorldPosition, syncLightFromNodeDuringDrag } from './realtimeLightSync'
+import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
@@ -12283,6 +12284,11 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
     if (typeof config.castShadow === 'boolean') {
       light.castShadow = config.castShadow
     }
+
+    // Auto-fit DirectionalLight shadow frustum to cover the Ground extents.
+    // This keeps shadows reliably covering the whole ground even when the ground
+    // is replaced/moved/resized.
+    tryFitDirectionalLightShadowsToGround(light)
   } else if (light instanceof THREE.HemisphereLight) {
     const ground = (config as any).groundColor
     if (typeof ground === 'string' && ground.length) {
@@ -12295,6 +12301,29 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
 
   const helpers = container.children.filter((child) => (child as LightHelperObject).update && child.userData?.nodeId === node.id) as LightHelperObject[]
   helpers.forEach((entry) => entry.update?.())
+}
+
+function tryFitDirectionalLightShadowsToGround(light: THREE.DirectionalLight): void {
+  const groundNode = findGroundNodeInTree(sceneStore.nodes)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+
+  const groundObject = objectMap.get(groundNode.id) ?? null
+  if (!groundObject) {
+    return
+  }
+
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh
+  const width = definition.width
+  const depth = definition.depth
+
+  groundObject.updateMatrixWorld(true)
+
+  autoFitDirectionalLightShadowToGround(light, groundObject.matrixWorld, width, depth, {
+    onlyCastShadow: true,
+    maxFarCap: DIRECTIONAL_LIGHT_MAX_FIXED_HEIGHT_DISTANCE_ABS_CAP,
+  })
 }
 
 function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
