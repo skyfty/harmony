@@ -250,6 +250,7 @@ import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
 import { createDirectionalLightTargetHandleManager } from './DirectionalLightTargetHandle'
+import { lockDirectionalLightTargetWorldPosition, syncLightFromNodeDuringDrag } from './realtimeLightSync'
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
@@ -11592,182 +11593,354 @@ function buildHierarchyMaps(): { nodeMap: Map<string, SceneNode>; parentMap: Map
   return { nodeMap, parentMap }
 }
 
-function handleTransformChange() {
-  if (!transformControls || !isSceneReady.value) return
-  const target = transformControls.object as THREE.Object3D | null
-  if (!target) {
+function handleDirectionalLightTargetPivotTransformChange(options: {
+  target: THREE.Object3D
+  mode: string
+  primaryId: string | null
+  primaryObject: THREE.Object3D | null
+}): void {
+  const { target, mode, primaryId, primaryObject } = options
+
+  if (!primaryId) {
+    return
+  }
+  const node = sceneStore.getNodeById(primaryId)
+  if (!node?.light || node.light.type !== 'Directional') {
     return
   }
 
-  const isDirectionalLightTargetPivot = Boolean((target.userData as any)?.isDirectionalLightTargetPivot)
-  const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot || isDirectionalLightTargetPivot)
-  const mode = transformControls.getMode()
-  const isTranslateMode = mode === 'translate'
-  const isActiveTranslateTool = props.activeTool === 'translate'
-  const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
-
-  const nodeId = (target.userData?.nodeId as string | undefined) ?? null
-  const primaryId = sceneStore.selectedNodeId ?? nodeId
-  const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
-
-  if (isDirectionalLightTargetPivot) {
-    if (!primaryId) {
-      return
-    }
-    const node = sceneStore.getNodeById(primaryId)
-    if (!node?.light || node.light.type !== 'Directional') {
-      return
-    }
-
-    if (!directionalLightPivotEditState || directionalLightPivotEditState.nodeId !== primaryId) {
-      beginDirectionalLightTargetPivotInteraction(primaryId)
-    }
-
-    target.updateMatrixWorld(true)
-    target.getWorldPosition(directionalLightPivotWorldPositionHelper)
-    target.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
-
-    if (mode === 'translate') {
-      const state = directionalLightPivotEditState
-      const captureHistory = Boolean(state?.captureHistoryPending)
-      if (state) {
-        state.captureHistoryPending = false
-      }
-
-      sceneStore.updateLightProperties(
-        primaryId,
-        {
-          target: {
-            x: directionalLightPivotWorldPositionHelper.x,
-            y: directionalLightPivotWorldPositionHelper.y,
-            z: directionalLightPivotWorldPositionHelper.z,
-          },
-        },
-        { captureHistory },
-      )
-
-      // Directly update the Three.js light target so lighting renders in
-      // real-time during the drag (scene graph sync is deferred while dragging).
-      if (primaryObject) {
-        const updatedNode = sceneStore.getNodeById(primaryId)
-        if (updatedNode) {
-          updateLightObjectProperties(primaryObject, updatedNode)
-          primaryObject.updateMatrixWorld(true)
-        }
-      }
-
-      updateGridHighlightFromObject(primaryObject)
-      updateSelectionHighlights()
-      return
-    }
-
-    if (mode === 'rotate') {
-      const state = directionalLightPivotEditState
-      if (!state || state.nodeId !== primaryId) {
-        return
-      }
-      if (!primaryObject) {
-        return
-      }
-
-      // Derive a new direction from the pivot's rotation delta.
-      directionalLightInvQuaternionHelper.copy(state.initialPivotWorldQuaternion).invert()
-      directionalLightDeltaQuaternionHelper
-        .copy(directionalLightPivotWorldQuaternionHelper)
-        .multiply(directionalLightInvQuaternionHelper)
-
-      directionalLightCandidateDirectionWorldHelper
-        .copy(state.initialDirectionWorld)
-        .applyQuaternion(directionalLightDeltaQuaternionHelper)
-
-      if (directionalLightCandidateDirectionWorldHelper.lengthSq() < 1e-12) {
-        directionalLightCandidateDirectionWorldHelper.set(0, -1, 0)
-      } else {
-        directionalLightCandidateDirectionWorldHelper.normalize()
-      }
-
-      const targetWorldY = directionalLightPivotWorldPositionHelper.y
-      const fixedY = state.fixedLightWorldY
-      const denom = directionalLightCandidateDirectionWorldHelper.y
-      const numerator = targetWorldY - fixedY
-
-      const maxD = resolveDirectionalLightMaxFixedHeightDistance(primaryId)
-
-      let d = 0
-      if (!Number.isFinite(denom) || Math.abs(denom) < DIRECTIONAL_LIGHT_FIXED_HEIGHT_EPS) {
-        d = Math.sign(-numerator || 1) * maxD
-      } else {
-        d = numerator / denom
-      }
-
-      if (!Number.isFinite(d)) {
-        d = Math.sign(-numerator || 1) * maxD
-      }
-      d = clampNumber(d, -maxD, maxD)
-
-      // Place the light along the direction ray while enforcing a fixed world Y.
-      transformWorldPositionBuffer.copy(directionalLightPivotWorldPositionHelper)
-      transformWorldPositionBuffer.addScaledVector(directionalLightCandidateDirectionWorldHelper, -d)
-      transformWorldPositionBuffer.y = fixedY
-
-      const parent = primaryObject.parent
-      if (parent) {
-        parent.updateMatrixWorld(true)
-        parent.worldToLocal(transformWorldPositionBuffer)
-      } else {
-        rootGroup.updateMatrixWorld(true)
-        rootGroup.worldToLocal(transformWorldPositionBuffer)
-      }
-
-      // Directly update the Three.js object so the light renders in real-time
-      // during the drag (scene graph sync is deferred while dragging).
-      primaryObject.position.copy(transformWorldPositionBuffer)
-      primaryObject.updateMatrixWorld(true)
-
-      // Keep the directional light target fixed in world space so the sun handle
-      // doesn't drift while we move the light to change direction.
-      const directional = primaryObject.children.find(
-        (child) => (child as THREE.DirectionalLight).isDirectionalLight,
-      ) as THREE.DirectionalLight | undefined
-      if (directional?.target) {
-        lightTargetWorldPositionHelper.copy(directionalLightPivotWorldPositionHelper)
-        primaryObject.worldToLocal(lightTargetWorldPositionHelper)
-        directional.target.position.copy(lightTargetWorldPositionHelper)
-        directional.target.updateMatrixWorld(true)
-      }
-
-      emit('updateNodeTransform', {
-        id: primaryId,
-        position: {
-          x: transformWorldPositionBuffer.x,
-          y: transformWorldPositionBuffer.y,
-          z: transformWorldPositionBuffer.z,
-        },
-      })
-
-      updateGridHighlightFromObject(primaryObject)
-      updateSelectionHighlights()
-      return
-    }
-
-    return
-  }
-
-  // Single-select requires a real node id.
-  if (!isPivotTarget && !nodeId) {
-    return
-  }
-
-  // Only snap single-select local position (legacy behavior).
-  if (!isPivotTarget && nodeId && isTranslateMode && shouldSnapTranslate) {
-    snapVectorToGridForNode(target.position, nodeId)
+  if (!directionalLightPivotEditState || directionalLightPivotEditState.nodeId !== primaryId) {
+    beginDirectionalLightTargetPivotInteraction(primaryId)
   }
 
   target.updateMatrixWorld(true)
-  target.getWorldPosition(transformCurrentWorldPosition)
+  target.getWorldPosition(directionalLightPivotWorldPositionHelper)
+  target.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
 
-  const groupState = transformGroupState
-  const isGroupTransform = Boolean(groupState && groupState.entries.size > 1)
+  if (mode === 'translate') {
+    applyDirectionalLightTargetPivotTranslate(primaryId, primaryObject)
+    return
+  }
+
+  if (mode === 'rotate') {
+    applyDirectionalLightTargetPivotRotate(primaryId, primaryObject)
+    return
+  }
+}
+
+function applyDirectionalLightTargetPivotTranslate(primaryId: string, primaryObject: THREE.Object3D | null): void {
+  const state = directionalLightPivotEditState
+  const captureHistory = Boolean(state?.captureHistoryPending)
+  if (state) {
+    state.captureHistoryPending = false
+  }
+
+  sceneStore.updateLightProperties(
+    primaryId,
+    {
+      target: {
+        x: directionalLightPivotWorldPositionHelper.x,
+        y: directionalLightPivotWorldPositionHelper.y,
+        z: directionalLightPivotWorldPositionHelper.z,
+      },
+    },
+    { captureHistory },
+  )
+
+  // Directly update the Three.js light target so lighting renders in
+  // real-time during the drag (scene graph sync is deferred while dragging).
+  if (primaryObject) {
+    const updatedNode = sceneStore.getNodeById(primaryId)
+    if (updatedNode) {
+      syncLightFromNodeDuringDrag(primaryObject, updatedNode, updateLightObjectProperties)
+    }
+  }
+
+  updateGridHighlightFromObject(primaryObject)
+  updateSelectionHighlights()
+}
+
+function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject: THREE.Object3D | null): void {
+  const state = directionalLightPivotEditState
+  if (!state || state.nodeId !== primaryId) {
+    return
+  }
+  if (!primaryObject) {
+    return
+  }
+
+  // Derive a new direction from the pivot's rotation delta.
+  directionalLightInvQuaternionHelper.copy(state.initialPivotWorldQuaternion).invert()
+  directionalLightDeltaQuaternionHelper
+    .copy(directionalLightPivotWorldQuaternionHelper)
+    .multiply(directionalLightInvQuaternionHelper)
+
+  directionalLightCandidateDirectionWorldHelper
+    .copy(state.initialDirectionWorld)
+    .applyQuaternion(directionalLightDeltaQuaternionHelper)
+
+  if (directionalLightCandidateDirectionWorldHelper.lengthSq() < 1e-12) {
+    directionalLightCandidateDirectionWorldHelper.set(0, -1, 0)
+  } else {
+    directionalLightCandidateDirectionWorldHelper.normalize()
+  }
+
+  const targetWorldY = directionalLightPivotWorldPositionHelper.y
+  const fixedY = state.fixedLightWorldY
+  const denom = directionalLightCandidateDirectionWorldHelper.y
+  const numerator = targetWorldY - fixedY
+
+  const maxD = resolveDirectionalLightMaxFixedHeightDistance(primaryId)
+
+  let d = 0
+  if (!Number.isFinite(denom) || Math.abs(denom) < DIRECTIONAL_LIGHT_FIXED_HEIGHT_EPS) {
+    d = Math.sign(-numerator || 1) * maxD
+  } else {
+    d = numerator / denom
+  }
+
+  if (!Number.isFinite(d)) {
+    d = Math.sign(-numerator || 1) * maxD
+  }
+  d = clampNumber(d, -maxD, maxD)
+
+  // Place the light along the direction ray while enforcing a fixed world Y.
+  transformWorldPositionBuffer.copy(directionalLightPivotWorldPositionHelper)
+  transformWorldPositionBuffer.addScaledVector(directionalLightCandidateDirectionWorldHelper, -d)
+  transformWorldPositionBuffer.y = fixedY
+
+  const parent = primaryObject.parent
+  if (parent) {
+    parent.updateMatrixWorld(true)
+    parent.worldToLocal(transformWorldPositionBuffer)
+  } else {
+    rootGroup.updateMatrixWorld(true)
+    rootGroup.worldToLocal(transformWorldPositionBuffer)
+  }
+
+  // Directly update the Three.js object so the light renders in real-time
+  // during the drag (scene graph sync is deferred while dragging).
+  primaryObject.position.copy(transformWorldPositionBuffer)
+  primaryObject.updateMatrixWorld(true)
+
+  // Keep the directional light target fixed in world space so the sun handle
+  // doesn't drift while we move the light to change direction.
+  lockDirectionalLightTargetWorldPosition(
+    primaryObject,
+    directionalLightPivotWorldPositionHelper,
+    lightTargetWorldPositionHelper,
+  )
+
+  emit('updateNodeTransform', {
+    id: primaryId,
+    position: {
+      x: transformWorldPositionBuffer.x,
+      y: transformWorldPositionBuffer.y,
+      z: transformWorldPositionBuffer.z,
+    },
+  })
+
+  updateGridHighlightFromObject(primaryObject)
+  updateSelectionHighlights()
+}
+
+function computeTransformUpdatesForGroupTransform(options: {
+  target: THREE.Object3D
+  mode: string
+  shouldSnapTranslate: boolean
+  isActiveTranslateTool: boolean
+  groupState: NonNullable<typeof transformGroupState>
+}): TransformUpdatePayload[] {
+  const { target, mode, shouldSnapTranslate, isActiveTranslateTool, groupState } = options
+
+  const updates: TransformUpdatePayload[] = []
+  const pivotWorld = groupState.initialGroupPivotWorldPosition
+
+  // Current pivot transform comes from the attached object (selection pivot).
+  target.getWorldPosition(transformWorldPositionBuffer)
+  target.getWorldQuaternion(transformPivotCurrentWorldQuaternion)
+  target.getWorldScale(transformPivotCurrentWorldScale)
+
+  switch (mode) {
+    case 'translate': {
+      transformDeltaPosition.copy(transformWorldPositionBuffer).sub(pivotWorld)
+      groupState.entries.forEach((entry) => {
+        transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
+        if (shouldSnapTranslate) {
+          snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
+        }
+        transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+        if (entry.parent) {
+          entry.parent.worldToLocal(transformLocalPositionHelper)
+        }
+        entry.object.position.copy(transformLocalPositionHelper)
+        entry.object.updateMatrixWorld(true)
+        syncInstancedTransform(entry.object, true)
+        syncInstancedOutlineEntryTransform(entry.nodeId)
+      })
+      if (isActiveTranslateTool) {
+        transformLastWorldPosition.copy(transformCurrentWorldPosition)
+        hasTransformLastWorldPosition = true
+      }
+      break
+    }
+    case 'rotate': {
+      transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
+      transformQuaternionDelta.copy(transformPivotCurrentWorldQuaternion).multiply(transformQuaternionInverseHelper)
+      groupState.entries.forEach((entry) => {
+        // Orbit position around pivot.
+        transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
+        transformOffsetWorldHelper.applyQuaternion(transformQuaternionDelta)
+        transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
+
+        transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+        if (entry.parent) {
+          entry.parent.worldToLocal(transformLocalPositionHelper)
+        }
+        entry.object.position.copy(transformLocalPositionHelper)
+
+        // Rotate orientation in world space, then convert to local.
+        transformQuaternionHelper.copy(entry.initialWorldQuaternion)
+        transformQuaternionHelper.premultiply(transformQuaternionDelta)
+
+        if (entry.parent) {
+          entry.parent.updateMatrixWorld(true)
+          entry.parent.getWorldQuaternion(transformParentWorldQuaternionHelper)
+          transformParentWorldQuaternionInverseHelper.copy(transformParentWorldQuaternionHelper).invert()
+          transformQuaternionHelper.premultiply(transformParentWorldQuaternionInverseHelper)
+        }
+
+        entry.object.quaternion.copy(transformQuaternionHelper)
+        entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
+        entry.object.updateMatrixWorld(true)
+        syncInstancedTransform(entry.object, true)
+        syncInstancedOutlineEntryTransform(entry.nodeId)
+      })
+
+      hasTransformLastWorldPosition = false
+      break
+    }
+    case 'scale': {
+      const initialScale = groupState.initialGroupPivotWorldScale
+      transformScaleFactor.set(1, 1, 1)
+      transformScaleFactor.x = initialScale.x === 0 ? 1 : transformPivotCurrentWorldScale.x / initialScale.x
+      transformScaleFactor.y = initialScale.y === 0 ? 1 : transformPivotCurrentWorldScale.y / initialScale.y
+      transformScaleFactor.z = initialScale.z === 0 ? 1 : transformPivotCurrentWorldScale.z / initialScale.z
+
+      // Scale offsets in the pivot's orientation frame.
+      transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
+      groupState.entries.forEach((entry) => {
+        entry.object.scale.set(
+          entry.initialScale.x * transformScaleFactor.x,
+          entry.initialScale.y * transformScaleFactor.y,
+          entry.initialScale.z * transformScaleFactor.z,
+        )
+
+        transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
+        transformOffsetLocalHelper.copy(transformOffsetWorldHelper).applyQuaternion(transformQuaternionInverseHelper)
+        transformOffsetLocalHelper.multiply(transformScaleFactor)
+        transformOffsetWorldHelper.copy(transformOffsetLocalHelper).applyQuaternion(groupState.initialGroupPivotWorldQuaternion)
+        transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
+
+        transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+        if (entry.parent) {
+          entry.parent.worldToLocal(transformLocalPositionHelper)
+        }
+        entry.object.position.copy(transformLocalPositionHelper)
+        entry.object.updateMatrixWorld(true)
+        syncInstancedTransform(entry.object, true)
+        syncInstancedOutlineEntryTransform(entry.nodeId)
+      })
+
+      hasTransformLastWorldPosition = false
+      break
+    }
+    default:
+      break
+  }
+
+  groupState.entries.forEach((entry) => {
+    updates.push({
+      id: entry.nodeId,
+      position: entry.object.position,
+      rotation: toEulerLike(entry.object.rotation),
+      scale: entry.object.scale,
+    })
+  })
+
+  return updates
+}
+
+function computeTransformUpdatesForSingleSelect(options: {
+  target: THREE.Object3D
+  mode: string
+  nodeId: string
+  groupState: typeof transformGroupState
+  isTranslateMode: boolean
+  isActiveTranslateTool: boolean
+  shouldSnapTranslate: boolean
+}): TransformUpdatePayload[] {
+  const { target, mode, nodeId, groupState, isTranslateMode, isActiveTranslateTool } = options
+
+  // Single-select legacy path (includes instanced pivot compensation).
+  const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
+  const effectiveNodeId = nodeId
+
+  if (isTranslateMode && isActiveTranslateTool) {
+    transformLastWorldPosition.copy(transformCurrentWorldPosition)
+    hasTransformLastWorldPosition = true
+  }
+
+  // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
+  if ((mode === 'rotate' || mode === 'scale') && !hasPivotOverride) {
+    const primaryEntry = groupState?.entries.get(effectiveNodeId) ?? null
+    if (primaryEntry) {
+      computeTransformPivotWorld(target, instancedPivotWorldHelper)
+      transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+      if (transformDeltaPosition.lengthSq() > 1e-12) {
+        target.getWorldPosition(transformWorldPositionBuffer)
+        transformWorldPositionBuffer.add(transformDeltaPosition)
+        if (target.parent) {
+          target.parent.worldToLocal(transformWorldPositionBuffer)
+        }
+        target.position.copy(transformWorldPositionBuffer)
+        target.updateMatrixWorld(true)
+        syncInstancedTransform(target, true)
+        syncInstancedOutlineEntryTransform(effectiveNodeId)
+      }
+    }
+  }
+
+  return [
+    {
+      id: effectiveNodeId,
+      position: target.position,
+      rotation: toEulerLike(target.rotation),
+      scale: target.scale,
+    },
+  ]
+}
+
+function applyTransformChangeSingleSelectSnap(options: {
+  isPivotTarget: boolean
+  nodeId: string | null
+  isTranslateMode: boolean
+  shouldSnapTranslate: boolean
+  target: THREE.Object3D
+}): void {
+  const { isPivotTarget, nodeId, isTranslateMode, shouldSnapTranslate, target } = options
+  if (!isPivotTarget && nodeId && isTranslateMode && shouldSnapTranslate) {
+    // Only snap single-select local position (legacy behavior).
+    snapVectorToGridForNode(target.position, nodeId)
+  }
+}
+
+function applyTransformChangeTranslateDeltaTracking(options: {
+  target: THREE.Object3D
+  isTranslateMode: boolean
+  isActiveTranslateTool: boolean
+}): void {
+  const { target, isTranslateMode, isActiveTranslateTool } = options
 
   if (isTranslateMode && isActiveTranslateTool) {
     transformMovementDelta.set(0, 0, 0)
@@ -11780,169 +11953,31 @@ function handleTransformChange() {
   } else {
     hasTransformLastWorldPosition = false
   }
+}
 
-  // Keep instanced transforms in sync during dragging when transforming a real node.
+function syncInstancedTransformDuringDragIfNeeded(options: {
+  isPivotTarget: boolean
+  nodeId: string | null
+  target: THREE.Object3D
+}): void {
+  const { isPivotTarget, nodeId, target } = options
   if (!isPivotTarget && nodeId) {
+    // Keep instanced transforms in sync during dragging when transforming a real node.
     syncInstancedTransform(target, true)
     syncInstancedOutlineEntryTransform(nodeId)
     if (target.userData?.instancedPickProxy) {
       updateTransformControlsPivotOverride(target)
     }
   }
+}
 
-  const updates: TransformUpdatePayload[] = []
-
-  if (isGroupTransform && groupState) {
-    const pivotWorld = groupState.initialGroupPivotWorldPosition
-
-    // Current pivot transform comes from the attached object (selection pivot).
-    target.getWorldPosition(transformWorldPositionBuffer)
-    target.getWorldQuaternion(transformPivotCurrentWorldQuaternion)
-    target.getWorldScale(transformPivotCurrentWorldScale)
-
-    switch (mode) {
-      case 'translate': {
-        transformDeltaPosition.copy(transformWorldPositionBuffer).sub(pivotWorld)
-        groupState.entries.forEach((entry) => {
-          transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
-          if (shouldSnapTranslate) {
-            snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
-          }
-          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
-          if (entry.parent) {
-            entry.parent.worldToLocal(transformLocalPositionHelper)
-          }
-          entry.object.position.copy(transformLocalPositionHelper)
-          entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object, true)
-          syncInstancedOutlineEntryTransform(entry.nodeId)
-        })
-        if (isActiveTranslateTool) {
-          transformLastWorldPosition.copy(transformCurrentWorldPosition)
-          hasTransformLastWorldPosition = true
-        }
-        break
-      }
-      case 'rotate': {
-        transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
-        transformQuaternionDelta.copy(transformPivotCurrentWorldQuaternion).multiply(transformQuaternionInverseHelper)
-        groupState.entries.forEach((entry) => {
-          // Orbit position around pivot.
-          transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
-          transformOffsetWorldHelper.applyQuaternion(transformQuaternionDelta)
-          transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
-
-          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
-          if (entry.parent) {
-            entry.parent.worldToLocal(transformLocalPositionHelper)
-          }
-          entry.object.position.copy(transformLocalPositionHelper)
-
-          // Rotate orientation in world space, then convert to local.
-          transformQuaternionHelper.copy(entry.initialWorldQuaternion)
-          transformQuaternionHelper.premultiply(transformQuaternionDelta)
-
-          if (entry.parent) {
-            entry.parent.updateMatrixWorld(true)
-            entry.parent.getWorldQuaternion(transformParentWorldQuaternionHelper)
-            transformParentWorldQuaternionInverseHelper.copy(transformParentWorldQuaternionHelper).invert()
-            transformQuaternionHelper.premultiply(transformParentWorldQuaternionInverseHelper)
-          }
-
-          entry.object.quaternion.copy(transformQuaternionHelper)
-          entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
-          entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object, true)
-          syncInstancedOutlineEntryTransform(entry.nodeId)
-        })
-
-        hasTransformLastWorldPosition = false
-        break
-      }
-      case 'scale': {
-        const initialScale = groupState.initialGroupPivotWorldScale
-        transformScaleFactor.set(1, 1, 1)
-        transformScaleFactor.x = initialScale.x === 0 ? 1 : transformPivotCurrentWorldScale.x / initialScale.x
-        transformScaleFactor.y = initialScale.y === 0 ? 1 : transformPivotCurrentWorldScale.y / initialScale.y
-        transformScaleFactor.z = initialScale.z === 0 ? 1 : transformPivotCurrentWorldScale.z / initialScale.z
-
-        // Scale offsets in the pivot's orientation frame.
-        transformQuaternionInverseHelper.copy(groupState.initialGroupPivotWorldQuaternion).invert()
-        groupState.entries.forEach((entry) => {
-          entry.object.scale.set(
-            entry.initialScale.x * transformScaleFactor.x,
-            entry.initialScale.y * transformScaleFactor.y,
-            entry.initialScale.z * transformScaleFactor.z,
-          )
-
-          transformOffsetWorldHelper.copy(entry.initialWorldPosition).sub(pivotWorld)
-          transformOffsetLocalHelper.copy(transformOffsetWorldHelper).applyQuaternion(transformQuaternionInverseHelper)
-          transformOffsetLocalHelper.multiply(transformScaleFactor)
-          transformOffsetWorldHelper.copy(transformOffsetLocalHelper).applyQuaternion(groupState.initialGroupPivotWorldQuaternion)
-          transformWorldPositionBuffer.copy(pivotWorld).add(transformOffsetWorldHelper)
-
-          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
-          if (entry.parent) {
-            entry.parent.worldToLocal(transformLocalPositionHelper)
-          }
-          entry.object.position.copy(transformLocalPositionHelper)
-          entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object, true)
-          syncInstancedOutlineEntryTransform(entry.nodeId)
-        })
-
-        hasTransformLastWorldPosition = false
-        break
-      }
-      default:
-        break
-    }
-
-    groupState.entries.forEach((entry) => {
-      updates.push({
-        id: entry.nodeId,
-        position: entry.object.position,
-        rotation: toEulerLike(entry.object.rotation),
-        scale: entry.object.scale,
-      })
-    })
-  } else {
-    // Single-select legacy path (includes instanced pivot compensation).
-    const hasPivotOverride = Boolean((target.userData as any)?.transformControlsPivotWorld?.isVector3)
-    const effectiveNodeId = nodeId!
-
-    if (isTranslateMode && isActiveTranslateTool) {
-      transformLastWorldPosition.copy(transformCurrentWorldPosition)
-      hasTransformLastWorldPosition = true
-    }
-
-    // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
-    if ((mode === 'rotate' || mode === 'scale') && !hasPivotOverride) {
-      const primaryEntry = groupState?.entries.get(effectiveNodeId) ?? null
-      if (primaryEntry) {
-        computeTransformPivotWorld(target, instancedPivotWorldHelper)
-        transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
-        if (transformDeltaPosition.lengthSq() > 1e-12) {
-          target.getWorldPosition(transformWorldPositionBuffer)
-          transformWorldPositionBuffer.add(transformDeltaPosition)
-          if (target.parent) {
-            target.parent.worldToLocal(transformWorldPositionBuffer)
-          }
-          target.position.copy(transformWorldPositionBuffer)
-          target.updateMatrixWorld(true)
-          syncInstancedTransform(target, true)
-          syncInstancedOutlineEntryTransform(effectiveNodeId)
-        }
-      }
-    }
-
-    updates.push({
-      id: effectiveNodeId,
-      position: target.position,
-      rotation: toEulerLike(target.rotation),
-      scale: target.scale,
-    })
-  }
+function finalizeTransformChange(options: {
+  updates: TransformUpdatePayload[]
+  isGroupTransform: boolean
+  primaryObject: THREE.Object3D | null
+  target: THREE.Object3D
+}): void {
+  const { updates, isGroupTransform, primaryObject, target } = options
 
   updateGridHighlightFromObject((isGroupTransform ? primaryObject : target) ?? null)
   updateSelectionHighlights()
@@ -11961,6 +11996,173 @@ function handleTransformChange() {
   }
 
   emitTransformUpdates(updates)
+}
+
+function getTransformChangeContext(): {
+  target: THREE.Object3D
+  mode: string
+  isDirectionalLightTargetPivot: boolean
+  isPivotTarget: boolean
+  isTranslateMode: boolean
+  isActiveTranslateTool: boolean
+  shouldSnapTranslate: boolean
+  nodeId: string | null
+  primaryId: string | null
+  primaryObject: THREE.Object3D | null
+} | null {
+  if (!transformControls || !isSceneReady.value) {
+    return null
+  }
+  const target = transformControls.object as THREE.Object3D | null
+  if (!target) {
+    return null
+  }
+
+  const isDirectionalLightTargetPivot = Boolean((target.userData as any)?.isDirectionalLightTargetPivot)
+  const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot || isDirectionalLightTargetPivot)
+  const mode = transformControls.getMode()
+  const isTranslateMode = mode === 'translate'
+  const isActiveTranslateTool = props.activeTool === 'translate'
+  const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
+
+  const nodeId = (target.userData?.nodeId as string | undefined) ?? null
+  const primaryId = sceneStore.selectedNodeId ?? nodeId
+  const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
+
+  return {
+    target,
+    mode,
+    isDirectionalLightTargetPivot,
+    isPivotTarget,
+    isTranslateMode,
+    isActiveTranslateTool,
+    shouldSnapTranslate,
+    nodeId,
+    primaryId,
+    primaryObject,
+  }
+}
+
+function isValidTransformTargetForNonPivot(isPivotTarget: boolean, nodeId: string | null): boolean {
+  // Single-select requires a real node id.
+  return Boolean(isPivotTarget || nodeId)
+}
+
+function updateTransformCurrentWorldPositionFromTarget(target: THREE.Object3D): void {
+  target.updateMatrixWorld(true)
+  target.getWorldPosition(transformCurrentWorldPosition)
+}
+
+function computeTransformUpdatesForContext(options: {
+  target: THREE.Object3D
+  mode: string
+  nodeId: string
+  isTranslateMode: boolean
+  isActiveTranslateTool: boolean
+  shouldSnapTranslate: boolean
+}): { updates: TransformUpdatePayload[]; isGroupTransform: boolean } {
+  const { target, mode, nodeId, isTranslateMode, isActiveTranslateTool, shouldSnapTranslate } = options
+
+  const groupState = transformGroupState
+  const isGroupTransform = Boolean(groupState && groupState.entries.size > 1)
+
+  if (isGroupTransform && groupState) {
+    return {
+      updates: computeTransformUpdatesForGroupTransform({
+        target,
+        mode,
+        shouldSnapTranslate,
+        isActiveTranslateTool,
+        groupState,
+      }),
+      isGroupTransform,
+    }
+  }
+
+  return {
+    updates: computeTransformUpdatesForSingleSelect({
+      target,
+      mode,
+      nodeId,
+      groupState,
+      isTranslateMode,
+      isActiveTranslateTool,
+      shouldSnapTranslate,
+    }),
+    isGroupTransform: false,
+  }
+}
+
+function handleTransformChange() {
+  const ctx = getTransformChangeContext()
+  if (!ctx) {
+    return
+  }
+
+  const {
+    target,
+    mode,
+    isDirectionalLightTargetPivot,
+    isPivotTarget,
+    isTranslateMode,
+    isActiveTranslateTool,
+    shouldSnapTranslate,
+    nodeId,
+    primaryId,
+    primaryObject,
+  } = ctx
+
+  if (isDirectionalLightTargetPivot) {
+    handleDirectionalLightTargetPivotTransformChange({
+      target,
+      mode,
+      primaryId,
+      primaryObject,
+    })
+    return
+  }
+
+  if (!isValidTransformTargetForNonPivot(isPivotTarget, nodeId)) {
+    return
+  }
+
+  applyTransformChangeSingleSelectSnap({
+    isPivotTarget,
+    nodeId,
+    isTranslateMode,
+    shouldSnapTranslate,
+    target,
+  })
+
+  updateTransformCurrentWorldPositionFromTarget(target)
+
+  applyTransformChangeTranslateDeltaTracking({
+    target,
+    isTranslateMode,
+    isActiveTranslateTool,
+  })
+
+  syncInstancedTransformDuringDragIfNeeded({
+    isPivotTarget,
+    nodeId,
+    target,
+  })
+
+  const { updates, isGroupTransform } = computeTransformUpdatesForContext({
+    target,
+    mode,
+    nodeId: nodeId!,
+    isTranslateMode,
+    isActiveTranslateTool,
+    shouldSnapTranslate,
+  })
+
+  finalizeTransformChange({
+    updates,
+    isGroupTransform,
+    primaryObject,
+    target,
+  })
 }
 
 function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode) {
