@@ -1088,6 +1088,8 @@ export interface GroundDynamicMesh {
   columns: number
   cellSize: number
   heightMap: GroundHeightMap
+  /** When true, ground chunk meshes will cast shadows (more expensive on large grounds). */
+  castShadow?: boolean
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null

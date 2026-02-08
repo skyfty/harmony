@@ -125,7 +125,7 @@ function refreshHandleColor(handle: THREE.Object3D, color: THREE.ColorRepresenta
     const material = Array.isArray(anyMaterial) ? anyMaterial[0] : anyMaterial
     const maybeBasic = material as THREE.MeshBasicMaterial | undefined
     if (maybeBasic && (maybeBasic as any).color?.set) {
-      ;(maybeBasic as any).color.set(0xffff00 as any)
+      ;(maybeBasic as any).color.set(color as any)
     }
   })
 }

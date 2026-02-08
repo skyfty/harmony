@@ -48,6 +48,17 @@ const enableAirWall = computed({
   },
 })
 
+const groundCastShadow = computed({
+  get: () => groundDefinition.value?.castShadow === true,
+  set: (value: boolean) => {
+    const node = selectedGroundNode.value
+    if (!node || node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    sceneStore.updateNodeDynamicMesh(node.id, { castShadow: value })
+  },
+})
+
 const noiseStrength = ref(1)
 const selectedNoiseMode = ref<GroundGenerationMode>('perlin')
 let syncingGeneration = false
@@ -279,6 +290,14 @@ function handleScatterAssetSelect(
         hide-details
         color="primary"
         label="Enable Air Wall"
+      />
+
+      <v-switch
+        v-model="groundCastShadow"
+        density="compact"
+        hide-details
+        color="primary"
+        label="地形投射阴影"
       />
 
       <div class="ground-tool-tabs">

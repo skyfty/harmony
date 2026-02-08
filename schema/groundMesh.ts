@@ -29,6 +29,7 @@ type GroundChunkRuntime = {
 type GroundRuntimeState = {
   definitionSignature: string
   chunkCells: number
+  castShadow: boolean
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   lastChunkUpdateAt: number
 
@@ -421,7 +422,14 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   const signature = definitionStructureSignature(definition)
   const existing = groundRuntimeStateMap.get(root)
   const chunkCells = resolveChunkCells(definition)
+  const desiredCastShadow = definition.castShadow === true
   if (existing && existing.definitionSignature === signature && existing.chunkCells === chunkCells) {
+    if (existing.castShadow !== desiredCastShadow) {
+      existing.castShadow = desiredCastShadow
+      for (const runtime of existing.chunks.values()) {
+        runtime.mesh.castShadow = desiredCastShadow
+      }
+    }
     return existing
   }
 
@@ -449,6 +457,7 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   const next: GroundRuntimeState = {
     definitionSignature: signature,
     chunkCells,
+    castShadow: desiredCastShadow,
     chunks: new Map(),
     lastChunkUpdateAt: 0,
 
@@ -561,7 +570,7 @@ function ensureChunkMesh(
 
   mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
   mesh.receiveShadow = true
-  mesh.castShadow = false
+  mesh.castShadow = state.castShadow
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
   mesh.visible = true

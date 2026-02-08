@@ -83,6 +83,9 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
+  if (definition.castShadow !== undefined) {
+    result.castShadow = definition.castShadow
+  }
   if (definition.hasManualEdits !== undefined) {
     result.hasManualEdits = definition.hasManualEdits
   }
@@ -158,6 +161,10 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     hasManualEdits: o.hasManualEdits,
     terrainScatter: manualDeepCloneLocal(o.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter'],
     terrainPaint: manualDeepCloneLocal(o.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint'],
+  }
+
+  if (typeof (o as any).castShadow === 'boolean') {
+    definition.castShadow = (o as any).castShadow
   }
 
   if (initialGeneration && !hasHeightOverrides) {

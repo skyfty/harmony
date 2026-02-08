@@ -1129,6 +1129,9 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
+  if (definition.castShadow !== undefined) {
+    result.castShadow = definition.castShadow
+  }
   if (definition.hasManualEdits !== undefined) {
     result.hasManualEdits = definition.hasManualEdits
   }
