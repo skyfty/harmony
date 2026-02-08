@@ -969,6 +969,10 @@ function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void 
   // Intensity: follow sky exposure (simple, predictable mapping).
   const exposure = typeof settings.exposure === 'number' ? settings.exposure : 1
   light.intensity = clampNumber(exposure, 0, 20)
+
+  // Keep shadow coverage matching the Ground extents.
+  // Without this, the fixed sky-sun shadow frustum can clip shadows on larger grounds.
+  tryFitDirectionalLightShadowsToGround(light)
 }
 
 // Building label font/meshes (planning-conversion buildings)
@@ -12393,6 +12397,11 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateGroundMesh(groundObject, node.dynamicMesh)
         groundData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+
+        // The Skybox sun (Sky.js) uses a DirectionalLight for shadows. Re-fit it when the ground changes.
+        if (skySunLight) {
+          tryFitDirectionalLightShadowsToGround(skySunLight)
+        }
       }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {

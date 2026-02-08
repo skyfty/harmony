@@ -71,6 +71,7 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import { updateGroundChunks } from '@schema/groundMesh'
+import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
@@ -1082,6 +1083,9 @@ let cloudRenderer: SceneCloudRenderer | null = null
 const SKY_SUN_LIGHT_NAME = 'HarmonySkySunLight'
 const SKY_SUN_LIGHT_TARGET_NAME = 'HarmonySkySunLightTarget'
 const SKY_SUN_LIGHT_DISTANCE = 1000
+const SKY_SUN_SHADOW_FRUSTUM_SIZE = 2000
+const SKY_SUN_SHADOW_NEAR = 0.5
+const SKY_SUN_SHADOW_FAR = 5000
 
 function ensureSkySunLightExists(): THREE.DirectionalLight | null {
 	if (!scene) {
@@ -1108,6 +1112,22 @@ function ensureSkySunLightExists(): THREE.DirectionalLight | null {
 	skySunLight.castShadow = true
 	skySunLight.target = skySunLightTarget
 
+	// Match the editor viewport defaults: without configuring the shadow camera,
+	// DirectionalLight shadows are often clipped away (appears as "no shadows").
+	const shadowCam = skySunLight.shadow.camera as THREE.OrthographicCamera
+	const half = SKY_SUN_SHADOW_FRUSTUM_SIZE * 0.5
+	shadowCam.left = -half
+	shadowCam.right = half
+	shadowCam.top = half
+	shadowCam.bottom = -half
+	shadowCam.near = SKY_SUN_SHADOW_NEAR
+	shadowCam.far = SKY_SUN_SHADOW_FAR
+	shadowCam.updateProjectionMatrix()
+
+	skySunLight.shadow.mapSize.set(2048, 2048)
+	skySunLight.shadow.bias = -0.0001
+	skySunLight.shadow.normalBias = 0.02
+
 	;(skySunLight as any).raycast = () => {}
 	;(skySunLightTarget as any).raycast = () => {}
 
@@ -1127,6 +1147,20 @@ function disposeSkySunLight(): void {
 	skySunLightTarget = null
 }
 
+function tryFitSkySunLightShadowsToGround(light: THREE.DirectionalLight): void {
+	if (!cachedGroundNodeId || !cachedGroundDynamicMesh) {
+		return
+	}
+	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
+	if (!groundObject) {
+		return
+	}
+	const width = cachedGroundDynamicMesh.width
+	const depth = cachedGroundDynamicMesh.depth
+	groundObject.updateMatrixWorld(true)
+	autoFitDirectionalLightShadowToGround(light, groundObject.matrixWorld, width, depth, { onlyCastShadow: true })
+}
+
 function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void {
 	const light = ensureSkySunLightExists()
 	if (!light || !skySunLightTarget) {
@@ -1139,6 +1173,7 @@ function syncSkySunLightFromSkyboxSettings(settings: SceneSkyboxSettings): void 
 		? settings.exposure
 		: DEFAULT_SKYBOX_SETTINGS.exposure
 	light.intensity = Math.max(0, Math.min(20, exposure))
+	tryFitSkySunLightShadowsToGround(light)
 }
 let backgroundTexture: THREE.Texture | null = null
 let backgroundTextureCleanup: (() => void) | null = null
@@ -10232,6 +10267,9 @@ async function applyInitialDocumentGraph(
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
 	syncGroundCache(document)
+	if (skySunLight) {
+		tryFitSkySunLightShadowsToGround(skySunLight)
+	}
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
@@ -10263,6 +10301,9 @@ async function applyIncrementalDocumentGraph(
 	}
 
 	syncGroundCache(document)
+	if (skySunLight) {
+		tryFitSkySunLightShadowsToGround(skySunLight)
+	}
 
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)
