@@ -11646,6 +11646,16 @@ function handleTransformChange() {
         { captureHistory },
       )
 
+      // Directly update the Three.js light target so lighting renders in
+      // real-time during the drag (scene graph sync is deferred while dragging).
+      if (primaryObject) {
+        const updatedNode = sceneStore.getNodeById(primaryId)
+        if (updatedNode) {
+          updateLightObjectProperties(primaryObject, updatedNode)
+          primaryObject.updateMatrixWorld(true)
+        }
+      }
+
       updateGridHighlightFromObject(primaryObject)
       updateSelectionHighlights()
       return
@@ -11707,6 +11717,23 @@ function handleTransformChange() {
       } else {
         rootGroup.updateMatrixWorld(true)
         rootGroup.worldToLocal(transformWorldPositionBuffer)
+      }
+
+      // Directly update the Three.js object so the light renders in real-time
+      // during the drag (scene graph sync is deferred while dragging).
+      primaryObject.position.copy(transformWorldPositionBuffer)
+      primaryObject.updateMatrixWorld(true)
+
+      // Keep the directional light target fixed in world space so the sun handle
+      // doesn't drift while we move the light to change direction.
+      const directional = primaryObject.children.find(
+        (child) => (child as THREE.DirectionalLight).isDirectionalLight,
+      ) as THREE.DirectionalLight | undefined
+      if (directional?.target) {
+        lightTargetWorldPositionHelper.copy(directionalLightPivotWorldPositionHelper)
+        primaryObject.worldToLocal(lightTargetWorldPositionHelper)
+        directional.target.position.copy(lightTargetWorldPositionHelper)
+        directional.target.updateMatrixWorld(true)
       }
 
       emit('updateNodeTransform', {
