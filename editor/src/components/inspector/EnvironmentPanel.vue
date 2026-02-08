@@ -49,19 +49,22 @@ function handleSkyboxPresetSelect(presetId: string | null) {
   sceneStore.applySkyboxPreset(presetId)
 }
 
-function onSkyboxChange(key: SkyboxParameterKey, event: Event) {
-  const value = (event.target as HTMLInputElement).value as unknown as number
-  if (Number.isNaN(value)) {
+function onSkyboxChange(key: SkyboxParameterKey, value: unknown) {
+  if (value === '' || value === null || value === undefined) {
     return
   }
-  if (Math.abs(value - localSkyboxSettings.value[key]) < 1e-6) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  if (Math.abs(numeric - localSkyboxSettings.value[key]) < 1e-6) {
     return
   }
   localSkyboxSettings.value = {
     ...localSkyboxSettings.value,
-    [key]: value,
+    [key]: numeric,
   }
-  sceneStore.setSkyboxSettings({ [key]: value } as Partial<SceneSkyboxSettings>, { markCustom: true })
+  sceneStore.setSkyboxSettings({ [key]: numeric } as Partial<SceneSkyboxSettings>, { markCustom: true })
 }
 
 const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackgroundMode }> = [
@@ -1260,7 +1263,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="0.05" :max="2.00" :step="0.01"
                 type="number" inputmode="decimal"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('exposure', $event)"
+                @update:model-value="(value) => onSkyboxChange('exposure', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1270,7 +1273,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="1.00" :max="20.00" :step="0.1"
                 type="number" inputmode="decimal"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('turbidity', $event)"
+                @update:model-value="(value) => onSkyboxChange('turbidity', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1280,7 +1283,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="0.00" :max="5.00" :step="0.05"
                 type="number" inputmode="decimal"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('rayleigh', $event)"
+                @update:model-value="(value) => onSkyboxChange('rayleigh', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1290,7 +1293,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="0.00" :max="0.05" :step="0.0005"
                 type="number" inputmode="decimal"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('mieCoefficient', $event)"
+                @update:model-value="(value) => onSkyboxChange('mieCoefficient', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1300,7 +1303,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="0" :max="1" :step="0.01"
                 type="number" inputmode="decimal"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('mieDirectionalG', $event)"
+                @update:model-value="(value) => onSkyboxChange('mieDirectionalG', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1310,7 +1313,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="-10" :max="90" :step="1"
                 type="number" inputmode="numeric"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('elevation', $event)"
+                @update:model-value="(value) => onSkyboxChange('elevation', value)"
               />
             </div>
             <div class="sky-slider">
@@ -1320,7 +1323,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 :min="0" :max="360" :step="1"
                 type="number" inputmode="numeric"
                 density="compact" variant="underlined" hide-details color="primary"
-                @change="onSkyboxChange('azimuth', $event)"
+                @update:model-value="(value) => onSkyboxChange('azimuth', value)"
               />
             </div>
           </div>
