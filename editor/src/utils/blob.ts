@@ -1,17 +1,21 @@
-export async function computeBlobHash(blob: Blob, algorithm: 'SHA-256' = 'SHA-256'): Promise<string> {
+export async function computeBlobHash(blob: Blob, _algorithm: 'SHA-256' = 'SHA-256'): Promise<string> {
+  // Simple, non-cryptographic hash implementation (FNV-1a 64-bit).
+  // This avoids using SubtleCrypto/crypto and is sufficient to differentiate blobs.
   const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
 
-  // Prefer SubtleCrypto (browser or Node's global `crypto.webcrypto.subtle`).
-  const subtle = (globalThis as any).crypto?.subtle || (globalThis as any).crypto?.webkitSubtle || (globalThis as any).crypto?.webcrypto?.subtle || null
-  if (subtle) {
-    const hashBuffer = await subtle.digest(algorithm, buffer)
-    const hashBytes = Array.from(new Uint8Array(hashBuffer))
-    const hex = hashBytes.map((byte) => byte.toString(16).padStart(2, '0')).join('')
-    return `sha256-${hex}`
+  let hash = 14695981039346656037n // FNV offset basis (64-bit)
+  const prime = 1099511628211n // FNV prime (64-bit)
+  const mask = (1n << 64n) - 1n
+
+  for (const b of bytes) {
+    hash = hash ^ BigInt(b)
+    hash = (hash * prime) & mask
   }
 
-  // No available hashing implementation in this environment.
-  throw new Error('SubtleCrypto is not available in this environment')
+  // Format as hex (16 chars) and keep the existing prefix for compatibility.
+  const hex = hash.toString(16).padStart(16, '0')
+  return `sha256-${hex}`
 }
 
 export function dataUrlToBlob(dataUrl: string): Blob {

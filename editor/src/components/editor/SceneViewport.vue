@@ -145,7 +145,6 @@ import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
 import { Sky } from 'three/addons/objects/Sky.js'
-import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
@@ -225,8 +224,6 @@ import {
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
   clampWallProps,
-  GUIDE_ROUTE_COMPONENT_TYPE,
-  clampGuideRouteComponentProps,
 } from '@schema/components'
 
 import type {
@@ -239,7 +236,7 @@ import type {
   WarpGateEffectInstance,
   GuideboardEffectInstance,
   LodComponentProps,
-  GuideRouteComponentProps,
+
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
