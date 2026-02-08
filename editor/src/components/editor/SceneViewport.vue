@@ -11604,18 +11604,9 @@ function handleDirectionalLightTargetPivotTransformChange(options: {
   if (!primaryId) {
     return
   }
-  const node = sceneStore.getNodeById(primaryId)
-  if (!node?.light || node.light.type !== 'Directional') {
+  if (!prepareDirectionalLightTargetPivotWorldState(primaryId, target)) {
     return
   }
-
-  if (!directionalLightPivotEditState || directionalLightPivotEditState.nodeId !== primaryId) {
-    beginDirectionalLightTargetPivotInteraction(primaryId)
-  }
-
-  target.updateMatrixWorld(true)
-  target.getWorldPosition(directionalLightPivotWorldPositionHelper)
-  target.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
 
   if (mode === 'translate') {
     applyDirectionalLightTargetPivotTranslate(primaryId, primaryObject)
@@ -11628,7 +11619,29 @@ function handleDirectionalLightTargetPivotTransformChange(options: {
   }
 }
 
+function prepareDirectionalLightTargetPivotWorldState(primaryId: string, target: THREE.Object3D): boolean {
+  const node = sceneStore.getNodeById(primaryId)
+  if (!node?.light || node.light.type !== 'Directional') {
+    return false
+  }
+
+  if (!directionalLightPivotEditState || directionalLightPivotEditState.nodeId !== primaryId) {
+    beginDirectionalLightTargetPivotInteraction(primaryId)
+  }
+
+  target.updateMatrixWorld(true)
+  target.getWorldPosition(directionalLightPivotWorldPositionHelper)
+  target.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
+  return true
+}
+
 function applyDirectionalLightTargetPivotTranslate(primaryId: string, primaryObject: THREE.Object3D | null): void {
+  updateDirectionalLightTargetFromPivotWorldPosition(primaryId)
+  syncDirectionalLightRealtimeFromStore(primaryId, primaryObject)
+  finalizeDirectionalLightPivotEdit(primaryObject)
+}
+
+function updateDirectionalLightTargetFromPivotWorldPosition(primaryId: string): void {
   const state = directionalLightPivotEditState
   const captureHistory = Boolean(state?.captureHistoryPending)
   if (state) {
@@ -11646,29 +11659,30 @@ function applyDirectionalLightTargetPivotTranslate(primaryId: string, primaryObj
     },
     { captureHistory },
   )
+}
 
+function syncDirectionalLightRealtimeFromStore(primaryId: string, primaryObject: THREE.Object3D | null): void {
   // Directly update the Three.js light target so lighting renders in
   // real-time during the drag (scene graph sync is deferred while dragging).
-  if (primaryObject) {
-    const updatedNode = sceneStore.getNodeById(primaryId)
-    if (updatedNode) {
-      syncLightFromNodeDuringDrag(primaryObject, updatedNode, updateLightObjectProperties)
-    }
+  if (!primaryObject) {
+    return
   }
+  const updatedNode = sceneStore.getNodeById(primaryId)
+  if (!updatedNode) {
+    return
+  }
+  syncLightFromNodeDuringDrag(primaryObject, updatedNode, updateLightObjectProperties)
+}
 
+function finalizeDirectionalLightPivotEdit(primaryObject: THREE.Object3D | null): void {
   updateGridHighlightFromObject(primaryObject)
   updateSelectionHighlights()
 }
 
-function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject: THREE.Object3D | null): void {
-  const state = directionalLightPivotEditState
-  if (!state || state.nodeId !== primaryId) {
-    return
-  }
-  if (!primaryObject) {
-    return
-  }
-
+function computeDirectionalLightPivotCandidateDirectionWorld(state: {
+  initialPivotWorldQuaternion: THREE.Quaternion
+  initialDirectionWorld: THREE.Vector3
+}): THREE.Vector3 {
   // Derive a new direction from the pivot's rotation delta.
   directionalLightInvQuaternionHelper.copy(state.initialPivotWorldQuaternion).invert()
   directionalLightDeltaQuaternionHelper
@@ -11685,29 +11699,46 @@ function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject
     directionalLightCandidateDirectionWorldHelper.normalize()
   }
 
-  const targetWorldY = directionalLightPivotWorldPositionHelper.y
-  const fixedY = state.fixedLightWorldY
-  const denom = directionalLightCandidateDirectionWorldHelper.y
-  const numerator = targetWorldY - fixedY
+  return directionalLightCandidateDirectionWorldHelper
+}
 
-  const maxD = resolveDirectionalLightMaxFixedHeightDistance(primaryId)
+function computeDirectionalLightFixedHeightSignedDistance(options: {
+  directionY: number
+  targetWorldY: number
+  fixedWorldY: number
+  maxDistance: number
+}): number {
+  const { directionY, targetWorldY, fixedWorldY, maxDistance } = options
+  const denom = directionY
+  const numerator = targetWorldY - fixedWorldY
 
   let d = 0
   if (!Number.isFinite(denom) || Math.abs(denom) < DIRECTIONAL_LIGHT_FIXED_HEIGHT_EPS) {
-    d = Math.sign(-numerator || 1) * maxD
+    d = Math.sign(-numerator || 1) * maxDistance
   } else {
     d = numerator / denom
   }
 
   if (!Number.isFinite(d)) {
-    d = Math.sign(-numerator || 1) * maxD
+    d = Math.sign(-numerator || 1) * maxDistance
   }
-  d = clampNumber(d, -maxD, maxD)
+
+  return clampNumber(d, -maxDistance, maxDistance)
+}
+
+function computeDirectionalLightFixedHeightLocalPosition(options: {
+  primaryObject: THREE.Object3D
+  targetWorldPosition: THREE.Vector3
+  directionWorld: THREE.Vector3
+  signedDistance: number
+  fixedWorldY: number
+}): THREE.Vector3 {
+  const { primaryObject, targetWorldPosition, directionWorld, signedDistance, fixedWorldY } = options
 
   // Place the light along the direction ray while enforcing a fixed world Y.
-  transformWorldPositionBuffer.copy(directionalLightPivotWorldPositionHelper)
-  transformWorldPositionBuffer.addScaledVector(directionalLightCandidateDirectionWorldHelper, -d)
-  transformWorldPositionBuffer.y = fixedY
+  transformWorldPositionBuffer.copy(targetWorldPosition)
+  transformWorldPositionBuffer.addScaledVector(directionWorld, -signedDistance)
+  transformWorldPositionBuffer.y = fixedWorldY
 
   const parent = primaryObject.parent
   if (parent) {
@@ -11718,9 +11749,41 @@ function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject
     rootGroup.worldToLocal(transformWorldPositionBuffer)
   }
 
+  return transformWorldPositionBuffer
+}
+
+function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject: THREE.Object3D | null): void {
+  const state = directionalLightPivotEditState
+  if (!state || state.nodeId !== primaryId) {
+    return
+  }
+  if (!primaryObject) {
+    return
+  }
+
+  const directionWorld = computeDirectionalLightPivotCandidateDirectionWorld(state)
+  const targetWorldY = directionalLightPivotWorldPositionHelper.y
+  const fixedY = state.fixedLightWorldY
+  const maxD = resolveDirectionalLightMaxFixedHeightDistance(primaryId)
+
+  const d = computeDirectionalLightFixedHeightSignedDistance({
+    directionY: directionWorld.y,
+    targetWorldY,
+    fixedWorldY: fixedY,
+    maxDistance: maxD,
+  })
+
+  const localPosition = computeDirectionalLightFixedHeightLocalPosition({
+    primaryObject,
+    targetWorldPosition: directionalLightPivotWorldPositionHelper,
+    directionWorld,
+    signedDistance: d,
+    fixedWorldY: fixedY,
+  })
+
   // Directly update the Three.js object so the light renders in real-time
   // during the drag (scene graph sync is deferred while dragging).
-  primaryObject.position.copy(transformWorldPositionBuffer)
+  primaryObject.position.copy(localPosition)
   primaryObject.updateMatrixWorld(true)
 
   // Keep the directional light target fixed in world space so the sun handle
@@ -11734,14 +11797,13 @@ function applyDirectionalLightTargetPivotRotate(primaryId: string, primaryObject
   emit('updateNodeTransform', {
     id: primaryId,
     position: {
-      x: transformWorldPositionBuffer.x,
-      y: transformWorldPositionBuffer.y,
-      z: transformWorldPositionBuffer.z,
+      x: localPosition.x,
+      y: localPosition.y,
+      z: localPosition.z,
     },
   })
 
-  updateGridHighlightFromObject(primaryObject)
-  updateSelectionHighlights()
+  finalizeDirectionalLightPivotEdit(primaryObject)
 }
 
 function computeTransformUpdatesForGroupTransform(options: {
