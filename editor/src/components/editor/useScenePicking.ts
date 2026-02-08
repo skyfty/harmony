@@ -42,6 +42,11 @@ export function useScenePicking(
     let current: THREE.Object3D | null = object
     while (current) {
       const userData = current.userData as Record<string, unknown> | undefined
+      // Some editor-only helpers (e.g. light target handles) must remain pickable.
+      // Opt them out of the editorOnly-picking filter via `pickableEditorOnly`.
+      if (userData?.pickableEditorOnly === true) {
+        return false
+      }
       if (userData?.editorOnly === true) {
         return true
       }

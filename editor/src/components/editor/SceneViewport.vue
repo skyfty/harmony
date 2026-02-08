@@ -403,6 +403,19 @@ selectionPivotObject.name = 'SelectionPivot'
 selectionPivotObject.userData = { editorOnly: true, isSelectionPivot: true }
 rootGroup.add(selectionPivotObject)
 
+// DirectionalLight editing: keep the gizmo near the light target (usually near the scene)
+// so users don't need to fly the camera to extremely high light positions.
+const directionalLightTargetPivotObject = new THREE.Object3D()
+directionalLightTargetPivotObject.name = 'DirectionalLightTargetPivot'
+directionalLightTargetPivotObject.userData = {
+  editorOnly: true,
+  isDirectionalLightTargetPivot: true,
+  suppressGridHighlight: true,
+}
+// This object is editor-only and should never be pickable.
+;(directionalLightTargetPivotObject as any).raycast = () => {}
+rootGroup.add(directionalLightTargetPivotObject)
+
 const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
@@ -1581,6 +1594,54 @@ const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 
 const lightTargetWorldPositionHelper = new THREE.Vector3()
+const directionalLightPivotWorldPositionHelper = new THREE.Vector3()
+const directionalLightPivotWorldQuaternionHelper = new THREE.Quaternion()
+const directionalLightInitialDirectionWorldHelper = new THREE.Vector3()
+const directionalLightDeltaQuaternionHelper = new THREE.Quaternion()
+const directionalLightInvQuaternionHelper = new THREE.Quaternion()
+const directionalLightCandidateDirectionWorldHelper = new THREE.Vector3()
+
+const DIRECTIONAL_LIGHT_FIXED_HEIGHT_EPS = 1e-4
+const DIRECTIONAL_LIGHT_MAX_FIXED_HEIGHT_DISTANCE_ABS_CAP = 2_000_000
+
+function resolveDirectionalLightMaxFixedHeightDistance(nodeId: string): number {
+  const node = sceneStore.getNodeById(nodeId)
+  const config = node?.light
+  if (!node || !config || config.type !== 'Directional') {
+    return 200000
+  }
+
+  const shadow = (config as any).shadow as Record<string, unknown> | undefined
+  const cameraFar = shadow?.cameraFar
+  if (typeof cameraFar === 'number' && Number.isFinite(cameraFar) && cameraFar > 0) {
+    // Keep the computed light distance within the shadow depth range.
+    return clampNumber(cameraFar * 0.95, 50, DIRECTIONAL_LIGHT_MAX_FIXED_HEIGHT_DISTANCE_ABS_CAP)
+  }
+
+  const orthoSize = shadow?.orthoSize
+  if (typeof orthoSize === 'number' && Number.isFinite(orthoSize) && orthoSize > 0) {
+    // Depth should be comfortably larger than the lateral coverage.
+    return clampNumber(orthoSize * 20, 50, DIRECTIONAL_LIGHT_MAX_FIXED_HEIGHT_DISTANCE_ABS_CAP)
+  }
+
+  // Fallback: scale with current framing radius so it adapts to different project scales.
+  const r = lastCameraFocusRadius
+  if (typeof r === 'number' && Number.isFinite(r) && r > 0) {
+    return clampNumber(r * 50, 200, DIRECTIONAL_LIGHT_MAX_FIXED_HEIGHT_DISTANCE_ABS_CAP)
+  }
+
+  return 200000
+}
+
+type DirectionalLightPivotEditState = {
+  nodeId: string
+  fixedLightWorldY: number
+  initialPivotWorldQuaternion: THREE.Quaternion
+  initialDirectionWorld: THREE.Vector3
+  captureHistoryPending: boolean
+}
+
+let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
@@ -5200,6 +5261,108 @@ function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
   ;(userData as any).transformControlsPivotWorld = pivotWorld
 }
 
+function syncDirectionalLightTargetPivotFromNode(
+  nodeId: string,
+  options: { orientForRotate?: boolean } = {},
+): boolean {
+  const node = sceneStore.getNodeById(nodeId)
+  const config = node?.light
+  if (!node || !config || config.type !== 'Directional') {
+    return false
+  }
+
+  const target = config.target
+  directionalLightPivotWorldPositionHelper.set(
+    target?.x ?? node.position.x,
+    target?.y ?? node.position.y,
+    target?.z ?? node.position.z,
+  )
+
+  // Place pivot under rootGroup.
+  rootGroup.updateMatrixWorld(true)
+  directionalLightTargetPivotObject.position.copy(directionalLightPivotWorldPositionHelper)
+  rootGroup.worldToLocal(directionalLightTargetPivotObject.position)
+
+  // Initialize orientation for rotate so the gizmo aligns with the current light direction.
+  // For translate, keep world-oriented axes.
+  if (options.orientForRotate) {
+    const container = objectMap.get(nodeId)
+    if (container) {
+      container.updateMatrixWorld(true)
+      container.getWorldPosition(lightTargetWorldPositionHelper)
+      directionalLightInitialDirectionWorldHelper
+        .copy(directionalLightPivotWorldPositionHelper)
+        .sub(lightTargetWorldPositionHelper)
+      if (directionalLightInitialDirectionWorldHelper.lengthSq() < 1e-12) {
+        directionalLightInitialDirectionWorldHelper.set(0, -1, 0)
+      } else {
+        directionalLightInitialDirectionWorldHelper.normalize()
+      }
+
+      directionalLightTargetPivotObject.up.set(0, 1, 0)
+      directionalLightTargetPivotObject.lookAt(
+        directionalLightPivotWorldPositionHelper.clone().add(directionalLightInitialDirectionWorldHelper),
+      )
+    } else {
+      directionalLightTargetPivotObject.quaternion.identity()
+      directionalLightTargetPivotObject.rotation.set(0, 0, 0)
+    }
+  } else {
+    directionalLightTargetPivotObject.quaternion.identity()
+    directionalLightTargetPivotObject.rotation.set(0, 0, 0)
+  }
+
+  directionalLightTargetPivotObject.scale.set(1, 1, 1)
+  directionalLightTargetPivotObject.updateMatrixWorld(true)
+  return true
+}
+
+function beginDirectionalLightTargetPivotInteraction(nodeId: string): void {
+  const node = sceneStore.getNodeById(nodeId)
+  const config = node?.light
+  if (!node || !config || config.type !== 'Directional') {
+    directionalLightPivotEditState = null
+    return
+  }
+
+  const container = objectMap.get(nodeId)
+  if (!container) {
+    directionalLightPivotEditState = null
+    return
+  }
+
+  directionalLightTargetPivotObject.updateMatrixWorld(true)
+  directionalLightTargetPivotObject.getWorldPosition(directionalLightPivotWorldPositionHelper)
+  directionalLightTargetPivotObject.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
+
+  container.updateMatrixWorld(true)
+  container.getWorldPosition(lightTargetWorldPositionHelper)
+
+  directionalLightInitialDirectionWorldHelper
+    .copy(directionalLightPivotWorldPositionHelper)
+    .sub(lightTargetWorldPositionHelper)
+  if (directionalLightInitialDirectionWorldHelper.lengthSq() < 1e-12) {
+    directionalLightInitialDirectionWorldHelper.set(0, -1, 0)
+  } else {
+    directionalLightInitialDirectionWorldHelper.normalize()
+  }
+
+  directionalLightPivotEditState = {
+    nodeId,
+    fixedLightWorldY: lightTargetWorldPositionHelper.y,
+    initialPivotWorldQuaternion: directionalLightPivotWorldQuaternionHelper.clone(),
+    initialDirectionWorld: directionalLightInitialDirectionWorldHelper.clone(),
+    captureHistoryPending: true,
+  }
+}
+
+function endDirectionalLightTargetPivotInteraction(): void {
+  directionalLightPivotEditState = null
+  directionalLightTargetPivotObject.quaternion.identity()
+  directionalLightTargetPivotObject.rotation.set(0, 0, 0)
+  directionalLightTargetPivotObject.updateMatrixWorld(true)
+}
+
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds
     .filter((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
@@ -5280,7 +5443,10 @@ const draggingChangedHandler = (event: unknown) => {
   }
 
   const targetObject = transformControls?.object as THREE.Object3D | null
-  const isPivotTarget = Boolean((targetObject?.userData as any)?.isSelectionPivot)
+  const isDirectionalLightTargetPivot = Boolean((targetObject?.userData as any)?.isDirectionalLightTargetPivot)
+  const isPivotTarget = Boolean(
+    (targetObject?.userData as any)?.isSelectionPivot || isDirectionalLightTargetPivot,
+  )
   const primaryId = sceneStore.selectedNodeId ?? null
   const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
 
@@ -5305,6 +5471,9 @@ const draggingChangedHandler = (event: unknown) => {
       wallRenderer.endWallDrag(primaryId)
     }
     transformGroupState = null
+    if (isDirectionalLightTargetPivot) {
+      endDirectionalLightTargetPivotInteraction()
+    }
     updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
     if (pendingSceneGraphSync) {
@@ -5322,6 +5491,10 @@ const draggingChangedHandler = (event: unknown) => {
       wallRenderer.beginWallDrag(primaryId)
     }
     transformGroupState = buildTransformGroupState(primaryId)
+    if (isDirectionalLightTargetPivot && primaryId) {
+      // Establish baseline direction + fixed world height for rotation.
+      beginDirectionalLightTargetPivotInteraction(primaryId)
+    }
     // Prime multi-binding caches before the first transform delta is applied.
     if (targetObject) {
       primeInstancedTransform(isPivotTarget ? primaryObject : targetObject)
@@ -7128,6 +7301,19 @@ function focusCameraOnSelection(nodeIds: string[]): boolean {
   const tempVector = new THREE.Vector3()
 
   for (const nodeId of focusIds) {
+    // Lights: focus on their target (keeps framing near the scene even if the light position is very high).
+    const candidate = sceneStore.getNodeById(nodeId)
+    if (candidate?.light?.type === 'Directional' && candidate.light.target) {
+      tempVector.set(candidate.light.target.x, candidate.light.target.y, candidate.light.target.z)
+      if (!hasBounds) {
+        combinedBox.setFromCenterAndSize(tempVector, new THREE.Vector3(0.01, 0.01, 0.01))
+        hasBounds = true
+      } else {
+        combinedBox.expandByPoint(tempVector)
+      }
+      continue
+    }
+
     const object = objectMap.get(nodeId)
     if (object) {
       object.updateWorldMatrix(true, true)
@@ -7177,6 +7363,13 @@ function focusCameraOnSelection(nodeIds: string[]): boolean {
 function focusCameraOnNode(nodeId: string): boolean {
   const target = new THREE.Vector3()
   let radiusEstimate = 1
+
+  const node = sceneStore.getNodeById(nodeId)
+  if (node?.light?.type === 'Directional' && node.light.target) {
+    target.set(node.light.target.x, node.light.target.y, node.light.target.z)
+    radiusEstimate = Math.max(lastCameraFocusRadius ?? 1, 10)
+    return applyCameraFocus(target, radiusEstimate)
+  }
 
   const object = objectMap.get(nodeId)
   if (object) {
@@ -8213,6 +8406,8 @@ function animate() {
     freezeCircleFacing: !!wallCircleCenterDragState || !!wallCircleRadiusDragState,
   })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
+  // Directional light target handles: keep readable in very large scenes.
+  updateDirectionalLightTargetHandleScreenSize({ camera, canvas: canvasRef.value })
   updateVertexSnapHintPulse(performance.now())
   updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
@@ -8313,6 +8508,8 @@ function disposeScene() {
   instancedMeshGroup.removeFromParent()
   clearInstancedOutlineEntries()
   instancedOutlineGroup.removeFromParent()
+
+  directionalLightTargetHandles.clear()
 
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -11399,7 +11596,8 @@ function handleTransformChange() {
     return
   }
 
-  const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot)
+  const isDirectionalLightTargetPivot = Boolean((target.userData as any)?.isDirectionalLightTargetPivot)
+  const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot || isDirectionalLightTargetPivot)
   const mode = transformControls.getMode()
   const isTranslateMode = mode === 'translate'
   const isActiveTranslateTool = props.activeTool === 'translate'
@@ -11408,6 +11606,122 @@ function handleTransformChange() {
   const nodeId = (target.userData?.nodeId as string | undefined) ?? null
   const primaryId = sceneStore.selectedNodeId ?? nodeId
   const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
+
+  if (isDirectionalLightTargetPivot) {
+    if (!primaryId) {
+      return
+    }
+    const node = sceneStore.getNodeById(primaryId)
+    if (!node?.light || node.light.type !== 'Directional') {
+      return
+    }
+
+    if (!directionalLightPivotEditState || directionalLightPivotEditState.nodeId !== primaryId) {
+      beginDirectionalLightTargetPivotInteraction(primaryId)
+    }
+
+    target.updateMatrixWorld(true)
+    target.getWorldPosition(directionalLightPivotWorldPositionHelper)
+    target.getWorldQuaternion(directionalLightPivotWorldQuaternionHelper)
+
+    if (mode === 'translate') {
+      const state = directionalLightPivotEditState
+      const captureHistory = Boolean(state?.captureHistoryPending)
+      if (state) {
+        state.captureHistoryPending = false
+      }
+
+      sceneStore.updateLightProperties(
+        primaryId,
+        {
+          target: {
+            x: directionalLightPivotWorldPositionHelper.x,
+            y: directionalLightPivotWorldPositionHelper.y,
+            z: directionalLightPivotWorldPositionHelper.z,
+          },
+        },
+        { captureHistory },
+      )
+
+      updateGridHighlightFromObject(primaryObject)
+      updateSelectionHighlights()
+      return
+    }
+
+    if (mode === 'rotate') {
+      const state = directionalLightPivotEditState
+      if (!state || state.nodeId !== primaryId) {
+        return
+      }
+      if (!primaryObject) {
+        return
+      }
+
+      // Derive a new direction from the pivot's rotation delta.
+      directionalLightInvQuaternionHelper.copy(state.initialPivotWorldQuaternion).invert()
+      directionalLightDeltaQuaternionHelper
+        .copy(directionalLightPivotWorldQuaternionHelper)
+        .multiply(directionalLightInvQuaternionHelper)
+
+      directionalLightCandidateDirectionWorldHelper
+        .copy(state.initialDirectionWorld)
+        .applyQuaternion(directionalLightDeltaQuaternionHelper)
+
+      if (directionalLightCandidateDirectionWorldHelper.lengthSq() < 1e-12) {
+        directionalLightCandidateDirectionWorldHelper.set(0, -1, 0)
+      } else {
+        directionalLightCandidateDirectionWorldHelper.normalize()
+      }
+
+      const targetWorldY = directionalLightPivotWorldPositionHelper.y
+      const fixedY = state.fixedLightWorldY
+      const denom = directionalLightCandidateDirectionWorldHelper.y
+      const numerator = targetWorldY - fixedY
+
+      const maxD = resolveDirectionalLightMaxFixedHeightDistance(primaryId)
+
+      let d = 0
+      if (!Number.isFinite(denom) || Math.abs(denom) < DIRECTIONAL_LIGHT_FIXED_HEIGHT_EPS) {
+        d = Math.sign(-numerator || 1) * maxD
+      } else {
+        d = numerator / denom
+      }
+
+      if (!Number.isFinite(d)) {
+        d = Math.sign(-numerator || 1) * maxD
+      }
+      d = clampNumber(d, -maxD, maxD)
+
+      // Place the light along the direction ray while enforcing a fixed world Y.
+      transformWorldPositionBuffer.copy(directionalLightPivotWorldPositionHelper)
+      transformWorldPositionBuffer.addScaledVector(directionalLightCandidateDirectionWorldHelper, -d)
+      transformWorldPositionBuffer.y = fixedY
+
+      const parent = primaryObject.parent
+      if (parent) {
+        parent.updateMatrixWorld(true)
+        parent.worldToLocal(transformWorldPositionBuffer)
+      } else {
+        rootGroup.updateMatrixWorld(true)
+        rootGroup.worldToLocal(transformWorldPositionBuffer)
+      }
+
+      emit('updateNodeTransform', {
+        id: primaryId,
+        position: {
+          x: transformWorldPositionBuffer.x,
+          y: transformWorldPositionBuffer.y,
+          z: transformWorldPositionBuffer.z,
+        },
+      })
+
+      updateGridHighlightFromObject(primaryObject)
+      updateSelectionHighlights()
+      return
+    }
+
+    return
+  }
 
   // Single-select requires a real node id.
   if (!isPivotTarget && !nodeId) {
@@ -11671,6 +11985,7 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
         container.add(light.target)
       }
     }
+    ensureDirectionalLightTargetHandle(light.target, config.color)
     if (typeof config.castShadow === 'boolean') {
       light.castShadow = config.castShadow
     }
@@ -12397,6 +12712,192 @@ function applyLightShadowConfig(light: THREE.Light, config: SceneNode['light']):
   shadowCamera?.updateProjectionMatrix?.()
 }
 
+const DIRECTIONAL_LIGHT_TARGET_HANDLE_NAME = 'HarmonyDirectionalLightTargetHandle'
+
+const DIRECTIONAL_LIGHT_TARGET_HANDLE_SCREEN_DIAMETER_PX = 44
+
+const directionalLightTargetHandles = new Set<THREE.Object3D>()
+const directionalLightTargetHandleWorldHelper = new THREE.Vector3()
+const directionalLightTargetHandleCameraWorldHelper = new THREE.Vector3()
+const directionalLightTargetHandleParentScaleHelper = new THREE.Vector3(1, 1, 1)
+
+function computeWorldUnitsPerPixel(options: {
+  camera: THREE.Camera
+  distance: number
+  viewportHeightPx: number
+}): number {
+  const { camera, distance, viewportHeightPx } = options
+  const safeHeight = Math.max(1, viewportHeightPx)
+
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+    const perspective = camera as THREE.PerspectiveCamera
+    const vFovRad = THREE.MathUtils.degToRad(perspective.fov)
+    const worldHeight = 2 * Math.max(1e-6, distance) * Math.tan(vFovRad / 2)
+    return worldHeight / safeHeight
+  }
+
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    const ortho = camera as THREE.OrthographicCamera
+    const worldHeight = Math.abs((ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom))
+    return worldHeight / safeHeight
+  }
+
+  return Math.max(1e-6, distance) / safeHeight
+}
+
+function updateDirectionalLightTargetHandleScreenSize(options: {
+  camera: THREE.Camera | null
+  canvas: HTMLCanvasElement | null
+}): void {
+  if (!options.camera || !options.canvas || directionalLightTargetHandles.size === 0) {
+    return
+  }
+
+  const viewportHeightPx = Math.max(1, options.canvas.getBoundingClientRect().height)
+  options.camera.getWorldPosition(directionalLightTargetHandleCameraWorldHelper)
+
+  for (const handle of directionalLightTargetHandles) {
+    if (!handle?.parent) {
+      directionalLightTargetHandles.delete(handle)
+      continue
+    }
+
+    handle.getWorldPosition(directionalLightTargetHandleWorldHelper)
+    const distance = Math.max(1e-6, directionalLightTargetHandleWorldHelper.distanceTo(directionalLightTargetHandleCameraWorldHelper))
+    const unitsPerPx = computeWorldUnitsPerPixel({ camera: options.camera, distance, viewportHeightPx })
+    const desiredWorldDiameter = Math.max(1e-6, DIRECTIONAL_LIGHT_TARGET_HANDLE_SCREEN_DIAMETER_PX * unitsPerPx)
+
+    const baseDiameterRaw = handle.userData?.baseDiameter
+    const baseDiameter =
+      typeof baseDiameterRaw === 'number' && Number.isFinite(baseDiameterRaw) && baseDiameterRaw > 1e-6
+        ? baseDiameterRaw
+        : 1
+
+    const parent = handle.parent as THREE.Object3D | null
+    if (parent) {
+      parent.getWorldScale(directionalLightTargetHandleParentScaleHelper)
+    } else {
+      directionalLightTargetHandleParentScaleHelper.set(1, 1, 1)
+    }
+    const parentScale = Math.max(
+      1e-6,
+      Math.max(
+        directionalLightTargetHandleParentScaleHelper.x,
+        directionalLightTargetHandleParentScaleHelper.y,
+        directionalLightTargetHandleParentScaleHelper.z,
+      ),
+    )
+
+    const scale = THREE.MathUtils.clamp(desiredWorldDiameter / (baseDiameter * parentScale), 1e-4, 1e6)
+    handle.scale.setScalar(scale)
+
+    // Keep ring facing the camera for better readability.
+    handle.quaternion.copy(options.camera.quaternion)
+  }
+}
+
+function createDirectionalLightTargetHandle(color: THREE.ColorRepresentation): THREE.Object3D {
+  // Build a more recognizable "sun" (sphere + halo ring) and keep it readable at large scales.
+  const radius = Math.max(0.18, DIRECTIONAL_LIGHT_HELPER_SIZE * 0.12)
+
+  const group = new THREE.Group()
+  group.name = DIRECTIONAL_LIGHT_TARGET_HANDLE_NAME
+  group.renderOrder = 1000
+  group.layers.enableAll()
+
+  // Base diameter used for screen-space scaling.
+  const haloOuter = radius * 2.2
+  group.userData = {
+    ...(group.userData ?? {}),
+    editorOnly: true,
+    pickableEditorOnly: true,
+    excludeFromOutline: true,
+    isDirectionalLightTargetHandle: true,
+    baseDiameter: haloOuter * 2,
+  }
+
+  // Slight lift to avoid z-fighting with ground/meshes at the target point.
+  group.position.set(0, radius * 1.2, 0)
+
+  const sphereGeo = new THREE.SphereGeometry(radius, 18, 14)
+  const sphereMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    depthWrite: false,
+  })
+  sphereMat.toneMapped = false
+
+  const sphere = new THREE.Mesh(sphereGeo, sphereMat)
+  sphere.name = 'DirectionalLightTargetHandle_Sphere'
+  sphere.renderOrder = 1000
+  sphere.layers.enableAll()
+  sphere.userData = {
+    ...(sphere.userData ?? {}),
+    editorOnly: true,
+    pickableEditorOnly: true,
+    excludeFromOutline: true,
+    isDirectionalLightTargetHandle: true,
+  }
+  group.add(sphere)
+
+  const haloInner = radius * 1.45
+  const haloGeo = new THREE.RingGeometry(haloInner, haloOuter, 28)
+  const haloMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.55,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  haloMat.toneMapped = false
+
+  const halo = new THREE.Mesh(haloGeo, haloMat)
+  halo.name = 'DirectionalLightTargetHandle_Halo'
+  halo.renderOrder = 999
+  halo.layers.enableAll()
+  halo.userData = {
+    ...(halo.userData ?? {}),
+    editorOnly: true,
+    pickableEditorOnly: true,
+    excludeFromOutline: true,
+    isDirectionalLightTargetHandle: true,
+  }
+  group.add(halo)
+
+  return group
+}
+
+function ensureDirectionalLightTargetHandle(target: THREE.Object3D, color: THREE.ColorRepresentation): void {
+  const existing = target.children.find((child) =>
+    child?.userData?.isDirectionalLightTargetHandle === true || child?.name === DIRECTIONAL_LIGHT_TARGET_HANDLE_NAME,
+  ) as THREE.Object3D | undefined
+
+  if (!existing) {
+    const created = createDirectionalLightTargetHandle(color)
+    target.add(created)
+    directionalLightTargetHandles.add(created)
+    return
+  }
+
+  directionalLightTargetHandles.add(existing)
+
+  existing.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    const anyMaterial = (mesh as any).material as THREE.Material | THREE.Material[] | null | undefined
+    const material = Array.isArray(anyMaterial) ? anyMaterial[0] : anyMaterial
+    const maybeBasic = material as THREE.MeshBasicMaterial | undefined
+    if (maybeBasic && (maybeBasic as any).color?.set) {
+      ;(maybeBasic as any).color.set(color as any)
+    }
+  })
+}
+
 function createLightObject(node: SceneNode): THREE.Object3D {
   const container = new THREE.Group()
   container.name = `${node.name}-Light`
@@ -12427,6 +12928,9 @@ function createLightObject(node: SceneNode): THREE.Object3D {
         )
       }
       container.add(target)
+      // Visible, selectable target handle (Unity-like “sun” icon near the scene).
+      // Marked editorOnly so it doesn't interfere with placement/snap surfaces, but still pickable.
+      ensureDirectionalLightTargetHandle(target, config.color)
       helper = new THREE.DirectionalLightHelper(directional, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
       requiresHelperUpdate = true
       break
@@ -13042,6 +13546,17 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     transformControls.setSpace('world')
     transformControls.attach(selectionPivotObject)
     // Keep grid highlight anchored to the primary object (not the pivot).
+    updateGridHighlightFromObject(target)
+    return
+  }
+
+  // DirectionalLight: edit using an editor-only pivot at the light target so the gizmo stays near the scene.
+  const node = sceneStore.getNodeById(primaryId)
+  if (node?.light?.type === 'Directional' && (tool === 'translate' || tool === 'rotate')) {
+    syncDirectionalLightTargetPivotFromNode(primaryId, { orientForRotate: tool === 'rotate' })
+    transformControls.setSpace(tool === 'rotate' ? 'local' : 'world')
+    transformControls.attach(directionalLightTargetPivotObject)
+    // Keep highlight anchored to the actual node object.
     updateGridHighlightFromObject(target)
     return
   }
