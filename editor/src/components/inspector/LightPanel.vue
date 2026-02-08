@@ -33,7 +33,7 @@ const lightForm = reactive({
   shadowOrthoSize: 20,
 })
 
-const shadowMapSizeOptions = [256, 512, 1024, 2048, 4096]
+const shadowMapSizeOptions = [256, 512, 1024, 2048, 4096, 8192]
 
 const lightType = computed<LightNodeType | null>(() => selectedNode.value?.light?.type ?? null)
 const nodeVisible = computed(() => selectedNode.value?.visible ?? true)

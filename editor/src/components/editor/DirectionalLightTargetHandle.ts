@@ -7,7 +7,8 @@ export type DirectionalLightTargetHandleManager = {
 }
 
 const TARGET_HANDLE_NAME = 'HarmonyDirectionalLightTargetHandle'
-const TARGET_HANDLE_SCREEN_DIAMETER_PX = 44
+// Make handle slightly smaller on-screen by default
+const TARGET_HANDLE_SCREEN_DIAMETER_PX = 36
 
 function computeWorldUnitsPerPixel(options: {
   camera: THREE.Camera
@@ -38,7 +39,8 @@ function createTargetHandle(options: {
   helperSize: number
 }): THREE.Object3D {
   // Build a recognizable "sun" (sphere + halo ring) and keep it readable at large scales.
-  const radius = Math.max(0.18, options.helperSize * 0.12)
+  // Reduce base radius so the sun handle appears smaller
+  const radius = Math.max(0.12, options.helperSize * 0.08)
 
   const group = new THREE.Group()
   group.name = TARGET_HANDLE_NAME
@@ -60,10 +62,12 @@ function createTargetHandle(options: {
   group.position.set(0, radius * 1.2, 0)
 
   const sphereGeo = new THREE.SphereGeometry(radius, 18, 14)
+  // Sun handle: use yellow and semi-transparent for visibility.
+  const SUN_HANDLE_HEX = 0xffff00
   const sphereMat = new THREE.MeshBasicMaterial({
-    color: options.color,
+    color: SUN_HANDLE_HEX,
     transparent: true,
-    opacity: 0.95,
+    opacity: 0.6,
     depthTest: false,
     depthWrite: false,
   })
@@ -85,12 +89,13 @@ function createTargetHandle(options: {
   const haloInner = radius * 1.45
   const haloGeo = new THREE.RingGeometry(haloInner, haloOuter, 28)
   const haloMat = new THREE.MeshBasicMaterial({
-    color: options.color,
+    color: 0xffff00,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.35,
     depthTest: false,
     depthWrite: false,
     side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
   })
   haloMat.toneMapped = false
 
@@ -120,7 +125,7 @@ function refreshHandleColor(handle: THREE.Object3D, color: THREE.ColorRepresenta
     const material = Array.isArray(anyMaterial) ? anyMaterial[0] : anyMaterial
     const maybeBasic = material as THREE.MeshBasicMaterial | undefined
     if (maybeBasic && (maybeBasic as any).color?.set) {
-      ;(maybeBasic as any).color.set(color as any)
+      ;(maybeBasic as any).color.set(0xffff00 as any)
     }
   })
 }
