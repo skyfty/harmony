@@ -12324,11 +12324,13 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.flowDirection.x - merged.flowDirection.x) <= 1e-6 &&
           Math.abs(currentProps.flowDirection.y - merged.flowDirection.y) <= 1e-6
         const unchanged =
+          currentProps.implementationMode === merged.implementationMode &&
           currentProps.textureWidth === merged.textureWidth &&
           currentProps.textureHeight === merged.textureHeight &&
           Math.abs(currentProps.distortionScale - merged.distortionScale) <= 1e-6 &&
           Math.abs(currentProps.size - merged.size) <= 1e-6 &&
           Math.abs(currentProps.flowSpeed - merged.flowSpeed) <= 1e-6 &&
+          Math.abs(currentProps.waveStrength - merged.waveStrength) <= 1e-6 &&
           flowDirectionUnchanged
         if (unchanged) {
           return false

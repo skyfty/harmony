@@ -6,6 +6,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   WATER_COMPONENT_TYPE,
   WATER_PRESETS,
+  type WaterImplementationMode,
   type WaterPresetId,
   type WaterComponentProps,
   clampWaterComponentProps,
@@ -41,7 +42,17 @@ const waterPresetOptions = computed(() =>
   WATER_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
 )
 
+const waterImplementationOptions = computed(() =>
+  [
+    { value: 'auto' as const, label: 'Auto' },
+    { value: 'static' as const, label: 'Static EnvMap' },
+    { value: 'dynamic' as const, label: 'Dynamic Water' },
+  ] satisfies Array<{ value: WaterImplementationMode; label: string }>,
+)
+
 const selectedPreset = ref<WaterPresetId | null>(null)
+
+const selectedImplementationMode = ref<WaterImplementationMode>('auto')
 
 const localState = reactive({
   textureWidth: WATER_DEFAULT_TEXTURE_WIDTH,
@@ -60,6 +71,7 @@ watch(
   (props) => {
     const normalized = clampWaterComponentProps(props ?? null)
     syncing.value = true
+    selectedImplementationMode.value = normalized.implementationMode
     localState.textureWidth = normalized.textureWidth
     localState.textureHeight = normalized.textureHeight
     localState.distortionScale = normalized.distortionScale
@@ -73,6 +85,14 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+function handleImplementationModeChange(value: WaterImplementationMode) {
+  if (!componentEnabled.value) {
+    return
+  }
+  selectedImplementationMode.value = value
+  applyWaterPatch({ implementationMode: value })
+}
 
 function applyWaterPatch(patch: Partial<WaterComponentProps>) {
   if (!componentEnabled.value) {
@@ -336,6 +356,19 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="water-field-grid">
+        <v-select
+          class="water-preset-select"
+          label="Implementation"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :items="waterImplementationOptions"
+          item-title="label"
+          item-value="value"
+          :model-value="selectedImplementationMode"
+          :disabled="!componentEnabled"
+          @update:modelValue="handleImplementationModeChange"
+        />
         <v-select
           class="water-preset-select"
           label="Preset"

@@ -2,11 +2,18 @@ import type { Material, Mesh, Object3D, Texture } from 'three'
 import {
   BufferGeometry,
   Color,
+  CubeCamera,
   DataTexture,
+  LinearFilter,
+  Mesh as ThreeMesh,
+  MeshStandardMaterial,
   
   RepeatWrapping,
   NoColorSpace,
   ShaderMaterial,
+  WebGLCubeRenderTarget,
+  type Scene,
+  type WebGLRenderer,
   Vector2,
   Vector3,
 } from 'three'
@@ -35,12 +42,19 @@ export const WATER_MIN_SIZE = 1
 export const WATER_MIN_FLOW_SPEED = 0
 export const WATER_MIN_WAVE_STRENGTH = 0
 
+export type WaterImplementationMode = 'auto' | 'static' | 'dynamic'
+
+export const WATER_DEFAULT_IMPLEMENTATION_MODE: WaterImplementationMode = 'auto'
+
+const WATER_STATIC_ENVMAP_SIZE = 64
+
 export interface FlowDirection {
   x: number
   y: number
 }
 
 export interface WaterComponentProps {
+  implementationMode: WaterImplementationMode
   textureWidth: number
   textureHeight: number
   distortionScale: number
@@ -115,9 +129,39 @@ function normalizeFlowDirection(candidate?: FlowDirection | null): FlowDirection
   return { x: rawX / length, y: rawY / length }
 }
 
+function normalizeImplementationMode(candidate: unknown): WaterImplementationMode {
+  if (candidate === 'auto' || candidate === 'static' || candidate === 'dynamic') {
+    return candidate
+  }
+  return WATER_DEFAULT_IMPLEMENTATION_MODE
+}
+
+function isWeChatMiniProgramRuntime(): boolean {
+  const wx = (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
+  return Boolean(wx && typeof wx.getSystemInfoSync === 'function')
+}
+
+function isMobileUserAgentRuntime(): boolean {
+  const nav = (globalThis as typeof globalThis & { navigator?: { userAgent?: string } }).navigator
+  const ua = typeof nav?.userAgent === 'string' ? nav.userAgent : ''
+  if (!ua) {
+    return false
+  }
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+}
+
+function resolveEffectiveImplementationMode(mode: WaterImplementationMode): Exclude<WaterImplementationMode, 'auto'> {
+  if (mode !== 'auto') {
+    return mode
+  }
+  const isMobile = isWeChatMiniProgramRuntime() || isMobileUserAgentRuntime()
+  return isMobile ? 'static' : 'dynamic'
+}
+
 export function clampWaterComponentProps(
   props: Partial<WaterComponentProps> | null | undefined,
 ): WaterComponentProps {
+  const implementationMode = normalizeImplementationMode((props as any)?.implementationMode)
   const normalizedFlow = normalizeFlowDirection(props?.flowDirection ?? null)
   const width = Number.isFinite(props?.textureWidth)
     ? Math.max(WATER_MIN_TEXTURE_SIZE, props!.textureWidth!)
@@ -136,6 +180,7 @@ export function clampWaterComponentProps(
     ? Math.max(WATER_MIN_WAVE_STRENGTH, props!.waveStrength!)
     : WATER_DEFAULT_WAVE_STRENGTH
   return {
+    implementationMode,
     textureWidth: width,
     textureHeight: height,
     distortionScale,
@@ -148,6 +193,7 @@ export function clampWaterComponentProps(
 
 export function cloneWaterComponentProps(props: WaterComponentProps): WaterComponentProps {
   return {
+    implementationMode: props.implementationMode,
     textureWidth: props.textureWidth,
     textureHeight: props.textureHeight,
     distortionScale: props.distortionScale,
@@ -162,11 +208,21 @@ class WaterComponent extends Component<WaterComponentProps> {
   private hostMesh: Mesh | null = null
   private waterParent: Object3D | null = null
   private waterInstance: Water | null = null
+  private staticWaterMesh: Mesh | null = null
+  private staticWaterMaterial: MeshStandardMaterial | null = null
+  private staticEnvTarget: WebGLCubeRenderTarget | null = null
+  private staticEnvCamera: CubeCamera | null = null
+  private staticEnvHasCaptured = false
+  private staticEnvNeedsCapture = false
+  private staticEnvIsCapturing = false
+  private staticEnvLastCapturedWorldPos: Vector3 | null = null
   private waterGeometry: BufferGeometry | null = null
   private normalTexture: Texture | null = null
   private flowOffset = new Vector2()
   private resolvedFlowDirection = new Vector2(1, 1)
   private lastSignature: string | null = null
+
+  private staticNormalScrollSpeed = 0.03
 
   constructor(context: ComponentRuntimeContext<WaterComponentProps>) {
     super(context)
@@ -192,16 +248,25 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
-    if (!this.waterInstance) {
+    const props = clampWaterComponentProps(this.context.getProps())
+    const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
+
+    if (effectiveMode === 'dynamic' && this.waterInstance) {
+      this.syncWaterTransform(this.waterInstance)
+      const material = this.waterInstance.material as ShaderMaterial
+      if (material.uniforms?.time) {
+        material.uniforms.time.value += deltaTime * props.flowSpeed
+      }
+      this.syncSunUniforms()
       return
     }
-    this.syncWaterTransform()
-    const props = clampWaterComponentProps(this.context.getProps())
-    const material = this.waterInstance.material as ShaderMaterial
-    if (material.uniforms?.time) {
-      material.uniforms.time.value += deltaTime * props.flowSpeed
+
+    if (effectiveMode === 'static' && this.staticWaterMesh) {
+      this.syncWaterTransform(this.staticWaterMesh)
+      this.tickStaticNormalScroll(deltaTime, props)
+      this.markStaticEnvCaptureIfMoved()
+      this.syncSunUniforms()
     }
-    this.syncSunUniforms()
   }
 
   private updateRuntimeObject(object: Object3D | null): void {
@@ -215,17 +280,26 @@ class WaterComponent extends Component<WaterComponentProps> {
       return
     }
     const props = clampWaterComponentProps(this.context.getProps())
+    const effectiveMode = resolveEffectiveImplementationMode(props.implementationMode)
     const material = this.selectPrimaryMaterial(mesh.material)
     const materialSignature = this.computeMaterialSignature(material)
-    const signature = this.createRebuildSignature(props, materialSignature)
+    const signature = this.createRebuildSignature(props, materialSignature, effectiveMode)
     if (this.hostMesh !== mesh || signature !== this.lastSignature) {
       this.destroyWater()
       this.hostMesh = mesh
       this.lastSignature = signature
-      this.createWater(mesh, props, material)
+      if (effectiveMode === 'dynamic') {
+        this.createDynamicWater(mesh, props, material)
+      } else {
+        this.createStaticWater(mesh, props, material)
+      }
       return
     }
-    this.applyUniforms(props, material)
+    if (effectiveMode === 'dynamic') {
+      this.applyDynamicUniforms(props, material)
+    } else {
+      this.applyStaticUniforms(props, material)
+    }
   }
 
   private resolveHostMesh(root: Object3D | null): Mesh | null {
@@ -305,11 +379,15 @@ class WaterComponent extends Component<WaterComponentProps> {
     return null
   }
 
-  private createRebuildSignature(props: WaterComponentProps, materialSignature: string): string {
-    return [props.textureWidth, props.textureHeight, materialSignature].join('_')
+  private createRebuildSignature(
+    props: WaterComponentProps,
+    materialSignature: string,
+    effectiveMode: Exclude<WaterImplementationMode, 'auto'>,
+  ): string {
+    return [effectiveMode, props.textureWidth, props.textureHeight, materialSignature].join('_')
   }
 
-  private createWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
+  private createDynamicWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
     this.waterGeometry = resolvedGeometry
@@ -347,20 +425,86 @@ class WaterComponent extends Component<WaterComponentProps> {
       // Don't hide the host mesh here; a hidden parent would also hide the Water child.
     }
     this.waterInstance = water
-    this.applyUniforms(props, material)
+    this.applyDynamicUniforms(props, material)
     this.syncSunUniforms()
   }
 
-  private syncWaterTransform(): void {
-    if (!this.waterInstance || !this.hostMesh) {
+  private createStaticWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
+    const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
+    const resolvedGeometry = baseGeometry ?? new BufferGeometry()
+    this.waterGeometry = resolvedGeometry
+
+    const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
+    this.normalTexture = normalTexture
+
+    const staticMaterial = new MeshStandardMaterial({
+      color: this.resolveMaterialColor(material),
+      transparent: Boolean((material as Material | null)?.transparent),
+      opacity: typeof (material as Material | null)?.opacity === 'number'
+        ? (material as Material).opacity
+        : WATER_DEFAULT_ALPHA,
+      metalness: 0,
+      roughness: 0.08,
+    })
+    staticMaterial.normalMap = normalTexture
+    staticMaterial.envMapIntensity = 1
+    this.staticWaterMaterial = staticMaterial
+
+    const typedWaterMesh = new ThreeMesh(resolvedGeometry, staticMaterial) as unknown as Mesh
+    typedWaterMesh.name = `${mesh.name ?? 'Water'} (Static)`
+    typedWaterMesh.userData = typedWaterMesh.userData ?? {}
+    typedWaterMesh.userData[COMPONENT_ARTIFACT_KEY] = true
+    typedWaterMesh.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = this.context.nodeId
+    typedWaterMesh.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
+    typedWaterMesh.renderOrder = mesh.renderOrder
+
+    const envTarget = new WebGLCubeRenderTarget(WATER_STATIC_ENVMAP_SIZE)
+    envTarget.texture.generateMipmaps = false
+    envTarget.texture.minFilter = LinearFilter
+    this.staticEnvTarget = envTarget
+
+    const envCamera = new CubeCamera(0.1, 2000, envTarget)
+    this.staticEnvCamera = envCamera
+
+    const parent = mesh.parent
+    if (parent) {
+      typedWaterMesh.position.copy(mesh.position)
+      typedWaterMesh.quaternion.copy(mesh.quaternion)
+      typedWaterMesh.scale.copy(mesh.scale)
+      parent.add(typedWaterMesh)
+      parent.add(envCamera)
+      this.waterParent = parent
+      mesh.visible = false
+    } else {
+      mesh.add(typedWaterMesh)
+      mesh.add(envCamera)
+      this.waterParent = mesh
+    }
+
+    this.staticWaterMesh = typedWaterMesh
+    this.staticEnvHasCaptured = false
+    this.staticEnvNeedsCapture = false
+    this.staticEnvLastCapturedWorldPos = null
+
+    const self = this
+    typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene) {
+      self.maybeCaptureStaticEnvMap(renderer, scene)
+    }
+
+    this.applyStaticUniforms(props, material)
+    this.syncSunUniforms()
+  }
+
+  private syncWaterTransform(target: Object3D): void {
+    if (!this.hostMesh) {
       return
     }
-    // Keep Water aligned with the host mesh even though it's not parented under it.
-    this.waterInstance.position.copy(this.hostMesh.position)
-    this.waterInstance.quaternion.copy(this.hostMesh.quaternion)
-    this.waterInstance.scale.copy(this.hostMesh.scale)
-    this.waterInstance.updateMatrix()
-    this.waterInstance.updateMatrixWorld(true)
+    // Keep the surface aligned with the host mesh even though it's not parented under it.
+    target.position.copy(this.hostMesh.position)
+    target.quaternion.copy(this.hostMesh.quaternion)
+    target.scale.copy(this.hostMesh.scale)
+    target.updateMatrix()
+    target.updateMatrixWorld(true)
   }
 
   private prepareNormalTexture(source: Texture | null): Texture {
@@ -373,7 +517,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     return clone
   }
 
-  private applyUniforms(props: WaterComponentProps, material: Material | null): void {
+  private applyDynamicUniforms(props: WaterComponentProps, material: Material | null): void {
     if (!this.waterInstance) {
       return
     }
@@ -394,6 +538,116 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.resolvedFlowDirection.copy(normalized)
     this.flowOffset.set(0, 0)
     this.syncSunUniforms()
+  }
+
+  private applyStaticUniforms(props: WaterComponentProps, material: Material | null): void {
+    if (!this.staticWaterMesh || !this.staticWaterMaterial) {
+      return
+    }
+    this.staticWaterMaterial.color.copy(this.resolveMaterialColor(material))
+    const opacity = typeof (material as Material | null)?.opacity === 'number' ? (material as Material).opacity : WATER_DEFAULT_ALPHA
+    this.staticWaterMaterial.opacity = opacity
+    this.staticWaterMaterial.transparent = Boolean((material as Material | null)?.transparent) || opacity < 0.999
+
+    // Use existing wave params to approximate Water.js look:
+    // - `size` controls normal tiling
+    // - `distortionScale * waveStrength` controls normal strength
+    const tiling = Math.min(16, Math.max(0.5, 8 / Math.max(0.001, props.size)))
+    if (this.normalTexture) {
+      this.normalTexture.repeat.set(tiling, tiling)
+      this.normalTexture.wrapS = RepeatWrapping
+      this.normalTexture.wrapT = RepeatWrapping
+    }
+
+    const strength = Math.max(0, props.distortionScale * props.waveStrength)
+    const normalScale = Math.min(1.5, strength * 0.08)
+    this.staticWaterMaterial.normalScale.set(normalScale, normalScale)
+
+    // Ensure capture happens the first time it becomes visible.
+    if (!this.staticEnvHasCaptured) {
+      this.staticEnvNeedsCapture = true
+    }
+  }
+
+  private tickStaticNormalScroll(deltaTime: number, props: WaterComponentProps): void {
+    if (!this.normalTexture || !this.staticWaterMaterial) {
+      return
+    }
+    const dx = typeof props.flowDirection?.x === 'number' ? props.flowDirection.x : DEFAULT_FLOW_DIRECTION.x
+    const dy = typeof props.flowDirection?.y === 'number' ? props.flowDirection.y : DEFAULT_FLOW_DIRECTION.y
+    this.resolvedFlowDirection.set(dx, dy)
+    if (this.resolvedFlowDirection.lengthSq() <= 1e-6) {
+      this.resolvedFlowDirection.set(DEFAULT_FLOW_DIRECTION.x, DEFAULT_FLOW_DIRECTION.y)
+    } else {
+      this.resolvedFlowDirection.normalize()
+    }
+
+    const speed = (Number.isFinite(props.flowSpeed) ? props.flowSpeed : WATER_DEFAULT_FLOW_SPEED) * this.staticNormalScrollSpeed
+    if (Math.abs(speed) <= 1e-9) {
+      return
+    }
+    this.flowOffset.x = (this.flowOffset.x + this.resolvedFlowDirection.x * speed * deltaTime) % 1
+    this.flowOffset.y = (this.flowOffset.y + this.resolvedFlowDirection.y * speed * deltaTime) % 1
+    if (this.flowOffset.x < 0) this.flowOffset.x += 1
+    if (this.flowOffset.y < 0) this.flowOffset.y += 1
+    this.normalTexture.offset.copy(this.flowOffset)
+  }
+
+  private markStaticEnvCaptureIfMoved(): void {
+    if (!this.hostMesh) {
+      return
+    }
+    const current = new Vector3()
+    this.hostMesh.getWorldPosition(current)
+    if (!this.staticEnvLastCapturedWorldPos) {
+      return
+    }
+    const dx = current.x - this.staticEnvLastCapturedWorldPos.x
+    const dy = current.y - this.staticEnvLastCapturedWorldPos.y
+    const dz = current.z - this.staticEnvLastCapturedWorldPos.z
+    if (dx * dx + dy * dy + dz * dz > 1e-6) {
+      this.staticEnvNeedsCapture = true
+    }
+  }
+
+  private maybeCaptureStaticEnvMap(renderer: WebGLRenderer, scene: Scene): void {
+    if (!this.staticWaterMesh || !this.staticWaterMaterial || !this.staticEnvCamera || !this.staticEnvTarget) {
+      return
+    }
+    if (this.staticEnvIsCapturing) {
+      return
+    }
+    if (this.staticEnvHasCaptured && !this.staticEnvNeedsCapture) {
+      return
+    }
+    if (!this.hostMesh) {
+      return
+    }
+
+    const worldPos = new Vector3()
+    this.hostMesh.getWorldPosition(worldPos)
+
+    this.staticEnvIsCapturing = true
+    const wasVisible = this.staticWaterMesh.visible
+    this.staticWaterMesh.visible = false
+    try {
+      if (this.staticEnvCamera.parent) {
+        const local = this.staticEnvCamera.parent.worldToLocal(worldPos.clone())
+        this.staticEnvCamera.position.copy(local)
+      } else {
+        this.staticEnvCamera.position.copy(worldPos)
+      }
+      this.staticEnvCamera.updateMatrixWorld(true)
+      this.staticEnvCamera.update(renderer, scene)
+      this.staticWaterMaterial.envMap = this.staticEnvTarget.texture
+      this.staticWaterMaterial.needsUpdate = true
+      this.staticEnvHasCaptured = true
+      this.staticEnvNeedsCapture = false
+      this.staticEnvLastCapturedWorldPos = worldPos.clone()
+    } finally {
+      this.staticWaterMesh.visible = wasVisible
+      this.staticEnvIsCapturing = false
+    }
   }
 
   private syncSunUniforms(): void {
@@ -458,6 +712,28 @@ class WaterComponent extends Component<WaterComponentProps> {
       }
       this.waterInstance = null
     }
+    if (this.staticWaterMesh) {
+      this.waterParent?.remove(this.staticWaterMesh)
+      this.staticWaterMesh.onBeforeRender = null as any
+      this.staticWaterMesh = null
+      this.meshVisibility(true)
+    }
+    if (this.staticEnvCamera) {
+      this.waterParent?.remove(this.staticEnvCamera)
+      this.staticEnvCamera = null
+    }
+    if (this.staticEnvTarget) {
+      this.staticEnvTarget.dispose()
+      this.staticEnvTarget = null
+    }
+    if (this.staticWaterMaterial) {
+      this.staticWaterMaterial.dispose()
+      this.staticWaterMaterial = null
+    }
+    this.staticEnvHasCaptured = false
+    this.staticEnvNeedsCapture = false
+    this.staticEnvIsCapturing = false
+    this.staticEnvLastCapturedWorldPos = null
     if (this.waterGeometry) {
       this.waterGeometry.dispose()
       this.waterGeometry = null
@@ -468,6 +744,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
     this.hostMesh = null
     this.lastSignature = null
+    this.waterParent = null
   }
 
   private meshVisibility(value: boolean): void {
