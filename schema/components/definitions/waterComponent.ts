@@ -6,6 +6,8 @@ import {
   DataTexture,
   LinearFilter,
   Mesh as ThreeMesh,
+  UniformsLib,
+  UniformsUtils,
   
   RepeatWrapping,
   NoColorSpace,
@@ -440,11 +442,9 @@ class WaterComponent extends Component<WaterComponentProps> {
     normalTexture.wrapT = RepeatWrapping
     normalTexture.needsUpdate = true
 
-    return new ShaderMaterial({
-      transparent,
-      opacity,
-      depthWrite: !transparent,
-      uniforms: {
+    const uniforms = UniformsUtils.merge([
+      UniformsLib['lights'],
+      {
         envMap: { value: null },
         normalSampler: { value: normalTexture },
         alpha: { value: opacity },
@@ -456,12 +456,31 @@ class WaterComponent extends Component<WaterComponentProps> {
         eye: { value: new Vector3() },
         waterColor: { value: waterColor },
       },
+    ])
+
+    return new ShaderMaterial({
+      transparent,
+      opacity,
+      depthWrite: !transparent,
+      uniforms,
+      lights: true,
       vertexShader: /* glsl */ `
-        varying vec4 vWorldPosition;
+        varying vec4 worldPosition;
+
+        #include <common>
+        #include <shadowmap_pars_vertex>
+        #include <logdepthbuf_pars_vertex>
 
         void main() {
-          vWorldPosition = modelMatrix * vec4(position, 1.0);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          worldPosition = modelMatrix * vec4( position, 1.0 );
+
+          vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+          gl_Position = projectionMatrix * mvPosition;
+
+          #include <beginnormal_vertex>
+          #include <defaultnormal_vertex>
+          #include <logdepthbuf_vertex>
+          #include <shadowmap_vertex>
         }
       `,
       fragmentShader: /* glsl */ `
@@ -476,7 +495,15 @@ class WaterComponent extends Component<WaterComponentProps> {
         uniform vec3 eye;
         uniform vec3 waterColor;
 
-        varying vec4 vWorldPosition;
+        varying vec4 worldPosition;
+
+        #include <common>
+        #include <packing>
+        #include <bsdfs>
+        #include <lights_pars_begin>
+        #include <shadowmap_pars_fragment>
+        #include <shadowmask_pars_fragment>
+        #include <logdepthbuf_pars_fragment>
 
         vec4 getNoise(vec2 uv) {
           vec2 uv0 = (uv / 103.0) + vec2(time / 17.0, time / 29.0);
@@ -506,12 +533,13 @@ class WaterComponent extends Component<WaterComponentProps> {
         }
 
         void main() {
-          vec3 worldPos = vWorldPosition.xyz;
-          vec3 worldToEye = eye - worldPos;
+          #include <logdepthbuf_fragment>
+
+          vec3 worldToEye = eye - worldPosition.xyz;
           vec3 eyeDirection = normalize(worldToEye);
           float distance = max(0.0001, length(worldToEye));
 
-          vec4 noise = getNoise(worldPos.xz * size);
+          vec4 noise = getNoise(worldPosition.xz * size);
           vec3 surfaceNormal = normalize(noise.xzy * vec3(1.5, 1.0, 1.5));
 
           vec3 diffuseLight = vec3(0.0);
@@ -529,13 +557,18 @@ class WaterComponent extends Component<WaterComponentProps> {
           vec3 reflectionSample = textureCube(envMap, reflectionVec).rgb;
           vec3 scatter = max(0.0, dot(surfaceNormal, eyeDirection)) * waterColor;
 
+          float shadowMask = getShadowMask();
+
           vec3 albedo = mix(
-            (sunColor * diffuseLight * 0.3 + scatter),
+            (sunColor * diffuseLight * 0.3 + scatter) * shadowMask,
             (vec3(0.1) + reflectionSample * 0.9 + reflectionSample * specularLight),
             reflectance
           );
 
           gl_FragColor = vec4(albedo, alpha);
+
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }
       `,
     })
