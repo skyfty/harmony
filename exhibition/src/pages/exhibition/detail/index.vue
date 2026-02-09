@@ -272,8 +272,8 @@ async function enterExhibition(): Promise<void> {
   }
   const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
   const target = sceneUrl
-    ? `/uni_modules/scene-viewer/pages/scene-viewer/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
-    : '/uni_modules/scene-viewer/pages/scene-viewer/index';
+    ? `/uni_modules/scene-viewer/pages/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
+    : '/uni_modules/scene-viewer/pages/index';
 
   try {
     await new Promise<void>((resolve, reject) => {

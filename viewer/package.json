@@ -1,5 +1,5 @@
 {
-  "name": "harmony-scene-viewer",
+  "name": "harmony-viewer",
   "version": "0.0.1",
   "type": "module",
   "scripts": {
@@ -15,6 +15,7 @@
     "@dcloudio/uni-app-harmony": "3.0.0-alpha-4050320250224001",
     "@dcloudio/uni-components": "3.0.0-alpha-4050320250224001",
     "@dcloudio/uni-mp-weixin": "3.0.0-alpha-4050320250224001",
+    "@harmony/scene-viewer": "file:../scenery",
     "@harmony/schema": "file:../schema",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",
     "@minisheep/three-platform-adapter": "^2.0.1",

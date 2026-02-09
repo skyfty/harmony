@@ -65,7 +65,7 @@ const formatDate = (value?: string) => {
 
 function openProject() {
     if (!currentProject.value) return;
-    uni.navigateTo({ url: `/uni_modules/scene-viewer/pages/scene-viewer/index?projectId=${encodeURIComponent(currentProject.value.id)}` });
+    uni.navigateTo({ url: `/uni_modules/scene-viewer/pages/index?projectId=${encodeURIComponent(currentProject.value.id)}` });
 }
 
 function removeProject() {
@@ -201,7 +201,7 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
 
     // Navigate to the project immediately after import
     setTimeout(() => {
-        uni.navigateTo({ url: `/uni_modules/scene-viewer/pages/scene-viewer/index?projectId=${encodeURIComponent(newProject.id)}` });
+        uni.navigateTo({ url: `/uni_modules/scene-viewer/pages/index?projectId=${encodeURIComponent(newProject.id)}` });
     }, 500);
 
     uni.showToast({ title: '项目导入成功', icon: 'success' });

@@ -116,7 +116,7 @@ cd harmony
 ### exhibition（`exhibition/.env.development` / `exhibition/.env.production`）
 - `VITE_MINI_API_BASE`：展览主题小程序调用后端的完整基础路径，默认包含 `/api/mini`。
 
-### scene-viewer（`scene-viewer/.env.development` / `scene-viewer/.env.production`）
+### scene-viewer（`viewer/.env.development` / `viewer/.env.production`）
 - `VITE_MINI_API_BASE`：3D 场景 viewer（独立工程 + 可复用 `uni_modules/scene-viewer` 分包）调用后端的完整基础路径，默认包含 `/api/mini`。
 
 > 开发阶段保持默认即可连接本地 `http://localhost:4000`，上线前请将生产配置中的域名更新为实际部署域名并确认 HTTPS（当前小程序侧仅支持微信小程序构建）。

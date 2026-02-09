@@ -19,7 +19,7 @@
     "@dcloudio/uni-mp-weixin": "3.0.0-alpha-4050320250224001",
     "@harmony/schema": "file:../schema",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",
-    "@harmony/scene-viewer": "file:../scene-viewer/src/uni_modules/scene-viewer",
+    "@harmony/scene-viewer": "file:../scenery",
     "cannon-es": "^0.20.0",
     "pinia": "^2.2.6",
     "three": "^0.172.0",
