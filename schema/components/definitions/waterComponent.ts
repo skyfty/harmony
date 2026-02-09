@@ -2,17 +2,20 @@ import type { Camera, Material, Mesh, Object3D, Texture } from 'three'
 import {
   BufferGeometry,
   Color,
-  CubeCamera,
   DataTexture,
+  Matrix4,
   LinearFilter,
   Mesh as ThreeMesh,
+  PerspectiveCamera,
+  Plane,
   UniformsLib,
   UniformsUtils,
   
   RepeatWrapping,
   NoColorSpace,
   ShaderMaterial,
-  WebGLCubeRenderTarget,
+  Vector4,
+  WebGLRenderTarget,
   type Scene,
   type WebGLRenderer,
   Vector2,
@@ -46,8 +49,6 @@ export const WATER_MIN_WAVE_STRENGTH = 0
 export type WaterImplementationMode = 'auto' | 'static' | 'dynamic'
 
 export const WATER_DEFAULT_IMPLEMENTATION_MODE: WaterImplementationMode = 'auto'
-
-const WATER_STATIC_ENVMAP_SIZE = 128
 
 export interface FlowDirection {
   x: number
@@ -211,8 +212,18 @@ class WaterComponent extends Component<WaterComponentProps> {
   private waterInstance: Water | null = null
   private staticWaterMesh: Mesh | null = null
   private staticWaterMaterial: ShaderMaterial | null = null
-  private staticEnvTarget: WebGLCubeRenderTarget | null = null
-  private staticEnvCamera: CubeCamera | null = null
+  private staticMirrorTarget: WebGLRenderTarget | null = null
+  private staticMirrorCamera: PerspectiveCamera | null = null
+  private staticTextureMatrix = new Matrix4()
+  private staticMirrorPlane = new Plane()
+  private staticClipPlane = new Vector4()
+  private staticMirrorWorldPosition = new Vector3()
+  private staticCameraWorldPosition = new Vector3()
+  private staticRotationMatrix = new Matrix4()
+  private staticNormal = new Vector3()
+  private staticView = new Vector3()
+  private staticTarget = new Vector3()
+  private staticQ = new Vector4()
   private staticEnvHasCaptured = false
   private staticEnvNeedsCapture = false
   private staticEnvIsCapturing = false
@@ -443,14 +454,16 @@ class WaterComponent extends Component<WaterComponentProps> {
     normalTexture.needsUpdate = true
 
     const uniforms = UniformsUtils.merge([
+      UniformsLib['fog'],
       UniformsLib['lights'],
       {
-        envMap: { value: null },
         normalSampler: { value: normalTexture },
+        mirrorSampler: { value: null },
         alpha: { value: opacity },
         time: { value: 0.0 },
         size: { value: props.size },
         distortionScale: { value: distortionScale },
+        textureMatrix: { value: new Matrix4() },
         sunColor: { value: new Color(0xffffff) },
         sunDirection: { value: new Vector3(0.70707, 0.70707, 0).normalize() },
         eye: { value: new Vector3() },
@@ -465,26 +478,34 @@ class WaterComponent extends Component<WaterComponentProps> {
       uniforms,
       lights: true,
       vertexShader: /* glsl */ `
+        uniform mat4 textureMatrix;
+        uniform float time;
+
+        varying vec4 mirrorCoord;
         varying vec4 worldPosition;
 
         #include <common>
+        #include <fog_pars_vertex>
         #include <shadowmap_pars_vertex>
         #include <logdepthbuf_pars_vertex>
 
         void main() {
-          worldPosition = modelMatrix * vec4( position, 1.0 );
+          mirrorCoord = modelMatrix * vec4( position, 1.0 );
+          worldPosition = mirrorCoord.xyzw;
+          mirrorCoord = textureMatrix * mirrorCoord;
 
-          vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+          vec4 mvPosition =  modelViewMatrix * vec4( position, 1.0 );
           gl_Position = projectionMatrix * mvPosition;
 
           #include <beginnormal_vertex>
           #include <defaultnormal_vertex>
           #include <logdepthbuf_vertex>
+          #include <fog_vertex>
           #include <shadowmap_vertex>
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform samplerCube envMap;
+        uniform sampler2D mirrorSampler;
         uniform sampler2D normalSampler;
         uniform float alpha;
         uniform float time;
@@ -495,11 +516,13 @@ class WaterComponent extends Component<WaterComponentProps> {
         uniform vec3 eye;
         uniform vec3 waterColor;
 
+        varying vec4 mirrorCoord;
         varying vec4 worldPosition;
 
         #include <common>
         #include <packing>
         #include <bsdfs>
+        #include <fog_pars_fragment>
         #include <lights_pars_begin>
         #include <shadowmap_pars_fragment>
         #include <shadowmask_pars_fragment>
@@ -551,10 +574,8 @@ class WaterComponent extends Component<WaterComponentProps> {
           float reflectance = rf0 + (1.0 - rf0) * pow((1.0 - theta), 5.0);
 
           float distortionAmount = (0.001 + 1.0 / distance) * distortionScale;
-          vec3 reflectionVec = reflect(-eyeDirection, surfaceNormal);
-          reflectionVec = normalize(reflectionVec + vec3(surfaceNormal.x, 0.0, surfaceNormal.z) * distortionAmount * 0.15);
-
-          vec3 reflectionSample = textureCube(envMap, reflectionVec).rgb;
+          vec2 distortion = surfaceNormal.xz * distortionAmount;
+          vec3 reflectionSample = vec3(texture2D(mirrorSampler, mirrorCoord.xy / mirrorCoord.w + distortion));
           vec3 scatter = max(0.0, dot(surfaceNormal, eyeDirection)) * waterColor;
 
           float shadowMask = getShadowMask();
@@ -569,6 +590,7 @@ class WaterComponent extends Component<WaterComponentProps> {
 
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
+          #include <fog_fragment>
         }
       `,
     })
@@ -593,13 +615,16 @@ class WaterComponent extends Component<WaterComponentProps> {
     typedWaterMesh.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = this.context.componentId
     typedWaterMesh.renderOrder = mesh.renderOrder
 
-    const envTarget = new WebGLCubeRenderTarget(WATER_STATIC_ENVMAP_SIZE)
-    envTarget.texture.generateMipmaps = false
-    envTarget.texture.minFilter = LinearFilter
-    this.staticEnvTarget = envTarget
+    const mirrorTarget = new WebGLRenderTarget(
+      Math.max(WATER_MIN_TEXTURE_SIZE, Math.floor(props.textureWidth)),
+      Math.max(WATER_MIN_TEXTURE_SIZE, Math.floor(props.textureHeight)),
+    )
+    mirrorTarget.texture.generateMipmaps = false
+    mirrorTarget.texture.minFilter = LinearFilter
+    this.staticMirrorTarget = mirrorTarget
 
-    const envCamera = new CubeCamera(0.1, 2000, envTarget)
-    this.staticEnvCamera = envCamera
+    const mirrorCamera = new PerspectiveCamera()
+    this.staticMirrorCamera = mirrorCamera
 
     const parent = mesh.parent
     if (parent) {
@@ -607,12 +632,12 @@ class WaterComponent extends Component<WaterComponentProps> {
       typedWaterMesh.quaternion.copy(mesh.quaternion)
       typedWaterMesh.scale.copy(mesh.scale)
       parent.add(typedWaterMesh)
-      parent.add(envCamera)
+      parent.add(mirrorCamera)
       this.waterParent = parent
       mesh.visible = false
     } else {
       mesh.add(typedWaterMesh)
-      mesh.add(envCamera)
+      mesh.add(mirrorCamera)
       this.waterParent = mesh
     }
 
@@ -624,7 +649,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     const self = this
     typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene, camera: Camera) {
       self.syncStaticEyeUniform(camera)
-      self.maybeCaptureStaticEnvMap(renderer, scene)
+      self.maybeCaptureStaticMirror(renderer, scene, camera)
     }
 
     this.applyStaticUniforms(props, material)
@@ -700,6 +725,11 @@ class WaterComponent extends Component<WaterComponentProps> {
       uniforms.distortionScale.value = Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength)
     }
 
+    // Keep material's textureMatrix uniform object stable; we update its value during mirror capture.
+    if (uniforms.textureMatrix?.value instanceof Matrix4) {
+      // no-op
+    }
+
     // Ensure capture happens the first time it becomes visible.
     if (!this.staticEnvHasCaptured) {
       this.staticEnvNeedsCapture = true
@@ -747,8 +777,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
   }
 
-  private maybeCaptureStaticEnvMap(renderer: WebGLRenderer, scene: Scene): void {
-    if (!this.staticWaterMesh || !this.staticWaterMaterial || !this.staticEnvCamera || !this.staticEnvTarget) {
+  private maybeCaptureStaticMirror(renderer: WebGLRenderer, scene: Scene, camera: Camera): void {
+    if (!this.staticWaterMesh || !this.staticWaterMaterial || !this.staticMirrorCamera || !this.staticMirrorTarget) {
       return
     }
     if (this.staticEnvIsCapturing) {
@@ -757,35 +787,125 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (this.staticEnvHasCaptured && !this.staticEnvNeedsCapture) {
       return
     }
-    if (!this.hostMesh) {
+
+    const scope = this.staticWaterMesh
+    const mirrorCamera = this.staticMirrorCamera
+
+    // Mirror world position is the plane position.
+    this.staticMirrorWorldPosition.setFromMatrixPosition(scope.matrixWorld)
+    this.staticCameraWorldPosition.setFromMatrixPosition(camera.matrixWorld)
+
+    this.staticRotationMatrix.extractRotation(scope.matrixWorld)
+
+    // Water.js assumes plane normal is +Z in local space.
+    this.staticNormal.set(0, 0, 1)
+    this.staticNormal.applyMatrix4(this.staticRotationMatrix)
+
+    this.staticView.subVectors(this.staticMirrorWorldPosition, this.staticCameraWorldPosition)
+
+    // Avoid rendering when mirror is facing away.
+    if (this.staticView.dot(this.staticNormal) > 0) {
       return
     }
 
-    const worldPos = new Vector3()
-    this.hostMesh.getWorldPosition(worldPos)
+    // Compute mirror camera position.
+    this.staticView.reflect(this.staticNormal).negate()
+    this.staticView.add(this.staticMirrorWorldPosition)
 
+    this.staticRotationMatrix.extractRotation(camera.matrixWorld)
+    const lookAtPosition = new Vector3(0, 0, -1)
+    lookAtPosition.applyMatrix4(this.staticRotationMatrix)
+    lookAtPosition.add(this.staticCameraWorldPosition)
+
+    this.staticTarget.subVectors(this.staticMirrorWorldPosition, lookAtPosition)
+    this.staticTarget.reflect(this.staticNormal).negate()
+    this.staticTarget.add(this.staticMirrorWorldPosition)
+
+    mirrorCamera.position.copy(this.staticView)
+    mirrorCamera.up.set(0, 1, 0)
+    mirrorCamera.up.applyMatrix4(this.staticRotationMatrix)
+    mirrorCamera.up.reflect(this.staticNormal)
+    mirrorCamera.lookAt(this.staticTarget)
+
+    // Match camera projection.
+    ;(mirrorCamera as any).near = (camera as any).near
+    mirrorCamera.far = (camera as any).far
+    mirrorCamera.updateMatrixWorld()
+    mirrorCamera.projectionMatrix.copy((camera as any).projectionMatrix)
+
+    // Update the texture matrix (Water.js style).
+    this.staticTextureMatrix.set(
+      0.5, 0.0, 0.0, 0.5,
+      0.0, 0.5, 0.0, 0.5,
+      0.0, 0.0, 0.5, 0.5,
+      0.0, 0.0, 0.0, 1.0,
+    )
+    this.staticTextureMatrix.multiply(mirrorCamera.projectionMatrix)
+    this.staticTextureMatrix.multiply(mirrorCamera.matrixWorldInverse)
+
+    // Oblique clip plane (Water.js style).
+    this.staticMirrorPlane.setFromNormalAndCoplanarPoint(this.staticNormal, this.staticMirrorWorldPosition)
+    this.staticMirrorPlane.applyMatrix4(mirrorCamera.matrixWorldInverse)
+
+    this.staticClipPlane.set(
+      this.staticMirrorPlane.normal.x,
+      this.staticMirrorPlane.normal.y,
+      this.staticMirrorPlane.normal.z,
+      this.staticMirrorPlane.constant,
+    )
+
+    const projectionMatrix = mirrorCamera.projectionMatrix
+    this.staticQ.x = (Math.sign(this.staticClipPlane.x) + projectionMatrix.elements[8]) / projectionMatrix.elements[0]
+    this.staticQ.y = (Math.sign(this.staticClipPlane.y) + projectionMatrix.elements[9]) / projectionMatrix.elements[5]
+    this.staticQ.z = -1.0
+    this.staticQ.w = (1.0 + projectionMatrix.elements[10]) / projectionMatrix.elements[14]
+
+    // Calculate the scaled plane vector.
+    this.staticClipPlane.multiplyScalar(2.0 / this.staticClipPlane.dot(this.staticQ))
+
+    // Replacing the third row of the projection matrix.
+    projectionMatrix.elements[2] = this.staticClipPlane.x
+    projectionMatrix.elements[6] = this.staticClipPlane.y
+    projectionMatrix.elements[10] = this.staticClipPlane.z + 1.0
+    projectionMatrix.elements[14] = this.staticClipPlane.w
+
+    // Capture.
     this.staticEnvIsCapturing = true
-    const wasVisible = this.staticWaterMesh.visible
-    this.staticWaterMesh.visible = false
+    const wasVisible = scope.visible
+    scope.visible = false
+    const currentRenderTarget = renderer.getRenderTarget()
+    const currentXrEnabled = renderer.xr.enabled
+    const currentShadowAutoUpdate = renderer.shadowMap.autoUpdate
     try {
-      if (this.staticEnvCamera.parent) {
-        const local = this.staticEnvCamera.parent.worldToLocal(worldPos.clone())
-        this.staticEnvCamera.position.copy(local)
-      } else {
-        this.staticEnvCamera.position.copy(worldPos)
+      renderer.xr.enabled = false
+      renderer.shadowMap.autoUpdate = false
+
+      renderer.setRenderTarget(this.staticMirrorTarget)
+      if ((renderer as any).autoClear === false) {
+        renderer.clear()
       }
-      this.staticEnvCamera.updateMatrixWorld(true)
-      this.staticEnvCamera.update(renderer, scene)
+      renderer.render(scene, mirrorCamera)
+
       const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
-      if (uniforms.envMap) {
-        uniforms.envMap.value = this.staticEnvTarget.texture
+      if (uniforms.mirrorSampler) {
+        uniforms.mirrorSampler.value = this.staticMirrorTarget.texture
       }
+      if (uniforms.textureMatrix?.value instanceof Matrix4) {
+        uniforms.textureMatrix.value.copy(this.staticTextureMatrix)
+      }
+
       this.staticWaterMaterial.needsUpdate = true
       this.staticEnvHasCaptured = true
       this.staticEnvNeedsCapture = false
-      this.staticEnvLastCapturedWorldPos = worldPos.clone()
+
+      const worldPos = new Vector3()
+      scope.getWorldPosition(worldPos)
+      this.staticEnvLastCapturedWorldPos = worldPos
     } finally {
-      this.staticWaterMesh.visible = wasVisible
+      renderer.xr.enabled = currentXrEnabled
+      renderer.shadowMap.autoUpdate = currentShadowAutoUpdate
+      renderer.setRenderTarget(currentRenderTarget)
+      scope.visible = wasVisible
       this.staticEnvIsCapturing = false
     }
   }
@@ -865,13 +985,13 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.staticWaterMesh = null
       this.meshVisibility(true)
     }
-    if (this.staticEnvCamera) {
-      this.waterParent?.remove(this.staticEnvCamera)
-      this.staticEnvCamera = null
+    if (this.staticMirrorCamera) {
+      this.waterParent?.remove(this.staticMirrorCamera)
+      this.staticMirrorCamera = null
     }
-    if (this.staticEnvTarget) {
-      this.staticEnvTarget.dispose()
-      this.staticEnvTarget = null
+    if (this.staticMirrorTarget) {
+      this.staticMirrorTarget.dispose()
+      this.staticMirrorTarget = null
     }
     if (this.staticWaterMaterial) {
       this.staticWaterMaterial.dispose()
