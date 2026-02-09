@@ -29,6 +29,9 @@ editor/.env
 admin/.env
 miniprogram/.env
 
+# Generated uni_modules copied from npm-installed packages
+exhibition/src/uni_modules/scene-viewer/
+
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)
 editor/src/wasm/rust-crate/target/

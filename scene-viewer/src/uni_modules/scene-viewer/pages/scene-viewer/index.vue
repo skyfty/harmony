@@ -420,7 +420,7 @@ import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
-import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer';
+import { SceneCloudRenderer, sanitizeCloudSettings } from '@harmony/schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '../../components/PlatformCanvas.vue';
 import { useProjectStore } from '../../common/stores/projectStore';
@@ -429,18 +429,18 @@ import {
   buildSceneGraph,
   createTerrainScatterLodRuntime,
   type SceneGraphBuildOptions,
-} from '@schema/sceneGraph';
-import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller';
-import ResourceCache from '@schema/ResourceCache';
-import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@schema/assetCache';
-import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@schema/assetDownloadMirrors';
-import { isGroundDynamicMesh, buildGroundHeightfieldData } from '@schema/groundHeightfield';
-import { updateGroundChunks } from '@schema/groundMesh';
-import { buildGroundAirWallDefinitions } from '@schema/airWall';
+} from '@harmony/schema/sceneGraph';
+import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
+import ResourceCache from '@harmony/schema/ResourceCache';
+import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
+import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
+import { isGroundDynamicMesh, buildGroundHeightfieldData } from '@harmony/schema/groundHeightfield';
+import { updateGroundChunks } from '@harmony/schema/groundMesh';
+import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 import {
   createDefaultTerrainPaintLoaders,
   syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
-} from '@schema/terrainPaintPreview';
+} from '@harmony/schema/terrainPaintPreview';
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
   createRigidbodyBody as createSharedRigidbodyBody,
@@ -455,10 +455,10 @@ import {
   type RigidbodyInstance,
   type RigidbodyMaterialEntry,
   type RigidbodyOrientationAdjustment,
-} from '@schema/physicsEngine';
-import { loadNodeObject } from '@schema/modelAssetLoader';
+} from '@harmony/schema/physicsEngine';
+import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
-import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
+import { inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -473,9 +473,9 @@ import {
   updateModelInstanceMatrix,
   findNodeIdForInstance,
   type ModelInstanceGroup,
-} from '@schema/modelObjectCache';
-import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker';
-import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel';
+} from '@harmony/schema/modelObjectCache';
+import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker';
+import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel';
 import {
   DEFAULT_ENVIRONMENT_SETTINGS,
   DEFAULT_ENVIRONMENT_GRAVITY,
@@ -515,10 +515,10 @@ import {
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
   type Vector3Like,
-} from '@schema/index';
-import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror';
-import { ComponentManager } from '@schema/components/componentManager';
-import { setActiveMultiuserSceneId } from '@schema/multiuserContext';
+} from '@harmony/schema/index';
+import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
+import { ComponentManager } from '@harmony/schema/components/componentManager';
+import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
 import {
   behaviorComponentDefinition,
   guideboardComponentDefinition,
@@ -559,7 +559,7 @@ import {
   DEFAULT_AXLE,
   LOD_COMPONENT_TYPE,
   SCENE_STATE_ANCHOR_COMPONENT_TYPE,
-} from '@schema/components';
+} from '@harmony/schema/components';
 import {
   VehicleDriveController,
   type VehicleDriveCameraFollowState,
@@ -569,7 +569,7 @@ import {
   type VehicleDriveInputState,
   type VehicleDriveOrbitMode,
   type VehicleInstance,
-} from '@schema/VehicleDriveController';
+} from '@harmony/schema/VehicleDriveController';
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
@@ -577,11 +577,11 @@ import {
   createCameraFollowState,
   getApproxDimensions,
   resetCameraFollowState,
-} from '@schema/followCameraController';
-import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers';
-import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync';
-import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime';
-import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@schema/cameraGuard';
+} from '@harmony/schema/followCameraController';
+import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers';
+import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
+import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
+import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
 import type {
   GuideboardComponentProps,
   LodComponentProps,
@@ -592,7 +592,7 @@ import type {
   AutoTourComponentProps,
   VehicleComponentProps,
   VehicleWheelProps,
-} from '@schema/components';
+} from '@harmony/schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -609,12 +609,12 @@ import {
   DEFAULT_OBJECT_RADIUS,
   PROXIMITY_MIN_DISTANCE,
   PROXIMITY_RADIUS_SCALE,
-} from '@schema/behaviors/runtime';
+} from '@harmony/schema/behaviors/runtime';
 import {
   applyMaterialOverrides,
   disposeMaterialTextures,
   type MaterialTextureAssignmentOptions,
-} from '@schema/material';
+} from '@harmony/schema/material';
 
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
@@ -2149,7 +2149,7 @@ const vehicleSpeedGaugeStyle = computed(() => ({
 }));
 
 // Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
-const vehicleDriveStateBridge: import('@schema/VehicleDriveController').VehicleDriveRuntimeState = {
+const vehicleDriveStateBridge: import('@harmony/schema/VehicleDriveController').VehicleDriveRuntimeState = {
   get active() {
     return vehicleDriveActive.value;
   },

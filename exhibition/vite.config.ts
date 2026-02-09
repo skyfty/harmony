@@ -11,16 +11,19 @@ export default defineConfig({
     exclude: ['@minisheep/three-platform-adapter']
   },  
   resolve: {
-    alias: {
-      '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
-      // The viewer module depends on three/cannon. We intentionally resolve them
-      // from the scene-viewer project to keep exhibition itself free of direct
-      // three/cannon installs while avoiding schema's nested node_modules.
-      'three': fileURLToPath(new URL('../scene-viewer/node_modules/three', import.meta.url)),
-      'cannon-es': fileURLToPath(new URL('../scene-viewer/node_modules/cannon-es', import.meta.url)),
-      'three/examples': fileURLToPath(new URL('../scene-viewer/node_modules/three/examples', import.meta.url)),
-      '@three-examples': fileURLToPath(new URL('../scene-viewer/node_modules/three/examples/jsm', import.meta.url)),
-    },
+    alias: [
+      // Keep this app decoupled from monorepo-relative imports.
+      // scene-viewer and @harmony/schema are resolved from node_modules.
+
+      // When developing with local (file:) linked packages, some modules may be
+      // resolved from their own nested node_modules (e.g. ../schema/node_modules).
+      // Force ONLY the base adapter import to resolve from this app's node_modules
+      // (do not intercept subpaths like "@minisheep/three-platform-adapter/wechat").
+      {
+        find: /^@minisheep\/three-platform-adapter$/,
+        replacement: fileURLToPath(new URL('./node_modules/@minisheep/three-platform-adapter', import.meta.url)),
+      },
+    ],
   },
   
   server: {
