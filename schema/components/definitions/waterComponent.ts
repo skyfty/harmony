@@ -8,6 +8,7 @@ import {
   Mesh as ThreeMesh,
   PerspectiveCamera,
   Plane,
+  Quaternion,
   UniformsLib,
   UniformsUtils,
   
@@ -71,6 +72,10 @@ const DEFAULT_NORMAL_MAP = createDefaultNormalTexture()
 const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
+
+const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.05 * 0.05
+const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((0.5 * Math.PI) / 180 / 2)
+const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 1e-6
 
 // Removed unused PositionAttribute type
 
@@ -224,10 +229,16 @@ class WaterComponent extends Component<WaterComponentProps> {
   private staticView = new Vector3()
   private staticTarget = new Vector3()
   private staticQ = new Vector4()
+  private staticTempWorldPos = new Vector3()
+  private staticTempCameraPos = new Vector3()
+  private staticTempCameraQuat = new Quaternion()
   private staticEnvHasCaptured = false
   private staticEnvNeedsCapture = false
   private staticEnvIsCapturing = false
   private staticEnvLastCapturedWorldPos: Vector3 | null = null
+  private staticEnvLastCapturedCameraPos: Vector3 | null = null
+  private staticEnvLastCapturedCameraQuat: Quaternion | null = null
+  private staticEnvLastCapturedCameraProjection: number[] | null = null
   private waterGeometry: BufferGeometry | null = null
   private normalTexture: Texture | null = null
   private flowOffset = new Vector2()
@@ -645,10 +656,14 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.staticEnvHasCaptured = false
     this.staticEnvNeedsCapture = false
     this.staticEnvLastCapturedWorldPos = null
+    this.staticEnvLastCapturedCameraPos = null
+    this.staticEnvLastCapturedCameraQuat = null
+    this.staticEnvLastCapturedCameraProjection = null
 
     const self = this
     typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene, camera: Camera) {
       self.syncStaticEyeUniform(camera)
+      self.markStaticEnvCaptureIfCameraChanged(camera)
       self.maybeCaptureStaticMirror(renderer, scene, camera)
     }
 
@@ -764,16 +779,54 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (!this.hostMesh) {
       return
     }
-    const current = new Vector3()
-    this.hostMesh.getWorldPosition(current)
+    this.hostMesh.getWorldPosition(this.staticTempWorldPos)
     if (!this.staticEnvLastCapturedWorldPos) {
       return
     }
-    const dx = current.x - this.staticEnvLastCapturedWorldPos.x
-    const dy = current.y - this.staticEnvLastCapturedWorldPos.y
-    const dz = current.z - this.staticEnvLastCapturedWorldPos.z
+    const dx = this.staticTempWorldPos.x - this.staticEnvLastCapturedWorldPos.x
+    const dy = this.staticTempWorldPos.y - this.staticEnvLastCapturedWorldPos.y
+    const dz = this.staticTempWorldPos.z - this.staticEnvLastCapturedWorldPos.z
     if (dx * dx + dy * dy + dz * dz > 1e-6) {
       this.staticEnvNeedsCapture = true
+    }
+  }
+
+  private markStaticEnvCaptureIfCameraChanged(camera: Camera): void {
+    // Keep static planar reflection correct when the view changes, without updating every frame.
+    if (!this.staticEnvHasCaptured || this.staticEnvNeedsCapture) {
+      return
+    }
+
+    this.staticTempCameraPos.setFromMatrixPosition(camera.matrixWorld)
+    ;(camera as any).getWorldQuaternion?.(this.staticTempCameraQuat)
+
+    if (!this.staticEnvLastCapturedCameraPos || !this.staticEnvLastCapturedCameraQuat) {
+      // If we don't have a baseline yet, don't force a capture.
+      return
+    }
+
+    const dx = this.staticTempCameraPos.x - this.staticEnvLastCapturedCameraPos.x
+    const dy = this.staticTempCameraPos.y - this.staticEnvLastCapturedCameraPos.y
+    const dz = this.staticTempCameraPos.z - this.staticEnvLastCapturedCameraPos.z
+    if (dx * dx + dy * dy + dz * dz > WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ) {
+      this.staticEnvNeedsCapture = true
+      return
+    }
+
+    const dot = Math.abs(this.staticTempCameraQuat.dot(this.staticEnvLastCapturedCameraQuat))
+    if (dot < WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS) {
+      this.staticEnvNeedsCapture = true
+      return
+    }
+
+    const projection = (camera as any).projectionMatrix
+    if (projection?.elements && this.staticEnvLastCapturedCameraProjection) {
+      for (let i = 0; i < 16; i += 1) {
+        if (Math.abs(projection.elements[i] - this.staticEnvLastCapturedCameraProjection[i]) > WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS) {
+          this.staticEnvNeedsCapture = true
+          return
+        }
+      }
     }
   }
 
@@ -898,9 +951,35 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.staticEnvHasCaptured = true
       this.staticEnvNeedsCapture = false
 
-      const worldPos = new Vector3()
-      scope.getWorldPosition(worldPos)
-      this.staticEnvLastCapturedWorldPos = worldPos
+      scope.getWorldPosition(this.staticTempWorldPos)
+      if (!this.staticEnvLastCapturedWorldPos) {
+        this.staticEnvLastCapturedWorldPos = this.staticTempWorldPos.clone()
+      } else {
+        this.staticEnvLastCapturedWorldPos.copy(this.staticTempWorldPos)
+      }
+
+      this.staticTempCameraPos.setFromMatrixPosition(camera.matrixWorld)
+      ;(camera as any).getWorldQuaternion?.(this.staticTempCameraQuat)
+      if (!this.staticEnvLastCapturedCameraPos) {
+        this.staticEnvLastCapturedCameraPos = this.staticTempCameraPos.clone()
+      } else {
+        this.staticEnvLastCapturedCameraPos.copy(this.staticTempCameraPos)
+      }
+      if (!this.staticEnvLastCapturedCameraQuat) {
+        this.staticEnvLastCapturedCameraQuat = this.staticTempCameraQuat.clone()
+      } else {
+        this.staticEnvLastCapturedCameraQuat.copy(this.staticTempCameraQuat)
+      }
+      const proj = (camera as any).projectionMatrix
+      if (proj?.elements) {
+        if (!this.staticEnvLastCapturedCameraProjection) {
+          this.staticEnvLastCapturedCameraProjection = Array.from(proj.elements)
+        } else {
+          for (let i = 0; i < 16; i += 1) {
+            this.staticEnvLastCapturedCameraProjection[i] = proj.elements[i]
+          }
+        }
+      }
     } finally {
       renderer.xr.enabled = currentXrEnabled
       renderer.shadowMap.autoUpdate = currentShadowAutoUpdate
@@ -1001,6 +1080,9 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.staticEnvNeedsCapture = false
     this.staticEnvIsCapturing = false
     this.staticEnvLastCapturedWorldPos = null
+    this.staticEnvLastCapturedCameraPos = null
+    this.staticEnvLastCapturedCameraQuat = null
+    this.staticEnvLastCapturedCameraProjection = null
     if (this.waterGeometry) {
       this.waterGeometry.dispose()
       this.waterGeometry = null
