@@ -6,8 +6,8 @@
 - `editor/`: Vue 3 + Vite + Vuetify + Three.js editor app.
 - `admin/`: Vue 3 + Vite + Vuetify admin app.
 - `uploader/`: Vue 3 + Vite + Vuetify uploader app.
-- `viewer/`: uni-app 微信小程序 3D viewer（含可复用 `uni_modules/scene-viewer` 分包模块）。
-- `exhibition/`: uni-app 微信小程序主题业务端（不直接依赖 three/cannon，仅调用 scene-viewer 分包）。
+- `viewer/`: uni-app 微信小程序 3D viewer（含可复用 `uni_modules/scenery` 分包模块）。
+- `exhibition/`: uni-app 微信小程序主题业务端（不直接依赖 three/cannon，仅调用 scenery 分包）。
 
 ## Key workflows (use per-package scripts)
 - Server dev: `cd server && npm run dev` (uses `server/.env.development`, runs with `tsx watch`).

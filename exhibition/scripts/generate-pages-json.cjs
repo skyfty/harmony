@@ -45,8 +45,8 @@ const pagesJson = {
   pages,
   subPackages: [
     {
-      root: 'uni_modules/scene-viewer/pages',
-      name: 'scene-viewer',
+      root: 'uni_modules/scenery/pages',
+      name: 'scenery',
       pages: [{ path: 'index' }],
     },
   ],

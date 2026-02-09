@@ -39,7 +39,7 @@ function resolveConsumerRoot() {
 }
 
 function installToUniModules(consumerRoot) {
-  const destDir = path.join(consumerRoot, 'src', 'uni_modules', 'scene-viewer');
+  const destDir = path.join(consumerRoot, 'src', 'uni_modules', 'scenery');
 
   rmrf(destDir);
 
@@ -65,14 +65,14 @@ function installToUniModules(consumerRoot) {
     },
   });
 
-  console.log(`[scene-viewer] Installed uni_module -> ${path.relative(consumerRoot, destDir)}`);
+  console.log(`[scenery] Installed uni_module -> ${path.relative(consumerRoot, destDir)}`);
 }
 
 try {
   const consumerRoot = resolveConsumerRoot();
   installToUniModules(consumerRoot);
-} catch (err) {
-  console.warn('[scene-viewer] postinstall failed:', err && err.message ? err.message : err);
+  } catch (err) {
+  console.warn('[scenery] postinstall failed:', err && err.message ? err.message : err);
   // Do not hard-fail install; build scripts can surface errors if module is missing.
   process.exitCode = 0;
 }

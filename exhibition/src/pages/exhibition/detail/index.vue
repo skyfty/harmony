@@ -272,19 +272,19 @@ async function enterExhibition(): Promise<void> {
   }
   const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
   const target = sceneUrl
-    ? `/uni_modules/scene-viewer/pages/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
-    : '/uni_modules/scene-viewer/pages/index';
+    ? `/uni_modules/scenery/pages/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
+    : '/uni_modules/scenery/pages/index';
 
   try {
     await new Promise<void>((resolve, reject) => {
       uni.loadSubPackage({
-        name: 'scene-viewer',
-        success: () => resolve(),
-        fail: (err) => reject(err),
-      });
+          name: 'scenery',
+          success: () => resolve(),
+          fail: (err) => reject(err),
+        });
     });
   } catch (err) {
-    console.warn('[enterExhibition] failed to load scene-viewer subpackage', err);
+    console.warn('[enterExhibition] failed to load scenery subpackage', err);
   }
 
   uni.navigateTo({ url: target });
