@@ -1,4 +1,4 @@
-import type { Material, Mesh, Object3D, Texture } from 'three'
+import type { Camera, Material, Mesh, Object3D, Texture } from 'three'
 import {
   BufferGeometry,
   Color,
@@ -6,7 +6,6 @@ import {
   DataTexture,
   LinearFilter,
   Mesh as ThreeMesh,
-  MeshStandardMaterial,
   
   RepeatWrapping,
   NoColorSpace,
@@ -46,7 +45,7 @@ export type WaterImplementationMode = 'auto' | 'static' | 'dynamic'
 
 export const WATER_DEFAULT_IMPLEMENTATION_MODE: WaterImplementationMode = 'auto'
 
-const WATER_STATIC_ENVMAP_SIZE = 64
+const WATER_STATIC_ENVMAP_SIZE = 128
 
 export interface FlowDirection {
   x: number
@@ -209,7 +208,7 @@ class WaterComponent extends Component<WaterComponentProps> {
   private waterParent: Object3D | null = null
   private waterInstance: Water | null = null
   private staticWaterMesh: Mesh | null = null
-  private staticWaterMaterial: MeshStandardMaterial | null = null
+  private staticWaterMaterial: ShaderMaterial | null = null
   private staticEnvTarget: WebGLCubeRenderTarget | null = null
   private staticEnvCamera: CubeCamera | null = null
   private staticEnvHasCaptured = false
@@ -221,8 +220,6 @@ class WaterComponent extends Component<WaterComponentProps> {
   private flowOffset = new Vector2()
   private resolvedFlowDirection = new Vector2(1, 1)
   private lastSignature: string | null = null
-
-  private staticNormalScrollSpeed = 0.03
 
   constructor(context: ComponentRuntimeContext<WaterComponentProps>) {
     super(context)
@@ -263,7 +260,7 @@ class WaterComponent extends Component<WaterComponentProps> {
 
     if (effectiveMode === 'static' && this.staticWaterMesh) {
       this.syncWaterTransform(this.staticWaterMesh)
-      this.tickStaticNormalScroll(deltaTime, props)
+      this.tickStaticShaderTime(deltaTime, props.flowSpeed)
       this.markStaticEnvCaptureIfMoved()
       this.syncSunUniforms()
     }
@@ -429,6 +426,121 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.syncSunUniforms()
   }
 
+  private createStaticWaterShaderMaterial(
+    props: WaterComponentProps,
+    baseMaterial: Material | null,
+    normalTexture: Texture,
+  ): ShaderMaterial {
+    const opacity = typeof (baseMaterial as Material | null)?.opacity === 'number' ? (baseMaterial as Material).opacity : WATER_DEFAULT_ALPHA
+    const transparent = Boolean((baseMaterial as Material | null)?.transparent) || opacity < 0.999
+    const waterColor = this.resolveMaterialColor(baseMaterial)
+    const distortionScale = Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength)
+
+    normalTexture.wrapS = RepeatWrapping
+    normalTexture.wrapT = RepeatWrapping
+    normalTexture.needsUpdate = true
+
+    return new ShaderMaterial({
+      transparent,
+      opacity,
+      depthWrite: !transparent,
+      uniforms: {
+        envMap: { value: null },
+        normalSampler: { value: normalTexture },
+        alpha: { value: opacity },
+        time: { value: 0.0 },
+        size: { value: props.size },
+        distortionScale: { value: distortionScale },
+        sunColor: { value: new Color(0xffffff) },
+        sunDirection: { value: new Vector3(0.70707, 0.70707, 0).normalize() },
+        eye: { value: new Vector3() },
+        waterColor: { value: waterColor },
+      },
+      vertexShader: /* glsl */ `
+        varying vec4 vWorldPosition;
+
+        void main() {
+          vWorldPosition = modelMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform samplerCube envMap;
+        uniform sampler2D normalSampler;
+        uniform float alpha;
+        uniform float time;
+        uniform float size;
+        uniform float distortionScale;
+        uniform vec3 sunColor;
+        uniform vec3 sunDirection;
+        uniform vec3 eye;
+        uniform vec3 waterColor;
+
+        varying vec4 vWorldPosition;
+
+        vec4 getNoise(vec2 uv) {
+          vec2 uv0 = (uv / 103.0) + vec2(time / 17.0, time / 29.0);
+          vec2 uv1 = (uv / 107.0) - vec2(time / -19.0, time / 31.0);
+          vec2 uv2 = (uv / vec2(8907.0, 9803.0)) + vec2(time / 101.0, time / 97.0);
+          vec2 uv3 = (uv / vec2(1091.0, 1027.0)) - vec2(time / 109.0, time / -113.0);
+          vec4 noise = texture2D(normalSampler, uv0) +
+            texture2D(normalSampler, uv1) +
+            texture2D(normalSampler, uv2) +
+            texture2D(normalSampler, uv3);
+          return noise * 0.5 - 1.0;
+        }
+
+        void sunLight(
+          const vec3 surfaceNormal,
+          const vec3 eyeDirection,
+          float shiny,
+          float spec,
+          float diffuse,
+          inout vec3 diffuseColor,
+          inout vec3 specularColor
+        ) {
+          vec3 reflectionDir = normalize(reflect(-sunDirection, surfaceNormal));
+          float direction = max(0.0, dot(eyeDirection, reflectionDir));
+          specularColor += pow(direction, shiny) * sunColor * spec;
+          diffuseColor += max(dot(sunDirection, surfaceNormal), 0.0) * sunColor * diffuse;
+        }
+
+        void main() {
+          vec3 worldPos = vWorldPosition.xyz;
+          vec3 worldToEye = eye - worldPos;
+          vec3 eyeDirection = normalize(worldToEye);
+          float distance = max(0.0001, length(worldToEye));
+
+          vec4 noise = getNoise(worldPos.xz * size);
+          vec3 surfaceNormal = normalize(noise.xzy * vec3(1.5, 1.0, 1.5));
+
+          vec3 diffuseLight = vec3(0.0);
+          vec3 specularLight = vec3(0.0);
+          sunLight(surfaceNormal, eyeDirection, 100.0, 2.0, 0.5, diffuseLight, specularLight);
+
+          float theta = max(dot(eyeDirection, surfaceNormal), 0.0);
+          float rf0 = 0.3;
+          float reflectance = rf0 + (1.0 - rf0) * pow((1.0 - theta), 5.0);
+
+          float distortionAmount = (0.001 + 1.0 / distance) * distortionScale;
+          vec3 reflectionVec = reflect(-eyeDirection, surfaceNormal);
+          reflectionVec = normalize(reflectionVec + vec3(surfaceNormal.x, 0.0, surfaceNormal.z) * distortionAmount * 0.15);
+
+          vec3 reflectionSample = textureCube(envMap, reflectionVec).rgb;
+          vec3 scatter = max(0.0, dot(surfaceNormal, eyeDirection)) * waterColor;
+
+          vec3 albedo = mix(
+            (sunColor * diffuseLight * 0.3 + scatter),
+            (vec3(0.1) + reflectionSample * 0.9 + reflectionSample * specularLight),
+            reflectance
+          );
+
+          gl_FragColor = vec4(albedo, alpha);
+        }
+      `,
+    })
+  }
+
   private createStaticWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
@@ -437,17 +549,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
     this.normalTexture = normalTexture
 
-    const staticMaterial = new MeshStandardMaterial({
-      color: this.resolveMaterialColor(material),
-      transparent: Boolean((material as Material | null)?.transparent),
-      opacity: typeof (material as Material | null)?.opacity === 'number'
-        ? (material as Material).opacity
-        : WATER_DEFAULT_ALPHA,
-      metalness: 0,
-      roughness: 0.08,
-    })
-    staticMaterial.normalMap = normalTexture
-    staticMaterial.envMapIntensity = 1
+    const staticMaterial = this.createStaticWaterShaderMaterial(props, material, normalTexture)
     this.staticWaterMaterial = staticMaterial
 
     const typedWaterMesh = new ThreeMesh(resolvedGeometry, staticMaterial) as unknown as Mesh
@@ -487,7 +589,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.staticEnvLastCapturedWorldPos = null
 
     const self = this
-    typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene) {
+    typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene, camera: Camera) {
+      self.syncStaticEyeUniform(camera)
       self.maybeCaptureStaticEnvMap(renderer, scene)
     }
 
@@ -544,24 +647,25 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (!this.staticWaterMesh || !this.staticWaterMaterial) {
       return
     }
-    this.staticWaterMaterial.color.copy(this.resolveMaterialColor(material))
     const opacity = typeof (material as Material | null)?.opacity === 'number' ? (material as Material).opacity : WATER_DEFAULT_ALPHA
+    const transparent = Boolean((material as Material | null)?.transparent) || opacity < 0.999
+    this.staticWaterMaterial.transparent = transparent
     this.staticWaterMaterial.opacity = opacity
-    this.staticWaterMaterial.transparent = Boolean((material as Material | null)?.transparent) || opacity < 0.999
+    this.staticWaterMaterial.depthWrite = !transparent
 
-    // Use existing wave params to approximate Water.js look:
-    // - `size` controls normal tiling
-    // - `distortionScale * waveStrength` controls normal strength
-    const tiling = Math.min(16, Math.max(0.5, 8 / Math.max(0.001, props.size)))
-    if (this.normalTexture) {
-      this.normalTexture.repeat.set(tiling, tiling)
-      this.normalTexture.wrapS = RepeatWrapping
-      this.normalTexture.wrapT = RepeatWrapping
+    const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
+    if (uniforms.waterColor?.value && uniforms.waterColor.value instanceof Color) {
+      uniforms.waterColor.value.copy(this.resolveMaterialColor(material))
     }
-
-    const strength = Math.max(0, props.distortionScale * props.waveStrength)
-    const normalScale = Math.min(1.5, strength * 0.08)
-    this.staticWaterMaterial.normalScale.set(normalScale, normalScale)
+    if (uniforms.alpha) {
+      uniforms.alpha.value = opacity
+    }
+    if (uniforms.size) {
+      uniforms.size.value = props.size
+    }
+    if (uniforms.distortionScale) {
+      uniforms.distortionScale.value = Math.max(WATER_MIN_DISTORTION_SCALE, props.distortionScale * props.waveStrength)
+    }
 
     // Ensure capture happens the first time it becomes visible.
     if (!this.staticEnvHasCaptured) {
@@ -569,28 +673,28 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
   }
 
-  private tickStaticNormalScroll(deltaTime: number, props: WaterComponentProps): void {
-    if (!this.normalTexture || !this.staticWaterMaterial) {
+  private tickStaticShaderTime(deltaTime: number, flowSpeed: number): void {
+    if (!this.staticWaterMaterial) {
       return
     }
-    const dx = typeof props.flowDirection?.x === 'number' ? props.flowDirection.x : DEFAULT_FLOW_DIRECTION.x
-    const dy = typeof props.flowDirection?.y === 'number' ? props.flowDirection.y : DEFAULT_FLOW_DIRECTION.y
-    this.resolvedFlowDirection.set(dx, dy)
-    if (this.resolvedFlowDirection.lengthSq() <= 1e-6) {
-      this.resolvedFlowDirection.set(DEFAULT_FLOW_DIRECTION.x, DEFAULT_FLOW_DIRECTION.y)
-    } else {
-      this.resolvedFlowDirection.normalize()
+    const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
+    if (!uniforms.time) {
+      return
     }
+    const speed = Number.isFinite(flowSpeed) ? flowSpeed : WATER_DEFAULT_FLOW_SPEED
+    const current = typeof uniforms.time.value === 'number' ? uniforms.time.value : 0
+    uniforms.time.value = current + deltaTime * speed
+  }
 
-    const speed = (Number.isFinite(props.flowSpeed) ? props.flowSpeed : WATER_DEFAULT_FLOW_SPEED) * this.staticNormalScrollSpeed
-    if (Math.abs(speed) <= 1e-9) {
+  private syncStaticEyeUniform(camera: Camera): void {
+    if (!this.staticWaterMaterial) {
       return
     }
-    this.flowOffset.x = (this.flowOffset.x + this.resolvedFlowDirection.x * speed * deltaTime) % 1
-    this.flowOffset.y = (this.flowOffset.y + this.resolvedFlowDirection.y * speed * deltaTime) % 1
-    if (this.flowOffset.x < 0) this.flowOffset.x += 1
-    if (this.flowOffset.y < 0) this.flowOffset.y += 1
-    this.normalTexture.offset.copy(this.flowOffset)
+    const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
+    const eye = uniforms.eye?.value
+    if (eye && eye instanceof Vector3) {
+      eye.setFromMatrixPosition(camera.matrixWorld)
+    }
   }
 
   private markStaticEnvCaptureIfMoved(): void {
@@ -639,7 +743,10 @@ class WaterComponent extends Component<WaterComponentProps> {
       }
       this.staticEnvCamera.updateMatrixWorld(true)
       this.staticEnvCamera.update(renderer, scene)
-      this.staticWaterMaterial.envMap = this.staticEnvTarget.texture
+      const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
+      if (uniforms.envMap) {
+        uniforms.envMap.value = this.staticEnvTarget.texture
+      }
       this.staticWaterMaterial.needsUpdate = true
       this.staticEnvHasCaptured = true
       this.staticEnvNeedsCapture = false
@@ -651,25 +758,32 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private syncSunUniforms(): void {
-    if (!this.waterInstance) {
-      return
-    }
     const root = this.resolveSceneRoot(this.hostMesh ?? this.context.getRuntimeObject())
     const light = this.findSunLight(root)
-    const material = this.waterInstance.material as ShaderMaterial
-    if (light) {
-      const direction = new Vector3()
-      const targetPosition = new Vector3()
-      light.target?.getWorldPosition(targetPosition)
-      light.getWorldPosition(direction)
-      direction.sub(targetPosition).normalize()
-      if (material.uniforms?.sunDirection) {
-        material.uniforms.sunDirection.value.copy(direction)
+    if (!light) {
+      return
+    }
+
+    const direction = new Vector3()
+    const targetPosition = new Vector3()
+    light.target?.getWorldPosition(targetPosition)
+    light.getWorldPosition(direction)
+    direction.sub(targetPosition).normalize()
+
+    const applyToShader = (shader: ShaderMaterial | null) => {
+      if (!shader) {
+        return
       }
-      if (material.uniforms?.sunColor) {
-        material.uniforms.sunColor.value.copy(light.color)
+      if (shader.uniforms?.sunDirection?.value && shader.uniforms.sunDirection.value instanceof Vector3) {
+        shader.uniforms.sunDirection.value.copy(direction)
+      }
+      if (shader.uniforms?.sunColor?.value && shader.uniforms.sunColor.value instanceof Color) {
+        shader.uniforms.sunColor.value.copy(light.color)
       }
     }
+
+    applyToShader(this.waterInstance ? (this.waterInstance.material as ShaderMaterial) : null)
+    applyToShader(this.staticWaterMaterial)
   }
 
   private resolveSceneRoot(object: Object3D | null): Object3D | null {
