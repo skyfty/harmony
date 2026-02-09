@@ -74,10 +74,13 @@ const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
 const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.15 * 0.15
-// Allow ~20° rotation change before forcing re-capture.
-const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((20 * Math.PI) / 180 / 2)
+// Allow ~35° rotation change before forcing re-capture.
+const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((35 * Math.PI) / 180 / 2)
 // Loose projection matrix difference tolerance (e.g. small FOV/near/far adjustments allowed).
-const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 1e-4
+const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 5e-4
+
+// Water surface moved threshold before forcing a re-capture (world units).
+const WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ = 0.05 * 0.05
 
 // Removed unused PositionAttribute type
 
@@ -665,6 +668,9 @@ class WaterComponent extends Component<WaterComponentProps> {
     const self = this
     typedWaterMesh.onBeforeRender = function (renderer: WebGLRenderer, scene: Scene, camera: Camera) {
       self.syncStaticEyeUniform(camera)
+      if (!self.isEligibleStaticMirrorCaptureCamera(camera)) {
+        return
+      }
       self.markStaticEnvCaptureIfCameraChanged(camera)
       self.maybeCaptureStaticMirror(renderer, scene, camera)
     }
@@ -788,9 +794,25 @@ class WaterComponent extends Component<WaterComponentProps> {
     const dx = this.staticTempWorldPos.x - this.staticEnvLastCapturedWorldPos.x
     const dy = this.staticTempWorldPos.y - this.staticEnvLastCapturedWorldPos.y
     const dz = this.staticTempWorldPos.z - this.staticEnvLastCapturedWorldPos.z
-    if (dx * dx + dy * dy + dz * dz > 1e-6) {
+    if (dx * dx + dy * dy + dz * dz > WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ) {
       this.staticEnvNeedsCapture = true
     }
+  }
+
+  private isEligibleStaticMirrorCaptureCamera(camera: Camera): boolean {
+    // `onBeforeRender` is invoked for multiple passes (e.g. shadow maps) with light cameras.
+    // Capturing from those cameras makes static reflections refresh too frequently and also incorrect.
+    if (!camera) {
+      return false
+    }
+    if (this.staticMirrorCamera && camera === this.staticMirrorCamera) {
+      return false
+    }
+    const parent = (camera as any).parent
+    if (parent && (parent as any).isLight) {
+      return false
+    }
+    return true
   }
 
   private markStaticEnvCaptureIfCameraChanged(camera: Camera): void {
@@ -833,6 +855,9 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private maybeCaptureStaticMirror(renderer: WebGLRenderer, scene: Scene, camera: Camera): void {
+    if (!this.isEligibleStaticMirrorCaptureCamera(camera)) {
+      return
+    }
     if (!this.staticWaterMesh || !this.staticWaterMaterial || !this.staticMirrorCamera || !this.staticMirrorTarget) {
       return
     }
@@ -842,7 +867,6 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (this.staticEnvHasCaptured && !this.staticEnvNeedsCapture) {
       return
     }
-
     const scope = this.staticWaterMesh
     const mirrorCamera = this.staticMirrorCamera
 
