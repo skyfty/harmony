@@ -73,9 +73,11 @@ const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
 
-const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.05 * 0.05
-const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((0.5 * Math.PI) / 180 / 2)
-const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 1e-6
+const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.15 * 0.15
+// Allow ~20° rotation change before forcing re-capture.
+const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((20 * Math.PI) / 180 / 2)
+// Loose projection matrix difference tolerance (e.g. small FOV/near/far adjustments allowed).
+const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 1e-4
 
 // Removed unused PositionAttribute type
 
