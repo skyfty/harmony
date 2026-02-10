@@ -36,8 +36,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useProjectStore } from '@/stores/projectStore';
-import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema';
+import { useProjectStore } from '@/uni_modules/scenery/common/stores/projectStore';
+// 不再解析 zip 内容，只保存压缩包二进制并显示文件名
 import { saveScenePackageZip } from '@/utils/scenePackageStorage';
 
 const projectStore = useProjectStore();
@@ -170,36 +170,30 @@ async function readFileAsArrayBuffer(file: UniApp.ChooseFileSuccessCallbackResul
 }
 
 async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: string) {
-    const pkg = unzipScenePackage(zip);
-    const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
-    const projectConfig = JSON.parse(projectText) as any;
-
-    if (!projectConfig || typeof projectConfig !== 'object') {
-        throw new Error('项目文件格式不正确');
-    }
-
-    const projectId =
-        typeof projectConfig.id === 'string' && projectConfig.id.trim().length ? projectConfig.id.trim() : generateId('project');
+    // origin 传入为文件名或来源描述，仅用于显示
+    const projectId = generateId('project');
     const ab = toArrayBuffer(zip as any);
     const scenePackage = await saveScenePackageZip(ab, projectId);
-    const sceneCount = Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.length : 0;
+
+    // 使用传入的文件名作为项目名称（去掉扩展名）
+    const rawName = String(origin ?? '本地文件');
+    const nameMatch = rawName.match(/(.+?)(?:\.[^.]+)?$/);
+    const displayName = nameMatch ? nameMatch[1] : rawName;
 
     const newProject = projectStore.setProject(
         {
             scenePackage,
             project: {
                 id: projectId,
-                name: String(projectConfig.name ?? ''),
-                sceneOrder: Array.isArray(projectConfig.sceneOrder)
-                    ? projectConfig.sceneOrder
-                    : (Array.isArray(pkg.manifest.scenes) ? pkg.manifest.scenes.map((s) => s.sceneId) : []),
+                name: displayName,
+                sceneOrder: [],
             } as any,
-            sceneCount,
+            sceneCount: 0,
         },
-        origin,
+        rawName,
     );
 
-    // Navigate to the project immediately after import
+    // 导入后跳转到项目
     setTimeout(() => {
         uni.navigateTo({ url: `/uni_modules/scenery/pages/index?projectId=${encodeURIComponent(newProject.id)}` });
     }, 500);
