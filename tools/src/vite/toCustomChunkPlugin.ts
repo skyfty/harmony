@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import type { Plugin, UserConfig } from "vite";
 
 type ManualChunksConfig = Record<string, string[]>;
 
@@ -89,14 +89,14 @@ function wrapManualChunks(
   };
 }
 
-export default function toCustomChunkPlugin(options: ToCustomChunkPluginOptions): Plugin {
+export function toCustomChunkPlugin(options: ToCustomChunkPluginOptions): Plugin {
   const enabled = options.enabled ?? true;
   const matchTable = createMatchTable(options.manualChunks ?? {});
 
   return {
     name: "to-custom-chunk",
     apply: "build",
-    config(config) {
+    config(config: UserConfig) {
       if (!enabled) return;
 
       const isMp = (process.env.UNI_PLATFORM ?? "").startsWith("mp-");

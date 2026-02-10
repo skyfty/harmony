@@ -5,7 +5,7 @@ import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
-import toCustomChunkPlugin from "./scripts/toCustomChunkPlugin";
+import { toCustomChunkPlugin } from "@harmony/tools/vite";
 
 const uniPlatform = process.env.UNI_PLATFORM;
 const vueRuntimeAlias = uniPlatform?.startsWith('mp-')

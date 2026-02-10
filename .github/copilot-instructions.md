@@ -34,7 +34,7 @@
 
 ## TypeScript/ESM + import conventions
 - Server is ESM (`"type": "module"`) and uses TS path alias `@/*` via `server/tsconfig.json`.
-- Build outputs run `scripts/fix-esm-extensions.cjs` (server + schema) — keep source imports idiomatic ESM; avoid mixing CommonJS unless you’re following existing compat code (see `server/src/utils/cjsCompat.ts`).
+- Build outputs run `harmony-tools fix-esm-extensions --root dist` (server + schema) — keep source imports idiomatic ESM; avoid mixing CommonJS unless you’re following existing compat code (see `server/src/utils/cjsCompat.ts`).
 
 ## Vite aliases (editor)
 - `editor/vite.config.ts` defines `@` -> `editor/src` and `@schema` -> `schema/` source.

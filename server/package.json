@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file=.env.development src/index.ts",
-    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json && node scripts/fix-esm-extensions.cjs",
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json && harmony-tools fix-esm-extensions --root dist",
     "start": "node dist/index.js",
     "seed": "tsx --env-file=.env.development src/scripts/seed.ts",
     "seed:prod": "node --env-file=.env.production dist/scripts/seed.js"
@@ -32,6 +32,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@harmony/tools": "file:../tools",
     "@types/bcryptjs": "^2.4.6",
     "@types/fs-extra": "^11.0.4",
     "@types/jsonwebtoken": "^9.0.6",
