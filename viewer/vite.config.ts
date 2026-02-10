@@ -1,5 +1,4 @@
-import { defineConfig, Rollup } from "vite";
-import { fileURLToPath, URL } from 'node:url';
+import { defineConfig } from "vite";
 import uni from '@dcloudio/vite-plugin-uni';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';

@@ -21,6 +21,7 @@
     "@harmony/schema": "file:../schema",
     
     "pinia": "^2.2.6",
+    "@vue/shared": "^3.5.13",
     "vue": "^3.5.13",
     "vue-i18n": "^9.14.3"
   },
@@ -31,7 +32,6 @@
     "@dcloudio/uni-stacktracey": "3.0.0-alpha-4050320250224001",
     "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4050320250224001",
     "@minisheep/vite-plugin-mp-chunk-splitter": "^1.0.2",
-    "@types/three": "^0.171.0",
     "@typescript-eslint/eslint-plugin": "^6.9.0",
     "@typescript-eslint/parser": "^6.9.0",
     "@vue/runtime-core": "^3.5.13",

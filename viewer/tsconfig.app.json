@@ -29,9 +29,6 @@
     "paths": {
       "@/*": ["./src/*"],
       "@schema/*": ["../schema/*"],
-      "three": ["./node_modules/@types/three/index"],
-      "three/*": ["./node_modules/@types/three/*"],
-      "@three-examples/*": ["./node_modules/@types/three/examples/jsm/*"]
     }
   }
 }
