@@ -31,6 +31,7 @@
     "@dcloudio/uni-cli-shared": "3.0.0-alpha-4050320250224001",
     "@dcloudio/uni-stacktracey": "3.0.0-alpha-4050320250224001",
     "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4050320250224001",
+    "@minisheep/three-platform-adapter": "^2.0.1",
     "@minisheep/vite-plugin-mp-chunk-splitter": "^1.0.2",
     "@typescript-eslint/eslint-plugin": "^6.9.0",
     "@typescript-eslint/parser": "^6.9.0",

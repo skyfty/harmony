@@ -6,8 +6,8 @@
   ],
   "subPackages": [
     {
-      "root": "pages/scene-viewer",
-      "name": "scene-viewer",
+      "root": "pages/scenery",
+      "name": "scenery",
       "pages": [
         {
           "path": "index"
