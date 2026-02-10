@@ -1,24 +1,18 @@
 import { defineConfig, Rollup } from "vite";
 import { fileURLToPath, URL } from 'node:url';
 import uni from '@dcloudio/vite-plugin-uni';
-import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
 // https://vitejs.dev/config/
 export default defineConfig({
   optimizeDeps: {
-    exclude: ['@minisheep/three-platform-adapter']
+    exclude: []
   },  
   resolve: {
     alias: {
-      '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
       // Ensure modules imported from files outside project root (e.g. ../schema)
       // resolve "three" to this package's installed dependency
-      'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
-      'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
-      'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
-      '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
     },
   },
   
@@ -34,7 +28,6 @@ export default defineConfig({
     visualizer({
       emitFile: true,
     }),
-    threePlatformAdapter(),
     createMpChunkSplitterPlugin({
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024

@@ -5,6 +5,8 @@
   "scripts": {
     "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:h5": "cross-env DEBUG=none uni -p h5",
+    "build:h5": "uni build -p h5",
     "type-check": "vue-tsc -b",
     "lint": "eslint --ext .ts,.js,.vue src || true",
     "lint:fix": "eslint --ext .ts,.js,.vue src --fix || true",
