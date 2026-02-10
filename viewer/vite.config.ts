@@ -1,10 +1,11 @@
-import { defineConfig, Rollup } from "vite";
+import { defineConfig } from "vite";
 import { fileURLToPath, URL } from 'node:url';
 import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
+import toCustomChunkPlugin from "./scripts/toCustomChunkPlugin";
 
 const uniPlatform = process.env.UNI_PLATFORM;
 const vueRuntimeAlias = uniPlatform?.startsWith('mp-')
@@ -49,21 +50,23 @@ export default defineConfig({
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
 
-
-    // //默认情况 uni-app 会将node_modules下的模块全都打包在 common/vendor.js
-    // //你也可以自定义输出目录，但需自己把控不影响应用加载顺序
-    // //可以设置环境变量进行调试 如 cross-env DEBUG=minisheep:to-custom-chunk uni build -p mp-weixin
-    // toCustomChunkPlugin({
-    //   'common/my-vendor': [
-    //     '@minisheep/three-platform-adapter',
-    //     '@minisheep/three-platform-adapter/wechat',
-    //   ],
-    //   'sub-pack-2/vendor': [
-    //     '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
-    //     'three',
-    //     'three/examples/jsm/**',
-    //   ]
-    // }),
+    // 默认情况 uni-app 会将 node_modules 下的模块打包在 common/vendor.js
+    // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
+    toCustomChunkPlugin({
+      manualChunks: {
+        'pages/scenery/chunks/vendor': [
+          '@minisheep/three-platform-adapter',
+          '@minisheep/three-platform-adapter/wechat',
+          '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
+          'three',
+          // three@0.150+ exposes examples via `three/addons/*` (maps to examples/jsm)
+          'three/addons/**',
+          // Catch any other examples entrypoints (legacy or non-jsm)
+          'three/examples/**',
+          'three/examples/jsm/**',
+        ]
+      }
+    }),
 
     {
       name:'find-dep',

@@ -6,7 +6,8 @@
     "nightwatch.conf.*",
     "playwright.config.*",
     "src/env.d.ts",
-    "script/**/*"
+    "script/**/*",
+    "scripts/**/*"
   ],
   "compilerOptions": {
     "composite": true,
