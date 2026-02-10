@@ -2,17 +2,9 @@
   "pages": [
     {
       "path": "pages/index/index"
-    }
-  ],
-  "subPackages": [
+    },
     {
-      "root": "uni_modules/scenery/pages",
-      "name": "scenery",
-      "pages": [
-        {
-          "path": "index"
-        }
-      ]
+      "path": "pages/scenery/index"
     }
   ],
   "globalStyle": {

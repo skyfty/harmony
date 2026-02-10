@@ -52,6 +52,9 @@
       "path": "pages/profile/index"
     },
     {
+      "path": "pages/scenery/view/index"
+    },
+    {
       "path": "pages/search/index"
     },
     {

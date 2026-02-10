@@ -9,6 +9,7 @@
   "license": "UNLICENSED",
   "files": [
     "package.json",
+    "pages/**/*",
     "components/**/*",
     "common/**/*",
     "static/**/*",

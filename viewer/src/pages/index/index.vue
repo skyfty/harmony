@@ -65,7 +65,7 @@ const formatDate = (value?: string) => {
 
 function openProject() {
     if (!currentProject.value) return;
-    uni.navigateTo({ url: `/uni_modules/scenery/pages/index?projectId=${encodeURIComponent(currentProject.value.id)}` });
+    uni.navigateTo({ url: `/pages/scenery/index?projectId=${encodeURIComponent(currentProject.value.id)}` });
 }
 
 function removeProject() {

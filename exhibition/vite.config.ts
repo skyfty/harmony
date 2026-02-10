@@ -12,6 +12,10 @@ export default defineConfig({
   },  
   resolve: {
     alias: [
+      {
+        find: '@harmony/schema',
+        replacement: fileURLToPath(new URL('../schema', import.meta.url)),
+      },
       // Keep this app decoupled from monorepo-relative imports.
       // scene-viewer and @harmony/schema are resolved from node_modules.
 

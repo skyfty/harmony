@@ -272,20 +272,8 @@ async function enterExhibition(): Promise<void> {
   }
   const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
   const target = sceneUrl
-    ? `/uni_modules/scenery/pages/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
-    : '/uni_modules/scenery/pages/index';
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      uni.loadSubPackage({
-          name: 'scenery',
-          success: () => resolve(),
-          fail: (err) => reject(err),
-        });
-    });
-  } catch (err) {
-    console.warn('[enterExhibition] failed to load scenery subpackage', err);
-  }
+    ? `/pages/scenery/view/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
+    : '/pages/scenery/view/index';
 
   uni.navigateTo({ url: target });
 }

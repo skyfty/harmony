@@ -19,6 +19,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
+      '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
       'vue': vueRuntimeAlias,
       // Ensure modules imported from files outside project root (e.g. ../schema)
       // resolve "three" to this package's installed dependency

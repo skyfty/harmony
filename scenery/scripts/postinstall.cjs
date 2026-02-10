@@ -54,7 +54,7 @@ function installToUniModules(consumerRoot) {
       if (rel === 'package-lock.json' || rel === 'pnpm-lock.yaml' || rel === 'yarn.lock') return false;
 
       // Only include directories/files we expect under a uni_modules module.
-      const allowedRoots = ['package.json', 'pages', 'components', 'common', 'static'];
+          const allowedRoots = ['package.json', 'components', 'common', 'static'];
       const first = rel.split('/')[0];
       if (!allowedRoots.includes(first)) return false;
 
