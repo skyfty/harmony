@@ -30,7 +30,8 @@ function printHelp(): void {
   console.log(`harmony-tools
 
 Commands:
-  sync-scenery --mode <viewer-subpackage|consumer-uni-modules> [--repoRoot <path>] [--projectRoot <path>] [--consumerRoot <path>]
+  sync-scenery --mode <subpackage-uni-modules|consumer-uni-modules> [--repoRoot <path>] [--projectRoot <path>] [--consumerRoot <path>] [--dest <path>] [--subpackageRoot <path>] [--moduleName <name>]
+    (viewer-subpackage is supported as an alias of subpackage-uni-modules)
   generate-pages-json [--projectRoot <path>] [--pagesDir <path>] [--out <path>] [--home <path>]
   fix-esm-extensions [--root <path>] [--skipNodeModules=false]
 `);

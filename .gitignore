@@ -33,6 +33,9 @@ miniprogram/.env
 exhibition/src/uni_modules/scenery/
 viewer/src/uni_modules/scenery/
 
+# Generated uni_modules copied into the scenery subpackage (sync-scenery --mode subpackage-uni-modules)
+**/src/pages/scenery/uni_modules/scenery/
+
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)
 editor/src/wasm/rust-crate/target/

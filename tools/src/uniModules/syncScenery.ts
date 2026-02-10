@@ -7,6 +7,16 @@ export type SyncSceneryCommonOptions = {
   repoRoot: string;
 };
 
+export type SyncSceneryToSubpackageUniModulesOptions = SyncSceneryCommonOptions & {
+  projectRoot: string;
+  /** Defaults to 'pages/scenery' */
+  subpackageRoot?: string;
+  /** Defaults to 'scenery' */
+  moduleName?: string;
+  /** Optional explicit destination path. If relative, resolved from projectRoot. */
+  dest?: string;
+};
+
 export type SyncSceneryToViewerSubpackageOptions = SyncSceneryCommonOptions & {
   viewerRoot: string;
 };
@@ -63,9 +73,19 @@ function sceneryRootFromRepo(repoRoot: string): string {
   return path.resolve(repoRoot, "scenery");
 }
 
-export function syncSceneryToViewerSubpackage(options: SyncSceneryToViewerSubpackageOptions): void {
+function resolveDestFromProjectRoot(projectRoot: string, dest: string): string {
+  return path.isAbsolute(dest) ? dest : path.resolve(projectRoot, dest);
+}
+
+export function syncSceneryToSubpackageUniModules(options: SyncSceneryToSubpackageUniModulesOptions): void {
   const sceneryRoot = sceneryRootFromRepo(options.repoRoot);
-  const dest = path.resolve(options.viewerRoot, "src/pages/scenery/uni_modules/scenery");
+
+  const subpackageRoot = options.subpackageRoot ?? "pages/scenery";
+  const moduleName = options.moduleName ?? "scenery";
+
+  const dest = options.dest
+    ? resolveDestFromProjectRoot(options.projectRoot, options.dest)
+    : path.resolve(options.projectRoot, `src/${subpackageRoot}/uni_modules/${moduleName}`);
 
   if (!fs.existsSync(sceneryRoot)) {
     throw new Error(`scenery root not found: ${sceneryRoot}`);
@@ -81,6 +101,16 @@ export function syncSceneryToViewerSubpackage(options: SyncSceneryToViewerSubpac
   });
 
   console.log(`[harmony-tools] synced scenery -> ${dest}`);
+}
+
+export function syncSceneryToViewerSubpackage(options: SyncSceneryToViewerSubpackageOptions): void {
+  // Back-compat wrapper: historically hard-coded to pages/scenery/uni_modules/scenery under viewerRoot.
+  syncSceneryToSubpackageUniModules({
+    repoRoot: options.repoRoot,
+    projectRoot: options.viewerRoot,
+    subpackageRoot: "pages/scenery",
+    moduleName: "scenery",
+  });
 }
 
 export function syncSceneryToConsumerUniModules(options: SyncSceneryToConsumerUniModulesOptions): void {

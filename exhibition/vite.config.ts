@@ -43,7 +43,12 @@ export default defineConfig({
     visualizer({
       emitFile: true,
     }),
-    threePlatformAdapter(),
+    threePlatformAdapter({
+      assetsOutput: {
+        worker: 'pages/scenery/workers',
+        wasm: 'pages/scenery/wasms',
+      },
+    }),
     createMpChunkSplitterPlugin({
       subpackages: ['pages/scenery'],
       singleChunkMode: true,
@@ -86,7 +91,8 @@ export default defineConfig({
       name:'find-dep',
       config(config){
         // uni 插件覆盖了这个导致不能正确识别 pnpm 安装模块的依赖
-        config.resolve!.preserveSymlinks = true;
+        config.resolve ??= {};
+        config.resolve.preserveSymlinks = true;
       }
     },
   ],

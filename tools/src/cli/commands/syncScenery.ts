@@ -1,23 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
-import { syncSceneryToConsumerUniModules, syncSceneryToViewerSubpackage } from "../../uniModules/syncScenery.js";
+import {
+  syncSceneryToConsumerUniModules,
+  syncSceneryToSubpackageUniModules,
+  syncSceneryToViewerSubpackage,
+} from "../../uniModules/syncScenery.js";
 import { parseArgs } from "../parseArgs.js";
 
 export async function cmdSyncScenery(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
-  const mode = args.get("mode");
+  const normalizedMode = args.get("mode");
 
-  if (mode !== "viewer-subpackage" && mode !== "consumer-uni-modules") {
-    throw new Error(`sync-scenery requires --mode viewer-subpackage|consumer-uni-modules`);
+
+  if (normalizedMode !== "subpackage-uni-modules" && normalizedMode !== "consumer-uni-modules") {
+    throw new Error(
+      `sync-scenery requires --mode subpackage-uni-modules|consumer-uni-modules (viewer-subpackage is supported as an alias)`
+    );
   }
 
   const repoRoot = args.get("repoRoot")
     ? resolveMaybe(args.get("repoRoot"), process.cwd())
     : inferRepoRoot(process.cwd());
 
-  if (mode === "viewer-subpackage") {
-    const projectRoot = resolveMaybe(args.get("projectRoot"), process.cwd());
-    syncSceneryToViewerSubpackage({ repoRoot, viewerRoot: projectRoot });
+  if (normalizedMode === "subpackage-uni-modules") {
+    const projectRoot = resolveMaybe(args.get("projectRoot") ?? args.get("appRoot"), process.cwd());
+    const dest = args.get("dest");
+    const subpackageRoot = args.get("subpackageRoot");
+    const moduleName = args.get("moduleName");
+
+    // Prefer the generic implementation; keep the old function for compatibility.
+    if (dest || subpackageRoot || moduleName) {
+      syncSceneryToSubpackageUniModules({ repoRoot, projectRoot, dest, subpackageRoot, moduleName });
+    } else {
+      syncSceneryToViewerSubpackage({ repoRoot, viewerRoot: projectRoot });
+    }
     return;
   }
 
