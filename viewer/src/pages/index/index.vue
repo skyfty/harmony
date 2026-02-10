@@ -180,7 +180,7 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
     const nameMatch = rawName.match(/(.+?)(?:\.[^.]+)?$/);
     const displayName = nameMatch ? nameMatch[1] : rawName;
 
-    const newProject = projectStore.setProject(
+    projectStore.setProject(
         {
             scenePackage,
             project: {
@@ -195,7 +195,7 @@ async function importScenePackageZip(zip: ArrayBuffer | Uint8Array, origin?: str
 
     // 导入后跳转到项目
     setTimeout(() => {
-        uni.navigateTo({ url: `/uni_modules/scenery/pages/index?projectId=${encodeURIComponent(newProject.id)}` });
+        openProject();
     }, 500);
 
     uni.showToast({ title: '项目导入成功', icon: 'success' });
