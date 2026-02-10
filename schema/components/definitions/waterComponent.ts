@@ -842,16 +842,6 @@ class WaterComponent extends Component<WaterComponentProps> {
       this.staticEnvNeedsCapture = true
       return
     }
-
-    const projection = (camera as any).projectionMatrix
-    if (projection?.elements && this.staticEnvLastCapturedCameraProjection) {
-      for (let i = 0; i < 16; i += 1) {
-        if (Math.abs(projection.elements[i] - this.staticEnvLastCapturedCameraProjection[i]) > WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS) {
-          this.staticEnvNeedsCapture = true
-          return
-        }
-      }
-    }
   }
 
   private maybeCaptureStaticMirror(renderer: WebGLRenderer, scene: Scene, camera: Camera): void {
