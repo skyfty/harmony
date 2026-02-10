@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
-import { ensureTestAccountLogin } from "@/utils/testAccount";
 
 onLaunch(() => {
-  ensureTestAccountLogin().catch((error) => {
-    console.warn("Test account bootstrap failed", error);
-  });
   console.log("App Launch");
 });
 onShow(() => {
