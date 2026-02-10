@@ -36,7 +36,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useProjectStore } from '@/uni_modules/scenery/common/stores/projectStore';
+import { useProjectStore } from '@/stores/projectStore';
 // 不再解析 zip 内容，只保存压缩包二进制并显示文件名
 import { saveScenePackageZip } from '@/utils/scenePackageStorage';
 

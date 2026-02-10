@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import SceneryViewer from '@/uni_modules/scenery/components/SceneryViewer.vue';
+import SceneryViewer from '@harmony/scenery/components/SceneryViewer.vue';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');

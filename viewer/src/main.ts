@@ -5,9 +5,6 @@ import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
 import { createSSRApp } from "vue";
 import { createPinia } from 'pinia';
 import App from "./App.vue";
-// #ifdef MP-WEIXIN
-import '@minisheep/three-platform-adapter/wechat';
-// #endif
 
 export function createApp() {
   const app = createSSRApp(App);

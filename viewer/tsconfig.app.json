@@ -28,7 +28,7 @@
     "exactOptionalPropertyTypes": true,
     "paths": {
       "@/*": ["./src/*"],
-      "@schema/*": ["../schema/*"],
+      "@schema/*": ["../schema/*"]
     }
   }
 }

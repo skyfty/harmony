@@ -44,6 +44,7 @@ export default defineConfig({
     }),
     threePlatformAdapter(),
     createMpChunkSplitterPlugin({
+      subpackages: ['pages/scenery'],
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
@@ -68,7 +69,7 @@ export default defineConfig({
       name:'find-dep',
       config(config){
         // uni 插件覆盖了这个导致不能正确识别 pnpm 安装模块的依赖
-        config.resolve!.preserveSymlinks = false;
+        config.resolve!.preserveSymlinks = true;
       }
     },
   ],
