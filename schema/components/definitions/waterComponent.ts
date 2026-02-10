@@ -77,7 +77,6 @@ const WATER_STATIC_MIRROR_CAMERA_POSITION_EPS_SQ = 0.15 * 0.15
 // Allow ~35° rotation change before forcing re-capture.
 const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((35 * Math.PI) / 180 / 2)
 // Loose projection matrix difference tolerance (e.g. small FOV/near/far adjustments allowed).
-const WATER_STATIC_MIRROR_CAMERA_PROJECTION_EPS = 5e-4
 
 // Water surface moved threshold before forcing a re-capture (world units).
 const WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ = 0.05 * 0.05
