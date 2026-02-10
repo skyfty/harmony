@@ -14,9 +14,6 @@
     "static/**/*",
     "scripts/**/*"
   ],
-  "scripts": {
-    "postinstall": "node scripts/postinstall.cjs"
-  },
   "dependencies": {
     "@harmony/schema": "file:../schema",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",

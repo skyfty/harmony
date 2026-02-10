@@ -34,6 +34,11 @@ function resolveConsumerRoot() {
   const initCwd = process.env.INIT_CWD;
   if (initCwd && path.isAbsolute(initCwd)) return initCwd;
 
+  // When invoked manually from an app (e.g. "node ../scenery/scripts/postinstall.cjs"),
+  // prefer the current working directory as the consumer root.
+  const cwd = process.cwd();
+  if (cwd && path.isAbsolute(cwd)) return cwd;
+
   // Fallback: best-effort guess.
   return path.resolve(packageRoot, '..', '..', '..');
 }

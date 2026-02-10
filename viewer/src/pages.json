@@ -2,9 +2,15 @@
   "pages": [
     {
       "path": "pages/index/index"
-    },
+    }
+  ],
+  "subPackages": [
     {
-      "path": "pages/scenery/index"
+      "root": "pages/scenery",
+      "name": "scenery",
+      "pages": [
+        { "path": "index" }
+      ]
     }
   ],
   "globalStyle": {

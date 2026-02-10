@@ -3,9 +3,13 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "predev:mp-weixin": "node ../scenery/scripts/postinstall.cjs",
     "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin",
+    "prebuild:mp-weixin": "node ../scenery/scripts/postinstall.cjs",
     "build:mp-weixin": "uni build -p mp-weixin",
+    "predev:h5": "node ../scenery/scripts/postinstall.cjs",
     "dev:h5": "cross-env DEBUG=none uni -p h5",
+    "prebuild:h5": "node ../scenery/scripts/postinstall.cjs",
     "build:h5": "uni build -p h5",
     "type-check": "vue-tsc -b",
     "lint": "eslint --ext .ts,.js,.vue src || true",

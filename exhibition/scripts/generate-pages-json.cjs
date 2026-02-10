@@ -43,13 +43,6 @@ const pages = pagePaths.map((p) => ({ path: p }));
 
 const pagesJson = {
   pages,
-  subPackages: [
-    {
-      root: 'uni_modules/scenery/pages',
-      name: 'scenery',
-      pages: [{ path: 'index' }],
-    },
-  ],
   globalStyle: {
     navigationStyle: 'custom',
     navigationBarTextStyle: 'white',
