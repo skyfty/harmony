@@ -272,8 +272,8 @@ async function enterExhibition(): Promise<void> {
   }
   const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
   const target = sceneUrl
-    ? `/pages/scenery/view/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
-    : '/pages/scenery/view/index';
+    ? `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
+    : '/pages/scenery/index';
 
   uni.navigateTo({ url: target });
 }

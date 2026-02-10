@@ -52,9 +52,6 @@
       "path": "pages/profile/index"
     },
     {
-      "path": "pages/scenery/view/index"
-    },
-    {
       "path": "pages/search/index"
     },
     {
@@ -74,6 +71,16 @@
     },
     {
       "path": "pages/works/records/index"
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/scenery",
+      "pages": [
+        {
+          "path": "index"
+        }
+      ]
     }
   ],
   "globalStyle": {

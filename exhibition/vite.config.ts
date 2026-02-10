@@ -1,10 +1,11 @@
-import { defineConfig, Rollup } from "vite";
+import { defineConfig } from "vite";
 import { fileURLToPath, URL } from 'node:url';
 import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
+import { toCustomChunkPlugin } from "@harmony/tools/vite";
 // https://vitejs.dev/config/
 export default defineConfig({
   optimizeDeps: {
@@ -44,8 +45,25 @@ export default defineConfig({
     }),
     threePlatformAdapter(),
     createMpChunkSplitterPlugin({
+      subpackages: ['pages/scenery'],
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024
+    }),
+
+    // 默认情况 uni-app 会将 node_modules 下的模块打包在 common/vendor.js
+    // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
+    toCustomChunkPlugin({
+      manualChunks: {
+        'pages/scenery/chunks/vendor': [
+          '@minisheep/three-platform-adapter',
+          '@minisheep/three-platform-adapter/wechat',
+          '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
+          'three',
+          'three/addons/**',
+          'three/examples/**',
+          'three/examples/jsm/**',
+        ]
+      }
     }),
 
 

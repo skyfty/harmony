@@ -2,6 +2,11 @@ import path from "node:path";
 import { walkFiles, writeJsonPretty } from "../node/fsUtils.js";
 import { toPosixPath } from "../node/pathUtils.js";
 
+const SRC_DIRNAME = "src";
+const UNI_PAGES_PREFIX = "pages/";
+const SCENERY_ROOT = "pages/scenery";
+const SCENERY_PREFIX = `${SCENERY_ROOT}/`;
+
 export type GeneratePagesJsonOptions = {
   projectRoot: string;
   pagesDir: string;
@@ -10,31 +15,30 @@ export type GeneratePagesJsonOptions = {
 };
 
 export async function generatePagesJson(options: GeneratePagesJsonOptions): Promise<void> {
-  const vueFiles = walkFiles(options.pagesDir, (absPath) => absPath.endsWith(".vue"));
+  const pagePaths = collectUniPagePaths(options.pagesDir, options.projectRoot);
+  const sorted = sortWithHomeFirst(dedupe(pagePaths), options.home);
 
-  const pagePaths = vueFiles
-    .map((absVue) => toUniPagePath(absVue, options.projectRoot))
-    .filter((p) => p.startsWith("pages/"));
+  const { mainPages, sceneryPages } = splitSceneryPages(sorted);
 
-  const unique = Array.from(new Set(pagePaths));
+  const pages = mainPages.map((pagePath) => ({ path: pagePath }));
+  const subPackages = sceneryPages.length
+    ? [
+        {
+          root: SCENERY_ROOT,
+          pages: sceneryPages.map((pagePath) => ({ path: pagePath.slice(SCENERY_PREFIX.length) })),
+        },
+      ]
+    : undefined;
 
-  unique.sort((a, b) => {
-    if (a === options.home) return -1;
-    if (b === options.home) return 1;
-    return a.localeCompare(b);
-  });
-
-  const pages = unique.map((p) => ({ path: p }));
-
-  // Keep behavior consistent with existing exhibition script.
   const json = {
     pages,
+    ...(subPackages ? { subPackages } : {}),
     globalStyle: {
       navigationStyle: "custom",
       navigationBarTextStyle: "white",
       navigationBarBackgroundColor: "#F8F8F8",
       backgroundColor: "#F8F8F8",
-    }
+    },
   };
 
   writeJsonPretty(options.outPath, json);
@@ -42,8 +46,39 @@ export async function generatePagesJson(options: GeneratePagesJsonOptions): Prom
 }
 
 function toUniPagePath(absVueFile: string, projectRoot: string): string {
-  const srcRoot = path.resolve(projectRoot, "src");
+  const srcRoot = path.resolve(projectRoot, SRC_DIRNAME);
   const relFromSrc = toPosixPath(path.relative(srcRoot, absVueFile));
-  if (!relFromSrc.startsWith("pages/")) return "";
+  if (!relFromSrc.startsWith(UNI_PAGES_PREFIX)) return "";
   return relFromSrc.replace(/\.vue$/, "");
+}
+
+function collectUniPagePaths(pagesDir: string, projectRoot: string): string[] {
+  const vueFiles = walkFiles(pagesDir, (absPath) => absPath.endsWith(".vue"));
+  return vueFiles
+    .map((absVue) => toUniPagePath(absVue, projectRoot))
+    .filter((p) => p.startsWith(UNI_PAGES_PREFIX));
+}
+
+function dedupe<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+function sortWithHomeFirst(pagePaths: string[], home: string): string[] {
+  return pagePaths.sort((a, b) => {
+    if (a === home) return -1;
+    if (b === home) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function splitSceneryPages(pagePaths: string[]): { mainPages: string[]; sceneryPages: string[] } {
+  const mainPages: string[] = [];
+  const sceneryPages: string[] = [];
+
+  for (const pagePath of pagePaths) {
+    if (pagePath.startsWith(SCENERY_PREFIX)) sceneryPages.push(pagePath);
+    else mainPages.push(pagePath);
+  }
+
+  return { mainPages, sceneryPages };
 }
