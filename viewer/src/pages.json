@@ -6,7 +6,7 @@
   ],
   "subPackages": [
     {
-      "root": "pages/scenery",
+      "root": "uni_modules/scenery/pages",
       "name": "scenery",
       "pages": [
         {
