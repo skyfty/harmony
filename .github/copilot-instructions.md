@@ -6,7 +6,8 @@
 - `editor/`: Vue 3 + Vite + Vuetify + Three.js editor app.
 - `admin/`: Vue 3 + Vite + Vuetify admin app.
 - `uploader/`: Vue 3 + Vite + Vuetify uploader app.
-- `miniprogram/`: uni-app client (H5 + mp-weixin builds).
+- `viewer/`: uni-app 微信小程序 3D viewer（含可复用 `uni_modules/scenery` 分包模块）。
+- `exhibition/`: uni-app 微信小程序主题业务端（不直接依赖 three/cannon，仅调用 scenery 分包）。
 
 ## Key workflows (use per-package scripts)
 - Server dev: `cd server && npm run dev` (uses `server/.env.development`, runs with `tsx watch`).
@@ -16,7 +17,8 @@
   - `editor` build runs `npm --prefix ../schema run build` first (don’t skip when changing `schema/`).
 - Admin dev/build: `cd admin && npm run dev` / `npm run build`.
 - Uploader dev/build: `cd uploader && npm run dev` / `npm run build`.
-- Miniprogram: `cd miniprogram && npm run dev:h5` or `npm run dev:mp-weixin`.
+- Scene viewer: `cd viewer && npm run dev:mp-weixin`.
+- Exhibition: `cd exhibition && npm run dev:mp-weixin`.
 
 ## Runtime config convention (important)
 - Frontends load `/config/app-config.json` at startup and store it on `window.__HARMONY_RUNTIME_CONFIG__`.
@@ -32,7 +34,7 @@
 
 ## TypeScript/ESM + import conventions
 - Server is ESM (`"type": "module"`) and uses TS path alias `@/*` via `server/tsconfig.json`.
-- Build outputs run `scripts/fix-esm-extensions.cjs` (server + schema) — keep source imports idiomatic ESM; avoid mixing CommonJS unless you’re following existing compat code (see `server/src/utils/cjsCompat.ts`).
+- Build outputs run `harmony-tools fix-esm-extensions --root dist` (server + schema) — keep source imports idiomatic ESM; avoid mixing CommonJS unless you’re following existing compat code (see `server/src/utils/cjsCompat.ts`).
 
 ## Vite aliases (editor)
 - `editor/vite.config.ts` defines `@` -> `editor/src` and `@schema` -> `schema/` source.

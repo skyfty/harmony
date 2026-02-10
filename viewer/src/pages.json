@@ -1,0 +1,23 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index"
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/scenery",
+      "name": "scenery",
+      "independent": true,
+      "pages": [
+        { "path": "index" }
+      ]
+    }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "white",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}

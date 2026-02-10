@@ -3,16 +3,24 @@
   "version": "0.1.0",
   "description": "Shared scene schema definitions for Harmony clients",
   "type": "module",
-  "private": true,
+  "private": false,
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-terrain-scatter.cjs && node scripts/fix-esm-extensions.cjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-terrain-scatter.cjs && harmony-tools fix-esm-extensions --root dist",
     "build:asset-types": "tsc -p tsconfig.asset-types.json"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    },
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "default": "./dist/components/index.js"
     },
     "./asset-api": {
       "types": "./dist/asset-api.d.ts",
@@ -32,6 +40,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.171.0",
+    "@harmony/tools": "file:../tools",
     "typescript": "^5.4.5"
   }
 }
