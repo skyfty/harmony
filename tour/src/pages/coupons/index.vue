@@ -1,0 +1,61 @@
+<template>
+  <view class="page">
+    <view class="header">
+      <text class="title">卡券中心</text>
+    </view>
+    <view class="content">
+      <CouponCard
+        v-for="coupon in coupons"
+        :key="coupon.id"
+        :title="coupon.title"
+        :description="coupon.description"
+        :valid-until="coupon.validUntil"
+        :status="coupon.status"
+        @use="handleUse(coupon.id)"
+      />
+    </view>
+    <BottomNav active="coupon" @navigate="handleNavigate" />
+  </view>
+</template>
+
+<script setup lang="ts">
+import BottomNav from '@/components/BottomNav.vue';
+import CouponCard from '@/components/CouponCard.vue';
+import { listCoupons } from '@/mocks/coupons';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
+
+const coupons = listCoupons();
+
+function handleUse(_id: string) {
+  uni.showToast({ title: '已使用（mock）', icon: 'none' });
+}
+
+function handleNavigate(key: NavKey) {
+  redirectToNav(key);
+}
+</script>
+
+<style scoped lang="scss">
+.page {
+  min-height: 100vh;
+  background: #f8f8f8;
+  padding-bottom: 70px;
+}
+
+.header {
+  padding: 16px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a1f2e;
+}
+
+.content {
+  padding: 0 16px 18px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+</style>
