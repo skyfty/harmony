@@ -423,7 +423,7 @@ import { SceneCloudRenderer, sanitizeCloudSettings } from '@harmony/schema/cloud
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import { useProjectStore } from '../common/stores/projectStore';
-import { loadScenePackageZip, type ScenePackagePointer } from '../common/utils/scenePackageStorage';
+import { loadScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
 
 type SceneryProps = {
   projectId?: string;

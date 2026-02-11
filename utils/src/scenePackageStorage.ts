@@ -2,7 +2,7 @@ import {
   writeScenePackageZipSync,
   readScenePackageZipSync,
   removeScenePackageZipSync,
-} from '@/utils/scenePackageFs';
+} from './scenePackageFs';
 
 export type ScenePackagePointer =
   | { kind: 'wxfs'; ref: string }
@@ -74,7 +74,6 @@ async function idbGetZip(key: string): Promise<ArrayBuffer> {
       return value;
     }
 
-    // Some browsers may give back a TypedArray view.
     if (value && typeof value === 'object' && 'buffer' in (value as any) && (value as any).buffer instanceof ArrayBuffer) {
       const view = value as any;
       return (view.buffer as ArrayBuffer).slice(view.byteOffset ?? 0, (view.byteOffset ?? 0) + (view.byteLength ?? (view.buffer as ArrayBuffer).byteLength));
@@ -103,11 +102,11 @@ async function idbDeleteZip(key: string): Promise<void> {
   }
 }
 
-function toArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
+function toArrayBuffer(input: ArrayBuffer | Uint8Array | any): ArrayBuffer {
   if (input instanceof Uint8Array) {
-    return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+    return (input.buffer as any).slice(input.byteOffset, input.byteOffset + input.byteLength) as ArrayBuffer;
   }
-  return input;
+  return input as ArrayBuffer;
 }
 
 export async function saveScenePackageZip(bytes: ArrayBuffer | Uint8Array, projectId: string): Promise<ScenePackagePointer> {

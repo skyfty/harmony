@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
-import { ensureTestAccountLogin } from "@/utils/testAccount";
+import { ensureTestAccountLogin } from "@harmony/utils";
 
 onLaunch(() => {
   ensureTestAccountLogin().catch((error) => {

@@ -1,6 +1,6 @@
 import { ref, type Ref } from 'vue';
 import { defineStore } from 'pinia';
-import { removeScenePackageZip, type ScenePackagePointer } from '@/utils/scenePackageStorage';
+import { removeScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
 
 export interface ProjectConfig {
   id: string;

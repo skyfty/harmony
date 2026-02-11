@@ -23,11 +23,11 @@ function getUserDataPath(): string {
   return path;
 }
 
-function normalizeToArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
+function normalizeToArrayBuffer(input: ArrayBuffer | Uint8Array | any): ArrayBuffer {
   if (input instanceof Uint8Array) {
-    return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+    return (input.buffer as any).slice(input.byteOffset, input.byteOffset + input.byteLength) as ArrayBuffer;
   }
-  return input;
+  return input as ArrayBuffer;
 }
 
 function ensureDirExistsSync(dirPath: string): void {
@@ -58,7 +58,7 @@ export function writeScenePackageZipSync(bytes: ArrayBuffer | Uint8Array, projec
   ensureDirExistsSync(dir);
   const filePath = resolveScenePackageZipPath(projectId);
   const buffer = normalizeToArrayBuffer(bytes);
-  fs.writeFileSync(filePath, buffer);
+  fs.writeFileSync(filePath, buffer as any);
   return filePath;
 }
 
@@ -67,11 +67,10 @@ export function readScenePackageZipSync(filePath: string): ArrayBuffer {
   if (typeof fs.readFileSync !== 'function') {
     throw new Error('当前环境不支持 readFileSync');
   }
-  const result = fs.readFileSync(filePath);
+  const result = fs.readFileSync(filePath as any);
   if (result instanceof ArrayBuffer) {
     return result;
   }
-  // Some typings return string if encoding was provided; we never provide encoding.
   throw new Error('读取场景包失败（返回不是 ArrayBuffer）');
 }
 

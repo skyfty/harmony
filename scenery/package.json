@@ -18,6 +18,7 @@
     "@harmony/schema": "file:../schema",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",
     "@minisheep/three-platform-adapter": "^2.0.1",
+    "@harmony/utils": "file:../utils",
     "cannon-es": "^0.20.0",
     "three": "^0.172.0",
     "three-mesh-bvh": "^0.9.1"

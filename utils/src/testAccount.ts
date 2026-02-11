@@ -1,5 +1,4 @@
-import { apiLogin, apiRegister } from '@/api/miniprogram';
-import { getAuthToken } from '@/utils/http';
+import { post, setAuthToken, getAuthToken } from './http';
 
 const DEFAULT_USERNAME = 'test';
 const DEFAULT_PASSWORD = 'test1234';
@@ -20,18 +19,28 @@ export async function ensureTestAccountLogin(force = false): Promise<void> {
   const { username, password, displayName } = resolveCredentials();
 
   try {
-    await apiLogin({ username, password });
+    const session = await post('/users/login', { username, password }, false);
+    if (session && session.token) {
+      try {
+        setAuthToken((session as any).token);
+      } catch {}
+    }
     return;
   } catch (error) {
     console.warn('Failed to sign in test account, attempting registration', error);
   }
 
   try {
-    await apiRegister({ username, password, displayName });
+    const reg = await post('/users/register', { username, password, displayName }, false);
+    if (reg && (reg as any).token) {
+      try {
+        setAuthToken((reg as any).token);
+      } catch {}
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (message && message.toLowerCase().includes('already exists')) {
-      await apiLogin({ username, password });
+      await post('/users/login', { username, password }, false).then((s: any) => s && s.token && setAuthToken(s.token)).catch(() => {});
       return;
     }
     console.error('Unable to register test account', error);

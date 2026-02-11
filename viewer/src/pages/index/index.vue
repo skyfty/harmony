@@ -38,7 +38,7 @@ import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useProjectStore } from '@/stores/projectStore';
 // 不再解析 zip 内容，只保存压缩包二进制并显示文件名
-import { saveScenePackageZip } from '@/utils/scenePackageStorage';
+import { saveScenePackageZip } from '@harmony/utils';
 
 const projectStore = useProjectStore();
 const { currentProject } = storeToRefs(projectStore);
