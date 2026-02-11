@@ -57,6 +57,7 @@ export default {
           'three/addons/**',
           'three/examples/**',
           'three/examples/jsm/**',
+          'cannon'
         ],
       },
     }),

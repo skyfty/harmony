@@ -71,6 +71,7 @@ export default {
             // Catch any other examples entrypoints (legacy or non-jsm)
             'three/examples/**',
             'three/examples/jsm/**',
+            'cannon'
           ]
         }
       }),
