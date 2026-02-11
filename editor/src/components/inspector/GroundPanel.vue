@@ -297,7 +297,7 @@ function handleScatterAssetSelect(
         density="compact"
         hide-details
         color="primary"
-        label="地形投射阴影"
+        label="Cast Ground Shadows"
       />
 
       <div class="ground-tool-tabs">
@@ -308,10 +308,10 @@ function handleScatterAssetSelect(
             :transition="false"
             class="ground-tabs"
           >
-            <v-tab value="terrain" :title="'地形工具'">
+            <v-tab value="terrain" :title="'Terrain Tools'">
               <v-icon icon="mdi-image-edit-outline" size="16" />
             </v-tab>
-            <v-tab value="paint" :title="'地貌绘制'">
+            <v-tab value="paint" :title="'Terrain Paint'">
               <v-icon icon="mdi-brush-variant" size="16" />
             </v-tab>
             <v-tab

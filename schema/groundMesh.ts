@@ -537,8 +537,8 @@ function ensureChunkMesh(
   if (!material) {
     material = new THREE.MeshStandardMaterial({
       color: '#707070',
-      roughness: 0.85,
-      metalness: 0.05,
+      roughness: 1.0,
+      metalness: 0.1,
     })
   }
 
