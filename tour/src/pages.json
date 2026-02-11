@@ -20,7 +20,9 @@
       "root": "pages/scenery",
       "name": "scenery",
       "independent": true,
-      "pages": [{ "path": "index" }]
+      "pages": [
+        { "path": "index" }
+      ]
     }
   ],
   "globalStyle": {
