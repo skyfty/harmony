@@ -485,7 +485,7 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
 
   const topBottomMesh = new THREE.Mesh(topBottomGeometry, materialTemplate.clone())
   topBottomMesh.name = 'FloorTopBottomMesh'
-  topBottomMesh.castShadow = false
+  topBottomMesh.castShadow = true
   topBottomMesh.receiveShadow = true
   topBottomMesh.userData[MATERIAL_CONFIG_ID_KEY] = topBottom
   group.add(topBottomMesh)
@@ -494,7 +494,7 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
   if (sideGeometry) {
     const sideMesh = new THREE.Mesh(sideGeometry, materialTemplate.clone())
     sideMesh.name = 'FloorSideMesh'
-    sideMesh.castShadow = false
+    sideMesh.castShadow = true
     sideMesh.receiveShadow = true
     sideMesh.userData[MATERIAL_CONFIG_ID_KEY] = side
     group.add(sideMesh)
@@ -538,8 +538,8 @@ function buildInstancedMeshesFromTemplate(
   templates.forEach((template, index) => {
     const instanced = new THREE.InstancedMesh(template.geometry, template.material as any, instanceMatrices.length)
     instanced.name = `${options.namePrefix}_${index + 1}`
-    instanced.castShadow = template.castShadow
-    instanced.receiveShadow = template.receiveShadow
+    instanced.castShadow = true
+    instanced.receiveShadow = true
     for (let i = 0; i < instanceMatrices.length; i += 1) {
       instanced.setMatrixAt(i, instanceMatrices[i]!)
     }
