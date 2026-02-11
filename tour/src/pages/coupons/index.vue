@@ -39,7 +39,9 @@ function handleNavigate(key: NavKey) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-  padding-bottom: 70px;
+  padding-bottom: 85px;
+  padding-bottom: calc(85px + constant(safe-area-inset-bottom));
+  padding-bottom: calc(85px + env(safe-area-inset-bottom));
 }
 
 .header {
