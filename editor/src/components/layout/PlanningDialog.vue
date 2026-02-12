@@ -1603,11 +1603,6 @@ async function handleConvertTo3DScene() {
   const abortController = new AbortController()
 
   try {
-    if (!planningData) {
-      dialogOpen.value = false
-      return
-    }
-
     // Conversion uses stable feature ids as node ids and will re-use/update existing nodes.
     // We still keep overwriteExisting=true so conversion can prune orphaned generated nodes.
     const overwriteExisting = true
@@ -1628,22 +1623,33 @@ async function handleConvertTo3DScene() {
     dialogOpen.value = false
     await nextTick()
 
-    await convertPlanningTo3DScene({
-      sceneStore: sceneStore as any,
-      planningData,
-      overwriteExisting,
-      signal: abortController.signal,
-      onProgress: ({ step, progress }) => {
-        if (abortController.signal.aborted) return
-        uiStore.updateLoadingOverlay({
-          mode: 'determinate',
-          progress,
-          message: step,
-          closable: false,
-          autoClose: false,
-        })
-      },
-    })
+    if (!planningData) {
+      uiStore.updateLoadingOverlay({
+        mode: 'determinate',
+        progress: 50,
+        message: '正在同步删除内容…',
+        closable: false,
+        autoClose: false,
+      })
+      await clearPlanningGeneratedContent(sceneStore as any)
+    } else {
+      await convertPlanningTo3DScene({
+        sceneStore: sceneStore as any,
+        planningData,
+        overwriteExisting,
+        signal: abortController.signal,
+        onProgress: ({ step, progress }) => {
+          if (abortController.signal.aborted) return
+          uiStore.updateLoadingOverlay({
+            mode: 'determinate',
+            progress,
+            message: step,
+            closable: false,
+            autoClose: false,
+          })
+        },
+      })
+    }
 
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
@@ -3378,6 +3384,8 @@ function handleLayerDelete(layerId: string) {
     activeLayerId.value = layers.value[0]?.id ?? ''
   }
   markPlanningDirty()
+  // Persist layer removal so scene updates (e.g. terrain cleared) immediately
+  persistPlanningToSceneIfDirty({ force: true })
 }
 
 function setRenameFieldRef(layerId: string, el: unknown) {
@@ -4299,6 +4307,8 @@ function deleteSelectedFeature() {
     selectedFeature.value = null
     selectedVertex.value = null
     markPlanningDirty()
+    // Persist immediately so scene updates (e.g. clearing planning terrain) take effect
+    persistPlanningToSceneIfDirty({ force: true })
     return
   }
 
@@ -4307,6 +4317,7 @@ function deleteSelectedFeature() {
     selectedFeature.value = null
     selectedVertex.value = null
     markPlanningDirty()
+    persistPlanningToSceneIfDirty({ force: true })
     return
   }
   const line = polylines.value.find((item) => item.id === feature.lineId)
@@ -4319,6 +4330,7 @@ function deleteSelectedFeature() {
     selectedFeature.value = null
     selectedVertex.value = null
     markPlanningDirty()
+    persistPlanningToSceneIfDirty({ force: true })
     return
   }
   const removeIndex = Math.min(feature.segmentIndex + 1, line.points.length - 1)
@@ -4333,6 +4345,8 @@ function deleteSelectedFeature() {
   normalizeRoadLayerIfNeeded(layerIdBefore)
 
   markPlanningDirty()
+  // Persist so the scene reflects the edit immediately
+  persistPlanningToSceneIfDirty({ force: true })
 }
 
 function handleDeleteButtonClick() {

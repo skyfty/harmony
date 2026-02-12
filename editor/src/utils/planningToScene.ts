@@ -671,16 +671,45 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
 
   const groundNode = findGroundNode(sceneStore.nodes)
   if (groundNode?.dynamicMesh?.type === 'Ground') {
-    const prevSnapshot = (groundNode.dynamicMesh as any)?.terrainScatter ?? null
+    let nextGroundDynamicMesh = groundNode.dynamicMesh as GroundDynamicMesh
+    const resetContours = resetGroundPlanningContours(nextGroundDynamicMesh)
+    if (resetContours.changed) {
+      nextGroundDynamicMesh = resetContours.definition
+    }
+
+    const prevSnapshot = (nextGroundDynamicMesh as any)?.terrainScatter ?? null
     const storeLocal = ensureScatterStore(groundNode.id, prevSnapshot)
     removePlanningScatterLayers(storeLocal)
     const snapshot = serializeTerrainScatterStore(storeLocal)
     snapshot.metadata.updatedAt = monotonicUpdatedAt(prevSnapshot, snapshot.metadata.updatedAt)
     const next = {
-      ...(groundNode.dynamicMesh as any),
+      ...(nextGroundDynamicMesh as any),
       terrainScatter: snapshot,
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+  }
+}
+
+function resetGroundPlanningContours(definition: GroundDynamicMesh): { definition: GroundDynamicMesh; changed: boolean } {
+  const hadPlanningContours = Boolean(
+    (definition.planningMetadata?.contourBounds && isBoundsValid(definition.planningMetadata?.contourBounds))
+    || Object.keys(definition.planningHeightMap ?? {}).length,
+  )
+  if (!hadPlanningContours) {
+    return { definition, changed: false }
+  }
+
+  return {
+    changed: true,
+    definition: {
+      ...definition,
+      planningHeightMap: {},
+      planningMetadata: {
+        ...(definition.planningMetadata ?? {}),
+        contourBounds: null,
+        generatedAt: Date.now(),
+      },
+    },
   }
 }
 
@@ -1511,21 +1540,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
-    const hadPlanningContours = Boolean(
-      (groundDefinition.planningMetadata?.contourBounds && isBoundsValid(groundDefinition.planningMetadata?.contourBounds))
-      || Object.keys(groundDefinition.planningHeightMap ?? {}).length,
-    )
+    const resetContours = resetGroundPlanningContours(groundDefinition)
+    const hadPlanningContours = resetContours.changed
 
     if (hadPlanningContours) {
-      const clearedPlanning = {
-        ...groundDefinition,
-        planningHeightMap: {},
-        planningMetadata: {
-          ...(groundDefinition.planningMetadata ?? {}),
-          contourBounds: null,
-          generatedAt: Date.now(),
-        },
-      }
+      const clearedPlanning = resetContours.definition
       groundDefinition = clearedPlanning
       sceneStore.updateNodeDynamicMesh(groundNode.id, clearedPlanning)
       await yieldController.maybeYield(true)
