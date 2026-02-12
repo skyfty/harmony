@@ -16,7 +16,7 @@ const usageSnapshotSchema = new Schema(
 const warehouseSchema = new Schema<OptimizeWarehouseDocument>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    productId: { type: Schema.Types.ObjectId, ref: 'OptimizeProduct', required: true },
+    productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     quantity: { type: Number, default: 0, min: 0 },
     totalPurchased: { type: Number, default: 0, min: 0 },
     totalConsumed: { type: Number, default: 0, min: 0 },

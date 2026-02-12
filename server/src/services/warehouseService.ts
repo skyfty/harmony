@@ -1,10 +1,10 @@
 import { Types } from 'mongoose'
 import { OptimizeWarehouseModel } from '@/models/OptimizeWarehouse'
-import type { OptimizeProductDocument } from '@/types/models'
+import type { ProductDocument } from '@/types/models'
 
 interface AddProductOptions {
   userId: string
-  product: OptimizeProductDocument
+  product: ProductDocument
   orderId: Types.ObjectId
 }
 

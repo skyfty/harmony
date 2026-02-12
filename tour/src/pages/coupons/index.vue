@@ -19,15 +19,27 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import CouponCard from '@/components/CouponCard.vue';
-import { listCoupons } from '@/mocks/coupons';
+import { listMyCoupons } from '@/api/mini/coupons';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+import type { Coupon } from '@/types/coupon';
 
-const coupons = listCoupons();
+const coupons = ref<Coupon[]>([]);
+
+async function reload() {
+  coupons.value = await listMyCoupons();
+}
+
+onMounted(() => {
+  void reload().catch(() => {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  });
+});
 
 function handleUse(_id: string) {
-  uni.showToast({ title: '已使用（mock）', icon: 'none' });
+  uni.showToast({ title: '已使用', icon: 'none' });
 }
 
 function handleNavigate(key: NavKey) {

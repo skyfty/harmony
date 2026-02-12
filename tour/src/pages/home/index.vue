@@ -25,7 +25,7 @@
           :name="scenic.name"
           :summary="scenic.summary"
           :cover-url="scenic.coverUrl"
-          :rating="scenic.rating"
+          v-bind="scenic.rating !== undefined ? { rating: scenic.rating } : {}"
           @tap="openDetail(scenic.id)"
         />
       </view>
@@ -34,13 +34,9 @@
         <text class="section-text">热门活动</text>
       </view>
       <view class="activity">
-        <view class="activity-card">
-          <text class="activity-title">周末限定 · 夜游湖畔</text>
-          <text class="activity-desc">探索灯光带与环湖栈道</text>
-        </view>
-        <view class="activity-card">
-          <text class="activity-title">山谷越野挑战</text>
-          <text class="activity-desc">体验多种地形与路线</text>
+        <view v-for="event in events" :key="event.id" class="activity-card">
+          <text class="activity-title">{{ event.title }}</text>
+          <text class="activity-desc">{{ event.description }}</text>
         </view>
       </view>
     </view>
@@ -50,14 +46,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
-import { listScenics } from '@/mocks/scenics';
+import { listHotEvents, listSpaces } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+import type { ScenicSummary } from '@/types/scenic';
 
 const keyword = ref('');
-const scenics = computed(() => listScenics());
+const scenics = ref<ScenicSummary[]>([]);
+const events = ref<{ id: string; title: string; description: string }[]>([]);
+
+async function reload() {
+  const [spacesRes, eventsRes] = await Promise.all([listSpaces(), listHotEvents()]);
+  scenics.value = spacesRes;
+  events.value = eventsRes.map((event) => ({
+    id: event.id,
+    title: event.title,
+    description: event.description,
+  }));
+}
+
+onMounted(() => {
+  void reload().catch(() => {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  });
+});
 
 const filtered = computed(() => {
   const k = keyword.value.trim();

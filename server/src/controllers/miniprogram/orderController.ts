@@ -1,7 +1,7 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { OrderModel } from '@/models/Order'
-import { OptimizeProductModel } from '@/models/OptimizeProduct'
+import { ProductModel } from '@/models/Product'
 import { ensureUserId } from './utils'
 
 interface OrderItemLean {
@@ -66,7 +66,7 @@ async function buildProductMap(productIds: string[]): Promise<Map<string, Produc
   if (!productIds.length) {
     return new Map()
   }
-  const products = (await OptimizeProductModel.find({ _id: { $in: productIds } })
+  const products = (await ProductModel.find({ _id: { $in: productIds } })
     .lean()
     .exec()) as ProductLean[]
   return new Map(products.map((product) => [product._id.toString(), product]))

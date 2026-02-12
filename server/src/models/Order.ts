@@ -3,7 +3,7 @@ import type { OrderDocument } from '@/types/models'
 
 const orderItemSchema = new Schema(
   {
-    productId: { type: Schema.Types.ObjectId, ref: 'OptimizeProduct', required: true },
+    productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     name: { type: String, required: true },
     price: { type: Number, required: true, min: 0 },
     quantity: { type: Number, required: true, min: 1, default: 1 },

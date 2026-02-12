@@ -166,6 +166,50 @@ export interface OptimizeWarehouseDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export type ProductUsageConfig = OptimizeProductUsageConfig
+
+export interface ProductDocument extends Document<Types.ObjectId> {
+  name: string
+  slug: string
+  category: string
+  price: number
+  imageUrl?: string
+  coverUrl?: string | null
+  summary?: string | null
+  description?: string
+  tags: string[]
+  usageConfig?: ProductUsageConfig
+  validityDays?: number | null
+  applicableSceneTags: string[]
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type UserProductState = 'locked' | 'unused' | 'used' | 'expired'
+
+export interface UserProductDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  productId: Types.ObjectId
+  state: UserProductState
+  acquiredAt: Date
+  usedAt?: Date | null
+  expiresAt?: Date | null
+  orderId?: Types.ObjectId | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface SceneProductBindingDocument extends Document<Types.ObjectId> {
+  sceneId: Types.ObjectId
+  productId: Types.ObjectId
+  enabled: boolean
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface OrderItem {
   productId: Types.ObjectId
   name: string
@@ -279,6 +323,56 @@ export interface SceneDocument extends Document<Types.ObjectId> {
   originalFilename?: string | null
   metadata?: Record<string, unknown> | null
   publishedBy: Types.ObjectId | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface SceneSpotDocument extends Document<Types.ObjectId> {
+  sceneId: Types.ObjectId
+  title: string
+  summary?: string | null
+  coverUrl?: string | null
+  order: number
+  anchor?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface MiniEventDocument extends Document<Types.ObjectId> {
+  title: string
+  description?: string | null
+  coverUrl?: string | null
+  locationText?: string | null
+  startAt?: Date | null
+  endAt?: Date | null
+  sceneId?: Types.ObjectId | null
+  hotScore: number
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface CouponDocument extends Document<Types.ObjectId> {
+  title: string
+  description: string
+  validUntil: Date
+  usageRules?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type UserCouponStatus = 'unused' | 'used' | 'expired'
+
+export interface UserCouponDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  couponId: Types.ObjectId
+  status: UserCouponStatus
+  claimedAt: Date
+  usedAt?: Date | null
+  expiresAt?: Date | null
+  metadata?: Record<string, unknown> | null
   createdAt: Date
   updatedAt: Date
 }

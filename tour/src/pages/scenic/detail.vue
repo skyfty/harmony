@@ -67,7 +67,7 @@ import { ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import StarRating from '@/components/StarRating.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
-import { getScenicById } from '@/mocks/scenics';
+import { getSpace } from '@/api/mini';
 import { listCommentsByScenic } from '@/mocks/comments';
 import type { ScenicDetail } from '@/types/scenic';
 
@@ -76,9 +76,19 @@ const comments = ref(listCommentsByScenic(''));
 
 onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
-  const s = id ? getScenicById(id) : undefined;
-  scenic.value = s ?? null;
   comments.value = id ? listCommentsByScenic(id) : [];
+  if (!id) {
+    scenic.value = null;
+    return;
+  }
+  void getSpace(id)
+    .then((space) => {
+      scenic.value = space ?? null;
+    })
+    .catch(() => {
+      scenic.value = null;
+      uni.showToast({ title: '加载失败', icon: 'none' });
+    });
 });
 
 function goBack() {
