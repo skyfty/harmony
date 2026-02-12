@@ -174,6 +174,8 @@ interface PlanningPolygon {
   points: PlanningPoint[]
   /** Height delta in meters (only meaningful when layer kind is 'terrain'). */
   terrainHeightMeters?: number
+  /** Edge blend radius in meters (only meaningful when layer kind is 'terrain'). */
+  terrainBlendMeters?: number
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
@@ -1435,6 +1437,11 @@ function buildPlanningSnapshot() {
       terrainHeightMeters: getLayerKind(poly.layerId) === 'terrain'
         ? (Number.isFinite(Number((poly as any).terrainHeightMeters)) ? Math.round(Number((poly as any).terrainHeightMeters) * 100) / 100 : undefined)
         : undefined,
+      terrainBlendMeters: getLayerKind(poly.layerId) === 'terrain'
+        ? (Number.isFinite(Number((poly as any).terrainBlendMeters))
+          ? Math.round(Math.min(20, Math.max(0, Number((poly as any).terrainBlendMeters))) * 100) / 100
+          : undefined)
+        : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
       wallPresetAssetId: poly.wallPresetAssetId ?? null,
       floorPresetAssetId: poly.floorPresetAssetId ?? null,
@@ -1990,6 +1997,11 @@ function loadPlanningFromScene() {
         if (!Number.isFinite(raw)) return 0
         return Math.min(1000, Math.max(-1000, Math.round(raw * 100) / 100))
       })(),
+      terrainBlendMeters: (() => {
+        const raw = Number((poly as any).terrainBlendMeters)
+        if (!Number.isFinite(raw)) return 2
+        return Math.min(20, Math.max(0, Math.round(raw * 100) / 100))
+      })(),
       airWallEnabled: Boolean((poly as any).airWallEnabled),
       wallPresetAssetId:
         typeof (poly as any).wallPresetAssetId === 'string'
@@ -2385,6 +2397,22 @@ const terrainContourHeightModel = computed<number>({
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
     ;(poly as any).terrainHeightMeters = Math.round(clampNumberInput(value, 0, -1000, 1000) * 100) / 100
+    markPlanningDirty()
+  },
+})
+
+const terrainContourBlendModel = computed<number>({
+  get: () => {
+    const poly = selectedTerrainContourPolygon.value
+    if (!poly) return 2
+    const raw = Number((poly as any).terrainBlendMeters)
+    return Number.isFinite(raw) ? Math.min(20, Math.max(0, Math.round(raw * 100) / 100)) : 2
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const poly = selectedTerrainContourPolygon.value
+    if (!poly) return
+    ;(poly as any).terrainBlendMeters = Math.round(clampNumberInput(value, 2, 0, 20) * 100) / 100
     markPlanningDirty()
   },
 })
@@ -4018,6 +4046,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
     layerId: targetLayerId,
     points: clonePoints(points),
     terrainHeightMeters: targetKind === 'terrain' ? 0 : undefined,
+    terrainBlendMeters: targetKind === 'terrain' ? 2 : undefined,
   })
 
   // Select the newly created polygon so its properties appear immediately
@@ -6225,6 +6254,7 @@ void handleDeleteButtonClick
 void reorderPlanningImages
 // Keep terrain-related symbols to avoid unused-local errors (terrain panel removed)
 void terrainContourHeightModel
+void terrainContourBlendModel
 void terrainLimited
 void terrainCellSizeModel
 void terrainNoiseEnabledModel
@@ -7154,6 +7184,16 @@ onBeforeUnmount(() => {
                 hide-details
                 suffix="m"
                 label="Height"
+              />
+              <v-text-field
+                v-model.number="terrainContourBlendModel"
+                type="number"
+                step="0.1"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="m"
+                label="Smoothing"
               />
             </div>
 

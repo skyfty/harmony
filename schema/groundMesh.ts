@@ -216,6 +216,17 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   return planning + (manual - base)
 }
 
+export function resolveGroundManualHeightForEffectiveTarget(
+  definition: GroundDynamicMesh,
+  row: number,
+  column: number,
+  effectiveHeight: number,
+): number {
+  const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  const planning = getPlanningVertexHeight(definition, row, column)
+  return base + (effectiveHeight - planning)
+}
+
 function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   const key = groundVertexKey(row, column)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
@@ -236,6 +247,17 @@ export function setManualHeightOverrideValue(definition: GroundDynamicMesh, map:
 
 export function setPlanningHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   setHeightOverrideValue(definition, map, row, column, value)
+}
+
+function setManualHeightOverrideForEffectiveValue(
+  definition: GroundDynamicMesh,
+  map: GroundHeightMap,
+  row: number,
+  column: number,
+  effectiveHeight: number,
+): void {
+  const manualHeight = resolveGroundManualHeightForEffectiveTarget(definition, row, column, effectiveHeight)
+  setManualHeightOverrideValue(definition, map, row, column, manualHeight)
 }
 
 function sampleNeighborAverage(
@@ -731,7 +753,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               nextHeight = currentHeight + offset
             }
 
-            setHeightOverrideValue(definition, heightMap, row, col, nextHeight)
+            setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, nextHeight)
             modified = true
           }
       }
@@ -764,7 +786,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
           const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
           const average = sampleNeighborAverage(definition, row, col, rows, columns)
           const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
-          setHeightOverrideValue(definition, heightMap, row, col, smoothedHeight)
+          setManualHeightOverrideForEffectiveValue(definition, heightMap, row, col, smoothedHeight)
           modified = true
         }
       }

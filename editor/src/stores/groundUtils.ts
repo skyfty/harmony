@@ -5,6 +5,7 @@
 import type { GroundDynamicMesh, GroundGenerationSettings, GroundSettings, SceneNode } from '@harmony/schema'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
+import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
@@ -199,21 +200,71 @@ export function applyGroundRegionTransform(
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
 ): { definition: GroundDynamicMesh; changed: boolean } {
+  const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
+  const getManualHeight = (row: number, column: number): number => {
+    const key = groundVertexKey(row, column)
+    const raw = definition.manualHeightMap[key]
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return raw
+    }
+    return getBaseHeight(row, column)
+  }
+  const getPlanningHeight = (row: number, column: number): number => {
+    const key = groundVertexKey(row, column)
+    const raw = definition.planningHeightMap[key]
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return raw
+    }
+    return getBaseHeight(row, column)
+  }
+  const resolveEffectiveHeight = (row: number, column: number): number => {
+    const base = getBaseHeight(row, column)
+    const manual = getManualHeight(row, column)
+    const planning = getPlanningHeight(row, column)
+    return planning + (manual - base)
+  }
+  const resolveManualForEffective = (row: number, column: number, effective: number): number => {
+    const base = getBaseHeight(row, column)
+    const planning = getPlanningHeight(row, column)
+    return base + (effective - planning)
+  }
+  const roundHeight = (value: number): number => {
+    const rounded = Math.round(value * 100) / 100
+    return Object.is(rounded, -0) ? 0 : rounded
+  }
+
   const normalized = normalizeGroundBounds(definition, bounds)
   const nextHeightMap = { ...definition.manualHeightMap }
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
       const key = groundVertexKey(row, column)
-      const current = nextHeightMap[key] ?? 0
-      const next = transform(current, row, column)
-      if (Math.abs(next) <= HEIGHT_EPSILON) {
-        if (key in nextHeightMap) {
-          delete nextHeightMap[key]
-          changed = true
-        }
-      } else if (Math.abs(next - current) > HEIGHT_EPSILON) {
-        nextHeightMap[key] = next
+      const previousStored = nextHeightMap[key]
+      const currentEffective = resolveEffectiveHeight(row, column)
+      const nextEffective = transform(currentEffective, row, column)
+      if (!Number.isFinite(nextEffective)) {
+        continue
+      }
+
+      const nextManual = resolveManualForEffective(row, column, nextEffective)
+      const roundedManual = roundHeight(nextManual)
+      const roundedBase = roundHeight(getBaseHeight(row, column))
+
+      if (roundedManual === roundedBase) {
+        delete nextHeightMap[key]
+      } else {
+        nextHeightMap[key] = roundedManual
+      }
+
+      const nextStored = nextHeightMap[key]
+      if (previousStored === undefined && nextStored === undefined) {
+        continue
+      }
+      if (previousStored === undefined || nextStored === undefined) {
+        changed = true
+        continue
+      }
+      if (Math.abs(nextStored - previousStored) > HEIGHT_EPSILON) {
         changed = true
       }
     }

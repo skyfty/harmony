@@ -234,6 +234,7 @@ type PlanningPolygonAny = {
   name?: string
   layerId: string
   points: PlanningPoint[]
+  terrainBlendMeters?: unknown
   scatter?: unknown
   airWallEnabled?: unknown
 }
@@ -1070,6 +1071,7 @@ function polygonArea2D(points: PlanningPoint[]): number {
 }
 
 const PLANNING_TERRAIN_CONTOUR_BLEND_METERS = 2
+const PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX = 20
 const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
 
@@ -1081,6 +1083,13 @@ function clampFiniteNumber(raw: unknown, fallback: number, min: number, max: num
 
 function normalizeContourHeightMeters(raw: unknown): number {
   const clamped = clampFiniteNumber(raw, 0, -PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT, PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT)
+  const rounded = Math.round(clamped * 100) / 100
+  return Object.is(rounded, -0) ? 0 : rounded
+}
+
+function normalizeContourBlendMeters(raw: unknown, fallback = PLANNING_TERRAIN_CONTOUR_BLEND_METERS): number {
+  const normalizedFallback = clampFiniteNumber(fallback, PLANNING_TERRAIN_CONTOUR_BLEND_METERS, 0, PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX)
+  const clamped = clampFiniteNumber(raw, normalizedFallback, 0, PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX)
   const rounded = Math.round(clamped * 100) / 100
   return Object.is(rounded, -0) ? 0 : rounded
 }
@@ -1329,12 +1338,13 @@ async function applyPlanningTerrainContoursToGround(options: {
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
 }): Promise<GroundDynamicMesh> {
-  const blendMeters = Math.max(0, options.blendMeters ?? PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
+  const defaultBlendMeters = normalizeContourBlendMeters(options.blendMeters, PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
   const definition = options.definition
   const polygons = (Array.isArray(options.contourPolygons) ? options.contourPolygons : [])
     .map((poly) => ({
       poly,
       points: sanitizePlanningContourPoints(poly?.points ?? []),
+      blendMeters: normalizeContourBlendMeters((poly as any)?.terrainBlendMeters, defaultBlendMeters),
     }))
     .filter((item) => item.points.length >= 3)
 
@@ -1343,7 +1353,7 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   let nextBounds: GroundContourBounds | null = null
   for (const item of polygons) {
-    const b = boundsFromPlanningPolygon(definition, item.points, blendMeters)
+    const b = boundsFromPlanningPolygon(definition, item.points, item.blendMeters)
     nextBounds = unionBounds(nextBounds, b)
   }
 
@@ -1368,11 +1378,12 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const cell = Math.max(1e-6, Number(definition.cellSize) || 1)
   const delta = new Float32Array(rows * cols)
+  const contourBlendStrength = 0.65
 
   // Accumulate additive height deltas for each contour polygon.
   for (let polyIndex = 0; polyIndex < polygons.length; polyIndex += 1) {
     throwIfAborted(options.signal)
-    const { poly, points } = polygons[polyIndex]!
+    const { poly, points, blendMeters } = polygons[polyIndex]!
     const height = normalizeContourHeightMeters((poly as any).terrainHeightMeters)
 
     const polyBounds = boundsFromPlanningPolygon(definition, points, blendMeters)
@@ -1395,29 +1406,48 @@ async function applyPlanningTerrainContoursToGround(options: {
       continue
     }
 
+    const localRows = r1 - r0 + 1
+    const localCols = c1 - c0 + 1
+    const localDelta = new Float32Array(localRows * localCols)
+
     for (let row = r0; row <= r1; row += 1) {
       if ((row & 63) === 0) {
         await options.yieldController.maybeYield()
       }
       const py = row * cell
-      const localRow = row - minRow
+      const localRow = row - r0
       for (let col = c0; col <= c1; col += 1) {
         const px = col * cell
         if (planningPointInPolygon({ x: px, y: py }, points)) {
-          const localCol = col - minCol
-          const idx = localRow * cols + localCol
-          delta[idx] = (delta[idx] ?? 0) + height
+          const localCol = col - c0
+          const idx = localRow * localCols + localCol
+          localDelta[idx] = (localDelta[idx] ?? 0) + height
         }
       }
     }
-  }
 
-  // Smooth transitions: fixed blend radius in meters.
-  const radiusVertices = Math.max(1, Math.min(12, Math.round(blendMeters / cell)))
-  const blurred = boxBlurGrid(delta, rows, cols, radiusVertices)
-  const strength = 0.65
-  for (let i = 0; i < delta.length; i += 1) {
-    delta[i] = delta[i]! * (1 - strength) + blurred[i]! * strength
+    const radiusVertices = Math.max(0, Math.min(12, Math.round(blendMeters / cell)))
+    if (radiusVertices > 0) {
+      const blurred = boxBlurGrid(localDelta, localRows, localCols, radiusVertices)
+      for (let i = 0; i < localDelta.length; i += 1) {
+        localDelta[i] = localDelta[i]! * (1 - contourBlendStrength) + blurred[i]! * contourBlendStrength
+      }
+    }
+
+    for (let row = r0; row <= r1; row += 1) {
+      const localRow = row - r0
+      const globalRow = row - minRow
+      for (let col = c0; col <= c1; col += 1) {
+        const localCol = col - c0
+        const globalCol = col - minCol
+        const localValue = localDelta[localRow * localCols + localCol] ?? 0
+        if (Math.abs(localValue) <= 1e-12) {
+          continue
+        }
+        const idx = globalRow * cols + globalCol
+        delta[idx] = (delta[idx] ?? 0) + localValue
+      }
+    }
   }
 
   const nextHeightMap = { ...(definition.planningHeightMap ?? {}) }
