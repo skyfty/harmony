@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose'
-import type { OptimizeWarehouseDocument } from '@/types/models'
+import type { WarehouseDocument } from '@/types/models'
 
 const usageSnapshotSchema = new Schema(
   {
@@ -13,7 +13,7 @@ const usageSnapshotSchema = new Schema(
   { _id: false },
 )
 
-const warehouseSchema = new Schema<OptimizeWarehouseDocument>(
+const warehouseSchema = new Schema<WarehouseDocument>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
@@ -34,4 +34,4 @@ const warehouseSchema = new Schema<OptimizeWarehouseDocument>(
 warehouseSchema.index({ userId: 1, productId: 1 }, { unique: true })
 warehouseSchema.index({ updatedAt: -1 })
 
-export const OptimizeWarehouseModel = model<OptimizeWarehouseDocument>('OptimizeWarehouse', warehouseSchema)
+export const WarehouseModel = model<WarehouseDocument>('Warehouse', warehouseSchema)

@@ -1,6 +1,6 @@
-import { OptimizeProductModel } from '@/models/OptimizeProduct'
+import { ProductModel } from '@/models/Product'
 import { OPTIMIZE_PRODUCT_SEEDS } from '@/data/optimizeProducts'
-import type { OptimizeProductUsageConfig } from '@/types/models'
+import type { ProductUsageConfig } from '@/types/models'
 
 let indexesEnsured = false
 
@@ -9,7 +9,7 @@ async function ensureIndexes(): Promise<void> {
     return
   }
   try {
-    await OptimizeProductModel.syncIndexes()
+    await ProductModel.syncIndexes()
   } catch (error) {
     console.warn('Failed to sync optimize product indexes, continuing without dropping stale indexes.', error)
   }
@@ -20,7 +20,7 @@ export async function ensureOptimizeProductsSeeded(): Promise<void> {
   await ensureIndexes()
   await Promise.all(
     OPTIMIZE_PRODUCT_SEEDS.map((seed, index) =>
-      OptimizeProductModel.updateOne(
+      ProductModel.updateOne(
         { slug: seed.slug },
         {
           $set: {
@@ -30,7 +30,7 @@ export async function ensureOptimizeProductsSeeded(): Promise<void> {
             imageUrl: seed.imageUrl,
             description: seed.description,
             tags: seed.tags ?? [],
-            usageConfig: (seed.usageConfig ?? undefined) as OptimizeProductUsageConfig | undefined,
+            usageConfig: (seed.usageConfig ?? undefined) as ProductUsageConfig | undefined,
             updatedAt: new Date(),
           },
           $setOnInsert: {
@@ -42,6 +42,6 @@ export async function ensureOptimizeProductsSeeded(): Promise<void> {
         console.error(`Failed to seed optimize product #${index} (${seed.slug}):`, error)
         return undefined
       }),
-    ),
+    )
   )
 }

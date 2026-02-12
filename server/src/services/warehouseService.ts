@@ -1,5 +1,5 @@
 import { Types } from 'mongoose'
-import { OptimizeWarehouseModel } from '@/models/OptimizeWarehouse'
+import { WarehouseModel } from '@/models/Warehouse'
 import type { ProductDocument } from '@/types/models'
 
 interface AddProductOptions {
@@ -22,7 +22,7 @@ export async function addProductToWarehouse({ userId, product, orderId }: AddPro
     usageConfig: product.usageConfig ?? undefined,
   }
 
-  await OptimizeWarehouseModel.findOneAndUpdate(
+  await WarehouseModel.findOneAndUpdate(
     {
       userId: new Types.ObjectId(userId),
       productId: product._id,

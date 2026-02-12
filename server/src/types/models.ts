@@ -115,13 +115,7 @@ export interface ExhibitionDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export interface OptimizeProductPurchaseEntry {
-  userId: Types.ObjectId
-  orderId?: Types.ObjectId
-  purchasedAt: Date
-}
-
-export interface OptimizeProductUsageConfig {
+export interface ProductUsageConfig {
   type: 'permanent' | 'consumable'
   perExhibitionLimit?: number | null
   exclusiveGroup?: string | null
@@ -129,44 +123,28 @@ export interface OptimizeProductUsageConfig {
   notes?: string
 }
 
-export interface OptimizeProductDocument extends Document<Types.ObjectId> {
-  name: string
-  slug: string
-  category: string
-  price: number
-  imageUrl?: string
-  description?: string
-  tags: string[]
-  usageConfig?: OptimizeProductUsageConfig
-  purchasedBy: OptimizeProductPurchaseEntry[]
-  createdAt: Date
-  updatedAt: Date
-}
-
-export interface OptimizeWarehouseSnapshot {
+export interface WarehouseSnapshot {
   name: string
   category: string
   price: number
   imageUrl?: string
   description?: string
-  usageConfig?: OptimizeProductUsageConfig
+  usageConfig?: ProductUsageConfig
 }
 
-export interface OptimizeWarehouseDocument extends Document<Types.ObjectId> {
+export interface WarehouseDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   productId: Types.ObjectId
   quantity: number
   totalPurchased: number
   totalConsumed: number
-  productSnapshot: OptimizeWarehouseSnapshot
+  productSnapshot: WarehouseSnapshot
   latestOrderId?: Types.ObjectId | null
   lastPurchasedAt?: Date | null
   metadata?: Record<string, unknown>
   createdAt: Date
   updatedAt: Date
 }
-
-export type ProductUsageConfig = OptimizeProductUsageConfig
 
 export interface ProductDocument extends Document<Types.ObjectId> {
   name: string
