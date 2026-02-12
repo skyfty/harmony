@@ -671,16 +671,45 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
 
   const groundNode = findGroundNode(sceneStore.nodes)
   if (groundNode?.dynamicMesh?.type === 'Ground') {
-    const prevSnapshot = (groundNode.dynamicMesh as any)?.terrainScatter ?? null
+    let nextGroundDynamicMesh = groundNode.dynamicMesh as GroundDynamicMesh
+    const resetContours = resetGroundPlanningContours(nextGroundDynamicMesh)
+    if (resetContours.changed) {
+      nextGroundDynamicMesh = resetContours.definition
+    }
+
+    const prevSnapshot = (nextGroundDynamicMesh as any)?.terrainScatter ?? null
     const storeLocal = ensureScatterStore(groundNode.id, prevSnapshot)
     removePlanningScatterLayers(storeLocal)
     const snapshot = serializeTerrainScatterStore(storeLocal)
     snapshot.metadata.updatedAt = monotonicUpdatedAt(prevSnapshot, snapshot.metadata.updatedAt)
     const next = {
-      ...(groundNode.dynamicMesh as any),
+      ...(nextGroundDynamicMesh as any),
       terrainScatter: snapshot,
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+  }
+}
+
+function resetGroundPlanningContours(definition: GroundDynamicMesh): { definition: GroundDynamicMesh; changed: boolean } {
+  const hadPlanningContours = Boolean(
+    (definition.planningMetadata?.contourBounds && isBoundsValid(definition.planningMetadata?.contourBounds))
+    || Object.keys(definition.planningHeightMap ?? {}).length,
+  )
+  if (!hadPlanningContours) {
+    return { definition, changed: false }
+  }
+
+  return {
+    changed: true,
+    definition: {
+      ...definition,
+      planningHeightMap: {},
+      planningMetadata: {
+        ...(definition.planningMetadata ?? {}),
+        contourBounds: null,
+        generatedAt: Date.now(),
+      },
+    },
   }
 }
 
@@ -1084,22 +1113,115 @@ function isBoundsValid(b: GroundContourBounds | null | undefined): b is GroundCo
   )
 }
 
-function planningPointInPolygon(point: { x: number; y: number }, polygon: PlanningPoint[]): boolean {
-  // Ray casting algorithm. Assumes simple polygon.
-  const x = point.x
-  const y = point.y
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i]!.x
-    const yi = polygon[i]!.y
-    const xj = polygon[j]!.x
-    const yj = polygon[j]!.y
-
-    const intersect = (yi > y) !== (yj > y)
-      && x < ((xj - xi) * (y - yi)) / Math.max(1e-12, (yj - yi)) + xi
-    if (intersect) inside = !inside
+function isPointOnSegment2D(
+  point: { x: number; y: number },
+  start: PlanningPoint,
+  end: PlanningPoint,
+  epsilon = 1e-8,
+): boolean {
+  const ax = Number(start?.x)
+  const ay = Number(start?.y)
+  const bx = Number(end?.x)
+  const by = Number(end?.y)
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+    return false
   }
-  return inside
+  const abx = bx - ax
+  const aby = by - ay
+  const apx = point.x - ax
+  const apy = point.y - ay
+  const cross = abx * apy - aby * apx
+  if (Math.abs(cross) > epsilon) {
+    return false
+  }
+  const dot = apx * abx + apy * aby
+  if (dot < -epsilon) {
+    return false
+  }
+  const lenSq = abx * abx + aby * aby
+  if (dot - lenSq > epsilon) {
+    return false
+  }
+  return true
+}
+
+function planningPointInPolygon(point: { x: number; y: number }, polygon: PlanningPoint[]): boolean {
+  // Use nonzero winding rule to match PlanningDialog/SVG fill behavior.
+  // Treat boundary points as inside so contour edges do not crack on raster grid alignment.
+  let windingNumber = 0
+  const n = polygon.length
+  if (n < 3) {
+    return false
+  }
+
+  for (let i = 0; i < n; i += 1) {
+    const a = polygon[i]
+    const b = polygon[(i + 1) % n]
+    if (!a || !b) {
+      continue
+    }
+    if (isPointOnSegment2D(point, a, b)) {
+      return true
+    }
+
+    const isLeft = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y)
+    if (a.y <= point.y) {
+      if (b.y > point.y && isLeft > 0) {
+        windingNumber += 1
+      }
+    } else if (b.y <= point.y && isLeft < 0) {
+      windingNumber -= 1
+    }
+  }
+
+  return windingNumber !== 0
+}
+
+function sanitizePlanningContourPoints(points: PlanningPoint[]): PlanningPoint[] {
+  if (!Array.isArray(points) || points.length < 3) {
+    return []
+  }
+  const deduped: PlanningPoint[] = []
+  const duplicateEpsilonSq = 1e-12
+
+  for (const raw of points) {
+    const x = Number(raw?.x)
+    const y = Number(raw?.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      continue
+    }
+    const candidate: PlanningPoint = { id: raw?.id, x, y }
+    const prev = deduped[deduped.length - 1]
+    if (prev) {
+      const dx = candidate.x - prev.x
+      const dy = candidate.y - prev.y
+      if (dx * dx + dy * dy <= duplicateEpsilonSq) {
+        continue
+      }
+    }
+    deduped.push(candidate)
+  }
+
+  while (deduped.length >= 2) {
+    const first = deduped[0]!
+    const last = deduped[deduped.length - 1]!
+    const dx = first.x - last.x
+    const dy = first.y - last.y
+    if (dx * dx + dy * dy > duplicateEpsilonSq) {
+      break
+    }
+    deduped.pop()
+  }
+
+  if (deduped.length < 3) {
+    return []
+  }
+
+  const area = polygonArea2D(deduped)
+  if (!Number.isFinite(area) || area <= 1e-8) {
+    return []
+  }
+  return deduped
 }
 
 function polygonBounds(points: PlanningPoint[]): { minX: number; maxX: number; minY: number; maxY: number } | null {
@@ -1209,14 +1331,19 @@ async function applyPlanningTerrainContoursToGround(options: {
 }): Promise<GroundDynamicMesh> {
   const blendMeters = Math.max(0, options.blendMeters ?? PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
   const definition = options.definition
-  const polygons = Array.isArray(options.contourPolygons) ? options.contourPolygons : []
+  const polygons = (Array.isArray(options.contourPolygons) ? options.contourPolygons : [])
+    .map((poly) => ({
+      poly,
+      points: sanitizePlanningContourPoints(poly?.points ?? []),
+    }))
+    .filter((item) => item.points.length >= 3)
 
   const previousBoundsRaw = definition?.planningMetadata?.contourBounds
   const previousBounds: GroundContourBounds | null = isBoundsValid(previousBoundsRaw) ? previousBoundsRaw : null
 
   let nextBounds: GroundContourBounds | null = null
-  for (const poly of polygons) {
-    const b = boundsFromPlanningPolygon(definition, poly.points, blendMeters)
+  for (const item of polygons) {
+    const b = boundsFromPlanningPolygon(definition, item.points, blendMeters)
     nextBounds = unionBounds(nextBounds, b)
   }
 
@@ -1245,10 +1372,10 @@ async function applyPlanningTerrainContoursToGround(options: {
   // Accumulate additive height deltas for each contour polygon.
   for (let polyIndex = 0; polyIndex < polygons.length; polyIndex += 1) {
     throwIfAborted(options.signal)
-    const poly = polygons[polyIndex]!
+    const { poly, points } = polygons[polyIndex]!
     const height = normalizeContourHeightMeters((poly as any).terrainHeightMeters)
 
-    const polyBounds = boundsFromPlanningPolygon(definition, poly.points, blendMeters)
+    const polyBounds = boundsFromPlanningPolygon(definition, points, blendMeters)
     if (!polyBounds) {
       await options.yieldController.maybeYield()
       continue
@@ -1276,7 +1403,7 @@ async function applyPlanningTerrainContoursToGround(options: {
       const localRow = row - minRow
       for (let col = c0; col <= c1; col += 1) {
         const px = col * cell
-        if (planningPointInPolygon({ x: px, y: py }, poly.points)) {
+        if (planningPointInPolygon({ x: px, y: py }, points)) {
           const localCol = col - minCol
           const idx = localRow * cols + localCol
           delta[idx] = (delta[idx] ?? 0) + height
@@ -1511,21 +1638,11 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
-    const hadPlanningContours = Boolean(
-      (groundDefinition.planningMetadata?.contourBounds && isBoundsValid(groundDefinition.planningMetadata?.contourBounds))
-      || Object.keys(groundDefinition.planningHeightMap ?? {}).length,
-    )
+    const resetContours = resetGroundPlanningContours(groundDefinition)
+    const hadPlanningContours = resetContours.changed
 
     if (hadPlanningContours) {
-      const clearedPlanning = {
-        ...groundDefinition,
-        planningHeightMap: {},
-        planningMetadata: {
-          ...(groundDefinition.planningMetadata ?? {}),
-          contourBounds: null,
-          generatedAt: Date.now(),
-        },
-      }
+      const clearedPlanning = resetContours.definition
       groundDefinition = clearedPlanning
       sceneStore.updateNodeDynamicMesh(groundNode.id, clearedPlanning)
       await yieldController.maybeYield(true)
