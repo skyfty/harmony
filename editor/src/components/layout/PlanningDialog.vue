@@ -172,6 +172,8 @@ interface PlanningPolygon {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** Height delta in meters (only meaningful when layer kind is 'terrain'). */
+  terrainHeightMeters?: number
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
@@ -1485,6 +1487,9 @@ function buildPlanningSnapshot() {
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      terrainHeightMeters: getLayerKind(poly.layerId) === 'terrain'
+        ? (Number.isFinite(Number((poly as any).terrainHeightMeters)) ? Math.round(Number((poly as any).terrainHeightMeters) * 100) / 100 : undefined)
+        : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
       wallPresetAssetId: poly.wallPresetAssetId ?? null,
       floorPresetAssetId: poly.floorPresetAssetId ?? null,
@@ -2029,6 +2034,11 @@ function loadPlanningFromScene() {
       name: (poly as any).name,
       layerId: (poly as any).layerId,
       points: Array.isArray((poly as any).points) ? (poly as any).points.map((p: any) => ({ x: p.x, y: p.y })) : [],
+      terrainHeightMeters: (() => {
+        const raw = Number((poly as any).terrainHeightMeters)
+        if (!Number.isFinite(raw)) return 0
+        return Math.min(1000, Math.max(-1000, Math.round(raw * 100) / 100))
+      })(),
       airWallEnabled: Boolean((poly as any).airWallEnabled),
       wallPresetAssetId:
         typeof (poly as any).wallPresetAssetId === 'string'
@@ -2303,7 +2313,7 @@ const canUseLineTool = computed(() => {
 
 const canUseAreaTools = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route' && kind !== 'terrain'
+  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route'
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
@@ -2436,6 +2446,28 @@ const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !
 
 const propertyPanelLayerKind = computed<LayerKind | null>(() => {
   return selectedScatterTarget.value?.layer?.kind ?? (terrainPanelActive.value ? 'terrain' : null)
+})
+
+const selectedTerrainContourPolygon = computed<PlanningPolygon | null>(() => {
+  const poly = selectedPolygon.value
+  if (!poly) return null
+  return getLayerKind(poly.layerId) === 'terrain' ? poly : null
+})
+
+const terrainContourHeightModel = computed<number>({
+  get: () => {
+    const poly = selectedTerrainContourPolygon.value
+    if (!poly) return 0
+    const raw = Number((poly as any).terrainHeightMeters)
+    return Number.isFinite(raw) ? raw : 0
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const poly = selectedTerrainContourPolygon.value
+    if (!poly) return
+    ;(poly as any).terrainHeightMeters = Math.round(clampNumberInput(value, 0, -1000, 1000) * 100) / 100
+    markPlanningDirty()
+  },
 })
 
 const terrainBudget = computed(() => computeTerrainBudget(planningTerrain.value))
@@ -4056,11 +4088,13 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
     return
   }
   const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
+  const targetKind = getLayerKind(targetLayerId)
   polygons.value.push({
     id: createPlanningFeatureId(),
     name: `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`,
     layerId: targetLayerId,
     points: clonePoints(points),
+    terrainHeightMeters: targetKind === 'terrain' ? 0 : undefined,
   })
 }
 
@@ -7190,6 +7224,19 @@ onBeforeUnmount(() => {
             </div>
 
             <template v-if="propertyPanelLayerKind === 'terrain'">
+              <div v-if="selectedTerrainContourPolygon" class="property-panel__block">
+                <v-text-field
+                  v-model.number="terrainContourHeightModel"
+                  type="number"
+                  step="0.1"
+                  density="compact"
+                  variant="underlined"
+                  hide-details
+                  suffix="m"
+                  label="Height"
+                />
+              </div>
+
               <div class="property-panel__density">
                 <div class="property-panel__density-title">Grid</div>
                 <div class="property-panel__density-row">
