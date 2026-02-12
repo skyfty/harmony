@@ -446,37 +446,18 @@ const sceneGroundSize = computed(() => {
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 
 // Top of the layer list (earlier in list) = higher layer; SVG elements drawn later appear on top.
-// Therefore drawing order should traverse layers in reverse.
-const layerRenderOrderIds = computed(() => [...layers.value].reverse().map((layer) => layer.id))
+// Drawing order is not used when only the active layer is shown.
 
 const visiblePolygons = computed(() => {
-  const visible = visibleLayerIds.value
-  const order = layerRenderOrderIds.value
-  const buckets = new Map<string, PlanningPolygon[]>()
-  order.forEach((id) => buckets.set(id, []))
-  const orphan: PlanningPolygon[] = []
-  polygons.value.forEach((poly) => {
-    if (!visible.has(poly.layerId)) return
-    const bucket = buckets.get(poly.layerId)
-    if (bucket) bucket.push(poly)
-    else orphan.push(poly)
-  })
-  return [...order.flatMap((id) => buckets.get(id) ?? []), ...orphan]
+  const activeId = activeLayerId.value
+  if (!activeId) return []
+  return polygons.value.filter((poly) => poly.layerId === activeId)
 })
 
 const visiblePolylines = computed(() => {
-  const visible = visibleLayerIds.value
-  const order = layerRenderOrderIds.value
-  const buckets = new Map<string, PlanningPolyline[]>()
-  order.forEach((id) => buckets.set(id, []))
-  const orphan: PlanningPolyline[] = []
-  polylines.value.forEach((line) => {
-    if (!visible.has(line.layerId)) return
-    const bucket = buckets.get(line.layerId)
-    if (bucket) bucket.push(line)
-    else orphan.push(line)
-  })
-  return [...order.flatMap((id) => buckets.get(id) ?? []), ...orphan]
+  const activeId = activeLayerId.value
+  if (!activeId) return []
+  return polylines.value.filter((line) => line.layerId === activeId)
 })
 
 type ScatterThumbPlacement = { x: number; y: number; size: number }
