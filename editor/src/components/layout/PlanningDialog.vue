@@ -5085,11 +5085,31 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
   if (!candidate || !isActiveLayer(candidate.layerId)) {
     return
   }
-  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
+  // If user intends to draw (rectangle/lasso/line), start drawing instead of selecting the existing shape.
+  if (currentTool.value === 'rectangle') {
+    event.stopPropagation()
+    event.preventDefault()
+    startRectangleDrag(world, event)
+    return
+  }
+  if (currentTool.value === 'lasso') {
+    event.stopPropagation()
+    event.preventDefault()
+    addPolygonDraftPoint(world)
+    return
+  }
+  if (currentTool.value === 'line') {
+    event.stopPropagation()
+    event.preventDefault()
+    startLineDraft(world)
+    return
+  }
+
+  // Only select/move when select tool is active.
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: candidate.id })
-  if (effectiveTool !== 'select') {
+  if (currentTool.value !== 'select') {
     return
   }
 
