@@ -250,7 +250,11 @@ async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthSto
   if (!response.ok) {
     throw new Error(`Failed to fetch scenes (${response.status})`)
   }
-  const payload = await response.json().catch(() => null)
+  const payloadRaw = await response.json().catch(() => null)
+  const payload =
+    payloadRaw && typeof payloadRaw === 'object' && 'code' in payloadRaw && 'data' in payloadRaw
+      ? (payloadRaw as { data?: unknown }).data
+      : payloadRaw
   const entries: unknown =
     payload && typeof payload === 'object' && Array.isArray((payload as { scenes?: unknown[] }).scenes)
       ? (payload as { scenes?: unknown[] }).scenes

@@ -32,6 +32,20 @@ export interface AssetTagSummary {
 
 export interface ResourceCategorySearchResult extends ResourceCategory {}
 
+type ApiEnvelope<T> = {
+  code: number
+  data: T
+  message: string
+}
+
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
+}
+
 function normalizeTagSummary(tag: ServerAssetTagDto): AssetTagSummary {
   return {
     id: tag.id,
@@ -43,11 +57,19 @@ function normalizeTagSummary(tag: ServerAssetTagDto): AssetTagSummary {
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
-    return (await response.json()) as T
+    const payload = (await response.json()) as unknown
+    if (response.ok && isApiEnvelope<T>(payload)) {
+      return payload.data
+    }
+    return payload as T
   }
   const text = await response.text()
   try {
-    return JSON.parse(text) as T
+    const parsed = JSON.parse(text) as unknown
+    if (response.ok && isApiEnvelope<T>(parsed)) {
+      return parsed.data
+    }
+    return parsed as T
   } catch (_error) {
     throw new Error(text || '服务器响应格式不正确')
   }
@@ -280,15 +302,15 @@ export async function generateAssetTagSuggestions(payload: GenerateAssetTagPaylo
     throw buildError(message || '生成标签失败', response)
   }
 
-  const body = await parseJsonResponse<{ data?: GenerateAssetTagResult }>(response)
-  if (!body?.data || !Array.isArray(body.data.tags)) {
+  const body = await parseJsonResponse<GenerateAssetTagResult>(response)
+  if (!body || !Array.isArray(body.tags)) {
     throw new Error('AI 标签响应格式无效')
   }
   return {
-    tags: body.data.tags.filter((tag): tag is string => typeof tag === 'string'),
-    transcript: body.data.transcript ?? null,
-    imagePrompt: body.data.imagePrompt ?? null,
-    modelTraceId: body.data.modelTraceId,
+    tags: body.tags.filter((tag): tag is string => typeof tag === 'string'),
+    transcript: body.transcript ?? null,
+    imagePrompt: body.imagePrompt ?? null,
+    modelTraceId: body.modelTraceId,
   }
 }
 

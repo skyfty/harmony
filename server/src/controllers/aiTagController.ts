@@ -66,7 +66,7 @@ export async function handleGenerateTags(ctx: Context): Promise<void> {
       source,
       extraHints,
     })
-    ctx.body = { data: result }
+    ctx.body = result
   } catch (error) {
     const message = error instanceof Error ? error.message : '生成标签失败'
     ctx.status = 502

@@ -10,7 +10,7 @@ export async function login(ctx: Context): Promise<void> {
     const session = await loginWithCredentials(username, password)
     ctx.body = session
   } catch (error) {
-    ctx.throw(401, 'Invalid credentialsdfsdsdfsdfs')
+    ctx.throw(401, 'Invalid credentials')
   }
 }
 

@@ -2,7 +2,7 @@ import type { UserInfo } from '@vben/types';
 
 import { useAccessStore } from '@vben/stores';
 
-import { baseRequestClient } from '#/api/request';
+import { requestClient } from '#/api/request';
 
 interface ServerSessionUserRole {
   code: string;
@@ -26,7 +26,7 @@ interface ServerProfileResult {
  */
 export async function getUserInfoApi() {
   const accessStore = useAccessStore();
-  const response = await baseRequestClient.get<ServerProfileResult>(
+  const response = await requestClient.get<ServerProfileResult>(
     '/auth/profile',
     {
       headers: accessStore.accessToken

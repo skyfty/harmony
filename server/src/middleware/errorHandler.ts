@@ -8,7 +8,8 @@ export async function errorHandler(ctx: Context, next: Next): Promise<void> {
     const message = (error as { message?: string }).message ?? 'Internal Server Error'
     ctx.status = status
     ctx.body = {
-      success: false,
+      code: status,
+      data: null,
       message,
     }
   }

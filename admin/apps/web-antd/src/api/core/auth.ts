@@ -1,6 +1,6 @@
 import { useAccessStore } from '@vben/stores';
 
-import { baseRequestClient } from '#/api/request';
+import { requestClient } from '#/api/request';
 
 interface ServerSessionUserRole {
   code: string;
@@ -32,16 +32,13 @@ export namespace AuthApi {
     accessToken: string;
   }
 
-  export interface RefreshTokenResult {
-    data: string;
-    status: number;
-  }
+  export type RefreshTokenResult = string;
 }
 
 async function getServerProfile(token?: string) {
   const accessStore = useAccessStore();
   const accessToken = token || accessStore.accessToken || undefined;
-  const response = await baseRequestClient.get<ServerProfileResult>(
+  const response = await requestClient.get<ServerProfileResult>(
     '/auth/profile',
     {
       headers: accessToken
@@ -56,10 +53,11 @@ async function getServerProfile(token?: string) {
  * 登录
  */
 export async function loginApi(data: AuthApi.LoginParams) {
-  const response = await baseRequestClient.post<ServerProfileResult>(
+  const response = await requestClient.post<ServerProfileResult>(
     '/auth/login',
     data,
   );
+  console.log('Login API Response:', response); // 调试输出登录接口响应
   return {
     accessToken: response.token || '',
   } satisfies AuthApi.LoginResult;
@@ -69,7 +67,7 @@ export async function loginApi(data: AuthApi.LoginParams) {
  * 刷新accessToken
  */
 export async function refreshTokenApi() {
-  return baseRequestClient.post<AuthApi.RefreshTokenResult>(
+  return requestClient.post<AuthApi.RefreshTokenResult>(
     '/auth/refresh',
     undefined,
     {
@@ -82,7 +80,7 @@ export async function refreshTokenApi() {
  * 退出登录
  */
 export async function logoutApi(token?: string | null) {
-  return baseRequestClient.post(
+  return requestClient.post(
     '/auth/logout',
     undefined,
     token

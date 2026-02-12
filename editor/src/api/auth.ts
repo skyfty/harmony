@@ -1,6 +1,20 @@
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import type { AuthSessionResponse } from '@/types/auth'
 
+type ApiEnvelope<T> = {
+  code: number
+  data: T
+  message: string
+}
+
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
+}
+
 export interface LoginRequestPayload {
   username: string
   password: string
@@ -9,11 +23,20 @@ export interface LoginRequestPayload {
 function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
-    return response.json() as Promise<T>
+    return response.json().then((payload) => {
+      if (response.ok && isApiEnvelope<T>(payload)) {
+        return payload.data
+      }
+      return payload as T
+    })
   }
   return response.text().then((text) => {
     try {
-      return JSON.parse(text) as T
+      const parsed = JSON.parse(text) as unknown
+      if (response.ok && isApiEnvelope<T>(parsed)) {
+        return parsed.data
+      }
+      return parsed as T
     } catch (error) {
       throw new Error(text || '服务器返回的响应无法解析')
     }

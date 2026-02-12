@@ -3,7 +3,7 @@ import { getPresetSceneDetail, listPresetScenes } from '@/services/presetSceneSe
 
 export async function listPresetSceneSummaries(ctx: Context): Promise<void> {
   const data = listPresetScenes()
-  ctx.body = { data }
+  ctx.body = data
 }
 
 export async function getPresetScene(ctx: Context): Promise<void> {
@@ -21,5 +21,5 @@ export async function getPresetScene(ctx: Context): Promise<void> {
     return
   }
 
-  ctx.body = { data: detail }
+  ctx.body = detail
 }

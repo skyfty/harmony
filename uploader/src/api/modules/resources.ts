@@ -99,11 +99,11 @@ export async function uploadAsset(formData: FormData, options: UploadAssetOption
 export async function generateAssetTagSuggestions(
   payload: GenerateAssetTagPayload,
 ): Promise<GenerateAssetTagResult> {
-  const { data } = await apiClient.post<{ data: GenerateAssetTagResult }>('/ai/tags/suggest', payload)
-  if (!data?.data || !Array.isArray(data.data.tags)) {
+  const { data } = await apiClient.post<GenerateAssetTagResult>('/ai/tags/suggest', payload)
+  if (!data || !Array.isArray(data.tags)) {
     throw new Error('AI 标签响应格式无效')
   }
-  return data.data
+  return data
 }
 
 export async function listAssetSeries(): Promise<AssetSeries[]> {
