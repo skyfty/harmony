@@ -4002,13 +4002,18 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
   }
   const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'green-layer'
   const targetKind = getLayerKind(targetLayerId)
+  const newId = createPlanningFeatureId()
+  const newName = `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`
   polygons.value.push({
-    id: createPlanningFeatureId(),
-    name: `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`,
+    id: newId,
+    name: newName,
     layerId: targetLayerId,
     points: clonePoints(points),
     terrainHeightMeters: targetKind === 'terrain' ? 0 : undefined,
   })
+
+  // Select the newly created polygon so its properties appear immediately
+  selectFeature({ type: 'polygon', id: newId })
 }
 
 function addPolygonDraftPoint(point: PlanningPoint) {
