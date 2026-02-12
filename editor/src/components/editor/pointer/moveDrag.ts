@@ -3,6 +3,7 @@ import type { RoadDynamicMesh } from '@harmony/schema'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
+import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
@@ -18,6 +19,8 @@ import {
 import type {
   FloorVertexDragState,
   FloorThicknessDragState,
+  FloorCircleCenterDragState,
+  FloorCircleRadiusDragState,
   RoadVertexDragState,
   WallEndpointDragState,
   WallJointDragState,
@@ -222,6 +225,69 @@ function applySameNodeEndpointMagnet(options: {
   if (best) {
     constrained.copy(best)
     constrained.y = y
+  }
+}
+
+function computeCircleFromVertices(vertices: any[]): { centerX: number; centerZ: number; radius: number } | null {
+  const points: Array<{ x: number; z: number }> = []
+  for (const entry of vertices) {
+    if (!Array.isArray(entry) || entry.length < 2) continue
+    const x = Number(entry[0])
+    const z = Number(entry[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
+    points.push({ x, z })
+  }
+  if (points.length < 3) return null
+
+  let sumX = 0
+  let sumZ = 0
+  for (const p of points) {
+    sumX += p.x
+    sumZ += p.z
+  }
+  const inv = 1 / Math.max(1, points.length)
+  const centerX = sumX * inv
+  const centerZ = sumZ * inv
+
+  let meanRadius = 0
+  for (const p of points) {
+    meanRadius += Math.hypot(p.x - centerX, p.z - centerZ)
+  }
+  meanRadius /= Math.max(1, points.length)
+  if (!Number.isFinite(centerX + centerZ + meanRadius) || meanRadius <= 1e-4) return null
+
+  return { centerX, centerZ, radius: meanRadius }
+}
+
+function syncFloorCircleHandlesFromDefinition(options: {
+  containerObject: THREE.Object3D
+  definition: { vertices?: any; thickness?: number }
+}) {
+  const { containerObject, definition } = options
+  const handles = containerObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
+  if (!handles?.isGroup) return
+
+  const circle = computeCircleFromVertices(Array.isArray(definition.vertices) ? definition.vertices : [])
+  if (!circle) return
+
+  const thickness = Number.isFinite(definition.thickness) ? Math.max(0, Number(definition.thickness)) : 0
+  const yOffset = FLOOR_CIRCLE_HANDLE_Y + thickness * 0.5
+
+  handles.userData.centerX = circle.centerX
+  handles.userData.centerZ = circle.centerZ
+  handles.userData.radius = circle.radius
+  handles.userData.yOffset = yOffset
+
+  for (const child of handles.children) {
+    child.userData.yOffset = yOffset
+    if (child.userData?.circleKind === 'center') {
+      child.position.set(circle.centerX, yOffset, circle.centerZ)
+    } else if (child.userData?.circleKind === 'radius') {
+      // Will be re-oriented toward camera by updateScreenSize; any valid point is fine here.
+      child.position.set(circle.centerX + circle.radius, yOffset, circle.centerZ)
+    } else {
+      child.position.y = yOffset
+    }
   }
 }
 
@@ -434,6 +500,8 @@ export function handlePointerMoveDrag(
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
     floorThicknessDragState: FloorThicknessDragState | null
+    floorCircleCenterDragState: FloorCircleCenterDragState | null
+    floorCircleRadiusDragState: FloorCircleRadiusDragState | null
     wallEndpointDragState: WallEndpointDragState | null
     wallJointDragState: WallJointDragState | null
     wallHeightDragState: WallHeightDragState | null
@@ -455,6 +523,7 @@ export function handlePointerMoveDrag(
 
     updateFloorGroup: (runtimeObject: THREE.Object3D, definition: any) => void
     forceRebuildFloorVertexHandles?: () => void
+    forceRebuildFloorCircleHandles?: () => void
   },
 ): PointerMoveResult | null {
   const tmpIntersection = new THREE.Vector3()
@@ -518,7 +587,112 @@ export function handlePointerMoveDrag(
       }
     }
 
+    const circleHandles = state.containerObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
+    if (circleHandles?.isGroup) {
+      const yOffset = FLOOR_CIRCLE_HANDLE_Y + Math.max(0, state.thickness) * 0.5
+      for (const child of circleHandles.children) {
+        child.userData.yOffset = yOffset
+        child.position.y = yOffset
+      }
+    }
+
     return { handled: true }
+  }
+
+  if (ctx.floorCircleCenterDragState && event.pointerId === ctx.floorCircleCenterDragState.pointerId) {
+    const state = ctx.floorCircleCenterDragState
+
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    if (!state.startHitWorld) {
+      state.startHitWorld = tmpIntersection.clone()
+    }
+
+    const startHitWorld = state.startHitWorld ?? state.startPointWorld
+    const startHitLocal = state.runtimeObject.worldToLocal(startHitWorld.clone())
+    const hitLocal = state.runtimeObject.worldToLocal(tmpIntersection.clone())
+    const dx = hitLocal.x - startHitLocal.x
+    const dz = hitLocal.z - startHitLocal.z
+
+    const startVertices = sanitizeFloorVertices((state.baseDefinition as any)?.vertices)
+    state.workingDefinition.vertices = startVertices.map(([x, z]) => [x + dx, z + dz])
+    ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    syncFloorCircleHandlesFromDefinition({
+      containerObject: state.runtimeObject,
+      definition: state.workingDefinition as any,
+    })
+
+    return {
+      handled: true,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.floorCircleRadiusDragState && event.pointerId === ctx.floorCircleRadiusDragState.pointerId) {
+    const state = ctx.floorCircleRadiusDragState
+
+    const dxStart = event.clientX - state.startX
+    const dyStart = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dxStart, dyStart) < ctx.clickDragThresholdPx) {
+      return { handled: true }
+    }
+
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return { handled: true }
+    }
+
+    if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
+      return { handled: true }
+    }
+
+    if (!state.startHitWorld) {
+      state.startHitWorld = tmpIntersection.clone()
+    }
+
+    const hitLocal = state.runtimeObject.worldToLocal(tmpIntersection.clone())
+    const dx = hitLocal.x - state.centerLocal.x
+    const dz = hitLocal.z - state.centerLocal.z
+    const radius = Math.max(1e-4, Math.hypot(dx, dz))
+
+    state.workingDefinition.vertices = buildCircleVertices({
+      centerX: state.centerLocal.x,
+      centerZ: state.centerLocal.z,
+      radius,
+      segments: state.segments,
+    })
+
+    ctx.updateFloorGroup(state.runtimeObject, state.workingDefinition)
+    syncFloorCircleHandlesFromDefinition({
+      containerObject: state.runtimeObject,
+      definition: state.workingDefinition as any,
+    })
+
+    return {
+      handled: true,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
   }
 
   if (ctx.wallHeightDragState && event.pointerId === ctx.wallHeightDragState.pointerId) {

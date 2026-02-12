@@ -2,11 +2,14 @@ import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
+import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
 import { disposeWallPreviewGroup } from '../wallPreviewGroupUtils'
 import type {
   FloorThicknessDragState,
   FloorVertexDragState,
+  FloorCircleCenterDragState,
+  FloorCircleRadiusDragState,
   RoadVertexDragState,
   WallEndpointDragState,
   WallJointDragState,
@@ -32,6 +35,8 @@ export function handlePointerUpDrag(
     roadVertexDragState: RoadVertexDragState | null
     floorVertexDragState: FloorVertexDragState | null
     floorThicknessDragState: FloorThicknessDragState | null
+    floorCircleCenterDragState: FloorCircleCenterDragState | null
+    floorCircleRadiusDragState: FloorCircleRadiusDragState | null
     wallEndpointDragState: WallEndpointDragState | null
     wallJointDragState: WallJointDragState | null
     wallHeightDragState: WallHeightDragState | null
@@ -53,10 +58,12 @@ export function handlePointerUpDrag(
 
     ensureRoadVertexHandlesForSelectedNode: () => void
     ensureFloorVertexHandlesForSelectedNode: () => void
+    ensureFloorCircleHandlesForSelectedNode?: (options?: { force?: boolean }) => void
     ensureWallEndpointHandlesForSelectedNode: (options?: { force?: boolean }) => void
 
     setActiveRoadVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
     setActiveFloorVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
+    setActiveFloorCircleHandle?: (active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) => void
     setActiveWallEndpointHandle: (active: {
       nodeId: string
       chainStartIndex: number
@@ -93,6 +100,7 @@ export function handlePointerUpDrag(
     const state = ctx.floorThicknessDragState
     ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
     ctx.setActiveFloorVertexHandle(null)
+    ctx.setActiveFloorCircleHandle?.(null)
 
     if (state.moved) {
       ctx.ensureFloorVertexHandlesForSelectedNode()
@@ -118,6 +126,15 @@ export function handlePointerUpDrag(
           child.position.y = yOffset
         }
       }
+
+      const circleHandles = state.containerObject.getObjectByName(FLOOR_CIRCLE_HANDLE_GROUP_NAME) as THREE.Group | null
+      if (circleHandles?.isGroup) {
+        const yOffset = FLOOR_CIRCLE_HANDLE_Y + Math.max(0, state.startThickness) * 0.5
+        for (const child of circleHandles.children) {
+          child.userData.yOffset = yOffset
+          child.position.y = yOffset
+        }
+      }
     } catch {
       /* noop */
     }
@@ -125,6 +142,82 @@ export function handlePointerUpDrag(
     return {
       handled: true,
       nextFloorThicknessDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.floorCircleCenterDragState && event.pointerId === ctx.floorCircleCenterDragState.pointerId && event.button === 0) {
+    const state = ctx.floorCircleCenterDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveFloorCircleHandle?.(null)
+
+    if (state.moved) {
+      ctx.sceneStoreUpdateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextFloorCircleCenterDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click/no-drag: revert any preview mutations.
+    try {
+      ctx.updateFloorGroup(state.runtimeObject, state.baseDefinition)
+      ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextFloorCircleCenterDragState: null,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
+  }
+
+  if (ctx.floorCircleRadiusDragState && event.pointerId === ctx.floorCircleRadiusDragState.pointerId && event.button === 0) {
+    const state = ctx.floorCircleRadiusDragState
+    ctx.pointerInteractionReleaseIfCaptured(event.pointerId)
+    ctx.setActiveFloorCircleHandle?.(null)
+
+    if (state.moved) {
+      ctx.sceneStoreUpdateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+      void ctx.nextTick(() => {
+        ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+      })
+
+      return {
+        handled: true,
+        nextFloorCircleRadiusDragState: null,
+        preventDefault: true,
+        stopPropagation: true,
+        stopImmediatePropagation: true,
+      }
+    }
+
+    // Click/no-drag: revert any preview mutations.
+    try {
+      ctx.updateFloorGroup(state.runtimeObject, state.baseDefinition)
+      ctx.ensureFloorCircleHandlesForSelectedNode?.({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    return {
+      handled: true,
+      nextFloorCircleRadiusDragState: null,
       preventDefault: true,
       stopPropagation: true,
       stopImmediatePropagation: true,

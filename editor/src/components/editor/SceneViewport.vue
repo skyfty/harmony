@@ -31,6 +31,8 @@ import type {
   PointerDownResult,
   PointerMoveResult,
   PointerUpResult,
+  FloorCircleCenterDragState,
+  FloorCircleRadiusDragState,
   FloorThicknessDragState,
   FloorVertexDragState,
   RoadVertexDragState,
@@ -193,6 +195,10 @@ import {
 } from './WallEndpointRenderer'
 import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
+import {
+  createFloorCircleHandleRenderer,
+  type FloorCircleHandlePickResult,
+} from './FloorCircleHandleRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -3566,6 +3572,8 @@ type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: nu
 let roadVertexDragState: RoadVertexDragState | null = null
 let floorVertexDragState: FloorVertexDragState | null = null
 let floorThicknessDragState: FloorThicknessDragState | null = null
+let floorCircleCenterDragState: FloorCircleCenterDragState | null = null
+let floorCircleRadiusDragState: FloorCircleRadiusDragState | null = null
 let wallEndpointDragState: WallEndpointDragState | null = null
 let wallJointDragState: WallJointDragState | null = null
 let wallHeightDragState: WallHeightDragState | null = null
@@ -3592,6 +3600,19 @@ let floorEdgeDragState: FloorEdgeDragState | null = null
 const roadVertexRenderer = createRoadVertexRenderer()
 const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
+const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
+
+function isSelectedFloorCircleEditMode(): boolean {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return false
+  }
+  return readFloorBuildShapeFromNode(node) === 'circle'
+}
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -3662,6 +3683,10 @@ function setActiveWallEndpointHandle(active: any | null) {
 }
 
 function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) {
+  if (isSelectedFloorCircleEditMode()) {
+    floorVertexRenderer.clear()
+    return
+  }
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   const active = activeBuildTool.value === 'floor'
   const common = {
@@ -3681,6 +3706,29 @@ function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) 
   }
 }
 
+function ensureFloorCircleHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'floor'
+  const circleSelectedId = isSelectedFloorCircleEditMode() ? selectedId : null
+
+  const common = {
+    active,
+    selectedNodeId: circleSelectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveFloorDefinition: (nodeId: string) => {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      return node?.dynamicMesh?.type === 'Floor' ? (node.dynamicMesh as FloorDynamicMesh) : null
+    },
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+
+  if (options?.force) {
+    floorCircleHandleRenderer.forceRebuild(common)
+  } else {
+    floorCircleHandleRenderer.ensure(common)
+  }
+}
+
 function pickFloorVertexHandleAtPointer(event: PointerEvent) {
   return floorVertexRenderer.pick({
     camera,
@@ -3691,8 +3739,22 @@ function pickFloorVertexHandleAtPointer(event: PointerEvent) {
   })
 }
 
+function pickFloorCircleHandleAtPointer(event: PointerEvent): FloorCircleHandlePickResult | null {
+  return floorCircleHandleRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
 function setActiveFloorVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
   floorVertexRenderer.setActiveHandle(active as any)
+}
+
+function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) {
+  floorCircleHandleRenderer.setActiveHandle(active as any)
 }
 
 const FLOOR_EDGE_PICK_DISTANCE = 0.3
@@ -8293,6 +8355,12 @@ function animate() {
     freezeCircleFacing: !!wallCircleCenterDragState || !!wallCircleRadiusDragState,
   })
   floorVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
+  floorCircleHandleRenderer.updateScreenSize({
+    camera,
+    canvas: canvasRef.value,
+    diameterPx: 36,
+    freezeCircleFacing: !!floorCircleCenterDragState || !!floorCircleRadiusDragState,
+  })
   // Directional light target handles: keep readable in very large scenes.
   directionalLightTargetHandleManager.updateScreenSize({ camera, canvas: canvasRef.value })
   updateVertexSnapHintPulse(performance.now())
@@ -9231,6 +9299,12 @@ async function handlePointerDown(event: PointerEvent) {
     if (Object.prototype.hasOwnProperty.call(result, 'nextFloorThicknessDragState')) {
       floorThicknessDragState = result.nextFloorThicknessDragState ?? null
     }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextFloorCircleCenterDragState')) {
+      floorCircleCenterDragState = result.nextFloorCircleCenterDragState ?? null
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'nextFloorCircleRadiusDragState')) {
+      floorCircleRadiusDragState = result.nextFloorCircleRadiusDragState ?? null
+    }
     if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
       wallEndpointDragState = result.nextWallEndpointDragState ?? null
     }
@@ -9377,6 +9451,7 @@ async function handlePointerDown(event: PointerEvent) {
     activeBuildTool: activeBuildTool.value,
     wallBuildShape: wallBuildShape.value,
     floorBuildShape: floorBuildShape.value,
+    floorCircleEditModeActive: isSelectedFloorCircleEditMode(),
     isAltOverrideActive,
     nodePickerActive: nodePickerStore.isActive,
     nodePickerCompletePick: (nodeId) => nodePickerStore.completePick(nodeId),
@@ -9391,6 +9466,10 @@ async function handlePointerDown(event: PointerEvent) {
     ensureFloorVertexHandlesForSelectedNode: () => ensureFloorVertexHandlesForSelectedNode(),
     pickFloorVertexHandleAtPointer,
     setActiveFloorVertexHandle,
+
+    ensureFloorCircleHandlesForSelectedNode: () => ensureFloorCircleHandlesForSelectedNode(),
+    pickFloorCircleHandleAtPointer,
+    setActiveFloorCircleHandle,
 
     ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
     pickRoadVertexHandleAtPointer,
@@ -9518,6 +9597,8 @@ function handlePointerMove(event: PointerEvent) {
     !roadVertexDragState &&
     !floorVertexDragState &&
     !floorThicknessDragState &&
+    !floorCircleCenterDragState &&
+    !floorCircleRadiusDragState &&
     !wallCircleCenterDragState &&
     !wallCircleRadiusDragState &&
     !wallEndpointDragState &&
@@ -9529,14 +9610,17 @@ function handlePointerMove(event: PointerEvent) {
     ensureRoadVertexHandlesForSelectedNode()
     ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
+    ensureFloorCircleHandlesForSelectedNode()
 
     roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
   } else {
     roadVertexRenderer.clearHover()
     wallEndpointRenderer.clearHover()
     floorVertexRenderer.clearHover()
+    floorCircleHandleRenderer.clearHover()
   }
 
   const _moveDragCtx: any = {
@@ -9544,6 +9628,8 @@ function handlePointerMove(event: PointerEvent) {
     roadVertexDragState,
     floorVertexDragState,
     floorThicknessDragState,
+    floorCircleCenterDragState,
+    floorCircleRadiusDragState,
     wallEndpointDragState,
     wallJointDragState,
     wallHeightDragState,
@@ -9561,6 +9647,7 @@ function handlePointerMove(event: PointerEvent) {
 
     updateFloorGroup,
     forceRebuildFloorVertexHandles: () => ensureFloorVertexHandlesForSelectedNode({ force: true }),
+    forceRebuildFloorCircleHandles: () => ensureFloorCircleHandlesForSelectedNode({ force: true }),
   }
   _moveDragCtx.setWallNodeDimensions = (nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }) =>
     sceneStore.setWallNodeDimensions(nodeId, dimensions)
@@ -9708,6 +9795,12 @@ async function handlePointerUp(event: PointerEvent) {
       if (Object.prototype.hasOwnProperty.call(result, 'nextFloorThicknessDragState')) {
         floorThicknessDragState = result.nextFloorThicknessDragState ?? null
       }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextFloorCircleCenterDragState')) {
+        floorCircleCenterDragState = result.nextFloorCircleCenterDragState ?? null
+      }
+      if (Object.prototype.hasOwnProperty.call(result, 'nextFloorCircleRadiusDragState')) {
+        floorCircleRadiusDragState = result.nextFloorCircleRadiusDragState ?? null
+      }
       if (Object.prototype.hasOwnProperty.call(result, 'nextWallEndpointDragState')) {
         wallEndpointDragState = result.nextWallEndpointDragState ?? null
       }
@@ -9785,6 +9878,8 @@ async function handlePointerUp(event: PointerEvent) {
         roadVertexDragState,
         floorVertexDragState,
         floorThicknessDragState,
+        floorCircleCenterDragState,
+        floorCircleRadiusDragState,
         wallEndpointDragState,
         wallJointDragState,
         wallHeightDragState,
@@ -9799,10 +9894,12 @@ async function handlePointerUp(event: PointerEvent) {
         pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
         ensureRoadVertexHandlesForSelectedNode: () => ensureRoadVertexHandlesForSelectedNode(),
         ensureFloorVertexHandlesForSelectedNode: () => ensureFloorVertexHandlesForSelectedNode(),
+        ensureFloorCircleHandlesForSelectedNode: () => ensureFloorCircleHandlesForSelectedNode(),
         ensureWallEndpointHandlesForSelectedNode: (options) => ensureWallEndpointHandlesForSelectedNode(options),
 
         setActiveRoadVertexHandle,
         setActiveFloorVertexHandle,
+        setActiveFloorCircleHandle,
         setActiveWallEndpointHandle,
 
         nextTick,
@@ -10240,6 +10337,7 @@ function handlePointerCancel(event: PointerEvent) {
     floorThicknessDragState = null
     pointerInteraction.releaseIfCaptured(event.pointerId)
     setActiveFloorVertexHandle(null)
+    setActiveFloorCircleHandle(null)
 
     try {
       const handles = state.containerObject.getObjectByName(FLOOR_VERTEX_HANDLE_GROUP_NAME) as THREE.Group | null
@@ -10250,6 +10348,46 @@ function handlePointerCancel(event: PointerEvent) {
           child.position.y = yOffset
         }
       }
+
+      ensureFloorCircleHandlesForSelectedNode({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (floorCircleCenterDragState && event.pointerId === floorCircleCenterDragState.pointerId) {
+    const state = floorCircleCenterDragState
+    floorCircleCenterDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveFloorCircleHandle(null)
+
+    try {
+      updateFloorGroup(state.runtimeObject, state.baseDefinition)
+      ensureFloorCircleHandlesForSelectedNode({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (floorCircleRadiusDragState && event.pointerId === floorCircleRadiusDragState.pointerId) {
+    const state = floorCircleRadiusDragState
+    floorCircleRadiusDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveFloorCircleHandle(null)
+
+    try {
+      updateFloorGroup(state.runtimeObject, state.baseDefinition)
+      ensureFloorCircleHandlesForSelectedNode({ force: true })
     } catch {
       /* noop */
     }

@@ -257,6 +257,50 @@ export type FloorThicknessDragState = {
   containerObject: THREE.Object3D
 }
 
+export type FloorCircleCenterDragState = {
+  pointerId: number
+  nodeId: string
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+
+  containerObject: THREE.Object3D
+  runtimeObject: THREE.Object3D
+
+  baseDefinition: FloorDynamicMesh
+  workingDefinition: FloorDynamicMesh
+
+  startCenterLocal: { x: number; z: number }
+  segments: number
+}
+
+export type FloorCircleRadiusDragState = {
+  pointerId: number
+  nodeId: string
+
+  startX: number
+  startY: number
+  moved: boolean
+
+  dragPlane: THREE.Plane
+  startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
+
+  containerObject: THREE.Object3D
+  runtimeObject: THREE.Object3D
+
+  baseDefinition: FloorDynamicMesh
+  workingDefinition: FloorDynamicMesh
+
+  centerLocal: { x: number; z: number }
+  segments: number
+}
+
 export type PointerDownResult = {
   handled: true
   clearPointerTrackingState?: boolean
@@ -271,6 +315,8 @@ export type PointerDownResult = {
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextFloorThicknessDragState?: FloorThicknessDragState | null
+  nextFloorCircleCenterDragState?: FloorCircleCenterDragState | null
+  nextFloorCircleRadiusDragState?: FloorCircleRadiusDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
@@ -301,6 +347,8 @@ export type PointerUpResult = {
   nextRoadVertexDragState?: RoadVertexDragState | null
   nextFloorVertexDragState?: FloorVertexDragState | null
   nextFloorThicknessDragState?: FloorThicknessDragState | null
+  nextFloorCircleCenterDragState?: FloorCircleCenterDragState | null
+  nextFloorCircleRadiusDragState?: FloorCircleRadiusDragState | null
   nextWallEndpointDragState?: WallEndpointDragState | null
   nextWallJointDragState?: WallJointDragState | null
   nextWallHeightDragState?: WallHeightDragState | null
