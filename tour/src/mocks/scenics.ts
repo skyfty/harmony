@@ -8,7 +8,7 @@ const seed: ScenicDetail[] = [
     id: 'scenic-1',
     name: '云海山谷',
     summary: '观云海、穿峡谷，沉浸式山地景观。',
-    coverUrl: 'https://dummyimage.com/600x360/3f97ff/ffffff&text=%E4%BA%91%E6%B5%B7%E5%B1%B1%E8%B0%B7',
+    coverUrl: '/assets/photo-1441974231531-c6227db76b6e.avif',
     imageUrls: [
       'https://dummyimage.com/750x420/7ec6ff/ffffff&text=%E6%99%AF%E5%8C%BA%E5%9B%BE1',
       'https://dummyimage.com/750x420/3f97ff/ffffff&text=%E6%99%AF%E5%8C%BA%E5%9B%BE2',
@@ -25,7 +25,7 @@ const seed: ScenicDetail[] = [
     id: 'scenic-2',
     name: '湖畔栈道',
     summary: '环湖漫步与夜景灯光带。',
-    coverUrl: 'https://dummyimage.com/600x360/ffb340/ffffff&text=%E6%B9%96%E7%95%94%E6%A0%88%E9%81%93',
+    coverUrl: '/assets/photo-1506744038136-46273834b3fb.avif',
     imageUrls: [
       'https://dummyimage.com/750x420/ffd48a/ffffff&text=%E6%99%AF%E5%8C%BA%E5%9B%BE1',
       'https://dummyimage.com/750x420/ffb340/ffffff&text=%E6%99%AF%E5%8C%BA%E5%9B%BE2',

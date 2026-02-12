@@ -11,6 +11,7 @@ import aiTagRouter from './aiTags'
 import sceneRouter from './scenes'
 import userSceneRouter from './userScenes'
 import userProjectRouter from './userProjects'
+import adminRouter from './admin'
 
 export const routes: Router[] = [
   authRouter,
@@ -25,6 +26,7 @@ export const routes: Router[] = [
   aiTagRouter,
   userSceneRouter,
   userProjectRouter,
+  adminRouter,
 ]
 
 export default routes

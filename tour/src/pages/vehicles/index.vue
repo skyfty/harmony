@@ -21,19 +21,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
-import { listVehicles, getSelectedVehicleId, setSelectedVehicleId } from '@/mocks/vehicles';
+import { listVehicles } from '@/api/mini';
+import { getSelectedVehicleId, setSelectedVehicleId } from '@/mocks/vehicles';
+import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
-const vehicles = listVehicles();
+const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());
+
+async function reload() {
+  vehicles.value = await listVehicles();
+}
+
+onMounted(() => {
+  void reload().catch(() => {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  });
+});
 
 function select(id: string, status: VehicleStatus) {
   if (status === 'locked') {
-    uni.showToast({ title: '未解锁（mock）', icon: 'none' });
+    uni.showToast({ title: '未解锁', icon: 'none' });
     return;
   }
   selectedId.value = id;

@@ -1,5 +1,16 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_MINI_API_BASE?: string
+  readonly VITE_MINI_AUTO_LOGIN?: string
+  readonly VITE_MINI_TEST_USERNAME?: string
+  readonly VITE_MINI_TEST_PASSWORD?: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+
 
 declare module '*.vue' {
   import { DefineComponent } from 'vue'

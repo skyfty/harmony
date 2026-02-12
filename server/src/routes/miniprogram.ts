@@ -1,6 +1,9 @@
 import Router from 'koa-router'
 import { authMiddleware, optionalAuthMiddleware } from '@/middleware/auth'
 import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
+import { listSpaces, getSpace, getSpaceEntry, listSpaceProducts } from '@/controllers/miniprogram/spaceController'
+import { listHotEvents } from '@/controllers/miniprogram/eventController'
+import { listUserCoupons, claimCoupon } from '@/controllers/miniprogram/couponController'
 import {
   createWorks,
   listWorks,
@@ -59,6 +62,18 @@ miniRouter.get('/works/:id', optionalAuthMiddleware, getWork)
 miniRouter.get('/collections/:id', optionalAuthMiddleware, getCollection)
 miniRouter.get('/exhibitions/:id', optionalAuthMiddleware, getExhibition)
 
+// public readable (optional auth enhances with user state)
+miniRouter.get('/spaces', optionalAuthMiddleware, listSpaces)
+miniRouter.get('/spaces/:id', optionalAuthMiddleware, getSpace)
+miniRouter.get('/spaces/:id/entry', optionalAuthMiddleware, getSpaceEntry)
+miniRouter.get('/spaces/:id/products', optionalAuthMiddleware, listSpaceProducts)
+
+miniRouter.get('/events/hot', optionalAuthMiddleware, listHotEvents)
+
+// products can be read anonymously; login adds purchased/state
+miniRouter.get('/products', optionalAuthMiddleware, listProducts)
+miniRouter.get('/products/:id', optionalAuthMiddleware, getProduct)
+
 miniRouter.use(authMiddleware)
 
 // profile
@@ -99,9 +114,11 @@ miniRouter.post('/exhibitions/:id/visit', visitExhibition)
 miniRouter.post('/exhibitions/:id/share', shareExhibition)
 
 // products
-miniRouter.get('/products', listProducts)
-miniRouter.get('/products/:id', getProduct)
 miniRouter.post('/products/:id/purchase', purchaseProduct)
+
+// coupons (user-scoped)
+miniRouter.get('/coupons', listUserCoupons)
+miniRouter.post('/coupons/:id/claim', claimCoupon)
 
 // orders
 miniRouter.get('/orders', listOrders)
