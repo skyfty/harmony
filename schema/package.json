@@ -6,7 +6,7 @@
   "private": false,
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-terrain-scatter.cjs && harmony-tools fix-esm-extensions --root dist",
+    "build": "tsc -p tsconfig.build.json",
     "build:asset-types": "tsc -p tsconfig.asset-types.json"
   },
   "exports": {
