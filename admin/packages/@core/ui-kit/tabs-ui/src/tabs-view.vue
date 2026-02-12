@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { TabsEmits, TabsProps } from './types';
 
 import { useForwardPropsEmits } from '@vben-core/composables';
 import { ChevronLeft, ChevronRight } from '@vben-core/icons';
@@ -8,14 +9,7 @@ import { Tabs, TabsChrome } from './components';
 import { useTabsDrag } from './use-tabs-drag';
 import { useTabsViewScroll } from './use-tabs-view-scroll';
 
-type Props = {
-  active?: string;
-  contentClass?: string;
-  draggable?: boolean;
-  styleType?: string;
-  tabs?: Array<Record<string, unknown>>;
-  wheelable?: boolean;
-};
+interface Props extends TabsProps {}
 
 defineOptions({
   name: 'TabsView',
@@ -28,9 +22,7 @@ const props = withDefaults(defineProps<Props>(), {
   wheelable: true,
 });
 
-const emit = defineEmits<{
-  (event: string, ...args: any[]): void;
-}>();
+const emit = defineEmits<TabsEmits>();
 
 const forward = useForwardPropsEmits(props, emit);
 

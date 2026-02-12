@@ -8,7 +8,7 @@ import { computed, ref } from 'vue';
 import { Pin, X } from '@vben-core/icons';
 import { VbenContextMenu, VbenIcon } from '@vben-core/shadcn-ui';
 
-interface Props extends /* @vue-ignore */ TabsProps {}
+interface Props extends TabsProps {}
 
 defineOptions({
   name: 'VbenTabsChrome',

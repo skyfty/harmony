@@ -2,7 +2,7 @@ import { defineBuildConfig } from 'unbuild';
 
 export default defineBuildConfig({
   clean: true,
-  declaration: false,
+  declaration: true,
   entries: [
     {
       builder: 'mkdist',
