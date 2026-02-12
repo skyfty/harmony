@@ -22,8 +22,9 @@ function buildRoadMaterialProps(overrides?: Partial<SceneMaterialProps>): SceneM
     opacity: 1,
     side: 'double',
     wireframe: false,
-    metalness: 0.5,
-    roughness: 0.5,
+
+    metalness: 0.1,
+    roughness: 1.0,
     emissive: '#000000',
     emissiveIntensity: 0,
     aoStrength: 1,

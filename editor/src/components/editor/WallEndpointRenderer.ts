@@ -450,9 +450,9 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
 
         const gizmo = createEndpointGizmoObject({
           axes: options.handleKind === 'circle'
-            ? (options.circleKind === 'center' ? { x: false, y: false, z: false } : { x: true, y: false, z: false })
+            ? (options.circleKind === 'center' ? { x: false, y: true, z: false } : { x: true, y: false, z: false })
             : { x: true, y: true, z: true },
-          showNegativeAxes: options.handleKind === 'circle' ? false : true,
+          showNegativeAxes: options.handleKind === 'circle' ? options.circleKind === 'center' : true,
           renderOrder: WALL_ENDPOINT_HANDLE_RENDER_ORDER,
           depthTest: false,
           depthWrite: false,

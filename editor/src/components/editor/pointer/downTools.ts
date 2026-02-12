@@ -1,11 +1,14 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
+import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import type {
   FloorVertexDragState,
   FloorThicknessDragState,
+  FloorCircleCenterDragState,
+  FloorCircleRadiusDragState,
   PointerDownResult,
   RoadVertexDragState,
   WallEndpointDragState,
@@ -162,12 +165,44 @@ function computeChainCenterAndRadiusWorld(options: {
   return { centerWorld, radius }
 }
 
+function computeFloorCircleLocalFromVertices(vertices: any[]): { centerX: number; centerZ: number; radius: number; segments: number } | null {
+  const points: Array<{ x: number; z: number }> = []
+  for (const entry of vertices) {
+    if (!Array.isArray(entry) || entry.length < 2) continue
+    const x = Number(entry[0])
+    const z = Number(entry[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
+    points.push({ x, z })
+  }
+  if (points.length < 3) return null
+
+  let sumX = 0
+  let sumZ = 0
+  for (const p of points) {
+    sumX += p.x
+    sumZ += p.z
+  }
+  const inv = 1 / Math.max(1, points.length)
+  const centerX = sumX * inv
+  const centerZ = sumZ * inv
+
+  let meanRadius = 0
+  for (const p of points) {
+    meanRadius += Math.hypot(p.x - centerX, p.z - centerZ)
+  }
+  meanRadius /= Math.max(1, points.length)
+  if (!Number.isFinite(centerX + centerZ + meanRadius) || meanRadius <= 1e-4) return null
+
+  return { centerX, centerZ, radius: meanRadius, segments: points.length }
+}
+
 export function handlePointerDownTools(
   event: PointerEvent,
   ctx: {
     activeBuildTool: string | null
     wallBuildShape: WallBuildShape
     floorBuildShape: FloorBuildShape
+    floorCircleEditModeActive?: boolean
     isAltOverrideActive: boolean
 
     // Node picker
@@ -190,6 +225,11 @@ export function handlePointerDownTools(
     ensureFloorVertexHandlesForSelectedNode: () => void
     pickFloorVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number; gizmoKind: 'center' | 'axis'; gizmoAxis?: THREE.Vector3; gizmoPart: any } | null
     setActiveFloorVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
+
+    // Floor circle drag (circle-built floors only)
+    ensureFloorCircleHandlesForSelectedNode?: () => void
+    pickFloorCircleHandleAtPointer?: (event: PointerEvent) => FloorCircleHandlePickResult | null
+    setActiveFloorCircleHandle?: (active: { nodeId: string; circleKind: 'center' | 'radius'; gizmoPart: any } | null) => void
 
     // Road vertex drag
     ensureRoadVertexHandlesForSelectedNode: () => void
@@ -329,6 +369,78 @@ export function handlePointerDownTools(
 
                 const radiusPointWorld = centerWorld.clone().add(new THREE.Vector3(radius, 0, 0))
                 const startPointWorld = (circleKind === 'radius' ? radiusPointWorld : centerWorld).clone()
+
+                // Special case: dragging the center handle's Y axis arrow adjusts wall height.
+                const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+                const axisWorld =
+                  dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
+                    ? (handleHit.gizmoAxis as THREE.Vector3).clone().normalize()
+                    : null
+                const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
+                const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+                const isYAxisDrag =
+                  circleKind === 'center' &&
+                  effectiveDragMode === 'axis' &&
+                  effectiveAxisWorld &&
+                  Math.abs(effectiveAxisWorld.y) > 0.9 &&
+                  Math.abs(effectiveAxisWorld.x) < 0.2 &&
+                  Math.abs(effectiveAxisWorld.z) < 0.2
+
+                if (isYAxisDrag) {
+                  const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
+                  const heightStartPointWorld = centerWorld.clone()
+                  heightStartPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
+
+                  const wallHeightDragState: WallHeightDragState = {
+                    pointerId: event.pointerId,
+                    nodeId: handleHit.nodeId,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    moved: false,
+
+                    axisSign,
+                    dragPlane: ctx.createEndpointDragPlane({
+                      mode: 'axis',
+                      axisWorld: new THREE.Vector3(0, axisSign, 0),
+                      startPointWorld: heightStartPointWorld,
+                    }),
+                    startPointWorld: heightStartPointWorld.clone(),
+                    startHitWorld: null,
+
+                    startHeight: dimensions.height,
+
+                    containerObject: runtime,
+                    dimensions: { ...dimensions },
+                    baseSegmentsWorld,
+                    workingSegmentsWorld,
+                    previewGroup: null,
+                    previewSignature: null,
+                  }
+
+                  ctx.setActiveWallEndpointHandle({
+                    nodeId: handleHit.nodeId,
+                    chainStartIndex,
+                    chainEndIndex,
+                    handleKind: 'circle',
+                    circleKind: 'center',
+                    gizmoPart: handleHit.gizmoPart,
+                  })
+
+                  return {
+                    handled: true,
+                    clearPointerTrackingState: true,
+                    nextWallEndpointDragState: null,
+                    nextWallJointDragState: null,
+                    nextWallHeightDragState: wallHeightDragState,
+                    nextWallCircleCenterDragState: null,
+                    nextWallCircleRadiusDragState: null,
+                    capturePointerId: event.pointerId,
+                    preventDefault: true,
+                    stopPropagation: true,
+                    stopImmediatePropagation: true,
+                  }
+                }
+
                 const dragPlane = ctx.createEndpointDragPlane({
                   mode: 'free',
                   axisWorld: null,
@@ -694,6 +806,184 @@ export function handlePointerDownTools(
 
   if (ctx.activeBuildTool === 'floor') {
     if (button === 0 && !ctx.isAltOverrideActive) {
+      // Circle edit mode: center + radius handles only (avoid per-vertex clutter).
+      if (ctx.floorCircleEditModeActive && ctx.ensureFloorCircleHandlesForSelectedNode && ctx.pickFloorCircleHandleAtPointer) {
+        ctx.ensureFloorCircleHandlesForSelectedNode()
+        const circleHit = ctx.pickFloorCircleHandleAtPointer(event)
+        if (circleHit) {
+          const node = ctx.findSceneNode(ctx.nodes, circleHit.nodeId)
+          const runtime = ctx.objectMap.get(circleHit.nodeId) ?? null
+
+          if (node?.dynamicMesh?.type === 'Floor' && runtime) {
+            const circle = computeFloorCircleLocalFromVertices((node.dynamicMesh as any).vertices)
+            if (circle) {
+              const centerLocal = { x: circle.centerX, z: circle.centerZ }
+              const centerPointWorld = runtime.localToWorld(new THREE.Vector3(circle.centerX, 0, circle.centerZ))
+              const radiusPointWorld = runtime.localToWorld(new THREE.Vector3(circle.centerX + circle.radius, 0, circle.centerZ))
+
+              const circleKind = circleHit.circleKind === 'radius' ? 'radius' : 'center'
+              const startPointWorld = (circleKind === 'radius' ? radiusPointWorld : centerPointWorld).clone()
+              const dragPlane = ctx.createEndpointDragPlane({
+                mode: 'free',
+                axisWorld: null,
+                startPointWorld,
+                freePlaneNormal: new THREE.Vector3(0, 1, 0),
+              })
+
+              // Special case: center handle's Y axis arrow adjusts thickness.
+              const isYAxisArrow = circleHit.gizmoKind === 'axis' && (circleHit.gizmoPart === 'py' || circleHit.gizmoPart === 'ny')
+              if (circleKind === 'center' && isYAxisArrow) {
+                const axisSign: 1 | -1 = circleHit.gizmoPart === 'ny' ? -1 : 1
+
+                const floorComponent = node.components?.[FLOOR_COMPONENT_TYPE] as SceneNodeComponentState<FloorComponentProps> | undefined
+                const baseThickness = Number.isFinite(floorComponent?.props?.thickness)
+                  ? Number(floorComponent!.props.thickness)
+                  : (Number.isFinite((node.dynamicMesh as any).thickness) ? Number((node.dynamicMesh as any).thickness) : FLOOR_DEFAULT_THICKNESS)
+
+                const clampedBase = Math.min(FLOOR_MAX_THICKNESS, Math.max(FLOOR_MIN_THICKNESS, baseThickness))
+                const yOffset = FLOOR_VERTEX_HANDLE_Y + clampedBase * 0.5
+                const startPointWorld = runtime.localToWorld(new THREE.Vector3(circle.centerX, yOffset, circle.centerZ))
+
+                const floorThicknessDragState: FloorThicknessDragState = {
+                  pointerId: event.pointerId,
+                  nodeId: circleHit.nodeId,
+                  vertexIndex: 0,
+                  startX: event.clientX,
+                  startY: event.clientY,
+                  moved: false,
+
+                  axisSign,
+                  dragPlane: ctx.createEndpointDragPlane({
+                    mode: 'axis',
+                    axisWorld: new THREE.Vector3(0, axisSign, 0),
+                    startPointWorld,
+                  }),
+                  startPointWorld: startPointWorld.clone(),
+                  startHitWorld: null,
+
+                  startThickness: clampedBase,
+                  thickness: clampedBase,
+
+                  containerObject: runtime,
+                }
+
+                ctx.setActiveFloorCircleHandle?.({ nodeId: circleHit.nodeId, circleKind: 'center', gizmoPart: circleHit.gizmoPart })
+
+                return {
+                  handled: true,
+                  clearPointerTrackingState: true,
+                  nextFloorVertexDragState: null,
+                  nextFloorThicknessDragState: floorThicknessDragState,
+                  nextFloorCircleCenterDragState: null,
+                  nextFloorCircleRadiusDragState: null,
+                  capturePointerId: event.pointerId,
+                  preventDefault: true,
+                  stopPropagation: true,
+                  stopImmediatePropagation: true,
+                }
+              }
+
+              const workingDefinition = {
+                ...node.dynamicMesh,
+                vertices: (Array.isArray((node.dynamicMesh as any).vertices) ? (node.dynamicMesh as any).vertices : []).map(
+                  ([x, z]: any) => [Number(x) || 0, Number(z) || 0] as [number, number],
+                ),
+              } as any
+
+              ctx.setActiveFloorCircleHandle?.({ nodeId: circleHit.nodeId, circleKind, gizmoPart: circleHit.gizmoPart })
+
+              if (circleKind === 'center') {
+                const floorCircleCenterDragState: FloorCircleCenterDragState = {
+                  pointerId: event.pointerId,
+                  nodeId: circleHit.nodeId,
+
+                  startX: event.clientX,
+                  startY: event.clientY,
+                  moved: false,
+
+                  dragPlane,
+                  startPointWorld,
+                  startHitWorld: null,
+
+                  containerObject: runtime,
+                  runtimeObject: runtime,
+
+                  baseDefinition: node.dynamicMesh,
+                  workingDefinition,
+
+                  startCenterLocal: { x: centerLocal.x, z: centerLocal.z },
+                  segments: Math.max(3, circle.segments),
+                }
+
+                return {
+                  handled: true,
+                  clearPointerTrackingState: true,
+                  nextFloorVertexDragState: null,
+                  nextFloorThicknessDragState: null,
+                  nextFloorCircleCenterDragState: floorCircleCenterDragState,
+                  nextFloorCircleRadiusDragState: null,
+                  capturePointerId: event.pointerId,
+                  preventDefault: true,
+                  stopPropagation: true,
+                  stopImmediatePropagation: true,
+                }
+              }
+
+              const floorCircleRadiusDragState: FloorCircleRadiusDragState = {
+                pointerId: event.pointerId,
+                nodeId: circleHit.nodeId,
+
+                startX: event.clientX,
+                startY: event.clientY,
+                moved: false,
+
+                dragPlane,
+                startPointWorld,
+                startHitWorld: null,
+
+                containerObject: runtime,
+                runtimeObject: runtime,
+
+                baseDefinition: node.dynamicMesh,
+                workingDefinition,
+
+                centerLocal: { x: centerLocal.x, z: centerLocal.z },
+                segments: Math.max(3, circle.segments),
+              }
+
+              return {
+                handled: true,
+                clearPointerTrackingState: true,
+                nextFloorVertexDragState: null,
+                nextFloorThicknessDragState: null,
+                nextFloorCircleCenterDragState: null,
+                nextFloorCircleRadiusDragState: floorCircleRadiusDragState,
+                capturePointerId: event.pointerId,
+                preventDefault: true,
+                stopPropagation: true,
+                stopImmediatePropagation: true,
+              }
+            }
+
+            return {
+              handled: true,
+              clearPointerTrackingState: true,
+              preventDefault: true,
+              stopPropagation: true,
+              stopImmediatePropagation: true,
+            }
+          }
+
+          return {
+            handled: true,
+            clearPointerTrackingState: true,
+            preventDefault: true,
+            stopPropagation: true,
+            stopImmediatePropagation: true,
+          }
+        }
+      }
+
       // If a floor vertex handle is under the cursor, begin vertex interaction (drag to move).
       ctx.ensureFloorVertexHandlesForSelectedNode()
       const handleHit = ctx.pickFloorVertexHandleAtPointer(event)

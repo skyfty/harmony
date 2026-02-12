@@ -2,7 +2,48 @@ import * as THREE from 'three';
 import type { FloorDynamicMesh, SceneNodeMaterial } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
 import { createFloorRenderGroup } from '../../floorMesh';
-import { applyMaterialConfigAssignment, buildMaterialConfigMap } from '../materialAssignment';
+import { MATERIAL_CONFIG_ID_KEY } from '../../material';
+import { buildMaterialConfigMap } from '../materialAssignment';
+
+function isUnlitDefaultMaterial(material: THREE.Material | THREE.Material[]): boolean {
+  const materials = Array.isArray(material) ? material : [material];
+  return materials.length > 0 && materials.every((entry) => Boolean((entry as any)?.isMeshBasicMaterial));
+}
+
+function applyFloorMaterialConfigAssignment(
+  root: THREE.Object3D,
+  options: {
+    defaultMaterial: THREE.Material | THREE.Material[];
+    materialByConfigId: Map<string, THREE.Material>;
+    selectorKey?: string;
+  },
+): void {
+  const selectorKey = options.selectorKey ?? MATERIAL_CONFIG_ID_KEY;
+  const canFallbackToDefault = !isUnlitDefaultMaterial(options.defaultMaterial);
+
+  root.traverse((child: THREE.Object3D) => {
+    const mesh = child as THREE.Mesh & { isMesh?: boolean };
+    if (!mesh?.isMesh) {
+      return;
+    }
+
+    const selectorRaw = mesh.userData?.[selectorKey] as unknown;
+    const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
+    if (selectorId && options.materialByConfigId.has(selectorId)) {
+      mesh.material = options.materialByConfigId.get(selectorId)!;
+      return;
+    }
+
+    // Preserve the floor's built-in lit materials when:
+    // - no selector id is set (common default floors), or
+    // - selector id is invalid and the provided default is unlit (e.g. MeshBasicMaterial).
+    if (!selectorId || !canFallbackToDefault) {
+      return;
+    }
+
+    mesh.material = options.defaultMaterial;
+  });
+}
 
 export async function buildFloorMesh(
   deps: {
@@ -23,7 +64,7 @@ export async function buildFloorMesh(
 
   if (defaultMaterialAssignment) {
     const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
-    applyMaterialConfigAssignment(group, {
+    applyFloorMaterialConfigAssignment(group, {
       defaultMaterial: defaultMaterialAssignment,
       materialByConfigId,
     });
