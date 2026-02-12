@@ -67,6 +67,7 @@ export default defineConfig({
           'three/addons/**',
           'three/examples/**',
           'three/examples/jsm/**',
+          'cannon'
         ]
       }
     }),

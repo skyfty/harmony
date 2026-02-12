@@ -125,19 +125,6 @@ function sanitizeCubeSettings(input: SceneCubeTextureCloudSettings | null | unde
   }
 }
 
-function sanitizeSphericalSettings(input: SceneSphericalCloudSettings | null | undefined): SceneSphericalCloudSettings {
-  const fallback = DEFAULT_SPHERICAL_SETTINGS
-  return {
-    mode: 'spherical',
-    textureAssetId: ensureString(input?.textureAssetId ?? '').trim() || null,
-    radius: ensureNumber(input?.radius, fallback.radius),
-    opacity: ensureNumber(input?.opacity, fallback.opacity),
-    rotationSpeed: ensureNumber(input?.rotationSpeed, fallback.rotationSpeed),
-    color: ensureString(input?.color).trim() || fallback.color,
-    height: ensureNumber(input?.height, fallback.height),
-  }
-}
-
 function sanitizeVolumetricSettings(input: SceneVolumetricCloudSettings | null | undefined): SceneVolumetricCloudSettings {
   const fallback = DEFAULT_VOLUMETRIC_SETTINGS
   return {
@@ -162,8 +149,6 @@ export function sanitizeCloudSettings(input: SceneCloudSettings | null | undefin
   switch (input.mode) {
     case 'cubeTexture':
       return sanitizeCubeSettings(input)
-    case 'spherical':
-      return sanitizeSphericalSettings(input)
     case 'volumetric':
       return sanitizeVolumetricSettings(input)
     default:

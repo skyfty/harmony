@@ -1,0 +1,34 @@
+{
+  "pages": [
+    { "path": "pages/home/index" },
+    { "path": "pages/coupons/index" },
+    { "path": "pages/achievements/index" },
+    { "path": "pages/vehicles/index" },
+    { "path": "pages/profile/index" },
+    { "path": "pages/scenic/detail" },
+    { "path": "pages/orders/index" },
+    { "path": "pages/orders/detail/index" },
+    { "path": "pages/address/index" },
+    { "path": "pages/address/edit" },
+    { "path": "pages/feedback/index" },
+    { "path": "pages/feedback/create" },
+    { "path": "pages/settings/index" },
+    { "path": "pages/profile/edit" }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/scenery",
+      "name": "scenery",
+      "independent": true,
+      "pages": [
+        { "path": "index" }
+      ]
+    }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "white",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}

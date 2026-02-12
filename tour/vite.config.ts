@@ -9,6 +9,7 @@ import { toCustomChunkPlugin } from "@harmony/tools/vite";
 // https://vitejs.dev/config/
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
+const buildTarget = isMp ? 'es2018' : 'es2020';
 
 const vueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
@@ -16,7 +17,16 @@ const vueRuntimeAlias = isMp
 
 export default {
     optimizeDeps: {
-      exclude: ['@minisheep/three-platform-adapter']
+      exclude: ['@minisheep/three-platform-adapter'],
+      esbuildOptions: {
+        target: buildTarget,
+      },
+    },
+    esbuild: {
+      target: buildTarget,
+    },
+    build: {
+      target: buildTarget,
     },
     resolve: {
       alias: {
@@ -71,7 +81,11 @@ export default {
             // Catch any other examples entrypoints (legacy or non-jsm)
             'three/examples/**',
             'three/examples/jsm/**',
-            'cannon'
+            'cannon-es',
+            // @harmony/schema 通过 alias 解析到项目根目录之外 (../schema)，
+            // createMpChunkSplitterPlugin 无法识别其归属分包，
+            // 必须显式路由到 scenery 子包，否则会落入 common/vendor.js 并产生跨包 require
+            '**/harmony/schema/**',
           ]
         }
       }),
