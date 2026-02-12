@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@harmony/schema'
+import { resolveGroundEffectiveHeightAtVertex } from '@schema/groundMesh'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
 
 // 网格线的主要配色和宽度配置，确保与地形有足够对比度。
@@ -62,29 +63,13 @@ function buildGridSegments(definition: GroundDynamicMesh, visibleRange?: Terrain
     zCoords[rowIndex] = -halfDepth + rowIndex * stepZ
   }
 
-  // 将 heightMap 解析为紧凑的一维 Float32Array。
-  // 关键优化点：只遍历 heightMap 实际存在的条目，而不是 rows*columns 全量拼 key 查表。
+  // 构建紧凑的一维高度数组（使用合成后的有效高度）。
   const stride = columns + 1
   const heightGrid = new Float32Array((rows + 1) * stride)
-  const mapped = definition.heightMap ?? {}
-  for (const key of Object.keys(mapped)) {
-    const value = mapped[key]
-    if (typeof value !== 'number') {
-      continue
+  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+      heightGrid[rowIndex * stride + columnIndex] = resolveGroundEffectiveHeightAtVertex(definition, rowIndex, columnIndex)
     }
-    const sepIndex = key.indexOf(':')
-    if (sepIndex <= 0) {
-      continue
-    }
-    const rowIndex = Number(key.slice(0, sepIndex))
-    const columnIndex = Number(key.slice(sepIndex + 1))
-    if (!Number.isFinite(rowIndex) || !Number.isFinite(columnIndex)) {
-      continue
-    }
-    if (rowIndex < 0 || rowIndex > rows || columnIndex < 0 || columnIndex > columns) {
-      continue
-    }
-    heightGrid[rowIndex * stride + columnIndex] = value
   }
 
   // 先收集需要绘制的行/列索引，避免后续循环里反复判断对齐。
@@ -334,36 +319,22 @@ export class TerrainGridHelper extends THREE.Object3D {
   }
 
   private createHeightTransfer(definition: GroundDynamicMesh, rows: number, columns: number) {
-    const mapped = definition.heightMap ?? {}
     const stride = columns + 1
-    const keys = Object.keys(mapped)
-    const heightIndices = new Uint32Array(keys.length)
-    const heightValues = new Float32Array(keys.length)
+    const total = (rows + 1) * (columns + 1)
+    const heightIndices = new Uint32Array(total)
+    const heightValues = new Float32Array(total)
     let count = 0
     let minY = 0
     let maxY = 0
-    for (const key of keys) {
-      const value = mapped[key]
-      if (typeof value !== 'number') {
-        continue
-      }
-      const sepIndex = key.indexOf(':')
-      if (sepIndex <= 0) {
-        continue
-      }
-      const rowIndex = Number(key.slice(0, sepIndex))
-      const columnIndex = Number(key.slice(sepIndex + 1))
-      if (!Number.isFinite(rowIndex) || !Number.isFinite(columnIndex)) {
-        continue
-      }
-      if (rowIndex < 0 || rowIndex > rows || columnIndex < 0 || columnIndex > columns) {
-        continue
-      }
+    for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+      for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+      const value = resolveGroundEffectiveHeightAtVertex(definition, rowIndex, columnIndex)
       heightIndices[count] = rowIndex * stride + columnIndex
       heightValues[count] = value
       minY = Math.min(minY, value)
       maxY = Math.max(maxY, value)
       count += 1
+      }
     }
     return {
       heightIndices,

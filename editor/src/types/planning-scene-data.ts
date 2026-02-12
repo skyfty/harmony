@@ -10,6 +10,8 @@ export interface PlanningPolygonData {
   name: string
   layerId: string
   points: PlanningPoint[]
+  /** Optional; only meaningful when the polygon belongs to a terrain layer. Height delta in meters. */
+  terrainHeightMeters?: number
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
   /** Optional; wall preset prefab asset id (.wall). When set, overrides the layer default. */

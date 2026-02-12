@@ -71,7 +71,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
   SceneHistoryGroundRegionBounds,
-  SceneHistoryGroundHeightEntry,
+  SceneHistoryGroundManualHeightEntry,
   SceneHistoryNodeLocation,
   SceneHistoryNodeStructureOp,
   SceneHistoryTransformSnapshot,
@@ -1116,6 +1116,7 @@ function manualDeepClone<T>(source: T): T {
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
   const terrainScatter = manualDeepClone(definition.terrainScatter)
   const terrainPaint = manualDeepClone(definition.terrainPaint)
+  const planningMetadata = manualDeepClone(definition.planningMetadata)
   const result: GroundDynamicMesh = {
     type: 'Ground',
     width: definition.width,
@@ -1123,7 +1124,10 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     rows: definition.rows,
     columns: definition.columns,
     cellSize: definition.cellSize,
-    heightMap: { ...(definition.heightMap ?? {}) },
+    manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
+    planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
+    heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) },
+    planningMetadata: planningMetadata ?? null,
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
@@ -1131,9 +1135,6 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
-  }
-  if (definition.hasManualEdits !== undefined) {
-    result.hasManualEdits = definition.hasManualEdits
   }
   if (terrainScatter !== undefined) {
     result.terrainScatter = terrainScatter
@@ -5131,7 +5132,7 @@ function createDynamicMeshHistoryEntry(store: SceneState, nodeId: string): Scene
   if (!node) {
     return null
   }
-  // NOTE: dynamicMesh can be large (especially Ground.heightMap). Prefer dedicated ground region history
+  // NOTE: dynamicMesh can be large (especially Ground manual/planning maps). Prefer dedicated ground region history
   // for sculpt operations; this is mainly for non-ground meshes (road/wall/floor) and discrete edits.
   return {
     kind: 'node-dynamic-mesh',
@@ -5140,7 +5141,7 @@ function createDynamicMeshHistoryEntry(store: SceneState, nodeId: string): Scene
   }
 }
 
-function createGroundHeightmapRegionEntry(
+function createGroundManualHeightRegionEntry(
   store: SceneState,
   nodeId: string,
   bounds: SceneHistoryGroundRegionBounds,
@@ -5151,8 +5152,8 @@ function createGroundHeightmapRegionEntry(
   }
   const definition = node.dynamicMesh as GroundDynamicMesh
   const normalized = normalizeGroundBounds(definition, bounds)
-  const entries: SceneHistoryGroundHeightEntry[] = []
-  const heightMap = definition.heightMap ?? {}
+  const entries: SceneHistoryGroundManualHeightEntry[] = []
+  const heightMap = definition.manualHeightMap ?? {}
   for (const [key, rawValue] of Object.entries(heightMap)) {
     const value = typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : 0
     if (Math.abs(value) <= HEIGHT_EPSILON) {
@@ -5175,7 +5176,7 @@ function createGroundHeightmapRegionEntry(
     }
   }
   return {
-    kind: 'ground-heightmap-region',
+    kind: 'ground-manual-height-region',
     nodeId,
     bounds: normalized,
     entries,
@@ -5296,8 +5297,8 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
       return createTransformHistoryEntry(store, entry.transforms.map((t) => t.id))
     case 'node-dynamic-mesh':
       return createDynamicMeshHistoryEntry(store, entry.nodeId)
-    case 'ground-heightmap-region':
-      return createGroundHeightmapRegionEntry(store, entry.nodeId, entry.bounds)
+    case 'ground-manual-height-region':
+      return createGroundManualHeightRegionEntry(store, entry.nodeId, entry.bounds)
     default:
       return null
   }
@@ -5423,7 +5424,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       store.nodes = [...store.nodes]
       break
     }
-    case 'ground-heightmap-region': {
+    case 'ground-manual-height-region': {
       const node = findNodeById(store.nodes, entry.nodeId)
       if (!node) {
         break
@@ -5432,7 +5433,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
         node.dynamicMesh = createGroundDynamicMeshDefinition({}, store.groundSettings)
       }
       const definition = node.dynamicMesh as GroundDynamicMesh
-      const nextHeightMap: Record<string, number> = { ...(definition.heightMap ?? {}) }
+      const nextHeightMap: Record<string, number> = { ...(definition.manualHeightMap ?? {}) }
       for (const key of Object.keys(nextHeightMap)) {
         const parts = key.split(':')
         if (parts.length !== 2) continue
@@ -5452,7 +5453,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       })
       node.dynamicMesh = {
         ...definition,
-        heightMap: nextHeightMap,
+        manualHeightMap: nextHeightMap,
       }
       store.nodes = [...store.nodes]
       break
@@ -6765,14 +6766,14 @@ export const useSceneStore = defineStore('scene', {
       }
       this.appendUndoEntry({ kind: 'node-structure', ops: normalized })
     },
-    captureGroundHeightmapRegionHistory(nodeId: string, bounds: SceneHistoryGroundRegionBounds) {
+    captureGroundManualHeightRegionHistory(nodeId: string, bounds: SceneHistoryGroundRegionBounds) {
       if (this.isRestoringHistory) {
         return
       }
       if (historyCaptureSuppressionDepth > 0) {
         return
       }
-      const entry = createGroundHeightmapRegionEntry(this, nodeId, bounds)
+      const entry = createGroundManualHeightRegionEntry(this, nodeId, bounds)
       if (entry) {
         this.appendUndoEntry(entry)
       }
@@ -6907,8 +6908,8 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      // Record a minimal history entry for this region (sparse heightMap keys only).
-      this.captureGroundHeightmapRegionHistory(groundNode.id, bounds)
+      // Record a minimal history entry for this region (manual height layer only).
+      this.captureGroundManualHeightRegionHistory(groundNode.id, bounds)
 
       groundNode.dynamicMesh = result.definition
       this.nodes = [...this.nodes]
@@ -7550,7 +7551,7 @@ export const useSceneStore = defineStore('scene', {
 
       visitNode(this.nodes, nodeId, (node) => {
         // PERF: Avoid JSON stringify/parse deep clones.
-        // Dynamic meshes (especially Ground.heightMap) can be very large and deep cloning can stall the UI.
+        // Dynamic meshes (especially Ground manual/planning maps) can be very large and deep cloning can stall the UI.
         // Instead, update the existing dynamicMesh in-place when possible.
 
         if (!dynamicMesh || typeof dynamicMesh !== 'object') {

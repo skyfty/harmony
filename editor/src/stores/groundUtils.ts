@@ -45,8 +45,8 @@ function manualDeepCloneLocal(source: unknown): unknown {
   return source
 }
 
-type GroundDynamicMeshLike = GroundDynamicMesh & { hasManualEdits?: boolean; terrainScatter?: unknown; terrainPaint?: unknown }
-type GroundDynamicMeshResult = GroundDynamicMesh & { hasManualEdits?: boolean; terrainScatter?: unknown; terrainPaint?: unknown }
+type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
+type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
 
 export function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
   if (!settings) {
@@ -77,7 +77,10 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     rows: definition.rows,
     columns: definition.columns,
     cellSize: definition.cellSize,
-    heightMap: { ...(definition.heightMap ?? {}) },
+    manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
+    planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
+    heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
+    planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
@@ -85,9 +88,6 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
   }
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
-  }
-  if (definition.hasManualEdits !== undefined) {
-    result.hasManualEdits = definition.hasManualEdits
   }
   if (terrainScatter !== undefined) {
     result.terrainScatter = terrainScatter
@@ -142,8 +142,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
   const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
   const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
-  const heightMapOverrides = overrides.heightMap ?? null
-  const hasHeightOverrides = Boolean(heightMapOverrides && Object.keys(heightMapOverrides).length > 0)
+  const manualHeightMapOverrides = overrides.manualHeightMap ?? null
+  const planningHeightMapOverrides = overrides.planningHeightMap ?? null
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
   const definition: GroundDynamicMesh = {
     type: 'Ground',
@@ -152,13 +152,17 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     rows: derivedRows,
     columns: derivedColumns,
     cellSize,
-    heightMap: { ...(heightMapOverrides ?? {}) },
+    manualHeightMap: { ...(manualHeightMapOverrides ?? {}) },
+    planningHeightMap: { ...(planningHeightMapOverrides ?? {}) },
+    heightComposition: {
+      mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',
+      policyVersion: overrides.heightComposition?.policyVersion,
+    },
+    planningMetadata: manualDeepCloneLocal(overrides.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
     terrainScatterInstancesUpdatedAt: Date.now(),
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
     generation: initialGeneration,
-    // GroundDynamicMesh may or may not include these optional editor-only fields
-    hasManualEdits: o.hasManualEdits,
     terrainScatter: manualDeepCloneLocal(o.terrainScatter) as unknown as GroundDynamicMesh['terrainScatter'],
     terrainPaint: manualDeepCloneLocal(o.terrainPaint) as unknown as GroundDynamicMesh['terrainPaint'],
   }
@@ -167,7 +171,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     definition.castShadow = (o as any).castShadow
   }
 
-  if (initialGeneration && !hasHeightOverrides) {
+  if (initialGeneration && !manualHeightMapOverrides && !planningHeightMapOverrides) {
     // applyGroundGeneration is editor-specific; caller can apply if needed.
   }
 
@@ -196,7 +200,7 @@ export function applyGroundRegionTransform(
   transform: (current: number, row: number, column: number) => number,
 ): { definition: GroundDynamicMesh; changed: boolean } {
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = { ...definition.heightMap }
+  const nextHeightMap = { ...definition.manualHeightMap }
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
@@ -220,7 +224,7 @@ export function applyGroundRegionTransform(
   return {
     definition: {
       ...definition,
-      heightMap: nextHeightMap,
+      manualHeightMap: nextHeightMap,
     },
     changed: true,
   }

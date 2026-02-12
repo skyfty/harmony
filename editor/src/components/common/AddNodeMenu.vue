@@ -1875,7 +1875,10 @@ async function handleConfirmGround() {
     rows,
     columns,
     cellSize,
-    heightMap: {},
+    manualHeightMap: {},
+    planningHeightMap: {},
+    heightComposition: { mode: 'planning_plus_manual' },
+    planningMetadata: null,
     terrainScatterInstancesUpdatedAt: Date.now(),
     generation: preset?.generation ? { ...preset.generation } : { mode: 'flat', noiseScale: 80, noiseAmplitude: 0 },
   }

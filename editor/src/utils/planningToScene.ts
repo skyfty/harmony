@@ -20,6 +20,7 @@ import {
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 import {
   buildRandom,
   generateUniformCandidatesInPolygon,
@@ -224,7 +225,7 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 // NOTE: This should be high enough so densityPercent behaves proportionally for common use-cases.
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 20000
 
-type LayerKind = 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water' | 'building'
+type LayerKind = 'terrain' | 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water' | 'building'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
@@ -685,6 +686,8 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
 
 function layerKindFromId(layerId: string): LayerKind | null {
   switch (layerId) {
+    case 'terrain-layer':
+      return 'terrain'
     case 'road-layer':
       return 'road'
     case 'guide-route-layer':
@@ -704,7 +707,7 @@ function layerKindFromId(layerId: string): LayerKind | null {
   }
 
   // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(road|guide-route|floor|green|water|wall|building)-layer\b/i.exec(layerId)
+  const match = /^(terrain|road|guide-route|floor|green|water|wall|building)-layer\b/i.exec(layerId)
   if (match && match[1]) {
     return match[1].toLowerCase() as LayerKind
   }
@@ -721,7 +724,7 @@ function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): str
       return ids
     }
   }
-  return ['road-layer', 'guide-route-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
+  return ['terrain-layer', 'road-layer', 'guide-route-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
@@ -732,6 +735,7 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
     if (typeof kind === 'string') {
       const normalized = kind.toLowerCase()
       if (
+        normalized === 'terrain' ||
         normalized === 'road' ||
         normalized === 'guide-route' ||
         normalized === 'floor' ||
@@ -1036,6 +1040,285 @@ function polygonArea2D(points: PlanningPoint[]): number {
   return Math.abs(sum) * 0.5
 }
 
+const PLANNING_TERRAIN_CONTOUR_BLEND_METERS = 2
+const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
+type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
+
+function clampFiniteNumber(raw: unknown, fallback: number, min: number, max: number): number {
+  const num = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(num)) return fallback
+  return Math.min(max, Math.max(min, num))
+}
+
+function normalizeContourHeightMeters(raw: unknown): number {
+  const clamped = clampFiniteNumber(raw, 0, -PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT, PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT)
+  const rounded = Math.round(clamped * 100) / 100
+  return Object.is(rounded, -0) ? 0 : rounded
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
+function unionBounds(a: GroundContourBounds | null, b: GroundContourBounds | null): GroundContourBounds | null {
+  if (!a) return b
+  if (!b) return a
+  return {
+    minRow: Math.min(a.minRow, b.minRow),
+    maxRow: Math.max(a.maxRow, b.maxRow),
+    minColumn: Math.min(a.minColumn, b.minColumn),
+    maxColumn: Math.max(a.maxColumn, b.maxColumn),
+  }
+}
+
+function isBoundsValid(b: GroundContourBounds | null | undefined): b is GroundContourBounds {
+  return Boolean(
+    b
+    && Number.isFinite(b.minRow)
+    && Number.isFinite(b.maxRow)
+    && Number.isFinite(b.minColumn)
+    && Number.isFinite(b.maxColumn)
+    && b.maxRow >= b.minRow
+    && b.maxColumn >= b.minColumn,
+  )
+}
+
+function planningPointInPolygon(point: { x: number; y: number }, polygon: PlanningPoint[]): boolean {
+  // Ray casting algorithm. Assumes simple polygon.
+  const x = point.x
+  const y = point.y
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i]!.x
+    const yi = polygon[i]!.y
+    const xj = polygon[j]!.x
+    const yj = polygon[j]!.y
+
+    const intersect = (yi > y) !== (yj > y)
+      && x < ((xj - xi) * (y - yi)) / Math.max(1e-12, (yj - yi)) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+function polygonBounds(points: PlanningPoint[]): { minX: number; maxX: number; minY: number; maxY: number } | null {
+  if (!Array.isArray(points) || points.length < 3) return null
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    const x = Number(p?.x)
+    const y = Number(p?.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
+  return { minX, maxX, minY, maxY }
+}
+
+function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: PlanningPoint[], marginMeters: number): GroundContourBounds | null {
+  const bounds = polygonBounds(polyPoints)
+  if (!bounds) return null
+  const cell = Math.max(1e-6, Number(definition.cellSize) || 1)
+  const margin = Math.max(0, marginMeters)
+  const minCol = Math.floor((bounds.minX - margin) / cell)
+  const maxCol = Math.ceil((bounds.maxX + margin) / cell)
+  const minRow = Math.floor((bounds.minY - margin) / cell)
+  const maxRow = Math.ceil((bounds.maxY + margin) / cell)
+  return {
+    minRow: clampInt(minRow, 0, Math.trunc(definition.rows)),
+    maxRow: clampInt(maxRow, 0, Math.trunc(definition.rows)),
+    minColumn: clampInt(minCol, 0, Math.trunc(definition.columns)),
+    maxColumn: clampInt(maxCol, 0, Math.trunc(definition.columns)),
+  }
+}
+
+function boxBlurGrid(input: Float32Array, rows: number, cols: number, radius: number): Float32Array {
+  const r = Math.max(0, Math.trunc(radius))
+  if (r <= 0) return input.slice()
+  const temp = new Float32Array(rows * cols)
+  const output = new Float32Array(rows * cols)
+
+  // Horizontal pass
+  for (let row = 0; row < rows; row += 1) {
+    const base = row * cols
+    const prefix = new Float32Array(cols + 1)
+    prefix[0] = 0
+    for (let col = 0; col < cols; col += 1) {
+      prefix[col + 1] = prefix[col]! + input[base + col]!
+    }
+    for (let col = 0; col < cols; col += 1) {
+      const a = Math.max(0, col - r)
+      const b = Math.min(cols - 1, col + r)
+      const sum = prefix[b + 1]! - prefix[a]!
+      const count = b - a + 1
+      temp[base + col] = count > 0 ? sum / count : 0
+    }
+  }
+
+  // Vertical pass
+  for (let col = 0; col < cols; col += 1) {
+    const prefix = new Float32Array(rows + 1)
+    prefix[0] = 0
+    for (let row = 0; row < rows; row += 1) {
+      prefix[row + 1] = prefix[row]! + temp[row * cols + col]!
+    }
+    for (let row = 0; row < rows; row += 1) {
+      const a = Math.max(0, row - r)
+      const b = Math.min(rows - 1, row + r)
+      const sum = prefix[b + 1]! - prefix[a]!
+      const count = b - a + 1
+      output[row * cols + col] = count > 0 ? sum / count : 0
+    }
+  }
+
+  return output
+}
+
+function setHeightOverrideValueForContours(
+  definition: GroundDynamicMesh,
+  map: Record<string, number>,
+  row: number,
+  column: number,
+  value: number,
+): void {
+  const key = `${row}:${column}`
+  const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  let rounded = Math.round(value * 100) / 100
+  let baseRounded = Math.round(base * 100) / 100
+  if (Object.is(rounded, -0)) rounded = 0
+  if (Object.is(baseRounded, -0)) baseRounded = 0
+  if (rounded === baseRounded) {
+    delete map[key]
+    return
+  }
+  map[key] = rounded
+}
+
+async function applyPlanningTerrainContoursToGround(options: {
+  definition: GroundDynamicMesh
+  contourPolygons: PlanningPolygonAny[]
+  signal?: AbortSignal
+  yieldController: ReturnType<typeof createYieldController>
+  blendMeters?: number
+}): Promise<GroundDynamicMesh> {
+  const blendMeters = Math.max(0, options.blendMeters ?? PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
+  const definition = options.definition
+  const polygons = Array.isArray(options.contourPolygons) ? options.contourPolygons : []
+
+  const previousBoundsRaw = definition?.planningMetadata?.contourBounds
+  const previousBounds: GroundContourBounds | null = isBoundsValid(previousBoundsRaw) ? previousBoundsRaw : null
+
+  let nextBounds: GroundContourBounds | null = null
+  for (const poly of polygons) {
+    const b = boundsFromPlanningPolygon(definition, poly.points, blendMeters)
+    nextBounds = unionBounds(nextBounds, b)
+  }
+
+  const rewriteBounds = unionBounds(previousBounds, nextBounds)
+  if (!rewriteBounds) {
+    const cleared = { ...definition }
+    cleared.planningHeightMap = {}
+    cleared.planningMetadata = {
+      ...(cleared.planningMetadata ?? {}),
+      contourBounds: null,
+      generatedAt: Date.now(),
+    }
+    return cleared
+  }
+
+  const minRow = rewriteBounds.minRow
+  const maxRow = rewriteBounds.maxRow
+  const minCol = rewriteBounds.minColumn
+  const maxCol = rewriteBounds.maxColumn
+  const rows = maxRow - minRow + 1
+  const cols = maxCol - minCol + 1
+
+  const cell = Math.max(1e-6, Number(definition.cellSize) || 1)
+  const delta = new Float32Array(rows * cols)
+
+  // Accumulate additive height deltas for each contour polygon.
+  for (let polyIndex = 0; polyIndex < polygons.length; polyIndex += 1) {
+    throwIfAborted(options.signal)
+    const poly = polygons[polyIndex]!
+    const height = normalizeContourHeightMeters((poly as any).terrainHeightMeters)
+
+    const polyBounds = boundsFromPlanningPolygon(definition, poly.points, blendMeters)
+    if (!polyBounds) {
+      await options.yieldController.maybeYield()
+      continue
+    }
+    const r0 = Math.max(minRow, polyBounds.minRow)
+    const r1 = Math.min(maxRow, polyBounds.maxRow)
+    const c0 = Math.max(minCol, polyBounds.minColumn)
+    const c1 = Math.min(maxCol, polyBounds.maxColumn)
+    if (r1 < r0 || c1 < c0) {
+      await options.yieldController.maybeYield()
+      continue
+    }
+
+    // Height 0 still participates in bounds (to allow clearing previous edits), but doesn't add delta.
+    if (Math.abs(height) <= 1e-9) {
+      await options.yieldController.maybeYield()
+      continue
+    }
+
+    for (let row = r0; row <= r1; row += 1) {
+      if ((row & 63) === 0) {
+        await options.yieldController.maybeYield()
+      }
+      const py = row * cell
+      const localRow = row - minRow
+      for (let col = c0; col <= c1; col += 1) {
+        const px = col * cell
+        if (planningPointInPolygon({ x: px, y: py }, poly.points)) {
+          const localCol = col - minCol
+          const idx = localRow * cols + localCol
+          delta[idx] = (delta[idx] ?? 0) + height
+        }
+      }
+    }
+  }
+
+  // Smooth transitions: fixed blend radius in meters.
+  const radiusVertices = Math.max(1, Math.min(12, Math.round(blendMeters / cell)))
+  const blurred = boxBlurGrid(delta, rows, cols, radiusVertices)
+  const strength = 0.65
+  for (let i = 0; i < delta.length; i += 1) {
+    delta[i] = delta[i]! * (1 - strength) + blurred[i]! * strength
+  }
+
+  const nextHeightMap = { ...(definition.planningHeightMap ?? {}) }
+  for (let row = minRow; row <= maxRow; row += 1) {
+    if ((row & 63) === 0) {
+      await options.yieldController.maybeYield()
+    }
+    const localRow = row - minRow
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const localCol = col - minCol
+      const d = delta[localRow * cols + localCol]!
+      const base = computeGroundBaseHeightAtVertex(definition, row, col)
+      setHeightOverrideValueForContours(definition, nextHeightMap, row, col, base + d)
+    }
+  }
+
+  const next = {
+    ...definition,
+    planningHeightMap: nextHeightMap,
+    planningMetadata: {
+      ...(definition.planningMetadata ?? {}),
+      contourBounds: nextBounds,
+      generatedAt: Date.now(),
+    },
+  }
+  return next
+}
+
 function ensureScatterStore(groundNodeId: string, snapshot: any | null | undefined): TerrainScatterStore {
   let store = getTerrainScatterStore(groundNodeId) ?? ensureTerrainScatterStore(groundNodeId)
   if (snapshot && typeof snapshot === 'object') {
@@ -1224,6 +1507,55 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundNode = findGroundNode(sceneStore.nodes)
   const groundDynamicMesh = groundNode?.dynamicMesh
   let groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
+
+  // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
+  // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
+  if (groundNode && groundDefinition) {
+    const hadPlanningContours = Boolean(
+      (groundDefinition.planningMetadata?.contourBounds && isBoundsValid(groundDefinition.planningMetadata?.contourBounds))
+      || Object.keys(groundDefinition.planningHeightMap ?? {}).length,
+    )
+
+    if (hadPlanningContours) {
+      const clearedPlanning = {
+        ...groundDefinition,
+        planningHeightMap: {},
+        planningMetadata: {
+          ...(groundDefinition.planningMetadata ?? {}),
+          contourBounds: null,
+          generatedAt: Date.now(),
+        },
+      }
+      groundDefinition = clearedPlanning
+      sceneStore.updateNodeDynamicMesh(groundNode.id, clearedPlanning)
+      await yieldController.maybeYield(true)
+    }
+
+    const contourPolygons = polygons.filter((poly) => {
+      if (!poly?.points || poly.points.length < 3) return false
+      return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
+    })
+
+    if (contourPolygons.length || hadPlanningContours) {
+      emitProgress(options, 'Sculpting terrain…', 19)
+      await yieldController.maybeYield(true)
+      try {
+        const next = await applyPlanningTerrainContoursToGround({
+          definition: groundDefinition,
+          contourPolygons,
+          signal: options.signal,
+          yieldController,
+          blendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
+        })
+        groundDefinition = next
+        sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+        doneUnits += contourPolygons.length
+      } catch (err) {
+        console.warn('Failed to apply planning terrain contours', err)
+      }
+      await yieldController.maybeYield(true)
+    }
+  }
 
   const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
 
