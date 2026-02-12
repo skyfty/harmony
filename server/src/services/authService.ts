@@ -68,6 +68,23 @@ export interface AuthSessionResponse {
   permissions: string[]
 }
 
+const MANAGEMENT_PERMISSION_SEEDS = [
+  { code: 'scenic:read', name: '景区查看', group: 'scenic' },
+  { code: 'scenic:write', name: '景区管理', group: 'scenic' },
+  { code: 'product:read', name: '道具查看', group: 'product' },
+  { code: 'product:write', name: '道具管理', group: 'product' },
+  { code: 'coupon:read', name: '卡券查看', group: 'coupon' },
+  { code: 'coupon:write', name: '卡券管理', group: 'coupon' },
+  { code: 'order:read', name: '订单查看', group: 'order' },
+  { code: 'order:write', name: '订单管理', group: 'order' },
+  { code: 'user:read', name: '用户查看', group: 'user' },
+  { code: 'user:write', name: '用户管理', group: 'user' },
+  { code: 'resource:read', name: '资源查看', group: 'resource' },
+  { code: 'resource:write', name: '资源管理', group: 'resource' },
+  { code: 'category:read', name: '分类查看', group: 'category' },
+  { code: 'category:write', name: '分类管理', group: 'category' },
+] as const
+
 async function resolveRoleDetails(roleIds: Types.ObjectId[]): Promise<SessionUser['roles']> {
   if (!roleIds.length) {
     return []
@@ -202,6 +219,26 @@ export async function createInitialAdmin(): Promise<void> {
     roles: [adminRole._id],
     displayName: '系统管理员',
   })
+}
+
+export async function ensureManagementPermissions(): Promise<void> {
+  for (const seed of MANAGEMENT_PERMISSION_SEEDS) {
+    const exists = await PermissionModel.findOne({ code: seed.code }).exec()
+    if (exists) {
+      if (exists.name !== seed.name || exists.group !== seed.group) {
+        exists.name = seed.name
+        exists.group = seed.group
+        await exists.save()
+      }
+      continue
+    }
+    await PermissionModel.create({
+      code: seed.code,
+      name: seed.name,
+      group: seed.group,
+      description: `${seed.name}权限`,
+    })
+  }
 }
 
 async function ensureUserWithCredentials(credentials: {

@@ -12,7 +12,12 @@ import { appConfig } from '@/config/env'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { errorHandler } from '@/middleware/errorHandler'
 import routes from '@/routes'
-import { createInitialAdmin, ensureUploaderUser, ensureMiniProgramTestUser } from '@/services/authService'
+import {
+  createInitialAdmin,
+  ensureManagementPermissions,
+  ensureUploaderUser,
+  ensureMiniProgramTestUser,
+} from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService } from '@/services/multiuserService'
 
@@ -28,6 +33,7 @@ function registerRoutes(app: HarmonyKoa): void {
 async function bootstrap(): Promise<void> {
   await connectDatabase()
   await createInitialAdmin()
+  await ensureManagementPermissions()
   await ensureUploaderUser()
   await ensureMiniProgramTestUser()
 
