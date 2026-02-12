@@ -7123,7 +7123,19 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <!-- Terrain layer properties removed: only per-shape height is available -->
+            <!-- Per-shape terrain contour height -->
+            <div v-if="selectedTerrainContourPolygon" class="property-panel__block">
+              <v-text-field
+                v-model.number="terrainContourHeightModel"
+                type="number"
+                step="0.1"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="m"
+                label="Height"
+              />
+            </div>
 
             <template v-else-if="propertyPanelLayerKind === 'green'">
               <div class="property-panel__density">
