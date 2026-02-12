@@ -369,6 +369,78 @@ export function handlePointerDownTools(
 
                 const radiusPointWorld = centerWorld.clone().add(new THREE.Vector3(radius, 0, 0))
                 const startPointWorld = (circleKind === 'radius' ? radiusPointWorld : centerWorld).clone()
+
+                // Special case: dragging the center handle's Y axis arrow adjusts wall height.
+                const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
+                const axisWorld =
+                  dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
+                    ? (handleHit.gizmoAxis as THREE.Vector3).clone().normalize()
+                    : null
+                const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
+                const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
+                const isYAxisDrag =
+                  circleKind === 'center' &&
+                  effectiveDragMode === 'axis' &&
+                  effectiveAxisWorld &&
+                  Math.abs(effectiveAxisWorld.y) > 0.9 &&
+                  Math.abs(effectiveAxisWorld.x) < 0.2 &&
+                  Math.abs(effectiveAxisWorld.z) < 0.2
+
+                if (isYAxisDrag) {
+                  const axisSign: 1 | -1 = effectiveAxisWorld.y >= 0 ? 1 : -1
+                  const heightStartPointWorld = centerWorld.clone()
+                  heightStartPointWorld.y += Math.max(0.05, dimensions.height * 0.5)
+
+                  const wallHeightDragState: WallHeightDragState = {
+                    pointerId: event.pointerId,
+                    nodeId: handleHit.nodeId,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    moved: false,
+
+                    axisSign,
+                    dragPlane: ctx.createEndpointDragPlane({
+                      mode: 'axis',
+                      axisWorld: new THREE.Vector3(0, axisSign, 0),
+                      startPointWorld: heightStartPointWorld,
+                    }),
+                    startPointWorld: heightStartPointWorld.clone(),
+                    startHitWorld: null,
+
+                    startHeight: dimensions.height,
+
+                    containerObject: runtime,
+                    dimensions: { ...dimensions },
+                    baseSegmentsWorld,
+                    workingSegmentsWorld,
+                    previewGroup: null,
+                    previewSignature: null,
+                  }
+
+                  ctx.setActiveWallEndpointHandle({
+                    nodeId: handleHit.nodeId,
+                    chainStartIndex,
+                    chainEndIndex,
+                    handleKind: 'circle',
+                    circleKind: 'center',
+                    gizmoPart: handleHit.gizmoPart,
+                  })
+
+                  return {
+                    handled: true,
+                    clearPointerTrackingState: true,
+                    nextWallEndpointDragState: null,
+                    nextWallJointDragState: null,
+                    nextWallHeightDragState: wallHeightDragState,
+                    nextWallCircleCenterDragState: null,
+                    nextWallCircleRadiusDragState: null,
+                    capturePointerId: event.pointerId,
+                    preventDefault: true,
+                    stopPropagation: true,
+                    stopImmediatePropagation: true,
+                  }
+                }
+
                 const dragPlane = ctx.createEndpointDragPlane({
                   mode: 'free',
                   axisWorld: null,
