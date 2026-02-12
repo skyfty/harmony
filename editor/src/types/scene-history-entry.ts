@@ -15,7 +15,7 @@ export type SceneHistoryGroundRegionBounds = {
   maxColumn: number
 }
 
-export type SceneHistoryGroundHeightEntry = {
+export type SceneHistoryGroundManualHeightEntry = {
   row: number
   column: number
   value: number
@@ -87,8 +87,8 @@ export type SceneHistoryEntry =
       dynamicMesh: unknown
     }
   | {
-      kind: 'ground-heightmap-region'
+      kind: 'ground-manual-height-region'
       nodeId: string
       bounds: SceneHistoryGroundRegionBounds
-      entries: SceneHistoryGroundHeightEntry[]
+      entries: SceneHistoryGroundManualHeightEntry[]
     }

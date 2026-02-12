@@ -1022,6 +1022,20 @@ export interface GroundHeightMap {
   [key: string]: number
 }
 
+export type GroundHeightCompositionMode = 'planning_plus_manual'
+
+export type GroundContourBounds = {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
+export interface GroundPlanningMetadata {
+  contourBounds?: GroundContourBounds | null
+  generatedAt?: number
+}
+
 export type GroundGenerationMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
 
 export interface GroundGenerationSettings {
@@ -1087,14 +1101,19 @@ export interface GroundDynamicMesh {
   rows: number
   columns: number
   cellSize: number
-  heightMap: GroundHeightMap
+  manualHeightMap: GroundHeightMap
+  planningHeightMap: GroundHeightMap
+  heightComposition: {
+    mode: GroundHeightCompositionMode
+    policyVersion?: number
+  }
+  planningMetadata?: GroundPlanningMetadata | null
   /** When true, ground chunk meshes will cast shadows (more expensive on large grounds). */
   castShadow?: boolean
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null
   generation?: GroundGenerationSettings | null
-  hasManualEdits?: boolean
   terrainScatter?: TerrainScatterStoreSnapshot | null
   terrainPaint?: TerrainPaintSettings | null
 }

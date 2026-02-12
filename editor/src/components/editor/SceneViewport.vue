@@ -1211,7 +1211,9 @@ const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
   const serialized = stableSerialize({
-    heightMap: definition.heightMap ?? {}
+    manualHeightMap: definition.manualHeightMap ?? {},
+    planningHeightMap: definition.planningHeightMap ?? {},
+    heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
   })
   return hashString(serialized)
 }

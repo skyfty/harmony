@@ -1,6 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
-import { computeGroundBaseHeightAtVertex } from './groundGeneration'
+import { resolveGroundEffectiveHeightAtVertex } from './groundMesh'
 
 export type GroundHeightfieldData = {
   matrix: number[][]
@@ -137,7 +137,6 @@ export function computeGroundHeightfieldChunkHash(
   chunkRow: number,
   chunkColumn: number,
 ): number {
-  const heightMap = mesh.heightMap ?? {}
   const { scaleY } = resolveNodeScaleVector(node.scale)
   const pointsX = plan.columns + 1
   const pointsZ = plan.rows + 1
@@ -156,11 +155,7 @@ export function computeGroundHeightfieldChunkHash(
     for (let sc = 0; sc <= spec.columns; sc += sampleStepColumn) {
       const physicsColumnVertex = Math.min(pointsX - 1, spec.startColumn + sc)
       const sourceColumn = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
-      const key = `${sourceRow}:${sourceColumn}`
-      const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
-        ? rawHeight
-        : computeGroundBaseHeightAtVertex(mesh, sourceRow, sourceColumn)
+      const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRow, sourceColumn)
       const height = baseHeight * scaleY
       const normalized = Math.round(height * 1000)
       hash = (hash * 31 + normalized) >>> 0
@@ -239,7 +234,6 @@ export function buildGroundHeightfieldChunkData(
   const spec = computeChunkSpec(rows, columns, chunkRow, chunkColumn, plan.chunkCells)
   const pointsX = spec.columns + 1
   const pointsZ = spec.rows + 1
-  const heightMap = mesh.heightMap ?? {}
   const { scaleY } = resolveNodeScaleVector(node.scale)
 
   const matrix: number[][] = []
@@ -252,11 +246,7 @@ export function buildGroundHeightfieldChunkData(
       const physicsRowVertex = spec.startRow + localRowVertex
       const flippedPhysicsRowVertex = (plan.pointsZ - 1) - physicsRowVertex
       const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
-      const key = `${sourceRowVertex}:${sourceColumnVertex}`
-      const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
-        ? rawHeight
-        : computeGroundBaseHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
+      const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
       columnValues.push(baseHeight * scaleY)
     }
     matrix.push(columnValues)
@@ -300,7 +290,6 @@ export function buildGroundHeightfieldData(
   const { scaleX, scaleY, scaleZ } = resolveNodeScaleVector(node.scale)
   const uniformHorizontalScale = Math.max(MIN_ELEMENT_SIZE, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5)
   const elementSize = Math.max(MIN_ELEMENT_SIZE, rawCellSize * uniformHorizontalScale)
-  const heightMap = mesh.heightMap ?? {}
   const matrix: number[][] = []
   let heightHash = 0
 
@@ -311,11 +300,7 @@ export function buildGroundHeightfieldData(
     // Our ground grid increases Z when row increases, so we need to flip the row
     // order to keep the physics heightfield aligned with the rendered geometry.
     for (let row = pointsZ - 1; row >= 0; row -= 1) {
-      const key = `${row}:${column}`
-      const rawHeight = heightMap[key]
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight)
-        ? rawHeight
-        : computeGroundBaseHeightAtVertex(mesh, row, column)
+      const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, row, column)
       const height = baseHeight * scaleY
       columnValues.push(height)
       const normalized = Math.round(height * 1000)

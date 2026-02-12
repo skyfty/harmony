@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore,SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
 import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings, GroundSculptOperation } from '@harmony/schema'
-import { applyGroundGeneration } from '@schema/groundMesh'
 import TerrainSculptPanel from './TerrainSculptPanel.vue'
 import TerrainPaintPanel from './TerrainPaintPanel.vue'
 import GroundAssetPainter from './GroundAssetPainter.vue'
@@ -123,52 +122,6 @@ function clampNoiseStrength(value: number): number {
   return Math.min(5, Math.max(0, Number(value)))
 }
 
-function detectManualEdits(definition: GroundDynamicMesh): boolean {
-  if (!definition) {
-    return false
-  }
-  if (typeof definition.hasManualEdits === 'boolean') {
-    return definition.hasManualEdits
-  }
-  if (!definition.generation) {
-    const hasVariation = Object.values(definition.heightMap).some((value) => Math.abs(value) > 1e-4)
-    definition.hasManualEdits = hasVariation
-    return hasVariation
-  }
-
-  // Avoid deep-cloning large Ground definitions. We only need a scratch mesh with
-  // matching dimensions + generation settings and a fresh heightMap to generate into.
-  const scratch: GroundDynamicMesh = {
-    type: 'Ground',
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
-    cellSize: definition.cellSize,
-    heightMap: {},
-    terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
-    generation: definition.generation ? { ...definition.generation } : null,
-  }
-  if (!scratch.generation) {
-    definition.hasManualEdits = false
-    return false
-  }
-  applyGroundGeneration(scratch, scratch.generation)
-  const epsilon = 1e-4
-  const actualMap = definition.heightMap
-  const generatedMap = scratch.heightMap
-  const keys = new Set([...Object.keys(actualMap), ...Object.keys(generatedMap)])
-  for (const key of keys) {
-    const delta = Math.abs((actualMap[key] ?? 0) - (generatedMap[key] ?? 0))
-    if (delta > epsilon) {
-      definition.hasManualEdits = true
-      return true
-    }
-  }
-  definition.hasManualEdits = false
-  return false
-}
-
 function buildGenerationPayload(definition?: GroundDynamicMesh): GroundGenerationSettings {
   const fallback: GroundGenerationSettings = {
     mode: 'perlin',
@@ -197,23 +150,7 @@ function applyGenerationPatch(patch: Partial<GroundGenerationSettings>) {
   }
   nextGeneration.worldWidth = definition.width
   nextGeneration.worldDepth = definition.depth
-  const canRegenerate = !detectManualEdits(definition)
-  if (canRegenerate) {
-    // Regenerate into a fresh heightMap (do not clone existing heightMap).
-    const scratch: GroundDynamicMesh = {
-      ...definition,
-      heightMap: {},
-      generation: nextGeneration,
-    }
-    applyGroundGeneration(scratch, nextGeneration)
-    sceneStore.updateNodeDynamicMesh(node.id, {
-      generation: nextGeneration,
-      heightMap: scratch.heightMap,
-      hasManualEdits: false,
-    })
-  } else {
-    sceneStore.updateNodeDynamicMesh(node.id, { generation: nextGeneration })
-  }
+  sceneStore.updateNodeDynamicMesh(node.id, { generation: nextGeneration })
 }
 
 watch(

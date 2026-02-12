@@ -1042,8 +1042,6 @@ function polygonArea2D(points: PlanningPoint[]): number {
 
 const PLANNING_TERRAIN_CONTOUR_BLEND_METERS = 2
 const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
-const PLANNING_TERRAIN_CONTOUR_BOUNDS_KEY = 'planningContourBounds'
-
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
 
 function clampFiniteNumber(raw: unknown, fallback: number, min: number, max: number): number {
@@ -1213,7 +1211,7 @@ async function applyPlanningTerrainContoursToGround(options: {
   const definition = options.definition
   const polygons = Array.isArray(options.contourPolygons) ? options.contourPolygons : []
 
-  const previousBoundsRaw = (definition as any)?.[PLANNING_TERRAIN_CONTOUR_BOUNDS_KEY]
+  const previousBoundsRaw = definition?.planningMetadata?.contourBounds
   const previousBounds: GroundContourBounds | null = isBoundsValid(previousBoundsRaw) ? previousBoundsRaw : null
 
   let nextBounds: GroundContourBounds | null = null
@@ -1225,7 +1223,12 @@ async function applyPlanningTerrainContoursToGround(options: {
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
     const cleared = { ...definition }
-    ;(cleared as any)[PLANNING_TERRAIN_CONTOUR_BOUNDS_KEY] = null
+    cleared.planningHeightMap = {}
+    cleared.planningMetadata = {
+      ...(cleared.planningMetadata ?? {}),
+      contourBounds: null,
+      generatedAt: Date.now(),
+    }
     return cleared
   }
 
@@ -1290,7 +1293,7 @@ async function applyPlanningTerrainContoursToGround(options: {
     delta[i] = delta[i]! * (1 - strength) + blurred[i]! * strength
   }
 
-  const nextHeightMap = { ...(definition.heightMap ?? {}) }
+  const nextHeightMap = { ...(definition.planningHeightMap ?? {}) }
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
       await options.yieldController.maybeYield()
@@ -1306,10 +1309,13 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const next = {
     ...definition,
-    heightMap: nextHeightMap,
+    planningHeightMap: nextHeightMap,
+    planningMetadata: {
+      ...(definition.planningMetadata ?? {}),
+      contourBounds: nextBounds,
+      generatedAt: Date.now(),
+    },
   }
-  ;(next as any)[PLANNING_TERRAIN_CONTOUR_BOUNDS_KEY] = nextBounds
-  ;(next as any).hasManualEdits = true
   return next
 }
 
@@ -1505,12 +1511,32 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
+    const hadPlanningContours = Boolean(
+      (groundDefinition.planningMetadata?.contourBounds && isBoundsValid(groundDefinition.planningMetadata?.contourBounds))
+      || Object.keys(groundDefinition.planningHeightMap ?? {}).length,
+    )
+
+    if (hadPlanningContours) {
+      const clearedPlanning = {
+        ...groundDefinition,
+        planningHeightMap: {},
+        planningMetadata: {
+          ...(groundDefinition.planningMetadata ?? {}),
+          contourBounds: null,
+          generatedAt: Date.now(),
+        },
+      }
+      groundDefinition = clearedPlanning
+      sceneStore.updateNodeDynamicMesh(groundNode.id, clearedPlanning)
+      await yieldController.maybeYield(true)
+    }
+
     const contourPolygons = polygons.filter((poly) => {
       if (!poly?.points || poly.points.length < 3) return false
       return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
     })
 
-    if (contourPolygons.length || (groundDefinition as any)?.[PLANNING_TERRAIN_CONTOUR_BOUNDS_KEY]) {
+    if (contourPolygons.length || hadPlanningContours) {
       emitProgress(options, 'Sculpting terrain…', 19)
       await yieldController.maybeYield(true)
       try {

@@ -17,6 +17,7 @@ import {
 import {
 	sculptGround,
 	sampleGroundHeight,
+	resolveGroundEffectiveHeightAtVertex,
 	stitchGroundChunkNormals,
 	resolveGroundChunkCells,
 	updateGroundChunks,
@@ -761,7 +762,7 @@ let scatterEraseState: ScatterEraseState | null = null
 type SculptSessionState = {
 	nodeId: string
 	definition: GroundDynamicMesh
-	heightMap: GroundDynamicMesh['heightMap']
+	heightMap: GroundDynamicMesh['manualHeightMap']
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
@@ -2841,10 +2842,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
 		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
-		const clonedHeightMap = definition.heightMap
+		const clonedHeightMap = definition.manualHeightMap
 		const sessionDefinition: GroundDynamicMesh = {
 			...definition,
-			heightMap: clonedHeightMap,
+			manualHeightMap: clonedHeightMap,
 		}
 		sculptSessionState = {
 			nodeId,
@@ -2874,7 +2875,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const nextDynamicMesh: GroundDynamicMesh = {
 			...(targetNode.dynamicMesh as GroundDynamicMesh),
-			heightMap: sculptSessionState.heightMap,
+			manualHeightMap: sculptSessionState.heightMap,
 		}
 		targetNode.dynamicMesh = nextDynamicMesh
 		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
@@ -3131,7 +3132,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			pushTerrainPaintPreviewWeightmap(session, chunk)
 			if (becameDirty && !session.hasPendingChanges) {
 				session.hasPendingChanges = true
-				options.sceneStore.updateNodeDynamicMesh(session.nodeId, { hasManualEdits: true })
 			}
 		}
 	}
@@ -3260,7 +3260,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			options.sceneStore.updateNodeDynamicMesh(session.nodeId, {
 				terrainPaint: session.settings,
-				hasManualEdits: true,
 			})
 			return true
 		} catch (error) {
@@ -4069,8 +4068,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function getGroundVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
-		const key = `${row}:${column}`
-		return definition.heightMap[key] ?? 0
+		return resolveGroundEffectiveHeightAtVertex(definition, row, column)
 	}
 
 	function createGroundSelectionFromCells(

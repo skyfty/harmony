@@ -191,13 +191,29 @@ function clampVertexIndex(value: number, max: number): number {
   return value
 }
 
-function getVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+function getManualVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
   const key = groundVertexKey(row, column)
-  const raw = definition.heightMap[key]
+  const raw = definition.manualHeightMap[key]
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return raw
   }
   return computeGroundBaseHeightAtVertex(definition, row, column)
+}
+
+function getPlanningVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+  const key = groundVertexKey(row, column)
+  const raw = definition.planningHeightMap[key]
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw
+  }
+  return computeGroundBaseHeightAtVertex(definition, row, column)
+}
+
+export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
+  const base = computeGroundBaseHeightAtVertex(definition, row, column)
+  const manual = getManualVertexHeight(definition, row, column)
+  const planning = getPlanningVertexHeight(definition, row, column)
+  return planning + (manual - base)
 }
 
 function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
@@ -214,6 +230,14 @@ function setHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeight
   map[key] = rounded
 }
 
+export function setManualHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+  setHeightOverrideValue(definition, map, row, column, value)
+}
+
+export function setPlanningHeightOverrideValue(definition: GroundDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
+  setHeightOverrideValue(definition, map, row, column, value)
+}
+
 function sampleNeighborAverage(
   definition: GroundDynamicMesh,
   row: number,
@@ -225,7 +249,7 @@ function sampleNeighborAverage(
   let count = 0
   for (let r = Math.max(0, row - 1); r <= Math.min(maxRow, row + 1); r += 1) {
     for (let c = Math.max(0, column - 1); c <= Math.min(maxColumn, column + 1); c += 1) {
-      sum += getVertexHeight(definition, r, c)
+      sum += resolveGroundEffectiveHeightAtVertex(definition, r, c)
       count += 1
     }
   }
@@ -239,7 +263,7 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   const halfDepth = definition.depth * 0.5
   const localColumn = clampVertexIndex(Math.round((x + halfWidth) / definition.cellSize), columns)
   const localRow = clampVertexIndex(Math.round((z + halfDepth) / definition.cellSize), rows)
-  return getVertexHeight(definition, localRow, localColumn)
+  return resolveGroundEffectiveHeightAtVertex(definition, localRow, localColumn)
 }
 
 export function sampleGroundNormal(
@@ -285,7 +309,7 @@ function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometr
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const height = getVertexHeight(definition, row, column)
+      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -355,7 +379,7 @@ function buildGroundChunkGeometry(definition: GroundDynamicMesh, spec: GroundChu
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const height = getVertexHeight(definition, row, column)
+      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -604,8 +628,7 @@ export function applyGroundGeneration(
   const normalized = normalizeGroundGenerationSettings(settings)
   definition.generation = normalized
   // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
-  definition.heightMap = {}
-  definition.hasManualEdits = false
+  definition.planningHeightMap = {}
   return normalized
 }
 
@@ -636,7 +659,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
   const maxRow = Math.ceil((localZ + radius + halfDepth) / cellSize)
 
   let modified = false
-  let heightMap = definition.heightMap
+  let heightMap = definition.manualHeightMap
 
   for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
       for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
@@ -687,7 +710,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
             const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
             influence *= 1.0 + noiseVal * 0.1
 
-            const currentHeight = getVertexHeight(definition, row, col)
+            const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
             let nextHeight = currentHeight
 
             if (operation === 'smooth') {
@@ -738,7 +761,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
           if (smoothingFactor <= 0) {
             continue
           }
-          const currentHeight = getVertexHeight(definition, row, col)
+          const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
           const average = sampleNeighborAverage(definition, row, col, rows, columns)
           const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
           setHeightOverrideValue(definition, heightMap, row, col, smoothedHeight)
@@ -748,8 +771,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
     }
   }
   if (modified) {
-    definition.heightMap = heightMap
-    definition.hasManualEdits = true
+    definition.manualHeightMap = heightMap
   }
   return modified
 }
@@ -777,7 +799,7 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      const height = getVertexHeight(definition, row, column)
+      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
 
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
@@ -903,7 +925,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundD
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const column = spec.startColumn + localColumn
       const x = -halfWidth + column * cellSize
-      const height = getVertexHeight(definition, row, column)
+      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columns === 0 ? 0 : column / columns, rows === 0 ? 0 : 1 - row / rows)
       vertexIndex += 1
@@ -949,7 +971,7 @@ function updateChunkGeometryRegion(
       const x = -halfWidth + column * cellSize
       const localColumn = column - spec.startColumn
       const vertexIndex = localRow * vertexColumns + localColumn
-      const height = getVertexHeight(definition, row, column)
+      const height = resolveGroundEffectiveHeightAtVertex(definition, row, column)
       positionAttr.setXYZ(vertexIndex, x, height, z)
     }
   }
