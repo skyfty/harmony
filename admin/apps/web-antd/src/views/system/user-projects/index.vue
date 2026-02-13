@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
+import type { FormInstance } from 'ant-design-vue';
 import type {
   UserProjectCategoryItem,
   UserProjectDocument,
@@ -7,31 +7,20 @@ import type {
 } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
   createUserProjectApi,
   deleteUserProjectApi,
-  deleteUserProjectSceneApi,
   getUserProjectApi,
   listUserProjectCategoriesApi,
   listUserProjectsApi,
   updateUserProjectApi,
-  uploadUserProjectSceneBundleApi,
 } from '#/api';
+import { getUserApi } from '#/api/core/rbac';
 
-import {
-  Button,
-  Form,
-  Input,
-  message,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Upload,
-} from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Select, Space, Table, Tag } from 'ant-design-vue';
 
 interface ProjectFormModel {
   categoryId?: string;
@@ -40,9 +29,6 @@ interface ProjectFormModel {
   userId: string;
 }
 
-interface SceneUploadFormModel {
-  sceneId: string;
-}
 
 const categories = ref<UserProjectCategoryItem[]>([]);
 
@@ -51,13 +37,7 @@ const projectSubmitting = ref(false);
 const editingProjectKey = ref<null | string>(null);
 const projectFormRef = ref<FormInstance>();
 
-const filesModalOpen = ref(false);
-const filesSubmitting = ref(false);
-const fileFormRef = ref<FormInstance>();
-const sceneBundleFileList = ref<UploadFile[]>([]);
-const fileManageProjectUserId = ref('');
-const fileManageProjectId = ref('');
-const fileManageProjectName = ref('');
+// file management removed: use project details page instead
 const fileManageProjectDoc = ref<UserProjectDocument | null>(null);
 
 const projectFormModel = reactive<ProjectFormModel>({
@@ -67,9 +47,7 @@ const projectFormModel = reactive<ProjectFormModel>({
   categoryId: undefined,
 });
 
-const sceneUploadFormModel = reactive<SceneUploadFormModel>({
-  sceneId: '',
-});
+// scene upload removed from this view
 
 const categoryOptions = computed(() =>
   categories.value.map((item) => ({
@@ -82,18 +60,7 @@ const projectModalTitle = computed(() =>
   editingProjectKey.value ? '编辑工程' : '新建工程',
 );
 
-const fileModalTitle = computed(() =>
-  fileManageProjectName.value
-    ? `工程文件管理 - ${fileManageProjectName.value}`
-    : '工程文件管理',
-);
-
-const fileSceneColumns = [
-  { dataIndex: 'id', key: 'id', title: 'Scene ID' },
-  { dataIndex: 'name', key: 'name', title: '名称' },
-  { dataIndex: 'sceneJsonUrl', key: 'sceneJsonUrl', title: 'URL' },
-  { dataIndex: 'actions', key: 'actions', title: '操作', width: 180 },
-];
+// file management removed; details page added separately
 
 function resetProjectForm() {
   projectFormModel.userId = '';
@@ -102,10 +69,7 @@ function resetProjectForm() {
   projectFormModel.categoryId = undefined;
 }
 
-function resetFileForm() {
-  sceneUploadFormModel.sceneId = '';
-  sceneBundleFileList.value = [];
-}
+// scene upload removed; no file form to reset
 
 async function loadCategories() {
   categories.value = await listUserProjectCategoriesApi();
@@ -194,80 +158,17 @@ function handleDeleteProject(row: UserProjectListItem) {
 }
 
 async function openFileManager(row: UserProjectListItem) {
+  // kept only for compatibility; use details page instead
   const detail = await getUserProjectApi(row.userId, row.id);
-  fileManageProjectUserId.value = row.userId;
-  fileManageProjectId.value = row.id;
-  fileManageProjectName.value = row.name;
   fileManageProjectDoc.value = detail.project;
-  resetFileForm();
-  filesModalOpen.value = true;
 }
 
-function prepareReplace(sceneId: string) {
-  sceneUploadFormModel.sceneId = sceneId;
-  sceneBundleFileList.value = [];
+const router = useRouter();
+function openProjectDetail(row: UserProjectListItem) {
+  router.push({ name: 'UserProjectDetail', params: { userId: row.userId, projectId: row.id } });
 }
 
-const beforeSceneBundleUpload: UploadProps['beforeUpload'] = (file) => {
-  sceneBundleFileList.value = [
-    {
-      uid: file.uid,
-      name: file.name,
-      status: 'done',
-      originFileObj: file,
-    },
-  ];
-  return false;
-};
-
-function removeSceneBundleFile() {
-  sceneBundleFileList.value = [];
-}
-
-async function submitSceneBundle() {
-  const form = fileFormRef.value;
-  if (!form) {
-    return;
-  }
-  await form.validate();
-  const file = sceneBundleFileList.value[0]?.originFileObj as File | undefined;
-  if (!file) {
-    message.warning('请先选择场景 bundle 文件');
-    return;
-  }
-  filesSubmitting.value = true;
-  try {
-    const result = await uploadUserProjectSceneBundleApi(
-      fileManageProjectUserId.value,
-      fileManageProjectId.value,
-      sceneUploadFormModel.sceneId.trim(),
-      file,
-    );
-    fileManageProjectDoc.value = result.project;
-    resetFileForm();
-    message.success('文件上传成功（同 sceneId 会自动替换）');
-    projectGridApi.reload();
-  } finally {
-    filesSubmitting.value = false;
-  }
-}
-
-function handleDeleteScene(sceneId: string) {
-  Modal.confirm({
-    title: `确认删除场景文件 ${sceneId} 吗？`,
-    okType: 'danger',
-    onOk: async () => {
-      const result = await deleteUserProjectSceneApi(
-        fileManageProjectUserId.value,
-        fileManageProjectId.value,
-        sceneId,
-      );
-      fileManageProjectDoc.value = result.project;
-      message.success('场景文件删除成功');
-      projectGridApi.reload();
-    },
-  });
-}
+// scene upload / deletion removed from this UI. Use project detail page if needed.
 
 const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
   formOptions: {
@@ -307,7 +208,7 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
     columns: [
       { field: 'name', minWidth: 180, title: '工程名称' },
       { field: 'id', minWidth: 220, title: '工程ID' },
-      { field: 'userId', minWidth: 200, title: '用户ID' },
+      { field: 'userId', minWidth: 200, title: '用户' , slots: { default: 'user' }},
       {
         field: 'categoryId',
         minWidth: 200,
@@ -340,13 +241,28 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
           { page }: { page: { currentPage: number; pageSize: number } },
           formValues: Record<string, any>,
         ) => {
-          return await listUserProjectsApi({
+          const result = await listUserProjectsApi({
             keyword: formValues.keyword || undefined,
             userId: formValues.userId || undefined,
             categoryId: formValues.categoryId || undefined,
             page: page.currentPage,
             pageSize: page.pageSize,
           });
+          // fetch usernames for displayed page
+          const uniqueUserIds = Array.from(new Set((result.items || []).map((i) => i.userId).filter(Boolean)));
+          const userMap: Record<string, string> = {};
+          await Promise.all(
+            uniqueUserIds.map(async (id) => {
+              try {
+                const user = await getUserApi(id);
+                userMap[id] = user.username || id;
+              } catch {
+                userMap[id] = id;
+              }
+            }),
+          );
+          result.items = (result.items || []).map((it) => ({ ...(it as any), username: userMap[(it as any).userId] || (it as any).userId }));
+          return result;
         },
       },
     },
@@ -386,9 +302,16 @@ onMounted(async () => {
         <span v-else class="text-text-secondary">-</span>
       </template>
 
+      <template #user="{ row }">
+        <div>
+          <div>{{ (row as any).username || row.userId }}</div>
+          <div class="text-text-secondary" style="font-size:12px">{{ row.userId }}</div>
+        </div>
+      </template>
+
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="openFileManager(row)">文件管理</Button>
+          <Button size="small" type="link" @click="openProjectDetail(row)">详情</Button>
           <Button
             v-access:code="'userProject:write'"
             size="small"
@@ -441,70 +364,6 @@ onMounted(async () => {
       </Form>
     </Modal>
 
-    <Modal
-      :open="filesModalOpen"
-      :title="fileModalTitle"
-      width="920px"
-      :footer="null"
-      destroy-on-close
-      @cancel="() => (filesModalOpen = false)"
-    >
-      <Form
-        ref="fileFormRef"
-        :model="sceneUploadFormModel"
-        layout="inline"
-        class="mb-4"
-      >
-        <Form.Item label="Scene ID" name="sceneId" :rules="[{ required: true, message: '请输入Scene ID' }]">
-          <Input v-model:value="sceneUploadFormModel.sceneId" allow-clear placeholder="输入 sceneId 用于上传/替换" />
-        </Form.Item>
-        <Form.Item label="Bundle 文件">
-          <Upload
-            :before-upload="beforeSceneBundleUpload"
-            :file-list="sceneBundleFileList"
-            :max-count="1"
-            @remove="removeSceneBundleFile"
-          >
-            <Button>选择文件</Button>
-          </Upload>
-        </Form.Item>
-        <Form.Item>
-          <Button
-            v-access:code="'userProject:write'"
-            type="primary"
-            :loading="filesSubmitting"
-            @click="submitSceneBundle"
-          >
-            上传/替换
-          </Button>
-        </Form.Item>
-      </Form>
-
-      <Table
-        v-if="fileManageProjectDoc"
-        :columns="fileSceneColumns"
-        :data-source="fileManageProjectDoc.scenes"
-        :pagination="false"
-        row-key="id"
-        size="small"
-      >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'actions'">
-            <Space>
-              <Button size="small" type="link" @click="prepareReplace(record.id)">替换</Button>
-              <Button
-                v-access:code="'userProject:write'"
-                danger
-                size="small"
-                type="link"
-                @click="handleDeleteScene(record.id)"
-              >
-                删除
-              </Button>
-            </Space>
-          </template>
-        </template>
-      </Table>
-    </Modal>
+    <!-- File management moved to project details page; removed from project list view -->
   </div>
 </template>

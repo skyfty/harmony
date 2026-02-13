@@ -30,6 +30,14 @@ const routes: RouteRecordRaw[] = [
           title: '项目管理',
         },
       },
+        {
+          name: 'UserProjectDetail',
+          path: 'detail/:userId/:projectId',
+          component: () => import('#/views/system/user-projects/detail.vue'),
+          meta: {
+            title: '项目详情',
+          },
+        },
       {
         name: 'UserProjectCategories',
         path: 'categories',
