@@ -17,5 +17,228 @@
     "users": "用户管理",
     "rbac": "角色与权限",
     "scenics": "场景管理"
+  },
+  "userProjects": {
+    "categories": {
+      "modal": {
+        "edit": "编辑分类",
+        "create": "新增分类",
+        "ok": "保存",
+        "cancel": "取消"
+      },
+      "message": {
+        "updateSuccess": "分类更新成功",
+        "createSuccess": "分类创建成功",
+        "deleteSuccess": "分类删除成功"
+      },
+      "confirm": {
+        "delete": {
+          "title": "确认删除分类\"{name}\"吗？",
+          "content": "删除后已关联项目会清空分类。"
+        }
+      },
+      "table": {
+        "name": "名称",
+        "description": "描述",
+        "sortOrder": "排序",
+        "status": "状态",
+        "updatedAt": "更新时间",
+        "actions": "操作",
+        "title": "项目分类管理"
+      },
+      "toolbar": {
+        "create": "新增分类"
+      },
+      "actions": {
+        "edit": "编辑",
+        "delete": "删除"
+      },
+      "form": {
+        "name": {
+          "label": "名称",
+          "required": "请输入分类名称"
+        },
+        "description": {
+          "label": "描述"
+        },
+        "sortOrder": {
+          "label": "排序"
+        },
+        "enabled": {
+          "label": "启用"
+        }
+      }
+    },
+    "index": {
+      "modal": {
+        "edit": "编辑项目",
+        "create": "新建项目",
+        "ok": "保存",
+        "cancel": "取消"
+      },
+      "message": {
+        "updateSuccess": "项目更新成功",
+        "createSuccess": "项目创建成功",
+        "deleteSuccess": "项目删除成功"
+      },
+      "confirm": {
+        "delete": {
+          "title": "确认删除项目\"{name}\"吗？",
+          "content": "删除后不可恢复。"
+        }
+      },
+      "form": {
+        "keyword": { "label": "关键字", "placeholder": "项目名称" },
+        "userId": { "label": "用户ID", "placeholder": "可选（管理员可按用户筛选）" },
+        "categoryId": { "label": "分类", "placeholder": "全部分类" }
+      },
+      "table": {
+        "name": "项目名称",
+        "id": "项目ID",
+        "user": "用户",
+        "category": "分类",
+        "sceneCount": "场景数",
+        "updatedAt": "更新时间",
+        "actions": "操作",
+        "title": "项目管理"
+      },
+      "toolbar": {
+        "create": "新建项目",
+        "refreshCategories": "刷新分类"
+      },
+      "actions": {
+        "detail": "详情",
+        "edit": "编辑",
+        "delete": "删除"
+      },
+      "formFields": {
+        "userId": { "label": "用户ID", "required": "请输入用户ID" },
+        "id": { "label": "项目ID", "required": "请输入项目ID" },
+        "name": { "label": "项目名称", "required": "请输入项目名称" },
+        "categoryId": { "label": "分类", "placeholder": "可选" }
+      }
+    },
+    "detail": {
+      "title": "项目详情",
+      "button": { "back": "返回" },
+      "fields": {
+        "id": "项目ID",
+        "name": "项目名称",
+        "user": "用户",
+        "userId": "用户ID",
+        "category": "分类",
+        "sceneCount": "场景数",
+        "lastEditedSceneId": "最后编辑场景ID"
+      },
+      "scenes": { "title": "关联资源（场景）", "columns": { "id": "场景ID", "name": "名称", "url": "URL" } }
+    }
+  },
+  "orders": {
+    "index": {
+      "actions": { "edit": "编辑", "delete": "删除" },
+      "modal": { "title": "订单" },
+      "table": {
+        "orderNumber": "订单号",
+        "status": "状态",
+        "user": "用户",
+        "totalAmount": "总额",
+        "items": "商品数",
+        "createdAt": "创建时间",
+        "actions": "操作",
+        "title": "订单管理"
+      },
+      "toolbar": {
+        "create": "新增订单"
+      },
+      "message": {
+        "loadError": "读取订单失败",
+        "updateSuccess": "订单更新成功",
+        "createSuccess": "订单创建成功",
+        "deleteSuccess": "订单已删除"
+      },
+      "confirm": {
+        "delete": {
+          "title": "确认删除订单 {orderNumber} 吗？",
+          "content": "删除后不可恢复。"
+        }
+      }
+    },
+    "form": {
+      "labels": {
+        "user": "用户",
+        "status": "状态",
+        "paymentMethod": "支付方式",
+        "shippingAddress": "收货地址",
+        "items": "商品项"
+      },
+      "placeholders": {
+        "searchUser": "搜索用户（用户名/显示名）",
+        "searchProduct": "搜索并选择商品",
+        "productName": "商品名称（可编辑）"
+      },
+      "actions": {
+        "addItem": "添加商品",
+        "remove": "删除",
+        "save": "保存",
+        "cancel": "取消"
+      },
+      "validation": {
+        "selectUser": "请选择用户",
+        "addItem": "请至少添加一个商品项"
+      }
+    }
+  }
+  ,
+  "systemUsers": {
+    "index": {
+      "modal": { "edit": "编辑用户", "create": "新增用户", "ok": "保存", "cancel": "取消" },
+      "message": { "updateSuccess": "用户更新成功", "createSuccess": "用户创建成功", "deleteSuccess": "用户删除成功", "statusUpdate": "状态更新成功" },
+      "confirm": { "delete": { "title": "确认删除用户\"{username}\"吗？", "content": "删除后不可恢复。" } },
+      "form": {
+        "username": { "label": "用户名", "required": "请输入用户名", "placeholder": "请输入用户名" },
+        "password": { "label": "密码", "required": "请输入密码", "placeholder": "请输入密码", "reset": "重置密码", "keep": "不填写则保持原密码" },
+        "displayName": { "label": "昵称", "placeholder": "请输入昵称" },
+        "email": { "label": "邮箱", "placeholder": "请输入邮箱" },
+        "status": { "label": "状态", "options": { "active": "启用", "disabled": "禁用" }, "checkedChildren": "启", "unCheckedChildren": "停" },
+        "roles": { "label": "角色", "placeholder": "请选择角色" }
+      },
+      "table": {
+        "keyword": "关键字",
+        "username": "用户名",
+        "displayName": "昵称",
+        "email": "邮箱",
+        "roles": "角色",
+        "status": "状态",
+        "createdAt": "创建时间",
+        "updatedAt": "更新时间",
+        "actions": "操作",
+        "title": "用户管理"
+      },
+      "toolbar": { "create": "新增用户" },
+      "actions": { "edit": "编辑", "delete": "删除" }
+    }
+  },
+  "rolesPermissions": {
+    "index": {
+      "tabs": { "roles": "角色管理", "permissions": "权限管理" },
+      "role": {
+        "modal": { "edit": "编辑角色", "create": "新增角色", "ok": "保存", "cancel": "取消" },
+        "message": { "updateSuccess": "角色更新成功", "createSuccess": "角色创建成功", "deleteSuccess": "角色删除成功" },
+        "confirm": { "delete": { "title": "确认删除角色\"{name}\"吗？", "content": "删除后不可恢复。" } },
+        "form": { "name": { "label": "角色名称", "required": "请输入角色名称" }, "code": { "label": "角色编码", "required": "请输入角色编码" }, "description": { "label": "描述", "placeholder": "请输入描述" }, "permissions": { "label": "权限集", "placeholder": "请选择权限" } },
+        "table": { "name": "角色名称", "code": "角色编码", "description": "描述", "permissions": "权限集", "createdAt": "创建时间", "updatedAt": "更新时间", "actions": "操作", "title": "角色管理" },
+        "toolbar": { "create": "新增角色" },
+        "actions": { "edit": "编辑", "delete": "删除" }
+      },
+      "permission": {
+        "modal": { "edit": "编辑权限", "create": "新增权限", "ok": "保存", "cancel": "取消" },
+        "message": { "updateSuccess": "权限更新成功", "createSuccess": "权限创建成功", "deleteSuccess": "权限删除成功" },
+        "confirm": { "delete": { "title": "确认删除权限\"{name}\"吗？", "content": "删除后不可恢复。" } },
+        "form": { "name": { "label": "权限名称", "required": "请输入权限名称" }, "code": { "label": "权限编码", "required": "请输入权限编码" }, "group": { "label": "分组", "placeholder": "全部分组" }, "description": { "label": "描述", "placeholder": "请输入描述" } },
+        "table": { "name": "权限名称", "code": "权限编码", "group": "分组", "description": "描述", "createdAt": "创建时间", "updatedAt": "更新时间", "actions": "操作", "title": "权限管理" },
+        "toolbar": { "create": "新增权限" },
+        "actions": { "edit": "编辑", "delete": "删除" }
+      }
+    }
   }
 }

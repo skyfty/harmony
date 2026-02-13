@@ -48,7 +48,7 @@ export interface UserProjectCategoryItem {
   updatedAt: string;
 }
 
-export interface ListUserProjectsParams {
+export interface ListProjectsParams {
   categoryId?: string;
   keyword?: string;
   page?: number;
@@ -56,15 +56,15 @@ export interface ListUserProjectsParams {
   userId?: string;
 }
 
-export interface ListUserProjectCategoriesParams {
+export interface ListProjectCategoriesParams {
 }
 
-export interface CreateUserProjectPayload {
+export interface CreateProjectPayload {
   project: UserProjectDocument;
   userId?: string;
 }
 
-export interface UpdateUserProjectPayload {
+export interface UpdateProjectPayload {
   project: UserProjectDocument;
 }
 
@@ -75,9 +75,9 @@ function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
   };
 }
 
-export async function listUserProjectsApi(params: ListUserProjectsParams) {
+export async function listProjectsApi(params: ListProjectsParams) {
   const response = await requestClient.get<ServerPageResult<UserProjectListItem>>(
-    '/admin/user-projects',
+    '/admin/projects',
     {
       params,
     },
@@ -85,37 +85,37 @@ export async function listUserProjectsApi(params: ListUserProjectsParams) {
   return normalizeGridPage(response);
 }
 
-export async function getUserProjectApi(userId: string, projectId: string) {
+export async function getProjectApi(userId: string, projectId: string) {
   return requestClient.get<{ project: UserProjectDocument; userId: string }>(
-    `/admin/user-projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
   );
 }
 
-export async function createUserProjectApi(payload: CreateUserProjectPayload) {
+export async function createProjectApi(payload: CreateProjectPayload) {
   return requestClient.post<{ project: UserProjectDocument; userId: string }>(
-    '/admin/user-projects',
+    '/admin/projects',
     payload,
   );
 }
 
-export async function updateUserProjectApi(
+export async function updateProjectApi(
   userId: string,
   projectId: string,
-  payload: UpdateUserProjectPayload,
+  payload: UpdateProjectPayload,
 ) {
   return requestClient.put<{ project: UserProjectDocument; userId: string }>(
-    `/admin/user-projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
     payload,
   );
 }
 
-export async function deleteUserProjectApi(userId: string, projectId: string) {
+export async function deleteProjectApi(userId: string, projectId: string) {
   return requestClient.delete(
-    `/admin/user-projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}`,
   );
 }
 
-export async function uploadUserProjectSceneBundleApi(
+export async function uploadProjectSceneBundleApi(
   userId: string,
   projectId: string,
   sceneId: string,
@@ -132,7 +132,7 @@ export async function uploadUserProjectSceneBundleApi(
     };
     userId: string;
   }>(
-    `/admin/user-projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/bundle`,
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/bundle`,
     payload,
     {
       headers: {
@@ -142,7 +142,7 @@ export async function uploadUserProjectSceneBundleApi(
   );
 }
 
-export async function deleteUserProjectSceneApi(
+export async function deleteProjectSceneApi(
   userId: string,
   projectId: string,
   sceneId: string,
@@ -151,31 +151,31 @@ export async function deleteUserProjectSceneApi(
     project: UserProjectDocument;
     userId: string;
   }>(
-    `/admin/user-projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`,
+    `/admin/projects/${encodeURIComponent(userId)}/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`,
   );
 }
 
-export async function listUserProjectCategoriesApi(
-  params: ListUserProjectCategoriesParams = {},
+export async function listProjectCategoriesApi(
+  params: ListProjectCategoriesParams = {},
 ) {
-  return requestClient.get<UserProjectCategoryItem[]>('/admin/user-project-categories', {
+  return requestClient.get<UserProjectCategoryItem[]>('/admin/project-categories', {
     params,
   });
 }
 
-export async function createUserProjectCategoryApi(payload: {
+export async function createProjectCategoryApi(payload: {
   description?: string;
   enabled?: boolean;
   name: string;
   sortOrder?: number;
 }) {
   return requestClient.post<UserProjectCategoryItem>(
-    '/admin/user-project-categories',
+    '/admin/project-categories',
     payload,
   );
 }
 
-export async function updateUserProjectCategoryApi(
+export async function updateProjectCategoryApi(
   id: string,
   payload: {
     description?: null | string;
@@ -185,11 +185,11 @@ export async function updateUserProjectCategoryApi(
   },
 ) {
   return requestClient.put<UserProjectCategoryItem>(
-    `/admin/user-project-categories/${encodeURIComponent(id)}`,
+    `/admin/project-categories/${encodeURIComponent(id)}`,
     payload,
   );
 }
 
-export async function deleteUserProjectCategoryApi(id: string) {
-  return requestClient.delete(`/admin/user-project-categories/${encodeURIComponent(id)}`)
+export async function deleteProjectCategoryApi(id: string) {
+  return requestClient.delete(`/admin/project-categories/${encodeURIComponent(id)}`)
 }

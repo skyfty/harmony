@@ -220,7 +220,9 @@ export async function deleteSceneEntry(ctx: Context): Promise<void> {
   if (!deleted) {
     ctx.throw(404, '场景不存在')
   }
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function downloadSceneFile(ctx: Context): Promise<void> {

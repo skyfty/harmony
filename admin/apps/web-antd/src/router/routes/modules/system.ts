@@ -27,11 +27,11 @@ const routes: RouteRecordRaw[] = [
       order: 11,
       title: '项目',
     },
-    name: 'UserProject',
-    path: '/user-project',
+    name: 'Project',
+    path: '/projects',
     children: [
       {
-        name: 'UserProjectIndex',
+        name: 'ProjectIndex',
         path: '',
         component: () => import('#/views/user-projects/index.vue'),
         meta: {
@@ -39,17 +39,17 @@ const routes: RouteRecordRaw[] = [
           title: '项目管理',
         },
       },
-        {
-          name: 'UserProjectDetail',
-          path: 'detail/:userId/:projectId',
-          component: () => import('#/views/user-projects/detail.vue'),
-          meta: {
-              title: '项目详情',
-              hideInMenu: true,
-          },
-        },
       {
-        name: 'UserProjectCategories',
+        name: 'ProjectDetail',
+        path: 'detail/:userId/:projectId',
+        component: () => import('#/views/user-projects/detail.vue'),
+        meta: {
+          title: '项目详情',
+          hideInMenu: true,
+        },
+      },
+      {
+        name: 'ProjectCategories',
         path: 'categories',
         component: () => import('#/views/user-projects/categories.vue'),
         meta: {

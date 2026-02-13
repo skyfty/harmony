@@ -9,6 +9,7 @@ import type {
 } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -57,14 +58,13 @@ const userFormModel = reactive<UserFormModel>({
   username: '',
 });
 
-const modalTitle = computed(() =>
-  editingUserId.value ? '编辑用户' : '新增用户',
-);
+const { t } = useI18n();
+const modalTitle = computed(() => (editingUserId.value ? t('page.systemUsers.index.modal.edit') : t('page.systemUsers.index.modal.create')));
 
 const userRules = computed(() => ({
   username: [
     {
-      message: '请输入用户名',
+      message: t('page.systemUsers.index.form.username.required'),
       required: true,
       type: 'string',
       trigger: 'blur',
@@ -74,7 +74,7 @@ const userRules = computed(() => ({
     ? []
     : [
         {
-          message: '请输入密码',
+          message: t('page.systemUsers.index.form.password.required'),
           required: true,
           type: 'string',
           trigger: 'blur',
@@ -143,7 +143,7 @@ async function submitUser() {
         payload.password = userFormModel.password.trim();
       }
       await updateUserApi(editingUserId.value, payload);
-      message.success('用户更新成功');
+      message.success(t('page.systemUsers.index.message.updateSuccess'));
     } else {
       const payload: CreateUserPayload = {
         username: userFormModel.username.trim(),
@@ -154,7 +154,7 @@ async function submitUser() {
         status: userFormModel.status,
       };
       await createUserApi(payload);
-      message.success('用户创建成功');
+      message.success(t('page.systemUsers.index.message.createSuccess'));
     }
     modalOpen.value = false;
     userGridApi.reload();
@@ -165,12 +165,12 @@ async function submitUser() {
 
 function handleDelete(record: UserItem) {
   Modal.confirm({
-    title: `确认删除用户“${record.username}”吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.systemUsers.index.confirm.delete.title', { username: record.username }),
+    content: t('page.systemUsers.index.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteUserApi(record.id);
-      message.success('用户删除成功');
+      message.success(t('page.systemUsers.index.message.deleteSuccess'));
       userGridApi.reload();
     },
   });
@@ -180,7 +180,7 @@ async function handleStatusChange(record: UserItem, checked: boolean) {
   changingStatusId.value = record.id;
   try {
     await updateUserStatusApi(record.id, checked ? 'active' : 'disabled');
-    message.success('状态更新成功');
+    message.success(t('page.systemUsers.index.message.statusUpdate'));
     userGridApi.reload();
   } finally {
     changingStatusId.value = null;
@@ -193,23 +193,23 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
+        label: t('page.systemUsers.index.table.keyword'),
         componentProps: {
           allowClear: true,
-          placeholder: '用户名 / 邮箱 / 昵称',
+          placeholder: t('page.systemUsers.index.table.keyword'),
         },
       },
       {
         component: 'Select',
         fieldName: 'status',
-        label: '状态',
+        label: t('page.systemUsers.index.table.status'),
         componentProps: {
           allowClear: true,
           options: [
-            { label: '启用', value: 'active' },
-            { label: '禁用', value: 'disabled' },
+            { label: t('page.systemUsers.index.form.status.options.active'), value: 'active' },
+            { label: t('page.systemUsers.index.form.status.options.disabled'), value: 'disabled' },
           ],
-          placeholder: '全部状态',
+          placeholder: t('page.systemUsers.index.form.status.placeholder'),
         },
       },
     ],
@@ -217,19 +217,19 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'username', minWidth: 150, sortable: true, title: '用户名' },
-      { field: 'displayName', minWidth: 140, title: '昵称' },
-      { field: 'email', minWidth: 180, title: '邮箱' },
+      { field: 'username', minWidth: 150, sortable: true, title: t('page.systemUsers.index.table.username') },
+      { field: 'displayName', minWidth: 140, title: t('page.systemUsers.index.table.displayName') },
+      { field: 'email', minWidth: 180, title: t('page.systemUsers.index.table.email') },
       {
         field: 'roles',
         minWidth: 220,
-        title: '角色',
+        title: t('page.systemUsers.index.table.roles'),
         slots: { default: 'roles' },
       },
       {
         field: 'status',
         minWidth: 160,
-        title: '状态',
+        title: t('page.systemUsers.index.table.status'),
         slots: { default: 'status' },
       },
       {
@@ -237,14 +237,14 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '创建时间',
+        title: t('page.systemUsers.index.table.createdAt'),
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.systemUsers.index.table.updatedAt'),
       },
       {
         align: 'left',
@@ -252,7 +252,7 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
         fixed: 'right',
         minWidth: 220,
         slots: { default: 'actions' },
-        title: '操作',
+        title: t('page.systemUsers.index.table.actions'),
       },
     ],
     keepSource: true,
@@ -284,7 +284,7 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
       zoom: true,
     },
   },
-  tableTitle: '用户管理',
+  tableTitle: t('page.systemUsers.index.table.title'),
 });
 
 onMounted(async () => {

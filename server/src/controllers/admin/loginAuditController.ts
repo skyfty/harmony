@@ -37,7 +37,9 @@ export async function deleteLoginLog(ctx: Context): Promise<void> {
   if (!deleted) {
     ctx.throw(404, 'Not found')
   }
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function bulkDeleteLoginLogs(ctx: Context): Promise<void> {

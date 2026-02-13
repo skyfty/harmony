@@ -16,5 +16,228 @@
     "title": "System",
     "users": "Users",
     "rbac": "Roles & Permissions"
+  },
+  "userProjects": {
+    "categories": {
+      "modal": {
+        "edit": "Edit Category",
+        "create": "New Category",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Category updated successfully",
+        "createSuccess": "Category created successfully",
+        "deleteSuccess": "Category deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete category \"{name}\"?",
+          "content": "Associated projects will have this category cleared."
+        }
+      },
+      "table": {
+        "name": "Name",
+        "description": "Description",
+        "sortOrder": "Sort Order",
+        "status": "Status",
+        "updatedAt": "Updated At",
+        "actions": "Actions",
+        "title": "Project Category Management"
+      },
+      "toolbar": {
+        "create": "New Category"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "form": {
+        "name": {
+          "label": "Name",
+          "required": "Please enter category name"
+        },
+        "description": {
+          "label": "Description"
+        },
+        "sortOrder": {
+          "label": "Sort Order"
+        },
+        "enabled": {
+          "label": "Enabled"
+        }
+      }
+    },
+    "index": {
+      "modal": {
+        "edit": "Edit Project",
+        "create": "New Project",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Project updated successfully",
+        "createSuccess": "Project created successfully",
+        "deleteSuccess": "Project deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete project \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": { "label": "Keyword", "placeholder": "Project name" },
+        "userId": { "label": "User ID", "placeholder": "Optional (admins can filter by user)" },
+        "categoryId": { "label": "Category", "placeholder": "All categories" }
+      },
+      "table": {
+        "name": "Project Name",
+        "id": "Project ID",
+        "user": "User",
+        "category": "Category",
+        "sceneCount": "Scene Count",
+        "updatedAt": "Updated At",
+        "actions": "Actions",
+        "title": "Project Management"
+      },
+      "toolbar": {
+        "create": "New Project",
+        "refreshCategories": "Refresh Categories"
+      },
+      "actions": {
+        "detail": "Detail",
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "userId": { "label": "User ID", "required": "Please enter user ID" },
+        "id": { "label": "Project ID", "required": "Please enter project ID" },
+        "name": { "label": "Project Name", "required": "Please enter project name" },
+        "categoryId": { "label": "Category", "placeholder": "Optional" }
+      }
+    },
+    "detail": {
+      "title": "Project Details",
+      "button": { "back": "Back" },
+      "fields": {
+        "id": "Project ID",
+        "name": "Project Name",
+        "user": "User",
+        "userId": "User ID",
+        "category": "Category",
+        "sceneCount": "Scene Count",
+        "lastEditedSceneId": "Last Edited Scene ID"
+      },
+      "scenes": { "title": "Related Resources (Scenes)", "columns": { "id": "Scene ID", "name": "Name", "url": "URL" } }
+    }
+  },
+  "orders": {
+    "index": {
+      "actions": { "edit": "Edit", "delete": "Delete" },
+      "modal": { "title": "Order" },
+      "table": {
+        "orderNumber": "Order Number",
+        "status": "Status",
+        "user": "User",
+        "totalAmount": "Total Amount",
+        "items": "Items Count",
+        "createdAt": "Created At",
+        "actions": "Actions",
+        "title": "Order Management"
+      },
+      "toolbar": {
+        "create": "New Order"
+      },
+      "message": {
+        "loadError": "Failed to load orders",
+        "updateSuccess": "Order updated",
+        "createSuccess": "Order created",
+        "deleteSuccess": "Order deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete order {orderNumber}?",
+          "content": "This action cannot be undone."
+        }
+      }
+    },
+    "form": {
+      "labels": {
+        "user": "User",
+        "status": "Status",
+        "paymentMethod": "Payment Method",
+        "shippingAddress": "Shipping Address",
+        "items": "Items"
+      },
+      "placeholders": {
+        "searchUser": "Search users (username/display name)",
+        "searchProduct": "Search and select product",
+        "productName": "Product name (editable)"
+      },
+      "actions": {
+        "addItem": "Add product",
+        "remove": "Delete",
+        "save": "Save",
+        "cancel": "Cancel"
+      },
+      "validation": {
+        "selectUser": "Please select a user",
+        "addItem": "Please add at least one product item"
+      }
+    }
+  }
+  ,
+  "systemUsers": {
+    "index": {
+      "modal": { "edit": "Edit User", "create": "New User", "ok": "Save", "cancel": "Cancel" },
+      "message": { "updateSuccess": "User updated", "createSuccess": "User created", "deleteSuccess": "User deleted", "statusUpdate": "Status updated" },
+      "confirm": { "delete": { "title": "Confirm delete user \"{username}\"?", "content": "This action cannot be undone." } },
+      "form": {
+        "username": { "label": "Username", "required": "Please enter username", "placeholder": "Please enter username" },
+        "password": { "label": "Password", "required": "Please enter password", "placeholder": "Please enter password", "reset": "Reset Password", "keep": "Leave blank to keep current password" },
+        "displayName": { "label": "Display Name", "placeholder": "Please enter display name" },
+        "email": { "label": "Email", "placeholder": "Please enter email" },
+        "status": { "label": "Status", "options": { "active": "Active", "disabled": "Disabled" }, "checkedChildren": "On", "unCheckedChildren": "Off" },
+        "roles": { "label": "Roles", "placeholder": "Please select roles" }
+      },
+      "table": {
+        "keyword": "Keyword",
+        "username": "Username",
+        "displayName": "Display Name",
+        "email": "Email",
+        "roles": "Roles",
+        "status": "Status",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions",
+        "title": "User Management"
+      },
+      "toolbar": { "create": "New User" },
+      "actions": { "edit": "Edit", "delete": "Delete" }
+    }
+  },
+  "rolesPermissions": {
+    "index": {
+      "tabs": { "roles": "Role Management", "permissions": "Permission Management" },
+      "role": {
+        "modal": { "edit": "Edit Role", "create": "New Role", "ok": "Save", "cancel": "Cancel" },
+        "message": { "updateSuccess": "Role updated", "createSuccess": "Role created", "deleteSuccess": "Role deleted" },
+        "confirm": { "delete": { "title": "Confirm delete role \"{name}\"?", "content": "This action cannot be undone." } },
+        "form": { "name": { "label": "Role Name", "required": "Please enter role name" }, "code": { "label": "Role Code", "required": "Please enter role code" }, "description": { "label": "Description", "placeholder": "Please enter description" }, "permissions": { "label": "Permission Set", "placeholder": "Please select permissions" } },
+        "table": { "name": "Role Name", "code": "Role Code", "description": "Description", "permissions": "Permission Set", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Role Management" },
+        "toolbar": { "create": "New Role" },
+        "actions": { "edit": "Edit", "delete": "Delete" }
+      },
+      "permission": {
+        "modal": { "edit": "Edit Permission", "create": "New Permission", "ok": "Save", "cancel": "Cancel" },
+        "message": { "updateSuccess": "Permission updated", "createSuccess": "Permission created", "deleteSuccess": "Permission deleted" },
+        "confirm": { "delete": { "title": "Confirm delete permission \"{name}\"?", "content": "This action cannot be undone." } },
+        "form": { "name": { "label": "Permission Name", "required": "Please enter permission name" }, "code": { "label": "Permission Code", "required": "Please enter permission code" }, "group": { "label": "Group", "placeholder": "All groups" }, "description": { "label": "Description", "placeholder": "Please enter description" } },
+        "table": { "name": "Permission Name", "code": "Permission Code", "group": "Group", "description": "Description", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Permission Management" },
+        "toolbar": { "create": "New Permission" },
+        "actions": { "edit": "Edit", "delete": "Delete" }
+      }
+    }
   }
 }

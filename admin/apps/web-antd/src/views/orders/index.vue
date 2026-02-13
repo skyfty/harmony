@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { Button, Modal, Space, message } from 'ant-design-vue';
 import { listOrdersApi, getOrderApi, createOrderApi, updateOrderApi, deleteOrderApi } from '#/api';
@@ -9,6 +10,7 @@ const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const editingModel = ref<any>(null);
 const submitting = ref(false);
+const { t } = useI18n();
 
 async function openCreate() {
   editingId.value = null;
@@ -23,7 +25,7 @@ async function openEditModal(row: any) {
     editingModel.value = data;
     modalOpen.value = true;
   } catch (err) {
-    message.error('读取订单失败');
+    message.error(t('page.orders.index.message.loadError'));
   }
 }
 
@@ -32,10 +34,10 @@ async function submitForm(payload: any) {
   try {
     if (editingId.value) {
       await updateOrderApi(editingId.value, payload);
-      message.success('订单更新成功');
+      message.success(t('page.orders.index.message.updateSuccess'));
     } else {
       await createOrderApi(payload);
-      message.success('订单创建成功');
+      message.success(t('page.orders.index.message.createSuccess'));
     }
     modalOpen.value = false;
     orderGridApi.reload();
@@ -48,12 +50,12 @@ async function submitForm(payload: any) {
 
 function handleDelete(row: any) {
   Modal.confirm({
-    title: `确认删除订单 ${row.orderNumber} 吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.orders.index.confirm.delete.title', { orderNumber: row.orderNumber }),
+    content: t('page.orders.index.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteOrderApi(row.id);
-      message.success('订单已删除');
+      message.success(t('page.orders.index.message.deleteSuccess'));
       orderGridApi.reload();
     },
   });
@@ -62,11 +64,11 @@ function handleDelete(row: any) {
 const [OrderGrid, orderGridApi] = useVbenVxeGrid({
   formOptions: {
     schema: [
-      { component: 'Input', fieldName: 'keyword', label: '关键字', componentProps: { allowClear: true, placeholder: '订单号' } },
+      { component: 'Input', fieldName: 'keyword', label: t('page.orders.index.table.orderNumber'), componentProps: { allowClear: true, placeholder: t('page.orders.form.placeholders.searchProduct') } },
       {
         component: 'Select',
         fieldName: 'status',
-        label: '状态',
+        label: t('page.orders.index.table.status'),
         componentProps: { allowClear: true, options: [{ label: 'pending', value: 'pending' }, { label: 'paid', value: 'paid' }, { label: 'completed', value: 'completed' }, { label: 'cancelled', value: 'cancelled' }] },
       },
     ],
@@ -74,13 +76,13 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'orderNumber', minWidth: 200, title: '订单号' },
-      { field: 'status', minWidth: 120, title: '状态' },
-      { field: 'userInfo.displayName', minWidth: 160, title: '用户' },
-      { field: 'totalAmount', minWidth: 120, title: '总额' },
-      { field: 'items', minWidth: 120, formatter: (val: any) => (val || []).length, title: '商品数' },
-      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
-      { align: 'left', fixed: 'right', minWidth: 180, field: 'actions', slots: { default: 'actions' }, title: '操作' },
+      { field: 'orderNumber', minWidth: 200, title: t('page.orders.index.table.orderNumber') },
+      { field: 'status', minWidth: 120, title: t('page.orders.index.table.status') },
+      { field: 'userInfo.displayName', minWidth: 160, title: t('page.orders.index.table.user') },
+      { field: 'totalAmount', minWidth: 120, title: t('page.orders.index.table.totalAmount') },
+      { field: 'items', minWidth: 120, formatter: (val: any) => (val || []).length, title: t('page.orders.index.table.items') },
+      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.orders.index.table.createdAt') },
+      { align: 'left', fixed: 'right', minWidth: 180, field: 'actions', slots: { default: 'actions' }, title: t('page.orders.index.table.actions') },
     ],
     keepSource: true,
     pagerConfig: { pageSize: 20 },
@@ -99,7 +101,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
     },
     toolbarConfig: { custom: true, refresh: true, search: true },
   },
-  tableTitle: '订单管理',
+  tableTitle: t('page.orders.index.table.title'),
 });
 </script>
 
@@ -107,18 +109,18 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
   <div class="p-5">
     <OrderGrid>
       <template #toolbar-actions>
-        <Button type="primary" @click="openCreate">新增订单</Button>
+        <Button type="primary" @click="openCreate">{{ t('page.orders.index.toolbar.create') }}</Button>
       </template>
 
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Button size="small" type="link" @click="openEditModal(row)">{{ t('page.orders.index.actions.edit') || 'Edit' }}</Button>
+          <Button danger size="small" type="link" @click="handleDelete(row)">{{ t('page.orders.index.actions.delete') || 'Delete' }}</Button>
         </Space>
       </template>
     </OrderGrid>
 
-    <Modal :open="modalOpen" :confirm-loading="submitting" title="订单" ok-text="保存" cancel-text="取消" @cancel="() => (modalOpen = false)" :footer="null">
+    <Modal :open="modalOpen" :confirm-loading="submitting" :title="t('page.orders.index.modal.title')" :ok-text="t('page.orders.form.actions.save')" :cancel-text="t('page.orders.form.actions.cancel')" @cancel="() => (modalOpen = false)" :footer="null">
       <OrderForm :model="editingModel" mode="create" @submit="submitForm" @cancel="() => (modalOpen = false)" />
     </Modal>
   </div>

@@ -17,13 +17,13 @@ function ensureProjectId(ctx: Context): string {
   return projectId.trim()
 }
 
-export async function listUserProjectDocuments(ctx: Context): Promise<void> {
+export async function listProjects(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const projects = await listUserProjects(userId)
   ctx.body = { projects }
 }
 
-export async function getUserProjectDocument(ctx: Context): Promise<void> {
+export async function getProject(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const projectId = ensureProjectId(ctx)
   const project = await getUserProject(userId, projectId)
@@ -33,7 +33,7 @@ export async function getUserProjectDocument(ctx: Context): Promise<void> {
   ctx.body = { project }
 }
 
-export async function saveUserProjectDocument(ctx: Context): Promise<void> {
+export async function saveProject(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const projectId = ensureProjectId(ctx)
   const payload = ctx.request.body
@@ -55,7 +55,7 @@ export async function saveUserProjectDocument(ctx: Context): Promise<void> {
   }
 }
 
-export async function deleteUserProjectDocument(ctx: Context): Promise<void> {
+export async function removeProject(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const projectId = ensureProjectId(ctx)
   const result = await deleteUserProjectCascade(userId, projectId)

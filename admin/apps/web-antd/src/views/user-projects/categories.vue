@@ -3,13 +3,14 @@ import type { FormInstance } from 'ant-design-vue';
 import type { UserProjectCategoryItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
-  createUserProjectCategoryApi,
-  deleteUserProjectCategoryApi,
-  listUserProjectCategoriesApi,
-  updateUserProjectCategoryApi,
+  createProjectCategoryApi,
+  deleteProjectCategoryApi,
+  listProjectCategoriesApi,
+  updateProjectCategoryApi,
 } from '#/api';
 
 import {
@@ -42,8 +43,10 @@ const formModel = reactive<CategoryFormModel>({
   enabled: true,
 });
 
+const { t } = useI18n();
+
 const modalTitle = computed(() =>
-  editingId.value ? '编辑分类' : '新增分类',
+  editingId.value ? t('page.userProjects.categories.modal.edit') : t('page.userProjects.categories.modal.create'),
 );
 
 function resetForm() {
@@ -76,22 +79,22 @@ async function submit() {
   await form.validate();
   submitting.value = true;
   try {
-    if (editingId.value) {
-      await updateUserProjectCategoryApi(editingId.value, {
+      if (editingId.value) {
+      await updateProjectCategoryApi(editingId.value, {
         name: formModel.name.trim(),
         description: formModel.description || null,
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
       });
-      message.success('分类更新成功');
+      message.success(t('page.userProjects.categories.message.updateSuccess'));
     } else {
-      await createUserProjectCategoryApi({
+      await createProjectCategoryApi({
         name: formModel.name.trim(),
         description: formModel.description || undefined,
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
       });
-      message.success('分类创建成功');
+      message.success(t('page.userProjects.categories.message.createSuccess'));
     }
     modalOpen.value = false;
     gridApi.reload();
@@ -102,12 +105,12 @@ async function submit() {
 
 function handleDelete(row: UserProjectCategoryItem) {
   Modal.confirm({
-    title: `确认删除分类“${row.name}”吗？`,
-    content: '删除后已关联项目会清空分类。',
+    title: t('page.userProjects.categories.confirm.delete.title', { name: row.name }),
+    content: t('page.userProjects.categories.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
-      await deleteUserProjectCategoryApi(row.id);
-      message.success('分类删除成功');
+      await deleteProjectCategoryApi(row.id);
+      message.success(t('page.userProjects.categories.message.deleteSuccess'));
       gridApi.reload();
     },
   });
@@ -115,27 +118,25 @@ function handleDelete(row: UserProjectCategoryItem) {
 
 const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
   formOptions: {
-    schema: [
-      // categories are global; no user filter
-    ],
+    schema: [],
   },
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 220, title: '名称' },
-      { field: 'description', minWidth: 260, title: '描述' },
-      { field: 'sortOrder', minWidth: 100, title: '排序' },
+      { field: 'name', minWidth: 220, title: t('page.userProjects.categories.table.name') },
+      { field: 'description', minWidth: 260, title: t('page.userProjects.categories.table.description') },
+      { field: 'sortOrder', minWidth: 100, title: t('page.userProjects.categories.table.sortOrder') },
       {
         field: 'enabled',
         minWidth: 100,
-        title: '状态',
+        title: t('page.userProjects.categories.table.status'),
         slots: { default: 'enabled' },
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.userProjects.categories.table.updatedAt'),
       },
       {
         align: 'left',
@@ -143,15 +144,13 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
         fixed: 'right',
         minWidth: 180,
         slots: { default: 'actions' },
-        title: '操作',
+        title: t('page.userProjects.categories.table.actions'),
       },
     ],
     proxyConfig: {
       ajax: {
-        query: async (_context: unknown, formValues: Record<string, any>) => {
-          const list = await listUserProjectCategoriesApi({
-            userId: formValues.userId || undefined,
-          });
+        query: async () => {
+          const list = await listProjectCategoriesApi();
           return {
             items: list || [],
             total: (list || []).length,
@@ -161,13 +160,13 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
     },
     toolbarConfig: {
       refresh: true,
-      search: true,
+      search: false,
     },
     pagerConfig: {
       pageSize: 50,
     },
   },
-  tableTitle: '项目分类管理',
+    tableTitle: t('page.userProjects.categories.table.title'),
 });
 </script>
 
@@ -175,8 +174,8 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
   <div class="p-5">
     <Grid>
       <template #toolbar-actions>
-        <Button v-access:code="'userProjectCategory:write'" type="primary" @click="openCreate">
-          新增分类
+        <Button v-access:code="'projectCategory:write'" type="primary" @click="openCreate">
+          {{ t('page.userProjects.categories.toolbar.create') }}
         </Button>
       </template>
 
@@ -186,17 +185,17 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'userProjectCategory:write'" size="small" type="link" @click="openEdit(row)">
-            编辑
+          <Button v-access:code="'projectCategory:write'" size="small" type="link" @click="openEdit(row)">
+            {{ t('page.userProjects.categories.actions.edit') }}
           </Button>
           <Button
-            v-access:code="'userProjectCategory:write'"
+            v-access:code="'projectCategory:write'"
             danger
             size="small"
             type="link"
             @click="handleDelete(row)"
           >
-            删除
+            {{ t('page.userProjects.categories.actions.delete') }}
           </Button>
         </Space>
       </template>
@@ -206,24 +205,24 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
       :open="modalOpen"
       :title="modalTitle"
       :confirm-loading="submitting"
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.userProjects.categories.modal.ok')"
+      :cancel-text="t('page.userProjects.categories.modal.cancel')"
       destroy-on-close
       @cancel="() => (modalOpen = false)"
       @ok="submit"
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
         <!-- Categories are global; no per-user association -->
-        <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入分类名称' }]">
+        <Form.Item :label="t('page.userProjects.categories.form.name.label')" name="name" :rules="[{ required: true, message: t('page.userProjects.categories.form.name.required') }]">
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>
-        <Form.Item label="描述" name="description">
+        <Form.Item :label="t('page.userProjects.categories.form.description.label')" name="description">
           <Input v-model:value="formModel.description" allow-clear />
         </Form.Item>
-        <Form.Item label="排序" name="sortOrder">
+        <Form.Item :label="t('page.userProjects.categories.form.sortOrder.label')" name="sortOrder">
           <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />
         </Form.Item>
-        <Form.Item label="启用" name="enabled">
+        <Form.Item :label="t('page.userProjects.categories.form.enabled.label')" name="enabled">
           <Switch v-model:checked="formModel.enabled" />
         </Form.Item>
       </Form>

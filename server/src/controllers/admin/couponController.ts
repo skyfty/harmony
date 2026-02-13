@@ -134,5 +134,7 @@ export async function deleteCoupon(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid coupon id')
   }
   await CouponModel.findByIdAndDelete(id).exec()
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }

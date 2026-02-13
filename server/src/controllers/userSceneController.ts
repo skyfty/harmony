@@ -87,7 +87,9 @@ export async function deleteUserSceneDocument(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const sceneId = ensureSceneId(ctx)
   await deleteUserScene(userId, sceneId)
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function deleteUserSceneDocumentsBulk(ctx: Context): Promise<void> {

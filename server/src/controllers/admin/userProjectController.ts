@@ -51,7 +51,7 @@ function mapProjectSummary(row: any) {
   return {
     userId: String(row.userId ?? ''),
     id: String(row.projectId ?? ''),
-    name: typeof (document as any).name === 'string' ? (document as any).name : '未命名工程',
+    name: typeof (document as any).name === 'string' ? (document as any).name : '未命名项目',
     categoryId: typeof (row.categoryId ?? (document as any).categoryId) === 'string' ? (row.categoryId ?? (document as any).categoryId) : null,
     sceneCount: scenes.length,
     lastEditedSceneId: typeof (document as any).lastEditedSceneId === 'string' ? (document as any).lastEditedSceneId : null,
@@ -64,7 +64,7 @@ function readRequestFiles(ctx: Context): Record<string, unknown> | undefined {
   return (ctx.request as unknown as { files?: Record<string, unknown> }).files
 }
 
-export async function listAdminUserProjects(ctx: Context): Promise<void> {
+export async function listProjects(ctx: Context): Promise<void> {
   const { page = '1', pageSize = '20', keyword, categoryId, userId } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 100)
@@ -97,7 +97,7 @@ export async function listAdminUserProjects(ctx: Context): Promise<void> {
   }
 }
 
-export async function getAdminUserProject(ctx: Context): Promise<void> {
+export async function getProject(ctx: Context): Promise<void> {
   const userId = resolveScopedUserId(ctx, ctx.params?.userId)
   const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
   if (!projectId) {
@@ -113,7 +113,7 @@ export async function getAdminUserProject(ctx: Context): Promise<void> {
   }
 }
 
-export async function createAdminUserProject(ctx: Context): Promise<void> {
+export async function createProject(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, unknown>
   const userId = resolveScopedUserId(ctx, body.userId)
   const project = body.project ?? body
@@ -134,7 +134,7 @@ export async function createAdminUserProject(ctx: Context): Promise<void> {
   }
 }
 
-export async function updateAdminUserProject(ctx: Context): Promise<void> {
+export async function updateProject(ctx: Context): Promise<void> {
   const userId = resolveScopedUserId(ctx, ctx.params?.userId)
   const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
   if (!projectId) {
@@ -154,17 +154,19 @@ export async function updateAdminUserProject(ctx: Context): Promise<void> {
   }
 }
 
-export async function deleteAdminUserProject(ctx: Context): Promise<void> {
+export async function removeProject(ctx: Context): Promise<void> {
   const userId = resolveScopedUserId(ctx, ctx.params?.userId)
   const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
   if (!projectId) {
     ctx.throw(400, 'Project id is required')
   }
   await UserProjectModel.findOneAndDelete({ userId, projectId }).lean().exec()
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
-export async function uploadAdminUserProjectSceneBundle(ctx: Context): Promise<void> {
+export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
   const userId = resolveScopedUserId(ctx, ctx.params?.userId)
   const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
   const sceneId = typeof ctx.params?.sceneId === 'string' ? ctx.params.sceneId.trim() : ''
@@ -212,7 +214,7 @@ export async function uploadAdminUserProjectSceneBundle(ctx: Context): Promise<v
   }
 }
 
-export async function deleteAdminUserProjectScene(ctx: Context): Promise<void> {
+export async function removeProjectScene(ctx: Context): Promise<void> {
   const userId = resolveScopedUserId(ctx, ctx.params?.userId)
   const projectId = typeof ctx.params?.projectId === 'string' ? ctx.params.projectId.trim() : ''
   const sceneId = typeof ctx.params?.sceneId === 'string' ? ctx.params.sceneId.trim() : ''
@@ -237,7 +239,7 @@ export async function deleteAdminUserProjectScene(ctx: Context): Promise<void> {
   ctx.body = { userId, project: saved }
 }
 
-export async function listAdminUserProjectCategories(ctx: Context): Promise<void> {
+export async function listProjectCategories(ctx: Context): Promise<void> {
   const rows = await UserProjectCategoryModel.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
   ctx.body = (rows as any[]).map((row) => ({
     id: row._id.toString(),
@@ -250,7 +252,7 @@ export async function listAdminUserProjectCategories(ctx: Context): Promise<void
   }))
 }
 
-export async function createAdminUserProjectCategory(ctx: Context): Promise<void> {
+export async function createProjectCategory(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, unknown>
   try {
     const category = await createUserProjectCategory(body)
@@ -266,7 +268,7 @@ export async function createAdminUserProjectCategory(ctx: Context): Promise<void
   }
 }
 
-export async function updateAdminUserProjectCategory(ctx: Context): Promise<void> {
+export async function updateProjectCategory(ctx: Context): Promise<void> {
   const categoryId = typeof ctx.params?.id === 'string' ? ctx.params.id.trim() : ''
   if (!categoryId || !Types.ObjectId.isValid(categoryId)) {
     ctx.throw(400, 'Invalid category id')
@@ -288,7 +290,7 @@ export async function updateAdminUserProjectCategory(ctx: Context): Promise<void
   }
 }
 
-export async function deleteAdminUserProjectCategory(ctx: Context): Promise<void> {
+export async function removeProjectCategory(ctx: Context): Promise<void> {
   const categoryId = typeof ctx.params?.id === 'string' ? ctx.params.id.trim() : ''
   if (!categoryId || !Types.ObjectId.isValid(categoryId)) {
     ctx.throw(400, 'Invalid category id')
@@ -297,5 +299,8 @@ export async function deleteAdminUserProjectCategory(ctx: Context): Promise<void
   if (!deleted) {
     ctx.throw(404, 'Category not found')
   }
-  ctx.status = 204
+  // Return an explicit body instead of 204 No Content to avoid client-side
+  // JSON parsing errors in some request clients that expect a response body.
+  ctx.status = 200
+  ctx.body = {}
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FormInstance } from 'ant-design-vue';
 import { reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { Button, Form, Input, InputNumber, Select, AutoComplete, Space, message, Avatar } from 'ant-design-vue';
 import { listProductsApi, listUsersApi } from '#/api';
 import { requestClient } from '#/api/request';
@@ -10,6 +11,7 @@ const props = defineProps<{ model: any; mode: 'edit' | 'create' }>();
 const emit = defineEmits(['submit', 'cancel']);
 
 const formRef = ref<FormInstance>();
+const { t } = useI18n();
 
 const localModel = reactive({
   userId: props.model?.userId || '',
@@ -85,11 +87,11 @@ async function submit() {
     return;
   }
   if (!localModel.userId) {
-    message.error('请选择用户');
+    message.error(t('page.orders.form.validation.selectUser'));
     return;
   }
   if (!localModel.items.length) {
-    message.error('请至少添加一个商品项');
+    message.error(t('page.orders.form.validation.addItem'));
     return;
   }
   const payload = {
@@ -128,8 +130,8 @@ watch(
 <template>
   <div>
     <Form ref="formRef" :model="localModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 16 }">
-      <Form.Item label="用户" name="userId" :rules="[{ required: true, message: '请选择用户' }]">
-        <AutoComplete v-model:value="localModel.userId" :options="userOptions" placeholder="搜索用户（用户名/显示名）" @search="searchUsers" />
+      <Form.Item :label="t('page.orders.form.labels.user')" name="userId" :rules="[{ required: true, message: t('page.orders.form.validation.selectUser') }]">
+        <AutoComplete v-model:value="localModel.userId" :options="userOptions" :placeholder="t('page.orders.form.placeholders.searchUser')" @search="searchUsers" />
         <div v-if="localModel.userId" style="margin-top:8px;display:flex;align-items:center;gap:8px">
           <template v-if="(userOptions.find(u => u.value === localModel.userId) && userOptions.find(u => u.value === localModel.userId).raw)">
             <img v-if="userOptions.find(u => u.value === localModel.userId).raw.avatarUrl" :src="userOptions.find(u => u.value === localModel.userId).raw.avatarUrl" style="width:40px;height:40px;border-radius:50%;object-fit:cover" />
@@ -141,36 +143,36 @@ watch(
         </div>
       </Form.Item>
 
-      <Form.Item label="状态" name="status">
+      <Form.Item :label="t('page.orders.form.labels.status')" name="status">
         <Select v-model:value="localModel.status" :options="[{label:'pending',value:'pending'},{label:'paid',value:'paid'},{label:'completed',value:'completed'},{label:'cancelled',value:'cancelled'}]" />
       </Form.Item>
 
-      <Form.Item label="支付方式" name="paymentMethod">
+      <Form.Item :label="t('page.orders.form.labels.paymentMethod')" name="paymentMethod">
         <Input v-model:value="localModel.paymentMethod" />
       </Form.Item>
 
-      <Form.Item label="收货地址" name="shippingAddress">
+      <Form.Item :label="t('page.orders.form.labels.shippingAddress')" name="shippingAddress">
         <Input v-model:value="localModel.shippingAddress" />
       </Form.Item>
 
-      <Form.Item label="商品项">
+      <Form.Item :label="t('page.orders.form.labels.items')">
         <div v-for="(it, idx) in localModel.items" :key="idx" style="margin-bottom:8px">
           <Space>
-            <Select style="width:360px" v-model:value="it.productId" show-search :options="productOptions" @search="searchProducts" placeholder="搜索并选择商品" @change="(val) => onSelectProduct(idx, val)" />
-            <Input style="width:280px" v-model:value="it.name" placeholder="商品名称（可编辑）" />
+            <Select style="width:360px" v-model:value="it.productId" show-search :options="productOptions" @search="searchProducts" :placeholder="t('page.orders.form.placeholders.searchProduct')" @change="(val) => onSelectProduct(idx, val)" />
+            <Input style="width:280px" v-model:value="it.name" :placeholder="t('page.orders.form.placeholders.productName')" />
             <InputNumber style="width:120px" v-model:value="it.price" min="0" />
             <InputNumber style="width:100px" v-model:value="it.quantity" min="1" />
-            <Button type="text" danger @click="() => removeItem(idx)">删除</Button>
+            <Button type="text" danger @click="() => removeItem(idx)">{{ t('page.orders.form.actions.remove') }}</Button>
           </Space>
         </div>
         <div style="margin-top:8px">
-          <Button type="dashed" @click="addEmptyItem">添加商品</Button>
+          <Button type="dashed" @click="addEmptyItem">{{ t('page.orders.form.actions.addItem') }}</Button>
         </div>
       </Form.Item>
 
       <Form.Item>
-        <Button type="primary" @click="submit">保存</Button>
-        <Button style="margin-left:8px" @click="cancel">取消</Button>
+        <Button type="primary" @click="submit">{{ t('page.orders.form.actions.save') }}</Button>
+        <Button style="margin-left:8px" @click="cancel">{{ t('page.orders.form.actions.cancel') }}</Button>
       </Form.Item>
     </Form>
   </div>

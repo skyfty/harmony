@@ -65,17 +65,17 @@ import {
   uploadAsset,
 } from '@/controllers/resourceController'
 import {
-  createAdminUserProject,
-  createAdminUserProjectCategory,
-  deleteAdminUserProject,
-  deleteAdminUserProjectCategory,
-  deleteAdminUserProjectScene,
-  getAdminUserProject,
-  listAdminUserProjectCategories,
-  listAdminUserProjects,
-  updateAdminUserProject,
-  updateAdminUserProjectCategory,
-  uploadAdminUserProjectSceneBundle,
+  createProject,
+  createProjectCategory,
+  getProject,
+  listProjectCategories,
+  listProjects,
+  removeProject,
+  removeProjectCategory,
+  removeProjectScene,
+  updateProject,
+  updateProjectCategory,
+  uploadProjectSceneBundle,
 } from '@/controllers/admin/userProjectController'
 import {
   listLoginLogs,
@@ -169,27 +169,27 @@ adminRouter.delete('/categories/:id', requireAnyPermission(['category:write']), 
 adminRouter.post('/categories/:id/move', requireAnyPermission(['category:write']), moveAssetCategory)
 adminRouter.post('/categories/merge', requireAnyPermission(['category:write']), mergeAssetCategories)
 
-adminRouter.get('/user-projects', requireAnyPermission(['userProject:read']), listAdminUserProjects)
-adminRouter.post('/user-projects', requireAnyPermission(['userProject:write']), createAdminUserProject)
-adminRouter.get('/user-projects/:userId/:projectId', requireAnyPermission(['userProject:read']), getAdminUserProject)
-adminRouter.put('/user-projects/:userId/:projectId', requireAnyPermission(['userProject:write']), updateAdminUserProject)
-adminRouter.delete('/user-projects/:userId/:projectId', requireAnyPermission(['userProject:write']), deleteAdminUserProject)
+adminRouter.get('/projects', requireAnyPermission(['project:read']), listProjects)
+adminRouter.post('/projects', requireAnyPermission(['project:write']), createProject)
+adminRouter.get('/projects/:userId/:projectId', requireAnyPermission(['project:read']), getProject)
+adminRouter.put('/projects/:userId/:projectId', requireAnyPermission(['project:write']), updateProject)
+adminRouter.delete('/projects/:userId/:projectId', requireAnyPermission(['project:write']), removeProject)
 adminRouter.put(
-  '/user-projects/:userId/:projectId/scenes/:sceneId/bundle',
-  requireAnyPermission(['userProject:write']),
+  '/projects/:userId/:projectId/scenes/:sceneId/bundle',
+  requireAnyPermission(['project:write']),
   koaBody({ multipart: true, urlencoded: true, formidable: { keepExtensions: true } }),
-  uploadAdminUserProjectSceneBundle,
+  uploadProjectSceneBundle,
 )
 adminRouter.delete(
-  '/user-projects/:userId/:projectId/scenes/:sceneId',
-  requireAnyPermission(['userProject:write']),
-  deleteAdminUserProjectScene,
+  '/projects/:userId/:projectId/scenes/:sceneId',
+  requireAnyPermission(['project:write']),
+  removeProjectScene,
 )
 
-adminRouter.get('/user-project-categories', requireAnyPermission(['userProjectCategory:read']), listAdminUserProjectCategories)
-adminRouter.post('/user-project-categories', requireAnyPermission(['userProjectCategory:write']), createAdminUserProjectCategory)
-adminRouter.put('/user-project-categories/:id', requireAnyPermission(['userProjectCategory:write']), updateAdminUserProjectCategory)
-adminRouter.delete('/user-project-categories/:id', requireAnyPermission(['userProjectCategory:write']), deleteAdminUserProjectCategory)
+adminRouter.get('/project-categories', requireAnyPermission(['projectCategory:read']), listProjectCategories)
+adminRouter.post('/project-categories', requireAnyPermission(['projectCategory:write']), createProjectCategory)
+adminRouter.put('/project-categories/:id', requireAnyPermission(['projectCategory:write']), updateProjectCategory)
+adminRouter.delete('/project-categories/:id', requireAnyPermission(['projectCategory:write']), removeProjectCategory)
 
 // Login audit / login logs
 adminRouter.get('/login-logs', requireAnyPermission(['auth:read']), listLoginLogs)

@@ -41,7 +41,7 @@ const LOCAL_WORKSPACE_DESCRIPTOR: ProjectWorkspaceDescriptor = {
   username: null,
 }
 
-const USER_PROJECT_API_PREFIX = '/api/user-projects'
+const USER_PROJECT_API_PREFIX = '/api/projects'
 
 function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): ProjectWorkspaceDescriptor {
   if (!user) {

@@ -1241,7 +1241,9 @@ export async function deleteAssetCategory(ctx: Context): Promise<void> {
     }
     throw error
   }
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function moveAssetCategory(ctx: Context): Promise<void> {
@@ -1745,7 +1747,9 @@ export async function deleteAsset(ctx: Context): Promise<void> {
     }
     await refreshManifest()
   }
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function downloadAsset(ctx: Context): Promise<void> {
@@ -1915,7 +1919,9 @@ export async function deleteAssetSeries(ctx: Context): Promise<void> {
   if ((updateResult.modifiedCount ?? 0) > 0) {
     await refreshManifest()
   }
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function createAssetTag(ctx: Context): Promise<void> {
@@ -2023,7 +2029,9 @@ export async function deleteAssetTag(ctx: Context): Promise<void> {
     ctx.throw(409, 'Cannot delete tag that is in use')
   }
   await AssetTagModel.findByIdAndDelete(id)
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function getProjectDirectories(ctx: Context): Promise<void> {

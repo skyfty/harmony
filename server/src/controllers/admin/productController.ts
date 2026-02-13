@@ -184,5 +184,7 @@ export async function deleteProduct(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid product id')
   }
   await ProductModel.findByIdAndDelete(id).exec()
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }

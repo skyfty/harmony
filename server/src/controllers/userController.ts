@@ -115,7 +115,9 @@ export async function deleteUser(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid user id')
   }
   await UserModel.findByIdAndDelete(id)
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
 
 export async function updateUserStatus(ctx: Context): Promise<void> {

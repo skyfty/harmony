@@ -69,5 +69,7 @@ export async function deleteBinding(ctx: Context): Promise<void> {
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) ctx.throw(400, 'Invalid binding id')
   await SceneProductBindingModel.findByIdAndDelete(id).exec()
-  ctx.status = 204
+  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  ctx.status = 200
+  ctx.body = {}
 }
