@@ -94,7 +94,7 @@ export async function getScene(ctx: Context): Promise<void> {
   if (!scene) {
     ctx.throw(404, '场景不存在')
   }
-  ctx.body = { data: scene }
+  ctx.body = scene
 }
 
 function parseSceneMetadata(value: unknown): Record<string, unknown> | null {
@@ -158,7 +158,7 @@ export async function createSceneEntry(ctx: Context): Promise<void> {
     throw error
   }
   ctx.status = 201
-  ctx.body = { data: scene }
+  ctx.body = scene
 }
 
 export async function updateSceneEntry(ctx: Context): Promise<void> {
@@ -208,7 +208,7 @@ export async function updateSceneEntry(ctx: Context): Promise<void> {
   if (!updated) {
     ctx.throw(404, '场景不存在')
   }
-  ctx.body = { data: updated }
+  ctx.body = updated
 }
 
 export async function deleteSceneEntry(ctx: Context): Promise<void> {

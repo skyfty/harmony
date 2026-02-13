@@ -11,6 +11,7 @@ import type Router from 'koa-router'
 import { appConfig } from '@/config/env'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { errorHandler } from '@/middleware/errorHandler'
+import { responseEnvelope } from '@/middleware/responseEnvelope'
 import routes from '@/routes'
 import {
   createInitialAdmin,
@@ -58,6 +59,7 @@ async function bootstrap(): Promise<void> {
     }),
   )
   app.use(errorHandler)
+  app.use(responseEnvelope)
   app.use(
     koaBody({
       json: true,

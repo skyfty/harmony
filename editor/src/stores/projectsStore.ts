@@ -322,7 +322,11 @@ async function fetchUserProjectsFromServer(authStore: ReturnType<typeof useAuthS
   if (!response.ok) {
     throw new Error(`Failed to fetch projects (${response.status})`)
   }
-  const payload = await response.json().catch(() => null)
+  const payloadRaw = await response.json().catch(() => null)
+  const payload =
+    payloadRaw && typeof payloadRaw === 'object' && 'code' in payloadRaw && 'data' in payloadRaw
+      ? (payloadRaw as { data?: unknown }).data
+      : payloadRaw
   const entries: unknown =
     payload && typeof payload === 'object' && Array.isArray((payload as { projects?: unknown[] }).projects)
       ? (payload as { projects?: unknown[] }).projects
@@ -375,7 +379,11 @@ async function removeProjectFromServer(projectId: string, authStore: ReturnType<
   if (response.status === 204 || response.status === 404) {
     return { deletedSceneIds: [], failedSceneIds: [] }
   }
-  const payload = await response.json().catch(() => null)
+  const payloadRaw = await response.json().catch(() => null)
+  const payload =
+    payloadRaw && typeof payloadRaw === 'object' && 'code' in payloadRaw && 'data' in payloadRaw
+      ? (payloadRaw as { data?: unknown }).data
+      : payloadRaw
   const result = payload && typeof payload === 'object' ? (payload as any).result : null
   return {
     deletedSceneIds: Array.isArray(result?.deletedSceneIds) ? (result.deletedSceneIds as string[]) : [],

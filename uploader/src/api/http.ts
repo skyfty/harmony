@@ -1,6 +1,20 @@
 import axios, { AxiosHeaders } from 'axios'
 import type { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
+type ApiEnvelope<T = unknown> = {
+  code: number
+  data: T
+  message: string
+}
+
+function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
+}
+
 type RuntimeConfig = {
   serverApiBaseUrl?: string
   serverApiPrefix?: string
@@ -105,7 +119,17 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 })
 
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  (response: AxiosResponse) => {
+    const payload = response.data
+    if (!isApiEnvelope(payload)) {
+      return response
+    }
+    if (payload.code !== 0) {
+      return Promise.reject(new Error(payload.message || `请求失败(${response.status})`))
+    }
+    response.data = payload.data
+    return response
+  },
   (error: AxiosError) => {
     if (error.response?.status === 401) {
       persistToken(null)

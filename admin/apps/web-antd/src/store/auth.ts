@@ -29,11 +29,13 @@ export const useAuthStore = defineStore('auth', () => {
     params: Recordable<any>,
     onSuccess?: () => Promise<void> | void,
   ) {
+
     // 异步处理用户登录操作并获取 accessToken
     let userInfo: null | UserInfo = null;
     try {
       loginLoading.value = true;
       const { accessToken } = await loginApi(params);
+            console.log('Access Token:', accessToken); // 调试输出 accessToken
 
       // 如果成功获取到 accessToken
       if (accessToken) {
@@ -79,7 +81,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout(redirect: boolean = true) {
     try {
-      await logoutApi();
+      await logoutApi(accessStore.accessToken);
     } catch {
       // 不做任何处理
     }
