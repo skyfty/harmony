@@ -34,6 +34,34 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'Products',
+    path: '/products',
+    meta: {
+      icon: 'lucide:shopping-cart',
+      title: '商品管理',
+    },
+    children: [
+      {
+        name: 'ProductsIndex',
+        path: '',
+        component: () => import('#/views/system/products/index.vue'),
+        meta: {
+          icon: 'lucide:shopping-cart',
+          title: '商品管理',
+        },
+      },
+      {
+        name: 'ProductsCategories',
+        path: 'categories',
+        component: () => import('#/views/system/products/categories.vue'),
+        meta: {
+          icon: 'lucide:tag',
+          title: '商品分类',
+        },
+      },
+    ],
+  },
+  {
     name: 'Resources',
     path: '/resources',
     meta: {

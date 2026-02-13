@@ -3,3 +3,4 @@ export * from './menu';
 export * from './rbac';
 export * from './resources';
 export * from './user';
+export * from './products';
