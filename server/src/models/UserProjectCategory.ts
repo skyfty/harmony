@@ -3,7 +3,6 @@ import type { UserProjectCategoryDocument } from '@/types/models'
 
 const userProjectCategorySchema = new Schema<UserProjectCategoryDocument>(
   {
-    userId: { type: String, required: true, index: true },
     name: { type: String, required: true },
     description: { type: String, required: false, default: null },
     sortOrder: { type: Number, required: true, default: 0 },
@@ -16,7 +15,8 @@ const userProjectCategorySchema = new Schema<UserProjectCategoryDocument>(
   },
 )
 
-userProjectCategorySchema.index({ userId: 1, normalizedName: 1 }, { unique: true })
-userProjectCategorySchema.index({ userId: 1, sortOrder: 1, createdAt: -1 })
+// Global categories: unique normalizedName across collection
+userProjectCategorySchema.index({ normalizedName: 1 }, { unique: true })
+userProjectCategorySchema.index({ sortOrder: 1, createdAt: -1 })
 
 export const UserProjectCategoryModel = model<UserProjectCategoryDocument>('UserProjectCategory', userProjectCategorySchema)

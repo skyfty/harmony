@@ -434,8 +434,6 @@ export interface UserProjectDocument extends Document<Types.ObjectId> {
 }
 
 export interface UserProjectCategoryDocument extends Document<Types.ObjectId> {
-  /** 中文：用户 ID（字符串） */
-  userId: string
   /** 中文：分类名称 */
   name: string
   /** 中文：分类描述（可选） */

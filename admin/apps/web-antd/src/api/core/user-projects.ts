@@ -46,7 +46,6 @@ export interface UserProjectCategoryItem {
   name: string;
   sortOrder: number;
   updatedAt: string;
-  userId: string;
 }
 
 export interface ListUserProjectsParams {
@@ -58,7 +57,6 @@ export interface ListUserProjectsParams {
 }
 
 export interface ListUserProjectCategoriesParams {
-  userId?: string;
 }
 
 export interface CreateUserProjectPayload {
@@ -170,7 +168,6 @@ export async function createUserProjectCategoryApi(payload: {
   enabled?: boolean;
   name: string;
   sortOrder?: number;
-  userId?: string;
 }) {
   return requestClient.post<UserProjectCategoryItem>(
     '/admin/user-project-categories',
@@ -185,7 +182,6 @@ export async function updateUserProjectCategoryApi(
     enabled?: boolean;
     name?: string;
     sortOrder?: number;
-    userId?: string;
   },
 ) {
   return requestClient.put<UserProjectCategoryItem>(
@@ -194,10 +190,6 @@ export async function updateUserProjectCategoryApi(
   );
 }
 
-export async function deleteUserProjectCategoryApi(id: string, userId?: string) {
-  return requestClient.delete(`/admin/user-project-categories/${encodeURIComponent(id)}`,
-    {
-      params: userId ? { userId } : undefined,
-    },
-  );
+export async function deleteUserProjectCategoryApi(id: string) {
+  return requestClient.delete(`/admin/user-project-categories/${encodeURIComponent(id)}`)
 }

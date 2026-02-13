@@ -28,7 +28,6 @@ interface CategoryFormModel {
   enabled: boolean;
   name: string;
   sortOrder: number;
-  userId: string;
 }
 
 const modalOpen = ref(false);
@@ -37,7 +36,6 @@ const editingId = ref<null | string>(null);
 const formRef = ref<FormInstance>();
 
 const formModel = reactive<CategoryFormModel>({
-  userId: '',
   name: '',
   description: '',
   sortOrder: 0,
@@ -49,7 +47,6 @@ const modalTitle = computed(() =>
 );
 
 function resetForm() {
-  formModel.userId = '';
   formModel.name = '';
   formModel.description = '';
   formModel.sortOrder = 0;
@@ -64,7 +61,6 @@ function openCreate() {
 
 function openEdit(row: UserProjectCategoryItem) {
   editingId.value = row.id;
-  formModel.userId = row.userId || '';
   formModel.name = row.name;
   formModel.description = row.description || '';
   formModel.sortOrder = row.sortOrder || 0;
@@ -82,7 +78,6 @@ async function submit() {
   try {
     if (editingId.value) {
       await updateUserProjectCategoryApi(editingId.value, {
-        userId: formModel.userId.trim() || undefined,
         name: formModel.name.trim(),
         description: formModel.description || null,
         sortOrder: formModel.sortOrder,
@@ -91,7 +86,6 @@ async function submit() {
       message.success('分类更新成功');
     } else {
       await createUserProjectCategoryApi({
-        userId: formModel.userId.trim() || undefined,
         name: formModel.name.trim(),
         description: formModel.description || undefined,
         sortOrder: formModel.sortOrder,
@@ -112,7 +106,7 @@ function handleDelete(row: UserProjectCategoryItem) {
     content: '删除后已关联项目会清空分类。',
     okType: 'danger',
     onOk: async () => {
-      await deleteUserProjectCategoryApi(row.id, row.userId);
+      await deleteUserProjectCategoryApi(row.id);
       message.success('分类删除成功');
       gridApi.reload();
     },
@@ -122,22 +116,13 @@ function handleDelete(row: UserProjectCategoryItem) {
 const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
   formOptions: {
     schema: [
-      {
-        component: 'Input',
-        fieldName: 'userId',
-        label: '用户ID',
-        componentProps: {
-          allowClear: true,
-          placeholder: '可选（管理员按用户筛选）',
-        },
-      },
+      // categories are global; no user filter
     ],
   },
   gridOptions: {
     border: true,
     columns: [
       { field: 'name', minWidth: 220, title: '名称' },
-      { field: 'userId', minWidth: 220, title: '用户ID' },
       { field: 'description', minWidth: 260, title: '描述' },
       { field: 'sortOrder', minWidth: 100, title: '排序' },
       {
@@ -228,9 +213,7 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
       @ok="submit"
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
-        <Form.Item label="用户ID" name="userId">
-          <Input v-model:value="formModel.userId" allow-clear placeholder="为空时默认当前用户" />
-        </Form.Item>
+        <!-- Categories are global; no per-user association -->
         <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入分类名称' }]">
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>

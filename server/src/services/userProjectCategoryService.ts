@@ -4,7 +4,6 @@ import { UserProjectModel } from '@/models/UserProject'
 
 export interface UserProjectCategoryView {
   id: string
-  userId: string
   name: string
   description: string | null
   sortOrder: number
@@ -35,7 +34,6 @@ function sanitizeDescription(description: unknown): string | null {
 function toCategoryView(row: any): UserProjectCategoryView {
   return {
     id: row._id.toString(),
-    userId: String(row.userId),
     name: String(row.name),
     description: typeof row.description === 'string' ? row.description : null,
     sortOrder: Number.isFinite(Number(row.sortOrder)) ? Number(row.sortOrder) : 0,
@@ -45,13 +43,12 @@ function toCategoryView(row: any): UserProjectCategoryView {
   }
 }
 
-export async function listUserProjectCategories(userId: string): Promise<UserProjectCategoryView[]> {
-  const rows = await UserProjectCategoryModel.find({ userId }).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
+export async function listUserProjectCategories(): Promise<UserProjectCategoryView[]> {
+  const rows = await UserProjectCategoryModel.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
   return (rows as any[]).map(toCategoryView)
 }
 
 export async function createUserProjectCategory(
-  userId: string,
   payload: { description?: unknown; enabled?: unknown; name?: unknown; sortOrder?: unknown },
 ): Promise<UserProjectCategoryView> {
   const name = sanitizeName(payload.name)
@@ -60,7 +57,6 @@ export async function createUserProjectCategory(
   }
   const sortOrder = Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : 0
   const created = await UserProjectCategoryModel.create({
-    userId,
     name,
     description: sanitizeDescription(payload.description),
     sortOrder,
@@ -72,13 +68,12 @@ export async function createUserProjectCategory(
 
 export async function updateUserProjectCategory(
   categoryId: string,
-  userId: string,
   payload: { description?: unknown; enabled?: unknown; name?: unknown; sortOrder?: unknown },
 ): Promise<UserProjectCategoryView | null> {
   if (!Types.ObjectId.isValid(categoryId)) {
     throw new Error('Invalid category id')
   }
-  const current = await UserProjectCategoryModel.findOne({ _id: categoryId, userId }).lean().exec()
+  const current = await UserProjectCategoryModel.findOne({ _id: categoryId }).lean().exec()
   if (!current) {
     return null
   }
@@ -87,7 +82,7 @@ export async function updateUserProjectCategory(
     throw new Error('Category name is required')
   }
   const updated = await UserProjectCategoryModel.findOneAndUpdate(
-    { _id: categoryId, userId },
+    { _id: categoryId },
     {
       name: nextNameRaw,
       normalizedName: normalizeName(nextNameRaw),
@@ -102,17 +97,17 @@ export async function updateUserProjectCategory(
   return updated ? toCategoryView(updated) : null
 }
 
-export async function deleteUserProjectCategory(categoryId: string, userId: string): Promise<boolean> {
+export async function deleteUserProjectCategory(categoryId: string): Promise<boolean> {
   if (!Types.ObjectId.isValid(categoryId)) {
     throw new Error('Invalid category id')
   }
-  const deleted = await UserProjectCategoryModel.findOneAndDelete({ _id: categoryId, userId }).lean().exec()
+  const deleted = await UserProjectCategoryModel.findOneAndDelete({ _id: categoryId }).lean().exec()
   if (!deleted) {
     return false
   }
 
   await UserProjectModel.updateMany(
-    { userId, categoryId },
+    { categoryId },
     {
       $set: {
         categoryId: null,

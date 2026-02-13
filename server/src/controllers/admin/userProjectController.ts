@@ -238,31 +238,22 @@ export async function deleteAdminUserProjectScene(ctx: Context): Promise<void> {
 }
 
 export async function listAdminUserProjectCategories(ctx: Context): Promise<void> {
-  const scopedUserId = resolveScopedUserId(ctx, (ctx.query as Record<string, string>)?.userId)
-  const canAll = canManageAllUsers(ctx)
-  if (canAll && !(ctx.query as Record<string, string>)?.userId?.trim()) {
-    const rows = await UserProjectCategoryModel.find({}).sort({ userId: 1, sortOrder: 1, createdAt: -1 }).lean().exec()
-    ctx.body = (rows as any[]).map((row) => ({
-      id: row._id.toString(),
-      userId: String(row.userId),
-      name: String(row.name),
-      description: typeof row.description === 'string' ? row.description : null,
-      sortOrder: Number(row.sortOrder ?? 0),
-      enabled: row.enabled !== false,
-      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
-      updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : new Date(row.updatedAt).toISOString(),
-    }))
-    return
-  }
-  const categories = await listUserProjectCategories(scopedUserId)
-  ctx.body = categories
+  const rows = await UserProjectCategoryModel.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
+  ctx.body = (rows as any[]).map((row) => ({
+    id: row._id.toString(),
+    name: String(row.name),
+    description: typeof row.description === 'string' ? row.description : null,
+    sortOrder: Number(row.sortOrder ?? 0),
+    enabled: row.enabled !== false,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : new Date(row.updatedAt).toISOString(),
+  }))
 }
 
 export async function createAdminUserProjectCategory(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, unknown>
-  const userId = resolveScopedUserId(ctx, body.userId)
   try {
-    const category = await createUserProjectCategory(userId, body)
+    const category = await createUserProjectCategory(body)
     ctx.status = 201
     ctx.body = category
   } catch (error) {
@@ -281,9 +272,8 @@ export async function updateAdminUserProjectCategory(ctx: Context): Promise<void
     ctx.throw(400, 'Invalid category id')
   }
   const body = (ctx.request.body ?? {}) as Record<string, unknown>
-  const userId = resolveScopedUserId(ctx, body.userId)
   try {
-    const category = await updateUserProjectCategory(categoryId, userId, body)
+    const category = await updateUserProjectCategory(categoryId, body)
     if (!category) {
       ctx.throw(404, 'Category not found')
     }
@@ -303,8 +293,7 @@ export async function deleteAdminUserProjectCategory(ctx: Context): Promise<void
   if (!categoryId || !Types.ObjectId.isValid(categoryId)) {
     ctx.throw(400, 'Invalid category id')
   }
-  const userId = resolveScopedUserId(ctx, (ctx.query as Record<string, string>)?.userId)
-  const deleted = await deleteUserProjectCategory(categoryId, userId)
+  const deleted = await deleteUserProjectCategory(categoryId)
   if (!deleted) {
     ctx.throw(404, 'Category not found')
   }
