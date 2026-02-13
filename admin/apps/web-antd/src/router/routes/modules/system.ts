@@ -152,6 +152,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      {
+        name: 'SystemLoginLogs',
+        path: '/system/login-logs',
+        component: () => import('#/views/system/login-logs/index.vue'),
+        meta: {
+          icon: 'lucide:log-in',
+          title: '登录日志',
+        },
+      },
       // moved: scenics and user-project routes relocated to root-level entries
       // resource routes moved to root level
     ],

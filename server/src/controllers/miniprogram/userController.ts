@@ -2,6 +2,7 @@ import type { Context } from 'koa'
 import { UserModel } from '@/models/User'
 import { hashPassword } from '@/utils/password'
 import { getProfile as fetchProfile, loginWithCredentials } from '@/services/authService'
+import { recordLogin } from '@/services/loginAuditService'
 
 interface RegisterBody {
   username?: string
@@ -44,6 +45,15 @@ export async function register(ctx: Context): Promise<void> {
     status: 'active',
   })
   const session = await loginWithCredentials(safeUsername, safePassword)
+  // record successful registration-login
+  await recordLogin({
+    userId: session.user.id,
+    username: session.user.username,
+    action: 'login',
+    success: true,
+    ip: ctx.ip || ctx.request.ip,
+    userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+  })
   ctx.status = 201
   ctx.body = session
 }
@@ -56,12 +66,30 @@ export async function login(ctx: Context): Promise<void> {
   }
   const safeUsername = username.trim()
   const safePassword = password
-  const session = await loginWithCredentials(safeUsername, safePassword).catch(() => {
+  let session: any
+  try {
+    session = await loginWithCredentials(safeUsername, safePassword)
+  } catch (error) {
+    // record failed login attempt for miniprogram
+    await recordLogin({
+      username: safeUsername,
+      action: 'login',
+      success: false,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+    })
     ctx.throw(401, 'Invalid credentials')
-  })
-  if (!session) {
     return
   }
+  // record successful login for miniprogram
+  await recordLogin({
+    userId: session.user.id,
+    username: session.user.username,
+    action: 'login',
+    success: true,
+    ip: ctx.ip || ctx.request.ip,
+    userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+  })
   ctx.body = session
 }
 

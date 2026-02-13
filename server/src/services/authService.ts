@@ -91,6 +91,9 @@ const MANAGEMENT_PERMISSION_SEEDS = [
   { code: 'userProject:write', name: '用户工程管理', group: 'userProject' },
   { code: 'userProjectCategory:read', name: '用户工程分类查看', group: 'userProjectCategory' },
   { code: 'userProjectCategory:write', name: '用户工程分类管理', group: 'userProjectCategory' },
+  { code: 'auth:read', name: '登录日志查看', group: 'auth' },
+  { code: 'auth:delete', name: '登录日志删除', group: 'auth' },
+  { code: 'auth:export', name: '登录日志导出', group: 'auth' },
 ] as const
 
 async function resolveRoleDetails(roleIds: Types.ObjectId[]): Promise<SessionUser['roles']> {

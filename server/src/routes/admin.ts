@@ -77,6 +77,13 @@ import {
   updateAdminUserProjectCategory,
   uploadAdminUserProjectSceneBundle,
 } from '@/controllers/admin/userProjectController'
+import {
+  listLoginLogs,
+  getLoginLog,
+  deleteLoginLog,
+  bulkDeleteLoginLogs,
+  exportLoginLogs,
+} from '@/controllers/admin/loginAuditController'
 import { koaBody } from '@/utils/bodyParser'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
@@ -183,5 +190,12 @@ adminRouter.get('/user-project-categories', requireAnyPermission(['userProjectCa
 adminRouter.post('/user-project-categories', requireAnyPermission(['userProjectCategory:write']), createAdminUserProjectCategory)
 adminRouter.put('/user-project-categories/:id', requireAnyPermission(['userProjectCategory:write']), updateAdminUserProjectCategory)
 adminRouter.delete('/user-project-categories/:id', requireAnyPermission(['userProjectCategory:write']), deleteAdminUserProjectCategory)
+
+// Login audit / login logs
+adminRouter.get('/login-logs', requireAnyPermission(['auth:read']), listLoginLogs)
+adminRouter.get('/login-logs/:id', requireAnyPermission(['auth:read']), getLoginLog)
+adminRouter.delete('/login-logs/:id', requireAnyPermission(['auth:delete']), deleteLoginLog)
+adminRouter.delete('/login-logs', requireAnyPermission(['auth:delete']), bulkDeleteLoginLogs)
+adminRouter.get('/login-logs/export', requireAnyPermission(['auth:export']), exportLoginLogs)
 
 export default adminRouter

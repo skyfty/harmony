@@ -65,6 +65,29 @@ export interface UserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface LoginAuditDocument extends Document<Types.ObjectId> {
+  /** 中文：关联用户 ID（可选） */
+  userId?: Types.ObjectId
+  /** 中文：用户名（可选，便于查询） */
+  username?: string
+  /** 中文：动作，如 login/logout/token-refresh 等 */
+  action: string
+  /** 中文：是否成功 */
+  success: boolean
+  /** 中文：来源 IP（可选） */
+  ip?: string
+  /** 中文：User-Agent 字符串（可选） */
+  userAgent?: string
+  /** 中文：简化的设备/客户端信息（可选） */
+  device?: string
+  /** 中文：备注或失败原因（可选） */
+  note?: string
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
 export interface RatingEntry {
   /** 中文：评分用户 ID */
   userId: Types.ObjectId

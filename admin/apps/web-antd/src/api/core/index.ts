@@ -7,3 +7,4 @@ export * from './products';
 export * from './orders';
 export * from './scenics';
 export * from './user-projects';
+export * from './loginLogs';
