@@ -20,6 +20,7 @@
     "detail": { "title": "Project Details" },
     "categories": { "title": "Project Categories" }
   },
+  "products": { "title": "Products", "index": { "title": "Product Management" }, "categories": { "title": "Product Categories" } },
   "system": {
     "title": "System",
     "users": "Users",

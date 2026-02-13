@@ -289,7 +289,6 @@ onMounted(async () => {
       <template #user="{ row }">
         <div>
           <div>{{ (row as any).username || row.userId }}</div>
-          <div class="text-text-secondary" style="font-size:12px">{{ row.userId }}</div>
         </div>
       </template>
 
