@@ -4,37 +4,6 @@ import { $t } from '#/locales';
 
 const routes: RouteRecordRaw[] = [
   {
-    meta: {
-      icon: 'carbon:user-role',
-      order: 10,
-      title: $t('page.system.title'),
-    },
-    name: 'System',
-    path: '/system',
-    children: [
-      {
-        name: 'SystemUsers',
-        path: '/system/users',
-        component: () => import('#/views/system/users/index.vue'),
-        meta: {
-          icon: 'lucide:users',
-          title: $t('page.system.users'),
-        },
-      },
-      {
-        name: 'SystemRbac',
-        path: '/system/rbac',
-        component: () => import('#/views/system/roles-permissions/index.vue'),
-        meta: {
-          icon: 'lucide:shield-check',
-          title: $t('page.system.rbac'),
-        },
-      },
-      // moved: scenics and user-project routes relocated to root-level entries
-      // resource routes moved to root level
-    ],
-  },
-  {
     name: 'Scenics',
     path: '/scenics',
     component: () => import('#/views/system/scenics/index.vue'),
@@ -154,6 +123,37 @@ const routes: RouteRecordRaw[] = [
           title: '资源系列',
         },
       },
+    ],
+  },
+  {
+    meta: {
+      icon: 'carbon:user-role',
+      order: 10,
+      title: $t('page.system.title'),
+    },
+    name: 'System',
+    path: '/system',
+    children: [
+      {
+        name: 'SystemUsers',
+        path: '/system/users',
+        component: () => import('#/views/system/users/index.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: $t('page.system.users'),
+        },
+      },
+      {
+        name: 'SystemRbac',
+        path: '/system/rbac',
+        component: () => import('#/views/system/roles-permissions/index.vue'),
+        meta: {
+          icon: 'lucide:shield-check',
+          title: $t('page.system.rbac'),
+        },
+      },
+      // moved: scenics and user-project routes relocated to root-level entries
+      // resource routes moved to root level
     ],
   },
 ];
