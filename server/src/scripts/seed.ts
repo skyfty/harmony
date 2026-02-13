@@ -1,6 +1,11 @@
 import '@/utils/cjsCompat'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
-import { createInitialAdmin, ensureEditorUser, ensureUploaderUser } from '@/services/authService'
+import {
+  createInitialAdmin,
+  ensureEditorUser,
+  ensureManagementPermissions,
+  ensureUploaderUser,
+} from '@/services/authService'
 import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 import { SceneModel } from '@/models/Scene'
 import { ProductModel } from '@/models/Product'
@@ -201,6 +206,11 @@ async function main(): Promise<void> {
   await ensureUploaderUser().catch((error) => {
     console.warn('[seed] 跳过创建上传账号：', error)
   })
+
+  await ensureManagementPermissions().catch((error) => {
+    console.warn('[seed] 初始化管理权限失败：', error)
+  })
+  console.log('[seed] 管理权限数据已初始化')
 
   await ensureOptimizeProductsSeeded().catch(() => undefined)
   console.log('[seed] 优化商城测试商品（若存在）已写入数据库')

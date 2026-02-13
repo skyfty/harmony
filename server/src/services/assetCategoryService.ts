@@ -1,5 +1,6 @@
 import { MongoServerError } from 'mongodb'
-import { Types } from 'mongoose'
+import { startSession, Types } from 'mongoose'
+import type { ClientSession } from 'mongoose'
 import type { AssetCategoryDocument } from '@/types/models'
 import { AssetCategoryModel, normalizeCategoryName } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
@@ -28,6 +29,30 @@ export interface CategoryTreeNode extends CategoryNodeDto {
 export interface CategoryPathItemDto {
   id: string
   name: string
+}
+
+export interface BulkMoveAssetsParams {
+  assetIds?: string[]
+  fromCategoryId?: string | Types.ObjectId
+  includeDescendants?: boolean
+  targetCategoryId: string | Types.ObjectId
+}
+
+export interface BulkMoveAssetsResult {
+  matchedCount: number
+  modifiedCount: number
+}
+
+export interface MergeCategoryParams {
+  sourceCategoryId: string | Types.ObjectId
+  targetCategoryId: string | Types.ObjectId
+  moveChildren?: boolean
+}
+
+export interface MergeCategoryResult {
+  deletedCategoryId: string
+  movedAssetCount: number
+  movedChildCount: number
 }
 
 type LeanCategory = {
@@ -286,13 +311,303 @@ export async function getCategoryTree(): Promise<CategoryTreeNode[]> {
   return roots
 }
 
-export async function listDescendantCategoryIds(categoryId: string | Types.ObjectId): Promise<string[]> {
+export async function listDescendantCategoryIds(
+  categoryId: string | Types.ObjectId,
+  options: { session?: ClientSession } = {},
+): Promise<string[]> {
   const objectId = toObjectId(categoryId)
   if (!objectId) {
     return []
   }
-  const categories = await AssetCategoryModel.find({ pathIds: objectId }).select('_id').lean<{ _id: Types.ObjectId }[]>().exec()
+  const categories = await AssetCategoryModel.find({ pathIds: objectId })
+    .select('_id')
+    .session(options.session ?? null)
+    .lean<{ _id: Types.ObjectId }[]>()
+    .exec()
   return categories.map((category) => category._id.toString())
+}
+
+async function rebuildSubtreePaths(
+  categoryId: Types.ObjectId,
+  options: { session?: ClientSession } = {},
+): Promise<void> {
+  const movedCategory = await AssetCategoryModel.findById(categoryId)
+    .session(options.session ?? null)
+    .exec()
+  if (!movedCategory) {
+    throw new Error('Category not found')
+  }
+
+  const parent = movedCategory.parentId
+    ? await AssetCategoryModel.findById(movedCategory.parentId).session(options.session ?? null).exec()
+    : null
+
+  const parentPathIds = parent ? parent.pathIds.map((id) => id as Types.ObjectId) : []
+  const parentPathNames = parent ? [...parent.pathNames] : []
+  const nextPathIds = [...parentPathIds, movedCategory._id as Types.ObjectId]
+  const nextPathNames = [...parentPathNames, movedCategory.name]
+  const nextRootId = parent ? (parent.rootId as Types.ObjectId) : (movedCategory._id as Types.ObjectId)
+
+  movedCategory.pathIds = nextPathIds
+  movedCategory.pathNames = nextPathNames
+  movedCategory.depth = nextPathIds.length - 1
+  movedCategory.rootId = nextRootId
+  await movedCategory.save({ session: options.session })
+
+  const descendants = await AssetCategoryModel.find({ pathIds: categoryId, _id: { $ne: categoryId } })
+    .sort({ depth: 1 })
+    .session(options.session ?? null)
+    .exec()
+  if (!descendants.length) {
+    return
+  }
+
+  const updates = descendants
+    .map((descendant) => {
+      const anchor = descendant.pathIds.findIndex((id) => id.equals(categoryId))
+      if (anchor < 0) {
+        return null
+      }
+      const suffixIds = descendant.pathIds.slice(anchor + 1).map((id) => id as Types.ObjectId)
+      const suffixNames = descendant.pathNames.slice(anchor + 1)
+      const mergedPathIds = [...nextPathIds, ...suffixIds]
+      const mergedPathNames = [...nextPathNames, ...suffixNames]
+      return {
+        updateOne: {
+          filter: { _id: descendant._id as Types.ObjectId },
+          update: {
+            $set: {
+              depth: mergedPathIds.length - 1,
+              pathIds: mergedPathIds,
+              pathNames: mergedPathNames,
+              rootId: nextRootId,
+            },
+          },
+        },
+      }
+    })
+    .filter(
+      (
+        item,
+      ): item is {
+        updateOne: {
+          filter: { _id: Types.ObjectId }
+          update: {
+            $set: {
+              depth: number
+              pathIds: Types.ObjectId[]
+              pathNames: string[]
+              rootId: Types.ObjectId
+            }
+          }
+        }
+      } => Boolean(item),
+    )
+
+  if (updates.length) {
+    await AssetCategoryModel.bulkWrite(updates, { session: options.session })
+  }
+}
+
+export async function moveCategory(
+  categoryId: string | Types.ObjectId,
+  targetParentId: null | string | Types.ObjectId,
+): Promise<AssetCategoryDocument> {
+  const sourceId = toObjectId(categoryId)
+  if (!sourceId) {
+    throw new Error('Invalid category id')
+  }
+
+  const nextParentId = targetParentId === null ? null : toObjectId(targetParentId)
+  if (targetParentId !== null && !nextParentId) {
+    throw new Error('Invalid target parent category id')
+  }
+  if (nextParentId && nextParentId.equals(sourceId)) {
+    throw new Error('Cannot move category to itself')
+  }
+
+  const session = await startSession()
+  try {
+    let moved: AssetCategoryDocument | null = null
+    await session.withTransaction(async () => {
+      const source = await AssetCategoryModel.findById(sourceId).session(session).exec()
+      if (!source) {
+        throw new Error('Category not found')
+      }
+      if (!source.parentId) {
+        throw new Error('Root category cannot be moved')
+      }
+
+      const parent = nextParentId
+        ? await AssetCategoryModel.findById(nextParentId).session(session).exec()
+        : null
+      if (nextParentId && !parent) {
+        throw new Error('Target parent category not found')
+      }
+      if (parent && parent.pathIds.some((id) => id.equals(sourceId))) {
+        throw new Error('Cannot move category into its own descendant')
+      }
+
+      const duplicate = await AssetCategoryModel.findOne({
+        _id: { $ne: sourceId },
+        parentId: nextParentId ?? null,
+        normalizedName: source.normalizedName,
+      })
+        .select('_id')
+        .session(session)
+        .lean()
+        .exec()
+      if (duplicate) {
+        throw new Error('Category name already exists at target level')
+      }
+
+      source.parentId = nextParentId
+      await source.save({ session })
+      await rebuildSubtreePaths(sourceId, { session })
+      moved = await AssetCategoryModel.findById(sourceId).session(session).exec()
+    })
+
+    if (!moved) {
+      throw new Error('Failed to move category')
+    }
+    return moved
+  } finally {
+    await session.endSession()
+  }
+}
+
+export async function bulkMoveAssetsToCategory(params: BulkMoveAssetsParams): Promise<BulkMoveAssetsResult> {
+  const targetCategoryId = toObjectId(params.targetCategoryId)
+  if (!targetCategoryId) {
+    throw new Error('Invalid target category id')
+  }
+  const targetExists = await AssetCategoryModel.exists({ _id: targetCategoryId }).exec()
+  if (!targetExists) {
+    throw new Error('Target category not found')
+  }
+
+  const filter: Record<string, unknown> = {}
+  if (Array.isArray(params.assetIds) && params.assetIds.length) {
+    const uniqueIds = Array.from(new Set(params.assetIds))
+    const objectIds = uniqueIds.map((id) => toObjectId(id))
+    if (objectIds.some((id) => !id)) {
+      throw new Error('Invalid asset id')
+    }
+    filter._id = { $in: objectIds }
+  } else if (params.fromCategoryId) {
+    const fromCategoryId = toObjectId(params.fromCategoryId)
+    if (!fromCategoryId) {
+      throw new Error('Invalid source category id')
+    }
+    const sourceExists = await AssetCategoryModel.exists({ _id: fromCategoryId }).exec()
+    if (!sourceExists) {
+      throw new Error('Source category not found')
+    }
+    const includeDescendants = params.includeDescendants !== false
+    const categoryIds = includeDescendants
+      ? await listDescendantCategoryIds(fromCategoryId)
+      : [fromCategoryId.toString()]
+    filter.categoryId = { $in: categoryIds.map((id) => new Types.ObjectId(id)) }
+  } else {
+    throw new Error('Either assetIds or fromCategoryId is required')
+  }
+
+  const existingCategoryFilter =
+    typeof filter.categoryId === 'object' && filter.categoryId !== null
+      ? (filter.categoryId as Record<string, unknown>)
+      : {}
+  filter.categoryId = {
+    ...existingCategoryFilter,
+    $ne: targetCategoryId,
+  }
+
+  const result = await AssetModel.updateMany(filter, { $set: { categoryId: targetCategoryId } }).exec()
+  return {
+    matchedCount: result.matchedCount ?? 0,
+    modifiedCount: result.modifiedCount ?? 0,
+  }
+}
+
+export async function mergeCategories(params: MergeCategoryParams): Promise<MergeCategoryResult> {
+  const sourceId = toObjectId(params.sourceCategoryId)
+  const targetId = toObjectId(params.targetCategoryId)
+  if (!sourceId || !targetId) {
+    throw new Error('Invalid category id')
+  }
+  if (sourceId.equals(targetId)) {
+    throw new Error('Source and target categories cannot be the same')
+  }
+
+  const moveChildren = params.moveChildren !== false
+  const session = await startSession()
+  try {
+    let movedAssetCount = 0
+    let movedChildCount = 0
+
+    await session.withTransaction(async () => {
+      const source = await AssetCategoryModel.findById(sourceId).session(session).exec()
+      if (!source) {
+        throw new Error('Source category not found')
+      }
+      if (!source.parentId) {
+        throw new Error('Root category cannot be merged')
+      }
+
+      const target = await AssetCategoryModel.findById(targetId).session(session).exec()
+      if (!target) {
+        throw new Error('Target category not found')
+      }
+      if (target.pathIds.some((id) => id.equals(sourceId))) {
+        throw new Error('Cannot merge category into its own descendant')
+      }
+
+      const movedAssetResult = await AssetModel.updateMany(
+        { categoryId: sourceId },
+        { $set: { categoryId: targetId } },
+        { session },
+      ).exec()
+      movedAssetCount = movedAssetResult.modifiedCount ?? 0
+
+      const children = await AssetCategoryModel.find({ parentId: sourceId }).session(session).exec()
+      if (!moveChildren && children.length > 0) {
+        throw new Error('Source category has child categories')
+      }
+
+      if (moveChildren && children.length > 0) {
+        for (const child of children) {
+          const duplicate = await AssetCategoryModel.findOne({
+            _id: { $ne: child._id },
+            parentId: targetId,
+            normalizedName: child.normalizedName,
+          })
+            .select('_id')
+            .session(session)
+            .lean()
+            .exec()
+          if (duplicate) {
+            throw new Error(`Child category name conflict: ${child.name}`)
+          }
+        }
+
+        for (const child of children) {
+          child.parentId = targetId
+          await child.save({ session })
+          await rebuildSubtreePaths(child._id as Types.ObjectId, { session })
+        }
+        movedChildCount = children.length
+      }
+
+      await AssetCategoryModel.deleteOne({ _id: sourceId }, { session }).exec()
+    })
+
+    return {
+      deletedCategoryId: sourceId.toString(),
+      movedAssetCount,
+      movedChildCount,
+    }
+  } finally {
+    await session.endSession()
+  }
 }
 
 export async function deleteCategoryStrict(categoryId: string | Types.ObjectId): Promise<void> {

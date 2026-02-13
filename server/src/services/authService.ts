@@ -79,10 +79,21 @@ const MANAGEMENT_PERMISSION_SEEDS = [
   { code: 'order:write', name: '订单管理', group: 'order' },
   { code: 'user:read', name: '用户查看', group: 'user' },
   { code: 'user:write', name: '用户管理', group: 'user' },
+  { code: 'role:read', name: '角色查看', group: 'role' },
+  { code: 'role:write', name: '角色管理', group: 'role' },
+  { code: 'permission:read', name: '权限查看', group: 'permission' },
+  { code: 'permission:write', name: '权限管理', group: 'permission' },
   { code: 'resource:read', name: '资源查看', group: 'resource' },
   { code: 'resource:write', name: '资源管理', group: 'resource' },
   { code: 'category:read', name: '分类查看', group: 'category' },
   { code: 'category:write', name: '分类管理', group: 'category' },
+  { code: 'userProject:read', name: '用户工程查看', group: 'userProject' },
+  { code: 'userProject:write', name: '用户工程管理', group: 'userProject' },
+  { code: 'userProjectCategory:read', name: '用户工程分类查看', group: 'userProjectCategory' },
+  { code: 'userProjectCategory:write', name: '用户工程分类管理', group: 'userProjectCategory' },
+  { code: 'auth:read', name: '登录日志查看', group: 'auth' },
+  { code: 'auth:delete', name: '登录日志删除', group: 'auth' },
+  { code: 'auth:export', name: '登录日志导出', group: 'auth' },
 ] as const
 
 async function resolveRoleDetails(roleIds: Types.ObjectId[]): Promise<SessionUser['roles']> {

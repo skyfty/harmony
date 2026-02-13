@@ -1,5 +1,6 @@
 import type { Context } from 'koa'
 import { getProfile, loginWithCredentials } from '@/services/authService'
+import { recordLogin } from '@/services/loginAuditService'
 
 export async function login(ctx: Context): Promise<void> {
   const { username, password } = ctx.request.body as { username?: string; password?: string }
@@ -8,8 +9,27 @@ export async function login(ctx: Context): Promise<void> {
   }
   try {
     const session = await loginWithCredentials(username, password)
+    // record successful login
+    await recordLogin({
+      userId: session.user.id,
+      username: session.user.username,
+      action: 'login',
+      success: true,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+      device: undefined,
+    })
     ctx.body = session
   } catch (error) {
+    // record failed login attempt
+    await recordLogin({
+      username,
+      action: 'login',
+      success: false,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
+      note: (error && (error as Error).message) || 'login failed',
+    })
     ctx.throw(401, 'Invalid credentials')
   }
 }

@@ -24,6 +24,7 @@ import { AssetTagModel } from '@/models/AssetTag'
 import { AssetSeriesModel } from '@/models/AssetSeries'
 import type { CategoryNodeDto, CategoryPathItemDto, CategoryTreeNode } from '@/services/assetCategoryService'
 import {
+  bulkMoveAssetsToCategory,
   deleteCategoryStrict,
   ensureCategoryConsistency,
   ensureRootCategory,
@@ -33,6 +34,8 @@ import {
   getCategoryTree,
   listCategoryChildren as listCategoryChildrenService,
   listDescendantCategoryIds,
+  mergeCategories,
+  moveCategory,
   sanitizeCategorySegments,
   searchCategories,
   updateCategoryInfo,
@@ -1241,6 +1244,162 @@ export async function deleteAssetCategory(ctx: Context): Promise<void> {
   ctx.status = 204
 }
 
+export async function moveAssetCategory(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const rawTargetParentId = sanitizeString(body?.targetParentId)
+  const targetParentId = !rawTargetParentId || rawTargetParentId.toLowerCase() === 'null' ? null : rawTargetParentId
+  if (targetParentId !== null && !Types.ObjectId.isValid(targetParentId)) {
+    ctx.throw(400, 'Invalid target parent category id')
+  }
+
+  try {
+    const moved = await moveCategory(id, targetParentId)
+    await refreshManifest()
+    const hasChildren =
+      (await AssetCategoryModel.exists({ parentId: moved._id as Types.ObjectId }).select('_id').lean().exec()) !== null
+    ctx.body = mapCategoryTreeNode(categoryDocumentToTreeNode(moved, { hasChildren }))
+  } catch (error) {
+    if (error instanceof Error) {
+      const message = error.message
+      if (message.includes('Invalid category id')) {
+        ctx.throw(400, 'Invalid category id')
+      }
+      if (message.includes('Invalid target parent category id')) {
+        ctx.throw(400, 'Invalid target parent category id')
+      }
+      if (message.includes('Category not found') || message.includes('Target parent category not found')) {
+        ctx.throw(404, message.includes('Target') ? 'Target parent category not found' : 'Category not found')
+      }
+      if (message.includes('Root category cannot be moved')) {
+        ctx.throw(409, 'Root category cannot be moved')
+      }
+      if (message.includes('Cannot move category')) {
+        ctx.throw(409, message)
+      }
+      if (message.includes('Category name already exists at target level')) {
+        ctx.throw(409, 'Category name already exists at target level')
+      }
+    }
+    throw error
+  }
+}
+
+export async function mergeAssetCategories(ctx: Context): Promise<void> {
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const sourceCategoryId = sanitizeString(body?.sourceCategoryId)
+  const targetCategoryId = sanitizeString(body?.targetCategoryId)
+  if (!sourceCategoryId || !Types.ObjectId.isValid(sourceCategoryId)) {
+    ctx.throw(400, 'Invalid source category id')
+  }
+  if (!targetCategoryId || !Types.ObjectId.isValid(targetCategoryId)) {
+    ctx.throw(400, 'Invalid target category id')
+  }
+  const rawMoveChildren = body?.moveChildren
+  const moveChildren = typeof rawMoveChildren === 'boolean' ? rawMoveChildren : rawMoveChildren !== 'false'
+
+  try {
+    const result = await mergeCategories({
+      sourceCategoryId,
+      targetCategoryId,
+      moveChildren,
+    })
+    await refreshManifest()
+    ctx.body = result
+  } catch (error) {
+    if (error instanceof Error) {
+      const message = error.message
+      if (message.includes('Invalid category id')) {
+        ctx.throw(400, 'Invalid category id')
+      }
+      if (message.includes('Source and target categories cannot be the same')) {
+        ctx.throw(409, 'Source and target categories cannot be the same')
+      }
+      if (message.includes('Source category not found')) {
+        ctx.throw(404, 'Source category not found')
+      }
+      if (message.includes('Target category not found')) {
+        ctx.throw(404, 'Target category not found')
+      }
+      if (message.includes('Root category cannot be merged')) {
+        ctx.throw(409, 'Root category cannot be merged')
+      }
+      if (message.includes('Cannot merge category into its own descendant')) {
+        ctx.throw(409, 'Cannot merge category into its own descendant')
+      }
+      if (message.includes('Source category has child categories')) {
+        ctx.throw(409, 'Source category has child categories')
+      }
+      if (message.includes('Child category name conflict')) {
+        ctx.throw(409, message)
+      }
+    }
+    throw error
+  }
+}
+
+export async function bulkMoveAssetsCategory(ctx: Context): Promise<void> {
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const targetCategoryId = sanitizeString(body?.targetCategoryId)
+  if (!targetCategoryId || !Types.ObjectId.isValid(targetCategoryId)) {
+    ctx.throw(400, 'Invalid target category id')
+  }
+
+  const fromCategoryId = sanitizeString(body?.fromCategoryId)
+  if (fromCategoryId && !Types.ObjectId.isValid(fromCategoryId)) {
+    ctx.throw(400, 'Invalid source category id')
+  }
+  const includeDescendants =
+    body?.includeDescendants === undefined
+      ? true
+      : body.includeDescendants === true ||
+        (typeof body.includeDescendants === 'string' && body.includeDescendants !== 'false')
+
+  const assetIds = ensureArrayString(body?.assetIds)
+  if (!assetIds.length && !fromCategoryId) {
+    ctx.throw(400, 'Either assetIds or fromCategoryId is required')
+  }
+
+  try {
+    const result = await bulkMoveAssetsToCategory({
+      assetIds: assetIds.length ? assetIds : undefined,
+      fromCategoryId: fromCategoryId ?? undefined,
+      includeDescendants,
+      targetCategoryId,
+    })
+    if (result.modifiedCount > 0) {
+      await refreshManifest()
+    }
+    ctx.body = result
+  } catch (error) {
+    if (error instanceof Error) {
+      const message = error.message
+      if (message.includes('Invalid target category id')) {
+        ctx.throw(400, 'Invalid target category id')
+      }
+      if (message.includes('Invalid source category id')) {
+        ctx.throw(400, 'Invalid source category id')
+      }
+      if (message.includes('Invalid asset id')) {
+        ctx.throw(400, 'Invalid asset id')
+      }
+      if (message.includes('Target category not found')) {
+        ctx.throw(404, 'Target category not found')
+      }
+      if (message.includes('Source category not found')) {
+        ctx.throw(404, 'Source category not found')
+      }
+      if (message.includes('Either assetIds or fromCategoryId is required')) {
+        ctx.throw(400, 'Either assetIds or fromCategoryId is required')
+      }
+    }
+    throw error
+  }
+}
+
 export async function searchAssetCategories(ctx: Context): Promise<void> {
   await ensureDefaultCategories()
   const keyword = sanitizeString(Array.isArray(ctx.query.keyword) ? ctx.query.keyword[0] : ctx.query.keyword) ?? ''
@@ -1663,6 +1822,33 @@ export async function createAssetSeries(ctx: Context): Promise<void> {
     }
     throw error
   }
+}
+
+export async function updateAssetSeries(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid series id')
+  }
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const name = sanitizeString(body?.name)
+  if (!name) {
+    ctx.throw(400, 'Series name is required')
+  }
+  const description = sanitizeString(body?.description)
+  const duplicate = await AssetSeriesModel.findOne({ name, _id: { $ne: id } }).select('_id').lean().exec()
+  if (duplicate) {
+    ctx.throw(409, 'Series name already exists')
+  }
+  const updated = await AssetSeriesModel.findByIdAndUpdate(
+    id,
+    { name, description: description ?? null },
+    { new: true },
+  ).lean().exec()
+  if (!updated) {
+    ctx.throw(404, 'Series not found')
+  }
+  const count = await AssetModel.countDocuments({ seriesId: id }).exec()
+  ctx.body = mapSeriesDocument(updated as SeriesDocumentLike, count)
 }
 
 export async function listSeriesAssets(ctx: Context): Promise<void> {

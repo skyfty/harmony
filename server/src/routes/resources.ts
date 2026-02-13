@@ -1,7 +1,9 @@
 import Router from 'koa-router'
 import { authMiddleware } from '@/middleware/auth'
 import {
+  bulkMoveAssetsCategory,
   createAssetSeries,
+  updateAssetSeries,
   createAssetCategory,
   createAssetTag,
   deleteAsset,
@@ -21,6 +23,8 @@ import {
   listAssetSeries,
   listSeriesAssets,
   listResourceCategories,
+  mergeAssetCategories,
+  moveAssetCategory,
   searchAssetCategories,
   refreshAssetManifest,
   updateAsset,
@@ -44,8 +48,11 @@ resourceRouter.get('/categories/:id/descendants', getAssetCategoryDescendants)
 resourceRouter.get('/categories/:id/assets', listCategoryAssets)
 resourceRouter.put('/categories/:id', updateAssetCategory)
 resourceRouter.delete('/categories/:id', deleteAssetCategory)
+resourceRouter.post('/categories/:id/move', moveAssetCategory)
+resourceRouter.post('/categories/merge', mergeAssetCategories)
 resourceRouter.get('/series', listAssetSeries)
 resourceRouter.post('/series', createAssetSeries)
+resourceRouter.put('/series/:id', updateAssetSeries)
 resourceRouter.get('/series/:id/assets', listSeriesAssets)
 resourceRouter.delete('/series/:id', deleteAssetSeries)
 resourceRouter.get('/directories', getProjectDirectories)
@@ -71,6 +78,7 @@ resourceRouter.put(
 )
 resourceRouter.delete('/assets/:id', deleteAsset)
 resourceRouter.get('/assets/:id/download', downloadAsset)
+resourceRouter.post('/assets/bulk-move-category', bulkMoveAssetsCategory)
 resourceRouter.post('/assets/manifest/refresh', refreshAssetManifest)
 resourceRouter.get('/tags', listAssetTags)
 resourceRouter.post('/tags', createAssetTag)

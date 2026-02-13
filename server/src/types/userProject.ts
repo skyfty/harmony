@@ -8,6 +8,7 @@ export interface StoredProjectSceneMeta {
 export interface StoredProjectPayload {
   id: string
   name: string
+  categoryId?: string | null
   scenes: StoredProjectSceneMeta[]
   lastEditedSceneId: string | null
 }

@@ -52,6 +52,9 @@ function normalizeProjectDocument(raw: unknown, fallbackId?: string): StoredProj
   const nameCandidate = typeof document.name === 'string' ? document.name.trim() : ''
   document.name = nameCandidate || '未命名工程'
 
+  const categoryRaw = typeof document.categoryId === 'string' ? document.categoryId.trim() : ''
+  document.categoryId = categoryRaw || null
+
   const scenesRaw = document.scenes
   const scenesArray = Array.isArray(scenesRaw) ? scenesRaw : []
   const scenes: StoredProjectPayload['scenes'] = []
@@ -111,7 +114,13 @@ export async function saveUserProject(userId: string, projectId: string, payload
 
   await UserProjectModel.findOneAndUpdate(
     { userId, projectId: document.id },
-    { userId, projectId: document.id, sceneIds, document: cloneDocument(document) },
+    {
+      userId,
+      projectId: document.id,
+      categoryId: document.categoryId ?? null,
+      sceneIds,
+      document: cloneDocument(document),
+    },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   )
 

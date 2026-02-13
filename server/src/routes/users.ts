@@ -18,5 +18,6 @@ userRouter.post('/', createUser)
 userRouter.put('/:id', updateUser)
 userRouter.delete('/:id', deleteUser)
 userRouter.patch('/:id/status', updateUserStatus)
+userRouter.put('/:id/status', updateUserStatus)
 
 export default userRouter
