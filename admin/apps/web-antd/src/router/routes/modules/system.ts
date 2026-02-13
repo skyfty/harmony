@@ -30,7 +30,46 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      // moved: scenics and user-project routes relocated to root-level entries
       // resource routes moved to root level
+    ],
+  },
+  {
+    name: 'Scenics',
+    path: '/scenics',
+    component: () => import('#/views/system/scenics/index.vue'),
+    meta: {
+      icon: 'lucide:image',
+      title: '场景管理',
+    },
+  },
+  {
+    meta: {
+      icon: 'lucide:folder-kanban',
+      order: 11,
+      title: '项目',
+    },
+    name: 'UserProject',
+    path: '/user-project',
+    children: [
+      {
+        name: 'UserProjectIndex',
+        path: '',
+        component: () => import('#/views/system/user-projects/index.vue'),
+        meta: {
+          icon: 'lucide:folder-kanban',
+          title: '项目管理',
+        },
+      },
+      {
+        name: 'UserProjectCategories',
+        path: 'categories',
+        component: () => import('#/views/system/user-projects/categories.vue'),
+        meta: {
+          icon: 'lucide:folder-tree',
+          title: '项目分类',
+        },
+      },
     ],
   },
   {
@@ -57,6 +96,25 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:tag',
           title: '商品分类',
+        },
+      },
+    ],
+  },
+  {
+    name: 'Orders',
+    path: '/orders',
+    meta: {
+      icon: 'lucide:package',
+      title: '订单管理',
+    },
+    children: [
+      {
+        name: 'OrdersIndex',
+        path: '',
+        component: () => import('#/views/system/orders/index.vue'),
+        meta: {
+          icon: 'lucide:package',
+          title: '订单管理',
         },
       },
     ],

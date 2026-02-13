@@ -398,10 +398,31 @@ export interface UserProjectDocument extends Document<Types.ObjectId> {
   userId: string
   /** 中文：项目 ID */
   projectId: string
+  /** 中文：项目分类 ID（可选） */
+  categoryId?: string | null
   /** 中文：项目包含的场景 ID 列表 */
   sceneIds: string[]
   /** 中文：项目文档数据（任意结构） */
   document: Record<string, unknown>
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export interface UserProjectCategoryDocument extends Document<Types.ObjectId> {
+  /** 中文：用户 ID（字符串） */
+  userId: string
+  /** 中文：分类名称 */
+  name: string
+  /** 中文：分类描述（可选） */
+  description?: string | null
+  /** 中文：排序值 */
+  sortOrder: number
+  /** 中文：是否启用 */
+  enabled: boolean
+  /** 中文：规范化名称 */
+  normalizedName: string
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */

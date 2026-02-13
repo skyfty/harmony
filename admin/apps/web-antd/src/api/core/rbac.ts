@@ -22,6 +22,8 @@ export interface UserItem {
   createdAt: string;
   displayName: null | string;
   email: null | string;
+  avatarUrl?: string | null;
+  bio?: string | null;
   id: string;
   roles: UserRoleItem[];
   status: 'active' | 'disabled';

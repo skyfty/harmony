@@ -9,6 +9,8 @@ function mapUser(user: any) {
     username: user.username,
     email: user.email ?? null,
     displayName: user.displayName ?? null,
+    avatarUrl: user.avatarUrl ?? null,
+    bio: user.bio ?? null,
     status: user.status,
     roles: (user.roles ?? []).map((role: any) => ({
       id: role._id ? role._id.toString() : role.id,
