@@ -6,10 +6,19 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'Scenics',
     path: '/scenics',
-    component: () => import('#/views/system/scenics/index.vue'),
+    component: () => import('#/views/scenics/index.vue'),
     meta: {
       icon: 'lucide:image',
       title: '场景管理',
+    },
+  },
+  {
+    name: 'LoginLogs',
+    path: '/login-logs',
+    component: () => import('#/views/login-logs/index.vue'),
+    meta: {
+      icon: 'lucide:log-in',
+      title: '登录日志',
     },
   },
   {
@@ -24,7 +33,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'UserProjectIndex',
         path: '',
-        component: () => import('#/views/system/user-projects/index.vue'),
+        component: () => import('#/views/user-projects/index.vue'),
         meta: {
           icon: 'lucide:folder-kanban',
           title: '项目管理',
@@ -33,7 +42,7 @@ const routes: RouteRecordRaw[] = [
         {
           name: 'UserProjectDetail',
           path: 'detail/:userId/:projectId',
-          component: () => import('#/views/system/user-projects/detail.vue'),
+          component: () => import('#/views/user-projects/detail.vue'),
           meta: {
             title: '项目详情',
           },
@@ -41,7 +50,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'UserProjectCategories',
         path: 'categories',
-        component: () => import('#/views/system/user-projects/categories.vue'),
+        component: () => import('#/views/user-projects/categories.vue'),
         meta: {
           icon: 'lucide:folder-tree',
           title: '项目分类',
@@ -60,7 +69,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ProductsIndex',
         path: '',
-        component: () => import('#/views/system/products/index.vue'),
+        component: () => import('#/views/products/index.vue'),
         meta: {
           icon: 'lucide:shopping-cart',
           title: '商品管理',
@@ -69,7 +78,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ProductsCategories',
         path: 'categories',
-        component: () => import('#/views/system/products/categories.vue'),
+        component: () => import('#/views/products/categories.vue'),
         meta: {
           icon: 'lucide:tag',
           title: '商品分类',
@@ -88,7 +97,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'OrdersIndex',
         path: '',
-        component: () => import('#/views/system/orders/index.vue'),
+        component: () => import('#/views/orders/index.vue'),
         meta: {
           icon: 'lucide:package',
           title: '订单管理',
@@ -107,7 +116,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ResourcesIndex',
         path: '',
-        component: () => import('#/views/system/resources/index.vue'),
+        component: () => import('#/views/resources/index.vue'),
         meta: {
           icon: 'lucide:database',
           title: '资源管理',
@@ -116,7 +125,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ResourcesTags',
         path: 'tags',
-        component: () => import('#/views/system/resources/tags.vue'),
+        component: () => import('#/views/resources/tags.vue'),
         meta: {
           icon: 'lucide:tag',
           title: '资源标签',
@@ -125,7 +134,7 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ResourcesSeries',
         path: 'series',
-        component: () => import('#/views/system/resources/series.vue'),
+        component: () => import('#/views/resources/series.vue'),
         meta: {
           icon: 'lucide:archive',
           title: '资源系列',
@@ -160,15 +169,7 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
-      {
-        name: 'SystemLoginLogs',
-        path: '/system/login-logs',
-        component: () => import('#/views/system/login-logs/index.vue'),
-        meta: {
-          icon: 'lucide:log-in',
-          title: '登录日志',
-        },
-      },
+      // login-logs moved to top-level route
       // moved: scenics and user-project routes relocated to root-level entries
       // resource routes moved to root level
     ],

@@ -17,12 +17,6 @@ const project = ref<UserProjectDocument | null>(null);
 const owner = ref<any | null>(null);
 const categories = ref<any[]>([]);
 
-const sceneColumns = [
-  { dataIndex: 'id', key: 'id', title: 'Scene ID' },
-  { dataIndex: 'name', key: 'name', title: '名称' },
-  { dataIndex: 'sceneJsonUrl', key: 'sceneJsonUrl', title: 'URL' },
-];
-
 const categoryName = computed(() => {
   if (!project.value || !project.value.categoryId) return null;
   const found = categories.value.find((c) => c.id === project.value?.categoryId);
@@ -56,6 +50,12 @@ function goBack() {
 }
 
 onMounted(load);
+
+const sceneColumns = [
+  { dataIndex: 'id', key: 'id', title: 'Scene ID' },
+  { dataIndex: 'name', key: 'name', title: '名称' },
+  { dataIndex: 'sceneJsonUrl', key: 'sceneJsonUrl', title: 'URL' },
+];
 </script>
 
 <template>
