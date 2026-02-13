@@ -1186,6 +1186,45 @@ function planningPointInPolygon(point: { x: number; y: number }, polygon: Planni
   return windingNumber !== 0
 }
 
+function distancePointToSegment2D(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const abx = bx - ax
+  const aby = by - ay
+  const lenSq = abx * abx + aby * aby
+  if (lenSq <= 1e-14) {
+    const dx = px - ax
+    const dy = py - ay
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+  let t = ((px - ax) * abx + (py - ay) * aby) / lenSq
+  t = Math.max(0, Math.min(1, t))
+  const cx = ax + t * abx
+  const cy = ay + t * aby
+  const dx = px - cx
+  const dy = py - cy
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+function signedDistanceToPolygon(px: number, py: number, polygon: PlanningPoint[]): number {
+  const n = polygon.length
+  if (n < 3) return Number.POSITIVE_INFINITY
+  let minDist = Number.POSITIVE_INFINITY
+  for (let i = 0; i < n; i += 1) {
+    const a = polygon[i]!
+    const b = polygon[(i + 1) % n]!
+    const d = distancePointToSegment2D(px, py, a.x, a.y, b.x, b.y)
+    if (d < minDist) minDist = d
+  }
+  const inside = planningPointInPolygon({ x: px, y: py }, polygon)
+  return inside ? minDist : -minDist
+}
+
+function contourSmoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge1 <= edge0) return x >= edge1 ? 1 : 0
+  let t = (x - edge0) / (edge1 - edge0)
+  t = Math.max(0, Math.min(1, t))
+  return t * t * (3 - 2 * t)
+}
+
 function sanitizePlanningContourPoints(points: PlanningPoint[]): PlanningPoint[] {
   if (!Array.isArray(points) || points.length < 3) {
     return []
@@ -1269,48 +1308,6 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
   }
 }
 
-function boxBlurGrid(input: Float32Array, rows: number, cols: number, radius: number): Float32Array {
-  const r = Math.max(0, Math.trunc(radius))
-  if (r <= 0) return input.slice()
-  const temp = new Float32Array(rows * cols)
-  const output = new Float32Array(rows * cols)
-
-  // Horizontal pass
-  for (let row = 0; row < rows; row += 1) {
-    const base = row * cols
-    const prefix = new Float32Array(cols + 1)
-    prefix[0] = 0
-    for (let col = 0; col < cols; col += 1) {
-      prefix[col + 1] = prefix[col]! + input[base + col]!
-    }
-    for (let col = 0; col < cols; col += 1) {
-      const a = Math.max(0, col - r)
-      const b = Math.min(cols - 1, col + r)
-      const sum = prefix[b + 1]! - prefix[a]!
-      const count = b - a + 1
-      temp[base + col] = count > 0 ? sum / count : 0
-    }
-  }
-
-  // Vertical pass
-  for (let col = 0; col < cols; col += 1) {
-    const prefix = new Float32Array(rows + 1)
-    prefix[0] = 0
-    for (let row = 0; row < rows; row += 1) {
-      prefix[row + 1] = prefix[row]! + temp[row * cols + col]!
-    }
-    for (let row = 0; row < rows; row += 1) {
-      const a = Math.max(0, row - r)
-      const b = Math.min(rows - 1, row + r)
-      const sum = prefix[b + 1]! - prefix[a]!
-      const count = b - a + 1
-      output[row * cols + col] = count > 0 ? sum / count : 0
-    }
-  }
-
-  return output
-}
-
 function setHeightOverrideValueForContours(
   definition: GroundDynamicMesh,
   map: Record<string, number>,
@@ -1345,8 +1342,20 @@ async function applyPlanningTerrainContoursToGround(options: {
       poly,
       points: sanitizePlanningContourPoints(poly?.points ?? []),
       blendMeters: normalizeContourBlendMeters((poly as any)?.terrainBlendMeters, defaultBlendMeters),
+      height: normalizeContourHeightMeters((poly as any)?.terrainHeightMeters),
+      area: 0,
     }))
     .filter((item) => item.points.length >= 3)
+
+  // Compute area and sort: larger (outer) polygons first, then by height ascending.
+  for (const item of polygons) {
+    item.area = polygonArea2D(item.points)
+  }
+  polygons.sort((a, b) => {
+    const areaDiff = b.area - a.area
+    if (Math.abs(areaDiff) > 1e-6) return areaDiff
+    return a.height - b.height
+  })
 
   const previousBoundsRaw = definition?.planningMetadata?.contourBounds
   const previousBounds: GroundContourBounds | null = isBoundsValid(previousBoundsRaw) ? previousBoundsRaw : null
@@ -1377,14 +1386,22 @@ async function applyPlanningTerrainContoursToGround(options: {
   const cols = maxCol - minCol + 1
 
   const cell = Math.max(1e-6, Number(definition.cellSize) || 1)
-  const delta = new Float32Array(rows * cols)
-  const contourBlendStrength = 0.65
 
-  // Accumulate additive height deltas for each contour polygon.
+  // --- Phase 1: Pre-compute per-polygon blend-factor grids via SDF ---
+  interface PolyGrid {
+    blendGrid: Float32Array
+    height: number
+    r0: number
+    r1: number
+    c0: number
+    c1: number
+    localCols: number
+  }
+  const polyGrids: PolyGrid[] = []
+
   for (let polyIndex = 0; polyIndex < polygons.length; polyIndex += 1) {
     throwIfAborted(options.signal)
-    const { poly, points, blendMeters } = polygons[polyIndex]!
-    const height = normalizeContourHeightMeters((poly as any).terrainHeightMeters)
+    const { points, blendMeters, height } = polygons[polyIndex]!
 
     const polyBounds = boundsFromPlanningPolygon(definition, points, blendMeters)
     if (!polyBounds) {
@@ -1400,56 +1417,70 @@ async function applyPlanningTerrainContoursToGround(options: {
       continue
     }
 
-    // Height 0 still participates in bounds (to allow clearing previous edits), but doesn't add delta.
-    if (Math.abs(height) <= 1e-9) {
-      await options.yieldController.maybeYield()
-      continue
-    }
-
     const localRows = r1 - r0 + 1
     const localCols = c1 - c0 + 1
-    const localDelta = new Float32Array(localRows * localCols)
+    const outerBlend = Math.max(cell * 0.5, blendMeters)
+
+    // Pass 1: compute raw SDF values and find the polygon's inradius (max interior SDF).
+    const sdfGrid = new Float32Array(localRows * localCols)
+    let maxSDF = 0
 
     for (let row = r0; row <= r1; row += 1) {
-      if ((row & 63) === 0) {
+      if ((row & 31) === 0) {
         await options.yieldController.maybeYield()
       }
       const py = row * cell
       const localRow = row - r0
       for (let col = c0; col <= c1; col += 1) {
         const px = col * cell
-        if (planningPointInPolygon({ x: px, y: py }, points)) {
-          const localCol = col - c0
-          const idx = localRow * localCols + localCol
-          localDelta[idx] = (localDelta[idx] ?? 0) + height
-        }
+        const sdf = signedDistanceToPolygon(px, py, points)
+        const idx = localRow * localCols + (col - c0)
+        sdfGrid[idx] = sdf
+        if (sdf > maxSDF) maxSDF = sdf
       }
     }
 
-    const radiusVertices = Math.max(0, Math.min(12, Math.round(blendMeters / cell)))
-    if (radiusVertices > 0) {
-      const blurred = boxBlurGrid(localDelta, localRows, localCols, radiusVertices)
-      for (let i = 0; i < localDelta.length; i += 1) {
-        localDelta[i] = localDelta[i]! * (1 - contourBlendStrength) + blurred[i]! * contourBlendStrength
-      }
+    // Pass 2: convert SDF to blend factors.
+    // The blend ramps from 0 (at outerBlend distance outside the edge) to 1 (at the deepest
+    // interior point), producing a smooth mountain shape instead of a flat plateau with steep walls.
+    const innerBlend = Math.max(outerBlend, maxSDF)
+    const blendGrid = new Float32Array(localRows * localCols)
+    for (let i = 0; i < sdfGrid.length; i += 1) {
+      blendGrid[i] = contourSmoothstep(-outerBlend, innerBlend, sdfGrid[i]!)
     }
 
-    for (let row = r0; row <= r1; row += 1) {
-      const localRow = row - r0
-      const globalRow = row - minRow
-      for (let col = c0; col <= c1; col += 1) {
-        const localCol = col - c0
-        const globalCol = col - minCol
-        const localValue = localDelta[localRow * localCols + localCol] ?? 0
-        if (Math.abs(localValue) <= 1e-12) {
+    polyGrids.push({ blendGrid, height, r0, r1, c0, c1, localCols })
+  }
+
+  // --- Phase 2: Compose heights via iterative lerp across sorted polygons ---
+  const heightGrid = new Float32Array(rows * cols)
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    if ((row & 63) === 0) {
+      throwIfAborted(options.signal)
+      await options.yieldController.maybeYield()
+    }
+    const globalRow = row - minRow
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const globalCol = col - minCol
+      let h = 0
+      for (let gi = 0; gi < polyGrids.length; gi += 1) {
+        const pg = polyGrids[gi]!
+        if (row < pg.r0 || row > pg.r1 || col < pg.c0 || col > pg.c1) {
           continue
         }
-        const idx = globalRow * cols + globalCol
-        delta[idx] = (delta[idx] ?? 0) + localValue
+        const localRow = row - pg.r0
+        const localCol = col - pg.c0
+        const blend = pg.blendGrid[localRow * pg.localCols + localCol]!
+        if (blend <= 1e-9) continue
+        // Iterative lerp: smoothly transition from current height toward this polygon's target.
+        h = h + (pg.height - h) * blend
       }
+      heightGrid[globalRow * cols + globalCol] = h
     }
   }
 
+  // --- Phase 3: Write final heights into planningHeightMap ---
   const nextHeightMap = { ...(definition.planningHeightMap ?? {}) }
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
@@ -1458,9 +1489,9 @@ async function applyPlanningTerrainContoursToGround(options: {
     const localRow = row - minRow
     for (let col = minCol; col <= maxCol; col += 1) {
       const localCol = col - minCol
-      const d = delta[localRow * cols + localCol]!
+      const h = heightGrid[localRow * cols + localCol]!
       const base = computeGroundBaseHeightAtVertex(definition, row, col)
-      setHeightOverrideValueForContours(definition, nextHeightMap, row, col, base + d)
+      setHeightOverrideValueForContours(definition, nextHeightMap, row, col, base + h)
     }
   }
 
