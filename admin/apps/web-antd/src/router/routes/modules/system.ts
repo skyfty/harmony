@@ -39,6 +39,24 @@ const routes: RouteRecordRaw[] = [
           title: '资源管理',
         },
       },
+      {
+        name: 'SystemResourceTags',
+        path: '/system/resources/tags',
+        component: () => import('#/views/system/resources/tags.vue'),
+        meta: {
+          icon: 'lucide:tag',
+          title: '资源标签',
+        },
+      },
+      {
+        name: 'SystemResourceSeries',
+        path: '/system/resources/series',
+        component: () => import('#/views/system/resources/series.vue'),
+        meta: {
+          icon: 'lucide:archive',
+          title: '资源系列',
+        },
+      },
     ],
   },
 ];

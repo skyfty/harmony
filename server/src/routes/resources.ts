@@ -3,6 +3,7 @@ import { authMiddleware } from '@/middleware/auth'
 import {
   bulkMoveAssetsCategory,
   createAssetSeries,
+  updateAssetSeries,
   createAssetCategory,
   createAssetTag,
   deleteAsset,
@@ -51,6 +52,7 @@ resourceRouter.post('/categories/:id/move', moveAssetCategory)
 resourceRouter.post('/categories/merge', mergeAssetCategories)
 resourceRouter.get('/series', listAssetSeries)
 resourceRouter.post('/series', createAssetSeries)
+resourceRouter.put('/series/:id', updateAssetSeries)
 resourceRouter.get('/series/:id/assets', listSeriesAssets)
 resourceRouter.delete('/series/:id', deleteAssetSeries)
 resourceRouter.get('/directories', getProjectDirectories)

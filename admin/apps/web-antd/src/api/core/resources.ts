@@ -191,8 +191,32 @@ export async function listResourceTagsApi() {
   return requestClient.get<ResourceTagItem[]>('/resources/tags');
 }
 
+export async function createResourceTagApi(payload: { name?: string; names?: string[]; description?: string }) {
+  return requestClient.post<{ tags: ResourceTagItem[]; createdTagIds?: string[] }>('/resources/tags', payload);
+}
+
+export async function updateResourceTagApi(id: string, payload: { name: string; description?: null | string }) {
+  return requestClient.put<ResourceTagItem>(`/resources/tags/${id}`, payload);
+}
+
+export async function deleteResourceTagApi(id: string) {
+  return requestClient.delete(`/resources/tags/${id}`);
+}
+
 export async function listResourceSeriesApi() {
   return requestClient.get<ResourceSeriesItem[]>('/resources/series');
+}
+
+export async function createResourceSeriesApi(payload: { name: string; description?: string | null }) {
+  return requestClient.post<ResourceSeriesItem>('/resources/series', payload);
+}
+
+export async function updateResourceSeriesApi(id: string, payload: { name: string; description?: string | null }) {
+  return requestClient.put<ResourceSeriesItem>(`/resources/series/${id}`, payload);
+}
+
+export async function deleteResourceSeriesApi(id: string) {
+  return requestClient.delete(`/resources/series/${id}`);
 }
 
 export function buildResourceDownloadUrl(id: string) {

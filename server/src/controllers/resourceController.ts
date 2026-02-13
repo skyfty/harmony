@@ -1824,6 +1824,33 @@ export async function createAssetSeries(ctx: Context): Promise<void> {
   }
 }
 
+export async function updateAssetSeries(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid series id')
+  }
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const name = sanitizeString(body?.name)
+  if (!name) {
+    ctx.throw(400, 'Series name is required')
+  }
+  const description = sanitizeString(body?.description)
+  const duplicate = await AssetSeriesModel.findOne({ name, _id: { $ne: id } }).select('_id').lean().exec()
+  if (duplicate) {
+    ctx.throw(409, 'Series name already exists')
+  }
+  const updated = await AssetSeriesModel.findByIdAndUpdate(
+    id,
+    { name, description: description ?? null },
+    { new: true },
+  ).lean().exec()
+  if (!updated) {
+    ctx.throw(404, 'Series not found')
+  }
+  const count = await AssetModel.countDocuments({ seriesId: id }).exec()
+  ctx.body = mapSeriesDocument(updated as SeriesDocumentLike, count)
+}
+
 export async function listSeriesAssets(ctx: Context): Promise<void> {
   const { id } = ctx.params
   const targetSeries = sanitizeString(id)
