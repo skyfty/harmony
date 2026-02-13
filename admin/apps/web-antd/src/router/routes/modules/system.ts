@@ -30,9 +30,20 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      // resource routes moved to root level
+    ],
+  },
+  {
+    name: 'Resources',
+    path: '/resources',
+    meta: {
+      icon: 'lucide:database',
+      title: '资源管理',
+    },
+    children: [
       {
-        name: 'SystemResources',
-        path: '/system/resources',
+        name: 'ResourcesIndex',
+        path: '',
         component: () => import('#/views/system/resources/index.vue'),
         meta: {
           icon: 'lucide:database',
@@ -40,8 +51,8 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        name: 'SystemResourceTags',
-        path: '/system/resources/tags',
+        name: 'ResourcesTags',
+        path: 'tags',
         component: () => import('#/views/system/resources/tags.vue'),
         meta: {
           icon: 'lucide:tag',
@@ -49,8 +60,8 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        name: 'SystemResourceSeries',
-        path: '/system/resources/series',
+        name: 'ResourcesSeries',
+        path: 'series',
         component: () => import('#/views/system/resources/series.vue'),
         meta: {
           icon: 'lucide:archive',
