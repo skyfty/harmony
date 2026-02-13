@@ -9,7 +9,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('#/views/scenics/index.vue'),
     meta: {
       icon: 'lucide:image',
-      title: '场景管理',
+      title: $t('page.scenics.title'),
     },
   },
   {
@@ -18,14 +18,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('#/views/login-logs/index.vue'),
     meta: {
       icon: 'lucide:log-in',
-      title: '登录日志',
+      title: $t('page.loginLogs.title'),
     },
   },
   {
     meta: {
       icon: 'lucide:folder-kanban',
       order: 11,
-      title: '项目',
+      title: $t('page.project.title'),
     },
     name: 'Project',
     path: '/projects',
@@ -36,7 +36,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/user-projects/index.vue'),
         meta: {
           icon: 'lucide:folder-kanban',
-          title: '项目管理',
+          title: $t('page.project.index.title'),
         },
       },
       {
@@ -44,7 +44,7 @@ const routes: RouteRecordRaw[] = [
         path: 'detail/:userId/:projectId',
         component: () => import('#/views/user-projects/detail.vue'),
         meta: {
-          title: '项目详情',
+          title: $t('page.project.detail.title'),
           hideInMenu: true,
         },
       },
@@ -54,7 +54,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/user-projects/categories.vue'),
         meta: {
           icon: 'lucide:folder-tree',
-          title: '项目分类',
+          title: $t('page.project.categories.title'),
         },
       },
     ],
@@ -64,7 +64,7 @@ const routes: RouteRecordRaw[] = [
     path: '/products',
     meta: {
       icon: 'lucide:shopping-cart',
-      title: '商品管理',
+      title: $t('page.products.title'),
     },
     children: [
       {
@@ -73,7 +73,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/products/index.vue'),
         meta: {
           icon: 'lucide:shopping-cart',
-          title: '商品管理',
+          title: $t('page.products.index.title'),
         },
       },
       {
@@ -82,7 +82,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/products/categories.vue'),
         meta: {
           icon: 'lucide:tag',
-          title: '商品分类',
+          title: $t('page.products.categories.title'),
         },
       },
     ],
@@ -92,7 +92,7 @@ const routes: RouteRecordRaw[] = [
     path: '/orders',
     meta: {
       icon: 'lucide:package',
-      title: '订单管理',
+      title: $t('page.orders.title'),
     },
     children: [
       {
@@ -101,7 +101,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/orders/index.vue'),
         meta: {
           icon: 'lucide:package',
-          title: '订单管理',
+          title: $t('page.orders.index.title'),
         },
       },
     ],
@@ -111,7 +111,7 @@ const routes: RouteRecordRaw[] = [
     path: '/resources',
     meta: {
       icon: 'lucide:database',
-      title: '资源管理',
+      title: $t('page.resources.title'),
     },
     children: [
       {
@@ -120,7 +120,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/resources/index.vue'),
         meta: {
           icon: 'lucide:database',
-          title: '资源管理',
+          title: $t('page.resources.index.title'),
         },
       },
       {
@@ -129,7 +129,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/resources/tags.vue'),
         meta: {
           icon: 'lucide:tag',
-          title: '资源标签',
+          title: $t('page.resources.tags.title'),
         },
       },
       {
@@ -138,7 +138,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/resources/series.vue'),
         meta: {
           icon: 'lucide:archive',
-          title: '资源系列',
+          title: $t('page.resources.series.title'),
         },
       },
     ],

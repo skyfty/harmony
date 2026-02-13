@@ -12,6 +12,7 @@ import type {
 } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -69,6 +70,8 @@ const permissionCodeNameMap = computed(() => {
   return new Map(permissionOptions.value.map((item) => [item.code, item.name]));
 });
 
+const { t } = useI18n();
+
 const roleModalOpen = ref(false);
 const roleSubmitting = ref(false);
 const editingRoleId = ref<null | string>(null);
@@ -92,21 +95,17 @@ const permissionFormModel = reactive<PermissionFormModel>({
 });
 
 const roleRules = {
-  code: [{ message: '请输入角色编码', required: true, type: 'string', trigger: 'blur' }],
-  name: [{ message: '请输入角色名称', required: true, type: 'string', trigger: 'blur' }],
+  code: [{ message: t('page.rolesPermissions.index.role.form.code.required'), required: true, type: 'string', trigger: 'blur' }],
+  name: [{ message: t('page.rolesPermissions.index.role.form.name.required'), required: true, type: 'string', trigger: 'blur' }],
 } as Record<string, any>;
 
 const permissionRules = {
-  code: [{ message: '请输入权限编码', required: true, type: 'string', trigger: 'blur' }],
-  name: [{ message: '请输入权限名称', required: true, type: 'string', trigger: 'blur' }],
+  code: [{ message: t('page.rolesPermissions.index.permission.form.code.required'), required: true, type: 'string', trigger: 'blur' }],
+  name: [{ message: t('page.rolesPermissions.index.permission.form.name.required'), required: true, type: 'string', trigger: 'blur' }],
 } as Record<string, any>;
 
-const roleModalTitle = computed(() =>
-  editingRoleId.value ? '编辑角色' : '新增角色',
-);
-const permissionModalTitle = computed(() =>
-  editingPermissionId.value ? '编辑权限' : '新增权限',
-);
+const roleModalTitle = computed(() => (editingRoleId.value ? t('page.rolesPermissions.index.role.modal.edit') : t('page.rolesPermissions.index.role.modal.create')));
+const permissionModalTitle = computed(() => (editingPermissionId.value ? t('page.rolesPermissions.index.permission.modal.edit') : t('page.rolesPermissions.index.permission.modal.create')));
 
 function resetRoleForm() {
   roleFormModel.name = '';
@@ -161,7 +160,7 @@ async function submitRole() {
         permissionIds: roleFormModel.permissionIds,
       };
       await updateRoleApi(editingRoleId.value, payload);
-      message.success('角色更新成功');
+      message.success(t('page.rolesPermissions.index.role.message.updateSuccess'));
     } else {
       const payload: CreateRolePayload = {
         name: roleFormModel.name,
@@ -170,7 +169,7 @@ async function submitRole() {
         permissionIds: roleFormModel.permissionIds,
       };
       await createRoleApi(payload);
-      message.success('角色创建成功');
+      message.success(t('page.rolesPermissions.index.role.message.createSuccess'));
     }
     roleModalOpen.value = false;
     await loadPermissionOptions();
@@ -183,12 +182,12 @@ async function submitRole() {
 
 function handleDeleteRole(record: RoleItem) {
   Modal.confirm({
-    title: `确认删除角色“${record.name}”吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.rolesPermissions.index.role.confirm.delete.title', { name: record.name }),
+    content: t('page.rolesPermissions.index.role.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteRoleApi(record.id);
-      message.success('角色删除成功');
+      message.success(t('page.rolesPermissions.index.role.message.deleteSuccess'));
       roleGridApi.reload();
     },
   });
@@ -225,7 +224,7 @@ async function submitPermission() {
         description: permissionFormModel.description || undefined,
       };
       await updatePermissionApi(editingPermissionId.value, payload);
-      message.success('权限更新成功');
+      message.success(t('page.rolesPermissions.index.permission.message.updateSuccess'));
     } else {
       const payload: CreatePermissionPayload = {
         name: permissionFormModel.name,
@@ -234,7 +233,7 @@ async function submitPermission() {
         description: permissionFormModel.description || undefined,
       };
       await createPermissionApi(payload);
-      message.success('权限创建成功');
+      message.success(t('page.rolesPermissions.index.permission.message.createSuccess'));
     }
     permissionModalOpen.value = false;
     await loadPermissionOptions();
@@ -247,12 +246,12 @@ async function submitPermission() {
 
 function handleDeletePermission(record: PermissionItem) {
   Modal.confirm({
-    title: `确认删除权限“${record.name}”吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.rolesPermissions.index.permission.confirm.delete.title', { name: record.name }),
+    content: t('page.rolesPermissions.index.permission.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deletePermissionApi(record.id);
-      message.success('权限删除成功');
+      message.success(t('page.rolesPermissions.index.permission.message.deleteSuccess'));
       await loadPermissionOptions();
       permissionGridApi.reload();
       roleGridApi.reload();
@@ -266,10 +265,10 @@ const [RoleGrid, roleGridApi] = useVbenVxeGrid<RoleItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
+        label: t('page.rolesPermissions.index.role.table.keyword'),
         componentProps: {
           allowClear: true,
-          placeholder: '角色名 / 编码',
+          placeholder: t('page.rolesPermissions.index.role.table.keywordPlaceholder'),
         },
       },
     ],
@@ -277,28 +276,28 @@ const [RoleGrid, roleGridApi] = useVbenVxeGrid<RoleItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 160, sortable: true, title: '角色名称' },
-      { field: 'code', minWidth: 180, sortable: true, title: '角色编码' },
-      { field: 'description', minWidth: 220, title: '描述' },
+      { field: 'name', minWidth: 160, sortable: true, title: t('page.rolesPermissions.index.role.table.name') },
+      { field: 'code', minWidth: 180, sortable: true, title: t('page.rolesPermissions.index.role.table.code') },
+      { field: 'description', minWidth: 220, title: t('page.rolesPermissions.index.role.table.description') },
       {
         field: 'permissions',
         minWidth: 320,
         slots: { default: 'role-permissions' },
-        title: '权限集',
+        title: t('page.rolesPermissions.index.role.table.permissions'),
       },
       {
         field: 'createdAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '创建时间',
+        title: t('page.rolesPermissions.index.role.table.createdAt'),
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.rolesPermissions.index.role.table.updatedAt'),
       },
       {
         align: 'left',
@@ -306,7 +305,7 @@ const [RoleGrid, roleGridApi] = useVbenVxeGrid<RoleItem>({
         fixed: 'right',
         minWidth: 180,
         slots: { default: 'role-actions' },
-        title: '操作',
+        title: t('page.rolesPermissions.index.role.table.actions'),
       },
     ],
     pagerConfig: {
@@ -335,7 +334,7 @@ const [RoleGrid, roleGridApi] = useVbenVxeGrid<RoleItem>({
       zoom: true,
     },
   },
-  tableTitle: '角色管理',
+  tableTitle: t('page.rolesPermissions.index.role.table.title'),
 });
 
 const [PermissionGrid, permissionGridApi] = useVbenVxeGrid<PermissionItem>({
@@ -344,20 +343,20 @@ const [PermissionGrid, permissionGridApi] = useVbenVxeGrid<PermissionItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
+        label: t('page.rolesPermissions.index.permission.table.keyword'),
         componentProps: {
           allowClear: true,
-          placeholder: '权限名 / 编码',
+          placeholder: t('page.rolesPermissions.index.permission.table.keywordPlaceholder'),
         },
       },
       {
         component: 'Select',
         fieldName: 'group',
-        label: '分组',
+        label: t('page.rolesPermissions.index.permission.table.group'),
         componentProps: {
           allowClear: true,
           options: permissionGroupOptions,
-          placeholder: '全部分组',
+          placeholder: t('page.rolesPermissions.index.permission.table.groupPlaceholder'),
         },
       },
     ],
@@ -365,23 +364,23 @@ const [PermissionGrid, permissionGridApi] = useVbenVxeGrid<PermissionItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 170, sortable: true, title: '权限名称' },
-      { field: 'code', minWidth: 200, sortable: true, title: '权限编码' },
-      { field: 'group', minWidth: 160, sortable: true, title: '分组' },
-      { field: 'description', minWidth: 240, title: '描述' },
+      { field: 'name', minWidth: 170, sortable: true, title: t('page.rolesPermissions.index.permission.table.name') },
+      { field: 'code', minWidth: 200, sortable: true, title: t('page.rolesPermissions.index.permission.table.code') },
+      { field: 'group', minWidth: 160, sortable: true, title: t('page.rolesPermissions.index.permission.table.group') },
+      { field: 'description', minWidth: 240, title: t('page.rolesPermissions.index.permission.table.description') },
       {
         field: 'createdAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '创建时间',
+        title: t('page.rolesPermissions.index.permission.table.createdAt'),
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.rolesPermissions.index.permission.table.updatedAt'),
       },
       {
         align: 'left',
@@ -389,7 +388,7 @@ const [PermissionGrid, permissionGridApi] = useVbenVxeGrid<PermissionItem>({
         fixed: 'right',
         minWidth: 180,
         slots: { default: 'permission-actions' },
-        title: '操作',
+        title: t('page.rolesPermissions.index.permission.table.actions'),
       },
     ],
     pagerConfig: {
@@ -428,7 +427,7 @@ const [PermissionGrid, permissionGridApi] = useVbenVxeGrid<PermissionItem>({
       zoom: true,
     },
   },
-  tableTitle: '权限管理',
+  tableTitle: t('page.rolesPermissions.index.permission.table.title'),
 });
 
 onMounted(async () => {
@@ -439,7 +438,7 @@ onMounted(async () => {
 <template>
   <div class="p-5">
     <Tabs v-model:active-key="activeTab">
-      <Tabs.TabPane key="roles" tab="角色管理">
+      <Tabs.TabPane key="roles" :tab="t('page.rolesPermissions.index.tabs.roles')">
         <RoleGrid>
           <template #toolbar-actions>
             <Button
@@ -447,7 +446,7 @@ onMounted(async () => {
               type="primary"
               @click="openCreateRole"
             >
-              新增角色
+              {{ t('page.rolesPermissions.index.role.toolbar.create') }}
             </Button>
           </template>
 
@@ -468,7 +467,7 @@ onMounted(async () => {
                 type="link"
                 @click="openEditRole(row)"
               >
-                编辑
+                {{ t('page.rolesPermissions.index.role.actions.edit') }}
               </Button>
               <Button
                 v-access:code="'role:write'"
@@ -477,14 +476,14 @@ onMounted(async () => {
                 type="link"
                 @click="handleDeleteRole(row)"
               >
-                删除
+                {{ t('page.rolesPermissions.index.role.actions.delete') }}
               </Button>
             </Space>
           </template>
         </RoleGrid>
       </Tabs.TabPane>
 
-      <Tabs.TabPane key="permissions" tab="权限管理">
+      <Tabs.TabPane key="permissions" :tab="t('page.rolesPermissions.index.tabs.permissions')">
         <PermissionGrid>
           <template #toolbar-actions>
             <Button
@@ -492,7 +491,7 @@ onMounted(async () => {
               type="primary"
               @click="openCreatePermission"
             >
-              新增权限
+              {{ t('page.rolesPermissions.index.permission.toolbar.create') }}
             </Button>
           </template>
 
@@ -504,7 +503,7 @@ onMounted(async () => {
                 type="link"
                 @click="openEditPermission(row)"
               >
-                编辑
+                {{ t('page.rolesPermissions.index.permission.actions.edit') }}
               </Button>
               <Button
                 v-access:code="'permission:write'"
@@ -513,7 +512,7 @@ onMounted(async () => {
                 type="link"
                 @click="handleDeletePermission(row)"
               >
-                删除
+                {{ t('page.rolesPermissions.index.permission.actions.delete') }}
               </Button>
             </Space>
           </template>
@@ -526,8 +525,8 @@ onMounted(async () => {
       :open="roleModalOpen"
       :title="roleModalTitle"
       destroy-on-close
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.rolesPermissions.index.role.modal.ok')"
+      :cancel-text="t('page.rolesPermissions.index.role.modal.cancel')"
       @cancel="roleModalOpen = false"
       @ok="submitRole"
     >
@@ -538,36 +537,36 @@ onMounted(async () => {
         :rules="roleRules"
         :wrapper-col="{ span: 17 }"
       >
-        <Form.Item label="角色名称" name="name">
+        <Form.Item :label="t('page.rolesPermissions.index.role.form.name.label')" name="name">
           <Input
             v-model:value="roleFormModel.name"
             allow-clear
-            placeholder="请输入角色名称"
+            :placeholder="t('page.rolesPermissions.index.role.form.name.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="角色编码" name="code">
+        <Form.Item :label="t('page.rolesPermissions.index.role.form.code.label')" name="code">
           <Input
             v-model:value="roleFormModel.code"
             allow-clear
-            placeholder="请输入角色编码"
+            :placeholder="t('page.rolesPermissions.index.role.form.code.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="描述" name="description">
+        <Form.Item :label="t('page.rolesPermissions.index.role.form.description.label')" name="description">
           <Input.TextArea
             v-model:value="roleFormModel.description"
             :rows="3"
             allow-clear
-            placeholder="请输入描述"
+            :placeholder="t('page.rolesPermissions.index.role.form.description.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="权限集" name="permissionIds">
+        <Form.Item :label="t('page.rolesPermissions.index.role.form.permissions.label')" name="permissionIds">
           <Select
             v-model:value="roleFormModel.permissionIds"
             :options="permissionOptions.map((item) => ({ label: `${item.name} (${item.code})`, value: item.id }))"
             allow-clear
             mode="multiple"
             option-filter-prop="label"
-            placeholder="请选择权限"
+            :placeholder="t('page.rolesPermissions.index.role.form.permissions.placeholder')"
             show-search
           />
         </Form.Item>
@@ -579,8 +578,8 @@ onMounted(async () => {
       :open="permissionModalOpen"
       :title="permissionModalTitle"
       destroy-on-close
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.rolesPermissions.index.permission.modal.ok')"
+      :cancel-text="t('page.rolesPermissions.index.permission.modal.cancel')"
       @cancel="permissionModalOpen = false"
       @ok="submitPermission"
     >
@@ -591,33 +590,33 @@ onMounted(async () => {
         :rules="permissionRules"
         :wrapper-col="{ span: 17 }"
       >
-        <Form.Item label="权限名称" name="name">
+        <Form.Item :label="t('page.rolesPermissions.index.permission.form.name.label')" name="name">
           <Input
             v-model:value="permissionFormModel.name"
             allow-clear
-            placeholder="请输入权限名称"
+            :placeholder="t('page.rolesPermissions.index.permission.form.name.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="权限编码" name="code">
+        <Form.Item :label="t('page.rolesPermissions.index.permission.form.code.label')" name="code">
           <Input
             v-model:value="permissionFormModel.code"
             allow-clear
-            placeholder="请输入权限编码"
+            :placeholder="t('page.rolesPermissions.index.permission.form.code.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="分组" name="group">
+        <Form.Item :label="t('page.rolesPermissions.index.permission.form.group.label')" name="group">
           <Input
             v-model:value="permissionFormModel.group"
             allow-clear
-            placeholder="请输入分组（可选）"
+            :placeholder="t('page.rolesPermissions.index.permission.form.group.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="描述" name="description">
+        <Form.Item :label="t('page.rolesPermissions.index.permission.form.description.label')" name="description">
           <Input.TextArea
             v-model:value="permissionFormModel.description"
             :rows="3"
             allow-clear
-            placeholder="请输入描述"
+            :placeholder="t('page.rolesPermissions.index.permission.form.description.placeholder')"
           />
         </Form.Item>
       </Form>

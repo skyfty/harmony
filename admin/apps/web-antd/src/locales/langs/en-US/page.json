@@ -12,6 +12,14 @@
     "analytics": "Analytics",
     "workspace": "Workspace"
   },
+  "scenics": { "title": "Scenics" },
+  "loginLogs": { "title": "Login Logs" },
+  "project": {
+    "title": "Projects",
+    "index": { "title": "Project Management" },
+    "detail": { "title": "Project Details" },
+    "categories": { "title": "Project Categories" }
+  },
   "system": {
     "title": "System",
     "users": "Users",
@@ -133,6 +141,7 @@
     }
   },
   "orders": {
+    "title": "Order Management",
     "index": {
       "actions": { "edit": "Edit", "delete": "Delete" },
       "modal": { "title": "Order" },
@@ -188,6 +197,12 @@
     }
   }
   ,
+  "resources": {
+    "title": "Resources",
+    "index": { "title": "Resource Management" },
+    "tags": { "title": "Resource Tags" },
+    "series": { "title": "Resource Series" }
+  },
   "systemUsers": {
     "index": {
       "modal": { "edit": "Edit User", "create": "New User", "ok": "Save", "cancel": "Cancel" },
@@ -224,8 +239,8 @@
         "modal": { "edit": "Edit Role", "create": "New Role", "ok": "Save", "cancel": "Cancel" },
         "message": { "updateSuccess": "Role updated", "createSuccess": "Role created", "deleteSuccess": "Role deleted" },
         "confirm": { "delete": { "title": "Confirm delete role \"{name}\"?", "content": "This action cannot be undone." } },
-        "form": { "name": { "label": "Role Name", "required": "Please enter role name" }, "code": { "label": "Role Code", "required": "Please enter role code" }, "description": { "label": "Description", "placeholder": "Please enter description" }, "permissions": { "label": "Permission Set", "placeholder": "Please select permissions" } },
-        "table": { "name": "Role Name", "code": "Role Code", "description": "Description", "permissions": "Permission Set", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Role Management" },
+        "form": { "name": { "label": "Role Name", "required": "Please enter role name", "placeholder": "Please enter role name" }, "code": { "label": "Role Code", "required": "Please enter role code", "placeholder": "Please enter role code" }, "description": { "label": "Description", "placeholder": "Please enter description" }, "permissions": { "label": "Permission Set", "placeholder": "Please select permissions" } },
+        "table": { "keyword": "Keyword", "keywordPlaceholder": "Role name / code", "name": "Role Name", "code": "Role Code", "description": "Description", "permissions": "Permission Set", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Role Management" },
         "toolbar": { "create": "New Role" },
         "actions": { "edit": "Edit", "delete": "Delete" }
       },
@@ -233,8 +248,8 @@
         "modal": { "edit": "Edit Permission", "create": "New Permission", "ok": "Save", "cancel": "Cancel" },
         "message": { "updateSuccess": "Permission updated", "createSuccess": "Permission created", "deleteSuccess": "Permission deleted" },
         "confirm": { "delete": { "title": "Confirm delete permission \"{name}\"?", "content": "This action cannot be undone." } },
-        "form": { "name": { "label": "Permission Name", "required": "Please enter permission name" }, "code": { "label": "Permission Code", "required": "Please enter permission code" }, "group": { "label": "Group", "placeholder": "All groups" }, "description": { "label": "Description", "placeholder": "Please enter description" } },
-        "table": { "name": "Permission Name", "code": "Permission Code", "group": "Group", "description": "Description", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Permission Management" },
+        "form": { "name": { "label": "Permission Name", "required": "Please enter permission name", "placeholder": "Please enter permission name" }, "code": { "label": "Permission Code", "required": "Please enter permission code", "placeholder": "Please enter permission code" }, "group": { "label": "Group", "placeholder": "All groups" }, "description": { "label": "Description", "placeholder": "Please enter description" } },
+        "table": { "keyword": "Keyword", "keywordPlaceholder": "Permission name / code", "name": "Permission Name", "code": "Permission Code", "group": "Group", "description": "Description", "createdAt": "Created At", "updatedAt": "Updated At", "actions": "Actions", "title": "Permission Management" },
         "toolbar": { "create": "New Permission" },
         "actions": { "edit": "Edit", "delete": "Delete" }
       }
