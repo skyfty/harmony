@@ -38,12 +38,15 @@ import {
   updateUserStatus,
 } from '@/controllers/userController'
 import {
+  bulkMoveAssetsCategory,
   createAssetCategory,
   deleteAsset,
   deleteAssetCategory,
   getAsset,
   listAssets,
   listResourceCategories,
+  mergeAssetCategories,
+  moveAssetCategory,
   updateAsset,
   updateAssetCategory,
   uploadAsset,
@@ -101,10 +104,13 @@ adminRouter.put(
   updateAsset,
 )
 adminRouter.delete('/resources/assets/:id', requireAnyPermission(['resource:write']), deleteAsset)
+adminRouter.post('/resources/assets/bulk-move-category', requireAnyPermission(['resource:write']), bulkMoveAssetsCategory)
 
 adminRouter.get('/categories', requireAnyPermission(['category:read']), listResourceCategories)
 adminRouter.post('/categories', requireAnyPermission(['category:write']), createAssetCategory)
 adminRouter.put('/categories/:id', requireAnyPermission(['category:write']), updateAssetCategory)
 adminRouter.delete('/categories/:id', requireAnyPermission(['category:write']), deleteAssetCategory)
+adminRouter.post('/categories/:id/move', requireAnyPermission(['category:write']), moveAssetCategory)
+adminRouter.post('/categories/merge', requireAnyPermission(['category:write']), mergeAssetCategories)
 
 export default adminRouter

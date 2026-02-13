@@ -30,6 +30,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      {
+        name: 'SystemResources',
+        path: '/system/resources',
+        component: () => import('#/views/system/resources/index.vue'),
+        meta: {
+          icon: 'lucide:database',
+          title: '资源管理',
+        },
+      },
     ],
   },
 ];
