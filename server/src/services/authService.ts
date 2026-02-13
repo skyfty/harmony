@@ -50,6 +50,7 @@ interface SessionUser {
   gender?: 'male' | 'female' | 'other'
   birthDate?: string
   status: 'active' | 'disabled'
+  accountType: 'admin' | 'super' | 'user'
   workShareCount?: number
   exhibitionShareCount?: number
   roles: Array<{
@@ -67,6 +68,9 @@ export interface AuthSessionResponse {
   user: SessionUser
   permissions: string[]
 }
+
+const SUPER_PERMISSION = 'admin:super'
+const SUPER_ROLE_CODES = new Set(['admin', 'super'])
 
 const MANAGEMENT_PERMISSION_SEEDS = [
   { code: 'scenic:read', name: '景区查看', group: 'scenic' },
@@ -127,6 +131,24 @@ async function resolvePermissionCodes(roleIds: Types.ObjectId[]): Promise<string
   return permissions.map((permission) => permission.code)
 }
 
+function deriveAccountType(roles: SessionUser['roles']): SessionUser['accountType'] {
+  if (roles.some((role) => role.code === 'super')) {
+    return 'super'
+  }
+  if (roles.some((role) => role.code === 'admin')) {
+    return 'admin'
+  }
+  return 'user'
+}
+
+function mergePermissions(roles: SessionUser['roles'], permissions: string[]): string[] {
+  const permissionSet = new Set(permissions)
+  if (roles.some((role) => SUPER_ROLE_CODES.has(role.code))) {
+    permissionSet.add(SUPER_PERMISSION)
+  }
+  return Array.from(permissionSet)
+}
+
 function buildSessionUser(user: UserLean): SessionUser {
   if (!user) {
     throw new Error('User not found')
@@ -141,6 +163,7 @@ function buildSessionUser(user: UserLean): SessionUser {
     gender: user.gender ?? undefined,
     birthDate: user.birthDate?.toISOString() ?? undefined,
     status: user.status,
+    accountType: 'user',
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
     roles: [],
@@ -166,22 +189,21 @@ export async function loginWithCredentials(username: string, password: string): 
     resolveRoleDetails(roleIds),
     resolvePermissionCodes(roleIds),
   ])
-  const permissionSet = new Set(permissions)
-  if (roles.some((role) => role.code === 'admin')) {
-    permissionSet.add('admin:super')
-  }
+  const mergedPermissions = mergePermissions(roles, permissions)
   const sessionUser = buildSessionUser({ ...user, _id: user._id })
   sessionUser.roles = roles
+  sessionUser.accountType = deriveAccountType(roles)
   const token = signAuthToken({
     sub: user._id.toString(),
     username: user.username,
     roles: roles.map((role) => role.code),
-    permissions: Array.from(permissionSet),
+    permissions: mergedPermissions,
+    accountType: sessionUser.accountType,
   })
   return {
     token,
     user: sessionUser,
-    permissions: Array.from(permissionSet),
+    permissions: mergedPermissions,
   }
 }
 
@@ -195,24 +217,18 @@ export async function getProfile(userId: string): Promise<AuthSessionResponse> {
     resolveRoleDetails(roleIds),
     resolvePermissionCodes(roleIds),
   ])
-  const permissionSet = new Set(permissions)
-  if (roles.some((role) => role.code === 'admin')) {
-    permissionSet.add('admin:super')
-  }
+  const mergedPermissions = mergePermissions(roles, permissions)
   const sessionUser = buildSessionUser({ ...user, _id: user._id })
   sessionUser.roles = roles
+  sessionUser.accountType = deriveAccountType(roles)
   return {
     user: sessionUser,
-    permissions: Array.from(permissionSet),
+    permissions: mergedPermissions,
   }
 }
 
 export async function createInitialAdmin(): Promise<void> {
-  const existingAdmin = await UserModel.findOne({ username: 'admin' })
-  if (existingAdmin) {
-    return
-  }
-  const permission = await PermissionModel.findOne({ code: 'admin:super' })
+  const permission = await PermissionModel.findOne({ code: SUPER_PERMISSION })
   const superPermission = permission ?? (await PermissionModel.create({ name: 'Super Admin', code: 'admin:super' }))
   let adminRole = await RoleModel.findOne({ code: 'admin' })
   if (!adminRole) {
@@ -221,6 +237,18 @@ export async function createInitialAdmin(): Promise<void> {
       code: 'admin',
       permissions: [superPermission._id],
     })
+  }
+  const existingSuperRole = await RoleModel.findOne({ code: 'super' })
+  if (!existingSuperRole) {
+    await RoleModel.create({
+      name: 'Super Administrator',
+      code: 'super',
+      permissions: [superPermission._id],
+    })
+  }
+  const existingAdmin = await UserModel.findOne({ username: 'admin' })
+  if (existingAdmin) {
+    return
   }
   const hashed = await hashPassword('admin123')
   await UserModel.create({

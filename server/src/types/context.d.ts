@@ -7,6 +7,7 @@ declare module 'koa' {
       username: string
       roles: string[]
       permissions: string[]
+      accountType?: 'admin' | 'super' | 'user'
     }
   }
 }

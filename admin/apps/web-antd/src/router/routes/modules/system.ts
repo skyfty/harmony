@@ -44,7 +44,8 @@ const routes: RouteRecordRaw[] = [
           path: 'detail/:userId/:projectId',
           component: () => import('#/views/user-projects/detail.vue'),
           meta: {
-            title: '项目详情',
+              title: '项目详情',
+              hideInMenu: true,
           },
         },
       {

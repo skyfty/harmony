@@ -3,6 +3,8 @@ import { computed } from 'vue';
 import { preferences, updatePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 
+const SUPER_PERMISSION = 'admin:super';
+
 function useAccess() {
   const accessStore = useAccessStore();
   const userStore = useUserStore();
@@ -28,6 +30,10 @@ function useAccess() {
    */
   function hasAccessByCodes(codes: string[]) {
     const userCodesSet = new Set(accessStore.accessCodes);
+
+    if (userCodesSet.has(SUPER_PERMISSION)) {
+      return true;
+    }
 
     const intersection = codes.filter((item) => userCodesSet.has(item));
     return intersection.length > 0;

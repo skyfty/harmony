@@ -8,6 +8,7 @@ function assignUserState(ctx: Context, token: string): void {
     username: payload.username,
     roles: payload.roles,
     permissions: payload.permissions,
+    accountType: payload.accountType,
   }
 }
 
