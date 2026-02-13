@@ -11,5 +11,10 @@
     "title": "Dashboard",
     "analytics": "Analytics",
     "workspace": "Workspace"
+  },
+  "system": {
+    "title": "System",
+    "users": "Users",
+    "rbac": "Roles & Permissions"
   }
 }

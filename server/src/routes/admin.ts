@@ -83,6 +83,7 @@ adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getUser)
 adminRouter.post('/users', requireAnyPermission(['user:write']), createUser)
 adminRouter.put('/users/:id', requireAnyPermission(['user:write']), updateUser)
 adminRouter.patch('/users/:id/status', requireAnyPermission(['user:write']), updateUserStatus)
+adminRouter.put('/users/:id/status', requireAnyPermission(['user:write']), updateUserStatus)
 adminRouter.delete('/users/:id', requireAnyPermission(['user:write']), deleteUser)
 
 adminRouter.get('/resources/assets', requireAnyPermission(['resource:read']), listAssets)
