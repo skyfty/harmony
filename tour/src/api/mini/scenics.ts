@@ -26,3 +26,24 @@ export async function getScenic(id: string): Promise<ScenicDetail | null> {
   const res = await miniRequest<GetScenicResponse>(`/scene-spots/${encodeURIComponent(id)}`, { method: 'GET' })
   return res?.sceneSpot ?? null
 }
+
+export type ScenicInteractionResponse = {
+  averageRating: number
+  ratingCount: number
+  favoriteCount: number
+  favorited: boolean
+  userRating: number | null
+}
+
+export async function toggleScenicFavorite(id: string): Promise<ScenicInteractionResponse> {
+  return await miniRequest<ScenicInteractionResponse>(`/scene-spots/${encodeURIComponent(id)}/favorite`, {
+    method: 'POST',
+  })
+}
+
+export async function rateScenic(id: string, score: number): Promise<ScenicInteractionResponse> {
+  return await miniRequest<ScenicInteractionResponse>(`/scene-spots/${encodeURIComponent(id)}/rate`, {
+    method: 'POST',
+    body: { score },
+  })
+}

@@ -29,6 +29,9 @@ interface SceneSpotFormModel {
   address: string;
   order: number;
   isFeatured: boolean;
+  averageRating: number;
+  ratingCount: number;
+  favoriteCount: number;
 }
 
 const { TextArea } = Input;
@@ -61,6 +64,9 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   address: '',
   order: 0,
   isFeatured: false,
+  averageRating: 0,
+  ratingCount: 0,
+  favoriteCount: 0,
 });
 
 const featuredLoading = reactive<Record<string, boolean>>({});
@@ -82,6 +88,9 @@ function resetForm() {
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.order = 0;
   sceneSpotFormModel.isFeatured = false;
+  sceneSpotFormModel.averageRating = 0;
+  sceneSpotFormModel.ratingCount = 0;
+  sceneSpotFormModel.favoriteCount = 0;
   coverImageFileList.value = [];
   slidesFileList.value = [];
 }
@@ -222,6 +231,9 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.address = data.address ?? '';
   sceneSpotFormModel.order = data.order ?? 0;
   sceneSpotFormModel.isFeatured = data.isFeatured === true;
+  sceneSpotFormModel.averageRating = Number(data.averageRating ?? 0);
+  sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
+  sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
 
   coverImageFileList.value = data.coverImage
     ? [
@@ -263,6 +275,9 @@ async function submitSceneSpot() {
     address: sceneSpotFormModel.address.trim() || null,
     order: Number(sceneSpotFormModel.order) || 0,
     isFeatured: sceneSpotFormModel.isFeatured,
+    averageRating: Number(sceneSpotFormModel.averageRating) || 0,
+    ratingCount: Number(sceneSpotFormModel.ratingCount) || 0,
+    favoriteCount: Number(sceneSpotFormModel.favoriteCount) || 0,
   };
 
   submitting.value = true;
@@ -354,6 +369,9 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
       { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
+      { field: 'averageRating', minWidth: 120, title: t('page.sceneSpots.index.table.averageRating') },
+      { field: 'ratingCount', minWidth: 120, title: t('page.sceneSpots.index.table.ratingCount') },
+      { field: 'favoriteCount', minWidth: 120, title: t('page.sceneSpots.index.table.favoriteCount') },
       { field: 'address', minWidth: 220, title: t('page.sceneSpots.index.table.address') },
       { field: 'order', minWidth: 100, title: t('page.sceneSpots.index.table.order') },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.sceneSpots.index.table.updatedAt') },
@@ -496,6 +514,15 @@ onMounted(async () => {
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
           <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
+        </Form.Item>
+        <Form.Item :label="t('page.sceneSpots.index.formFields.averageRating.label')" name="averageRating">
+          <InputNumber v-model:value="sceneSpotFormModel.averageRating" :min="0" :max="5" :step="0.1" style="width: 100%" />
+        </Form.Item>
+        <Form.Item :label="t('page.sceneSpots.index.formFields.ratingCount.label')" name="ratingCount">
+          <InputNumber v-model:value="sceneSpotFormModel.ratingCount" :min="0" :precision="0" style="width: 100%" />
+        </Form.Item>
+        <Form.Item :label="t('page.sceneSpots.index.formFields.favoriteCount.label')" name="favoriteCount">
+          <InputNumber v-model:value="sceneSpotFormModel.favoriteCount" :min="0" :precision="0" style="width: 100%" />
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
           <Switch v-model:checked="sceneSpotFormModel.isFeatured" />

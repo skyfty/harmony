@@ -22,6 +22,9 @@ export interface SceneSpotItem {
   address: string;
   order: number;
   isFeatured: boolean;
+  averageRating: number;
+  ratingCount: number;
+  favoriteCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +46,9 @@ export interface SceneSpotCreatePayload {
   address?: null | string;
   order?: number;
   isFeatured?: boolean;
+  averageRating?: number;
+  ratingCount?: number;
+  favoriteCount?: number;
 }
 
 export interface SceneSpotUpdatePayload {
@@ -54,6 +60,9 @@ export interface SceneSpotUpdatePayload {
   address?: null | string;
   order?: number;
   isFeatured?: boolean;
+  averageRating?: number;
+  ratingCount?: number;
+  favoriteCount?: number;
 }
 
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {

@@ -590,6 +590,19 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   address: string
   order: number
   isFeatured: boolean
+  averageRating: number
+  ratingCount: number
+  favoriteCount: number
+  ratingTotalScore: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface SceneSpotInteractionDocument extends Document<Types.ObjectId> {
+  sceneSpotId: Types.ObjectId
+  userId: Types.ObjectId
+  favorited: boolean
+  rating?: number | null
   createdAt: Date
   updatedAt: Date
 }

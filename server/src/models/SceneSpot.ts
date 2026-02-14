@@ -11,6 +11,10 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },
     isFeatured: { type: Boolean, default: false },
+    averageRating: { type: Number, default: 0, min: 0, max: 5 },
+    ratingCount: { type: Number, default: 0, min: 0 },
+    favoriteCount: { type: Number, default: 0, min: 0 },
+    ratingTotalScore: { type: Number, default: 0, min: 0 },
   },
   {
     timestamps: true,

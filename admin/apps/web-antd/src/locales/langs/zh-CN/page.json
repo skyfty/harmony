@@ -105,6 +105,9 @@
         "isFeatured": "首页推荐",
         "isFeaturedYes": "已推荐",
         "isFeaturedNo": "未推荐",
+        "averageRating": "评分均值",
+        "ratingCount": "评分人数",
+        "favoriteCount": "收藏次数",
         "address": "地址",
         "order": "排序",
         "updatedAt": "更新时间",
@@ -142,6 +145,15 @@
         },
         "order": {
           "label": "排序"
+        },
+        "averageRating": {
+          "label": "评分均值"
+        },
+        "ratingCount": {
+          "label": "评分人数"
+        },
+        "favoriteCount": {
+          "label": "收藏次数"
         },
         "isFeatured": {
           "label": "首页推荐"

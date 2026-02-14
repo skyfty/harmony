@@ -1,7 +1,14 @@
 import Router from 'koa-router'
 import { authMiddleware, optionalAuthMiddleware } from '@/middleware/auth'
 import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
-import { listSceneSpots, getSceneSpot, getSceneSpotEntry, listSceneProducts } from '@/controllers/miniprogram/sceneSpotController'
+import {
+  listSceneSpots,
+  getSceneSpot,
+  getSceneSpotEntry,
+  listSceneProducts,
+  toggleSceneSpotFavorite,
+  rateSceneSpot,
+} from '@/controllers/miniprogram/sceneSpotController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import { listUserCoupons, claimCoupon } from '@/controllers/miniprogram/couponController'
 import {
@@ -79,6 +86,10 @@ miniRouter.use(authMiddleware)
 // profile
 miniRouter.get('/users/me', getProfile)
 miniRouter.patch('/users/me', updateProfile)
+
+// scenic interactions
+miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)
+miniRouter.post('/scene-spots/:id/rate', rateSceneSpot)
 
 // works
 miniRouter.get('/works', listWorks)

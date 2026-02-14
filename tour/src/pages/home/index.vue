@@ -25,6 +25,7 @@
           :name="scenic.title"
           :summary="scenic.description"
           :cover-url="scenic.coverImage"
+          :rating="scenic.averageRating"
           @tap="openDetail(scenic.id)"
         />
       </view>

@@ -105,6 +105,9 @@
         "isFeatured": "Home Featured",
         "isFeaturedYes": "Featured",
         "isFeaturedNo": "Not Featured",
+        "averageRating": "Average Rating",
+        "ratingCount": "Rating Count",
+        "favoriteCount": "Favorites",
         "address": "Address",
         "order": "Order",
         "updatedAt": "Updated At",
@@ -142,6 +145,15 @@
         },
         "order": {
           "label": "Order"
+        },
+        "averageRating": {
+          "label": "Average Rating"
+        },
+        "ratingCount": {
+          "label": "Rating Count"
+        },
+        "favoriteCount": {
+          "label": "Favorites"
         },
         "isFeatured": {
           "label": "Home Featured"

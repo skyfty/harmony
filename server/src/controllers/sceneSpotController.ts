@@ -12,6 +12,9 @@ type SceneSpotMutationPayload = {
   address?: string | null
   order?: number
   isFeatured?: boolean
+  averageRating?: number
+  ratingCount?: number
+  favoriteCount?: number
 }
 
 function toNonEmptyString(value: unknown): string | null {
@@ -90,6 +93,22 @@ function parseSlides(value: unknown): string[] {
   return []
 }
 
+function toNumberInRange(value: unknown, min: number, max: number): number | null {
+  const parsed = Number(value)
+  if (Number.isNaN(parsed) || parsed < min || parsed > max) {
+    return null
+  }
+  return parsed
+}
+
+function toNonNegativeInteger(value: unknown): number | null {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null
+  }
+  return parsed
+}
+
 function mapSceneSpot(spot: any) {
   return {
     id: String(spot._id),
@@ -101,6 +120,9 @@ function mapSceneSpot(spot: any) {
     address: typeof spot.address === 'string' ? spot.address : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
     isFeatured: spot.isFeatured === true,
+    averageRating: typeof spot.averageRating === 'number' ? spot.averageRating : 0,
+    ratingCount: typeof spot.ratingCount === 'number' ? spot.ratingCount : 0,
+    favoriteCount: typeof spot.favoriteCount === 'number' ? spot.favoriteCount : 0,
     createdAt: spot.createdAt instanceof Date ? spot.createdAt.toISOString() : new Date(spot.createdAt).toISOString(),
     updatedAt: spot.updatedAt instanceof Date ? spot.updatedAt.toISOString() : new Date(spot.updatedAt).toISOString(),
   }
@@ -194,6 +216,21 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Scene spot title is required')
   }
 
+  const averageRating = body.averageRating === undefined ? 0 : toNumberInRange(body.averageRating, 0, 5)
+  if (averageRating === null) {
+    ctx.throw(400, 'Average rating must be between 0 and 5')
+  }
+
+  const ratingCount = body.ratingCount === undefined ? 0 : toNonNegativeInteger(body.ratingCount)
+  if (ratingCount === null) {
+    ctx.throw(400, 'Rating count must be a non-negative integer')
+  }
+
+  const favoriteCount = body.favoriteCount === undefined ? 0 : toNonNegativeInteger(body.favoriteCount)
+  if (favoriteCount === null) {
+    ctx.throw(400, 'Favorite count must be a non-negative integer')
+  }
+
   const created = await SceneSpotModel.create({
     sceneId,
     title,
@@ -203,6 +240,10 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     address: toNullableString(body.address) ?? '',
     order: typeof body.order === 'number' ? body.order : 0,
     isFeatured: toBoolean(body.isFeatured) ?? false,
+    averageRating,
+    ratingCount,
+    favoriteCount,
+    ratingTotalScore: Number((averageRating * ratingCount).toFixed(2)),
   })
 
   const row = await SceneSpotModel.findById(created._id).lean().exec()
@@ -244,6 +285,36 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     }
   }
 
+  const nextAverageRating =
+    body.averageRating === undefined
+      ? typeof current.averageRating === 'number'
+        ? current.averageRating
+        : 0
+      : toNumberInRange(body.averageRating, 0, 5)
+  if (nextAverageRating === null) {
+    ctx.throw(400, 'Average rating must be between 0 and 5')
+  }
+
+  const nextRatingCount =
+    body.ratingCount === undefined
+      ? typeof current.ratingCount === 'number'
+        ? current.ratingCount
+        : 0
+      : toNonNegativeInteger(body.ratingCount)
+  if (nextRatingCount === null) {
+    ctx.throw(400, 'Rating count must be a non-negative integer')
+  }
+
+  const nextFavoriteCount =
+    body.favoriteCount === undefined
+      ? typeof current.favoriteCount === 'number'
+        ? current.favoriteCount
+        : 0
+      : toNonNegativeInteger(body.favoriteCount)
+  if (nextFavoriteCount === null) {
+    ctx.throw(400, 'Favorite count must be a non-negative integer')
+  }
+
   const updated = await SceneSpotModel.findByIdAndUpdate(
     id,
     {
@@ -255,6 +326,10 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
       address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
       order: body.order === undefined ? current.order : body.order,
       isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
+      averageRating: nextAverageRating,
+      ratingCount: nextRatingCount,
+      favoriteCount: nextFavoriteCount,
+      ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
     },
     { new: true },
   )
