@@ -1073,6 +1073,8 @@ function polygonArea2D(points: PlanningPoint[]): number {
 const PLANNING_TERRAIN_CONTOUR_BLEND_METERS = 2
 const PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX = 20
 const PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT = 1000
+const PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES = 3
+const PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS = 2
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
 
 function clampFiniteNumber(raw: unknown, fallback: number, min: number, max: number): number {
@@ -1328,12 +1330,106 @@ function setHeightOverrideValueForContours(
   map[key] = rounded
 }
 
+/**
+ * Separable box-blur applied in-place on a dense 2-D height grid.
+ *
+ * Three passes of box blur approximate a Gaussian blur (central-limit theorem).
+ * Each pass uses a running-sum / prefix-sum approach so the cost is O(rows×cols)
+ * regardless of radius.
+ *
+ * Boundary handling: values outside the grid are clamped to the nearest edge
+ * value so terrain edges don't collapse toward zero.
+ *
+ * An optional `weightGrid` (same dimensions) records the maximum polygon-blend
+ * weight at each vertex.  After blurring, vertices that had zero weight (i.e.
+ * not covered by any terrain polygon) are restored to zero so the blur doesn't
+ * bleed terrain height into empty areas.
+ */
+async function blurHeightGrid(
+  grid: Float32Array,
+  rows: number,
+  cols: number,
+  radius: number,
+  passes: number,
+  weightGrid: Float32Array | null,
+  signal?: AbortSignal,
+  yieldController?: ReturnType<typeof createYieldController>,
+): Promise<void> {
+  if (passes <= 0 || radius <= 0 || rows <= 1 || cols <= 1) return
+
+  const tmp = new Float32Array(rows * cols)
+  const r = Math.max(1, Math.round(radius))
+  const kernelSize = 2 * r + 1
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    // --- horizontal pass: read grid → write tmp ---
+    for (let row = 0; row < rows; row += 1) {
+      if ((row & 63) === 0) {
+        throwIfAborted(signal)
+        await yieldController?.maybeYield()
+      }
+      const rowOff = row * cols
+      // Build initial running sum for the window centred on col=0.
+      let sum = 0
+      for (let k = -r; k <= r; k += 1) {
+        const c = Math.max(0, Math.min(cols - 1, k))
+        sum += grid[rowOff + c]!
+      }
+      tmp[rowOff] = sum / kernelSize
+
+      for (let col = 1; col < cols; col += 1) {
+        // Add new right-edge value, subtract old left-edge value.
+        const addCol = Math.min(cols - 1, col + r)
+        const subCol = Math.max(0, col - r - 1)
+        sum += grid[rowOff + addCol]! - grid[rowOff + subCol]!
+        tmp[rowOff + col] = sum / kernelSize
+      }
+    }
+
+    // --- vertical pass: read tmp → write grid ---
+    for (let col = 0; col < cols; col += 1) {
+      if ((col & 63) === 0) {
+        throwIfAborted(signal)
+        await yieldController?.maybeYield()
+      }
+      let sum = 0
+      for (let k = -r; k <= r; k += 1) {
+        const rr = Math.max(0, Math.min(rows - 1, k))
+        sum += tmp[rr * cols + col]!
+      }
+      grid[col] = sum / kernelSize
+
+      for (let row = 1; row < rows; row += 1) {
+        const addRow = Math.min(rows - 1, row + r)
+        const subRow = Math.max(0, row - r - 1)
+        sum += tmp[addRow * cols + col]! - tmp[subRow * cols + col]!
+        grid[row * cols + col] = sum / kernelSize
+      }
+    }
+  }
+
+  // Restore zero-weight vertices so blur doesn't bleed into uncovered areas.
+  if (weightGrid) {
+    for (let i = 0; i < grid.length; i += 1) {
+      const w = weightGrid[i]!
+      if (w <= 1e-9) {
+        grid[i] = 0
+      } else if (w < 1) {
+        // Gradually reduce influence for partially-covered vertices.
+        grid[i] = grid[i]! * w
+      }
+    }
+  }
+}
+
 async function applyPlanningTerrainContoursToGround(options: {
   definition: GroundDynamicMesh
   contourPolygons: PlanningPolygonAny[]
   signal?: AbortSignal
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
+  smoothingPasses?: number
+  smoothingRadius?: number
 }): Promise<GroundDynamicMesh> {
   const defaultBlendMeters = normalizeContourBlendMeters(options.blendMeters, PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
   const definition = options.definition
@@ -1454,6 +1550,8 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   // --- Phase 2: Compose heights via iterative lerp across sorted polygons ---
   const heightGrid = new Float32Array(rows * cols)
+  // Track maximum blend weight at each vertex for post-blur masking.
+  const weightGrid = new Float32Array(rows * cols)
 
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
@@ -1464,6 +1562,7 @@ async function applyPlanningTerrainContoursToGround(options: {
     for (let col = minCol; col <= maxCol; col += 1) {
       const globalCol = col - minCol
       let h = 0
+      let maxWeight = 0
       for (let gi = 0; gi < polyGrids.length; gi += 1) {
         const pg = polyGrids[gi]!
         if (row < pg.r0 || row > pg.r1 || col < pg.c0 || col > pg.c1) {
@@ -1475,9 +1574,19 @@ async function applyPlanningTerrainContoursToGround(options: {
         if (blend <= 1e-9) continue
         // Iterative lerp: smoothly transition from current height toward this polygon's target.
         h = h + (pg.height - h) * blend
+        if (blend > maxWeight) maxWeight = blend
       }
-      heightGrid[globalRow * cols + globalCol] = h
+      const idx = globalRow * cols + globalCol
+      heightGrid[idx] = h
+      weightGrid[idx] = maxWeight
     }
+  }
+
+  // --- Phase 2.5: Smooth the composed height grid to soften polygon edges ---
+  const smoothPasses = Math.max(0, Math.round(options.smoothingPasses ?? PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES))
+  const smoothRadius = Math.max(0, Math.round(options.smoothingRadius ?? PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS))
+  if (smoothPasses > 0 && smoothRadius > 0) {
+    await blurHeightGrid(heightGrid, rows, cols, smoothRadius, smoothPasses, weightGrid, options.signal, options.yieldController)
   }
 
   // --- Phase 3: Write final heights into planningHeightMap ---
@@ -1724,6 +1833,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           signal: options.signal,
           yieldController,
           blendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
+          smoothingPasses: PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES,
+          smoothingRadius: PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS,
         })
         groundDefinition = next
         sceneStore.updateNodeDynamicMesh(groundNode.id, next)
