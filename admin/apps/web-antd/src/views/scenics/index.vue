@@ -12,10 +12,7 @@ import { $t } from '#/locales'
 import { Button, Form, Input, Modal, Space, Upload, message } from 'ant-design-vue'
 
 interface ScenicFormModel {
-  description: string
   fileList: UploadFile[]
-  intro: string
-  location: string
   metadata: string
   name: string
   url: string
@@ -30,10 +27,7 @@ const scenicSubmitting = ref(false)
 const editingScenicId = ref<null | string>(null)
 
 const scenicFormModel = reactive<ScenicFormModel>({
-  description: '',
   fileList: [],
-  intro: '',
-  location: '',
   metadata: '',
   name: '',
   url: '',
@@ -63,10 +57,7 @@ const scenicUploadProps: UploadProps = {
 
 function resetScenicForm() {
   scenicFormModel.name = ''
-  scenicFormModel.location = ''
-  scenicFormModel.intro = ''
   scenicFormModel.url = ''
-  scenicFormModel.description = ''
   scenicFormModel.metadata = ''
   scenicFormModel.fileList = []
 }
@@ -80,10 +71,7 @@ function openCreateScenicModal() {
 function openEditScenicModal(record: ScenicItem) {
   editingScenicId.value = record.id
   scenicFormModel.name = record.name || ''
-  scenicFormModel.location = typeof record.location === 'string' ? record.location : ''
-  scenicFormModel.intro = typeof record.intro === 'string' ? record.intro : ''
   scenicFormModel.url = typeof record.url === 'string' ? record.url : ''
-  scenicFormModel.description = typeof record.description === 'string' ? record.description : ''
   scenicFormModel.metadata =
     record.metadata && Object.keys(record.metadata).length
       ? JSON.stringify(record.metadata, null, 2)
@@ -131,9 +119,6 @@ async function submitScenic() {
   try {
     const metadata = parseMetadataText()
     const basePayload = {
-      description: scenicFormModel.description.trim() || null,
-      intro: scenicFormModel.intro.trim() || null,
-      location: scenicFormModel.location.trim() || null,
       metadata,
       name: scenicFormModel.name.trim(),
       url: scenicFormModel.url.trim() || null,
@@ -291,18 +276,10 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
         <Form.Item :label="t('page.scenics.index.formFields.name.label')" name="name">
           <Input v-model:value="scenicFormModel.name" allow-clear />
         </Form.Item>
-        <Form.Item :label="t('page.scenics.index.formFields.location.label')" name="location">
-          <Input v-model:value="scenicFormModel.location" allow-clear />
-        </Form.Item>
-        <Form.Item :label="t('page.scenics.index.formFields.intro.label')" name="intro">
-          <Input v-model:value="scenicFormModel.intro" allow-clear />
-        </Form.Item>
         <Form.Item :label="t('page.scenics.index.formFields.url.label')" name="url">
           <Input v-model:value="scenicFormModel.url" allow-clear />
         </Form.Item>
-        <Form.Item :label="t('page.scenics.index.formFields.description.label')" name="description">
-          <TextArea v-model:value="scenicFormModel.description" :rows="3" />
-        </Form.Item>
+        
         <Form.Item :label="t('page.scenics.index.formFields.metadata.label')" name="metadata">
           <TextArea
             v-model:value="scenicFormModel.metadata"
