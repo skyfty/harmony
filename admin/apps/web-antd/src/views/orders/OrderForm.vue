@@ -5,12 +5,13 @@ import { Button, Form, Input, InputNumber, Select, AutoComplete, Space, message,
 import { listProductsApi, listUsersApi } from '#/api';
 import { requestClient } from '#/api/request';
 import { h } from 'vue';
+import { $t } from '#/locales';
 
 const props = defineProps<{ model: any; mode: 'edit' | 'create' }>();
 const emit = defineEmits(['submit', 'cancel']);
 
 const formRef = ref<FormInstance>();
-const t = (key: string) => key;
+const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
 
 const localModel = reactive({
   userId: props.model?.userId || '',

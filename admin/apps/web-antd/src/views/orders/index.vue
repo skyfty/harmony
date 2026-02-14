@@ -4,12 +4,13 @@ import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { Button, Modal, Space, message } from 'ant-design-vue';
 import { listOrdersApi, getOrderApi, createOrderApi, updateOrderApi, deleteOrderApi } from '#/api';
 import OrderForm from './OrderForm.vue';
+import { $t } from '#/locales';
 
 const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const editingModel = ref<any>(null);
 const submitting = ref(false);
-const t = (key: string, _params?: Record<string, unknown>) => key;
+const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
 
 async function openCreate() {
   editingId.value = null;
@@ -68,7 +69,15 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
         component: 'Select',
         fieldName: 'status',
         label: t('page.orders.index.table.status'),
-        componentProps: { allowClear: true, options: [{ label: 'pending', value: 'pending' }, { label: 'paid', value: 'paid' }, { label: 'completed', value: 'completed' }, { label: 'cancelled', value: 'cancelled' }] },
+        componentProps: {
+          allowClear: true,
+          options: [
+            { label: t('page.orders.index.statusOptions.pending'), value: 'pending' },
+            { label: t('page.orders.index.statusOptions.paid'), value: 'paid' },
+            { label: t('page.orders.index.statusOptions.completed'), value: 'completed' },
+            { label: t('page.orders.index.statusOptions.cancelled'), value: 'cancelled' },
+          ],
+        },
       },
     ],
   },
@@ -119,7 +128,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
       </template>
     </OrderGrid>
 
-    <Modal :open="modalOpen" :confirm-loading="submitting" :title="t('page.orders.index.modal.title')" :ok-text="t('page.orders.form.actions.save')" :cancel-text="t('page.orders.form.actions.cancel')" @cancel="() => (modalOpen = false)" :footer="null">
+    <Modal :open="modalOpen" :confirm-loading="submitting" :title="t('page.orders.index.modal.title')" :ok-text="t('page.orders.form.actions.save')" :cancel-text="t('page.orders.form.actions.cancel')" @cancel="() => (modalOpen = false)" :width="900" :footer="null">
       <OrderForm :model="editingModel" mode="create" @submit="submitForm" @cancel="() => (modalOpen = false)" />
     </Modal>
   </div>

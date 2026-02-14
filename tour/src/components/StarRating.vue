@@ -5,6 +5,7 @@
       :key="n"
       class="star"
       :class="{ active: n <= filled }"
+      @tap="handleTap(n)"
     >★</text>
     <text v-if="showValue" class="value">{{ displayValue }}</text>
   </view>
@@ -12,6 +13,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+
+const emit = defineEmits<{
+  (e: 'change', value: number): void;
+}>();
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +41,11 @@ const displayValue = computed(() => {
   const raw = Number.isFinite(props.value) ? props.value : 0;
   return raw.toFixed(1);
 });
+
+function handleTap(score: number) {
+  if (props.readonly) return;
+  emit('change', score);
+}
 </script>
 
 <style scoped>

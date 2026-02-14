@@ -309,6 +309,12 @@
       "toolbar": {
         "create": "New Order"
       },
+      "statusOptions": {
+        "pending": "Pending",
+        "paid": "Paid",
+        "completed": "Completed",
+        "cancelled": "Cancelled"
+      },
       "message": {
         "loadError": "Failed to load orders",
         "updateSuccess": "Order updated",

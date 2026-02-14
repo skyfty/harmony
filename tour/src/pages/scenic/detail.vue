@@ -28,39 +28,22 @@
         </view>
       </view>
 
-      <view class="card">
-        <text class="section">评分与收藏</text>
-        <view class="metrics">
-          <view class="metric">
-            <text class="metric-value">{{ formatRating(scenic.averageRating) }}</text>
-            <text class="metric-label">综合评分</text>
-          </view>
-          <view class="metric">
-            <text class="metric-value">{{ scenic.ratingCount }}</text>
-            <text class="metric-label">评分人数</text>
-          </view>
-          <view class="metric">
-            <text class="metric-value">{{ scenic.favoriteCount }}</text>
-            <text class="metric-label">收藏次数</text>
-          </view>
+      <view class="stats-card">
+        <view class="stat stat--action" @tap="openRatingModal">
+          <text class="stat-icon">★</text>
+          <text class="stat-value">{{ ratingLabel }}</text>
+          <text class="stat-desc">评分 ({{ scenic.ratingCount || 0 }})</text>
         </view>
-        <view class="my-rating">
-          <text class="my-rating-label">我的评分</text>
-          <view class="stars">
-            <text
-              v-for="star in 5"
-              :key="star"
-              class="star"
-              :class="{ active: star <= (scenic.userRating || 0), disabled: ratingLoading }"
-              @tap="handleRate(star)"
-            >
-              {{ star <= (scenic.userRating || 0) ? '★' : '☆' }}
-            </text>
-          </view>
+        <view class="stat stat--action" :class="{ 'stat--favorited': scenic.favorited }" @tap="handleToggleFavorite">
+          <text class="stat-icon">{{ scenic.favorited ? '❤' : '♡' }}</text>
+          <text class="stat-value">{{ scenic.favoriteCount || 0 }}</text>
+          <text class="stat-desc">{{ scenic.favorited ? '已收藏' : '收藏' }}</text>
         </view>
-        <button class="favorite-btn" :class="{ active: scenic.favorited }" :disabled="favoriteLoading" @tap="handleToggleFavorite">
-          {{ scenic.favorited ? '已收藏' : '收藏景区' }}
-        </button>
+        <view class="stat">
+          <text class="stat-icon">👤</text>
+          <text class="stat-value">{{ scenic.ratingCount || 0 }}</text>
+          <text class="stat-desc">评分人数</text>
+        </view>
       </view>
 
       <view class="card">
@@ -80,24 +63,58 @@
       <view class="cta">
         <button class="enter" @tap="enterScenery">进入景区</button>
       </view>
+
+    </view>
+  </view>
+
+  <view v-if="ratingModalVisible" class="rating-modal-mask" @tap="closeRatingModal"></view>
+  <view v-if="ratingModalVisible" class="rating-modal-panel" @tap.stop="noop" catchtap="noop">
+    <text class="rating-modal__title">为该景区打分</text>
+    <view class="rating-modal__stars">
+      <view
+        v-for="n in 5"
+        :key="'star-' + n"
+        class="rating-modal__star"
+        :data-score="n"
+        :class="{ active: n <= ratingSelection }"
+        @tap.stop="selectRatingByEvent"
+        catchtap="selectRatingByEvent"
+      >
+        <text :data-score="n">★</text>
+      </view>
+    </view>
+    <view class="rating-modal__actions">
+      <button
+        class="rating-modal__submit"
+        :disabled="ratingSubmitting"
+        @tap="submitRating"
+      >{{ ratingSubmitting ? '提交中…' : ratingSelection ? `提交 ${ratingSelection} 星` : '请选择星级' }}</button>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
-import { ref } from 'vue';
-import { HttpError } from '@/api/http';
+import { computed, ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
-import { ensureDevLogin, getAccessToken, getScenic, rateScenic, setAccessToken, toggleScenicFavorite } from '@/api/mini';
+import { getScenic, rateScenic, toggleScenicFavorite } from '@/api/mini';
 import { listCommentsByScenic } from '@/mocks/comments';
 import type { ScenicDetail } from '@/types/scenic';
 
 const scenic = ref<ScenicDetail | null>(null);
 const comments = ref(listCommentsByScenic(''));
 const favoriteLoading = ref(false);
-const ratingLoading = ref(false);
+const ratingModalVisible = ref(false);
+const ratingSubmitting = ref(false);
+const ratingSelection = ref(0);
+
+const ratingLabel = computed(() => {
+  const v = scenic.value?.averageRating ?? 0;
+  if (v <= 0) return '--';
+  if (v >= 4.95) return '满分';
+  return v.toFixed(v >= 10 ? 0 : 1);
+});
 
 onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
@@ -127,10 +144,6 @@ function enterScenery() {
   });
 }
 
-function formatRating(score: number) {
-  return Number.isFinite(score) ? score.toFixed(1) : '0.0';
-}
-
 function applyInteractionState(next: {
   averageRating: number;
   ratingCount: number;
@@ -146,73 +159,65 @@ function applyInteractionState(next: {
   scenic.value.userRating = typeof next.userRating === 'number' ? next.userRating : null;
 }
 
-async function ensureActionLogin(): Promise<boolean> {
-  if (getAccessToken()) {
-    return true;
-  }
-
-  const token = await ensureDevLogin();
-  if (token) {
-    return true;
-  }
-
-  return await new Promise<boolean>((resolve) => {
-    uni.showModal({
-      title: '请先登录',
-      content: '登录后可进行评分和收藏操作',
-      confirmText: '去个人中心',
-      cancelText: '取消',
-      success: (res) => {
-        if (res.confirm) {
-          uni.navigateTo({ url: '/pages/profile/index' });
-        }
-        resolve(false);
-      },
-      fail: () => resolve(false),
-    });
-  });
+function openRatingModal(): void {
+  if (!scenic.value) return;
+  ratingSelection.value = 0;
+  ratingModalVisible.value = true;
 }
 
-function handleInteractionError(err: unknown) {
-  if (err instanceof HttpError && err.status === 401) {
-    setAccessToken('');
-    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' });
-    return;
-  }
-  uni.showToast({ title: '操作失败，请稍后重试', icon: 'none' });
+function closeRatingModal(): void {
+  ratingModalVisible.value = false;
+  ratingSelection.value = 0;
 }
 
-async function handleToggleFavorite() {
+function selectRating(n: number): void {
+  ratingSelection.value = n;
+}
+
+function selectRatingByEvent(event: { currentTarget?: { dataset?: { score?: string | number } }; target?: { dataset?: { score?: string | number } } }): void {
+  const scoreRaw = event?.currentTarget?.dataset?.score ?? event?.target?.dataset?.score;
+  const score = Number(scoreRaw);
+  if (Number.isFinite(score) && score >= 1 && score <= 5) {
+    selectRating(score);
+  }
+}
+
+function noop(): void {}
+
+async function submitRating(): Promise<void> {
+  if (!scenic.value || ratingSelection.value === 0) return;
+  ratingSubmitting.value = true;
+  try {
+    const next = await rateScenic(scenic.value.id, ratingSelection.value);
+    applyInteractionState(next);
+    uni.showToast({ title: '评分成功', icon: 'success' });
+    closeRatingModal();
+  } catch (err) {
+    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
+  } finally {
+    ratingSubmitting.value = false;
+  }
+}
+
+async function handleToggleFavorite(): Promise<void> {
   if (!scenic.value || favoriteLoading.value) return;
-  const ok = await ensureActionLogin();
-  if (!ok) return;
-
   favoriteLoading.value = true;
   try {
     const next = await toggleScenicFavorite(scenic.value.id);
     applyInteractionState(next);
   } catch (err) {
-    handleInteractionError(err);
+    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
   } finally {
     favoriteLoading.value = false;
   }
 }
 
-async function handleRate(score: number) {
-  if (!scenic.value || ratingLoading.value) return;
-  const ok = await ensureActionLogin();
-  if (!ok) return;
-
-  ratingLoading.value = true;
-  try {
-    const next = await rateScenic(scenic.value.id, score);
-    applyInteractionState(next);
-    uni.showToast({ title: '评分成功', icon: 'none' });
-  } catch (err) {
-    handleInteractionError(err);
-  } finally {
-    ratingLoading.value = false;
+function getErrorMessage(reason: unknown): string {
+  if (reason && typeof reason === 'object' && 'message' in reason && typeof (reason as { message: unknown }).message === 'string') {
+    return (reason as { message: string }).message;
   }
+  if (typeof reason === 'string') return reason;
+  return '操作失败，请稍后重试';
 }
 </script>
 
@@ -296,81 +301,128 @@ async function handleRate(score: number) {
   gap: 10px;
 }
 
-.metrics {
+.stats-card {
   margin-top: 12px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
 }
 
-.metric {
-  background: #f4f7fc;
-  border-radius: 12px;
-  padding: 10px 8px;
-  text-align: center;
+.stat {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.08);
 }
 
-.metric-value {
-  display: block;
-  font-size: 16px;
-  font-weight: 700;
+.stat-icon {
+  font-size: 18px;
+  color: #1f7aec;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
   color: #1a1f2e;
 }
 
-.metric-label {
-  margin-top: 4px;
-  display: block;
-  font-size: 11px;
+.stat-desc {
+  font-size: 12px;
   color: #8a94a6;
 }
 
-.my-rating {
-  margin-top: 12px;
+.stat--action {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stat--action:active {
+  transform: scale(0.95);
+  opacity: 0.8;
+}
+
+.stat--favorited {
+  background: rgba(31, 122, 236, 0.08);
+}
+
+.stat--favorited .stat-icon {
+  color: #e74c3c;
+}
+
+.rating-modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+.rating-modal-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 280px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 30px 24px 24px;
+  box-shadow: 0 24px 48px rgba(31, 122, 236, 0.2);
+  z-index: 1001;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rating-modal__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1f2e;
+  text-align: center;
+}
+
+.rating-modal__stars {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.rating-modal__star {
+  font-size: 36px;
+  color: #e3e9f2;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rating-modal__star.active {
+  color: #ffb400;
+  transform: scale(1.1);
+}
+
+.rating-modal__actions {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
-.my-rating-label {
-  font-size: 12px;
-  color: #5f6b83;
-}
-
-.stars {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.star {
-  font-size: 20px;
-  color: #d9dfeb;
-}
-
-.star.active {
-  color: #ffb340;
-}
-
-.star.disabled {
-  opacity: 0.55;
-}
-
-.favorite-btn {
-  margin-top: 12px;
+.rating-modal__submit {
   width: 100%;
-  height: 38px;
-  line-height: 38px;
-  border-radius: 12px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
-  font-weight: 700;
+  padding: 12px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.favorite-btn.active {
-  background: #1f7aec;
-  color: #ffffff;
+.rating-modal__submit:disabled {
+  opacity: 0.5;
 }
 
 .empty {

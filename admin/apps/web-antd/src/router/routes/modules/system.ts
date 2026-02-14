@@ -101,7 +101,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/orders/index.vue'),
         meta: {
           icon: 'lucide:package',
-          title: $t('page.orders.index.title'),
+          title: $t('page.orders.title'),
         },
       },
     ],

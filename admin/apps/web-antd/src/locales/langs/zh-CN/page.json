@@ -309,6 +309,12 @@
       "toolbar": {
         "create": "新增订单"
       },
+      "statusOptions": {
+        "pending": "待处理",
+        "paid": "已支付",
+        "completed": "已完成",
+        "cancelled": "已取消"
+      },
       "message": {
         "loadError": "读取订单失败",
         "updateSuccess": "订单更新成功",
