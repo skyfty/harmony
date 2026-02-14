@@ -185,8 +185,6 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
     border: true,
     columns: [
       { field: 'name', minWidth: 180, title: t('page.scenics.index.table.name') },
-      { field: 'location', minWidth: 180, title: t('page.scenics.index.table.location') },
-      { field: 'intro', minWidth: 220, title: t('page.scenics.index.table.intro') },
       { field: 'url', minWidth: 240, title: t('page.scenics.index.table.url'), slots: { default: 'url' } },
       {
         field: 'updatedAt',

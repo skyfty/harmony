@@ -2,7 +2,6 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
-import { MiniEventModel } from '@/models/MiniEvent'
 import { SceneProductBindingModel } from '@/models/SceneProductBinding'
 import { ProductModel } from '@/models/Product'
 import { UserProductModel } from '@/models/UserProduct'
@@ -109,7 +108,6 @@ export async function getScenic(ctx: Context): Promise<void> {
   }
 
   const spots = await SceneSpotModel.find({ sceneId: id }).sort({ order: 1, createdAt: 1 }).lean().exec()
-  const events = await MiniEventModel.find({ sceneId: id }).sort({ hotScore: -1, startAt: 1 }).lean().exec()
 
   ctx.body = {
     scenic: buildScenicDetail(scene),
@@ -120,16 +118,6 @@ export async function getScenic(ctx: Context): Promise<void> {
       coverUrl: asString(spot.coverUrl, ''),
       anchor: spot.anchor ?? null,
       order: spot.order ?? 0,
-    })),
-    events: events.map((event) => ({
-      id: objectIdString(event._id),
-      title: event.title,
-      description: asString(event.description, ''),
-      coverUrl: asString(event.coverUrl, ''),
-      locationText: event.locationText ?? null,
-      startAt: event.startAt ? event.startAt.toISOString() : null,
-      endAt: event.endAt ? event.endAt.toISOString() : null,
-      hotScore: event.hotScore ?? 0,
     })),
   }
 }
