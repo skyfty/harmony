@@ -232,6 +232,7 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
 
     <Modal
       :open="sceneModalOpen"
+      :width="900"
       :title="sceneModalTitle"
       :confirm-loading="sceneSubmitting"
       :ok-text="t('page.scenes.index.modal.ok')"

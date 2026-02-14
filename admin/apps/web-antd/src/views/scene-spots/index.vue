@@ -37,6 +37,7 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
 const sceneSpotFormRef = ref<FormInstance>();
+
 const coverImageFileList = ref<UploadFile[]>([]);
 const slidesFileList = ref<UploadFile[]>([]);
 const previewVisible = ref(false);
@@ -45,6 +46,12 @@ const previewTitle = ref('');
 
 const sceneOptions = ref<Array<{ label: string; value: string }>>([]);
 const sceneNameMap = ref<Record<string, string>>({});
+const sceneOptionsLoading = ref(false);
+const sceneSearchKeyword = ref('');
+const sceneOptionsPage = ref(1);
+const sceneOptionsPageSize = 20;
+const sceneOptionsHasMore = ref(true);
+let sceneSearchTimer: null | ReturnType<typeof setTimeout> = null;
 
 const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   sceneId: '',
@@ -57,6 +64,11 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
 const modalTitle = computed(() =>
   editingId.value ? t('page.sceneSpots.index.modal.edit') : t('page.sceneSpots.index.modal.create'),
 );
+
+const uploadProps: UploadProps = {
+  accept: 'image/*',
+  beforeUpload: () => false,
+};
 
 function resetForm() {
   sceneSpotFormModel.sceneId = '';
@@ -72,7 +84,10 @@ function generateUid(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getFileUrl(file: UploadFile): string {
+function getFileUrl(file?: UploadFile): string {
+  if (!file) {
+    return '';
+  }
   return ((file.response as any)?.url || file.url || '') as string;
 }
 
@@ -106,11 +121,6 @@ async function normalizeFileList(fileList: UploadFile[]) {
   return normalized.filter((file) => !!getFileUrl(file));
 }
 
-const uploadProps: UploadProps = {
-  accept: 'image/*',
-  beforeUpload: () => false,
-};
-
 async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
   coverImageFileList.value = (await normalizeFileList(info.fileList)).slice(-1);
 }
@@ -128,23 +138,67 @@ async function handlePreview(file: UploadFile) {
   previewTitle.value = file.name || t('page.sceneSpots.index.formFields.coverImage.label');
 }
 
-async function loadSceneOptions() {
-  const response = await listScenesApi({
-    page: 1,
-    pageSize: 200,
+function mergeSceneOptions(items: SceneItem[], reset: boolean) {
+  const mapped = items.map((item) => ({ label: item.name, value: item.id }));
+  if (reset) {
+    sceneOptions.value = mapped;
+  } else {
+    const existing = new Set(sceneOptions.value.map((option) => option.value));
+    sceneOptions.value = [...sceneOptions.value, ...mapped.filter((option) => !existing.has(option.value))];
+  }
+
+  items.forEach((item) => {
+    sceneNameMap.value[item.id] = item.name;
   });
-  const items = response.items || [];
-  sceneOptions.value = items.map((item: SceneItem) => ({
-    label: item.name,
-    value: item.id,
-  }));
-  sceneNameMap.value = items.reduce(
-    (accumulator, item) => {
-      accumulator[item.id] = item.name;
-      return accumulator;
-    },
-    {} as Record<string, string>,
-  );
+}
+
+async function loadSceneOptions(reset = true) {
+  if (sceneOptionsLoading.value) {
+    return;
+  }
+  if (!reset && !sceneOptionsHasMore.value) {
+    return;
+  }
+
+  sceneOptionsLoading.value = true;
+  try {
+    const nextPage = reset ? 1 : sceneOptionsPage.value + 1;
+    const response = await listScenesApi({
+      keyword: sceneSearchKeyword.value || undefined,
+      page: nextPage,
+      pageSize: sceneOptionsPageSize,
+    });
+
+    const items = response.items || [];
+    mergeSceneOptions(items, reset);
+    sceneOptionsPage.value = nextPage;
+    sceneOptionsHasMore.value = sceneOptions.value.length < response.total;
+  } finally {
+    sceneOptionsLoading.value = false;
+  }
+}
+
+function handleSceneSearch(keyword: string) {
+  if (sceneSearchTimer) {
+    clearTimeout(sceneSearchTimer);
+  }
+
+  sceneSearchTimer = setTimeout(() => {
+    sceneSearchKeyword.value = keyword.trim();
+    loadSceneOptions(true);
+  }, 250);
+}
+
+function handleScenePopupScroll(event: Event) {
+  const target = event.target as HTMLElement;
+  if (!target) {
+    return;
+  }
+
+  const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 12;
+  if (nearBottom) {
+    loadSceneOptions(false);
+  }
 }
 
 function openCreateModal() {
@@ -190,7 +244,7 @@ async function submitSceneSpot() {
   }
   await form.validate();
 
-  const coverImage = getFileUrl(coverImageFileList.value[0] as UploadFile) || null;
+  const coverImage = getFileUrl(coverImageFileList.value[0]) || null;
   const slides = slidesFileList.value.map((file) => getFileUrl(file)).filter(Boolean);
 
   const payload: SceneSpotCreatePayload | SceneSpotUpdatePayload = {
@@ -250,8 +304,13 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
         label: t('page.sceneSpots.index.form.sceneId.label'),
         componentProps: {
           allowClear: true,
-          placeholder: t('page.sceneSpots.index.form.sceneId.placeholder'),
+          filterOption: false,
+          loading: sceneOptionsLoading,
+          onPopupScroll: handleScenePopupScroll,
+          onSearch: handleSceneSearch,
           options: sceneOptions,
+          placeholder: t('page.sceneSpots.index.form.sceneId.placeholder'),
+          showSearch: true,
         },
       },
     ],
@@ -307,7 +366,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
 
 onMounted(async () => {
   try {
-    await loadSceneOptions();
+    await loadSceneOptions(true);
   } catch {
     message.error(t('page.sceneSpots.index.message.loadScenesFailed'));
   }
@@ -341,6 +400,7 @@ onMounted(async () => {
 
     <Modal
       :open="modalOpen"
+      :width="900"
       :confirm-loading="submitting"
       :title="modalTitle"
       :ok-text="t('page.sceneSpots.index.modal.ok')"
@@ -353,9 +413,12 @@ onMounted(async () => {
         <Form.Item :label="t('page.sceneSpots.index.formFields.sceneId.label')" name="sceneId" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.sceneId.required') }]">
           <Select
             v-model:value="sceneSpotFormModel.sceneId"
+            :filter-option="false"
+            :loading="sceneOptionsLoading"
             :options="sceneOptions"
+            @popupScroll="handleScenePopupScroll"
+            @search="handleSceneSearch"
             show-search
-            option-filter-prop="label"
             :placeholder="t('page.sceneSpots.index.formFields.sceneId.placeholder')"
           />
         </Form.Item>
