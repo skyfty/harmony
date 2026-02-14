@@ -22,10 +22,9 @@
         <ScenicCard
           v-for="scenic in filtered"
           :key="scenic.id"
-          :name="scenic.name"
-          :summary="scenic.summary"
-          :cover-url="scenic.coverUrl"
-          v-bind="scenic.rating !== undefined ? { rating: scenic.rating } : {}"
+          :name="scenic.title"
+          :summary="scenic.description"
+          :cover-url="scenic.coverImage"
           @tap="openDetail(scenic.id)"
         />
       </view>
@@ -76,7 +75,7 @@ onMounted(() => {
 const filtered = computed(() => {
   const k = keyword.value.trim();
   if (!k) return scenics.value;
-  return scenics.value.filter((s) => s.name.includes(k) || s.summary.includes(k));
+  return scenics.value.filter((s) => s.title.includes(k) || s.description.includes(k));
 });
 
 function openDetail(id: string) {

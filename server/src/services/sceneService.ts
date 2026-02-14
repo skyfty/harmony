@@ -27,13 +27,11 @@ type StoredSceneFile = {
 export type SceneData = {
   id: string
   name: string
-  description: string | null
   fileKey: string
   fileUrl: string
   fileSize: number
   fileType: string | null
   originalFilename: string | null
-  metadata: Record<string, unknown> | null
   publishedBy: string | null
   createdAt: string
   updatedAt: string
@@ -49,16 +47,12 @@ export type SceneListQuery = {
 
 export type SceneCreatePayload = {
   name: string
-  description?: string | null
-  metadata?: Record<string, unknown> | null
   file: UploadedFilePayload
   publishedBy: string
 }
 
 export type SceneUpdatePayload = {
   name?: string
-  description?: string | null
-  metadata?: Record<string, unknown> | null
   file?: UploadedFilePayload | null
 }
 
@@ -135,8 +129,6 @@ export async function deleteSceneFile(fileKey: string | null | undefined): Promi
 
 function mapSceneDocument(scene: SceneDocLike): SceneData {
   const id = scene._id instanceof Types.ObjectId ? scene._id.toString() : String(scene._id)
-  const description = sanitizeString(scene.description)
-  const metadata = scene.metadata && typeof scene.metadata === 'object' ? (scene.metadata as Record<string, unknown>) : null
   const createdAt = scene.createdAt instanceof Date ? scene.createdAt.toISOString() : new Date(scene.createdAt).toISOString()
   const updatedAt = scene.updatedAt instanceof Date ? scene.updatedAt.toISOString() : new Date(scene.updatedAt).toISOString()
   let publishedBy: string | null = null
@@ -148,13 +140,11 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
   return {
     id,
     name: scene.name,
-    description: description ?? null,
     fileKey: scene.fileKey,
     fileUrl: scene.fileUrl,
     fileSize: scene.fileSize ?? 0,
     fileType: sanitizeString(scene.fileType),
     originalFilename: sanitizeString(scene.originalFilename),
-    metadata,
     publishedBy,
     createdAt,
     updatedAt,
@@ -197,13 +187,11 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
   try {
     const created = await SceneModel.create({
       name: payload.name,
-      description: payload.description ?? null,
       fileKey: stored.fileKey,
       fileUrl: stored.fileUrl,
       fileSize: stored.fileSize,
       fileType: stored.fileType,
       originalFilename: stored.originalFilename,
-      metadata: payload.metadata ?? null,
       publishedBy: new Types.ObjectId(payload.publishedBy),
     })
     return mapSceneDocument(created.toObject() as SceneDocLike)
@@ -225,12 +213,6 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
   const previousFileKey = scene.fileKey
   if (typeof payload.name === 'string' && payload.name.trim().length) {
     scene.name = payload.name.trim()
-  }
-  if (payload.description !== undefined) {
-    scene.description = payload.description ? payload.description.trim() : null
-  }
-  if (payload.metadata !== undefined) {
-    scene.metadata = payload.metadata ?? null
   }
   if (newFile) {
     scene.fileKey = newFile.fileKey

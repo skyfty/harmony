@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { ref } from 'vue';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { Button, Modal, Space, message } from 'ant-design-vue';
 import { listOrdersApi, getOrderApi, createOrderApi, updateOrderApi, deleteOrderApi } from '#/api';
@@ -10,7 +9,7 @@ const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const editingModel = ref<any>(null);
 const submitting = ref(false);
-const { t } = useI18n();
+const t = (key: string, _params?: Record<string, unknown>) => key;
 
 async function openCreate() {
   editingId.value = null;

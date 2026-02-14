@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { FormInstance } from 'ant-design-vue';
-import { reactive, ref, watch } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { computed, reactive, ref, watch } from 'vue';
 import { Button, Form, Input, InputNumber, Select, AutoComplete, Space, message, Avatar } from 'ant-design-vue';
 import { listProductsApi, listUsersApi } from '#/api';
 import { requestClient } from '#/api/request';
@@ -11,7 +10,7 @@ const props = defineProps<{ model: any; mode: 'edit' | 'create' }>();
 const emit = defineEmits(['submit', 'cancel']);
 
 const formRef = ref<FormInstance>();
-const { t } = useI18n();
+const t = (key: string) => key;
 
 const localModel = reactive({
   userId: props.model?.userId || '',
@@ -67,18 +66,26 @@ function addEmptyItem() {
   localModel.items.push({ productId: '', name: '', price: 0, quantity: 1 });
 }
 
-function removeItem(index: number) {
-  localModel.items.splice(index, 1);
+function removeItem(index: number | string) {
+  const normalizedIndex = Number(index);
+  if (Number.isNaN(normalizedIndex)) return;
+  localModel.items.splice(normalizedIndex, 1);
 }
 
-function onSelectProduct(index: number, productId: string) {
-  const opt = productOptions.value.find((o) => o.value === productId);
+function onSelectProduct(index: number | string, productId: number | string) {
+  const normalizedIndex = Number(index);
+  if (Number.isNaN(normalizedIndex)) return;
+  const normalizedId = String(productId);
+  const opt = productOptions.value.find((o) => o.value === normalizedId);
   if (!opt) return;
-  const row = localModel.items[index];
-  row.productId = productId;
+  const row = localModel.items[normalizedIndex];
+  if (!row) return;
+  row.productId = normalizedId;
   row.name = opt.label;
   row.price = opt.price ?? row.price;
 }
+
+const selectedUser = computed(() => userOptions.value.find((user) => user.value === localModel.userId)?.raw || null);
 
 async function submit() {
   try {
@@ -133,11 +140,11 @@ watch(
       <Form.Item :label="t('page.orders.form.labels.user')" name="userId" :rules="[{ required: true, message: t('page.orders.form.validation.selectUser') }]">
         <AutoComplete v-model:value="localModel.userId" :options="userOptions" :placeholder="t('page.orders.form.placeholders.searchUser')" @search="searchUsers" />
         <div v-if="localModel.userId" style="margin-top:8px;display:flex;align-items:center;gap:8px">
-          <template v-if="(userOptions.find(u => u.value === localModel.userId) && userOptions.find(u => u.value === localModel.userId).raw)">
-            <img v-if="userOptions.find(u => u.value === localModel.userId).raw.avatarUrl" :src="userOptions.find(u => u.value === localModel.userId).raw.avatarUrl" style="width:40px;height:40px;border-radius:50%;object-fit:cover" />
+          <template v-if="selectedUser">
+            <img v-if="selectedUser.avatarUrl" :src="selectedUser.avatarUrl" style="width:40px;height:40px;border-radius:50%;object-fit:cover" />
             <div style="display:flex;flex-direction:column">
-              <div style="font-weight:600">{{ userOptions.find(u => u.value === localModel.userId).raw.displayName || userOptions.find(u => u.value === localModel.userId).raw.username }}</div>
-              <div style="font-size:12px;color:#888">{{ userOptions.find(u => u.value === localModel.userId).raw.bio || userOptions.find(u => u.value === localModel.userId).raw.email }}</div>
+              <div style="font-weight:600">{{ selectedUser.displayName || selectedUser.username }}</div>
+              <div style="font-size:12px;color:#888">{{ selectedUser.bio || selectedUser.email }}</div>
             </div>
           </template>
         </div>
@@ -158,7 +165,7 @@ watch(
       <Form.Item :label="t('page.orders.form.labels.items')">
         <div v-for="(it, idx) in localModel.items" :key="idx" style="margin-bottom:8px">
           <Space>
-            <Select style="width:360px" v-model:value="it.productId" show-search :options="productOptions" @search="searchProducts" :placeholder="t('page.orders.form.placeholders.searchProduct')" @change="(val) => onSelectProduct(idx, val)" />
+            <Select style="width:360px" v-model:value="it.productId" show-search :options="productOptions" @search="searchProducts" :placeholder="t('page.orders.form.placeholders.searchProduct')" @change="(val) => onSelectProduct(idx, val as string | number)" />
             <Input style="width:280px" v-model:value="it.name" :placeholder="t('page.orders.form.placeholders.productName')" />
             <InputNumber style="width:120px" v-model:value="it.price" min="0" />
             <InputNumber style="width:100px" v-model:value="it.quantity" min="1" />

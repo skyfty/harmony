@@ -1,6 +1,7 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { SceneModel } from '@/models/Scene'
+import { SceneSpotModel } from '@/models/SceneSpot'
 import { SceneProductBindingModel } from '@/models/SceneProductBinding'
 import { ProductModel } from '@/models/Product'
 import { UserProductModel } from '@/models/UserProduct'
@@ -12,6 +13,34 @@ import {
   objectIdString,
 } from './miniDtoUtils'
 import type { ProductDocument, SceneDocument } from '@/types/models'
+
+function toStringValue(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function buildSceneDto(scene: any) {
+  return {
+    id: String(scene._id),
+    name: scene.name,
+    fileUrl: scene.fileUrl,
+    fileKey: scene.fileKey,
+    fileSize: typeof scene.fileSize === 'number' ? scene.fileSize : 0,
+  }
+}
+
+function buildSceneSpotSummaryDto(spot: any, scene: any) {
+  return {
+    id: String(spot._id),
+    sceneId: String(spot.sceneId),
+    title: spot.title,
+    coverImage: toStringValue(spot.coverImage, ''),
+    description: toStringValue(spot.description, ''),
+    address: toStringValue(spot.address, ''),
+    slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
+    order: typeof spot.order === 'number' ? spot.order : 0,
+    scene: buildSceneDto(scene),
+  }
+}
 
 type ProductWithStateDto = {
   id: string
@@ -55,7 +84,81 @@ function buildProductDto(product: ProductDocument, userEntry: { state: string; e
   }
 }
 
-export async function listScenicProducts(ctx: Context): Promise<void> {
+export async function listSceneSpots(ctx: Context): Promise<void> {
+  const { q } = ctx.query as { q?: string }
+  const filter: Record<string, unknown> = {}
+  if (typeof q === 'string' && q.trim()) {
+    const regex = new RegExp(q.trim(), 'i')
+    filter.$or = [{ title: regex }, { description: regex }, { address: regex }]
+  }
+
+  const spots = await SceneSpotModel.find(filter).sort({ order: 1, createdAt: -1 }).lean().exec()
+  const sceneIds = Array.from(new Set(spots.map((spot) => String(spot.sceneId))))
+  const scenes = sceneIds.length ? await SceneModel.find({ _id: { $in: sceneIds } }).lean().exec() : []
+  const sceneById = new Map(scenes.map((scene) => [String(scene._id), scene]))
+
+  const rows = spots
+    .map((spot) => {
+      const scene = sceneById.get(String(spot.sceneId))
+      if (!scene) {
+        return null
+      }
+      return buildSceneSpotSummaryDto(spot, scene)
+    })
+    .filter(Boolean)
+
+  ctx.body = {
+    total: rows.length,
+    sceneSpots: rows,
+  }
+}
+
+export async function getSceneSpot(ctx: Context): Promise<void> {
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene spot id')
+  }
+
+  const spot = await SceneSpotModel.findById(id).lean().exec()
+  if (!spot) {
+    ctx.throw(404, 'Scene spot not found')
+  }
+
+  const scene = await SceneModel.findById(spot.sceneId).lean().exec()
+  if (!scene) {
+    ctx.throw(404, 'Scene not found')
+  }
+
+  ctx.body = {
+    sceneSpot: buildSceneSpotSummaryDto(spot, scene),
+  }
+}
+
+export async function getSceneSpotEntry(ctx: Context): Promise<void> {
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene spot id')
+  }
+
+  const spot = await SceneSpotModel.findById(id).lean().exec()
+  if (!spot) {
+    ctx.throw(404, 'Scene spot not found')
+  }
+
+  const scene = await SceneModel.findById(spot.sceneId).lean().exec()
+  if (!scene) {
+    ctx.throw(404, 'Scene not found')
+  }
+
+  ctx.body = {
+    sceneId: String(scene._id),
+    sceneSpotId: String(spot._id),
+    packageUrl: scene.fileUrl,
+    sceneUrl: scene.fileUrl,
+  }
+}
+
+export async function listSceneProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
@@ -69,10 +172,8 @@ export async function listScenicProducts(ctx: Context): Promise<void> {
   }
 
   const includeApplicable = String((ctx.query as { includeApplicable?: string }).includeApplicable ?? '') === '1'
-
   const bindings = await SceneProductBindingModel.find({ sceneId: id, enabled: true }).lean().exec()
   const boundProductIds = bindings.map((binding) => binding.productId)
-
   const sceneTags: string[] = []
 
   const boundProducts = boundProductIds.length
@@ -80,7 +181,6 @@ export async function listScenicProducts(ctx: Context): Promise<void> {
     : ([] as ProductDocument[])
 
   const boundProductIdSet = new Set(boundProducts.map((product) => objectIdString(product._id)))
-
   const applicableProducts = includeApplicable
     ? ((await ProductModel.find({}).lean().exec()) as ProductDocument[]).filter((product) => {
         if (boundProductIdSet.has(objectIdString(product._id))) {

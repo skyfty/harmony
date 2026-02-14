@@ -3,25 +3,23 @@ import { miniRequest } from './client'
 
 export type ListScenicsResponse = {
   total: number
-  scenics: ScenicSummary[]
+  sceneSpots: ScenicSummary[]
 }
 
 export async function listScenics(query?: { q?: string }): Promise<ScenicSummary[]> {
-  const res = await miniRequest<ListScenicsResponse>('/scenics', {
+  const res = await miniRequest<ListScenicsResponse>('/scene-spots', {
     method: 'GET',
     query: { q: query?.q },
   })
-  return Array.isArray(res.scenics) ? res.scenics : []
+  return Array.isArray(res.sceneSpots) ? res.sceneSpots : []
 }
 
 export type GetScenicResponse = {
-  scenic: ScenicDetail
-  spots?: unknown[]
-  events?: unknown[]
+  sceneSpot: ScenicDetail
 }
 
 export async function getScenic(id: string): Promise<ScenicDetail | null> {
   if (!id) return null
-  const res = await miniRequest<GetScenicResponse>(`/scenics/${encodeURIComponent(id)}`, { method: 'GET' })
-  return res?.scenic ?? null
+  const res = await miniRequest<GetScenicResponse>(`/scene-spots/${encodeURIComponent(id)}`, { method: 'GET' })
+  return res?.sceneSpot ?? null
 }

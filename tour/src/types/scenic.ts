@@ -1,17 +1,18 @@
 export interface ScenicSummary {
   id: string;
-  name: string;
-  summary: string;
-  coverUrl: string;
-  rating?: number;
-  likes?: number;
+  sceneId: string;
+  title: string;
+  coverImage: string;
+  description: string;
+  address: string;
+  slides: string[];
+  scene: {
+    id: string;
+    name: string;
+    fileUrl: string;
+    fileKey: string;
+    fileSize: number;
+  };
 }
 
-export interface ScenicDetail extends ScenicSummary {
-  imageUrls: string[];
-  address: string;
-  phone: string;
-  packageUrl: string;
-  checkinProgress?: number;
-  description?: string;
-}
+export interface ScenicDetail extends ScenicSummary {}

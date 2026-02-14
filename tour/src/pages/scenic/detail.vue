@@ -6,26 +6,18 @@
     </view>
 
     <view v-else class="content">
-      <ImageSwiper :image-urls="scenic.imageUrls" />
+      <ImageSwiper :image-urls="scenic.slides" />
 
       <view class="card">
         <view class="row">
-          <text class="name">{{ scenic.name }}</text>
-          <StarRating v-if="typeof scenic.rating === 'number'" :value="scenic.rating" :show-value="true" />
+          <text class="name">{{ scenic.title }}</text>
         </view>
-        <text class="summary">{{ scenic.summary }}</text>
-
-        <view v-if="typeof scenic.checkinProgress === 'number'" class="progress">
-          <view class="bar">
-            <view class="fill" :style="{ width: `${Math.round(scenic.checkinProgress * 100)}%` }" />
-          </view>
-          <text class="percent">打卡进度 {{ Math.round(scenic.checkinProgress * 100) }}%</text>
-        </view>
+        <text class="summary">{{ scenic.description }}</text>
       </view>
 
       <view class="card">
         <text class="section">景区介绍</text>
-        <text class="desc">{{ scenic.description || scenic.summary }}</text>
+        <text class="desc">{{ scenic.description }}</text>
       </view>
 
       <view class="card">
@@ -33,10 +25,6 @@
         <view class="info-row">
           <text class="label">地址</text>
           <text class="value">{{ scenic.address }}</text>
-        </view>
-        <view class="info-row" @tap="call">
-          <text class="label">电话</text>
-          <text class="value value--link">{{ scenic.phone }}</text>
         </view>
       </view>
 
@@ -65,7 +53,6 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
-import StarRating from '@/components/StarRating.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
 import { getScenic } from '@/api/mini';
 import { listCommentsByScenic } from '@/mocks/comments';
@@ -95,19 +82,10 @@ function goBack() {
   uni.navigateBack();
 }
 
-function call() {
-  if (!scenic.value?.phone) {
-    return;
-  }
-  if (typeof uni.makePhoneCall === 'function') {
-    uni.makePhoneCall({ phoneNumber: scenic.value.phone });
-  }
-}
-
 function enterScenery() {
   if (!scenic.value) return;
   uni.navigateTo({
-    url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.packageUrl)}`,
+    url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
   });
 }
 </script>
@@ -152,29 +130,6 @@ function enterScenery() {
   line-height: 18px;
 }
 
-.progress {
-  margin-top: 12px;
-}
-
-.bar {
-  height: 8px;
-  border-radius: 999px;
-  background: #f2f4f7;
-  overflow: hidden;
-}
-
-.fill {
-  height: 100%;
-  background: linear-gradient(90deg, rgba(63, 151, 255, 0.9), rgba(126, 198, 255, 0.9));
-}
-
-.percent {
-  display: block;
-  margin-top: 8px;
-  font-size: 11px;
-  color: #8a94a6;
-}
-
 .section {
   display: block;
   font-size: 14px;
@@ -206,10 +161,6 @@ function enterScenery() {
   flex: 1;
   font-size: 12px;
   color: #1a1f2e;
-}
-
-.value--link {
-  color: #1f7aec;
 }
 
 .comments {

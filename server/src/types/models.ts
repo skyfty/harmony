@@ -571,13 +571,11 @@ export interface AssetDocument extends Document<Types.ObjectId> {
  */
 export interface SceneDocument extends Document<Types.ObjectId> {
   name: string
-  description?: string | null
   fileKey: string
   fileUrl: string
   fileSize: number
   fileType?: string | null
   originalFilename?: string | null
-  metadata?: Record<string, unknown> | null
   publishedBy: Types.ObjectId | null
   createdAt: Date
   updatedAt: Date
@@ -586,11 +584,11 @@ export interface SceneDocument extends Document<Types.ObjectId> {
 export interface SceneSpotDocument extends Document<Types.ObjectId> {
   sceneId: Types.ObjectId
   title: string
-  summary?: string | null
-  coverUrl?: string | null
+  coverImage?: string | null
+  slides: string[]
+  description: string
+  address: string
   order: number
-  anchor?: Record<string, unknown> | null
-  metadata?: Record<string, unknown> | null
   createdAt: Date
   updatedAt: Date
 }

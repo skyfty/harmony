@@ -1,21 +1,44 @@
 <script setup lang="ts">
 import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue'
 import type { Rule } from 'ant-design-vue/es/form'
-import type { ScenicCreatePayload, ScenicItem, ScenicMetadata, ScenicUpdatePayload } from '#/api'
+import type {
+  ScenicCreatePayload,
+  ScenicItem,
+  ScenicUpdatePayload,
+  SceneSpotCreatePayload,
+  SceneSpotItem,
+  SceneSpotUpdatePayload,
+} from '#/api'
 
 import { computed, reactive, ref } from 'vue'
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table'
-import { createScenicApi, deleteScenicApi, listScenicsApi, updateScenicApi } from '#/api'
+import {
+  createScenicApi,
+  createSceneSpotApi,
+  deleteScenicApi,
+  deleteSceneSpotApi,
+  listScenicsApi,
+  listSceneSpotsApi,
+  updateScenicApi,
+  updateSceneSpotApi,
+} from '#/api'
 import { $t } from '#/locales'
 
-import { Button, Form, Input, Modal, Space, Upload, message } from 'ant-design-vue'
+import { Button, Form, Input, InputNumber, Modal, Space, Upload, message } from 'ant-design-vue'
 
 interface ScenicFormModel {
   fileList: UploadFile[]
-  metadata: string
   name: string
-  url: string
+}
+
+interface SceneSpotFormModel {
+  title: string
+  coverImage: string
+  slides: string
+  description: string
+  address: string
+  order: number
 }
 
 const { TextArea } = Input
@@ -28,9 +51,23 @@ const editingScenicId = ref<null | string>(null)
 
 const scenicFormModel = reactive<ScenicFormModel>({
   fileList: [],
-  metadata: '',
   name: '',
-  url: '',
+})
+
+const sceneSpotModalOpen = ref(false)
+const sceneSpotSubmitting = ref(false)
+const sceneSpotFormRef = ref<FormInstance>()
+const sceneSpots = ref<SceneSpotItem[]>([])
+const currentScene = ref<null | ScenicItem>(null)
+const editingSceneSpotId = ref<null | string>(null)
+
+const sceneSpotFormModel = reactive<SceneSpotFormModel>({
+  title: '',
+  coverImage: '',
+  slides: '',
+  description: '',
+  address: '',
+  order: 0,
 })
 
 const scenicModalTitle = computed(() =>
@@ -57,8 +94,6 @@ const scenicUploadProps: UploadProps = {
 
 function resetScenicForm() {
   scenicFormModel.name = ''
-  scenicFormModel.url = ''
-  scenicFormModel.metadata = ''
   scenicFormModel.fileList = []
 }
 
@@ -71,33 +106,12 @@ function openCreateScenicModal() {
 function openEditScenicModal(record: ScenicItem) {
   editingScenicId.value = record.id
   scenicFormModel.name = record.name || ''
-  scenicFormModel.url = typeof record.url === 'string' ? record.url : ''
-  scenicFormModel.metadata =
-    record.metadata && Object.keys(record.metadata).length
-      ? JSON.stringify(record.metadata, null, 2)
-      : ''
   scenicFormModel.fileList = []
   scenicModalOpen.value = true
 }
 
 function closeScenicModal() {
   scenicModalOpen.value = false
-}
-
-function parseMetadataText(): ScenicMetadata | null {
-  const raw = scenicFormModel.metadata.trim()
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-      throw new Error('invalid metadata')
-    }
-    return parsed as ScenicMetadata
-  } catch {
-    throw new Error(t('page.scenics.index.message.invalidMetadata'))
-  }
 }
 
 function currentUploadFile(): Blob | File | null {
@@ -117,11 +131,8 @@ async function submitScenic() {
   await form.validate()
   scenicSubmitting.value = true
   try {
-    const metadata = parseMetadataText()
     const basePayload = {
-      metadata,
       name: scenicFormModel.name.trim(),
-      url: scenicFormModel.url.trim() || null,
     }
     const uploadFile = currentUploadFile()
 
@@ -143,15 +154,109 @@ async function submitScenic() {
 
     scenicModalOpen.value = false
     scenicGridApi.reload()
-  } catch (error) {
-    if (error instanceof Error && error.message === t('page.scenics.index.message.invalidMetadata')) {
-      message.error(error.message)
-    } else {
-      throw error
-    }
   } finally {
     scenicSubmitting.value = false
   }
+}
+
+function resetSceneSpotForm() {
+  editingSceneSpotId.value = null
+  sceneSpotFormModel.title = ''
+  sceneSpotFormModel.coverImage = ''
+  sceneSpotFormModel.slides = ''
+  sceneSpotFormModel.description = ''
+  sceneSpotFormModel.address = ''
+  sceneSpotFormModel.order = 0
+}
+
+async function reloadSceneSpots() {
+  if (!currentScene.value) {
+    sceneSpots.value = []
+    return
+  }
+  sceneSpots.value = await listSceneSpotsApi(currentScene.value.id)
+}
+
+async function openSceneSpotModal(scene: ScenicItem) {
+  currentScene.value = scene
+  sceneSpotModalOpen.value = true
+  resetSceneSpotForm()
+  await reloadSceneSpots()
+}
+
+function closeSceneSpotModal() {
+  sceneSpotModalOpen.value = false
+  currentScene.value = null
+  sceneSpots.value = []
+  resetSceneSpotForm()
+}
+
+function openEditSceneSpot(spot: SceneSpotItem) {
+  editingSceneSpotId.value = spot.id
+  sceneSpotFormModel.title = spot.title
+  sceneSpotFormModel.coverImage = spot.coverImage ?? ''
+  sceneSpotFormModel.slides = Array.isArray(spot.slides) ? spot.slides.join('\n') : ''
+  sceneSpotFormModel.description = spot.description ?? ''
+  sceneSpotFormModel.address = spot.address ?? ''
+  sceneSpotFormModel.order = spot.order ?? 0
+}
+
+async function submitSceneSpot() {
+  const scene = currentScene.value
+  if (!scene) {
+    return
+  }
+
+  const form = sceneSpotFormRef.value
+  if (!form) {
+    return
+  }
+  await form.validate()
+
+  const slides = sceneSpotFormModel.slides
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  const payload: SceneSpotCreatePayload | SceneSpotUpdatePayload = {
+    title: sceneSpotFormModel.title.trim(),
+    coverImage: sceneSpotFormModel.coverImage.trim() || null,
+    slides,
+    description: sceneSpotFormModel.description.trim() || null,
+    address: sceneSpotFormModel.address.trim() || null,
+    order: Number(sceneSpotFormModel.order) || 0,
+  }
+
+  sceneSpotSubmitting.value = true
+  try {
+    if (editingSceneSpotId.value) {
+      await updateSceneSpotApi(scene.id, editingSceneSpotId.value, payload)
+      message.success('景点已更新')
+    } else {
+      await createSceneSpotApi(scene.id, payload as SceneSpotCreatePayload)
+      message.success('景点已创建')
+    }
+    resetSceneSpotForm()
+    await reloadSceneSpots()
+  } finally {
+    sceneSpotSubmitting.value = false
+  }
+}
+
+function handleDeleteSceneSpot(spot: SceneSpotItem) {
+  if (!currentScene.value) {
+    return
+  }
+  const sceneId = currentScene.value.id
+  Modal.confirm({
+    title: `确认删除景点「${spot.title}」?`,
+    okType: 'danger',
+    onOk: async () => {
+      await deleteSceneSpotApi(sceneId, spot.id)
+      message.success('景点已删除')
+      await reloadSceneSpots()
+    },
+  })
 }
 
 function handleDeleteScenic(row: ScenicItem) {
@@ -185,7 +290,8 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
     border: true,
     columns: [
       { field: 'name', minWidth: 180, title: t('page.scenics.index.table.name') },
-      { field: 'url', minWidth: 240, title: t('page.scenics.index.table.url'), slots: { default: 'url' } },
+      { field: 'fileUrl', minWidth: 280, title: '场景文件地址', slots: { default: 'fileUrl' } },
+      { field: 'fileSize', minWidth: 120, title: '文件大小(B)' },
       {
         field: 'updatedAt',
         minWidth: 180,
@@ -197,7 +303,7 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
         align: 'left',
         field: 'actions',
         fixed: 'right',
-        minWidth: 200,
+        minWidth: 260,
         slots: { default: 'actions' },
         title: t('page.scenics.index.table.actions'),
       },
@@ -238,22 +344,25 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
   <div class="p-5">
     <ScenicGrid>
       <template #toolbar-actions>
-        <Button v-access:code="'scenic:write'" type="primary" @click="openCreateScenicModal">
+        <Button v-access:code="'scene:write'" type="primary" @click="openCreateScenicModal">
           {{ t('page.scenics.index.toolbar.create') }}
         </Button>
       </template>
 
-      <template #url="{ row }">
-        <a v-if="row.url" :href="row.url" target="_blank" rel="noopener noreferrer">{{ row.url }}</a>
+      <template #fileUrl="{ row }">
+        <a v-if="row.fileUrl" :href="row.fileUrl" target="_blank" rel="noopener noreferrer">{{ row.fileUrl }}</a>
         <span v-else class="text-text-secondary">-</span>
       </template>
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'scenic:write'" size="small" type="link" @click="openEditScenicModal(row)">
+          <Button v-access:code="'scene:write'" size="small" type="link" @click="openEditScenicModal(row)">
             {{ t('page.scenics.index.actions.edit') }}
           </Button>
-          <Button v-access:code="'scenic:write'" danger size="small" type="link" @click="handleDeleteScenic(row)">
+          <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openSceneSpotModal(row)">
+            景点
+          </Button>
+          <Button v-access:code="'scene:write'" danger size="small" type="link" @click="handleDeleteScenic(row)">
             {{ t('page.scenics.index.actions.delete') }}
           </Button>
         </Space>
@@ -274,21 +383,57 @@ const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
         <Form.Item :label="t('page.scenics.index.formFields.name.label')" name="name">
           <Input v-model:value="scenicFormModel.name" allow-clear />
         </Form.Item>
-        <Form.Item :label="t('page.scenics.index.formFields.url.label')" name="url">
-          <Input v-model:value="scenicFormModel.url" allow-clear />
-        </Form.Item>
-        
-        <Form.Item :label="t('page.scenics.index.formFields.metadata.label')" name="metadata">
-          <TextArea
-            v-model:value="scenicFormModel.metadata"
-            :rows="4"
-            :placeholder="t('page.scenics.index.formFields.metadata.placeholder')"
-          />
-        </Form.Item>
         <Form.Item :label="t('page.scenics.index.formFields.file.label')" name="file">
           <Upload v-model:file-list="scenicFormModel.fileList" v-bind="scenicUploadProps">
             <Button>{{ t('page.scenics.index.formFields.file.button') }}</Button>
           </Upload>
+        </Form.Item>
+      </Form>
+    </Modal>
+
+    <Modal
+      :open="sceneSpotModalOpen"
+      :title="currentScene ? `景点管理 - ${currentScene.name}` : '景点管理'"
+      :confirm-loading="sceneSpotSubmitting"
+      ok-text="保存景点"
+      cancel-text="关闭"
+      width="900px"
+      destroy-on-close
+      @cancel="closeSceneSpotModal"
+      @ok="submitSceneSpot"
+    >
+      <div class="mb-4 max-h-56 overflow-auto rounded border border-gray-200 p-3">
+        <div v-if="sceneSpots.length === 0" class="text-sm text-gray-500">暂无景点</div>
+        <div v-for="spot in sceneSpots" :key="spot.id" class="mb-2 flex items-center justify-between rounded border border-gray-100 p-2">
+          <div>
+            <div class="font-medium">{{ spot.title }}</div>
+            <div class="text-xs text-gray-500">{{ spot.address || '无地址' }}</div>
+          </div>
+          <Space>
+            <Button size="small" type="link" @click="openEditSceneSpot(spot)">编辑</Button>
+            <Button size="small" danger type="link" @click="handleDeleteSceneSpot(spot)">删除</Button>
+          </Space>
+        </div>
+      </div>
+
+      <Form ref="sceneSpotFormRef" :model="sceneSpotFormModel" :rules="scenicRules" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+        <Form.Item label="名称" name="title" :rules="[{ required: true, message: '请输入景点名称', trigger: 'blur' }]">
+          <Input v-model:value="sceneSpotFormModel.title" allow-clear />
+        </Form.Item>
+        <Form.Item label="介绍图" name="coverImage">
+          <Input v-model:value="sceneSpotFormModel.coverImage" allow-clear />
+        </Form.Item>
+        <Form.Item label="幻灯片" name="slides">
+          <TextArea v-model:value="sceneSpotFormModel.slides" :rows="3" placeholder="每行一个图片 URL" />
+        </Form.Item>
+        <Form.Item label="描述" name="description">
+          <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
+        </Form.Item>
+        <Form.Item label="地址" name="address">
+          <Input v-model:value="sceneSpotFormModel.address" allow-clear />
+        </Form.Item>
+        <Form.Item label="排序" name="order">
+          <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
         </Form.Item>
       </Form>
     </Modal>

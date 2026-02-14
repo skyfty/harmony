@@ -4,13 +4,11 @@ import type { SceneDocument } from '@/types/models'
 const sceneSchema = new Schema<SceneDocument>(
   {
     name: { type: String, required: true, trim: true },
-    description: { type: String, default: null },
     fileKey: { type: String, required: true },
     fileUrl: { type: String, required: true },
-    fileSize: { type: Number, default: 0 },
+    fileSize: { type: Number, required: true, min: 0 },
     fileType: { type: String, default: null },
     originalFilename: { type: String, default: null },
-    metadata: { type: Schema.Types.Mixed, default: null },
     publishedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   {

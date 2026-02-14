@@ -152,6 +152,7 @@ import { onLoad } from '@dcloudio/uni-app';
 import {
   apiDeleteExhibition,
   apiGetExhibition,
+  apiGetSceneSpotEntry,
   apiGetProfile,
   apiRateExhibition,
   apiShareExhibition,
@@ -270,10 +271,24 @@ async function enterExhibition(): Promise<void> {
     // 记录参观失败不会阻止进入场景，仅在控制台输出便于排查
     console.warn('[enterExhibition] failed to record visit', err);
   }
-  const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
-  const target = sceneUrl
-    ? `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
-    : '/pages/scenery/index';
+  const sceneSpotId = typeof exhibition.value.sceneSpotId === 'string' ? exhibition.value.sceneSpotId.trim() : '';
+
+  let target = '/pages/scenery/index';
+  if (sceneSpotId) {
+    try {
+      const entry = await apiGetSceneSpotEntry(sceneSpotId);
+      const sceneUrl = typeof entry.sceneUrl === 'string' ? entry.sceneUrl.trim() : '';
+      const packageUrl = typeof entry.packageUrl === 'string' ? entry.packageUrl.trim() : '';
+      if (sceneUrl || packageUrl) {
+        target = `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl || packageUrl)}&packageUrl=${encodeURIComponent(packageUrl || sceneUrl)}`;
+      }
+    } catch (err) {
+      console.warn('[enterExhibition] failed to resolve scene spot entry', err);
+    }
+  } else {
+    const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
+    target = sceneUrl ? `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl)}` : '/pages/scenery/index';
+  }
 
   uni.navigateTo({ url: target });
 }

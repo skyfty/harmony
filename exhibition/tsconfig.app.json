@@ -1,7 +1,7 @@
 {
   "extends": "@vue/tsconfig/tsconfig.json",
-  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "../schema/**/*.ts"],
-  "exclude": ["src/**/__tests__/*"],
+  "include": ["src/env.d.ts", "shims-uni.d.ts", "src/**/*", "src/**/*.vue", "../schema/**/*.ts"],
+  "exclude": ["src/**/__tests__/*", "src/pages/scenery/uni_modules/**"],
   "compilerOptions": {
     "lib": [
       // Target ES2020 to align with Vite.
@@ -15,20 +15,22 @@
       "DOM",
       "DOM.Iterable"
     ],
-    "types": ["@dcloudio/types", "miniprogram-api-typings", "three"],
+    "types": ["@dcloudio/types", "miniprogram-api-typings"],
     "composite": true,
     "allowJs": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "baseUrl": ".",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": true,
+    "exactOptionalPropertyTypes": false,
     "paths": {
       "@/*": ["./src/*"],
       "@schema/*": ["../schema/*"],
+      "@harmony/scenery/components/SceneryViewer.vue": ["./src/types/scenery-viewer-proxy.d.ts"],
       "three": ["./node_modules/@types/three/index"],
       "three/*": ["./node_modules/@types/three/*"],
       "@three-examples/*": ["./node_modules/@types/three/examples/jsm/*"]

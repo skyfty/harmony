@@ -15,37 +15,55 @@ interface GridPageResult<T> {
 export interface ScenicItem {
   id: string
   name: string
-  location?: string | null
-  intro?: string | null
-  url?: string | null
-  fileKey?: string
-  fileUrl?: string
-  description?: string | null
-  metadata?: Record<string, unknown> | null
+  fileKey: string
+  fileUrl: string
+  fileSize: number
+  fileType?: string | null
+  originalFilename?: string | null
+  publishedBy?: string | null
   createdAt: string
   updatedAt: string
 }
 
-export type ScenicMetadata = Record<string, unknown>
+export interface SceneSpotItem {
+  id: string
+  sceneId: string
+  title: string
+  coverImage?: string | null
+  slides: string[]
+  description: string
+  address: string
+  order: number
+  createdAt: string
+  updatedAt: string
+}
 
 export interface ScenicCreatePayload {
   name: string
-  location?: null | string
-  intro?: null | string
-  url?: null | string
-  description?: null | string
-  metadata?: ScenicMetadata | null
   file?: Blob | File | null
 }
 
 export interface ScenicUpdatePayload {
   name?: string
-  location?: null | string
-  intro?: null | string
-  url?: null | string
-  description?: null | string
-  metadata?: ScenicMetadata | null
   file?: Blob | File | null
+}
+
+export interface SceneSpotCreatePayload {
+  title: string
+  coverImage?: string | null
+  slides?: string[] | string
+  description?: string | null
+  address?: string | null
+  order?: number
+}
+
+export interface SceneSpotUpdatePayload {
+  title?: string
+  coverImage?: string | null
+  slides?: string[] | string
+  description?: string | null
+  address?: string | null
+  order?: number
 }
 
 export interface ListScenicsParams {
@@ -64,13 +82,6 @@ function appendField(form: FormData, key: string, value: null | string | undefin
 function toScenicFormData(payload: ScenicCreatePayload | ScenicUpdatePayload): FormData {
   const form = new FormData()
   appendField(form, 'name', payload.name)
-  appendField(form, 'location', payload.location)
-  appendField(form, 'intro', payload.intro)
-  appendField(form, 'url', payload.url)
-  appendField(form, 'description', payload.description)
-  if (Object.prototype.hasOwnProperty.call(payload, 'metadata')) {
-    form.append('metadata', payload.metadata == null ? '' : JSON.stringify(payload.metadata))
-  }
   if (payload.file) {
     form.append('file', payload.file)
   }
@@ -85,19 +96,19 @@ function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
 }
 
 export async function listScenicsApi(params: ListScenicsParams) {
-  const response = await requestClient.get<ServerPageResult<ScenicItem>>('/admin/scenics', {
+  const response = await requestClient.get<ServerPageResult<ScenicItem>>('/admin/scenes', {
     params,
   })
   return normalizeGridPage(response)
 }
 
 export async function getScenicApi(id: string) {
-  return requestClient.get<ScenicItem>(`/admin/scenics/${id}`)
+  return requestClient.get<ScenicItem>(`/admin/scenes/${id}`)
 }
 
 export async function createScenicApi(payload: FormData | ScenicCreatePayload) {
   const data = payload instanceof FormData ? payload : toScenicFormData(payload)
-  return requestClient.post<ScenicItem>('/admin/scenics', data, {
+  return requestClient.post<ScenicItem>('/admin/scenes', data, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -106,7 +117,7 @@ export async function createScenicApi(payload: FormData | ScenicCreatePayload) {
 
 export async function updateScenicApi(id: string, payload: FormData | ScenicUpdatePayload) {
   const data = payload instanceof FormData ? payload : toScenicFormData(payload)
-  return requestClient.put<ScenicItem>(`/admin/scenics/${id}`, data, {
+  return requestClient.put<ScenicItem>(`/admin/scenes/${id}`, data, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -114,5 +125,25 @@ export async function updateScenicApi(id: string, payload: FormData | ScenicUpda
 }
 
 export async function deleteScenicApi(id: string) {
-  return requestClient.delete(`/admin/scenics/${id}`)
+  return requestClient.delete(`/admin/scenes/${id}`)
+}
+
+export async function listSceneSpotsApi(sceneId: string) {
+  return requestClient.get<SceneSpotItem[]>(`/admin/scenes/${sceneId}/spots`)
+}
+
+export async function getSceneSpotApi(sceneId: string, id: string) {
+  return requestClient.get<SceneSpotItem>(`/admin/scenes/${sceneId}/spots/${id}`)
+}
+
+export async function createSceneSpotApi(sceneId: string, payload: SceneSpotCreatePayload) {
+  return requestClient.post<SceneSpotItem>(`/admin/scenes/${sceneId}/spots`, payload)
+}
+
+export async function updateSceneSpotApi(sceneId: string, id: string, payload: SceneSpotUpdatePayload) {
+  return requestClient.put<SceneSpotItem>(`/admin/scenes/${sceneId}/spots/${id}`, payload)
+}
+
+export async function deleteSceneSpotApi(sceneId: string, id: string) {
+  return requestClient.delete(`/admin/scenes/${sceneId}/spots/${id}`)
 }

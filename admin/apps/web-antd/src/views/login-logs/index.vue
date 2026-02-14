@@ -69,7 +69,7 @@ function handleDelete(row: any) {
 }
 
 async function handleBulkDelete() {
-  const selected = await gridApi.getSelectedRows()
+  const selected = (gridApi.grid?.getCheckboxRecords?.() ?? []) as any[]
   if (!selected.length) {
     message.warning('请选择要删除的记录')
     return
@@ -87,7 +87,7 @@ async function handleBulkDelete() {
 }
 
 async function handleExport() {
-  const form = await gridApi.getFormValues()
+  const form = (gridApi.formApi?.getValues?.() ?? {}) as Record<string, any>
   const params: any = {
     keyword: form.keyword,
     username: form.username,
@@ -128,7 +128,7 @@ async function handleExport() {
 
       <template #actions="{ row }">
         <a-space>
-          <a-button size="small" type="link" @click="() => gridApi.viewRow(row)">查看</a-button>
+          <a-button size="small" type="link" @click="() => message.info(`ID: ${row.id}`)">查看</a-button>
           <a-button size="small" type="link" danger @click="() => handleDelete(row)">删除</a-button>
         </a-space>
       </template>
