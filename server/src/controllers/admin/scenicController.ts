@@ -5,10 +5,7 @@ import { extractUploadedFile, createScene, deleteSceneById, updateScene } from '
 
 type ScenicPayload = {
   name?: string
-  location?: string | null
-  intro?: string | null
   url?: string | null
-  description?: string | null
   metadata?: Record<string, unknown> | null
 }
 
@@ -47,8 +44,6 @@ function parseMetadataInput(value: unknown, ctx: Context): Record<string, unknow
 
 function mapScenic(scene: any) {
   const metadata = (scene.metadata ?? {}) as Record<string, unknown>
-  const location = toNullableString(metadata.location)
-  const intro = toNullableString(metadata.intro) ?? toNullableString(scene.description)
   const url = toNullableString(metadata.url) ?? toNullableString(scene.fileUrl)
   const id = scene.id ?? scene._id?.toString?.() ?? String(scene._id)
   const createdSource = scene.createdAt ?? new Date()
@@ -58,12 +53,9 @@ function mapScenic(scene: any) {
   return {
     id,
     name: scene.name,
-    location,
-    intro,
     url,
     fileKey: scene.fileKey,
     fileUrl: scene.fileUrl,
-    description: scene.description ?? null,
     metadata,
     createdAt,
     updatedAt,
@@ -77,7 +69,7 @@ export async function listScenics(ctx: Context): Promise<void> {
   const skip = (pageNumber - 1) * limit
   const filter: Record<string, unknown> = {}
   if (keyword && keyword.trim()) {
-    filter.$or = [{ name: new RegExp(keyword.trim(), 'i') }, { description: new RegExp(keyword.trim(), 'i') }]
+    filter.name = new RegExp(keyword.trim(), 'i')
   }
   const [rows, total] = await Promise.all([
     SceneModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
@@ -121,13 +113,10 @@ export async function createScenic(ctx: Context): Promise<void> {
     const metadataInput = hasOwn(body, 'metadata') ? parseMetadataInput(body.metadata, ctx) : null
     const metadata = {
       ...(metadataInput ?? {}),
-      ...(toNullableString(body.location) ? { location: toNullableString(body.location) } : {}),
-      ...(toNullableString(body.intro) ? { intro: toNullableString(body.intro) } : {}),
       ...(toNullableString(body.url) ? { url: toNullableString(body.url) } : {}),
     }
     const payload = {
       name,
-      description: toNullableString(body.description) ?? toNullableString(body.intro) ?? null,
       metadata: Object.keys(metadata).length ? metadata : null,
       file: filePayload,
       publishedBy,
@@ -139,20 +128,14 @@ export async function createScenic(ctx: Context): Promise<void> {
   }
 
   // fallback: create from URL/meta only (legacy behavior)
-  const location = toNullableString(body.location)
-  const intro = toNullableString(body.intro)
   const url = toNullableString(body.url)
-  const description = toNullableString(body.description) ?? intro
   const metadataInput = hasOwn(body, 'metadata') ? parseMetadataInput(body.metadata, ctx) : null
   const metadata = {
     ...(metadataInput ?? {}),
-    ...(location ? { location } : {}),
-    ...(intro ? { intro } : {}),
     ...(url ? { url } : {}),
   }
   const created = await SceneModel.create({
     name,
-    description,
     fileKey: url ?? `scenic-${Date.now()}`,
     fileUrl: url ?? '',
     metadata,
@@ -176,23 +159,15 @@ export async function updateScenic(ctx: Context): Promise<void> {
   const filePayload = extractUploadedFile(files, 'file')
 
   const metadataProvided = hasOwn(body, 'metadata')
-  const locationProvided = hasOwn(body, 'location')
-  const introProvided = hasOwn(body, 'intro')
   const urlProvided = hasOwn(body, 'url')
 
   let nextMetadata: Record<string, unknown> | null | undefined
-  if (metadataProvided || locationProvided || introProvided || urlProvided) {
+  if (metadataProvided || urlProvided) {
     const baseMetadata = metadataProvided
       ? parseMetadataInput(body.metadata, ctx)
       : ((current.metadata ?? {}) as Record<string, unknown>)
     const merged = {
       ...(baseMetadata ?? {}),
-    }
-    if (locationProvided) {
-      merged.location = toNullableString(body.location)
-    }
-    if (introProvided) {
-      merged.intro = toNullableString(body.intro)
     }
     if (urlProvided) {
       merged.url = toNullableString(body.url)
@@ -200,17 +175,12 @@ export async function updateScenic(ctx: Context): Promise<void> {
     nextMetadata = Object.keys(merged).length ? merged : null
   }
 
-  const descriptionProvided = hasOwn(body, 'description')
-  const descriptionValue = descriptionProvided
-    ? toNullableString(body.description)
-    : (introProvided ? toNullableString(body.intro) : undefined)
   const normalizedName = hasOwn(body, 'name') ? toNullableString(body.name) : undefined
 
   // if file uploaded or metadata/name/description provided, use sceneService to update
   if (filePayload) {
     const payload = {
       name: normalizedName ?? undefined,
-      description: descriptionValue,
       metadata: nextMetadata,
       file: filePayload,
     }
@@ -224,14 +194,12 @@ export async function updateScenic(ctx: Context): Promise<void> {
 
   // fallback: legacy update without file
   const nextName = normalizedName ?? current.name
-  const nextDescription = descriptionValue ?? current.description ?? null
   const currentFileUrl = toNullableString(current.fileUrl) ?? ''
   const nextFileUrl = urlProvided ? (toNullableString(body.url) ?? currentFileUrl) : currentFileUrl
   const updated = await SceneModel.findByIdAndUpdate(
     id,
     {
       name: nextName,
-      description: nextDescription,
       fileUrl: nextFileUrl,
       metadata: nextMetadata === undefined ? current.metadata : nextMetadata,
     },
