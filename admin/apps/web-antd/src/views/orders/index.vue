@@ -128,7 +128,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
       </template>
     </OrderGrid>
 
-    <Modal :open="modalOpen" :confirm-loading="submitting" :title="t('page.orders.index.modal.title')" :ok-text="t('page.orders.form.actions.save')" :cancel-text="t('page.orders.form.actions.cancel')" @cancel="() => (modalOpen = false)" :width="900" :footer="null">
+    <Modal :open="modalOpen" :confirm-loading="submitting" :title="t('page.orders.index.modal.title')" :ok-text="t('page.orders.form.actions.save')" :cancel-text="t('page.orders.form.actions.cancel')" @cancel="() => (modalOpen = false)" :width="1100" :footer="null">
       <OrderForm :model="editingModel" mode="create" @submit="submitForm" @cancel="() => (modalOpen = false)" />
     </Modal>
   </div>
