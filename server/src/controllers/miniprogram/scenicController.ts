@@ -83,7 +83,7 @@ function buildScenicDetail(scene: SceneDocument): ScenicDetailDto {
   return dto
 }
 
-export async function listSpaces(ctx: Context): Promise<void> {
+export async function listScenics(ctx: Context): Promise<void> {
   const { q } = ctx.query as { q?: string }
   const filter: Record<string, unknown> = {}
   if (q && typeof q === 'string' && q.trim()) {
@@ -92,19 +92,19 @@ export async function listSpaces(ctx: Context): Promise<void> {
   const scenes = (await SceneModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as SceneDocument[]
   ctx.body = {
     total: scenes.length,
-    spaces: scenes.map(buildScenicSummary),
+    scenics: scenes.map(buildScenicSummary),
   }
 }
 
-export async function getSpace(ctx: Context): Promise<void> {
+export async function getScenic(ctx: Context): Promise<void> {
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid space id')
+    ctx.throw(400, 'Invalid scenic id')
   }
 
   const scene = (await SceneModel.findById(id).lean().exec()) as SceneDocument | null
   if (!scene) {
-    ctx.throw(404, 'Space not found')
+    ctx.throw(404, 'Scenic not found')
     return
   }
 
@@ -112,7 +112,7 @@ export async function getSpace(ctx: Context): Promise<void> {
   const events = await MiniEventModel.find({ sceneId: id }).sort({ hotScore: -1, startAt: 1 }).lean().exec()
 
   ctx.body = {
-    space: buildScenicDetail(scene),
+    scenic: buildScenicDetail(scene),
     spots: spots.map((spot) => ({
       id: objectIdString(spot._id),
       title: spot.title,
@@ -134,15 +134,15 @@ export async function getSpace(ctx: Context): Promise<void> {
   }
 }
 
-export async function getSpaceEntry(ctx: Context): Promise<void> {
+export async function getScenicEntry(ctx: Context): Promise<void> {
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid space id')
+    ctx.throw(400, 'Invalid scenic id')
   }
 
   const scene = (await SceneModel.findById(id).lean().exec()) as SceneDocument | null
   if (!scene) {
-    ctx.throw(404, 'Space not found')
+    ctx.throw(404, 'Scenic not found')
     return
   }
 
@@ -198,16 +198,16 @@ function buildProductDto(product: ProductDocument, userEntry: { state: string; e
   }
 }
 
-export async function listSpaceProducts(ctx: Context): Promise<void> {
+export async function listScenicProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, 'Invalid space id')
+    ctx.throw(400, 'Invalid scenic id')
   }
 
   const scene = (await SceneModel.findById(id).lean().exec()) as SceneDocument | null
   if (!scene) {
-    ctx.throw(404, 'Space not found')
+    ctx.throw(404, 'Scenic not found')
     return
   }
 

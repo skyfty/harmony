@@ -1,4 +1,4 @@
-export * from './spaces'
+export * from './scenics'
 export * from './events'
 export * from './vehicles'
 export * from './coupons'

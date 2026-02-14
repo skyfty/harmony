@@ -1,7 +1,7 @@
 import Router from 'koa-router'
 import { authMiddleware, optionalAuthMiddleware } from '@/middleware/auth'
 import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
-import { listSpaces, getSpace, getSpaceEntry, listSpaceProducts } from '@/controllers/miniprogram/spaceController'
+import { listScenics, getScenic, getScenicEntry, listScenicProducts } from '@/controllers/miniprogram/scenicController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import { listUserCoupons, claimCoupon } from '@/controllers/miniprogram/couponController'
 import {
@@ -63,10 +63,10 @@ miniRouter.get('/collections/:id', optionalAuthMiddleware, getCollection)
 miniRouter.get('/exhibitions/:id', optionalAuthMiddleware, getExhibition)
 
 // public readable (optional auth enhances with user state)
-miniRouter.get('/spaces', optionalAuthMiddleware, listSpaces)
-miniRouter.get('/spaces/:id', optionalAuthMiddleware, getSpace)
-miniRouter.get('/spaces/:id/entry', optionalAuthMiddleware, getSpaceEntry)
-miniRouter.get('/spaces/:id/products', optionalAuthMiddleware, listSpaceProducts)
+miniRouter.get('/scenics', optionalAuthMiddleware, listScenics)
+miniRouter.get('/scenics/:id', optionalAuthMiddleware, getScenic)
+miniRouter.get('/scenics/:id/entry', optionalAuthMiddleware, getScenicEntry)
+miniRouter.get('/scenics/:id/products', optionalAuthMiddleware, listScenicProducts)
 
 miniRouter.get('/events/hot', optionalAuthMiddleware, listHotEvents)
 

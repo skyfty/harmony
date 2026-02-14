@@ -12,7 +12,77 @@
     "analytics": "Analytics",
     "workspace": "Workspace"
   },
-  "scenics": { "title": "Scenics" },
+  "scenics": {
+    "title": "Scenics",
+    "index": {
+      "modal": {
+        "edit": "Edit Scenic",
+        "create": "New Scenic",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Scenic updated successfully",
+        "createSuccess": "Scenic created successfully",
+        "deleteSuccess": "Scenic deleted successfully",
+        "invalidMetadata": "Metadata must be a JSON object"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete scenic \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Scenic name / description"
+        }
+      },
+      "table": {
+        "title": "Scenic Management",
+        "name": "Name",
+        "location": "Location",
+        "intro": "Intro",
+        "url": "URL",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": {
+        "create": "New Scenic"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "name": {
+          "label": "Name",
+          "required": "Please enter scenic name"
+        },
+        "location": {
+          "label": "Location"
+        },
+        "intro": {
+          "label": "Intro"
+        },
+        "url": {
+          "label": "URL"
+        },
+        "description": {
+          "label": "Description"
+        },
+        "metadata": {
+          "label": "Metadata",
+          "placeholder": "Please input a JSON object, e.g. {\"level\": 1}"
+        },
+        "file": {
+          "label": "Scenic File",
+          "button": "Select File"
+        }
+      }
+    }
+  },
   "loginLogs": { "title": "Login Logs" },
   "project": {
     "title": "Projects",
@@ -24,7 +94,8 @@
   "system": {
     "title": "System",
     "users": "Users",
-    "rbac": "Roles & Permissions"
+    "rbac": "Roles & Permissions",
+    "scenics": "Scenics"
   },
   "userProjects": {
     "categories": {

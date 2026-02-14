@@ -13,15 +13,6 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
-    name: 'LoginLogs',
-    path: '/login-logs',
-    component: () => import('#/views/login-logs/index.vue'),
-    meta: {
-      icon: 'lucide:log-in',
-      title: $t('page.loginLogs.title'),
-    },
-  },
-  {
     meta: {
       icon: 'lucide:folder-kanban',
       order: 11,
@@ -168,6 +159,16 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:shield-check',
           title: $t('page.system.rbac'),
+        },
+      },
+      
+      {
+        name: 'LoginLogs',
+        path: '/login-logs',
+        component: () => import('#/views/login-logs/index.vue'),
+        meta: {
+          icon: 'lucide:log-in',
+          title: $t('page.loginLogs.title'),
         },
       },
       // login-logs moved to top-level route

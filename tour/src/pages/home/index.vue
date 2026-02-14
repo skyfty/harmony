@@ -49,7 +49,7 @@
 import { computed, onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
-import { listHotEvents, listSpaces } from '@/api/mini';
+import { listHotEvents, listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import type { ScenicSummary } from '@/types/scenic';
 
@@ -58,8 +58,8 @@ const scenics = ref<ScenicSummary[]>([]);
 const events = ref<{ id: string; title: string; description: string }[]>([]);
 
 async function reload() {
-  const [spacesRes, eventsRes] = await Promise.all([listSpaces(), listHotEvents()]);
-  scenics.value = spacesRes;
+  const [scenicsRes, eventsRes] = await Promise.all([listScenics(), listHotEvents()]);
+  scenics.value = scenicsRes;
   events.value = eventsRes.map((event) => ({
     id: event.id,
     title: event.title,

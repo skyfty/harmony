@@ -67,7 +67,7 @@ import { ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import StarRating from '@/components/StarRating.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
-import { getSpace } from '@/api/mini';
+import { getScenic } from '@/api/mini';
 import { listCommentsByScenic } from '@/mocks/comments';
 import type { ScenicDetail } from '@/types/scenic';
 
@@ -81,9 +81,9 @@ onLoad((query) => {
     scenic.value = null;
     return;
   }
-  void getSpace(id)
-    .then((space) => {
-      scenic.value = space ?? null;
+  void getScenic(id)
+    .then((scenicRes) => {
+      scenic.value = scenicRes ?? null;
     })
     .catch(() => {
       scenic.value = null;

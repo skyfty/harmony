@@ -12,7 +12,77 @@
     "analytics": "分析页",
     "workspace": "工作台"
   },
-  "scenics": { "title": "场景管理" },
+  "scenics": {
+    "title": "场景管理",
+    "index": {
+      "modal": {
+        "edit": "编辑场景",
+        "create": "新建场景",
+        "ok": "保存",
+        "cancel": "取消"
+      },
+      "message": {
+        "updateSuccess": "场景更新成功",
+        "createSuccess": "场景创建成功",
+        "deleteSuccess": "场景删除成功",
+        "invalidMetadata": "Metadata 必须是 JSON 对象"
+      },
+      "confirm": {
+        "delete": {
+          "title": "确认删除场景\"{name}\"吗？",
+          "content": "删除后不可恢复。"
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "关键字",
+          "placeholder": "场景名称 / 描述"
+        }
+      },
+      "table": {
+        "title": "场景管理",
+        "name": "名称",
+        "location": "位置",
+        "intro": "简介",
+        "url": "URL",
+        "updatedAt": "更新时间",
+        "actions": "操作"
+      },
+      "toolbar": {
+        "create": "新建场景"
+      },
+      "actions": {
+        "edit": "编辑",
+        "delete": "删除"
+      },
+      "formFields": {
+        "name": {
+          "label": "名称",
+          "required": "请输入场景名称"
+        },
+        "location": {
+          "label": "位置"
+        },
+        "intro": {
+          "label": "简介"
+        },
+        "url": {
+          "label": "URL"
+        },
+        "description": {
+          "label": "描述"
+        },
+        "metadata": {
+          "label": "Metadata",
+          "placeholder": "请输入 JSON 对象，例如 {\"level\": 1}"
+        },
+        "file": {
+          "label": "场景文件",
+          "button": "选择文件"
+        }
+      }
+    }
+  },
   "loginLogs": { "title": "登录日志" },
   "project": {
     "title": "项目",

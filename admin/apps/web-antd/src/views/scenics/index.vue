@@ -1,58 +1,321 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { Button, Card, Table } from 'ant-design-vue';
-import { listScenicsApi } from '#/api/core/scenics';
+import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue'
+import type { Rule } from 'ant-design-vue/es/form'
+import type { ScenicCreatePayload, ScenicItem, ScenicMetadata, ScenicUpdatePayload } from '#/api'
 
-const router = useRouter();
-const route = useRoute();
+import { computed, reactive, ref } from 'vue'
 
-const data = ref([] as any[]);
-const loading = ref(false);
+import { useVbenVxeGrid } from '#/adapter/vxe-table'
+import { createScenicApi, deleteScenicApi, listScenicsApi, updateScenicApi } from '#/api'
+import { $t } from '#/locales'
 
-async function load() {
-  loading.value = true;
+import { Button, Form, Input, Modal, Space, Upload, message } from 'ant-design-vue'
+
+interface ScenicFormModel {
+  description: string
+  fileList: UploadFile[]
+  intro: string
+  location: string
+  metadata: string
+  name: string
+  url: string
+}
+
+const { TextArea } = Input
+const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never)
+
+const scenicFormRef = ref<FormInstance>()
+const scenicModalOpen = ref(false)
+const scenicSubmitting = ref(false)
+const editingScenicId = ref<null | string>(null)
+
+const scenicFormModel = reactive<ScenicFormModel>({
+  description: '',
+  fileList: [],
+  intro: '',
+  location: '',
+  metadata: '',
+  name: '',
+  url: '',
+})
+
+const scenicModalTitle = computed(() =>
+  editingScenicId.value ? t('page.scenics.index.modal.edit') : t('page.scenics.index.modal.create'),
+)
+
+const scenicRules = computed(
+  () =>
+    ({
+      name: [
+        {
+          message: t('page.scenics.index.formFields.name.required'),
+          required: true,
+          trigger: 'blur',
+        },
+      ] as Rule[],
+    }) as Record<string, Rule[]>,
+)
+
+const scenicUploadProps: UploadProps = {
+  beforeUpload: () => false,
+  maxCount: 1,
+}
+
+function resetScenicForm() {
+  scenicFormModel.name = ''
+  scenicFormModel.location = ''
+  scenicFormModel.intro = ''
+  scenicFormModel.url = ''
+  scenicFormModel.description = ''
+  scenicFormModel.metadata = ''
+  scenicFormModel.fileList = []
+}
+
+function openCreateScenicModal() {
+  editingScenicId.value = null
+  resetScenicForm()
+  scenicModalOpen.value = true
+}
+
+function openEditScenicModal(record: ScenicItem) {
+  editingScenicId.value = record.id
+  scenicFormModel.name = record.name || ''
+  scenicFormModel.location = typeof record.location === 'string' ? record.location : ''
+  scenicFormModel.intro = typeof record.intro === 'string' ? record.intro : ''
+  scenicFormModel.url = typeof record.url === 'string' ? record.url : ''
+  scenicFormModel.description = typeof record.description === 'string' ? record.description : ''
+  scenicFormModel.metadata =
+    record.metadata && Object.keys(record.metadata).length
+      ? JSON.stringify(record.metadata, null, 2)
+      : ''
+  scenicFormModel.fileList = []
+  scenicModalOpen.value = true
+}
+
+function closeScenicModal() {
+  scenicModalOpen.value = false
+}
+
+function parseMetadataText(): ScenicMetadata | null {
+  const raw = scenicFormModel.metadata.trim()
+  if (!raw) {
+    return null
+  }
   try {
-    const res = await listScenicsApi({ page: 1, pageSize: 50 });
-    data.value = res.items || [];
-  } finally {
-    loading.value = false;
+    const parsed = JSON.parse(raw)
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      throw new Error('invalid metadata')
+    }
+    return parsed as ScenicMetadata
+  } catch {
+    throw new Error(t('page.scenics.index.message.invalidMetadata'))
   }
 }
 
-function goToDetail(row: any) {
-  router.push({ name: 'ScenicsDetail', params: { id: row.id } });
+function currentUploadFile(): Blob | File | null {
+  const first = scenicFormModel.fileList[0]
+  if (!first) {
+    return null
+  }
+  const origin = first.originFileObj
+  return origin || null
 }
 
-onMounted(load);
+async function submitScenic() {
+  const form = scenicFormRef.value
+  if (!form) {
+    return
+  }
+  await form.validate()
+  scenicSubmitting.value = true
+  try {
+    const metadata = parseMetadataText()
+    const basePayload = {
+      description: scenicFormModel.description.trim() || null,
+      intro: scenicFormModel.intro.trim() || null,
+      location: scenicFormModel.location.trim() || null,
+      metadata,
+      name: scenicFormModel.name.trim(),
+      url: scenicFormModel.url.trim() || null,
+    }
+    const uploadFile = currentUploadFile()
 
-const columns = [
-  { dataIndex: 'id', key: 'id', title: 'ID' },
-  { dataIndex: 'name', key: 'name', title: '名称' },
-  { dataIndex: 'category', key: 'category', title: '分类' },
-  { dataIndex: 'updatedAt', key: 'updatedAt', title: '更新时间' },
-  {
-    dataIndex: 'actions',
-    key: 'actions',
-    title: '操作',
-    slots: { customRender: 'actions' },
+    if (editingScenicId.value) {
+      const payload: ScenicUpdatePayload = {
+        ...basePayload,
+        file: uploadFile,
+      }
+      await updateScenicApi(editingScenicId.value, payload)
+      message.success(t('page.scenics.index.message.updateSuccess'))
+    } else {
+      const payload: ScenicCreatePayload = {
+        ...basePayload,
+        file: uploadFile,
+      }
+      await createScenicApi(payload)
+      message.success(t('page.scenics.index.message.createSuccess'))
+    }
+
+    scenicModalOpen.value = false
+    scenicGridApi.reload()
+  } catch (error) {
+    if (error instanceof Error && error.message === t('page.scenics.index.message.invalidMetadata')) {
+      message.error(error.message)
+    } else {
+      throw error
+    }
+  } finally {
+    scenicSubmitting.value = false
+  }
+}
+
+function handleDeleteScenic(row: ScenicItem) {
+  Modal.confirm({
+    title: t('page.scenics.index.confirm.delete.title', { name: row.name }),
+    content: t('page.scenics.index.confirm.delete.content'),
+    okType: 'danger',
+    onOk: async () => {
+      await deleteScenicApi(row.id)
+      message.success(t('page.scenics.index.message.deleteSuccess'))
+      scenicGridApi.reload()
+    },
+  })
+}
+
+const [ScenicGrid, scenicGridApi] = useVbenVxeGrid<ScenicItem>({
+  formOptions: {
+    schema: [
+      {
+        component: 'Input',
+        fieldName: 'keyword',
+        label: t('page.scenics.index.form.keyword.label'),
+        componentProps: {
+          allowClear: true,
+          placeholder: t('page.scenics.index.form.keyword.placeholder'),
+        },
+      },
+    ],
   },
-];
+  gridOptions: {
+    border: true,
+    columns: [
+      { field: 'name', minWidth: 180, title: t('page.scenics.index.table.name') },
+      { field: 'location', minWidth: 180, title: t('page.scenics.index.table.location') },
+      { field: 'intro', minWidth: 220, title: t('page.scenics.index.table.intro') },
+      { field: 'url', minWidth: 240, title: t('page.scenics.index.table.url'), slots: { default: 'url' } },
+      {
+        field: 'updatedAt',
+        minWidth: 180,
+        sortable: true,
+        formatter: 'formatDateTime',
+        title: t('page.scenics.index.table.updatedAt'),
+      },
+      {
+        align: 'left',
+        field: 'actions',
+        fixed: 'right',
+        minWidth: 200,
+        slots: { default: 'actions' },
+        title: t('page.scenics.index.table.actions'),
+      },
+    ],
+    pagerConfig: {
+      pageSize: 20,
+    },
+    proxyConfig: {
+      ajax: {
+        query: async (
+          { page }: { page: { currentPage: number; pageSize: number } },
+          formValues: Record<string, any>,
+        ) => {
+          return await listScenicsApi({
+            keyword: formValues.keyword || undefined,
+            page: page.currentPage,
+            pageSize: page.pageSize,
+          })
+        },
+      },
+    },
+    sortConfig: {
+      defaultSort: { field: 'updatedAt', order: 'desc' },
+      remote: false,
+    },
+    toolbarConfig: {
+      custom: true,
+      refresh: true,
+      search: true,
+      zoom: true,
+    },
+  },
+  tableTitle: t('page.scenics.index.table.title'),
+})
 </script>
 
 <template>
   <div class="p-5">
-    <Card>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 style="margin:0">场景管理</h3>
-        <Button type="primary" @click="() => router.push({ name: 'ScenicsCreate' })">新建场景</Button>
-      </div>
+    <ScenicGrid>
+      <template #toolbar-actions>
+        <Button v-access:code="'scenic:write'" type="primary" @click="openCreateScenicModal">
+          {{ t('page.scenics.index.toolbar.create') }}
+        </Button>
+      </template>
 
-      <Table :data-source="data" :columns="columns" :row-key="'id'" :loading="loading">
-        <template #actions="{ record }">
-          <a @click.prevent="goToDetail(record)">详情</a>
-        </template>
-      </Table>
-    </Card>
+      <template #url="{ row }">
+        <a v-if="row.url" :href="row.url" target="_blank" rel="noopener noreferrer">{{ row.url }}</a>
+        <span v-else class="text-text-secondary">-</span>
+      </template>
+
+      <template #actions="{ row }">
+        <Space>
+          <Button v-access:code="'scenic:write'" size="small" type="link" @click="openEditScenicModal(row)">
+            {{ t('page.scenics.index.actions.edit') }}
+          </Button>
+          <Button v-access:code="'scenic:write'" danger size="small" type="link" @click="handleDeleteScenic(row)">
+            {{ t('page.scenics.index.actions.delete') }}
+          </Button>
+        </Space>
+      </template>
+    </ScenicGrid>
+
+    <Modal
+      :open="scenicModalOpen"
+      :title="scenicModalTitle"
+      :confirm-loading="scenicSubmitting"
+      :ok-text="t('page.scenics.index.modal.ok')"
+      :cancel-text="t('page.scenics.index.modal.cancel')"
+      destroy-on-close
+      @cancel="closeScenicModal"
+      @ok="submitScenic"
+    >
+      <Form ref="scenicFormRef" :model="scenicFormModel" :rules="scenicRules" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
+        <Form.Item :label="t('page.scenics.index.formFields.name.label')" name="name">
+          <Input v-model:value="scenicFormModel.name" allow-clear />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.location.label')" name="location">
+          <Input v-model:value="scenicFormModel.location" allow-clear />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.intro.label')" name="intro">
+          <Input v-model:value="scenicFormModel.intro" allow-clear />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.url.label')" name="url">
+          <Input v-model:value="scenicFormModel.url" allow-clear />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.description.label')" name="description">
+          <TextArea v-model:value="scenicFormModel.description" :rows="3" />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.metadata.label')" name="metadata">
+          <TextArea
+            v-model:value="scenicFormModel.metadata"
+            :rows="4"
+            :placeholder="t('page.scenics.index.formFields.metadata.placeholder')"
+          />
+        </Form.Item>
+        <Form.Item :label="t('page.scenics.index.formFields.file.label')" name="file">
+          <Upload v-model:file-list="scenicFormModel.fileList" v-bind="scenicUploadProps">
+            <Button>{{ t('page.scenics.index.formFields.file.button') }}</Button>
+          </Upload>
+        </Form.Item>
+      </Form>
+    </Modal>
   </div>
 </template>
