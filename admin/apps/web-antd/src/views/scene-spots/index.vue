@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormInstance } from 'ant-design-vue';
+import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
 import type {
   SceneItem,
   SceneSpotCreatePayload,
@@ -20,13 +20,11 @@ import {
 } from '#/api';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space } from 'ant-design-vue';
+import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Upload } from 'ant-design-vue';
 
 interface SceneSpotFormModel {
   sceneId: string;
   title: string;
-  coverImage: string;
-  slides: string;
   description: string;
   address: string;
   order: number;
@@ -39,14 +37,18 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
 const sceneSpotFormRef = ref<FormInstance>();
+const coverImageFileList = ref<UploadFile[]>([]);
+const slidesFileList = ref<UploadFile[]>([]);
+const previewVisible = ref(false);
+const previewImage = ref('');
+const previewTitle = ref('');
 
 const sceneOptions = ref<Array<{ label: string; value: string }>>([]);
+const sceneNameMap = ref<Record<string, string>>({});
 
 const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   sceneId: '',
   title: '',
-  coverImage: '',
-  slides: '',
   description: '',
   address: '',
   order: 0,
@@ -59,11 +61,71 @@ const modalTitle = computed(() =>
 function resetForm() {
   sceneSpotFormModel.sceneId = '';
   sceneSpotFormModel.title = '';
-  sceneSpotFormModel.coverImage = '';
-  sceneSpotFormModel.slides = '';
   sceneSpotFormModel.description = '';
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.order = 0;
+  coverImageFileList.value = [];
+  slidesFileList.value = [];
+}
+
+function generateUid(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getFileUrl(file: UploadFile): string {
+  return ((file.response as any)?.url || file.url || '') as string;
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('read file failed'));
+  });
+}
+
+async function normalizeFileList(fileList: UploadFile[]) {
+  const normalized = await Promise.all(
+    fileList.map(async (file) => {
+      if (getFileUrl(file)) {
+        return file;
+      }
+      if (file.originFileObj) {
+        const url = await fileToDataUrl(file.originFileObj as File);
+        return {
+          ...file,
+          status: 'done' as const,
+          url,
+        };
+      }
+      return file;
+    }),
+  );
+
+  return normalized.filter((file) => !!getFileUrl(file));
+}
+
+const uploadProps: UploadProps = {
+  accept: 'image/*',
+  beforeUpload: () => false,
+};
+
+async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
+  coverImageFileList.value = (await normalizeFileList(info.fileList)).slice(-1);
+}
+
+async function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
+  slidesFileList.value = await normalizeFileList(info.fileList);
+}
+
+async function handlePreview(file: UploadFile) {
+  if (!file.url && !file.preview && file.originFileObj) {
+    file.preview = await fileToDataUrl(file.originFileObj as File);
+  }
+  previewImage.value = getFileUrl(file) || String(file.preview || '');
+  previewVisible.value = true;
+  previewTitle.value = file.name || t('page.sceneSpots.index.formFields.coverImage.label');
 }
 
 async function loadSceneOptions() {
@@ -71,10 +133,18 @@ async function loadSceneOptions() {
     page: 1,
     pageSize: 200,
   });
-  sceneOptions.value = (response.items || []).map((item: SceneItem) => ({
+  const items = response.items || [];
+  sceneOptions.value = items.map((item: SceneItem) => ({
     label: item.name,
     value: item.id,
   }));
+  sceneNameMap.value = items.reduce(
+    (accumulator, item) => {
+      accumulator[item.id] = item.name;
+      return accumulator;
+    },
+    {} as Record<string, string>,
+  );
 }
 
 function openCreateModal() {
@@ -88,11 +158,28 @@ async function openEditModal(row: SceneSpotItem) {
   const data = await getSceneSpotApi(row.id);
   sceneSpotFormModel.sceneId = data.sceneId || '';
   sceneSpotFormModel.title = data.title || '';
-  sceneSpotFormModel.coverImage = data.coverImage ?? '';
-  sceneSpotFormModel.slides = Array.isArray(data.slides) ? data.slides.join('\n') : '';
   sceneSpotFormModel.description = data.description ?? '';
   sceneSpotFormModel.address = data.address ?? '';
   sceneSpotFormModel.order = data.order ?? 0;
+
+  coverImageFileList.value = data.coverImage
+    ? [
+        {
+          uid: generateUid('cover'),
+          name: 'cover-image',
+          status: 'done',
+          url: data.coverImage,
+        },
+      ]
+    : [];
+
+  slidesFileList.value = (data.slides || []).map((slideUrl, index) => ({
+    uid: generateUid(`slide-${index}`),
+    name: `slide-${index + 1}`,
+    status: 'done',
+    url: slideUrl,
+  }));
+
   modalOpen.value = true;
 }
 
@@ -103,15 +190,13 @@ async function submitSceneSpot() {
   }
   await form.validate();
 
-  const slides = sceneSpotFormModel.slides
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const coverImage = getFileUrl(coverImageFileList.value[0] as UploadFile) || null;
+  const slides = slidesFileList.value.map((file) => getFileUrl(file)).filter(Boolean);
 
   const payload: SceneSpotCreatePayload | SceneSpotUpdatePayload = {
     sceneId: sceneSpotFormModel.sceneId,
     title: sceneSpotFormModel.title.trim(),
-    coverImage: sceneSpotFormModel.coverImage.trim() || null,
+    coverImage,
     slides,
     description: sceneSpotFormModel.description.trim() || null,
     address: sceneSpotFormModel.address.trim() || null,
@@ -175,7 +260,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
     border: true,
     columns: [
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
-      { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId') },
+      { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
       { field: 'address', minWidth: 220, title: t('page.sceneSpots.index.table.address') },
       { field: 'order', minWidth: 100, title: t('page.sceneSpots.index.table.order') },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.sceneSpots.index.table.updatedAt') },
@@ -238,6 +323,10 @@ onMounted(async () => {
         </Button>
       </template>
 
+      <template #sceneName="{ row }">
+        {{ sceneNameMap[row.sceneId] || row.sceneId }}
+      </template>
+
       <template #actions="{ row }">
         <Space>
           <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openEditModal(row)">
@@ -257,7 +346,7 @@ onMounted(async () => {
       :ok-text="t('page.sceneSpots.index.modal.ok')"
       :cancel-text="t('page.sceneSpots.index.modal.cancel')"
       destroy-on-close
-      @cancel="() => (modalOpen = false)"
+      @cancel="() => { modalOpen = false; resetForm(); }"
       @ok="submitSceneSpot"
     >
       <Form ref="sceneSpotFormRef" :label-col="{ span: 6 }" :model="sceneSpotFormModel" :wrapper-col="{ span: 17 }">
@@ -274,10 +363,27 @@ onMounted(async () => {
           <Input v-model:value="sceneSpotFormModel.title" allow-clear />
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage">
-          <Input v-model:value="sceneSpotFormModel.coverImage" allow-clear />
+          <Upload
+            v-bind="uploadProps"
+            :file-list="coverImageFileList"
+            list-type="picture-card"
+            @change="handleCoverImageChange"
+            @preview="handlePreview"
+          >
+            <div v-if="coverImageFileList.length < 1">+ Upload</div>
+          </Upload>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
-          <TextArea v-model:value="sceneSpotFormModel.slides" :rows="3" :placeholder="t('page.sceneSpots.index.formFields.slides.placeholder')" />
+          <Upload
+            v-bind="uploadProps"
+            :file-list="slidesFileList"
+            multiple
+            list-type="picture-card"
+            @change="handleSlidesChange"
+            @preview="handlePreview"
+          >
+            <div>+ Upload</div>
+          </Upload>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">
           <TextArea v-model:value="sceneSpotFormModel.description" :rows="3" />
@@ -289,6 +395,10 @@ onMounted(async () => {
           <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
         </Form.Item>
       </Form>
+    </Modal>
+
+    <Modal :open="previewVisible" :title="previewTitle" :footer="null" @cancel="previewVisible = false">
+      <img alt="preview" style="width: 100%" :src="previewImage" />
     </Modal>
   </div>
 </template>
