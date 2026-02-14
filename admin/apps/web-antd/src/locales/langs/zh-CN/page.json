@@ -77,6 +77,7 @@
       },
       "message": {
         "updateSuccess": "景点更新成功",
+        "updateFailed": "景点更新失败",
         "createSuccess": "景点创建成功",
         "deleteSuccess": "景点删除成功",
         "loadScenesFailed": "加载场景列表失败"
@@ -101,6 +102,9 @@
         "tableTitle": "景点管理",
         "titleCol": "景点名称",
         "sceneId": "所属场景",
+        "isFeatured": "首页推荐",
+        "isFeaturedYes": "已推荐",
+        "isFeaturedNo": "未推荐",
         "address": "地址",
         "order": "排序",
         "updatedAt": "更新时间",
@@ -138,6 +142,9 @@
         },
         "order": {
           "label": "排序"
+        },
+        "isFeatured": {
+          "label": "首页推荐"
         }
       }
     }

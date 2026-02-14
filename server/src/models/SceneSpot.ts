@@ -10,6 +10,7 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     description: { type: String, default: '' },
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },
+    isFeatured: { type: Boolean, default: false },
   },
   {
     timestamps: true,
@@ -18,6 +19,7 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
 )
 
 sceneSpotSchema.index({ sceneId: 1, order: 1 })
+sceneSpotSchema.index({ isFeatured: 1, order: 1, createdAt: -1 })
 sceneSpotSchema.index({ title: 'text', description: 'text', address: 'text' })
 
 export const SceneSpotModel = model<SceneSpotDocument>('SceneSpot', sceneSpotSchema)

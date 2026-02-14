@@ -38,8 +38,36 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
     address: toStringValue(spot.address, ''),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
     order: typeof spot.order === 'number' ? spot.order : 0,
+    isFeatured: spot.isFeatured === true,
     scene: buildSceneDto(scene),
   }
+}
+
+function toOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true
+    }
+    if (value === 0) {
+      return false
+    }
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === '1' || normalized === 'true') {
+      return true
+    }
+    if (normalized === '0' || normalized === 'false') {
+      return false
+    }
+  }
+
+  return undefined
 }
 
 type ProductWithStateDto = {
@@ -85,8 +113,13 @@ function buildProductDto(product: ProductDocument, userEntry: { state: string; e
 }
 
 export async function listSceneSpots(ctx: Context): Promise<void> {
-  const { q } = ctx.query as { q?: string }
+  const { q, featured } = ctx.query as { featured?: string; q?: string }
   const filter: Record<string, unknown> = {}
+  const featuredFlag = toOptionalBoolean(featured)
+  if (featuredFlag !== undefined) {
+    filter.isFeatured = featuredFlag
+  }
+
   if (typeof q === 'string' && q.trim()) {
     const regex = new RegExp(q.trim(), 'i')
     filter.$or = [{ title: regex }, { description: regex }, { address: regex }]

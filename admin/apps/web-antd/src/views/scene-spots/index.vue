@@ -20,7 +20,7 @@ import {
 } from '#/api';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Upload } from 'ant-design-vue';
+import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload } from 'ant-design-vue';
 
 interface SceneSpotFormModel {
   sceneId: string;
@@ -28,6 +28,7 @@ interface SceneSpotFormModel {
   description: string;
   address: string;
   order: number;
+  isFeatured: boolean;
 }
 
 const { TextArea } = Input;
@@ -59,7 +60,11 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   description: '',
   address: '',
   order: 0,
+  isFeatured: false,
 });
+
+const featuredLoading = reactive<Record<string, boolean>>({});
+const featuredError = reactive<Record<string, boolean>>({});
 
 const modalTitle = computed(() =>
   editingId.value ? t('page.sceneSpots.index.modal.edit') : t('page.sceneSpots.index.modal.create'),
@@ -76,6 +81,7 @@ function resetForm() {
   sceneSpotFormModel.description = '';
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.order = 0;
+  sceneSpotFormModel.isFeatured = false;
   coverImageFileList.value = [];
   slidesFileList.value = [];
 }
@@ -215,6 +221,7 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.description = data.description ?? '';
   sceneSpotFormModel.address = data.address ?? '';
   sceneSpotFormModel.order = data.order ?? 0;
+  sceneSpotFormModel.isFeatured = data.isFeatured === true;
 
   coverImageFileList.value = data.coverImage
     ? [
@@ -255,6 +262,7 @@ async function submitSceneSpot() {
     description: sceneSpotFormModel.description.trim() || null,
     address: sceneSpotFormModel.address.trim() || null,
     order: Number(sceneSpotFormModel.order) || 0,
+    isFeatured: sceneSpotFormModel.isFeatured,
   };
 
   submitting.value = true;
@@ -284,6 +292,31 @@ function handleDelete(row: SceneSpotItem) {
       sceneSpotGridApi.reload();
     },
   });
+}
+
+async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
+  const flag = Boolean(checked === true || checked === 'true' || checked === 1 || checked === '1');
+  const prev = row.isFeatured;
+  // prevent duplicate
+  if (featuredLoading[row.id]) return;
+  featuredLoading[row.id] = true;
+  // optimistic update
+  row.isFeatured = flag;
+  try {
+    await updateSceneSpotApi(row.id, { isFeatured: flag });
+    message.success(t('page.sceneSpots.index.message.updateSuccess'));
+    sceneSpotGridApi.reload();
+  } catch (err) {
+    row.isFeatured = prev;
+    featuredError[row.id] = true;
+    // clear error highlight after short delay
+    setTimeout(() => {
+      featuredError[row.id] = false;
+    }, 1400);
+    message.error(t('page.sceneSpots.index.message.updateFailed') || '更新失败');
+  } finally {
+    featuredLoading[row.id] = false;
+  }
 }
 
 const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
@@ -320,6 +353,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
     columns: [
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
+      { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
       { field: 'address', minWidth: 220, title: t('page.sceneSpots.index.table.address') },
       { field: 'order', minWidth: 100, title: t('page.sceneSpots.index.table.order') },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.sceneSpots.index.table.updatedAt') },
@@ -384,6 +418,12 @@ onMounted(async () => {
 
       <template #sceneName="{ row }">
         {{ sceneNameMap[row.sceneId] || row.sceneId }}
+      </template>
+
+      <template #isFeatured="{ row }">
+        <div :class="['featured-cell', { 'featured-error': featuredError[row.id] }]">
+          <Switch :checked="row.isFeatured" :loading="featuredLoading[row.id]" @change="(checked) => toggleFeatured(row, checked)" />
+        </div>
       </template>
 
       <template #actions="{ row }">
@@ -457,6 +497,9 @@ onMounted(async () => {
         <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
           <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
         </Form.Item>
+        <Form.Item :label="t('page.sceneSpots.index.formFields.isFeatured.label')" name="isFeatured">
+          <Switch v-model:checked="sceneSpotFormModel.isFeatured" />
+        </Form.Item>
       </Form>
     </Modal>
 
@@ -465,3 +508,21 @@ onMounted(async () => {
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.featured-cell {
+  display: inline-block;
+}
+.featured-error {
+  background-color: rgba(255, 77, 79, 0.06);
+  border-left: 3px solid #ff4d4f;
+  padding-left: 6px;
+  border-radius: 4px;
+  animation: featuredHighlight 1.2s ease;
+}
+@keyframes featuredHighlight {
+  0% { box-shadow: 0 0 0 rgba(255,77,79,0.0); }
+  40% { box-shadow: 0 0 10px rgba(255,77,79,0.28); }
+  100% { box-shadow: none; }
+}
+</style>

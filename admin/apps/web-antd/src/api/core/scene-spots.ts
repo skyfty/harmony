@@ -21,6 +21,7 @@ export interface SceneSpotItem {
   description: string;
   address: string;
   order: number;
+  isFeatured: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +31,7 @@ export interface ListSceneSpotsParams {
   page?: number;
   pageSize?: number;
   sceneId?: string;
+  isFeatured?: boolean;
 }
 
 export interface SceneSpotCreatePayload {
@@ -40,6 +42,7 @@ export interface SceneSpotCreatePayload {
   description?: null | string;
   address?: null | string;
   order?: number;
+  isFeatured?: boolean;
 }
 
 export interface SceneSpotUpdatePayload {
@@ -50,6 +53,7 @@ export interface SceneSpotUpdatePayload {
   description?: null | string;
   address?: null | string;
   order?: number;
+  isFeatured?: boolean;
 }
 
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {

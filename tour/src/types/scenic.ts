@@ -6,6 +6,7 @@ export interface ScenicSummary {
   description: string;
   address: string;
   slides: string[];
+  isFeatured: boolean;
   scene: {
     id: string;
     name: string;

@@ -11,6 +11,7 @@ type SceneSpotMutationPayload = {
   description?: string | null
   address?: string | null
   order?: number
+  isFeatured?: boolean
 }
 
 function toNonEmptyString(value: unknown): string | null {
@@ -27,6 +28,33 @@ function toNullableString(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function toBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true
+    }
+    if (value === 0) {
+      return false
+    }
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === '1' || normalized === 'true') {
+      return true
+    }
+    if (normalized === '0' || normalized === 'false') {
+      return false
+    }
+  }
+
+  return null
 }
 
 function parseSlides(value: unknown): string[] {
@@ -72,6 +100,7 @@ function mapSceneSpot(spot: any) {
     description: typeof spot.description === 'string' ? spot.description : '',
     address: typeof spot.address === 'string' ? spot.address : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
+    isFeatured: spot.isFeatured === true,
     createdAt: spot.createdAt instanceof Date ? spot.createdAt.toISOString() : new Date(spot.createdAt).toISOString(),
     updatedAt: spot.updatedAt instanceof Date ? spot.updatedAt.toISOString() : new Date(spot.updatedAt).toISOString(),
   }
@@ -173,6 +202,7 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     description: toNullableString(body.description) ?? '',
     address: toNullableString(body.address) ?? '',
     order: typeof body.order === 'number' ? body.order : 0,
+    isFeatured: toBoolean(body.isFeatured) ?? false,
   })
 
   const row = await SceneSpotModel.findById(created._id).lean().exec()
@@ -192,6 +222,7 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   }
 
   const body = (ctx.request.body ?? {}) as SceneSpotMutationPayload
+  const nextIsFeatured = toBoolean(body.isFeatured)
   const title = body.title === undefined ? undefined : toNonEmptyString(body.title)
   if (body.title !== undefined && !title) {
     ctx.throw(400, 'Scene spot title is required')
@@ -223,6 +254,7 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
       description: body.description === undefined ? current.description : toNullableString(body.description) ?? '',
       address: body.address === undefined ? current.address : toNullableString(body.address) ?? '',
       order: body.order === undefined ? current.order : body.order,
+      isFeatured: nextIsFeatured === null ? current.isFeatured : nextIsFeatured,
     },
     { new: true },
   )

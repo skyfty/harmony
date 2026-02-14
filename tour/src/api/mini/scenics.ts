@@ -6,10 +6,13 @@ export type ListScenicsResponse = {
   sceneSpots: ScenicSummary[]
 }
 
-export async function listScenics(query?: { q?: string }): Promise<ScenicSummary[]> {
+export async function listScenics(query?: { featured?: boolean; q?: string }): Promise<ScenicSummary[]> {
   const res = await miniRequest<ListScenicsResponse>('/scene-spots', {
     method: 'GET',
-    query: { q: query?.q },
+    query: {
+      featured: query?.featured === undefined ? undefined : query.featured ? '1' : '0',
+      q: query?.q,
+    },
   })
   return Array.isArray(res.sceneSpots) ? res.sceneSpots : []
 }

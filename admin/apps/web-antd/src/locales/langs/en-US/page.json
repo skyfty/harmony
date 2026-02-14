@@ -77,6 +77,7 @@
       },
       "message": {
         "updateSuccess": "Scene spot updated successfully",
+        "updateFailed": "Failed to update scene spot",
         "createSuccess": "Scene spot created successfully",
         "deleteSuccess": "Scene spot deleted successfully",
         "loadScenesFailed": "Failed to load scenes"
@@ -101,6 +102,9 @@
         "tableTitle": "Scene Spot Management",
         "titleCol": "Title",
         "sceneId": "Scene",
+        "isFeatured": "Home Featured",
+        "isFeaturedYes": "Featured",
+        "isFeaturedNo": "Not Featured",
         "address": "Address",
         "order": "Order",
         "updatedAt": "Updated At",
@@ -138,6 +142,9 @@
         },
         "order": {
           "label": "Order"
+        },
+        "isFeatured": {
+          "label": "Home Featured"
         }
       }
     }

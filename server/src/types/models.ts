@@ -589,6 +589,7 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   description: string
   address: string
   order: number
+  isFeatured: boolean
   createdAt: Date
   updatedAt: Date
 }
