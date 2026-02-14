@@ -12,7 +12,7 @@
     "analytics": "分析页",
     "workspace": "工作台"
   },
-  "scenics": {
+  "scenes": {
     "title": "场景管理",
     "index": {
       "modal": {
@@ -24,8 +24,7 @@
       "message": {
         "updateSuccess": "场景更新成功",
         "createSuccess": "场景创建成功",
-        "deleteSuccess": "场景删除成功",
-        "invalidMetadata": "Metadata 必须是 JSON 对象"
+        "deleteSuccess": "场景删除成功"
       },
       "confirm": {
         "delete": {
@@ -36,15 +35,14 @@
       "form": {
         "keyword": {
           "label": "关键字",
-          "placeholder": "场景名称 / 描述"
+          "placeholder": "场景名称"
         }
       },
       "table": {
         "title": "场景管理",
         "name": "名称",
-        "location": "位置",
-        "intro": "简介",
-        "url": "URL",
+        "fileUrl": "场景文件地址",
+        "fileSize": "文件大小(B)",
         "updatedAt": "更新时间",
         "actions": "操作"
       },
@@ -60,25 +58,86 @@
           "label": "名称",
           "required": "请输入场景名称"
         },
-        "location": {
-          "label": "位置"
+        "file": {
+          "label": "场景文件",
+          "button": "选择文件",
+          "required": "请上传场景文件"
+        }
+      }
+    }
+  },
+  "sceneSpots": {
+    "title": "景点管理",
+    "index": {
+      "modal": {
+        "edit": "编辑景点",
+        "create": "新建景点",
+        "ok": "保存",
+        "cancel": "取消"
+      },
+      "message": {
+        "updateSuccess": "景点更新成功",
+        "createSuccess": "景点创建成功",
+        "deleteSuccess": "景点删除成功",
+        "loadScenesFailed": "加载场景列表失败"
+      },
+      "confirm": {
+        "delete": {
+          "title": "确认删除景点\"{name}\"吗？",
+          "content": "删除后不可恢复。"
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "关键字",
+          "placeholder": "景点名称 / 描述 / 地址"
         },
-        "intro": {
-          "label": "简介"
+        "sceneId": {
+          "label": "所属场景",
+          "placeholder": "全部场景"
+        }
+      },
+      "table": {
+        "tableTitle": "景点管理",
+        "titleCol": "景点名称",
+        "sceneId": "所属场景",
+        "address": "地址",
+        "order": "排序",
+        "updatedAt": "更新时间",
+        "actions": "操作"
+      },
+      "toolbar": {
+        "create": "新建景点"
+      },
+      "actions": {
+        "edit": "编辑",
+        "delete": "删除"
+      },
+      "formFields": {
+        "sceneId": {
+          "label": "所属场景",
+          "required": "请选择所属场景",
+          "placeholder": "请选择场景"
         },
-        "url": {
-          "label": "URL"
+        "title": {
+          "label": "景点名称",
+          "required": "请输入景点名称"
+        },
+        "coverImage": {
+          "label": "介绍图"
+        },
+        "slides": {
+          "label": "幻灯片",
+          "placeholder": "每行一个图片 URL"
         },
         "description": {
           "label": "描述"
         },
-        "metadata": {
-          "label": "Metadata",
-          "placeholder": "请输入 JSON 对象，例如 {\"level\": 1}"
+        "address": {
+          "label": "地址"
         },
-        "file": {
-          "label": "场景文件",
-          "button": "选择文件"
+        "order": {
+          "label": "排序"
         }
       }
     }
@@ -95,7 +154,8 @@
     "title": "系统管理",
     "users": "用户管理",
     "rbac": "角色与权限",
-    "scenics": "场景管理"
+    "scenes": "场景管理",
+    "sceneSpots": "景点管理"
   },
   "userProjects": {
     "categories": {

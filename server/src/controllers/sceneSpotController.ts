@@ -4,6 +4,7 @@ import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
 
 type SceneSpotMutationPayload = {
+  sceneId?: string
   title?: string
   coverImage?: string | null
   slides?: unknown
@@ -83,14 +84,51 @@ async function ensureSceneExists(sceneId: string): Promise<void> {
   }
 }
 
+function toPositiveNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return fallback
+  }
+  return parsed
+}
+
 export async function listSceneSpots(ctx: Context): Promise<void> {
-  const { sceneId } = ctx.params as { sceneId: string }
-  if (!Types.ObjectId.isValid(sceneId)) {
-    ctx.throw(400, 'Invalid scene id')
+  const { keyword, page = '1', pageSize = '10', sceneId } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(toPositiveNumber(page, 1), 1)
+  const limit = Math.min(Math.max(toPositiveNumber(pageSize, 10), 1), 100)
+  const normalizedKeyword = toNonEmptyString(keyword)
+  const normalizedSceneId = toNonEmptyString(sceneId)
+
+  const query: Record<string, unknown> = {}
+
+  if (normalizedSceneId) {
+    if (!Types.ObjectId.isValid(normalizedSceneId)) {
+      ctx.throw(400, 'Invalid scene id')
+    }
+    query.sceneId = normalizedSceneId
   }
 
-  const rows = await SceneSpotModel.find({ sceneId }).sort({ order: 1, createdAt: 1 }).lean().exec()
-  ctx.body = rows.map(mapSceneSpot)
+  if (normalizedKeyword) {
+    const regex = new RegExp(normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+    query.$or = [{ title: regex }, { description: regex }, { address: regex }]
+  }
+
+  const [rows, total] = await Promise.all([
+    SceneSpotModel.find(query)
+      .sort({ order: 1, createdAt: 1 })
+      .skip((pageNumber - 1) * limit)
+      .limit(limit)
+      .lean()
+      .exec(),
+    SceneSpotModel.countDocuments(query).exec(),
+  ])
+
+  ctx.body = {
+    data: rows.map(mapSceneSpot),
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
 }
 
 export async function getSceneSpot(ctx: Context): Promise<void> {
@@ -107,7 +145,11 @@ export async function getSceneSpot(ctx: Context): Promise<void> {
 }
 
 export async function createSceneSpot(ctx: Context): Promise<void> {
-  const { sceneId } = ctx.params as { sceneId: string }
+  const body = (ctx.request.body ?? {}) as SceneSpotMutationPayload
+  const sceneId = toNonEmptyString(body.sceneId)
+  if (!sceneId) {
+    ctx.throw(400, 'Scene id is required')
+  }
   if (!Types.ObjectId.isValid(sceneId)) {
     ctx.throw(400, 'Invalid scene id')
   }
@@ -118,7 +160,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(404, 'Scene not found')
   }
 
-  const body = (ctx.request.body ?? {}) as SceneSpotMutationPayload
   const title = toNonEmptyString(body.title)
   if (!title) {
     ctx.throw(400, 'Scene spot title is required')
@@ -140,10 +181,7 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 }
 
 export async function updateSceneSpot(ctx: Context): Promise<void> {
-  const { id, sceneId } = ctx.params as { id: string; sceneId: string }
-  if (!Types.ObjectId.isValid(sceneId)) {
-    ctx.throw(400, 'Invalid scene id')
-  }
+  const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid scene spot id')
   }
@@ -152,9 +190,6 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   if (!current) {
     ctx.throw(404, 'Scene spot not found')
   }
-  if (String(current.sceneId) !== sceneId) {
-    ctx.throw(400, 'Scene spot does not belong to the scene')
-  }
 
   const body = (ctx.request.body ?? {}) as SceneSpotMutationPayload
   const title = body.title === undefined ? undefined : toNonEmptyString(body.title)
@@ -162,9 +197,26 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Scene spot title is required')
   }
 
+  const nextSceneId = body.sceneId === undefined ? String(current.sceneId) : toNonEmptyString(body.sceneId)
+  if (!nextSceneId) {
+    ctx.throw(400, 'Scene id is required')
+  }
+  if (!Types.ObjectId.isValid(nextSceneId)) {
+    ctx.throw(400, 'Invalid scene id')
+  }
+
+  if (body.sceneId !== undefined && nextSceneId !== String(current.sceneId)) {
+    try {
+      await ensureSceneExists(nextSceneId)
+    } catch {
+      ctx.throw(404, 'Scene not found')
+    }
+  }
+
   const updated = await SceneSpotModel.findByIdAndUpdate(
     id,
     {
+      sceneId: nextSceneId,
       title: title ?? current.title,
       coverImage: body.coverImage === undefined ? current.coverImage : toNullableString(body.coverImage),
       slides: body.slides === undefined ? current.slides : parseSlides(body.slides),

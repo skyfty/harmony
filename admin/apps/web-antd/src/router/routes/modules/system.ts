@@ -4,12 +4,21 @@ import { $t } from '#/locales';
 
 const routes: RouteRecordRaw[] = [
   {
-    name: 'Scenics',
-    path: '/scenics',
-    component: () => import('#/views/scenics/index.vue'),
+    name: 'Scenes',
+    path: '/scenes',
+    component: () => import('#/views/scenes/index.vue'),
     meta: {
       icon: 'lucide:image',
-      title: $t('page.scenics.title'),
+      title: $t('page.scenes.title'),
+    },
+  },
+  {
+    name: 'SceneSpots',
+    path: '/scene-spots',
+    component: () => import('#/views/scene-spots/index.vue'),
+    meta: {
+      icon: 'lucide:map-pinned',
+      title: $t('page.sceneSpots.title'),
     },
   },
   {
@@ -172,7 +181,7 @@ const routes: RouteRecordRaw[] = [
         },
       },
       // login-logs moved to top-level route
-      // moved: scenics and user-project routes relocated to root-level entries
+      // moved: scene and user-project routes relocated to root-level entries
       // resource routes moved to root level
     ],
   },

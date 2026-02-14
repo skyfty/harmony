@@ -12,44 +12,42 @@
     "analytics": "Analytics",
     "workspace": "Workspace"
   },
-  "scenics": {
-    "title": "Scenics",
+  "scenes": {
+    "title": "Scenes",
     "index": {
       "modal": {
-        "edit": "Edit Scenic",
-        "create": "New Scenic",
+        "edit": "Edit Scene",
+        "create": "New Scene",
         "ok": "Save",
         "cancel": "Cancel"
       },
       "message": {
-        "updateSuccess": "Scenic updated successfully",
-        "createSuccess": "Scenic created successfully",
-        "deleteSuccess": "Scenic deleted successfully",
-        "invalidMetadata": "Metadata must be a JSON object"
+        "updateSuccess": "Scene updated successfully",
+        "createSuccess": "Scene created successfully",
+        "deleteSuccess": "Scene deleted successfully"
       },
       "confirm": {
         "delete": {
-          "title": "Confirm delete scenic \"{name}\"?",
+          "title": "Confirm delete scene \"{name}\"?",
           "content": "This action cannot be undone."
         }
       },
       "form": {
         "keyword": {
           "label": "Keyword",
-          "placeholder": "Scenic name / description"
+          "placeholder": "Scene name"
         }
       },
       "table": {
-        "title": "Scenic Management",
+        "title": "Scene Management",
         "name": "Name",
-        "location": "Location",
-        "intro": "Intro",
-        "url": "URL",
+        "fileUrl": "Scene File URL",
+        "fileSize": "File Size (B)",
         "updatedAt": "Updated At",
         "actions": "Actions"
       },
       "toolbar": {
-        "create": "New Scenic"
+        "create": "New Scene"
       },
       "actions": {
         "edit": "Edit",
@@ -58,27 +56,88 @@
       "formFields": {
         "name": {
           "label": "Name",
-          "required": "Please enter scenic name"
+          "required": "Please enter scene name"
         },
-        "location": {
-          "label": "Location"
+        "file": {
+          "label": "Scene File",
+          "button": "Select File",
+          "required": "Please upload scene file"
+        }
+      }
+    }
+  },
+  "sceneSpots": {
+    "title": "Scene Spots",
+    "index": {
+      "modal": {
+        "edit": "Edit Scene Spot",
+        "create": "New Scene Spot",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Scene spot updated successfully",
+        "createSuccess": "Scene spot created successfully",
+        "deleteSuccess": "Scene spot deleted successfully",
+        "loadScenesFailed": "Failed to load scenes"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete scene spot \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Spot title / description / address"
         },
-        "intro": {
-          "label": "Intro"
+        "sceneId": {
+          "label": "Scene",
+          "placeholder": "All scenes"
+        }
+      },
+      "table": {
+        "tableTitle": "Scene Spot Management",
+        "titleCol": "Title",
+        "sceneId": "Scene",
+        "address": "Address",
+        "order": "Order",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": {
+        "create": "New Scene Spot"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "sceneId": {
+          "label": "Scene",
+          "required": "Please select a scene",
+          "placeholder": "Please select a scene"
         },
-        "url": {
-          "label": "URL"
+        "title": {
+          "label": "Title",
+          "required": "Please enter scene spot title"
+        },
+        "coverImage": {
+          "label": "Cover Image"
+        },
+        "slides": {
+          "label": "Slides",
+          "placeholder": "One image URL per line"
         },
         "description": {
           "label": "Description"
         },
-        "metadata": {
-          "label": "Metadata",
-          "placeholder": "Please input a JSON object, e.g. {\"level\": 1}"
+        "address": {
+          "label": "Address"
         },
-        "file": {
-          "label": "Scenic File",
-          "button": "Select File"
+        "order": {
+          "label": "Order"
         }
       }
     }
@@ -95,7 +154,8 @@
     "title": "System",
     "users": "Users",
     "rbac": "Roles & Permissions",
-    "scenics": "Scenics"
+    "scenes": "Scenes",
+    "sceneSpots": "Scene Spots"
   },
   "userProjects": {
     "categories": {

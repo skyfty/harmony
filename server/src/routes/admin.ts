@@ -107,11 +107,11 @@ adminRouter.put(
 adminRouter.delete('/scenes/:id', requireAnyPermission(['scene:write']), deleteScene)
 
 // Scene spots (POIs)
-adminRouter.get('/scenes/:sceneId/spots', requireAnyPermission(['sceneSpot:read']), listSceneSpots)
-adminRouter.get('/scenes/:sceneId/spots/:id', requireAnyPermission(['sceneSpot:read']), getSceneSpot)
-adminRouter.post('/scenes/:sceneId/spots', requireAnyPermission(['sceneSpot:write']), createSceneSpot)
-adminRouter.put('/scenes/:sceneId/spots/:id', requireAnyPermission(['sceneSpot:write']), updateSceneSpot)
-adminRouter.delete('/scenes/:sceneId/spots/:id', requireAnyPermission(['sceneSpot:write']), deleteSceneSpot)
+adminRouter.get('/scene-spots', requireAnyPermission(['sceneSpot:read']), listSceneSpots)
+adminRouter.get('/scene-spots/:id', requireAnyPermission(['sceneSpot:read']), getSceneSpot)
+adminRouter.post('/scene-spots', requireAnyPermission(['sceneSpot:write']), createSceneSpot)
+adminRouter.put('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), updateSceneSpot)
+adminRouter.delete('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteSceneSpot)
 
 // Scene - Product bindings
 adminRouter.get('/scenes/:scenicId/bindings', requireAnyPermission(['scene:read']), listBindings)
