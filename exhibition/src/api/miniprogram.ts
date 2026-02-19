@@ -91,6 +91,7 @@ export interface ExhibitionSummary {
   description?: string;
   coverUrl?: string;
   coverUrls: string[];
+  sceneSpotId?: string;
   scene?: string;
   status: 'draft' | 'published' | 'withdrawn';
   startDate?: string;
@@ -273,6 +274,17 @@ export function apiRateCollection(
 
 export function apiGetExhibition(id: string): Promise<ExhibitionSummary> {
   return get(`/exhibitions/${id}`);
+}
+
+export interface SceneSpotEntry {
+  sceneId: string;
+  sceneSpotId: string;
+  packageUrl: string;
+  sceneUrl: string;
+}
+
+export function apiGetSceneSpotEntry(id: string): Promise<SceneSpotEntry> {
+  return get(`/scene-spots/${id}/entry`);
 }
 
 export function apiCreateCollection(payload: {

@@ -8,7 +8,6 @@ import miniprogramRouter from './miniprogram'
 import presetSceneRouter from './presetScenes'
 import assistantRouter from './aiAssistant'
 import aiTagRouter from './aiTags'
-import sceneRouter from './scenes'
 import userSceneRouter from './userScenes'
 import userProjectRouter from './userProjects'
 import adminRouter from './admin'
@@ -20,7 +19,6 @@ export const routes: Router[] = [
   permissionRouter,
   resourceRouter,
   presetSceneRouter,
-  sceneRouter,
   miniprogramRouter,
   assistantRouter,
   aiTagRouter,

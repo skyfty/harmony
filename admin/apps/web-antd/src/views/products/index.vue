@@ -19,10 +19,10 @@ interface ProductFormModel {
   name: string;
   slug: string;
   category: string;
-  price: number | null;
-  validityDays: number | null;
-  summary: string | null;
-  description: string | null;
+  price?: number;
+  validityDays?: number;
+  summary: string;
+  description: string;
 }
 
 const modalOpen = ref(false);
@@ -34,10 +34,10 @@ const productFormModel = reactive<ProductFormModel>({
   name: '',
   slug: '',
   category: '',
-  price: null,
-  validityDays: null,
-  summary: null,
-  description: null,
+  price: undefined,
+  validityDays: undefined,
+  summary: '',
+  description: '',
 });
 
 const categoryOptions = ref<Array<{ label: string; value: string }>>([]);
@@ -48,10 +48,10 @@ function resetForm() {
   productFormModel.name = '';
   productFormModel.slug = '';
   productFormModel.category = '';
-  productFormModel.price = null;
-  productFormModel.validityDays = null;
-  productFormModel.summary = null;
-  productFormModel.description = null;
+  productFormModel.price = undefined;
+  productFormModel.validityDays = undefined;
+  productFormModel.summary = '';
+  productFormModel.description = '';
 }
 
 function openCreateModal() {
@@ -67,10 +67,10 @@ async function openEditModal(row: any) {
     productFormModel.name = data.name || '';
     productFormModel.slug = data.slug || '';
     productFormModel.category = data.category || '';
-    productFormModel.price = data.price ?? null;
-    productFormModel.validityDays = data.validityDays ?? null;
-    productFormModel.summary = data.summary ?? null;
-    productFormModel.description = data.description ?? null;
+    productFormModel.price = data.price ?? undefined;
+    productFormModel.validityDays = data.validityDays ?? undefined;
+    productFormModel.summary = data.summary ?? '';
+    productFormModel.description = data.description ?? '';
     modalOpen.value = true;
   } catch (err) {
     message.error('读取商品信息失败');
@@ -90,8 +90,8 @@ async function submitProduct() {
       category: productFormModel.category.trim() || undefined,
       price: productFormModel.price ?? undefined,
       validityDays: productFormModel.validityDays ?? undefined,
-      summary: productFormModel.summary ?? undefined,
-      description: productFormModel.description ?? undefined,
+      summary: productFormModel.summary.trim() || undefined,
+      description: productFormModel.description.trim() || undefined,
     } as any;
 
     if (editingId.value) {

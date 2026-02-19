@@ -73,8 +73,10 @@ const SUPER_PERMISSION = 'admin:super'
 const SUPER_ROLE_CODES = new Set(['admin', 'super'])
 
 const MANAGEMENT_PERMISSION_SEEDS = [
-  { code: 'scenic:read', name: '景区查看', group: 'scenic' },
-  { code: 'scenic:write', name: '景区管理', group: 'scenic' },
+  { code: 'scene:read', name: '场景查看', group: 'scene' },
+  { code: 'scene:write', name: '场景管理', group: 'scene' },
+  { code: 'sceneSpot:read', name: '景点查看', group: 'sceneSpot' },
+  { code: 'sceneSpot:write', name: '景点管理', group: 'sceneSpot' },
   { code: 'product:read', name: '道具查看', group: 'product' },
   { code: 'product:write', name: '道具管理', group: 'product' },
   { code: 'coupon:read', name: '卡券查看', group: 'coupon' },

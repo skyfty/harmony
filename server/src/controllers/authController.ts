@@ -2,6 +2,13 @@ import type { Context } from 'koa'
 import { getProfile, loginWithCredentials } from '@/services/authService'
 import { recordLogin } from '@/services/loginAuditService'
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && typeof error.message === 'string' && error.message.trim()) {
+    return error.message
+  }
+  return 'login failed'
+}
+
 export async function login(ctx: Context): Promise<void> {
   const { username, password } = ctx.request.body as { username?: string; password?: string }
   if (!username || !password) {
@@ -28,7 +35,7 @@ export async function login(ctx: Context): Promise<void> {
       success: false,
       ip: ctx.ip || ctx.request.ip,
       userAgent: ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent'],
-      note: (error && (error as Error).message) || 'login failed',
+      note: getErrorMessage(error),
     })
     ctx.throw(401, 'Invalid credentials')
   }

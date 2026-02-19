@@ -22,10 +22,10 @@
         <ScenicCard
           v-for="scenic in filtered"
           :key="scenic.id"
-          :name="scenic.name"
-          :summary="scenic.summary"
-          :cover-url="scenic.coverUrl"
-          v-bind="scenic.rating !== undefined ? { rating: scenic.rating } : {}"
+          :name="scenic.title"
+          :summary="scenic.description"
+          :cover-url="scenic.coverImage"
+          :rating="scenic.averageRating"
           @tap="openDetail(scenic.id)"
         />
       </view>
@@ -49,18 +49,42 @@
 import { computed, onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
-import { listHotEvents, listSpaces } from '@/api/mini';
+import { listHotEvents, listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import type { ScenicSummary } from '@/types/scenic';
 
 const keyword = ref('');
 const scenics = ref<ScenicSummary[]>([]);
 const events = ref<{ id: string; title: string; description: string }[]>([]);
+const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>;
+
+function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: ScenicSummary[]) {
+  if (!featuredScenics.length) {
+    return allScenics;
+  }
+
+  const merged = [...featuredScenics];
+  const idSet = new Set(featuredScenics.map((item) => item.id));
+
+  for (const scenic of allScenics) {
+    if (!idSet.has(scenic.id)) {
+      merged.push(scenic);
+    }
+  }
+
+  return merged;
+}
 
 async function reload() {
-  const [spacesRes, eventsRes] = await Promise.all([listSpaces(), listHotEvents()]);
-  scenics.value = spacesRes;
-  events.value = eventsRes.map((event) => ({
+  const featuredScenicsRes: ScenicSummary[] = await listScenicsSafe({ featured: true });
+  const allScenicsRes: ScenicSummary[] = await listScenicsSafe();
+  const eventsRes = await listHotEvents();
+  const normalizedEvents = Array.isArray(eventsRes)
+    ? eventsRes
+    : [];
+
+  scenics.value = composeFeaturedFirst(featuredScenicsRes, allScenicsRes);
+  events.value = normalizedEvents.map((event) => ({
     id: event.id,
     title: event.title,
     description: event.description,
@@ -69,18 +93,18 @@ async function reload() {
 
 onMounted(() => {
   void reload().catch(() => {
-    uni.showToast({ title: '加载失败', icon: 'none' });
+    void uni.showToast({ title: '加载失败', icon: 'none' });
   });
 });
 
 const filtered = computed(() => {
   const k = keyword.value.trim();
   if (!k) return scenics.value;
-  return scenics.value.filter((s) => s.name.includes(k) || s.summary.includes(k));
+  return scenics.value.filter((s) => s.title.includes(k) || s.description.includes(k));
 });
 
 function openDetail(id: string) {
-  uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` });
+  void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` });
 }
 
 function handleNavigate(key: NavKey) {

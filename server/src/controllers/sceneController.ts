@@ -1,23 +1,20 @@
-import { createReadStream } from 'node:fs'
-import path from 'node:path'
 import type { Context } from 'koa'
-import fs from 'fs-extra'
 import { Types } from 'mongoose'
+import { SceneSpotModel } from '@/models/SceneSpot'
 import {
-  createScene,
+  createScene as createSceneService,
   deleteSceneById,
   extractUploadedFile,
   findSceneById,
-  findSceneDocument,
-  listScenes,
-  resolveSceneFilePath,
-  updateScene,
-  type SceneCreatePayload,
-  type SceneData,
-  type SceneUpdatePayload,
+  listScenes as listScenesService,
+  updateScene as updateSceneService,
 } from '@/services/sceneService'
 
-function sanitizeString(value: unknown): string | null {
+type SceneMutationPayload = {
+  name?: string
+}
+
+function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
   }
@@ -25,228 +22,105 @@ function sanitizeString(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
-function parseNumber(value: string | string[] | undefined, fallback: number, options: { min?: number; max?: number } = {}): number {
-  const raw = Array.isArray(value) ? value[0] : value
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback
-  }
-  const min = options.min ?? 1
-  const max = options.max ?? Number.MAX_SAFE_INTEGER
-  return Math.min(Math.max(parsed, min), max)
-}
+export async function listScenes(ctx: Context): Promise<void> {
+  const { page = '1', pageSize = '10', keyword } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(Number(page) || 1, 1)
+  const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
 
-function parseDateParam(value: string | string[] | undefined): Date | null {
-  const raw = Array.isArray(value) ? value[0] : value
-  if (!raw) {
-    return null
-  }
-  const trimmed = raw.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  const parsed = new Date(trimmed)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-function readRequestFiles(ctx: Context): Record<string, unknown> | undefined {
-  return (ctx.request as unknown as { files?: Record<string, unknown> }).files
-}
-
-function requireUserId(ctx: Context): string {
-  const userId = (ctx.state as { user?: { id?: string } } | undefined)?.user?.id
-  if (!userId || !Types.ObjectId.isValid(userId)) {
-    ctx.throw(401, '用户身份无效')
-  }
-  return userId
-}
-
-export async function listSceneSummaries(ctx: Context): Promise<void> {
-  const query = ctx.query as Record<string, string | string[] | undefined>
-  const page = parseNumber(query.page, 1, { min: 1 })
-  const pageSize = parseNumber(query.pageSize, 20, { min: 1, max: 100 })
-  const keyword = sanitizeString(query.keyword)
-  const createdFrom = parseDateParam(query.createdFrom)
-  const createdTo = parseDateParam(query.createdTo)
-
-  const { data, total } = await listScenes({
-    page,
-    pageSize,
-    keyword: keyword ?? undefined,
-    createdFrom,
-    createdTo,
+  const result = await listScenesService({
+    page: pageNumber,
+    pageSize: limit,
+    keyword: toNonEmptyString(keyword) ?? undefined,
   })
 
   ctx.body = {
-    data,
-    page,
-    pageSize,
-    total,
+    data: result.data,
+    page: pageNumber,
+    pageSize: limit,
+    total: result.total,
   }
 }
 
 export async function getScene(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, '无效的场景 ID')
+    ctx.throw(400, 'Invalid scene id')
   }
   const scene = await findSceneById(id)
   if (!scene) {
-    ctx.throw(404, '场景不存在')
+    ctx.throw(404, 'Scene not found')
   }
   ctx.body = scene
 }
 
-function parseSceneMetadata(value: unknown): Record<string, unknown> | null {
-  if (value === null || value === undefined) {
-    return null
-  }
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if (!trimmed.length) {
-      return null
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>
-      }
-      return null
-    } catch (error) {
-      throw Object.assign(new Error('metadata 必须是有效的 JSON 对象'), { cause: error })
-    }
-  }
-  throw new Error('metadata 必须是对象或 JSON 字符串')
-}
-
-export async function createSceneEntry(ctx: Context): Promise<void> {
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const files = readRequestFiles(ctx)
-  const file = extractUploadedFile(files, 'file')
-  if (!file) {
-    ctx.throw(400, '场景文件不能为空')
-  }
-  const publishedBy = requireUserId(ctx)
-  const name = sanitizeString(body?.name)
+export async function createScene(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as SceneMutationPayload
+  const name = toNonEmptyString(body.name)
   if (!name) {
-    ctx.throw(400, '场景名称不能为空')
+    ctx.throw(400, 'Scene name is required')
   }
-  const description = sanitizeString(body?.description)
-  let metadata: Record<string, unknown> | null = null
-  try {
-    metadata = parseSceneMetadata(body?.metadata)
-  } catch (error) {
-    ctx.throw(400, (error as Error).message)
+  const files = (ctx.request as unknown as { files?: Record<string, unknown> }).files
+  const filePayload = extractUploadedFile(files, 'file')
+  if (!filePayload) {
+    ctx.throw(400, 'Scene package file is required')
   }
-  const payload: SceneCreatePayload = {
+  const publishedBy = (ctx.state as { user?: { id?: string } } | undefined)?.user?.id
+  if (!publishedBy || !Types.ObjectId.isValid(publishedBy)) {
+    ctx.throw(401, 'Invalid user')
+  }
+
+  const created = await createSceneService({
     name,
-    description: description ?? null,
-    metadata,
-    file,
+    file: filePayload,
     publishedBy,
-  }
-  let scene: SceneData
-  try {
-    scene = await createScene(payload)
-  } catch (error) {
-    if ((error as { code?: number } | null)?.code === 11000) {
-      ctx.throw(409, '场景名称已存在')
-    }
-    throw error
-  }
+  })
+
   ctx.status = 201
-  ctx.body = scene
+  ctx.body = created
 }
 
-export async function updateSceneEntry(ctx: Context): Promise<void> {
+export async function updateScene(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, '无效的场景 ID')
+    ctx.throw(400, 'Invalid scene id')
   }
-  const body = ctx.request.body as Record<string, unknown> | undefined
-  const files = readRequestFiles(ctx)
-  const file = extractUploadedFile(files, 'file')
-  const payload: SceneUpdatePayload = {}
-  if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
-    const name = sanitizeString(body.name)
-    if (!name) {
-      ctx.throw(400, '场景名称不能为空')
-    }
-    payload.name = name
+
+  const body = (ctx.request.body ?? {}) as SceneMutationPayload
+  const files = (ctx.request as unknown as { files?: Record<string, unknown> }).files
+  const filePayload = extractUploadedFile(files, 'file')
+  const normalizedName = body.name === undefined ? undefined : toNonEmptyString(body.name)
+  const name = normalizedName ?? undefined
+
+  if (body.name !== undefined && !normalizedName) {
+    ctx.throw(400, 'Scene name is required')
   }
-  if (body && Object.prototype.hasOwnProperty.call(body, 'description')) {
-    const descriptionValue = body.description
-    if (descriptionValue === null) {
-      payload.description = null
-    } else {
-      const description = sanitizeString(descriptionValue)
-      payload.description = description ?? null
-    }
+  if (!filePayload && name === undefined) {
+    ctx.throw(400, 'No scene fields provided to update')
   }
-  if (body && Object.prototype.hasOwnProperty.call(body, 'metadata')) {
-    try {
-      payload.metadata = parseSceneMetadata(body.metadata)
-    } catch (error) {
-      ctx.throw(400, (error as Error).message)
-    }
-  }
-  if (file) {
-    payload.file = file
-  }
-  let updated: SceneData | null
-  try {
-    updated = await updateScene(id, payload)
-  } catch (error) {
-    if ((error as { code?: number } | null)?.code === 11000) {
-      ctx.throw(409, '场景名称已存在')
-    }
-    throw error
-  }
+
+  const updated = await updateSceneService(id, {
+    name,
+    file: filePayload,
+  })
   if (!updated) {
-    ctx.throw(404, '场景不存在')
+    ctx.throw(404, 'Scene not found')
   }
   ctx.body = updated
 }
 
-export async function deleteSceneEntry(ctx: Context): Promise<void> {
+export async function deleteScene(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, '无效的场景 ID')
+    ctx.throw(400, 'Invalid scene id')
+  }
+  const spotCount = await SceneSpotModel.countDocuments({ sceneId: id }).exec()
+  if (spotCount > 0) {
+    ctx.throw(400, 'Scene has related scene spots, please remove spots first')
   }
   const deleted = await deleteSceneById(id)
   if (!deleted) {
-    ctx.throw(404, '场景不存在')
+    ctx.throw(404, 'Scene not found')
   }
-  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
   ctx.status = 200
   ctx.body = {}
-}
-
-export async function downloadSceneFile(ctx: Context): Promise<void> {
-  const { id } = ctx.params
-  if (!Types.ObjectId.isValid(id)) {
-    ctx.throw(400, '无效的场景 ID')
-  }
-  const scene = await findSceneDocument(id)
-  if (!scene) {
-    ctx.throw(404, '场景不存在')
-  }
-  const filePath = resolveSceneFilePath(scene.fileKey)
-  const exists = await fs.pathExists(filePath)
-  if (!exists) {
-    ctx.throw(404, '场景文件不存在')
-  }
-  const stats = await fs.stat(filePath)
-  const extension = path.extname(scene.fileKey)
-  const fallbackName = extension ? `${scene.name}${extension}` : scene.name
-  const filename = scene.originalFilename ?? fallbackName
-  if (filename) {
-    ctx.attachment(filename)
-  }
-  ctx.set('Content-Type', scene.fileType ?? 'application/octet-stream')
-  ctx.set('Content-Length', stats.size.toString())
-  ctx.body = createReadStream(filePath)
 }

@@ -1,20 +1,7 @@
-import { httpRequest } from '@/api/http'
-import { getMiniApiBaseUrl } from './config'
+import { miniRequest } from './client'
+import { getAccessToken, setAccessToken } from './token'
 
-const TOKEN_KEY = 'tour:mini:accessToken'
-
-export function getAccessToken(): string {
-  const raw: unknown = uni.getStorageSync(TOKEN_KEY)
-  return typeof raw === 'string' ? raw : ''
-}
-
-export function setAccessToken(token: string): void {
-  if (token) {
-    uni.setStorageSync(TOKEN_KEY, token)
-  } else {
-    uni.removeStorageSync(TOKEN_KEY)
-  }
-}
+export { getAccessToken, setAccessToken }
 
 type LoginResponse = {
   token?: string
@@ -22,8 +9,7 @@ type LoginResponse = {
 }
 
 export async function loginWithCredentials(username: string, password: string): Promise<string> {
-  const base = getMiniApiBaseUrl()
-  const data = await httpRequest<LoginResponse>(`${base}/users/login`, {
+  const data = await miniRequest<LoginResponse>('/users/login', {
     method: 'POST',
     body: { username, password },
   })

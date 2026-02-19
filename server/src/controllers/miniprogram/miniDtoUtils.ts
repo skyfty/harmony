@@ -16,7 +16,7 @@ export function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-export function pickSceneMetadata(scene: Pick<SceneDocument, 'metadata'>): Record<string, unknown> {
+export function pickSceneMetadata(scene: Partial<SceneDocument> & { metadata?: unknown }): Record<string, unknown> {
   const meta = scene.metadata
   if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
     return meta as Record<string, unknown>

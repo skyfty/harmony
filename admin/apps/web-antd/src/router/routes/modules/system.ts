@@ -4,21 +4,21 @@ import { $t } from '#/locales';
 
 const routes: RouteRecordRaw[] = [
   {
-    name: 'Scenics',
-    path: '/scenics',
-    component: () => import('#/views/scenics/index.vue'),
+    name: 'Scenes',
+    path: '/scenes',
+    component: () => import('#/views/scenes/index.vue'),
     meta: {
       icon: 'lucide:image',
-      title: $t('page.scenics.title'),
+      title: $t('page.scenes.title'),
     },
   },
   {
-    name: 'LoginLogs',
-    path: '/login-logs',
-    component: () => import('#/views/login-logs/index.vue'),
+    name: 'SceneSpots',
+    path: '/scene-spots',
+    component: () => import('#/views/scene-spots/index.vue'),
     meta: {
-      icon: 'lucide:log-in',
-      title: $t('page.loginLogs.title'),
+      icon: 'lucide:map-pinned',
+      title: $t('page.sceneSpots.title'),
     },
   },
   {
@@ -101,7 +101,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/orders/index.vue'),
         meta: {
           icon: 'lucide:package',
-          title: $t('page.orders.index.title'),
+          title: $t('page.orders.title'),
         },
       },
     ],
@@ -170,8 +170,18 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      
+      {
+        name: 'LoginLogs',
+        path: '/login-logs',
+        component: () => import('#/views/login-logs/index.vue'),
+        meta: {
+          icon: 'lucide:log-in',
+          title: $t('page.loginLogs.title'),
+        },
+      },
       // login-logs moved to top-level route
-      // moved: scenics and user-project routes relocated to root-level entries
+      // moved: scene and user-project routes relocated to root-level entries
       // resource routes moved to root level
     ],
   },

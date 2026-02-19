@@ -5,6 +5,7 @@ export * from './resources';
 export * from './user';
 export * from './products';
 export * from './orders';
-export * from './scenics';
+export * from './scenes';
+export * from './scene-spots';
 export * from './user-projects';
 export * from './loginLogs';

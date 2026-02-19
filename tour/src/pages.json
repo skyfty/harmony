@@ -5,6 +5,7 @@
     { "path": "pages/achievements/index" },
     { "path": "pages/vehicles/index" },
     { "path": "pages/profile/index" },
+    { "path": "pages/scenic/index" },
     { "path": "pages/scenic/detail" },
     { "path": "pages/orders/index" },
     { "path": "pages/orders/detail/index" },

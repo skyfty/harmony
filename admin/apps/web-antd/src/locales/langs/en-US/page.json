@@ -12,7 +12,155 @@
     "analytics": "Analytics",
     "workspace": "Workspace"
   },
-  "scenics": { "title": "Scenics" },
+  "scenes": {
+    "title": "Scenes",
+    "index": {
+      "modal": {
+        "edit": "Edit Scene",
+        "create": "New Scene",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Scene updated successfully",
+        "createSuccess": "Scene created successfully",
+        "deleteSuccess": "Scene deleted successfully"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete scene \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Scene name"
+        }
+      },
+      "table": {
+        "title": "Scene Management",
+        "name": "Name",
+        "fileUrl": "Scene File URL",
+        "fileSize": "File Size (B)",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": {
+        "create": "New Scene"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "name": {
+          "label": "Name",
+          "required": "Please enter scene name"
+        },
+        "file": {
+          "label": "Scene File",
+          "button": "Select File",
+          "required": "Please upload scene file"
+        }
+      }
+    }
+  },
+  "sceneSpots": {
+    "title": "Scene Spots",
+    "index": {
+      "modal": {
+        "edit": "Edit Scene Spot",
+        "create": "New Scene Spot",
+        "ok": "Save",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Scene spot updated successfully",
+        "updateFailed": "Failed to update scene spot",
+        "createSuccess": "Scene spot created successfully",
+        "deleteSuccess": "Scene spot deleted successfully",
+        "loadScenesFailed": "Failed to load scenes"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete scene spot \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": {
+          "label": "Keyword",
+          "placeholder": "Spot title / description / address"
+        },
+        "sceneId": {
+          "label": "Scene",
+          "placeholder": "All scenes"
+        }
+      },
+      "table": {
+        "tableTitle": "Scene Spot Management",
+        "titleCol": "Title",
+        "sceneId": "Scene",
+        "isFeatured": "Home Featured",
+        "isFeaturedYes": "Featured",
+        "isFeaturedNo": "Not Featured",
+        "averageRating": "Average Rating",
+        "ratingCount": "Rating Count",
+        "favoriteCount": "Favorites",
+        "address": "Address",
+        "order": "Order",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": {
+        "create": "New Scene Spot"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "formFields": {
+        "sceneId": {
+          "label": "Scene",
+          "required": "Please select a scene",
+          "placeholder": "Please select a scene"
+        },
+        "title": {
+          "label": "Title",
+          "required": "Please enter scene spot title"
+        },
+        "coverImage": {
+          "label": "Cover Image"
+        },
+        "slides": {
+          "label": "Slides",
+          "placeholder": "One image URL per line"
+        },
+        "description": {
+          "label": "Description"
+        },
+        "address": {
+          "label": "Address"
+        },
+        "order": {
+          "label": "Order"
+        },
+        "averageRating": {
+          "label": "Average Rating"
+        },
+        "ratingCount": {
+          "label": "Rating Count"
+        },
+        "favoriteCount": {
+          "label": "Favorites"
+        },
+        "isFeatured": {
+          "label": "Home Featured"
+        }
+      }
+    }
+  },
   "loginLogs": { "title": "Login Logs" },
   "project": {
     "title": "Projects",
@@ -24,7 +172,9 @@
   "system": {
     "title": "System",
     "users": "Users",
-    "rbac": "Roles & Permissions"
+    "rbac": "Roles & Permissions",
+    "scenes": "Scenes",
+    "sceneSpots": "Scene Spots"
   },
   "userProjects": {
     "categories": {
@@ -158,6 +308,12 @@
       },
       "toolbar": {
         "create": "New Order"
+      },
+      "statusOptions": {
+        "pending": "Pending",
+        "paid": "Paid",
+        "completed": "Completed",
+        "cancelled": "Cancelled"
       },
       "message": {
         "loadError": "Failed to load orders",
