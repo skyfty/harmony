@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import type { LanternBehaviorParams, LanternSlideDefinition, LanternSlideLayout } from '@harmony/schema'
+import type { LanternBehaviorParams, LanternSlideDefinition, LanternSlideLayout } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { watchEffect } from 'vue'
-import type { DebusBehaviorParams } from '@harmony/schema'
+import type { DebusBehaviorParams } from '@schema'
 
 const props = defineProps<{
   modelValue: DebusBehaviorParams | undefined

@@ -1,4 +1,4 @@
-import { AssetLoader, type AssetCacheEntry, type AssetLoadOptions, type AssetSource } from '@harmony/schema/assetCache'
+import { AssetLoader, type AssetCacheEntry, type AssetLoadOptions, type AssetSource } from '@schema/assetCache'
 
 const HTTP_URL_PATTERN = /^(https?:)?\/\//i
 

@@ -1,5 +1,5 @@
-import type { AssetBlobDownloader, AssetBlobPayload } from '@harmony/schema/assetCache'
-import { AssetDownloadWorkerUnavailableError } from '@harmony/schema/assetCache'
+import type { AssetBlobDownloader, AssetBlobPayload } from '@schema/assetCache'
+import { AssetDownloadWorkerUnavailableError } from '@schema/assetCache'
 
 export type AssetDownloadWorkerFactory = () => Worker | null
 

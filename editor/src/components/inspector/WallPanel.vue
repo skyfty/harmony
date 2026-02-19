@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -20,8 +20,8 @@ import {
   type WallForwardAxis,
   type WallModelOrientation,
   type WallComponentProps,
-} from '@harmony/schema/components'
-import { getCachedModelObject } from '@harmony/schema/modelObjectCache'
+} from '@schema/components'
+import { getCachedModelObject } from '@schema/modelObjectCache'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@harmony/schema'
-import { resolveGroundEffectiveHeightAtVertex } from '@harmony/schema/groundMesh'
+import type { GroundDynamicMesh } from '@schema'
+import { resolveGroundEffectiveHeightAtVertex } from '@schema/groundMesh'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
 
 // 网格线的主要配色和宽度配置，确保与地形有足够对比度。

@@ -2,8 +2,8 @@ import * as THREE from 'three'
 import { type Ref } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
-import { findNodeIdForInstance } from '@harmony/schema/modelObjectCache'
-import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker'
+import { findNodeIdForInstance } from '@schema/modelObjectCache'
+import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 
 export function useScenePicking(
   canvasRef: Ref<HTMLCanvasElement | null>,

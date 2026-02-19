@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { cloneGeometryForMirroredInstance } from '@harmony/schema/mirror'
+import { cloneGeometryForMirroredInstance } from '@schema/mirror'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
@@ -63,7 +63,7 @@ import type {
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
   WallDynamicMesh,
-} from '@harmony/schema/index'
+} from '@schema/index'
 import {
   createGradientBackgroundDome,
   disposeGradientBackgroundDome,
@@ -73,7 +73,7 @@ import {
   isHdriLikeExtension,
   isVideoLikeExtension,
   loadSkyCubeTexture,
-} from '@harmony/schema/index'
+} from '@schema/index'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -110,7 +110,7 @@ import {
   updateModelInstanceBindingMatrix,
   findBindingIdForInstance,
   findNodeIdForInstance,
-} from '@harmony/schema/modelObjectCache'
+} from '@schema/modelObjectCache'
 import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
@@ -118,19 +118,19 @@ import {
   getInstanceLayoutBindingId,
   getInstanceLayoutCount,
   resolveInstanceLayoutTemplateAssetId,
-} from '@harmony/schema/instanceLayout'
+} from '@schema/instanceLayout'
 import {
   buildContinuousInstancedModelUserDataPatchV2,
   buildLinearLocalPositions,
   getContinuousInstancedModelUserData,
   syncContinuousInstancedModelCommitted,
-} from '@harmony/schema/continuousInstancedModel'
-import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker'
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
-import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller'
-import { createUvDebugMaterial } from '@harmony/schema/debugTextures'
-import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror'
-import { createPrimitiveMesh } from '@harmony/schema/index'
+} from '@schema/continuousInstancedModel'
+import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
+import { loadObjectFromFile } from '@schema/assetImport'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { createUvDebugMaterial } from '@schema/debugTextures'
+import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
+import { createPrimitiveMesh } from '@schema/index'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -160,12 +160,12 @@ import {
   updateGroundMesh,
   releaseGroundMeshCache,
   sampleGroundHeight,
-} from '@harmony/schema/groundMesh'
-import { createRoadGroup, updateRoadGroup } from '@harmony/schema/roadMesh'
-import { createFloorGroup, updateFloorGroup } from '@harmony/schema/floorMesh'
-import { createGuideRouteGroup, updateGuideRouteGroup } from '@harmony/schema/guideRouteMesh'
+} from '@schema/groundMesh'
+import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
+import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
+import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
-import { hashString, stableSerialize } from '@harmony/schema/stableSerialize'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
@@ -230,7 +230,7 @@ import {
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
   clampWallProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 import type {
   ViewPointComponentProps,
@@ -243,7 +243,7 @@ import type {
   GuideboardEffectInstance,
   LodComponentProps,
 
-} from '@harmony/schema/components'
+} from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
@@ -255,7 +255,7 @@ import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
 import { createDirectionalLightTargetHandleManager } from './DirectionalLightTargetHandle'
 import { lockDirectionalLightTargetWorldPosition, syncLightFromNodeDuringDrag } from './realtimeLightSync'
-import { autoFitDirectionalLightShadowToGround } from '@harmony/schema/shadowFit'
+import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
@@ -293,7 +293,7 @@ import {
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
 // face/surface snap controllers removed: no alignment hint UI
-import { SceneCloudRenderer } from '@harmony/schema/cloudRenderer'
+import { SceneCloudRenderer } from '@schema/cloudRenderer'
 import {
   createProtagonistInitialVisibilityCapture,
   type ProtagonistInitialVisibilityCapture,

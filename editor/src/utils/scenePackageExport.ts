@@ -1,12 +1,12 @@
 import { zipSync, strToU8 } from 'fflate'
-import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@harmony/schema'
+import type { SceneJsonExportDocument, ProjectExportBundleProjectConfig } from '@schema'
 import {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
-} from '@harmony/schema'
-import { inferExtFromMimeType } from '@harmony/schema'
+} from '@schema'
+import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 export type ScenePackageExportScene = {
@@ -14,7 +14,7 @@ export type ScenePackageExportScene = {
   document: SceneJsonExportDocument
 }
 
-// inferExtFromMimeType moved to @harmony/schema (assetTypeConversion)
+// inferExtFromMimeType moved to @schema (assetTypeConversion)
 
 function inferExtFromFilename(filename: string | null | undefined): string | null {
   const raw = typeof filename === 'string' ? filename.trim() : ''

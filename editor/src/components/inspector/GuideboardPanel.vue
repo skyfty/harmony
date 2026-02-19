@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   GUIDEBOARD_COMPONENT_TYPE,
@@ -21,7 +21,7 @@ import {
   GUIDEBOARD_PULSE_SPEED_MAX,
   GUIDEBOARD_PULSE_STRENGTH_MIN,
   GUIDEBOARD_PULSE_STRENGTH_MAX,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

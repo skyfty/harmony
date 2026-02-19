@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
-import type { Vector3Like } from '@harmony/schema'
+import type { Vector3Like } from '@schema'
 import {
   clampSceneNodeInstanceLayout,
   INSTANCE_LAYOUT_DEFAULT_COUNT,
@@ -13,7 +13,7 @@ import {
   INSTANCE_LAYOUT_DEFAULT_SPACING,
   INSTANCE_LAYOUT_DEFAULT_UP,
   type SceneNodeInstanceLayout,
-} from '@harmony/schema/instanceLayout'
+} from '@schema/instanceLayout'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

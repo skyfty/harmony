@@ -1,7 +1,7 @@
 // Vehicle wheel helpers extracted from sceneStore.
 // Use `import type` for shared types to avoid runtime cycles.
 
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 
 type InferredWheel = {
   id: string

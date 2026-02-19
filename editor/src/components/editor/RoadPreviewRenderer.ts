@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from '@harmony/schema'
-import { createRoadGroup, updateRoadGroup } from '@harmony/schema/roadMesh'
+import type { RoadDynamicMesh } from '@schema'
+import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 
 export type RoadPreviewSession = {
   points: THREE.Vector3[]

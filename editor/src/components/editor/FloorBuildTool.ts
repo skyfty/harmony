@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
-import type { Vector3Like } from '@harmony/schema'
+import type { Vector3Like } from '@schema'
 import { createFloorPreviewRenderer, type FloorPreviewSession } from './FloorPreviewRenderer'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'

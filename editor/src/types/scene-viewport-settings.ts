@@ -1,5 +1,5 @@
 
-import type { CameraControlMode, CameraProjection } from '@harmony/schema'
+import type { CameraControlMode, CameraProjection } from '@schema'
 
 export type SceneViewportSnapMode = 'off' | 'vertex'
 

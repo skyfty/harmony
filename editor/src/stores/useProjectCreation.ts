@@ -1,4 +1,4 @@
-import type { Project } from '@harmony/schema/index'
+import type { Project } from '@schema/index'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { ProjectCreateParams } from '@/types/project-summary'
 import { useProjectsStore } from '@/stores/projectsStore'

@@ -1,5 +1,5 @@
-import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema'
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import { DEFAULT_ASSET_TYPE, isAssetType } from '@schema'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
 import { extractExtension } from '@/utils/blob'
 

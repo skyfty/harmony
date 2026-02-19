@@ -20,14 +20,7 @@ export default defineConfig({
         find: '@schema',
         replacement: resolveDir('../schema'),
       },
-      {
-        find: /^@harmony\/schema$/,
-        replacement: resolveDir('../schema/index.ts'),
-      },
-      {
-        find: /^@harmony\/schema\/(.+)$/,
-        replacement: `${withTrailingSlash(resolveDir('../schema'))}$1`,
-      },
+      // keep using the short @schema alias; no runtime alias needed for @harmony/schema
       {
         find: 'cannon-es',
         replacement: resolveDir('./node_modules/cannon-es'),

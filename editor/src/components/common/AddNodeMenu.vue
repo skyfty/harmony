@@ -9,12 +9,12 @@ import type {
   SceneBehavior,
   SceneBehaviorScriptBinding,
   SceneNodeComponentState,
-} from '@harmony/schema'
-import {createPrimitiveMesh}  from '@harmony/schema'
+} from '@schema'
+import {createPrimitiveMesh}  from '@schema'
 
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@harmony/schema/loader'
-import { applyGroundGeneration, createGroundMesh } from '@harmony/schema/groundMesh'
-import type { GroundDynamicMesh, GroundGenerationSettings } from '@harmony/schema'
+import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
+import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
+import type { GroundDynamicMesh, GroundGenerationSettings } from '@schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -27,7 +27,7 @@ import {
   type LightNodeType,
   type SceneNode,
   type Vector3Like,
-} from '@harmony/schema'
+} from '@schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import { extractExtension } from '@/utils/blob'
@@ -41,13 +41,13 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import type {
   GuideboardComponentProps,
   ProtagonistComponentProps,
   ViewPointComponentProps,
   WarpGateComponentProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import {
   NAMED_BEHAVIOR_SEQUENCES_KEY,
   cloneBehaviorList,
@@ -55,7 +55,7 @@ import {
   ensureBehaviorParams,
   normalizeNamedBehaviorSequenceMap,
   upsertNamedBehaviorSequence,
-} from '@harmony/schema/behaviors/definitions'
+} from '@schema/behaviors/definitions'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()

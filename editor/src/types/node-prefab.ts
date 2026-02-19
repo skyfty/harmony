@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, SceneNode } from '@harmony/schema'
+import type { AssetIndexEntry, SceneNode } from '@schema'
 
 export interface NodePrefabData {
   formatVersion: number

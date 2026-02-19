@@ -1,4 +1,4 @@
-import type { SceneNode } from  '@harmony/schema'
+import type { SceneNode } from  '@schema'
 
 export interface EnsureSceneAssetsOptions {
   nodes?: SceneNode[]

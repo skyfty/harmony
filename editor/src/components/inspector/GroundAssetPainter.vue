@@ -5,7 +5,7 @@ import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useUiStore } from '@/stores/uiStore'
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { useScatterAssetSelection } from '@/stores/useScatterAssetSelection'
 

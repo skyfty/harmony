@@ -1,4 +1,4 @@
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 

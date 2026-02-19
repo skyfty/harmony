@@ -6,7 +6,7 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { unzipScenePackage, readTextFileFromScenePackage } from '@harmony/schema'
+import { unzipScenePackage, readTextFileFromScenePackage } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 

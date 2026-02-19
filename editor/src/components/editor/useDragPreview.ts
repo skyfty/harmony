@@ -3,8 +3,8 @@ import * as THREE from 'three'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
-import { getCachedModelObject, getOrLoadModelObject } from '@harmony/schema/modelObjectCache'
+import { loadObjectFromFile } from '@schema/assetImport'
+import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 

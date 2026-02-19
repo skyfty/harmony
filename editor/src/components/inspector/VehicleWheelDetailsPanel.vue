@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState, Vector3Like } from '@harmony/schema'
+import type { SceneNodeComponentState, Vector3Like } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import {
@@ -9,7 +9,7 @@ import {
   clampVehicleComponentProps,
   type VehicleComponentProps,
   type VehicleWheelProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const props = defineProps<{
   wheelId: string | null

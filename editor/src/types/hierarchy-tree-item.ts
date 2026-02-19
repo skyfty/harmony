@@ -1,4 +1,4 @@
-import type { SceneNodeType,LightNodeType } from  '@harmony/schema'
+import type { SceneNodeType,LightNodeType } from  '@schema'
 
 export interface HierarchyTreeItem {
   id: string

@@ -1,5 +1,5 @@
 import { buildServerApiUrl } from './serverApiConfig'
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
 import type { AssetSeries } from '@/types/asset-series'

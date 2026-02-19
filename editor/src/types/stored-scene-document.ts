@@ -5,7 +5,7 @@ import type {
   EnvironmentSettings,
   SceneSkyboxSettings,
   SceneResourceSummary,
-} from '@harmony/schema'
+} from '@schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'

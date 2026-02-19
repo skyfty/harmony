@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
-import { PROTAGONIST_COMPONENT_TYPE, type ProtagonistComponentProps } from '@harmony/schema/components'
+import { PROTAGONIST_COMPONENT_TYPE, type ProtagonistComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

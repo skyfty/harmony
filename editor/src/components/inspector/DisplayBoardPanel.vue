@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   type DisplayBoardComponentProps,
-} from '@harmony/schema/components'
-import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@harmony/schema'
+} from '@schema/components'
+import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@schema'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 

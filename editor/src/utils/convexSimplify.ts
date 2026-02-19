@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneOutlineMesh } from '@harmony/schema'
+import type { SceneOutlineMesh } from '@schema'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
 
 export type ConvexSimplifyPass = {

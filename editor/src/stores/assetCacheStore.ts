@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import { fetchAssetBlob } from '@harmony/schema/assetCache'
-import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@harmony/schema/assetCache'
+import { fetchAssetBlob } from '@schema/assetCache'
+import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { extractExtension, ensureExtension } from '@/utils/blob'
-import { invalidateModelObject } from '@harmony/schema/modelObjectCache'
-import { isImageLikeExtension } from '@harmony/schema'
+import { invalidateModelObject } from '@schema/modelObjectCache'
+import { isImageLikeExtension } from '@schema'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
 

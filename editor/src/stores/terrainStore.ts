@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useUiStore } from './uiStore'
-import type { GroundSculptOperation } from '@harmony/schema'
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import type { GroundSculptOperation } from '@schema'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 

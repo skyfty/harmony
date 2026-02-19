@@ -3,12 +3,12 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@harmony/schema'
-import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@schema'
+import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
-import { findObjectByPath } from '@harmony/schema/modelAssetLoader'
-import { getCachedModelObject, getOrLoadModelObject } from '@harmony/schema/modelObjectCache'
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
+import { findObjectByPath } from '@schema/modelAssetLoader'
+import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
+import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -24,9 +24,9 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createGroundMesh, ensureAllGroundChunks } from '@harmony/schema/groundMesh'
-import { createWallGroup } from '@harmony/schema/wallMesh'
-import { createRoadGroup, resolveRoadLocalHeightSampler } from '@harmony/schema/roadMesh'
+import { createGroundMesh, ensureAllGroundChunks } from '@schema/groundMesh'
+import { createWallGroup } from '@schema/wallMesh'
+import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -42,8 +42,8 @@ import {
   RIGIDBODY_METADATA_KEY,
   WALL_COMPONENT_TYPE,
   clampWallProps,
-} from '@harmony/schema/components'
-import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield'
+} from '@schema/components'
+import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   const stack: SceneNode[] = [...nodes]

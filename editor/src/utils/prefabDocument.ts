@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@harmony/schema'
+import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 
 const NODE_PREFAB_FORMAT_VERSION = 1

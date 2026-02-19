@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { watchEffect } from 'vue'
-import type { HideCockpitBehaviorParams } from '@harmony/schema'
+import type { HideCockpitBehaviorParams } from '@schema'
 
 const props = defineProps<{
   modelValue: HideCockpitBehaviorParams | undefined

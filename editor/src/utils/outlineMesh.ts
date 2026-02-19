@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import type { SceneOutlineMesh } from '@harmony/schema'
+import type { SceneOutlineMesh } from '@schema'
 
 const DEFAULT_OUTLINE_COLOR = '#808080'
 const OUTLINE_MAX_POINTS = 2048

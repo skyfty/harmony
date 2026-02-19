@@ -43,7 +43,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import Loader, { type LoaderProgressPayload } from '@harmony/schema/loader'
+import Loader, { type LoaderProgressPayload } from '@schema/loader'
 import type { Object3D } from 'three'
 import {
   behaviorMapToList,
@@ -54,15 +54,15 @@ import {
   createBehaviorSequenceId,
   listBehaviorScripts,
   type BehaviorActionDefinition,
-} from '@harmony/schema/behaviors/definitions'
-import { BEHAVIOR_COMPONENT_TYPE } from '@harmony/schema/components'
+} from '@schema/behaviors/definitions'
+import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import type {
   BehaviorComponentProps,
   BehaviorEventType,
   SceneBehavior,
   SceneNodeComponentState,
-} from '@harmony/schema'
-import type { Project } from '@harmony/schema'
+} from '@schema'
+import type { Project } from '@schema'
 
 
 const sceneStore = useSceneStore()

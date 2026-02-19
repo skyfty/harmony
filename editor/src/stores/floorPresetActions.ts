@@ -1,5 +1,5 @@
-import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@harmony/schema'
-import { FLOOR_COMPONENT_TYPE, clampFloorComponentProps, type FloorComponentProps } from '@harmony/schema/components'
+import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
+import { FLOOR_COMPONENT_TYPE, clampFloorComponentProps, type FloorComponentProps } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'

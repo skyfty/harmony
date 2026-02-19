@@ -7,7 +7,7 @@ export type {
   SceneMaterialType,
   SceneNodeMaterial,
   SceneTextureWrapMode,
-} from '@harmony/schema'
+} from '@schema'
 
 export {
   cloneTextureSettings,
@@ -24,11 +24,11 @@ export {
   ensureMeshMaterialsUnique,
   resetMaterialOverrides,
   textureSettingsSignature,
-} from '@harmony/schema/material'
+} from '@schema/material'
 
 export type {
   MaterialBaselineState,
   MaterialTextureAssignmentOptions,
   MeshStandardTextureKey,
-} from '@harmony/schema/material'
+} from '@schema/material'
 

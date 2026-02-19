@@ -1,5 +1,5 @@
-import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
-import { LOD_COMPONENT_TYPE, clampLodComponentProps, type LodComponentProps } from '@harmony/schema/components'
+import type { SceneNode, SceneNodeComponentState } from '@schema'
+import { LOD_COMPONENT_TYPE, clampLodComponentProps, type LodComponentProps } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'

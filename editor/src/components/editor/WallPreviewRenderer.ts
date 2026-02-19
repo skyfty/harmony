@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@harmony/schema'
-import { createWallGroup, updateWallGroup } from '@harmony/schema/wallMesh'
+import type { WallDynamicMesh } from '@schema'
+import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 
 export type WallPreviewSegment = {
   start: THREE.Vector3

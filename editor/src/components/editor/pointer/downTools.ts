@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
@@ -25,8 +25,8 @@ import {
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
   type FloorComponentProps,
-} from '@harmony/schema/components'
-import type { SceneNodeComponentState } from '@harmony/schema'
+} from '@schema/components'
+import type { SceneNodeComponentState } from '@schema'
 
 type WallWorldSegmentLike = { start: THREE.Vector3; end: THREE.Vector3 }
 

@@ -1,4 +1,4 @@
-import  {type LightNodeType } from '@harmony/schema'
+import  {type LightNodeType } from '@schema'
 
 const LEGACY_LIGHT_TYPE_MAP: Record<string, LightNodeType> = {
   directional: 'Directional',

@@ -8,8 +8,8 @@ import type {
   EnvironmentRotationDegrees,
   SkyCubeBackgroundFormat,
 } from '@/types/environment'
-import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@harmony/schema'
-import type { SceneSkyboxSettings } from '@harmony/schema'
+import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@schema'
+import type { SceneSkyboxSettings } from '@schema'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { ProjectAsset } from '@/types/project-asset'

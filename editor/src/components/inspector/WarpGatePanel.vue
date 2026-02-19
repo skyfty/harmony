@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   WARP_GATE_COMPONENT_TYPE,
@@ -20,7 +20,7 @@ import {
   GROUND_LIGHT_PARTICLE_SIZE_MAX,
   GROUND_LIGHT_PARTICLE_COUNT_MIN,
   GROUND_LIGHT_PARTICLE_COUNT_MAX,
-} from '@harmony/schema/components'
+} from '@schema/components'
 const INTENSITY_MIN = GROUND_LIGHT_INTENSITY_MIN
 const INTENSITY_MAX = GROUND_LIGHT_INTENSITY_MAX
 const PARTICLE_SIZE_MIN = GROUND_LIGHT_PARTICLE_SIZE_MIN

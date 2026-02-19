@@ -1,4 +1,4 @@
-import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type LightNodeType, type SceneNodeType } from '@harmony/schema'
+import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type LightNodeType, type SceneNodeType } from '@schema'
 import { LIGHT_TYPE_ICONS as LIGHT_TYPE_ICONS_FROM_UTILS } from '@/stores/lightUtils'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {

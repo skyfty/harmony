@@ -15,7 +15,7 @@ import {
 import TexturePanel from './TexturePanel.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@harmony/schema'
+import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>

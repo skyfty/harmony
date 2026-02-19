@@ -2,7 +2,7 @@
 import { Box3, Vector3 } from 'three'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@schema'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
@@ -27,7 +27,7 @@ import {
   clampVehicleComponentProps,
   type VehicleComponentProps,
   type VehicleWheelProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const emit = defineEmits<{
   (event: 'open-wheel-details', payload: { id: string }): void

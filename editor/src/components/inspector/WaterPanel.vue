@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   WATER_COMPONENT_TYPE,
@@ -19,7 +19,7 @@ import {
   WATER_MIN_FLOW_SPEED,
   WATER_MIN_SIZE,
   WATER_MIN_TEXTURE_SIZE,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const DEFAULT_FLOW_DIRECTION = { x: 0.7071, y: 0.7071 }
 

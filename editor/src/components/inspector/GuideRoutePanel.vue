@@ -2,9 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeComponentState } from '@harmony/schema'
-import { GUIDE_ROUTE_COMPONENT_TYPE } from '@harmony/schema/components'
-import type { GuideRouteComponentProps } from '@harmony/schema/components'
+import type { SceneNodeComponentState } from '@schema'
+import { GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
+import type { GuideRouteComponentProps } from '@schema/components'
 
 type WaypointDraft = { name: string }
 

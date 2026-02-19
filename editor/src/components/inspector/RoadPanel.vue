@@ -2,10 +2,10 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { RoadDynamicMesh } from '@harmony/schema'
-import type { SceneNodeComponentState } from '@harmony/schema'
-import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING } from '@harmony/schema/components'
-import type { RoadComponentProps } from '@harmony/schema/components'
+import type { RoadDynamicMesh } from '@schema'
+import type { SceneNodeComponentState } from '@schema'
+import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_JUNCTION_SMOOTHING } from '@schema/components'
+import type { RoadComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

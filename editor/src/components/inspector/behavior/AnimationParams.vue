@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
-import type { AnimationBehaviorParams, SceneNode } from '@harmony/schema'
+import type { AnimationBehaviorParams, SceneNode } from '@schema'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 

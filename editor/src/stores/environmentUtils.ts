@@ -1,4 +1,4 @@
-import type { SceneNode, EnvironmentSettings } from '@harmony/schema'
+import type { SceneNode, EnvironmentSettings } from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 export const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'

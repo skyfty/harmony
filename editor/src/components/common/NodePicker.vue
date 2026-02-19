@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'
 import { useSceneStore } from '@/stores/sceneStore'

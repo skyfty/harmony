@@ -1,4 +1,4 @@
-import type { Vector3Like } from '@harmony/schema'
+import type { Vector3Like } from '@schema'
 export interface SceneCameraState {
   position: Vector3Like
   target: Vector3Like

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
-import type { RoadDynamicMesh, SceneNode } from '@harmony/schema'
+import type { RoadDynamicMesh, SceneNode } from '@schema'
 import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
 import {
   findConnectableRoadNodeId,

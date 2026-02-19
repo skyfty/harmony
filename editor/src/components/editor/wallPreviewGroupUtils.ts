@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@harmony/schema'
+import type { WallDynamicMesh } from '@schema'
 
 export type WallWorldSegment = {
   start: THREE.Vector3

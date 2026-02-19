@@ -461,7 +461,7 @@
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
-import type { CameraControlMode } from '@harmony/schema'
+import type { CameraControlMode } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'

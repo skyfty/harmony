@@ -1,11 +1,11 @@
 import { Object3D } from 'three'
-import { createPrimitiveMesh,isGeometryType, type SceneNode, type SceneNodeComponentState } from '@harmony/schema'
+import { createPrimitiveMesh,isGeometryType, type SceneNode, type SceneNodeComponentState } from '@schema'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 /**
  * Procedural runtime 辅助模块
@@ -71,7 +71,7 @@ export function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
  * 为过程化节点创建轻量的运行时 `Object3D`。
  *
  * - 对于 `WarpGate` / `Guideboard`，创建一个空的 `Object3D` 占位（组件会附加可视或行为）。
- * - 对于 `Plane` / `Sphere`，使用 `@harmony/schema` 提供的 `createPrimitiveMesh` 创建基础几何，
+ * - 对于 `Plane` / `Sphere`，使用 `@schema` 提供的 `createPrimitiveMesh` 创建基础几何，
  *   使其可被选中并预览。
  * - 兜底情况下创建通用的空 `Object3D`。
  *

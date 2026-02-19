@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { GroundGenerationMode, GroundSculptOperation } from '@harmony/schema'
+import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 
 type TerrainOperationOption = { value: GroundSculptOperation; label: string; icon: string }
 type NoiseModeOption = { value: GroundGenerationMode; label: string; icon: string }

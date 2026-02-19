@@ -6,9 +6,9 @@ import {
   updateModelInstanceBindingMatrix,
   updateModelInstanceMatrix,
   type ModelInstanceBinding,
-} from '@harmony/schema/modelObjectCache'
-import type { SceneNode } from '@harmony/schema'
-import { getContinuousInstancedModelUserData, syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel'
+} from '@schema/modelObjectCache'
+import type { SceneNode } from '@schema'
+import { getContinuousInstancedModelUserData, syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
 export function useInstancedMeshes(
   instancedMeshGroup: THREE.Group,

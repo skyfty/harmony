@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import type { PointerDownResult } from './types'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'

@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { ProjectAsset } from '@/types/project-asset'
 import { buildFloorPresetFilename, isFloorPresetFilename } from '@/utils/floorPreset'
@@ -13,8 +13,8 @@ import {
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
   FLOOR_DEFAULT_SIDE_UV_SCALE,
-} from '@harmony/schema/components'
-import type { FloorComponentProps } from '@harmony/schema/components'
+} from '@schema/components'
+import type { FloorComponentProps } from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)

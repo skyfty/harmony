@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import type { LoadSceneBehaviorParams, Project, ProjectSceneMeta } from '@harmony/schema'
+import type { LoadSceneBehaviorParams, Project, ProjectSceneMeta } from '@schema'
 import { useProjectsStore } from '@/stores/projectsStore'
 import ProjectSceneSelect from '@/components/common/ProjectSceneSelect.vue'
 

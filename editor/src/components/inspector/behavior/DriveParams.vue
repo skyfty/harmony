@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount } from 'vue'
-import type { DriveBehaviorParams } from '@harmony/schema'
+import type { DriveBehaviorParams } from '@schema'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{

@@ -1,4 +1,4 @@
-import type { SceneJsonExportDocument } from '@harmony/schema'
+import type { SceneJsonExportDocument } from '@schema'
 import { deflate, inflate } from 'pako'
 
 export interface ScenePreviewSnapshot {

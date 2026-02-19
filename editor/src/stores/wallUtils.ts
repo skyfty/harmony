@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh, Vector3Like, SceneNode } from '@harmony/schema'
+import type { WallDynamicMesh, Vector3Like, SceneNode } from '@schema'
 import {
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,
@@ -10,7 +10,7 @@ import {
   clampWallProps,
   type WallComponentProps,
   WALL_DEFAULT_SMOOTHING,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import type { Object3D } from 'three'
 
 type WallStoreDeps = {

@@ -5,7 +5,7 @@ import type {
   SceneNode,
   SceneNodeMaterial,
   SceneNodeEditorFlags,
-} from '@harmony/schema'
+} from '@schema'
 import type {ProjectAsset} from '@/types/project-asset'
 import {
   ensureTerrainScatterStore,
@@ -18,9 +18,9 @@ import {
   type TerrainScatterCategory,
   type TerrainScatterInstance,
   type TerrainScatterStore,
-} from '@harmony/schema/terrain-scatter'
-import { sampleGroundHeight, sampleGroundNormal } from '@harmony/schema/groundMesh'
-import { computeGroundBaseHeightAtVertex } from '@harmony/schema/groundGeneration'
+} from '@schema/terrain-scatter'
+import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 import {
   buildRandom,
   generateUniformCandidatesInPolygon,
@@ -34,9 +34,9 @@ import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/util
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { extractExtension } from '@/utils/blob'
-import { getCachedModelObject, getOrLoadModelObject } from '@harmony/schema/modelObjectCache'
+import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 import {
   FLOOR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -46,7 +46,7 @@ import {
   WATER_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_SMOOTHING,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import { createRoadNodeMaterials, ROAD_SURFACE_DEFAULT_COLOR } from '@/utils/roadNodeMaterials'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'

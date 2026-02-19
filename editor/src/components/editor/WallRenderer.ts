@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { SceneNode, SceneNodeComponentState, WallDynamicMesh } from '@harmony/schema'
-import { hashString, stableSerialize } from '@harmony/schema/stableSerialize'
+import type { SceneNode, SceneNodeComponentState, WallDynamicMesh } from '@schema'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -10,12 +10,12 @@ import {
   updateModelInstanceBindingMatrix,
   updateModelInstanceMatrix,
   releaseModelInstancesForNode,
-} from '@harmony/schema/modelObjectCache'
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
+} from '@schema/modelObjectCache'
+import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
-import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@harmony/schema/wallMesh'
-import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@harmony/schema/components'
-import { syncInstancedModelCommittedLocalMatrices } from '@harmony/schema/continuousInstancedModel'
+import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schema/wallMesh'
+import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
+import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'

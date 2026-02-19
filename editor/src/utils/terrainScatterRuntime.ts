@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { TerrainScatterInstance } from '@harmony/schema/terrain-scatter'
-import { allocateModelInstance, releaseModelInstance, updateModelInstanceMatrix } from '@harmony/schema/modelObjectCache'
+import type { TerrainScatterInstance } from '@schema/terrain-scatter'
+import { allocateModelInstance, releaseModelInstance, updateModelInstanceMatrix } from '@schema/modelObjectCache'
 
 const localPositionHelper = new THREE.Vector3()
 const localRotationHelper = new THREE.Euler()

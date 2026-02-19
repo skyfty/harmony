@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { watchEffect } from 'vue'
-import type { ShowCockpitBehaviorParams } from '@harmony/schema'
+import type { ShowCockpitBehaviorParams } from '@schema'
 
 const props = defineProps<{
   modelValue: ShowCockpitBehaviorParams | undefined

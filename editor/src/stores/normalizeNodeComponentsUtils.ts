@@ -7,7 +7,7 @@ import type {
   WallDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
-} from '@harmony/schema'
+} from '@schema'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -41,7 +41,7 @@ import {
   EFFECT_COMPONENT_TYPE,
   clampEffectComponentProps,
   cloneEffectComponentProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
 

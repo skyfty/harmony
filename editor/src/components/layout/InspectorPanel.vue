@@ -29,8 +29,8 @@ import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
-import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@harmony/schema'
-import type { BehaviorActionDefinition } from '@harmony/schema/behaviors/definitions'
+import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema'
+import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
@@ -53,7 +53,7 @@ import {
   type RigidbodyColliderType,
   FLOOR_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 type BehaviorDetailsPayload = {
   mode: 'create' | 'edit'

@@ -1,7 +1,7 @@
 import { resourceProviders } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@harmony/schema'
+import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@schema'
 
 export interface AssetCategoryDefinition {
   key:

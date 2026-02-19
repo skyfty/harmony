@@ -7,7 +7,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { SceneCloudRenderer, sanitizeCloudSettings } from '@harmony/schema/cloudRenderer'
+import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer'
 import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	DEFAULT_ENVIRONMENT_RESTITUTION,
@@ -44,13 +44,13 @@ import {
 	type Vector3Like,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
-} from '@harmony/schema/index'
+} from '@schema/index'
  
 import {
 	applyMaterialOverrides,
 	disposeMaterialTextures,
 	type MaterialTextureAssignmentOptions,
-} from '@harmony/schema/material'
+} from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
@@ -58,25 +58,25 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { useScenesStore } from '@/stores/scenesStore'
 import { buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
-import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@harmony/schema/sceneGraph'
-import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller'
+import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 
-import ResourceCache from '@harmony/schema/ResourceCache'
-import { AssetLoader } from '@harmony/schema/assetCache'
-import { inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
-import type { AssetCacheEntry } from '@harmony/schema/assetCache'
+import ResourceCache from '@schema/ResourceCache'
+import { AssetLoader } from '@schema/assetCache'
+import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
+import type { AssetCacheEntry } from '@schema/assetCache'
 import { StoreBackedAssetCache } from '@/utils/storeBackedAssetCache'
 import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
-} from '@harmony/schema/groundHeightfield'
-import { updateGroundChunks } from '@harmony/schema/groundMesh'
-import { autoFitDirectionalLightShadowToGround } from '@harmony/schema/shadowFit'
-import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall'
+} from '@schema/groundHeightfield'
+import { updateGroundChunks } from '@schema/groundMesh'
+import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
+import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	syncTerrainPaintPreviewForGround as syncTerrainPaintPreviewForGroundShared,
 	createDefaultTerrainPaintLoaders,
-} from '@harmony/schema/terrainPaintPreview'
+} from '@schema/terrainPaintPreview'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
@@ -93,8 +93,8 @@ import {
 	type RigidbodyMaterialEntry,
 	type RigidbodyOrientationAdjustment,
 	type RoadHeightfieldDebugCache,
-} from '@harmony/schema/physicsEngine'
-import { loadNodeObject } from '@harmony/schema/modelAssetLoader'
+} from '@schema/physicsEngine'
+import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
 	getOrLoadModelObject,
@@ -110,12 +110,12 @@ import {
 	findNodeIdForInstance,
 	type ModelInstanceGroup,
 	type ModelInstanceBinding,
-} from '@harmony/schema/modelObjectCache'
-import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker'
-import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel'
-import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror'
+} from '@schema/modelObjectCache'
+import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
+import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
+import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { ComponentManager } from '@harmony/schema/components/componentManager'
+import { ComponentManager } from '@schema/components/componentManager'
 import {
 	behaviorComponentDefinition,
 	guideboardComponentDefinition,
@@ -153,9 +153,9 @@ import {
 	DEFAULT_DIRECTION,
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
-} from '@harmony/schema/components'
-import { VehicleDriveController } from '@harmony/schema/VehicleDriveController'
-import type { VehicleDriveRuntimeState } from '@harmony/schema/VehicleDriveController'
+} from '@schema/components'
+import { VehicleDriveController } from '@schema/VehicleDriveController'
+import type { VehicleDriveRuntimeState } from '@schema/VehicleDriveController'
 import {
 	FollowCameraController,
 	computeFollowLerpAlpha,
@@ -163,10 +163,10 @@ import {
 	createCameraFollowState,
 	getApproxDimensions,
 	resetCameraFollowState,
-} from '@harmony/schema/followCameraController'
-import { startTourAndFollow, stopTourAndUnfollow } from '@harmony/schema/autoTourHelpers'
-import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync'
-import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime'
+} from '@schema/followCameraController'
+import { startTourAndFollow, stopTourAndUnfollow } from '@schema/autoTourHelpers'
+import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
+import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
 import type {
 	GuideboardComponentProps,
 	LodComponentProps,
@@ -178,7 +178,7 @@ import type {
 	VehicleComponentProps,
 	VehicleWheelProps,
 	WarpGateComponentProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	addBehaviorRuntimeListener,
@@ -192,13 +192,13 @@ import {
 	type BehaviorRuntimeEvent,
 	type BehaviorEventResolution,
 	type BehaviorRuntimeListener,
-} from '@harmony/schema/behaviors/runtime'
+} from '@schema/behaviors/runtime'
 import {
 	PROXIMITY_EXIT_PADDING,
 	DEFAULT_OBJECT_RADIUS,
 	PROXIMITY_MIN_DISTANCE,
 	PROXIMITY_RADIUS_SCALE,
-} from '@harmony/schema/behaviors/runtime'
+} from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 

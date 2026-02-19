@@ -7,8 +7,8 @@ import type {
   SceneCubeTextureCloudSettings,
   SceneSphericalCloudSettings,
   SceneVolumetricCloudSettings,
-} from '@harmony/schema'
-import { getLastExtensionFromFilenameOrUrl, isImageLikeExtension } from '@harmony/schema'
+} from '@schema'
+import { getLastExtensionFromFilenameOrUrl, isImageLikeExtension } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -19,7 +19,7 @@ import {
   cloudSettingsEqual,
   createDefaultCloudSettings,
   sanitizeCloudSettings,
-} from '@harmony/schema/cloudRenderer'
+} from '@schema/cloudRenderer'
 
 
 const sceneStore = useSceneStore()

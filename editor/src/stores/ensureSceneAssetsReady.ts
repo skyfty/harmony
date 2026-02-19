@@ -1,9 +1,9 @@
 import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { ModelInstanceGroup } from '@harmony/schema/modelObjectCache'
+import type { ModelInstanceGroup } from '@schema/modelObjectCache'
 
 type WatchFn = typeof import('vue').watch
 

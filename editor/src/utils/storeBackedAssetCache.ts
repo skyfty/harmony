@@ -1,4 +1,4 @@
-import { AssetCache, type AssetCacheEntry } from '@harmony/schema/assetCache'
+import { AssetCache, type AssetCacheEntry } from '@schema/assetCache'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 export class StoreBackedAssetCache extends AssetCache {

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@harmony/schema'
+import type { GroundDynamicMesh } from '@schema'
 import type { TerrainGridVisibleRange } from './TerrainGridHelper'
 import { TerrainGridHelper } from './TerrainGridHelper'
 

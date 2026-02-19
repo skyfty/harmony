@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { getModelInstanceBindingsForNode } from '@harmony/schema/modelObjectCache'
+import { getModelInstanceBindingsForNode } from '@schema/modelObjectCache'
 
 type InstancedOutlineEntry = {
   group: THREE.Group

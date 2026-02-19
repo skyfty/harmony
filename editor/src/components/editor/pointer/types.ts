@@ -1,5 +1,5 @@
 import type * as THREE from 'three'
-import type { FloorDynamicMesh, RoadDynamicMesh } from '@harmony/schema'
+import type { FloorDynamicMesh, RoadDynamicMesh } from '@schema'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'

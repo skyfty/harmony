@@ -6,7 +6,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import Loader from '@harmony/schema/loader'
+import Loader from '@schema/loader'
 
 const props = defineProps<{
   file: File | null

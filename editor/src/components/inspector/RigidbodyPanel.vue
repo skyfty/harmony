@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   RIGIDBODY_COMPONENT_TYPE,
@@ -17,7 +17,7 @@ import {
   DEFAULT_ANGULAR_DAMPING,
   DEFAULT_RIGIDBODY_RESTITUTION,
   DEFAULT_RIGIDBODY_FRICTION,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const emit = defineEmits<{

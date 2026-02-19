@@ -2,7 +2,7 @@
 import { computed, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@harmony/schema/index'
+import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@schema/index'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

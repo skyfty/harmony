@@ -1,7 +1,7 @@
 // Light-related helpers extracted from sceneStore.
 // Use `import type` for shared types to avoid runtime cycles.
 
-import type { SceneNode, LightNodeType } from '@harmony/schema'
+import type { SceneNode, LightNodeType } from '@schema'
 import type { Vector3, Light } from 'three'
 import { normalizeLightNodeType } from '@/types/light'
 

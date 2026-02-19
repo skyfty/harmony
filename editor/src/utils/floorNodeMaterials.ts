@@ -4,7 +4,7 @@ import type {
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
   SceneNodeMaterial,
-} from '@harmony/schema'
+} from '@schema'
 
 const FLOOR_DEFAULT_COLOR = '#4b4f55'
 

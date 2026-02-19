@@ -1,6 +1,6 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
-import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintChannel, TerrainPaintSettings } from '@harmony/schema'
+import type { GroundDynamicMesh, GroundSculptOperation, SceneNode, TerrainPaintChannel, TerrainPaintSettings } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -13,7 +13,7 @@ import {
 	type TerrainScatterLayer,
 	type TerrainScatterStore,
 	type TerrainScatterStoreSnapshot,
-} from '@harmony/schema/terrain-scatter'
+} from '@schema/terrain-scatter'
 import {
 	sculptGround,
 	sampleGroundHeight,
@@ -24,13 +24,13 @@ import {
 	updateGroundMesh,
 	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
-} from '@harmony/schema/groundMesh'
+} from '@schema/groundMesh'
 import {
 	ensureInstancedMeshesRegistered,
 	getCachedModelObject,
 	getOrLoadModelObject,
 	type ModelInstanceGroup,
-} from '@harmony/schema/modelObjectCache'
+} from '@schema/modelObjectCache'
 import {
 	bindScatterInstance,
 	composeScatterMatrix,
@@ -47,7 +47,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
-import { loadObjectFromFile } from '@harmony/schema/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { computeBlobHash } from '@/utils/blob'
 import {
@@ -57,9 +57,9 @@ import {
 	updateTerrainPaintPreviewWeightmap,
 	decodeWeightmapToData,
 	encodeWeightmapToBinary,
-} from '@harmony/schema/terrainPaintPreview'
-import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller'
-import { normalizeScatterMaterials } from '@harmony/schema/scatterMaterials'
+} from '@schema/terrainPaintPreview'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'

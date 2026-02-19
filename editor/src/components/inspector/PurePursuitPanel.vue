@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   PURE_PURSUIT_COMPONENT_TYPE,
@@ -69,7 +69,7 @@ import {
   DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

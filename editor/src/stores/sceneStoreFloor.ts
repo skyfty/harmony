@@ -1,12 +1,12 @@
 import { Vector3 } from 'three'
-import type { FloorDynamicMesh, SceneNode, Vector3Like } from '@harmony/schema'
+import type { FloorDynamicMesh, SceneNode, Vector3Like } from '@schema'
 import {
   clampFloorComponentProps,
   FLOOR_DEFAULT_SIDE_UV_SCALE,
   FLOOR_DEFAULT_SMOOTH,
   FLOOR_DEFAULT_THICKNESS,
   type FloorComponentProps,
-} from '@harmony/schema/components'
+} from '@schema/components'
 import type { Object3D } from 'three'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 

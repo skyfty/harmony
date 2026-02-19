@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState } from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import {
@@ -11,7 +11,7 @@ import {
   DEFAULT_AUTO_TOUR_SPEED_MPS,
   MIN_AUTO_TOUR_SPEED_MPS,
   MAX_AUTO_TOUR_SPEED_MPS,
-} from '@harmony/schema/components'
+} from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

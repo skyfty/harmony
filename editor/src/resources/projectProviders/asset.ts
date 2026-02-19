@@ -1,4 +1,4 @@
-import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { buildServerApiUrl } from '@/api/serverApiConfig'

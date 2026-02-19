@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExitSceneBehaviorParams } from '@harmony/schema'
+import type { ExitSceneBehaviorParams } from '@schema'
 
 defineProps<{
   modelValue: ExitSceneBehaviorParams | undefined

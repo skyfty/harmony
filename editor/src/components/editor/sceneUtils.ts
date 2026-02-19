@@ -1,4 +1,4 @@
-import type { SceneNode } from '@harmony/schema'
+import type { SceneNode } from '@schema'
 import * as THREE from 'three'
 import { GRID_MAJOR_SPACING, GRID_SNAP_SPACING } from './constants'
 

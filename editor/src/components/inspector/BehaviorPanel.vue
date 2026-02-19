@@ -6,9 +6,9 @@ import type {
   BehaviorComponentProps,
   SceneBehavior,
   SceneNodeComponentState,
-} from '@harmony/schema'
+} from '@schema'
 import { useSceneStore } from '@/stores/sceneStore'
-import { BEHAVIOR_COMPONENT_TYPE } from '@harmony/schema/components'
+import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   behaviorMapToList,
@@ -19,7 +19,7 @@ import {
   type BehaviorActionDefinition,
   listBehaviorActions,
   listBehaviorScripts,
-} from '@harmony/schema/behaviors/definitions'
+} from '@schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
 
 interface BehaviorSequenceEntry {

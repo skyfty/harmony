@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { MoveToBehaviorParams } from '@harmony/schema'
+import type { MoveToBehaviorParams } from '@schema'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{

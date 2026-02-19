@@ -1,4 +1,4 @@
-import { AssetTypes } from '@harmony/schema'
+import { AssetTypes } from '@schema'
 
 const typeLabelMap: Record<string, string> = {
   model: '模型',

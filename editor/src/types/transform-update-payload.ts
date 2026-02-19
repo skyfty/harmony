@@ -1,4 +1,4 @@
-import type { Vector3Like } from '@harmony/schema'
+import type { Vector3Like } from '@schema'
 export type { Vector3Like }
 export interface TransformUpdatePayload {
   id: string

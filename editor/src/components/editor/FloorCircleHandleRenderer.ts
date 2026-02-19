@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh } from '@harmony/schema'
-import { hashString, stableSerialize } from '@harmony/schema/stableSerialize'
+import type { FloorDynamicMesh } from '@schema'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   createEndpointGizmoObject,
   getEndpointGizmoPartInfoFromObject,

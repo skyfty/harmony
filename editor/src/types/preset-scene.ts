@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, GroundSettings, SceneMaterial, SceneNode, EnvironmentSettings, SceneSkyboxSettings } from '@harmony/schema'
+import type { AssetIndexEntry, GroundSettings, SceneMaterial, SceneNode, EnvironmentSettings, SceneSkyboxSettings } from '@schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'

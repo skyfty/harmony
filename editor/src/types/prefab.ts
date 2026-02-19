@@ -1,4 +1,4 @@
-import type { Vector3Like } from '@harmony/schema'
+import type { Vector3Like } from '@schema'
 import type { NodePrefabData } from '@/types/node-prefab'
 
 export type ClipboardMode = 'copy' | 'cut'
