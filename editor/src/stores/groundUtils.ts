@@ -5,7 +5,7 @@
 import type { GroundDynamicMesh, GroundGenerationSettings, GroundSettings, SceneNode } from '@harmony/schema'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
-import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
+import { computeGroundBaseHeightAtVertex } from '@harmony/schema/groundGeneration'
 
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100

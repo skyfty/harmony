@@ -52,7 +52,7 @@ import type {
   GuideRouteDynamicMesh,
 } from '@harmony/schema'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
-import { stableSerialize } from '@schema/stableSerialize'
+import { stableSerialize } from '@harmony/schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import lightUtils from './lightUtils'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -115,8 +115,8 @@ import {
   DEFAULT_SCENE_MATERIAL_TYPE,
   MATERIAL_TEXTURE_SLOTS,
 } from '@/types/material'
-import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
-import { findObjectByPath } from '@schema/modelAssetLoader'
+import { createBehaviorSequenceId } from '@harmony/schema/behaviors/definitions'
+import { findObjectByPath } from '@harmony/schema/modelAssetLoader'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -125,20 +125,20 @@ import {
   normalizeSkyboxSettings,
   resolveSkyboxPreset,
 } from '@/stores/skyboxPresets'
-import { cloudSettingsEqual } from '@schema/cloudRenderer'
+import { cloudSettingsEqual } from '@harmony/schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
-import { loadObjectFromFile } from '@schema/assetImport'
-import { sampleGroundHeight } from '@schema/groundMesh'
+import { loadObjectFromFile } from '@harmony/schema/assetImport'
+import { sampleGroundHeight } from '@harmony/schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutGridCenterOffsetLocal,
   resolveInstanceLayoutTemplateAssetId,
-} from '@schema/instanceLayout'
+} from '@harmony/schema/instanceLayout'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -147,11 +147,11 @@ import {
   updateModelInstanceMatrix,
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
-} from '@schema/modelObjectCache'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
-import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
-import { createGuideRouteGroup } from '@schema/guideRouteMesh'
+} from '@harmony/schema/modelObjectCache'
+import { createWallGroup, updateWallGroup } from '@harmony/schema/wallMesh'
+import { createRoadGroup, resolveRoadLocalHeightSampler } from '@harmony/schema/roadMesh'
+import { createFloorGroup, updateFloorGroup } from '@harmony/schema/floorMesh'
+import { createGuideRouteGroup } from '@harmony/schema/guideRouteMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
@@ -208,7 +208,7 @@ import type {
   FloorComponentProps,
   WarpGateComponentProps,
   WaterComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import {
   WALL_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
@@ -259,11 +259,11 @@ import {
   WATER_COMPONENT_TYPE,
   clampWaterComponentProps,
   cloneWaterComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import {
   LOD_COMPONENT_TYPE,
   type LodComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
 

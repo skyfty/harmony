@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 import type { SceneNode } from '@harmony/schema'
-import { getModelInstanceBindingsForNode } from '@schema/modelObjectCache'
+import { getModelInstanceBindingsForNode } from '@harmony/schema/modelObjectCache'
 
 type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
 

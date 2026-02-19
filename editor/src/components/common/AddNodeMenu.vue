@@ -12,8 +12,8 @@ import type {
 } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
 
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
-import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
+import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@harmony/schema/loader'
+import { applyGroundGeneration, createGroundMesh } from '@harmony/schema/groundMesh'
 import type { GroundDynamicMesh, GroundGenerationSettings } from '@harmony/schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
@@ -41,13 +41,13 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import type {
   GuideboardComponentProps,
   ProtagonistComponentProps,
   ViewPointComponentProps,
   WarpGateComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import {
   NAMED_BEHAVIOR_SEQUENCES_KEY,
   cloneBehaviorList,
@@ -55,7 +55,7 @@ import {
   ensureBehaviorParams,
   normalizeNamedBehaviorSequenceMap,
   upsertNamedBehaviorSequence,
-} from '@schema/behaviors/definitions'
+} from '@harmony/schema/behaviors/definitions'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()

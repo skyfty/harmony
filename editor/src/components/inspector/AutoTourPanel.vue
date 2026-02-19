@@ -11,7 +11,7 @@ import {
   DEFAULT_AUTO_TOUR_SPEED_MPS,
   MIN_AUTO_TOUR_SPEED_MPS,
   MAX_AUTO_TOUR_SPEED_MPS,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

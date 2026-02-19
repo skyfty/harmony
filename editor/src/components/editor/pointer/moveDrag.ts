@@ -5,11 +5,11 @@ import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVert
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { createWallGroup, updateWallGroup } from '@harmony/schema/wallMesh'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
 import { GRID_MAJOR_SPACING } from '../constants'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
-import { FLOOR_MAX_THICKNESS, FLOOR_MIN_THICKNESS } from '@schema/components'
+import { FLOOR_MAX_THICKNESS, FLOOR_MIN_THICKNESS } from '@harmony/schema/components'
 import {
   applyWallPreviewStyling,
   buildWallPreviewDynamicMeshFromWorldSegments,

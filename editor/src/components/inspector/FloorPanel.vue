@@ -13,8 +13,8 @@ import {
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
   FLOOR_DEFAULT_SIDE_UV_SCALE,
-} from '@schema/components'
-import type { FloorComponentProps } from '@schema/components'
+} from '@harmony/schema/components'
+import type { FloorComponentProps } from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)

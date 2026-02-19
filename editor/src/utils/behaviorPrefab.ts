@@ -1,5 +1,5 @@
 import type { BehaviorEventType, SceneBehavior } from '@harmony/schema'
-import { cloneBehavior, cloneBehaviorList, createBehaviorSequenceId, ensureBehaviorParams } from '@schema/behaviors/definitions'
+import { cloneBehavior, cloneBehaviorList, createBehaviorSequenceId, ensureBehaviorParams } from '@harmony/schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
 
 export const BEHAVIOR_PREFAB_FORMAT_VERSION = 1

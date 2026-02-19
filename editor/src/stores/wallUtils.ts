@@ -10,7 +10,7 @@ import {
   clampWallProps,
   type WallComponentProps,
   WALL_DEFAULT_SMOOTHING,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import type { Object3D } from 'three'
 
 type WallStoreDeps = {

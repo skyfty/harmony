@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh, Vector3Like } from '@harmony/schema'
-import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH } from '@schema/components'
-import { updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH } from '@harmony/schema/components'
+import { updateRoadGroup, resolveRoadLocalHeightSampler } from '@harmony/schema/roadMesh'
 import type { Object3D } from 'three'
 
 type RoadStoreDeps = {

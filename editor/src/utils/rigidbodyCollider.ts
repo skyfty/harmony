@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@harmony/schema'
-import type { RigidbodyPhysicsShape } from '@schema/components'
+import type { RigidbodyPhysicsShape } from '@harmony/schema/components'
 
 export type ColliderScaleFactors = { x: number; y: number; z: number }
 

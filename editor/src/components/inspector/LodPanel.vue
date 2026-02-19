@@ -7,7 +7,7 @@ import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import { LOD_COMPONENT_TYPE, type LodComponentProps, clampLodComponentProps } from '@schema/components'
+import { LOD_COMPONENT_TYPE, type LodComponentProps, clampLodComponentProps } from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()

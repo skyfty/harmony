@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
-import { hashString, stableSerialize } from '@schema/stableSerialize'
+import { hashString, stableSerialize } from '@harmony/schema/stableSerialize'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 
 export type RoadVertexHandleState = {

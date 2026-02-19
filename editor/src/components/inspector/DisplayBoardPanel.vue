@@ -7,7 +7,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   type DisplayBoardComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@harmony/schema'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'

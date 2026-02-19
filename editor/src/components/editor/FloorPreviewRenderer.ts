@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { FloorDynamicMesh } from '@harmony/schema'
-import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
-import { FLOOR_DEFAULT_SIDE_UV_SCALE, FLOOR_DEFAULT_SMOOTH, FLOOR_DEFAULT_THICKNESS } from '@schema/components'
+import { createFloorGroup, updateFloorGroup } from '@harmony/schema/floorMesh'
+import { FLOOR_DEFAULT_SIDE_UV_SCALE, FLOOR_DEFAULT_SMOOTH, FLOOR_DEFAULT_THICKNESS } from '@harmony/schema/components'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 
 export type FloorPreviewSession = {

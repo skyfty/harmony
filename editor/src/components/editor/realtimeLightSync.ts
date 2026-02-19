@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 
-import type { SceneNode } from '@schema/index'
+import type { SceneNode } from '@harmony/schema/index'
 
 type UpdateLightObjectProperties = (container: THREE.Object3D, node: SceneNode) => void
 

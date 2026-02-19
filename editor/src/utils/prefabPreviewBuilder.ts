@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-import { AssetLoader } from '@schema/assetCache'
-import ResourceCache from '@schema/ResourceCache'
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { AssetLoader } from '@harmony/schema/assetCache'
+import ResourceCache from '@harmony/schema/ResourceCache'
+import { buildSceneGraph, type SceneGraphBuildOptions } from '@harmony/schema/sceneGraph'
 import { normalizePrefabSceneDocument } from '@/utils/prefabDocument'
 import { collectPrefabAssetReferences } from '@/stores/prefabActions'
 import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
@@ -12,9 +12,9 @@ import {
   getInstanceLayoutCount,
   resolveInstanceLayoutTemplateAssetId,
   buildInstanceLayoutLocalMatrices,
-} from '@schema/instanceLayout'
-import { getCachedModelObject } from '@schema/modelObjectCache'
-import { hashString } from '@schema/stableSerialize'
+} from '@harmony/schema/instanceLayout'
+import { getCachedModelObject } from '@harmony/schema/modelObjectCache'
+import { hashString } from '@harmony/schema/stableSerialize'
 import { PinnedLruCache, cloneObject3DShared } from '@/utils/prefabPreviewCache'
 
 type AssetCacheStoreLike = {

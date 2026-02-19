@@ -2,8 +2,8 @@ import type * as THREE from 'three'
 import {
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
-} from '@schema/components'
-import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components'
+} from '@harmony/schema/components'
+import type { GuideboardComponentProps, WarpGateComponentProps } from '@harmony/schema/components'
 
 export type EffectPlaybackEntry = {
   id: string

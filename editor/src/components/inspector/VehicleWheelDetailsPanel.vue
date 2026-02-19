@@ -9,7 +9,7 @@ import {
   clampVehicleComponentProps,
   type VehicleComponentProps,
   type VehicleWheelProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const props = defineProps<{
   wheelId: string | null

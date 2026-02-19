@@ -17,7 +17,7 @@ import {
   DEFAULT_ANGULAR_DAMPING,
   DEFAULT_RIGIDBODY_RESTITUTION,
   DEFAULT_RIGIDBODY_FRICTION,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const emit = defineEmits<{

@@ -9,7 +9,7 @@ import { useConsoleStore } from '@/stores/consoleStore'
 import './style.css'
 import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
-import { configureAssetBlobDownloader } from '@schema/assetCache'
+import { configureAssetBlobDownloader } from '@harmony/schema/assetCache'
 import { createWorkerAssetBlobDownloader } from '@/utils/assetDownloadWorkerPool'
 
 async function preloadRuntimeConfig() {

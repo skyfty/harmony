@@ -23,7 +23,7 @@ import {
   GROUND_LIGHT_PARTICLE_SIZE_MAX,
   GROUND_LIGHT_PARTICLE_COUNT_MIN,
   GROUND_LIGHT_PARTICLE_COUNT_MAX,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

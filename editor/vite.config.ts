@@ -21,6 +21,14 @@ export default defineConfig({
         replacement: resolveDir('../schema'),
       },
       {
+        find: /^@harmony\/schema$/,
+        replacement: resolveDir('../schema/index.ts'),
+      },
+      {
+        find: /^@harmony\/schema\/(.+)$/,
+        replacement: `${withTrailingSlash(resolveDir('../schema'))}$1`,
+      },
+      {
         find: 'cannon-es',
         replacement: resolveDir('./node_modules/cannon-es'),
       },

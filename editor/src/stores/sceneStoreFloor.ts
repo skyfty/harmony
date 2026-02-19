@@ -6,7 +6,7 @@ import {
   FLOOR_DEFAULT_SMOOTH,
   FLOOR_DEFAULT_THICKNESS,
   type FloorComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import type { Object3D } from 'three'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 

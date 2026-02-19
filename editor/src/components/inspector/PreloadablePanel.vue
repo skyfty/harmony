@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
-import { PRELOADABLE_COMPONENT_TYPE, type PreloadableComponentProps } from '@schema/components'
+import { PRELOADABLE_COMPONENT_TYPE, type PreloadableComponentProps } from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

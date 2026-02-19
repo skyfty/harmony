@@ -8,8 +8,8 @@ import type {
   SceneNodeComponentState,
   TriggerBehaviorParams,
 } from '@harmony/schema'
-import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
-import { behaviorMapToList } from '@schema/behaviors/definitions'
+import { BEHAVIOR_COMPONENT_TYPE } from '@harmony/schema/components'
+import { behaviorMapToList } from '@harmony/schema/behaviors/definitions'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 

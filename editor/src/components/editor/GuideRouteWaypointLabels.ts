@@ -1,9 +1,9 @@
 import * as THREE from 'three'
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
-import type { SceneNode, SceneNodeComponentState } from '@schema/index'
-import { clampGuideRouteComponentProps, GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
-import type { GuideRouteComponentProps } from '@schema/components'
+import type { SceneNode, SceneNodeComponentState } from '@harmony/schema/index'
+import { clampGuideRouteComponentProps, GUIDE_ROUTE_COMPONENT_TYPE } from '@harmony/schema/components'
+import type { GuideRouteComponentProps } from '@harmony/schema/components'
 
 // Internal cache for meshes keyed by `${nodeId}:${index}`
 const guideRouteWaypointLabelMeshes = new Map<string, THREE.Mesh>()

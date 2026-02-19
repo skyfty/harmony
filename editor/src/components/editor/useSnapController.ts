@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
-import { findNodeIdForInstance } from '@schema/modelObjectCache'
+import { findNodeIdForInstance } from '@harmony/schema/modelObjectCache'
 import { MeshBVH } from 'three-mesh-bvh'
 
 export type VertexSnapResult = {

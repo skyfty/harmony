@@ -19,7 +19,7 @@ import {
   cloudSettingsEqual,
   createDefaultCloudSettings,
   sanitizeCloudSettings,
-} from '@schema/cloudRenderer'
+} from '@harmony/schema/cloudRenderer'
 
 
 const sceneStore = useSceneStore()

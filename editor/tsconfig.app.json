@@ -6,6 +6,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@harmony/schema": ["../schema/index.ts"],
+      "@harmony/schema/*": ["../schema/*"],
       "@schema/*": ["../schema/*"],
       "@three-examples/*": [
         "node_modules/@types/three/examples/jsm/*",

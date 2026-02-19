@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
-import { PROTAGONIST_COMPONENT_TYPE, type ProtagonistComponentProps } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE, type ProtagonistComponentProps } from '@harmony/schema/components'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 
 export type NodePatchLike = {

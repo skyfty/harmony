@@ -19,7 +19,7 @@ import {
   WATER_MIN_FLOW_SPEED,
   WATER_MIN_SIZE,
   WATER_MIN_TEXTURE_SIZE,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const DEFAULT_FLOW_DIRECTION = { x: 0.7071, y: 0.7071 }
 

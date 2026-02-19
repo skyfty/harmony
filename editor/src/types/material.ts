@@ -24,11 +24,11 @@ export {
   ensureMeshMaterialsUnique,
   resetMaterialOverrides,
   textureSettingsSignature,
-} from '@schema/material'
+} from '@harmony/schema/material'
 
 export type {
   MaterialBaselineState,
   MaterialTextureAssignmentOptions,
   MeshStandardTextureKey,
-} from '@schema/material'
+} from '@harmony/schema/material'
 

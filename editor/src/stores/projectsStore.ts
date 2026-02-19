@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { Project, ProjectSceneMeta } from '@schema/index'
+import type { Project, ProjectSceneMeta } from '@harmony/schema/index'
 import { toRaw, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'

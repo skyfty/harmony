@@ -25,7 +25,7 @@ import {
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
   type FloorComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import type { SceneNodeComponentState } from '@harmony/schema'
 
 type WallWorldSegmentLike = { start: THREE.Vector3; end: THREE.Vector3 }

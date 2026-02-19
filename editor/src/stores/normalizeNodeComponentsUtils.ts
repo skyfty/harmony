@@ -41,7 +41,7 @@ import {
   EFFECT_COMPONENT_TYPE,
   clampEffectComponentProps,
   cloneEffectComponentProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
 

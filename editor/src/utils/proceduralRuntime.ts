@@ -5,7 +5,7 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 /**
  * Procedural runtime 辅助模块

@@ -69,7 +69,7 @@ import {
   DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

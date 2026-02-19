@@ -25,7 +25,7 @@ import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as CANNON from 'cannon-es'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
-import { getCachedModelObject } from '@schema/modelObjectCache'
+import { getCachedModelObject } from '@harmony/schema/modelObjectCache'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
   VEHICLE_COMPONENT_TYPE,
@@ -37,7 +37,7 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyPhysicsShape,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
 

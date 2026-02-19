@@ -24,13 +24,13 @@ import {
 	updateGroundMesh,
 	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
-} from '@schema/groundMesh'
+} from '@harmony/schema/groundMesh'
 import {
 	ensureInstancedMeshesRegistered,
 	getCachedModelObject,
 	getOrLoadModelObject,
 	type ModelInstanceGroup,
-} from '@schema/modelObjectCache'
+} from '@harmony/schema/modelObjectCache'
 import {
 	bindScatterInstance,
 	composeScatterMatrix,
@@ -47,7 +47,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 import {SCATTER_BRUSH_RADIUS_MAX} from '@/stores/terrainStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
-import { loadObjectFromFile } from '@schema/assetImport'
+import { loadObjectFromFile } from '@harmony/schema/assetImport'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { computeBlobHash } from '@/utils/blob'
 import {
@@ -57,9 +57,9 @@ import {
 	updateTerrainPaintPreviewWeightmap,
 	decodeWeightmapToData,
 	encodeWeightmapToBinary,
-} from '@schema/terrainPaintPreview'
-import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
-import { normalizeScatterMaterials } from '@schema/scatterMaterials'
+} from '@harmony/schema/terrainPaintPreview'
+import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller'
+import { normalizeScatterMaterials } from '@harmony/schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'

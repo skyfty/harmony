@@ -1,5 +1,5 @@
 import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@harmony/schema'
-import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
+import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@harmony/schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'

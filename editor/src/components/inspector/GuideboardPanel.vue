@@ -21,7 +21,7 @@ import {
   GUIDEBOARD_PULSE_SPEED_MAX,
   GUIDEBOARD_PULSE_STRENGTH_MIN,
   GUIDEBOARD_PULSE_STRENGTH_MAX,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

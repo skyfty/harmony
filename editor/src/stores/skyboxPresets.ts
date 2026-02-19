@@ -1,6 +1,6 @@
 import type { SkyboxPresetDefinition } from '@/types/skybox'
 import type { SceneSkyboxSettings } from '@harmony/schema'
-import { sanitizeCloudSettings } from '@schema/cloudRenderer'
+import { sanitizeCloudSettings } from '@harmony/schema/cloudRenderer'
 
 export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   {

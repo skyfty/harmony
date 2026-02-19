@@ -13,8 +13,8 @@ import type { AssetSourceMetadata } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryNodeLocation } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
-import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
-import { behaviorMapToList, cloneBehaviorList } from '@schema/behaviors/definitions'
+import { BEHAVIOR_COMPONENT_TYPE } from '@harmony/schema/components'
+import { behaviorMapToList, cloneBehaviorList } from '@harmony/schema/behaviors/definitions'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -281,7 +281,7 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
       // (these imports are available in callers like prefabPreviewBuilder)
       // Fallback: ignore if utilities are not present at runtime.
       // @ts-ignore
-      const { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } = require('@schema/instanceLayout')
+      const { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } = require('@harmony/schema/instanceLayout')
       const layout = clampSceneNodeInstanceLayout(rawLayout)
       if (layout?.mode === 'grid') {
         const templateAssetId = resolveInstanceLayoutTemplateAssetId(layout, (node as any).sourceAssetId)

@@ -27,7 +27,7 @@ import {
   clampVehicleComponentProps,
   type VehicleComponentProps,
   type VehicleWheelProps,
-} from '@schema/components'
+} from '@harmony/schema/components'
 
 const emit = defineEmits<{
   (event: 'open-wheel-details', payload: { id: string }): void

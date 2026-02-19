@@ -13,7 +13,7 @@ import {
   INSTANCE_LAYOUT_DEFAULT_SPACING,
   INSTANCE_LAYOUT_DEFAULT_UP,
   type SceneNodeInstanceLayout,
-} from '@schema/instanceLayout'
+} from '@harmony/schema/instanceLayout'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

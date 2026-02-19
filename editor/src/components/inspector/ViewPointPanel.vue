@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
-import { VIEW_POINT_COMPONENT_TYPE, type ViewPointComponentProps } from '@schema/components'
+import { VIEW_POINT_COMPONENT_TYPE, type ViewPointComponentProps } from '@harmony/schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

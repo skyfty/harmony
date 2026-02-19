@@ -20,8 +20,8 @@ import {
   type WallForwardAxis,
   type WallModelOrientation,
   type WallComponentProps,
-} from '@schema/components'
-import { getCachedModelObject } from '@schema/modelObjectCache'
+} from '@harmony/schema/components'
+import { getCachedModelObject } from '@harmony/schema/modelObjectCache'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)

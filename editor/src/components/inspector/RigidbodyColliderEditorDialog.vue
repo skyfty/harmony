@@ -6,7 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from '@/utils/transformControls.js'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { findSceneNode } from '@/components/editor/sceneUtils'
-import { getCachedModelObject } from '@schema/modelObjectCache'
+import { getCachedModelObject } from '@harmony/schema/modelObjectCache'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
@@ -14,7 +14,7 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
-} from '@schema/components'
+} from '@harmony/schema/components'
 import {
   DEFAULT_CONVEX_SIMPLIFY_CONFIG,
   buildConservativeConvexGeometryFromObject,

@@ -5,14 +5,14 @@ import type {
   BehaviorScriptType,
   SceneBehavior,
 } from '@harmony/schema'
-import type { BehaviorActionDefinition, BehaviorScriptDefinition } from '@schema/behaviors/definitions'
+import type { BehaviorActionDefinition, BehaviorScriptDefinition } from '@harmony/schema/behaviors/definitions'
 import {
   cloneBehavior,
   createBehaviorSequenceId,
   createBehaviorTemplate,
   ensureBehaviorParams,
   findBehaviorScript,
-} from '@schema/behaviors/definitions'
+} from '@harmony/schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { instantiateBehaviorPrefab } from '@/utils/behaviorPrefab'
