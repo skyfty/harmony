@@ -8,6 +8,10 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 # 先拷贝 package 清单，包含本地依赖所需的 schema 包描述
 COPY uploader/package.json uploader/pnpm-lock.yaml ./
 COPY schema/package.json ../schema/package.json
+# Bring in local tools package so schema's file:../tools can be resolved
+COPY tools ./tools
+# Install and build local tools package so its `dist` and `bin` exist (if needed)
+RUN pnpm --dir /app/tools install --frozen-lockfile && pnpm --dir /app/tools run build
 # 安装依赖（包含 devDependencies，确保 vue-tsc/vite 可用）
 RUN pnpm install --frozen-lockfile --strict-peer-dependencies=false
 
