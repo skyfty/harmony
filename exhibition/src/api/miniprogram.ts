@@ -15,7 +15,7 @@ export interface AuthSession {
     workShareCount?: number;
     exhibitionShareCount?: number;
   };
-  permissions: string[];
+  permissions?: string[];
 }
 
 export interface WorkSummary {
@@ -175,7 +175,7 @@ export async function apiRegister(payload: {
   email?: string;
   phone?: string;
 }): Promise<AuthSession> {
-  const session = await post<AuthSession>('/users/register', payload, false);
+  const session = await post<AuthSession>('/mini-auth/register', payload, false);
   if (session.token) {
     setAuthToken(session.token);
   }
@@ -183,7 +183,7 @@ export async function apiRegister(payload: {
 }
 
 export async function apiLogin(payload: { username: string; password: string }): Promise<AuthSession> {
-  const session = await post<AuthSession>('/users/login', payload, false);
+  const session = await post<AuthSession>('/mini-auth/login', payload, false);
   if (session.token) {
     setAuthToken(session.token);
   }
@@ -191,7 +191,7 @@ export async function apiLogin(payload: { username: string; password: string }):
 }
 
 export function apiGetProfile(): Promise<AuthSession> {
-  return get<AuthSession>('/users/me');
+  return get<AuthSession>('/mini-auth/profile');
 }
 
 export function apiUpdateProfile(payload: {

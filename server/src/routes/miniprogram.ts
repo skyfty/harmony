@@ -1,5 +1,5 @@
 import Router from 'koa-router'
-import { authMiddleware, optionalAuthMiddleware } from '@/middleware/auth'
+import { optionalMiniAuth, requireMiniAuth } from '@/middleware/authDomains'
 import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
 import {
   listSceneSpots,
@@ -70,23 +70,23 @@ miniRouter.post('/users/register', register)
 miniRouter.post('/users/login', login)
 
 // public readable resources
-miniRouter.get('/works/:id', optionalAuthMiddleware, getWork)
-miniRouter.get('/collections/:id', optionalAuthMiddleware, getCollection)
-miniRouter.get('/exhibitions/:id', optionalAuthMiddleware, getExhibition)
+miniRouter.get('/works/:id', optionalMiniAuth, getWork)
+miniRouter.get('/collections/:id', optionalMiniAuth, getCollection)
+miniRouter.get('/exhibitions/:id', optionalMiniAuth, getExhibition)
 
 // public readable (optional auth enhances with user state)
-miniRouter.get('/scene-spots', optionalAuthMiddleware, listSceneSpots)
-miniRouter.get('/scene-spots/:id', optionalAuthMiddleware, getSceneSpot)
-miniRouter.get('/scene-spots/:id/entry', optionalAuthMiddleware, getSceneSpotEntry)
-miniRouter.get('/scenes/:id/products', optionalAuthMiddleware, listSceneProducts)
+miniRouter.get('/scene-spots', optionalMiniAuth, listSceneSpots)
+miniRouter.get('/scene-spots/:id', optionalMiniAuth, getSceneSpot)
+miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
+miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)
 
-miniRouter.get('/events/hot', optionalAuthMiddleware, listHotEvents)
+miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
 
 // products can be read anonymously; login adds purchased/state
-miniRouter.get('/products', optionalAuthMiddleware, listProducts)
-miniRouter.get('/products/:id', optionalAuthMiddleware, getProduct)
+miniRouter.get('/products', optionalMiniAuth, listProducts)
+miniRouter.get('/products/:id', optionalMiniAuth, getProduct)
 
-miniRouter.use(authMiddleware)
+miniRouter.use(requireMiniAuth)
 
 // profile
 miniRouter.get('/users/me', getProfile)

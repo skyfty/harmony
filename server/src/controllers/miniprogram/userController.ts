@@ -1,7 +1,10 @@
 import type { Context } from 'koa'
-import { UserModel } from '@/models/User'
-import { hashPassword } from '@/utils/password'
-import { getProfile as fetchProfile, loginWithCredentials } from '@/services/authService'
+import { AppUserModel } from '@/models/AppUser'
+import {
+  miniGetProfile,
+  miniLoginWithPassword,
+  miniRegisterWithPassword,
+} from '@/services/miniAuthService'
 import { recordLogin } from '@/services/loginAuditService'
 
 interface RegisterBody {
@@ -30,21 +33,22 @@ export async function register(ctx: Context): Promise<void> {
     return
   }
   const safeUsername = username.trim()
-  const safePassword = password
-  const existing = await UserModel.findOne({ username: safeUsername }).lean().exec()
-  if (existing) {
-    ctx.throw(409, 'Username already exists')
+  let session: any
+  try {
+    session = await miniRegisterWithPassword({
+      username: safeUsername,
+      password,
+      displayName,
+      email,
+      phone,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Username already exists') {
+      ctx.throw(409, 'Username already exists')
+    }
+    ctx.throw(400, 'Register failed')
+    return
   }
-  const hashedPassword = await hashPassword(safePassword)
-  await UserModel.create({
-    username: safeUsername,
-    password: hashedPassword,
-    displayName: displayName ?? safeUsername,
-    email,
-    phone,
-    status: 'active',
-  })
-  const session = await loginWithCredentials(safeUsername, safePassword)
   // record successful registration-login
   await recordLogin({
     userId: session.user.id,
@@ -65,10 +69,9 @@ export async function login(ctx: Context): Promise<void> {
     return
   }
   const safeUsername = username.trim()
-  const safePassword = password
   let session: any
   try {
-    session = await loginWithCredentials(safeUsername, safePassword)
+    session = await miniLoginWithPassword(safeUsername, password)
   } catch (error) {
     // record failed login attempt for miniprogram
     await recordLogin({
@@ -98,7 +101,7 @@ export async function getProfile(ctx: Context): Promise<void> {
   if (!userId) {
     ctx.throw(401, 'Unauthorized')
   }
-  const profile = await fetchProfile(userId)
+  const profile = await miniGetProfile(userId)
   ctx.body = profile
 }
 
@@ -136,10 +139,10 @@ export async function updateProfile(ctx: Context): Promise<void> {
   if (!Object.keys(updatePayload).length) {
     ctx.throw(400, 'No profile fields provided')
   }
-  const updated = await UserModel.findByIdAndUpdate(userId, updatePayload, { new: true }).lean().exec()
+  const updated = await AppUserModel.findByIdAndUpdate(userId, updatePayload, { new: true }).lean().exec()
   if (!updated) {
     ctx.throw(404, 'User not found')
   }
-  const profile = await fetchProfile(userId)
+  const profile = await miniGetProfile(userId)
   ctx.body = profile
 }

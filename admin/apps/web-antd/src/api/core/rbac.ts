@@ -19,16 +19,18 @@ export interface UserRoleItem {
 }
 
 export interface UserItem {
+  bio?: null | string;
   createdAt: string;
   displayName: null | string;
   email: null | string;
   avatarUrl?: string | null;
-  bio?: string | null;
   id: string;
-  roles: UserRoleItem[];
+  phone?: null | string;
+  roles?: UserRoleItem[];
   status: 'active' | 'disabled';
   updatedAt: string;
   username: string;
+  wxOpenId?: null | string;
 }
 
 export interface UserListParams {
@@ -39,6 +41,46 @@ export interface UserListParams {
 }
 
 export interface CreateUserPayload {
+  bio?: string;
+  displayName?: string;
+  email?: string;
+  password: string;
+  phone?: string;
+  roleIds?: string[];
+  status?: 'active' | 'disabled';
+  username: string;
+}
+
+export interface UpdateUserPayload {
+  bio?: string;
+  displayName?: string;
+  email?: string;
+  password?: string;
+  phone?: string;
+  roleIds?: string[];
+  status?: 'active' | 'disabled';
+}
+
+export interface AdminItem {
+  avatarUrl?: string | null;
+  createdAt: string;
+  displayName: null | string;
+  email: null | string;
+  id: string;
+  roles: UserRoleItem[];
+  status: 'active' | 'disabled';
+  updatedAt: string;
+  username: string;
+}
+
+export interface AdminListParams {
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+  status?: '' | 'active' | 'disabled';
+}
+
+export interface CreateAdminPayload {
   displayName?: string;
   email?: string;
   password: string;
@@ -47,7 +89,7 @@ export interface CreateUserPayload {
   username: string;
 }
 
-export interface UpdateUserPayload {
+export interface UpdateAdminPayload {
   displayName?: string;
   email?: string;
   password?: string;
@@ -160,6 +202,41 @@ export async function updateUserStatusApi(
   status: 'active' | 'disabled',
 ) {
   return requestClient.put<UserItem>(`/admin/users/${id}/status`, {
+    status,
+  });
+}
+
+export async function listAdminsApi(params: AdminListParams) {
+  const response = await requestClient.get<ServerPageResult<AdminItem>>(
+    '/admin/admins',
+    {
+      params,
+    },
+  );
+  return normalizeGridPage(response);
+}
+
+export async function getAdminApi(id: string) {
+  return requestClient.get<AdminItem>(`/admin/admins/${id}`);
+}
+
+export async function createAdminApi(payload: CreateAdminPayload) {
+  return requestClient.post<AdminItem>('/admin/admins', payload);
+}
+
+export async function updateAdminApi(id: string, payload: UpdateAdminPayload) {
+  return requestClient.put<AdminItem>(`/admin/admins/${id}`, payload);
+}
+
+export async function deleteAdminApi(id: string) {
+  return requestClient.delete(`/admin/admins/${id}`);
+}
+
+export async function updateAdminStatusApi(
+  id: string,
+  status: 'active' | 'disabled',
+) {
+  return requestClient.put<AdminItem>(`/admin/admins/${id}/status`, {
     status,
   });
 }

@@ -4,13 +4,13 @@ import {
   deletePermission,
   listPermissions,
   updatePermission,
-} from '@/controllers/permissionController'
-import { authMiddleware } from '@/middleware/auth'
+} from '@/controllers/admin/adminPermissionController'
+import { requireAdminAuth } from '@/middleware/authDomains'
 import { requireAnyPermission } from '@/middleware/permission'
 
 const permissionRouter = new Router({ prefix: '/api/permissions' })
 
-permissionRouter.use(authMiddleware)
+permissionRouter.use(requireAdminAuth)
 permissionRouter.get('/', requireAnyPermission(['permission:read']), listPermissions)
 permissionRouter.post('/', requireAnyPermission(['permission:write']), createPermission)
 permissionRouter.put('/:id', requireAnyPermission(['permission:write']), updatePermission)

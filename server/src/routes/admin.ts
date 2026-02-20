@@ -1,5 +1,5 @@
 import Router from 'koa-router'
-import { authMiddleware } from '@/middleware/auth'
+import { requireAdminAuth } from '@/middleware/authDomains'
 import { requireAnyPermission } from '@/middleware/permission'
 import {
   createScene,
@@ -48,13 +48,21 @@ import {
   updateOrder,
 } from '@/controllers/admin/orderController'
 import {
-  createUser,
-  deleteUser,
-  getUser,
-  listUsers,
-  updateUser,
-  updateUserStatus,
-} from '@/controllers/userController'
+  createAppUser,
+  deleteAppUser,
+  getAppUser,
+  listAppUsers,
+  updateAppUser,
+  updateAppUserStatus,
+} from '@/controllers/admin/appUserController'
+import {
+  createAdminAccount,
+  deleteAdminAccount,
+  getAdminAccount,
+  listAdminAccounts,
+  updateAdminAccount,
+  updateAdminAccountStatus,
+} from '@/controllers/admin/adminAccountController'
 import {
   bulkMoveAssetsCategory,
   createAssetCategory,
@@ -93,7 +101,7 @@ import { koaBody } from '@/utils/bodyParser'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
 
-adminRouter.use(authMiddleware)
+adminRouter.use(requireAdminAuth)
 
 adminRouter.get('/scenes', requireAnyPermission(['scene:read']), listScenes)
 adminRouter.get('/scenes/:id', requireAnyPermission(['scene:read']), getScene)
@@ -165,13 +173,21 @@ adminRouter.post('/orders', requireAnyPermission(['order:write']), createOrder)
 adminRouter.put('/orders/:id', requireAnyPermission(['order:write']), updateOrder)
 adminRouter.delete('/orders/:id', requireAnyPermission(['order:write']), deleteOrder)
 
-adminRouter.get('/users', requireAnyPermission(['user:read']), listUsers)
-adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getUser)
-adminRouter.post('/users', requireAnyPermission(['user:write']), createUser)
-adminRouter.put('/users/:id', requireAnyPermission(['user:write']), updateUser)
-adminRouter.patch('/users/:id/status', requireAnyPermission(['user:write']), updateUserStatus)
-adminRouter.put('/users/:id/status', requireAnyPermission(['user:write']), updateUserStatus)
-adminRouter.delete('/users/:id', requireAnyPermission(['user:write']), deleteUser)
+adminRouter.get('/users', requireAnyPermission(['user:read']), listAppUsers)
+adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getAppUser)
+adminRouter.post('/users', requireAnyPermission(['user:write']), createAppUser)
+adminRouter.put('/users/:id', requireAnyPermission(['user:write']), updateAppUser)
+adminRouter.patch('/users/:id/status', requireAnyPermission(['user:write']), updateAppUserStatus)
+adminRouter.put('/users/:id/status', requireAnyPermission(['user:write']), updateAppUserStatus)
+adminRouter.delete('/users/:id', requireAnyPermission(['user:write']), deleteAppUser)
+
+adminRouter.get('/admins', requireAnyPermission(['admin:super']), listAdminAccounts)
+adminRouter.get('/admins/:id', requireAnyPermission(['admin:super']), getAdminAccount)
+adminRouter.post('/admins', requireAnyPermission(['admin:super']), createAdminAccount)
+adminRouter.put('/admins/:id', requireAnyPermission(['admin:super']), updateAdminAccount)
+adminRouter.patch('/admins/:id/status', requireAnyPermission(['admin:super']), updateAdminAccountStatus)
+adminRouter.put('/admins/:id/status', requireAnyPermission(['admin:super']), updateAdminAccountStatus)
+adminRouter.delete('/admins/:id', requireAnyPermission(['admin:super']), deleteAdminAccount)
 
 adminRouter.get('/resources/assets', requireAnyPermission(['resource:read']), listAssets)
 adminRouter.get('/resources/assets/:id', requireAnyPermission(['resource:read']), getAsset)

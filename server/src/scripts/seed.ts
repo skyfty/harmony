@@ -1,11 +1,7 @@
 import '@/utils/cjsCompat'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
-import {
-  createInitialAdmin,
-  ensureEditorUser,
-  ensureManagementPermissions,
-  ensureUploaderUser,
-} from '@/services/authService'
+import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/adminAuthService'
+import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 import { SceneModel } from '@/models/Scene'
 import { ProductModel } from '@/models/Product'
@@ -195,19 +191,15 @@ async function main(): Promise<void> {
   await connectDatabase()
   console.log('[seed] 数据库连接成功')
 
-  await createInitialAdmin().catch((error) => {
+  await createInitialAdminV2().catch((error) => {
     console.warn('[seed] 跳过创建初始管理员：', error)
   })
 
-  await ensureEditorUser().catch((error) => {
-    console.warn('[seed] 跳过创建测试账号：', error)
+  await ensureMiniProgramTestUserV2().catch((error) => {
+    console.warn('[seed] 跳过创建小程序测试账号：', error)
   })
 
-  await ensureUploaderUser().catch((error) => {
-    console.warn('[seed] 跳过创建上传账号：', error)
-  })
-
-  await ensureManagementPermissions().catch((error) => {
+  await ensureAdminPermissionsV2().catch((error) => {
     console.warn('[seed] 初始化管理权限失败：', error)
   })
   console.log('[seed] 管理权限数据已初始化')

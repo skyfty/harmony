@@ -1,0 +1,29 @@
+import { Schema, model } from 'mongoose'
+import type { AppUserDocument } from '@/types/models'
+
+const appUserSchema = new Schema<AppUserDocument>(
+  {
+    username: { type: String, trim: true },
+    password: { type: String },
+    wxOpenId: { type: String, trim: true },
+    displayName: { type: String },
+    email: { type: String },
+    avatarUrl: { type: String },
+    phone: { type: String },
+    bio: { type: String },
+    gender: { type: String, enum: ['male', 'female', 'other'], default: undefined },
+    birthDate: { type: Date },
+    status: { type: String, enum: ['active', 'disabled'], default: 'active' },
+    workShareCount: { type: Number, default: 0 },
+    exhibitionShareCount: { type: Number, default: 0 },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  },
+)
+
+appUserSchema.index({ username: 1 }, { unique: true, sparse: true })
+appUserSchema.index({ wxOpenId: 1 }, { unique: true, sparse: true })
+
+export const AppUserModel = model<AppUserDocument>('AppUser', appUserSchema, 'users')

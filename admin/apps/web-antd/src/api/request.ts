@@ -17,8 +17,6 @@ import { message } from 'ant-design-vue';
 
 import { useAuthStore } from '#/store';
 
-import { refreshTokenApi } from './core';
-
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
 function createRequestClient(baseURL: string, options?: RequestClientOptions) {
@@ -43,16 +41,6 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     } else {
       await authStore.logout();
     }
-  }
-
-  /**
-   * 刷新token逻辑
-   */
-  async function doRefreshToken() {
-    const accessStore = useAccessStore();
-    const newToken = await refreshTokenApi();
-    accessStore.setAccessToken(newToken);
-    return newToken;
   }
 
   function formatToken(token: null | string) {
@@ -84,8 +72,7 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     authenticateResponseInterceptor({
       client,
       doReAuthenticate,
-      doRefreshToken,
-      enableRefreshToken: preferences.app.enableRefreshToken,
+      enableRefreshToken: false,
       formatToken,
     }),
   );

@@ -176,6 +176,7 @@
   },
   "system": {
     "title": "System",
+    "admins": "Admins",
     "users": "Users",
     "rbac": "Roles & Permissions",
     "scenes": "Scenes",

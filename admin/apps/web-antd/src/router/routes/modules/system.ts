@@ -181,6 +181,15 @@ const routes: RouteRecordRaw[] = [
     path: '/system',
     children: [
       {
+        name: 'SystemAdmins',
+        path: '/system/admins',
+        component: () => import('#/views/system/admins/index.vue'),
+        meta: {
+          icon: 'lucide:user-cog',
+          title: $t('page.system.admins'),
+        },
+      },
+      {
         name: 'SystemUsers',
         path: '/system/users',
         component: () => import('#/views/system/users/index.vue'),

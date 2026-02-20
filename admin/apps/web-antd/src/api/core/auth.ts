@@ -32,14 +32,13 @@ export namespace AuthApi {
     accessToken: string;
   }
 
-  export type RefreshTokenResult = string;
 }
 
 async function getServerProfile(token?: string) {
   const accessStore = useAccessStore();
   const accessToken = token || accessStore.accessToken || undefined;
   const response = await requestClient.get<ServerProfileResult>(
-    '/auth/profile',
+    '/admin-auth/profile',
     {
       headers: accessToken
         ? { Authorization: `Bearer ${accessToken}` }
@@ -54,7 +53,7 @@ async function getServerProfile(token?: string) {
  */
 export async function loginApi(data: AuthApi.LoginParams) {
   const response = await requestClient.post<ServerProfileResult>(
-    '/auth/login',
+    '/admin-auth/login',
     data,
   );
   console.log('Login API Response:', response); // 调试输出登录接口响应
@@ -64,24 +63,11 @@ export async function loginApi(data: AuthApi.LoginParams) {
 }
 
 /**
- * 刷新accessToken
- */
-export async function refreshTokenApi() {
-  return requestClient.post<AuthApi.RefreshTokenResult>(
-    '/auth/refresh',
-    undefined,
-    {
-      withCredentials: true,
-    },
-  );
-}
-
-/**
  * 退出登录
  */
 export async function logoutApi(token?: string | null) {
   return requestClient.post(
-    '/auth/logout',
+    '/admin-auth/logout',
     undefined,
     token
       ? {

@@ -1,6 +1,6 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
-import { PermissionModel } from '@/models/Permission'
+import { AdminPermissionModel } from '@/models/AdminPermission'
 
 function mapPermission(permission: any) {
   return {
@@ -24,8 +24,8 @@ export async function listPermissions(ctx: Context): Promise<void> {
   const limit = Number(pageSize)
   const skip = (pageNumber - 1) * limit
   const [permissions, total] = await Promise.all([
-    PermissionModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).lean(),
-    PermissionModel.countDocuments(filter),
+    AdminPermissionModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).lean(),
+    AdminPermissionModel.countDocuments(filter),
   ])
   ctx.body = {
     data: permissions.map(mapPermission),
@@ -40,11 +40,11 @@ export async function createPermission(ctx: Context): Promise<void> {
   if (!name || !code) {
     ctx.throw(400, 'Permission name and code are required')
   }
-  const exists = await PermissionModel.findOne({ code })
+  const exists = await AdminPermissionModel.findOne({ code })
   if (exists) {
     ctx.throw(409, 'Permission code already exists')
   }
-  const permission = await PermissionModel.create({ name, code, description, group })
+  const permission = await AdminPermissionModel.create({ name, code, description, group })
   ctx.body = mapPermission(permission)
 }
 
@@ -54,7 +54,7 @@ export async function updatePermission(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid permission id')
   }
   const { name, code, description, group } = ctx.request.body as Record<string, unknown>
-  const permission = await PermissionModel.findByIdAndUpdate(id, { name, code, description, group }, { new: true })
+  const permission = await AdminPermissionModel.findByIdAndUpdate(id, { name, code, description, group }, { new: true })
   if (!permission) {
     ctx.throw(404, 'Permission not found')
   }
@@ -66,8 +66,7 @@ export async function deletePermission(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid permission id')
   }
-  await PermissionModel.findByIdAndDelete(id)
-  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  await AdminPermissionModel.findByIdAndDelete(id)
   ctx.status = 200
   ctx.body = {}
 }

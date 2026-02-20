@@ -3,19 +3,17 @@ import type { FormInstance } from 'ant-design-vue';
 
 import type {
   CreateUserPayload,
-  RoleItem,
   UpdateUserPayload,
   UserItem,
 } from '#/api';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
   createUserApi,
   deleteUserApi,
-  listRolesApi,
   listUsersApi,
   updateUserApi,
   updateUserStatusApi,
@@ -34,15 +32,15 @@ import {
 } from 'ant-design-vue';
 
 interface UserFormModel {
+  bio: string;
   displayName: string;
   email: string;
   password: string;
-  roleIds: string[];
+  phone: string;
   status: 'active' | 'disabled';
   username: string;
 }
 
-const roleOptions = ref<Array<{ label: string; value: string }>>([]);
 const modalOpen = ref(false);
 const submitting = ref(false);
 const editingUserId = ref<null | string>(null);
@@ -50,10 +48,11 @@ const changingStatusId = ref<null | string>(null);
 const userFormRef = ref<FormInstance>();
 
 const userFormModel = reactive<UserFormModel>({
+  bio: '',
   displayName: '',
   email: '',
   password: '',
-  roleIds: [],
+  phone: '',
   status: 'active',
   username: '',
 });
@@ -87,8 +86,9 @@ function resetUserForm() {
   userFormModel.password = '';
   userFormModel.displayName = '';
   userFormModel.email = '';
+  userFormModel.phone = '';
+  userFormModel.bio = '';
   userFormModel.status = 'active';
-  userFormModel.roleIds = [];
 }
 
 function openCreateModal() {
@@ -103,25 +103,14 @@ function openEditModal(record: UserItem) {
   userFormModel.password = '';
   userFormModel.displayName = record.displayName || '';
   userFormModel.email = record.email || '';
+  userFormModel.phone = record.phone || '';
+  userFormModel.bio = record.bio || '';
   userFormModel.status = record.status;
-  userFormModel.roleIds = record.roles?.map((role) => role.id) || [];
   modalOpen.value = true;
 }
 
 function closeModal() {
   modalOpen.value = false;
-}
-
-async function loadRoleOptions() {
-  try {
-    const response = await listRolesApi({ page: 1, pageSize: 200 });
-    roleOptions.value = (response.items || []).map((role: RoleItem) => ({
-      label: `${role.name} (${role.code})`,
-      value: role.id,
-    }));
-  } catch {
-    roleOptions.value = [];
-  }
 }
 
 async function submitUser() {
@@ -134,9 +123,10 @@ async function submitUser() {
   try {
     if (editingUserId.value) {
       const payload: UpdateUserPayload = {
+        bio: userFormModel.bio || undefined,
         displayName: userFormModel.displayName || undefined,
         email: userFormModel.email || undefined,
-        roleIds: userFormModel.roleIds,
+        phone: userFormModel.phone || undefined,
         status: userFormModel.status,
       };
       if (userFormModel.password?.trim()) {
@@ -148,9 +138,10 @@ async function submitUser() {
       const payload: CreateUserPayload = {
         username: userFormModel.username.trim(),
         password: userFormModel.password,
+        bio: userFormModel.bio || undefined,
         displayName: userFormModel.displayName || undefined,
         email: userFormModel.email || undefined,
-        roleIds: userFormModel.roleIds,
+        phone: userFormModel.phone || undefined,
         status: userFormModel.status,
       };
       await createUserApi(payload);
@@ -219,13 +210,9 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
     columns: [
       { field: 'username', minWidth: 150, sortable: true, title: t('page.systemUsers.index.table.username') },
       { field: 'displayName', minWidth: 140, title: t('page.systemUsers.index.table.displayName') },
+      { field: 'wxOpenId', minWidth: 180, title: '微信 OpenId' },
+      { field: 'phone', minWidth: 140, title: '手机号' },
       { field: 'email', minWidth: 180, title: t('page.systemUsers.index.table.email') },
-      {
-        field: 'roles',
-        minWidth: 220,
-        title: t('page.systemUsers.index.table.roles'),
-        slots: { default: 'roles' },
-      },
       {
         field: 'status',
         minWidth: 160,
@@ -284,12 +271,9 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
       zoom: true,
     },
   },
-  tableTitle: t('page.systemUsers.index.table.title'),
+  tableTitle: '普通用户管理',
 });
 
-onMounted(async () => {
-  await loadRoleOptions();
-});
 </script>
 
 <template>
@@ -299,15 +283,6 @@ onMounted(async () => {
         <Button v-access:code="'user:write'" type="primary" @click="openCreateModal">
           新增用户
         </Button>
-      </template>
-
-      <template #roles="{ row }">
-        <Space wrap>
-          <Tag v-for="role in row.roles" :key="role.id" color="blue">
-            {{ role.name }}
-          </Tag>
-          <span v-if="!row.roles?.length" class="text-text-secondary">-</span>
-        </Space>
       </template>
 
       <template #status="{ row }">
@@ -395,6 +370,20 @@ onMounted(async () => {
             placeholder="请输入邮箱"
           />
         </Form.Item>
+        <Form.Item label="手机号" name="phone">
+          <Input
+            v-model:value="userFormModel.phone"
+            allow-clear
+            placeholder="请输入手机号"
+          />
+        </Form.Item>
+        <Form.Item label="简介" name="bio">
+          <Input
+            v-model:value="userFormModel.bio"
+            allow-clear
+            placeholder="请输入简介"
+          />
+        </Form.Item>
         <Form.Item label="状态" name="status">
           <Select
             v-model:value="userFormModel.status"
@@ -402,15 +391,6 @@ onMounted(async () => {
               { label: '启用', value: 'active' },
               { label: '禁用', value: 'disabled' },
             ]"
-          />
-        </Form.Item>
-        <Form.Item label="角色" name="roleIds">
-          <Select
-            v-model:value="userFormModel.roleIds"
-            :options="roleOptions"
-            allow-clear
-            mode="multiple"
-            placeholder="请选择角色"
           />
         </Form.Item>
       </Form>

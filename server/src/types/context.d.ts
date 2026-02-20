@@ -9,5 +9,16 @@ declare module 'koa' {
       permissions: string[]
       accountType?: 'admin' | 'super' | 'user'
     }
+    adminAuthUser?: {
+      id: string
+      username: string
+      roles: string[]
+      permissions: string[]
+    }
+    miniAuthUser?: {
+      id: string
+      username?: string
+      wxOpenId?: string
+    }
   }
 }

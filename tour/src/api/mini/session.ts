@@ -9,7 +9,7 @@ type LoginResponse = {
 }
 
 export async function loginWithCredentials(username: string, password: string): Promise<string> {
-  const data = await miniRequest<LoginResponse>('/users/login', {
+  const data = await miniRequest<LoginResponse>('/mini-auth/login', {
     method: 'POST',
     body: { username, password },
   })

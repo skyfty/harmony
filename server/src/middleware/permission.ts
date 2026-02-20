@@ -3,7 +3,7 @@ import type { Context, Next } from 'koa'
 const SUPER_PERMISSION = 'admin:super'
 
 function getPermissionSet(ctx: Context): Set<string> {
-  const permissions = ctx.state.user?.permissions ?? []
+  const permissions = ctx.state.adminAuthUser?.permissions ?? ctx.state.user?.permissions ?? []
   return new Set(Array.isArray(permissions) ? permissions : [])
 }
 

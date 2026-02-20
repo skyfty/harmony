@@ -19,7 +19,7 @@ export async function ensureTestAccountLogin(force = false): Promise<void> {
   const { username, password, displayName } = resolveCredentials();
 
   try {
-    const session = await post('/users/login', { username, password }, false);
+    const session = await post('/mini-auth/login', { username, password }, false);
     if (session && session.token) {
       try {
         setAuthToken((session as any).token);
@@ -31,7 +31,7 @@ export async function ensureTestAccountLogin(force = false): Promise<void> {
   }
 
   try {
-    const reg = await post('/users/register', { username, password, displayName }, false);
+    const reg = await post('/mini-auth/register', { username, password, displayName }, false);
     if (reg && (reg as any).token) {
       try {
         setAuthToken((reg as any).token);
@@ -40,7 +40,7 @@ export async function ensureTestAccountLogin(force = false): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (message && message.toLowerCase().includes('already exists')) {
-      await post('/users/login', { username, password }, false).then((s: any) => s && s.token && setAuthToken(s.token)).catch(() => {});
+      await post('/mini-auth/login', { username, password }, false).then((s: any) => s && s.token && setAuthToken(s.token)).catch(() => {});
       return;
     }
     console.error('Unable to register test account', error);

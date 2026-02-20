@@ -27,7 +27,7 @@ interface ServerProfileResult {
 export async function getUserInfoApi() {
   const accessStore = useAccessStore();
   const response = await requestClient.get<ServerProfileResult>(
-    '/auth/profile',
+    '/admin-auth/profile',
     {
       headers: accessStore.accessToken
         ? {

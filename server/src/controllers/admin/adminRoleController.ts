@@ -1,7 +1,7 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
-import { PermissionModel } from '@/models/Permission'
-import { RoleModel } from '@/models/Role'
+import { AdminPermissionModel } from '@/models/AdminPermission'
+import { AdminRoleModel } from '@/models/AdminRole'
 
 function mapRole(role: any) {
   return {
@@ -27,8 +27,8 @@ export async function listRoles(ctx: Context): Promise<void> {
   const limit = Number(pageSize)
   const skip = (pageNumber - 1) * limit
   const [roles, total] = await Promise.all([
-    RoleModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).populate('permissions').lean(),
-    RoleModel.countDocuments(filter),
+    AdminRoleModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).populate('permissions').lean(),
+    AdminRoleModel.countDocuments(filter),
   ])
   ctx.body = {
     data: roles.map(mapRole),
@@ -43,7 +43,7 @@ export async function getRole(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid role id')
   }
-  const role = await RoleModel.findById(id).populate('permissions').lean()
+  const role = await AdminRoleModel.findById(id).populate('permissions').lean()
   if (!role) {
     ctx.throw(404, 'Role not found')
   }
@@ -55,13 +55,13 @@ export async function createRole(ctx: Context): Promise<void> {
   if (!name || !code) {
     ctx.throw(400, 'Role name and code are required')
   }
-  const existing = await RoleModel.findOne({ code })
+  const existing = await AdminRoleModel.findOne({ code })
   if (existing) {
     ctx.throw(409, 'Role code already exists')
   }
   const permissions = Array.isArray(permissionIds) ? permissionIds : []
-  const role = await RoleModel.create({ name, code, description, permissions })
-  const populated = await RoleModel.findById(role._id).populate('permissions').lean()
+  const role = await AdminRoleModel.create({ name, code, description, permissions })
+  const populated = await AdminRoleModel.findById(role._id).populate('permissions').lean()
   ctx.body = mapRole(populated)
 }
 
@@ -75,7 +75,7 @@ export async function updateRole(ctx: Context): Promise<void> {
   if (Array.isArray(permissionIds)) {
     update.permissions = permissionIds
   }
-  const role = await RoleModel.findByIdAndUpdate(id, update, { new: true }).populate('permissions').lean()
+  const role = await AdminRoleModel.findByIdAndUpdate(id, update, { new: true }).populate('permissions').lean()
   if (!role) {
     ctx.throw(404, 'Role not found')
   }
@@ -87,14 +87,13 @@ export async function deleteRole(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid role id')
   }
-  await RoleModel.findByIdAndDelete(id)
-  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  await AdminRoleModel.findByIdAndDelete(id)
   ctx.status = 200
   ctx.body = {}
 }
 
 export async function listPermissionOptions(ctx: Context): Promise<void> {
-  const permissions = await PermissionModel.find().sort({ group: 1, name: 1 }).lean<Array<{
+  const permissions = await AdminPermissionModel.find().sort({ group: 1, name: 1 }).lean<Array<{
     _id: Types.ObjectId
     code: string
     name: string

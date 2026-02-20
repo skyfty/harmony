@@ -6,13 +6,13 @@ import {
   listPermissionOptions,
   listRoles,
   updateRole,
-} from '@/controllers/roleController'
-import { authMiddleware } from '@/middleware/auth'
+} from '@/controllers/admin/adminRoleController'
+import { requireAdminAuth } from '@/middleware/authDomains'
 import { requireAnyPermission } from '@/middleware/permission'
 
 const roleRouter = new Router({ prefix: '/api/roles' })
 
-roleRouter.use(authMiddleware)
+roleRouter.use(requireAdminAuth)
 roleRouter.get('/', requireAnyPermission(['role:read']), listRoles)
 roleRouter.get('/options/permissions', requireAnyPermission(['role:read']), listPermissionOptions)
 roleRouter.get('/:id', requireAnyPermission(['role:read']), getRole)

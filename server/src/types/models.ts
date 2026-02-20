@@ -65,6 +65,55 @@ export interface UserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface AdminPermissionDocument extends Document<Types.ObjectId> {
+  name: string
+  code: string
+  description?: string
+  group?: string
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface AdminRoleDocument extends Document<Types.ObjectId> {
+  name: string
+  code: string
+  description?: string
+  permissions: Types.ObjectId[]
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface AdminDocument extends Document<Types.ObjectId> {
+  username: string
+  password: string
+  displayName?: string
+  email?: string
+  avatarUrl?: string
+  phone?: string
+  status: 'active' | 'disabled'
+  roles: Types.ObjectId[]
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface AppUserDocument extends Document<Types.ObjectId> {
+  username?: string
+  password?: string
+  wxOpenId?: string
+  displayName?: string
+  email?: string
+  avatarUrl?: string
+  phone?: string
+  bio?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: Date
+  status: 'active' | 'disabled'
+  workShareCount?: number
+  exhibitionShareCount?: number
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface LoginAuditDocument extends Document<Types.ObjectId> {
   /** 中文：关联用户 ID（可选） */
   userId?: Types.ObjectId
