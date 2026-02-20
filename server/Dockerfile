@@ -30,7 +30,6 @@ RUN pnpm --dir /app/schema run build
 
 # Copy source for build (TypeScript compile)
 COPY server/tsconfig.json ./tsconfig.json
-COPY server/scripts ./scripts
 COPY server/src ./src
 # Build to dist (package.json build already runs tsc, tsc-alias, and extension fixer)
 RUN pnpm run build
