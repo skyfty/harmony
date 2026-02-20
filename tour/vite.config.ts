@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from 'node:url';
+import { createRequire } from 'node:module';
 import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
@@ -11,9 +12,17 @@ const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const buildTarget = isMp ? 'es2018' : 'es2020';
 
-const vueRuntimeAlias = isMp
+const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
   : '@dcloudio/uni-h5-vue/dist-x/vue.runtime.esm.js';
+
+const _require = createRequire(import.meta.url);
+let vueRuntimeAlias: string;
+try {
+  vueRuntimeAlias = _require.resolve(rawVueRuntimeAlias);
+} catch (e) {
+  vueRuntimeAlias = 'vue';
+}
 
 export default {
     optimizeDeps: {
