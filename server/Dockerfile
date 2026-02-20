@@ -8,6 +8,8 @@ ENV NODE_ENV=development
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 # Bring in the local schema package so file:../schema can be resolved during install
 COPY schema ./schema
+# Also bring in local tools package so file:../tools can be resolved
+COPY tools ./tools
 
 # Install deps for server (use pnpm with lockfile for reproducibility)
 WORKDIR /app/server
