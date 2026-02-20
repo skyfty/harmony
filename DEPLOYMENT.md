@@ -83,57 +83,27 @@ sudo mkdir -p /www/web/v_touchmagic_cn/harmony/config
 cd /www/web/v_touchmagic_cn/harmony
 docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
 ```
-## 4. 获取代码与镜像
+## 4. 获取代码（生产机直接构建）
 
-支持两种模式。
+本指南仅支持在生产机直接从源码构建并部署（不再使用预构建镜像传输流程）。
 
-### 4.1 模式 A：在构建机预构建镜像，再传到生产机
-
-#### 构建机执行（仓库根目录）
-
-```bash
-docker build -t harmony-server:prod -f server/Dockerfile .
-docker build -t harmony-admin:prod -f admin/Dockerfile .
-docker build -t harmony-editor:prod -f editor/Dockerfile .
-docker build -t harmony-uploader:prod -f uploader/Dockerfile .
-
-docker save -o harmony-prod-images.tar \
-  harmony-server:prod harmony-admin:prod harmony-editor:prod harmony-uploader:prod
-```
-
-#### 上传并导入生产机
-
-```bash
-scp harmony-prod-images.tar user@your-server:/tmp/
-ssh user@your-server "sudo docker load -i /tmp/harmony-prod-images.tar"
-```
-
-#### Compose 切换为 `image:` 方式
-
-将 `docker-compose.prod.yml` 中相关服务由 `build` 改为 `image`：
-
-```yaml
-services:
-  server:
-    image: harmony-server:prod
-  admin:
-    image: harmony-admin:prod
-  editor:
-    image: harmony-editor:prod
-  uploader:
-    image: harmony-uploader:prod
-```
-
-可通过额外文件 `docker-compose.override.images.yml` 覆盖，不改主文件。
-
-### 4.2 模式 B：生产机直接构建
+在生产机上执行：
 
 ```bash
 cd /www/web/v_touchmagic_cn/harmony
+# 如果尚未克隆仓库：
 git clone <your_repo_url> .
+
+# 若仓库已存在并需更新到远端主分支：
+git fetch --all
+git reset --hard origin/main
+
+# 从仓库根上下文构建并启动（包含 server/editor/admin/uploader 等服务）：
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-> 所有镜像构建均从仓库根上下文执行，避免遗漏 `schema` / monorepo 依赖。
+注意：所有镜像构建均应从仓库根上下文执行，确保 `schema/` 等 monorepo 依赖存在并可被构建系统访问。
 
 ---
 
@@ -347,10 +317,9 @@ docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-### 10.2 镜像回滚（预构建模式）
+### 10.2 镜像回滚
 
-- 使用上一版镜像 tag 更新 compose。
-- `docker compose up -d` 切回稳定版本。
+本部署策略以生产机直接构建为准，默认不使用预构建镜像传输流程。如在你的环境中仍使用镜像发布，请使用常规的 Docker 镜像回滚做法：将 `docker-compose.prod.yml` 指向目标镜像 tag，执行 `docker compose -f docker-compose.prod.yml up -d` 切回稳定版本，并确认服务与数据一致性。
 
 ### 10.3 数据回滚
 
