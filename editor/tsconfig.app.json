@@ -6,6 +6,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@schema": ["../schema/index.ts"],
       "@schema/*": ["../schema/*"],
       "@three-examples/*": [
         "node_modules/@types/three/examples/jsm/*",
