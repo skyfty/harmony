@@ -169,6 +169,11 @@
     "categories": { "title": "Project Categories" }
   },
   "products": { "title": "Products", "index": { "title": "Product Management" }, "categories": { "title": "Product Categories" } },
+  "coupons": {
+    "title": "Coupons",
+    "index": { "title": "Coupon Templates" },
+    "userCoupons": { "title": "User Coupons" }
+  },
   "system": {
     "title": "System",
     "users": "Users",

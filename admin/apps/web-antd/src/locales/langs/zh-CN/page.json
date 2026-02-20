@@ -169,6 +169,11 @@
     "categories": { "title": "项目分类" }
   },
   "products": { "title": "商品管理", "index": { "title": "商品管理" }, "categories": { "title": "商品分类" } },
+  "coupons": {
+    "title": "卡券管理",
+    "index": { "title": "卡券模板" },
+    "userCoupons": { "title": "用户卡券" }
+  },
   "system": {
     "title": "系统管理",
     "users": "用户管理",

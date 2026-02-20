@@ -1,45 +1,122 @@
 <template>
   <view class="page">
     <view class="header">
-      <text class="title">卡券中心</text>
+      <text class="title">
+        卡券中心
+      </text>
+      <view class="search-box">
+        <text class="search-icon">
+          🔍
+        </text>
+        <input
+          v-model="keyword"
+          class="search-input"
+          type="text"
+          placeholder="搜索卡券名称或描述"
+        >
+        <text
+          v-if="keyword"
+          class="clear-icon"
+          @tap="keyword = ''"
+        >
+          ✕
+        </text>
+      </view>
+      <view class="status-tabs">
+        <view
+          v-for="option in statusOptions"
+          :key="option.value"
+          class="status-tab"
+          :class="{ active: selectedStatus === option.value }"
+          @tap="selectedStatus = option.value"
+        >
+          {{ option.label }}
+        </view>
+      </view>
     </view>
     <view class="content">
-      <CouponCard
-        v-for="coupon in coupons"
+      <view
+        v-for="coupon in filteredCoupons"
         :key="coupon.id"
-        :title="coupon.title"
-        :description="coupon.description"
-        :valid-until="coupon.validUntil"
-        :status="coupon.status"
-        @use="handleUse(coupon.id)"
-      />
+        @tap="openDetail(coupon.id)"
+      >
+        <CouponCard
+          :title="coupon.title"
+          :description="coupon.description"
+          :valid-until="coupon.validUntil"
+          :status="coupon.status"
+          @use="openDetail(coupon.id)"
+        />
+      </view>
+      <view
+        v-if="!filteredCoupons.length"
+        class="empty"
+      >
+        <text>
+          暂无符合条件的卡券
+        </text>
+      </view>
     </view>
-    <BottomNav active="coupon" @navigate="handleNavigate" />
+    <BottomNav
+      active="coupon"
+      @navigate="handleNavigate"
+    />
   </view>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
+import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import CouponCard from '@/components/CouponCard.vue';
 import { listMyCoupons } from '@/api/mini/coupons';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import type { Coupon } from '@/types/coupon';
+import type { Coupon, CouponStatus } from '@/types/coupon';
+
+defineOptions({
+  name: 'CouponsIndexPage',
+});
 
 const coupons = ref<Coupon[]>([]);
+const keyword = ref('');
+const selectedStatus = ref<'all' | CouponStatus>('all');
+
+const statusOptions: Array<{ label: string; value: 'all' | CouponStatus }> = [
+  { label: '全部', value: 'all' },
+  { label: '未使用', value: 'unused' },
+  { label: '已使用', value: 'used' },
+  { label: '已过期', value: 'expired' },
+];
 
 async function reload() {
   coupons.value = await listMyCoupons();
 }
 
+const filteredCoupons = computed(() => {
+  let items = coupons.value;
+  if (selectedStatus.value !== 'all') {
+    items = items.filter((item) => item.status === selectedStatus.value);
+  }
+  const text = keyword.value.trim();
+  if (!text) {
+    return items;
+  }
+  return items.filter((item) => item.title.includes(text) || item.description.includes(text));
+});
+
 onMounted(() => {
   void reload().catch(() => {
-    uni.showToast({ title: '加载失败', icon: 'none' });
+    void uni.showToast({ title: '加载失败', icon: 'none' });
   });
 });
 
-function handleUse(_id: string) {
-  uni.showToast({ title: '已使用', icon: 'none' });
+onShow(() => {
+  void reload();
+});
+
+function openDetail(id: string) {
+  void uni.navigateTo({ url: `/pages/coupons/detail?id=${encodeURIComponent(id)}` });
 }
 
 function handleNavigate(key: NavKey) {
@@ -66,10 +143,59 @@ function handleNavigate(key: NavKey) {
   color: #1a1f2e;
 }
 
+.search-box {
+  margin-top: 12px;
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+}
+
+.search-input {
+  flex: 1;
+  font-size: 13px;
+  color: #1a1f2e;
+}
+
+.clear-icon {
+  font-size: 14px;
+  color: #a8b0c1;
+}
+
+.status-tabs {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.status-tab {
+  background: #ffffff;
+  border-radius: 999px;
+  text-align: center;
+  padding: 6px 0;
+  font-size: 12px;
+  color: #5f6b83;
+}
+
+.status-tab.active {
+  background: #1f7aec;
+  color: #ffffff;
+}
+
 .content {
   padding: 0 16px 18px;
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+.empty {
+  padding: 40px 0;
+  text-align: center;
+  color: #8a94a6;
 }
 </style>

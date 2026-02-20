@@ -2,6 +2,7 @@
   "pages": [
     { "path": "pages/home/index" },
     { "path": "pages/coupons/index" },
+    { "path": "pages/coupons/detail" },
     { "path": "pages/achievements/index" },
     { "path": "pages/vehicles/index" },
     { "path": "pages/profile/index" },

@@ -10,7 +10,12 @@ import {
   rateSceneSpot,
 } from '@/controllers/miniprogram/sceneSpotController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
-import { listUserCoupons, claimCoupon } from '@/controllers/miniprogram/couponController'
+import {
+  listUserCoupons,
+  claimCoupon,
+  getUserCouponDetail,
+  useUserCoupon,
+} from '@/controllers/miniprogram/couponController'
 import {
   createWorks,
   listWorks,
@@ -129,6 +134,8 @@ miniRouter.post('/products/:id/purchase', purchaseProduct)
 
 // coupons (user-scoped)
 miniRouter.get('/coupons', listUserCoupons)
+miniRouter.get('/coupons/:id', getUserCouponDetail)
+miniRouter.post('/coupons/:id/use', useUserCoupon)
 miniRouter.post('/coupons/:id/claim', claimCoupon)
 
 // orders

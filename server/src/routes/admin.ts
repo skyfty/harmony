@@ -31,8 +31,13 @@ import {
 import {
   createCoupon,
   deleteCoupon,
+  distributeCouponBatch,
+  distributeCouponToUser,
+  getCouponStats,
   getCoupon,
   listCoupons,
+  listUserCoupons,
+  useUserCouponByAdmin,
   updateCoupon,
 } from '@/controllers/admin/couponController'
 import {
@@ -144,6 +149,11 @@ adminRouter.put('/products/:id', requireAnyPermission(['product:write']), update
 adminRouter.delete('/products/:id', requireAnyPermission(['product:write']), deleteProduct)
 
 adminRouter.get('/coupons', requireAnyPermission(['coupon:read']), listCoupons)
+adminRouter.get('/coupons/stats', requireAnyPermission(['coupon:read']), getCouponStats)
+adminRouter.get('/coupons/user-coupons', requireAnyPermission(['coupon:read']), listUserCoupons)
+adminRouter.post('/coupons/user-coupons/:id/use', requireAnyPermission(['coupon:write']), useUserCouponByAdmin)
+adminRouter.post('/coupons/:id/distribute', requireAnyPermission(['coupon:write']), distributeCouponToUser)
+adminRouter.post('/coupons/:id/distribute/batch', requireAnyPermission(['coupon:write']), distributeCouponBatch)
 adminRouter.get('/coupons/:id', requireAnyPermission(['coupon:read']), getCoupon)
 adminRouter.post('/coupons', requireAnyPermission(['coupon:write']), createCoupon)
 adminRouter.put('/coupons/:id', requireAnyPermission(['coupon:write']), updateCoupon)

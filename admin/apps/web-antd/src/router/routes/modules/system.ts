@@ -88,6 +88,34 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'Coupons',
+    path: '/coupons',
+    meta: {
+      icon: 'lucide:ticket',
+      title: $t('page.coupons.title'),
+    },
+    children: [
+      {
+        name: 'CouponsIndex',
+        path: '',
+        component: () => import('#/views/coupons/index.vue'),
+        meta: {
+          icon: 'lucide:ticket',
+          title: $t('page.coupons.index.title'),
+        },
+      },
+      {
+        name: 'UserCoupons',
+        path: 'user-coupons',
+        component: () => import('#/views/coupons/user-coupons.vue'),
+        meta: {
+          icon: 'lucide:ticket-check',
+          title: $t('page.coupons.userCoupons.title'),
+        },
+      },
+    ],
+  },
+  {
     name: 'Orders',
     path: '/orders',
     meta: {

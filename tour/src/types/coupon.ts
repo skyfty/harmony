@@ -6,4 +6,7 @@ export interface Coupon {
   description: string;
   validUntil: string;
   status: CouponStatus;
+  claimedAt?: string | null;
+  usedAt?: string | null;
+  expiresAt?: string | null;
 }
