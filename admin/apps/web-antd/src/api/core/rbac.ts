@@ -48,6 +48,7 @@ export interface CreateUserPayload {
   phone?: string;
   roleIds?: string[];
   status?: 'active' | 'disabled';
+  avatarUrl?: string;
   username: string;
 }
 
@@ -59,6 +60,7 @@ export interface UpdateUserPayload {
   phone?: string;
   roleIds?: string[];
   status?: 'active' | 'disabled';
+  avatarUrl?: string;
 }
 
 export interface AdminItem {

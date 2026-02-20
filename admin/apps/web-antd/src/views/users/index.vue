@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormInstance } from 'ant-design-vue';
+import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
 
 import type {
   CreateUserPayload,
@@ -29,7 +29,9 @@ import {
   Space,
   Switch,
   Tag,
+  Upload,
 } from 'ant-design-vue';
+import { createResourceAssetApi } from '#/api/core/resources';
 
 interface UserFormModel {
   bio: string;
@@ -38,6 +40,7 @@ interface UserFormModel {
   password: string;
   phone: string;
   status: 'active' | 'disabled';
+  avatarUrl?: string;
   username: string;
 }
 
@@ -54,8 +57,18 @@ const userFormModel = reactive<UserFormModel>({
   password: '',
   phone: '',
   status: 'active',
+  avatarUrl: '',
   username: '',
 });
+
+const avatarFileList = ref<UploadFile[]>([]);
+const avatarPreview = ref('');
+
+const avatarUploadProps: UploadProps = {
+  beforeUpload: () => false,
+  maxCount: 1,
+  accept: 'image/*',
+};
 
 const { t } = useI18n();
 const modalTitle = computed(() => (editingUserId.value ? t('page.systemUsers.index.modal.edit') : t('page.systemUsers.index.modal.create')));
@@ -89,6 +102,9 @@ function resetUserForm() {
   userFormModel.phone = '';
   userFormModel.bio = '';
   userFormModel.status = 'active';
+  userFormModel.avatarUrl = '';
+  avatarFileList.value = [];
+  avatarPreview.value = '';
 }
 
 function openCreateModal() {
@@ -106,6 +122,9 @@ function openEditModal(record: UserItem) {
   userFormModel.phone = record.phone || '';
   userFormModel.bio = record.bio || '';
   userFormModel.status = record.status;
+  userFormModel.avatarUrl = record.avatarUrl || '';
+  avatarFileList.value = [];
+  avatarPreview.value = record.avatarUrl || '';
   modalOpen.value = true;
 }
 
@@ -121,6 +140,24 @@ async function submitUser() {
   await form.validate();
   submitting.value = true;
   try {
+    // If a new avatar file is selected, upload it first and get URL
+    let uploadedAvatarUrl: string | undefined = userFormModel.avatarUrl || undefined;
+    if (avatarFileList.value && avatarFileList.value.length > 0) {
+      const origin = (avatarFileList.value[0] as any).originFileObj as File;
+      if (origin) {
+        const fd = new FormData();
+        fd.append('file', origin);
+        try {
+          const res = await createResourceAssetApi(fd);
+          uploadedAvatarUrl = res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || uploadedAvatarUrl;
+        } catch (err) {
+          // upload failed — show error and abort
+          message.error(t('page.systemUsers.index.message.avatarUploadFailed') || 'Avatar upload failed');
+          throw err;
+        }
+      }
+    }
+
     if (editingUserId.value) {
       const payload: UpdateUserPayload = {
         bio: userFormModel.bio || undefined,
@@ -128,6 +165,7 @@ async function submitUser() {
         email: userFormModel.email || undefined,
         phone: userFormModel.phone || undefined,
         status: userFormModel.status,
+        avatarUrl: uploadedAvatarUrl,
       };
       if (userFormModel.password?.trim()) {
         payload.password = userFormModel.password.trim();
@@ -143,6 +181,7 @@ async function submitUser() {
         email: userFormModel.email || undefined,
         phone: userFormModel.phone || undefined,
         status: userFormModel.status,
+        avatarUrl: uploadedAvatarUrl,
       };
       await createUserApi(payload);
       message.success(t('page.systemUsers.index.message.createSuccess'));
@@ -208,6 +247,7 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
   gridOptions: {
     border: true,
     columns: [
+      { field: 'avatarUrl', minWidth: 100, title: '头像', slots: { default: 'avatar' } },
       { field: 'username', minWidth: 150, sortable: true, title: t('page.systemUsers.index.table.username') },
       { field: 'displayName', minWidth: 140, title: t('page.systemUsers.index.table.displayName') },
       { field: 'wxOpenId', minWidth: 180, title: '微信 OpenId' },
@@ -274,6 +314,17 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
   tableTitle: '普通用户管理',
 });
 
+function handleAvatarBeforeUpload(file: UploadFile) {
+  const origin = (file as any).originFileObj as File;
+  avatarFileList.value = [file];
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    avatarPreview.value = (e.target?.result as string) || '';
+  };
+  reader.readAsDataURL(origin);
+  return false;
+}
+
 </script>
 
 <template>
@@ -299,6 +350,13 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
             @change="(checked) => handleStatusChange(row, !!checked)"
           />
         </Space>
+      </template>
+
+      <template #avatar="{ row }">
+        <div>
+          <img v-if="row.avatarUrl" :src="row.avatarUrl" style="width:36px;height:36px;border-radius:50%" />
+          <span v-else class="text-text-secondary">-</span>
+        </div>
       </template>
 
       <template #actions="{ row }">
@@ -341,6 +399,16 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
         :rules="userRules"
         :wrapper-col="{ span: 17 }"
       >
+        <Form.Item label="头像" name="avatar">
+          <Upload v-model:file-list="avatarFileList" v-bind="avatarUploadProps" :beforeUpload="handleAvatarBeforeUpload">
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="width:40px;height:40px;border-radius:50%;overflow:hidden;border:1px solid #eee">
+                <img v-if="avatarPreview" :src="avatarPreview" style="width:100%;height:100%;object-fit:cover" />
+              </div>
+              <div>{{ t('ui.upload') }}</div>
+            </div>
+          </Upload>
+        </Form.Item>
         <Form.Item label="用户名" name="username">
           <Input
             v-model:value="userFormModel.username"
