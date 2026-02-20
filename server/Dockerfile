@@ -32,6 +32,8 @@ RUN pnpm --dir /app/schema install --frozen-lockfile
 
 # Build schema so its package exports (dist/*.js) exist for runtime imports.
 RUN pnpm --dir /app/schema run build
+# Ensure ESM file extensions are fixed in schema dist for Node resolution
+RUN node /app/tools/dist/cli-bin.js fix-esm-extensions --root /app/schema/dist || true
 
 # Copy source for build (TypeScript compile)
 COPY server/tsconfig.json ./tsconfig.json
