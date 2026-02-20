@@ -47,6 +47,9 @@ importers:
       koa-static:
         specifier: ^5.0.0
         version: 5.0.0
+      mongodb:
+        specifier: 5.9.2
+        version: 5.9.2
       mongoose:
         specifier: ^7.7.0
         version: 7.8.9
