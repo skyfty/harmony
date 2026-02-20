@@ -35,7 +35,7 @@ services:
       - ./server/.env.production
     depends_on:
       - mongo
-    command: ["node", "--env-file=.env.production", "dist/scripts/seed.js"]
+    command: ["node", "dist/scripts/seed.js"]
     profiles:
       - ops
     restart: "no"
