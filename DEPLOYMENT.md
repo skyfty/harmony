@@ -39,6 +39,37 @@ docker compose -f docker-compose.prod.yml ps
 - 静态资源： `curl -I https://<host>/uploads/<file>` → 200/404
 - 前端首页： `curl -I https://admin.<host>/`, `https://editor.<host>/`
 
+## 查看 Docker 日志
+生产环境排查常用命令：
+
+- 查看 compose 服务的实时日志（跟随输出）：
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f <service>
+# 例如查看 server 服务日志
+docker compose -f docker-compose.prod.yml logs -f server
+```
+
+- 限制输出行数并显示时间戳：
+
+```bash
+docker compose -f docker-compose.prod.yml logs --timestamps --tail 200 -f server
+```
+
+- 若需查看单个容器（非 compose 命令）、或在容器名已知时：
+
+```bash
+docker logs -f --since 1h <container_name_or_id>
+```
+
+- 结合 `grep` 或 `--since` 快速定位错误，例如只看 error：
+
+```bash
+docker compose -f docker-compose.prod.yml logs server --since 10m | grep -i error
+```
+
+说明：在生产环境中，`docker compose` 命令会自动使用 `docker-compose.prod.yml` 指定的服务定义；若你通过 systemd 或其他方式运行容器，请使用对应的容器名称或日志收集工具（如 `journald` / ELK / Prometheus + Loki）。
+
 ## 升级与回滚（简要）
 - 推荐升级： `./upgrade.sh all` 或 `./upgrade.sh server`
 - 手工升级：
