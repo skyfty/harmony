@@ -15,12 +15,6 @@
 ```bash
 # 使用 pnpm 安装
 pnpm add -D @vben/vsh
-
-# 或者使用 npm
-npm install -D @vben/vsh
-
-# 或者使用 yarn
-yarn add -D @vben/vsh
 ```
 
 ## 使用方法

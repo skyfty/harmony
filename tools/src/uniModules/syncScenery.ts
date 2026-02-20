@@ -134,7 +134,7 @@ export function syncSceneryToConsumerUniModules(options: SyncSceneryToConsumerUn
 }
 
 export function resolveConsumerRoot(): string {
-  // npm sets INIT_CWD to the directory where the install was initiated.
+  // Package managers set INIT_CWD to the directory where the install was initiated.
   const initCwd = process.env.INIT_CWD;
   if (initCwd && path.isAbsolute(initCwd)) return initCwd;
 

@@ -27,6 +27,19 @@ services:
       - ./server/.env.production:/app/server/.env.production:ro
     restart: unless-stopped
 
+  server-seed:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - ./server/.env.production
+    depends_on:
+      - mongo
+    command: ["node", "--env-file=.env.production", "dist/scripts/seed.js"]
+    profiles:
+      - ops
+    restart: "no"
+
   admin:
     build:
       context: .

@@ -28,8 +28,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepare": "npm run build"
+    "prepare": "pnpm run build"
   },
+  "engines": {
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "svgo": "^4.0.0"

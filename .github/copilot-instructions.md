@@ -10,15 +10,15 @@
 - `exhibition/`: uni-app 微信小程序主题业务端（不直接依赖 three/cannon，仅调用 scenery 分包）。
 
 ## Key workflows (use per-package scripts)
-- Server dev: `cd server && npm run dev` (uses `server/.env.development`, runs with `tsx watch`).
-- Server build/start: `cd server && npm run build && npm run start` (TS -> `dist/`, ESM).
-- Seed accounts/data: `cd server && npm run seed` or `npm run seed:prod` (see `server/src/services/authService.ts`).
-- Editor dev/build: `cd editor && npm run dev` / `npm run build`.
-  - `editor` build runs `npm --prefix ../schema run build` first (don’t skip when changing `schema/`).
-- Admin dev/build: `cd admin && npm run dev` / `npm run build`.
-- Uploader dev/build: `cd uploader && npm run dev` / `npm run build`.
-- Scene viewer: `cd viewer && npm run dev:mp-weixin`.
-- Exhibition: `cd exhibition && npm run dev:mp-weixin`.
+- Server dev: `cd server && pnpm run dev` (uses `server/.env.development`, runs with `tsx watch`).
+- Server build/start: `cd server && pnpm run build && pnpm run start` (TS -> `dist/`, ESM).
+- Seed accounts/data: `cd server && pnpm run seed` or `pnpm run seed:prod` (see `server/src/services/authService.ts`).
+- Editor dev/build: `cd editor && pnpm run dev` / `pnpm run build`.
+  - `editor` build runs `pnpm --dir ../schema run build` first (don’t skip when changing `schema/`).
+- Admin dev/build: `cd admin && pnpm run dev` / `pnpm run build`.
+- Uploader dev/build: `cd uploader && pnpm run dev` / `pnpm run build`.
+- Scene viewer: `cd viewer && pnpm run dev:mp-weixin`.
+- Exhibition: `cd exhibition && pnpm run dev:mp-weixin`.
 
 ## Runtime config convention (important)
 - Frontends load `/config/app-config.json` at startup and store it on `window.__HARMONY_RUNTIME_CONFIG__`.

@@ -4,11 +4,12 @@ FROM node:20-alpine AS build
 # 使用仓库根为构建上下文（在 compose 中设置），此处切到 uploader 目录
 WORKDIR /app/uploader
 ENV NODE_ENV=development
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 # 先拷贝 package 清单，包含本地依赖所需的 schema 包描述
-COPY uploader/package.json uploader/package-lock.json ./
+COPY uploader/package.json uploader/pnpm-lock.yaml ./
 COPY schema/package.json ../schema/package.json
 # 安装依赖（包含 devDependencies，确保 vue-tsc/vite 可用）
-RUN npm install --legacy-peer-deps
+RUN pnpm install --frozen-lockfile --strict-peer-dependencies=false
 
 # TypeScript also type-checks files from /app/schema (via file:../schema).
 # Node-style module resolution from /app/schema walks up to /app/node_modules,
@@ -20,11 +21,11 @@ COPY schema/ ../schema/
 # 确保依赖实际指向完整 schema 源码（安装阶段仅拷贝了 schema/package.json）
 RUN rm -rf /app/uploader/node_modules/@harmony/schema && ln -s /app/schema /app/uploader/node_modules/@harmony/schema
 # 安装 schema 自身依赖（schema/node_modules 不会随 Docker 上下文拷贝）
-RUN npm --prefix /app/schema ci
+RUN pnpm --dir /app/schema install --frozen-lockfile
 # 先构建 schema（生成 dist/ 供 @harmony/schema 的 exports 使用）
-RUN npm --prefix /app/schema run build
+RUN pnpm --dir /app/schema run build
 # 构建产物
-RUN npm run build
+RUN pnpm run build
 
 # --- Runtime Stage ---
 FROM nginx:alpine AS runtime

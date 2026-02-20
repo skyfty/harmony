@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm --prefix ../schema run build && vue-tsc -b && vite build",
+    "build": "pnpm --dir ../schema run build && vue-tsc -b && vite build",
     "preview": "vite preview"
   },
+  "engines": {
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@harmony/schema": "file:../schema",
     "@mdi/font": "^7.4.47",

@@ -10,6 +10,10 @@
     "seed": "tsx --env-file=.env.development src/scripts/seed.ts",
     "seed:prod": "node --env-file=.env.production dist/scripts/seed.js"
   },
+  "engines": {
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@harmony/schema": "file:../schema",
     "@koa/cors": "^5.0.0",

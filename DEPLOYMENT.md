@@ -77,8 +77,12 @@ sudo mkdir -p /www/web/v_touchmagic_cn/harmony/server/uploads
 sudo mkdir -p /www/web/v_touchmagic_cn/harmony/config
 ```
 
----
+### 3.3 初始化账号与基础数据（一次性）
 
+```bash
+cd /www/web/v_touchmagic_cn/harmony
+docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
+```
 ## 4. 获取代码与镜像
 
 支持两种模式。
@@ -227,7 +231,7 @@ docker compose -f docker-compose.prod.yml ps
 ### 6.2 首次初始化账号与基础数据
 
 ```bash
-docker compose -f docker-compose.prod.yml run --rm server npm run seed:prod
+docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
 ```
 
 脚本将确保：
@@ -367,13 +371,13 @@ docker compose -f docker-compose.prod.yml up -d
 ### 11.1 安装依赖
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### 11.2 生产构建（微信小程序）
 
 ```bash
-npm run build:mp-weixin
+pnpm run build:mp-weixin
 ```
 
 说明：
@@ -427,7 +431,7 @@ cd /www/web/v_touchmagic_cn/harmony
 docker compose -f docker-compose.prod.yml config
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
-docker compose -f docker-compose.prod.yml run --rm server npm run seed:prod
+docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
 docker compose -f docker-compose.prod.yml ps
 ```
 

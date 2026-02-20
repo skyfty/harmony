@@ -9,6 +9,10 @@
     "build": "tsc -p tsconfig.build.json",
     "build:asset-types": "tsc -p tsconfig.asset-types.json"
   },
+  "engines": {
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.28.2",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

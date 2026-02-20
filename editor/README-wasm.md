@@ -8,12 +8,12 @@
 
 本地构建示例（在 `editor` 目录下运行）：
 
-npm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
+pnpm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
 ```bash
 # 在系统上先安装 rustup/cargo 与 wasm-pack（见下）
 cd editor
-npm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
-npm run build
+pnpm run wasm:build:rust    # 在 editor/package.json 中已注册脚本
+pnpm run build
 ```
 
 必要的本地工具（示例安装命令）：
@@ -27,4 +27,4 @@ cargo install wasm-pack --force
 
 前端使用示例：参见 `editor/src/wasm_loader.ts`，用 `import('./wasm/pkg/harmony_wasm.js')` 并调用生成的初始化函数。
 
-注意（仓库策略）：`editor/src/wasm/pkg` 为编译生成的产物，不会提交到版本控制。CI 工作流（`.github/workflows/ci-wasm.yml`）会在构建时生成该目录并包含到前端构建结果中。本地开发者如果需要运行项目，请先执行 `npm run wasm:build:rust` 在本地生成 `pkg`，或在没有 Rust 环境的情况下使用 CI/远程构建产物。
+注意（仓库策略）：`editor/src/wasm/pkg` 为编译生成的产物，不会提交到版本控制。CI 工作流（`.github/workflows/ci-wasm.yml`）会在构建时生成该目录并包含到前端构建结果中。本地开发者如果需要运行项目，请先执行 `pnpm run wasm:build:rust` 在本地生成 `pkg`，或在没有 Rust 环境的情况下使用 CI/远程构建产物。

@@ -12,7 +12,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm vite build",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "pnpm run build"
   },
   "files": [
     "dist",
