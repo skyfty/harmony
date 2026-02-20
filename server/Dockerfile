@@ -11,6 +11,9 @@ COPY schema ./schema
 # Also bring in local tools package so file:../tools can be resolved
 COPY tools ./tools
 
+# Install and build local tools package so its `dist` and `bin` exist
+RUN pnpm --dir /app/tools install --frozen-lockfile && pnpm --dir /app/tools run build
+
 # Install deps for server (use pnpm with lockfile for reproducibility)
 WORKDIR /app/server
 COPY server/package.json server/pnpm-lock.yaml ./
