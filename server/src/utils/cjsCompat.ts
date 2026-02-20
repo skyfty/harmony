@@ -22,7 +22,12 @@ function ensureGeneratorFunctionCompat(): void {
       } as unknown as NodeModule
     }
   } catch (error) {
-    console.warn('Failed to apply generator-function compatibility patch', error)
+    // If the module isn't installed that's expected in some environments — silently ignore.
+    // Log only unexpected errors to avoid noisy stack traces during startup.
+    // eslint-disable-next-line no-console
+    if ((error as any)?.code !== 'MODULE_NOT_FOUND') {
+      console.warn('Failed to apply generator-function compatibility patch', error)
+    }
   }
 }
 
