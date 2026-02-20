@@ -13,6 +13,7 @@ cd "$REPO_DIR"
 
 COMPOSE_FILE="docker-compose.prod.yml"
 ALLOWED_SERVICES=("server" "admin" "editor" "uploader")
+BOOTSTRAP_SCRIPT="./bootstrap-prod-config.sh"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "[ERROR] docker 未安装或不在 PATH" >&2
@@ -24,6 +25,10 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 if [ ! -f "$COMPOSE_FILE" ]; then
   echo "[ERROR] 未找到 $COMPOSE_FILE" >&2
+  exit 1
+fi
+if [ ! -f "$BOOTSTRAP_SCRIPT" ]; then
+  echo "[ERROR] 未找到 $BOOTSTRAP_SCRIPT" >&2
   exit 1
 fi
 
@@ -61,12 +66,16 @@ for svc in "${TARGET_SERVICES[@]}"; do
 done
 
 echo "[3/5] 校验 compose 配置..."
+echo "[3/6] 自动准备前端运行时配置文件..."
+bash "$BOOTSTRAP_SCRIPT"
+
+echo "[4/6] 校验 compose 配置..."
 docker compose -f "$COMPOSE_FILE" config >/dev/null
 
-echo "[4/5] 构建镜像: ${TARGET_SERVICES[*]}"
+echo "[5/6] 构建镜像: ${TARGET_SERVICES[*]}"
 docker compose -f "$COMPOSE_FILE" build "${TARGET_SERVICES[@]}"
 
-echo "[5/5] 以无中断方式更新容器..."
+echo "[6/6] 以无中断方式更新容器..."
 docker compose -f "$COMPOSE_FILE" up -d "${TARGET_SERVICES[@]}"
 
 echo "\n当前容器状态："

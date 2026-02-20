@@ -100,6 +100,7 @@ git fetch --all
 git reset --hard origin/main
 
 # 从仓库根上下文构建并启动（包含 server/editor/admin/uploader 等服务）：
+./bootstrap-prod-config.sh
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 ```
@@ -192,6 +193,7 @@ Object.freeze(window._VBEN_ADMIN_PRO_APP_CONF_);
 
 ```bash
 cd /www/web/v_touchmagic_cn/harmony
+./bootstrap-prod-config.sh
 docker compose -f docker-compose.prod.yml config
 
 docker compose -f docker-compose.prod.yml build
@@ -390,6 +392,7 @@ pnpm run build:mp-weixin
 | 上传 403 | 路径穿越拦截 | 检查 URL 编码与路径合法性，不得包含 `..` |
 | 健康检查失败 | 反代未转发 `/api/` | 校验 Nginx upstream 与 location 配置 |
 | 小程序调用失败 | `VITE_MINI_API_BASE` 指向错误 | 修正生产 env 并重新构建上传 |
+| `invalid mount config for type "bind": bind source path does not exist` | 挂载源文件不存在 | 在仓库根执行 `./bootstrap-prod-config.sh` 自动创建缺失文件 |
 
 ---
 
@@ -398,6 +401,7 @@ pnpm run build:mp-weixin
 ```bash
 cd /www/web/v_touchmagic_cn/harmony
 
+./bootstrap-prod-config.sh
 docker compose -f docker-compose.prod.yml config
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
