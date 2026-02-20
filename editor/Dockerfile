@@ -9,7 +9,8 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 COPY editor/package.json editor/pnpm-lock.yaml ./
 COPY schema/package.json ../schema/package.json
 # Bring in local tools package so schema's file:../tools can be resolved
-COPY tools ./tools
+# Copy tools to /app/tools so pnpm --dir /app/tools can access it
+COPY tools /app/tools
 # Install and build local tools package so its `dist` and `bin` exist (if needed)
 RUN pnpm --dir /app/tools install --frozen-lockfile && pnpm --dir /app/tools run build
 # 安装依赖（包含 devDependencies，确保 vite 可用）
