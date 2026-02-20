@@ -127,12 +127,10 @@ const activeNodeMaterial = computed(() => {
   return nodeMaterials.value.find((entry) => entry.id === props.nodeMaterialId) ?? null
 })
 
-const panelRef = ref<HTMLElement | null>(null)
 const baseColorMenuOpen = ref(false)
 const emissiveColorMenuOpen = ref(false)
 
 const activeMaterialId = ref<string | null>(null)
-const importInputRef = ref<HTMLInputElement | null>(null)
 const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
 const hasPendingChanges = ref(false)
 const originalSharedMaterialId = ref<string | null>(null)
