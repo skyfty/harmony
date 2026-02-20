@@ -34,7 +34,8 @@
     "openai": "^4.56.1",
     "three": "^0.172.0",
     "tsx": "^4.15.7",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "generator-function": "^2.0.1"
   },
   "devDependencies": {
     "@harmony/tools": "file:../tools",
