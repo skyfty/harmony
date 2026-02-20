@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
-import type {
-  SceneItem,
-  SceneSpotCreatePayload,
-  SceneSpotItem,
-  SceneSpotUpdatePayload,
-} from '#/api';
+import type { SceneItem, SceneSpotItem } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 
@@ -44,6 +39,8 @@ const sceneSpotFormRef = ref<FormInstance>();
 
 const coverImageFileList = ref<UploadFile[]>([]);
 const slidesFileList = ref<UploadFile[]>([]);
+const originalCoverImageUrl = ref('');
+const originalSlides = ref<string[]>([]);
 const previewVisible = ref(false);
 const previewImage = ref('');
 const previewTitle = ref('');
@@ -81,6 +78,8 @@ const uploadProps: UploadProps = {
   beforeUpload: () => false,
 };
 
+const MAX_SLIDES_COUNT = 10;
+
 function resetForm() {
   sceneSpotFormModel.sceneId = '';
   sceneSpotFormModel.title = '';
@@ -93,6 +92,8 @@ function resetForm() {
   sceneSpotFormModel.favoriteCount = 0;
   coverImageFileList.value = [];
   slidesFileList.value = [];
+  originalCoverImageUrl.value = '';
+  originalSlides.value = [];
 }
 
 function generateUid(prefix: string) {
@@ -106,47 +107,17 @@ function getFileUrl(file?: UploadFile): string {
   return ((file.response as any)?.url || file.url || '') as string;
 }
 
-async function fileToDataUrl(file: File): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('read file failed'));
-  });
+function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
+  coverImageFileList.value = info.fileList.slice(-1);
 }
 
-async function normalizeFileList(fileList: UploadFile[]) {
-  const normalized = await Promise.all(
-    fileList.map(async (file) => {
-      if (getFileUrl(file)) {
-        return file;
-      }
-      if (file.originFileObj) {
-        const url = await fileToDataUrl(file.originFileObj as File);
-        return {
-          ...file,
-          status: 'done' as const,
-          url,
-        };
-      }
-      return file;
-    }),
-  );
-
-  return normalized.filter((file) => !!getFileUrl(file));
-}
-
-async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
-  coverImageFileList.value = (await normalizeFileList(info.fileList)).slice(-1);
-}
-
-async function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
-  slidesFileList.value = await normalizeFileList(info.fileList);
+function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
+  slidesFileList.value = info.fileList.slice(0, MAX_SLIDES_COUNT);
 }
 
 async function handlePreview(file: UploadFile) {
   if (!file.url && !file.preview && file.originFileObj) {
-    file.preview = await fileToDataUrl(file.originFileObj as File);
+    file.preview = URL.createObjectURL(file.originFileObj as File);
   }
   previewImage.value = getFileUrl(file) || String(file.preview || '');
   previewVisible.value = true;
@@ -234,6 +205,8 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.averageRating = Number(data.averageRating ?? 0);
   sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
   sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
+  originalCoverImageUrl.value = data.coverImage || '';
+  originalSlides.value = [...(data.slides || [])];
 
   coverImageFileList.value = data.coverImage
     ? [
@@ -263,22 +236,42 @@ async function submitSceneSpot() {
   }
   await form.validate();
 
-  const coverImage = getFileUrl(coverImageFileList.value[0]) || null;
-  const slides = slidesFileList.value.map((file) => getFileUrl(file)).filter(Boolean);
+  const payload = new FormData();
+  payload.append('sceneId', sceneSpotFormModel.sceneId);
+  payload.append('title', sceneSpotFormModel.title.trim());
+  payload.append('description', sceneSpotFormModel.description.trim());
+  payload.append('address', sceneSpotFormModel.address.trim());
+  payload.append('order', String(Number(sceneSpotFormModel.order) || 0));
+  payload.append('isFeatured', String(sceneSpotFormModel.isFeatured));
+  payload.append('averageRating', String(Number(sceneSpotFormModel.averageRating) || 0));
+  payload.append('ratingCount', String(Number(sceneSpotFormModel.ratingCount) || 0));
+  payload.append('favoriteCount', String(Number(sceneSpotFormModel.favoriteCount) || 0));
 
-  const payload: SceneSpotCreatePayload | SceneSpotUpdatePayload = {
-    sceneId: sceneSpotFormModel.sceneId,
-    title: sceneSpotFormModel.title.trim(),
-    coverImage,
-    slides,
-    description: sceneSpotFormModel.description.trim() || null,
-    address: sceneSpotFormModel.address.trim() || null,
-    order: Number(sceneSpotFormModel.order) || 0,
-    isFeatured: sceneSpotFormModel.isFeatured,
-    averageRating: Number(sceneSpotFormModel.averageRating) || 0,
-    ratingCount: Number(sceneSpotFormModel.ratingCount) || 0,
-    favoriteCount: Number(sceneSpotFormModel.favoriteCount) || 0,
-  };
+  const cover = coverImageFileList.value[0];
+  if (cover?.originFileObj) {
+    payload.append('coverImage', cover.originFileObj as File);
+  } else if (editingId.value && originalCoverImageUrl.value && coverImageFileList.value.length === 0) {
+    payload.append('removeCoverImage', 'true');
+  }
+
+  const retainedSlideUrls: string[] = [];
+  for (const file of slidesFileList.value) {
+    if (file.originFileObj) {
+      payload.append('slides', file.originFileObj as File);
+      continue;
+    }
+    const existingUrl = getFileUrl(file);
+    if (existingUrl) {
+      retainedSlideUrls.push(existingUrl);
+    }
+  }
+  if (editingId.value) {
+    payload.append('retainSlides', JSON.stringify(retainedSlideUrls));
+    const hadRemovedExistingSlides = retainedSlideUrls.length < originalSlides.value.length;
+    if (hadRemovedExistingSlides) {
+      payload.append('removeSlides', 'true');
+    }
+  }
 
   submitting.value = true;
   try {
@@ -286,7 +279,7 @@ async function submitSceneSpot() {
       await updateSceneSpotApi(editingId.value, payload);
       message.success(t('page.sceneSpots.index.message.updateSuccess'));
     } else {
-      await createSceneSpotApi(payload as SceneSpotCreatePayload);
+      await createSceneSpotApi(payload);
       message.success(t('page.sceneSpots.index.message.createSuccess'));
     }
     modalOpen.value = false;
@@ -318,7 +311,9 @@ async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
   // optimistic update
   row.isFeatured = flag;
   try {
-    await updateSceneSpotApi(row.id, { isFeatured: flag });
+    const payload = new FormData();
+    payload.append('isFeatured', String(flag));
+    await updateSceneSpotApi(row.id, payload);
     message.success(t('page.sceneSpots.index.message.updateSuccess'));
     sceneSpotGridApi.reload();
   } catch (err) {
@@ -503,7 +498,7 @@ onMounted(async () => {
             @change="handleSlidesChange"
             @preview="handlePreview"
           >
-            <div>+ Upload</div>
+            <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ Upload</div>
           </Upload>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">

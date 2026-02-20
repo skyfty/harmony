@@ -60,14 +60,19 @@ async function bootstrap(): Promise<void> {
   )
   app.use(errorHandler)
   app.use(responseEnvelope)
-  app.use(
-    koaBody({
-      json: true,
-      urlencoded: true,
-      multipart: false,
-      text: false,
-    }),
-  )
+  const globalBodyParser = koaBody({
+    json: true,
+    urlencoded: true,
+    multipart: false,
+    text: false,
+  })
+  app.use(async (ctx, next) => {
+    if (ctx.is('multipart')) {
+      await next()
+      return
+    }
+    await globalBodyParser(ctx, next)
+  })
 
   const uploadsPrefix = (() => {
     try {

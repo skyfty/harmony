@@ -109,8 +109,26 @@ adminRouter.delete('/scenes/:id', requireAnyPermission(['scene:write']), deleteS
 // Scene spots (POIs)
 adminRouter.get('/scene-spots', requireAnyPermission(['sceneSpot:read']), listSceneSpots)
 adminRouter.get('/scene-spots/:id', requireAnyPermission(['sceneSpot:read']), getSceneSpot)
-adminRouter.post('/scene-spots', requireAnyPermission(['sceneSpot:write']), createSceneSpot)
-adminRouter.put('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), updateSceneSpot)
+adminRouter.post(
+  '/scene-spots',
+  requireAnyPermission(['sceneSpot:write']),
+  koaBody({
+    multipart: true,
+    urlencoded: true,
+    formidable: { keepExtensions: true, maxFileSize: 5 * 1024 * 1024, multiples: true },
+  }),
+  createSceneSpot,
+)
+adminRouter.put(
+  '/scene-spots/:id',
+  requireAnyPermission(['sceneSpot:write']),
+  koaBody({
+    multipart: true,
+    urlencoded: true,
+    formidable: { keepExtensions: true, maxFileSize: 5 * 1024 * 1024, multiples: true },
+  }),
+  updateSceneSpot,
+)
 adminRouter.delete('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteSceneSpot)
 
 // Scene - Product bindings

@@ -37,34 +37,6 @@ export interface ListSceneSpotsParams {
   isFeatured?: boolean;
 }
 
-export interface SceneSpotCreatePayload {
-  sceneId: string;
-  title: string;
-  coverImage?: null | string;
-  slides?: string[] | string;
-  description?: null | string;
-  address?: null | string;
-  order?: number;
-  isFeatured?: boolean;
-  averageRating?: number;
-  ratingCount?: number;
-  favoriteCount?: number;
-}
-
-export interface SceneSpotUpdatePayload {
-  sceneId?: string;
-  title?: string;
-  coverImage?: null | string;
-  slides?: string[] | string;
-  description?: null | string;
-  address?: null | string;
-  order?: number;
-  isFeatured?: boolean;
-  averageRating?: number;
-  ratingCount?: number;
-  favoriteCount?: number;
-}
-
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
   return {
     items: result.data || [],
@@ -83,12 +55,20 @@ export async function getSceneSpotApi(id: string) {
   return requestClient.get<SceneSpotItem>(`/admin/scene-spots/${id}`);
 }
 
-export async function createSceneSpotApi(payload: SceneSpotCreatePayload) {
-  return requestClient.post<SceneSpotItem>('/admin/scene-spots', payload);
+export async function createSceneSpotApi(payload: FormData) {
+  return requestClient.post<SceneSpotItem>('/admin/scene-spots', payload, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
 }
 
-export async function updateSceneSpotApi(id: string, payload: SceneSpotUpdatePayload) {
-  return requestClient.put<SceneSpotItem>(`/admin/scene-spots/${id}`, payload);
+export async function updateSceneSpotApi(id: string, payload: FormData) {
+  return requestClient.put<SceneSpotItem>(`/admin/scene-spots/${id}`, payload, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
 }
 
 export async function deleteSceneSpotApi(id: string) {
