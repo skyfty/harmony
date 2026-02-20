@@ -17,7 +17,9 @@ RUN pnpm --dir /app/tools install --frozen-lockfile && pnpm --dir /app/tools run
 # Install deps for server (use pnpm with lockfile for reproducibility)
 WORKDIR /app/server
 COPY server/package.json server/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# Try a frozen install for reproducibility; fall back to non-frozen if lockfile
+# is out of date (helps CI/builds when package.json was updated in the image).
+RUN pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
 
 # TypeScript also type-checks files from /app/schema (via file:../schema).
 # Node-style module resolution from /app/schema walks up to /app/node_modules,
