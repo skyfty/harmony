@@ -17,6 +17,12 @@ importers:
       polygon-clipping:
         specifier: ^0.15.7
         version: 0.15.7
+      robust-predicates:
+        specifier: ^1.0.3
+        version: 1.1.0
+      splaytree:
+        specifier: ^3.2.3
+        version: 3.2.3
       three:
         specifier: ^0.172.0
         version: 0.172.0
@@ -203,6 +209,9 @@ packages:
   polygon-clipping@0.15.7:
     resolution: {integrity: sha512-nhfdr83ECBg6xtqOAJab1tbksbBAOMUltN60bU+llHVOL0e5Onm1WpAXXWXVB39L8AJFssoIhEVuy/S90MmotA==}
 
+  robust-predicates@1.1.0:
+    resolution: {integrity: sha512-i7QBspa755E84FsqI7XSRBmds34Bn/dVuGcaH0Iuw47vBeHiroPFeUgy8dwq1HJLCmm3FarbCJorDuRqRq5xsA==}
+
   robust-predicates@3.0.2:
     resolution: {integrity: sha512-IXgzBWvWQwE6PrDI05OvmXUIruQTcoMDzRsOd5CDvHCVLcLHMTSYvOK5Cm46kWqlV3yAbuSpBZdJ5oP5OUoStg==}
 
@@ -379,6 +388,8 @@ snapshots:
     dependencies:
       robust-predicates: 3.0.2
       splaytree: 3.2.3
+
+  robust-predicates@1.1.0: {}
 
   robust-predicates@3.0.2: {}
 
