@@ -50,7 +50,12 @@ services:
     ports:
       - "8087:80" # 通过反向代理映射到 https://admin.v.touchmagic.cn
     volumes:
-      - /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js:/usr/share/nginx/html/_app.config.js:ro
+      - type: bind
+        source: /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
+        target: /usr/share/nginx/html/_app.config.js
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
 
   editor:
@@ -63,7 +68,12 @@ services:
     ports:
       - "8088:80" # 通过反向代理映射到 https://editor.v.touchmagic.cn
     volumes:
-      - /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json:/usr/share/nginx/html/config/app-config.json:ro
+      - type: bind
+        source: /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json
+        target: /usr/share/nginx/html/config/app-config.json
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
 
   uploader:
@@ -76,5 +86,10 @@ services:
     ports:
       - "8090:80" # 可通过反向代理映射到上传服务域名
     volumes:
-      - /www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json:/usr/share/nginx/html/config/app-config.json:ro
+      - type: bind
+        source: /www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json
+        target: /usr/share/nginx/html/config/app-config.json
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped

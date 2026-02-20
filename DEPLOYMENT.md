@@ -29,7 +29,7 @@
 - 后端镜像构建：`server/Dockerfile`
 - 编辑器运行时配置模板：`editor/public/config/app-config.example.json`
 - 上传端运行时配置模板：`uploader/public/config/app-config.example.json`
-- Admin 运行时配置模板：`admin/admin-app-config.example.js`
+- Admin 运行时配置模板：`admin/admin-app-config.prod.js`
 - Admin API 基址读取：`admin/apps/web-antd/src/api/request.ts`
 - Admin 生产配置读取：`admin/packages/effects/hooks/src/use-app-config.ts`
 
@@ -51,6 +51,7 @@
    - `editor-app-config.json`
    - `uploader-app-config.json`
    - `admin` 生产配置注入文件（见第 5.2 节）
+  - 上述前端挂载源文件必须是“普通文件”（regular file），不能是目录
 6. **重要**：`admin` 服务构建链路需可用（`docker-compose.prod.yml` 中 `admin/Dockerfile` 必须存在且可构建）。
 
 ---
@@ -132,12 +133,12 @@ docker compose -f docker-compose.prod.yml up -d
 
 建议在前端静态目录注入 `_app.config.js`（或等价机制），至少包含：
 
-仓库模板文件：`admin/admin-app-config.example.js`
+仓库模板文件：`admin/admin-app-config.prod.js`
 
 可直接复制为服务器挂载文件：
 
 ```bash
-cp admin/admin-app-config.example.js /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
+cp admin/admin-app-config.prod.js /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
 ```
 
 ```js
