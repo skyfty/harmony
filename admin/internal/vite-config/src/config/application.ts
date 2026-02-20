@@ -13,6 +13,7 @@ import { defaultImportmapOptions, getDefaultPwaOptions } from '../options';
 import { loadApplicationPlugins } from '../plugins';
 import { loadAndConvertEnv } from '../utils/env';
 import { getCommonConfig } from './common';
+import { resolve as nodeResolve } from 'node:path';
 
 function defineApplicationConfig(userConfigPromise?: DefineApplicationOptions) {
   return defineConfig(async (config) => {
@@ -56,6 +57,19 @@ function defineApplicationConfig(userConfigPromise?: DefineApplicationOptions) {
     const { injectGlobalScss = true } = application;
 
     const applicationConfig: UserConfig = {
+      resolve: {
+        alias: [
+          // Some internal built dist files import a pnpm-scoped path to jiti's lib
+          // which pulls Node-only internals into the client bundle. Redirect
+          // such imports to a browser-safe shim so Rollup/Vite won't attempt
+          // to bundle Node-only code.
+          {
+            // Match pnpm-scoped absolute-like relative import paths to jiti's lib
+            find: /^.*node_modules\/\.pnpm\/jiti@.*\/node_modules\/jiti\/lib\/jiti\.mjs$/,
+            replacement: nodeResolve(findMonorepoRoot(), 'internal/vite-config/src/shims/jiti-browser.mjs'),
+          },
+        ],
+      },
       base,
       build: {
         rollupOptions: {
@@ -65,7 +79,7 @@ function defineApplicationConfig(userConfigPromise?: DefineApplicationOptions) {
             entryFileNames: 'jse/index-[name]-[hash].js',
           },
         },
-        target: 'es2015',
+        target: 'esnext',
       },
       css: createCssOptions(injectGlobalScss),
       esbuild: {

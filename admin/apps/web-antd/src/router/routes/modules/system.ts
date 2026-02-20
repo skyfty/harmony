@@ -135,6 +135,15 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'Users',
+    path: '/users',
+    component: () => import('#/views/users/index.vue'),
+    meta: {
+      icon: 'lucide:users',
+      title: $t('page.system.users'),
+    },
+  },
+  {
     name: 'Resources',
     path: '/resources',
     meta: {
@@ -187,15 +196,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:user-cog',
           title: $t('page.system.admins'),
-        },
-      },
-      {
-        name: 'SystemUsers',
-        path: '/system/users',
-        component: () => import('#/views/system/users/index.vue'),
-        meta: {
-          icon: 'lucide:users',
-          title: $t('page.system.users'),
         },
       },
       {
