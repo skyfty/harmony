@@ -1,4 +1,4 @@
-import { get, post, patch, del, setAuthToken, getAuthToken, getApiOrigin } from '@/utils/http';
+import { get, post, patch, del, setAuthToken, getAuthToken, getApiOrigin } from '@harmony/utils';
 
 export interface AuthSession {
   token?: string;
