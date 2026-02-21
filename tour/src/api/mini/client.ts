@@ -1,6 +1,22 @@
-import { httpRequest, type HttpRequestOptions } from '@/api/http'
-import { getMiniApiBaseUrl } from './config'
+import * as HarmonyUtils from '@harmony/utils'
 import { getAccessToken } from './token'
+
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS' | 'HEAD'
+
+type HttpRequestOptions = {
+  method?: HttpMethod
+  headers?: Record<string, string>
+  query?: Record<string, string | number | boolean | null | undefined>
+  body?: unknown
+  timeoutMs?: number
+}
+
+type UtilsHttpModule = {
+  getBaseUrl?: () => string
+  httpRequest?: <R>(target: string, options?: unknown) => Promise<R>
+}
+
+const utilsHttp = HarmonyUtils as unknown as UtilsHttpModule
 
 type MiniApiEnvelope<T> = {
   code: number
@@ -18,7 +34,7 @@ function isMiniApiEnvelope<T>(value: unknown): value is MiniApiEnvelope<T> {
 }
 
 export async function miniRequest<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
-  const base = getMiniApiBaseUrl()
+  const base = typeof utilsHttp.getBaseUrl === 'function' ? utilsHttp.getBaseUrl() : ''
   const token = getAccessToken()
 
   const headers: Record<string, string> = {
@@ -29,7 +45,12 @@ export async function miniRequest<T>(path: string, options: HttpRequestOptions =
     headers.Authorization = `Bearer ${token}`
   }
 
-  const payload = await httpRequest<MiniApiEnvelope<T> | T>(`${base}${path}`, {
+  const request = utilsHttp.httpRequest
+  if (typeof request !== 'function') {
+    throw new Error('httpRequest is not available from @harmony/utils')
+  }
+
+  const payload = await request<MiniApiEnvelope<T> | T>(`${base}${path}`, {
     ...options,
     headers,
   })

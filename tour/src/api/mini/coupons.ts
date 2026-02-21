@@ -1,7 +1,12 @@
 import type { Coupon } from '@/types/coupon'
-import { HttpError } from '@/api/http'
+import * as HarmonyUtils from '@harmony/utils'
 import { miniRequest } from './client'
 import { ensureDevLogin } from './session'
+
+type HttpErrorLike = Error & { status?: number }
+type HttpErrorCtor = new (...args: unknown[]) => HttpErrorLike
+
+const HttpError = (HarmonyUtils as unknown as { HttpError?: HttpErrorCtor }).HttpError
 
 type CouponsResponse = {
   total: number
@@ -35,7 +40,7 @@ export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]
     const res = await miniRequest<CouponsResponse>(`/coupons${buildQuery(params)}`, { method: 'GET' })
     return Array.isArray(res.coupons) ? res.coupons : []
   } catch (err) {
-    if (err instanceof HttpError && err.status === 401) {
+    if (HttpError && err instanceof HttpError && err.status === 401) {
       return []
     }
     throw err
