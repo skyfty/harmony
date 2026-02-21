@@ -15,12 +15,24 @@ interface AssetManifestEntry {
   id: string
   name: string
   type: ProjectAsset['type']
+  categoryId?: string | null
+  categoryPath?: Array<{ id: string; name: string }> | null
+  categoryPathString?: string | null
   tags?: AssetManifestTag[]
   tagIds?: string[]
+  seriesId?: string | null
+  seriesName?: string | null
   downloadUrl: string
   previewUrl?: string | null
   thumbnailUrl?: string | null
   description?: string | null
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   createdAt?: string
   updatedAt?: string
   size?: number
@@ -30,6 +42,12 @@ interface AssetManifestEntry {
 interface AssetManifest {
   generatedAt: string
   assets: AssetManifestEntry[]
+}
+
+interface ApiEnvelope<T> {
+  code: number
+  data: T
+  message: string
 }
 
 type AssetManifestLoader = () => Promise<AssetManifest>
@@ -68,11 +86,12 @@ async function fetchManifest(): Promise<AssetManifest> {
     throw new Error(`资产清单请求失败 (${response.status})`)
   }
 
-  const payload = (await response.json()) as AssetManifest
-  if (!payload || !Array.isArray(payload.assets)) {
+  const payload = (await response.json()) as ApiEnvelope<AssetManifest>
+  const manifest = payload?.data
+  if (!manifest || !Array.isArray(manifest.assets)) {
     throw new Error('资产清单格式不正确')
   }
-  return payload
+  return manifest
 }
 
 let manifestCache: AssetManifest | null = null
@@ -100,6 +119,11 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
     id: entry.id,
     name: entry.name,
     type: entry.type,
+    categoryId: entry.categoryId ?? null,
+    categoryPath: entry.categoryPath ?? null,
+    categoryPathString: entry.categoryPathString ?? null,
+    seriesId: entry.seriesId ?? null,
+    seriesName: entry.seriesName ?? null,
     downloadUrl: entry.downloadUrl,
     url: entry.downloadUrl,
     previewUrl: entry.previewUrl ?? entry.thumbnailUrl ?? null,
@@ -107,6 +131,14 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
     description: entry.description ?? undefined,
     tags: entry.tags,
     tagIds: entry.tagIds,
+    color: entry.color ?? null,
+    dimensionLength: entry.dimensionLength ?? null,
+    dimensionWidth: entry.dimensionWidth ?? null,
+    dimensionHeight: entry.dimensionHeight ?? null,
+    sizeCategory: entry.sizeCategory ?? null,
+    imageWidth: entry.imageWidth ?? null,
+    imageHeight: entry.imageHeight ?? null,
+    size: entry.size,
     terrainScatterPreset: entry.terrainScatterPreset ?? null,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
