@@ -13,7 +13,7 @@ import {
 import { getUserProject, saveUserProject } from '@/services/userProjectService'
 
 function ensureCurrentUserId(ctx: Context): string {
-  const userId = ctx.state.user?.id
+  const userId = ctx.state.adminAuthUser?.id
   if (!userId || typeof userId !== 'string') {
     ctx.throw(401, 'Unauthorized')
   }
@@ -21,11 +21,11 @@ function ensureCurrentUserId(ctx: Context): string {
 }
 
 function canManageAllUsers(ctx: Context): boolean {
-  const permissions = Array.isArray(ctx.state.user?.permissions) ? ctx.state.user?.permissions : []
+  const permissions = Array.isArray(ctx.state.adminAuthUser?.permissions) ? ctx.state.adminAuthUser?.permissions : []
   if (permissions?.includes('admin:super')) {
     return true
   }
-  const roles = Array.isArray(ctx.state.user?.roles) ? ctx.state.user?.roles : []
+  const roles = Array.isArray(ctx.state.adminAuthUser?.roles) ? ctx.state.adminAuthUser?.roles : []
   return roles?.includes('admin')
 }
 

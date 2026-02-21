@@ -37,6 +37,9 @@ const SUPER_PERMISSION = 'admin:super'
 
 const ADMIN_PERMISSION_SEEDS = [
   { code: 'admin:super', name: '超级管理员', group: 'admin' },
+  { code: 'auth:read', name: '登录审计查看', group: 'auth' },
+  { code: 'auth:delete', name: '登录审计删除', group: 'auth' },
+  { code: 'auth:export', name: '登录审计导出', group: 'auth' },
   { code: 'user:read', name: '用户查看', group: 'user' },
   { code: 'user:write', name: '用户管理', group: 'user' },
   { code: 'order:read', name: '订单查看', group: 'order' },
@@ -45,6 +48,18 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'product:write', name: '商品管理', group: 'product' },
   { code: 'coupon:read', name: '卡券查看', group: 'coupon' },
   { code: 'coupon:write', name: '卡券管理', group: 'coupon' },
+  { code: 'scene:read', name: '场景查看', group: 'scene' },
+  { code: 'scene:write', name: '场景管理', group: 'scene' },
+  { code: 'sceneSpot:read', name: '点位查看', group: 'scene' },
+  { code: 'sceneSpot:write', name: '点位管理', group: 'scene' },
+  { code: 'resource:read', name: '资源查看', group: 'resource' },
+  { code: 'resource:write', name: '资源管理', group: 'resource' },
+  { code: 'category:read', name: '资源分类查看', group: 'resource' },
+  { code: 'category:write', name: '资源分类管理', group: 'resource' },
+  { code: 'project:read', name: '项目查看', group: 'project' },
+  { code: 'project:write', name: '项目管理', group: 'project' },
+  { code: 'projectCategory:read', name: '项目分类查看', group: 'project' },
+  { code: 'projectCategory:write', name: '项目分类管理', group: 'project' },
 ] as const
 
 export interface AdminSessionUser {
@@ -210,6 +225,7 @@ export async function createInitialAdminV2(): Promise<void> {
   }
 
   const nonSuperPermissions = await AdminPermissionModel.find({ code: { $ne: SUPER_PERMISSION } }).exec()
+  const nonSuperPermissionIds = nonSuperPermissions.map((item) => item._id.toString())
 
   let superRole = await AdminRoleModel.findOne({ code: 'super_admin' }).exec()
   if (!superRole) {
@@ -218,15 +234,29 @@ export async function createInitialAdminV2(): Promise<void> {
       name: '超级管理员',
       permissions: [superPermission._id],
     })
+  } else {
+    const hasSuperPermission = superRole.permissions.some((permissionId) => permissionId.toString() === superPermission._id.toString())
+    if (!hasSuperPermission) {
+      superRole.permissions = [superPermission._id]
+      await superRole.save()
+    }
   }
 
-  const adminRole = await AdminRoleModel.findOne({ code: 'admin' }).exec()
+  let adminRole = await AdminRoleModel.findOne({ code: 'admin' }).exec()
   if (!adminRole) {
-    await AdminRoleModel.create({
+    adminRole = await AdminRoleModel.create({
       code: 'admin',
       name: '普通管理员',
       permissions: nonSuperPermissions.map((item) => item._id),
     })
+  } else {
+    const currentIds = adminRole.permissions.map((permissionId) => permissionId.toString())
+    const missingPermissionExists = nonSuperPermissionIds.some((permissionId) => !currentIds.includes(permissionId))
+    const hasExtraPermission = currentIds.some((permissionId) => !nonSuperPermissionIds.includes(permissionId))
+    if (missingPermissionExists || hasExtraPermission) {
+      adminRole.permissions = nonSuperPermissions.map((item) => item._id)
+      await adminRole.save()
+    }
   }
 
   const existingAdmin = await AdminModel.findOne({ username: appConfig.adminAuth.seed.username }).exec()
