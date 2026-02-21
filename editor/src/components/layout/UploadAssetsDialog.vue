@@ -166,12 +166,8 @@ const categoryIndex = computed(() => {
 })
 
 const uploadTagOptions = computed<TagOption[]>(() => {
-  const base: TagOption[] = Array.isArray(props.tagOptions) ? props.tagOptions : []
   const map = new Map<string, TagOption>()
   serverTags.value.forEach((option) => {
-    if (!map.has(option.value)) map.set(option.value, option)
-  })
-  base.forEach((option) => {
     if (!map.has(option.value)) map.set(option.value, option)
   })
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
@@ -180,6 +176,15 @@ const uploadTagOptions = computed<TagOption[]>(() => {
 const canUploadAll = computed(
   () => authStore.canResourceWrite && uploadEntries.value.some((entry) => entry.status !== 'success') && !uploadSubmitting.value,
 )
+const canReadResource = computed(() => authStore.hasPermission('resource:read'))
+const tagsEditable = computed(() => canReadResource.value)
+const tagAccessHint = computed(() => {
+  if (tagsEditable.value) return ''
+  if (!authStore.isAuthenticated) {
+    return 'Log in with resource:read permission to load and edit tags.'
+  }
+  return '当前账号缺少 resource:read，无法读取或编辑标签。'
+})
 const canUploadCurrent = computed(() => {
   if (!authStore.canResourceWrite) return false
   const entry = activeEntry.value
@@ -551,6 +556,12 @@ async function loadServerTags(options: { force?: boolean } = {}) {
   const force = options.force ?? false
   if (serverTagsLoading.value) return
   if (serverTagsLoaded.value && !force) return
+  if (!tagsEditable.value) {
+    serverTags.value = []
+    serverTagsLoaded.value = true
+    serverTagsError.value = tagAccessHint.value
+    return
+  }
   serverTagsLoading.value = true
   serverTagsError.value = null
   try {
@@ -575,9 +586,6 @@ async function loadServerTags(options: { force?: boolean } = {}) {
     serverTagsLoading.value = false
   }
 }
-
-// Keep for future use; referenced to satisfy TS noUnusedLocals.
-void loadServerTags
 
 async function loadResourceCategories(options: { force?: boolean } = {}) {
   const force = options.force ?? false
@@ -816,11 +824,11 @@ watch(
       uploadEntries.value = props.assets.map((asset) => createUploadEntry(asset))
       activeEntryId.value = uploadEntries.value[0]?.assetId ?? null
       uploadError.value = null
-      // void nextTick(() => {
-      //   void loadServerTags()
-      //   void loadResourceCategories()
-      //   void loadAssetSeries()
-      // })
+      void nextTick(() => {
+        void loadServerTags()
+        void loadResourceCategories()
+        void loadAssetSeries()
+      })
     } else if (!uploadSubmitting.value) {
       resetUploadState()
     }
@@ -863,6 +871,12 @@ async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
 async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<string, string[]>> {
   const resolved = new Map<string, string[]>()
   if (!entries.length) return resolved
+  if (!tagsEditable.value) {
+    entries.forEach((entry) => {
+      resolved.set(entry.assetId, [])
+    })
+    return resolved
+  }
   const existingOptions = uploadTagOptions.value
   const optionById = new Map(existingOptions.map((option) => [option.value, option] as const))
   const optionByName = new Map(existingOptions.map((option) => [option.name.trim().toLowerCase(), option] as const))
@@ -919,7 +933,7 @@ async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<st
         resolvedIds.push(matchByName.value)
         return
       }
-      resolvedIds.push(raw)
+      throw new Error(`标签“${raw}”未能解析为有效 ID，请重试。`)
     })
     resolved.set(entry.assetId, resolvedIds)
   })
@@ -1309,9 +1323,10 @@ function handleUploadAll(): void {
                       hide-selected
                       new-value-mode="add"
                       :loading="serverTagsLoading"
-                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success' || !tagsEditable"
                       @update:model-value="(value) => handleEntryTagsChange(entry, value as string[])"
                     />
+                    <div v-if="tagAccessHint" class="upload-entry__field-hint upload-entry__field-hint--warning">{{ tagAccessHint }}</div>
 
                     <div class="upload-ai-row">
                       <v-btn
@@ -1669,6 +1684,15 @@ function handleUploadAll(): void {
 .upload-description-textarea :deep(textarea) {
   overflow-y: auto;
   resize: none;
+}
+
+.upload-entry__field-hint {
+  margin-top: -8px;
+  font-size: 0.8rem;
+}
+
+.upload-entry__field-hint--warning {
+  color: #ef9a9a;
 }
 
 .upload-ai-row {
