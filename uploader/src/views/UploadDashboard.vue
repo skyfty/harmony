@@ -23,6 +23,14 @@
       </v-menu>
     </v-app-bar>
   <v-container class="uploader-container" fluid>
+      <v-alert
+        v-if="!canResourceWrite"
+        type="warning"
+        variant="tonal"
+        class="mb-4"
+      >
+        当前账号缺少 resource:write 权限，仅可浏览，无法上传。
+      </v-alert>
       <div
         class="upload-surface pa-8"
         :class="{ 'is-dragover': isDragOver }"
@@ -82,6 +90,7 @@
         elevation="8"
         size="x-large"
         icon="mdi-plus"
+        :disabled="!canResourceWrite"
         @click="triggerFileDialog"
       ></v-btn>
     </v-container>
@@ -96,6 +105,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const uploadStore = useUploadStore()
 const authStore = useAuthStore()
+const canResourceWrite = computed(() => authStore.canResourceWrite)
 
 const tasks = computed(() => uploadStore.tasks)
 const availableTags = computed(() => uploadStore.availableTags)
@@ -111,6 +121,9 @@ const isDragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 function triggerFileDialog(): void {
+  if (!canResourceWrite.value) {
+    return
+  }
   fileInput.value?.click()
 }
 
@@ -135,6 +148,9 @@ function extractFiles(event: DragEvent | Event): File[] {
 }
 
 async function handleFiles(event: DragEvent | Event): Promise<void> {
+  if (!canResourceWrite.value) {
+    return
+  }
   const files = extractFiles(event)
   if (!files.length) return
   await uploadStore.addFiles(files)

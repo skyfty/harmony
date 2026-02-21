@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useAuthStore } from '@/stores/authStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
 import type { AssetSeries } from '@/types/asset-series'
@@ -61,6 +62,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const authStore = useAuthStore()
 
 // Dialog open state
 const internalOpen = computed({
@@ -176,9 +178,10 @@ const uploadTagOptions = computed<TagOption[]>(() => {
 })
 
 const canUploadAll = computed(
-  () => uploadEntries.value.some((entry) => entry.status !== 'success') && !uploadSubmitting.value,
+  () => authStore.canResourceWrite && uploadEntries.value.some((entry) => entry.status !== 'success') && !uploadSubmitting.value,
 )
 const canUploadCurrent = computed(() => {
+  if (!authStore.canResourceWrite) return false
   const entry = activeEntry.value
   if (!entry) return false
   if (uploadSubmitting.value) return false
@@ -933,7 +936,9 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
 
   const authenticated = await ensureAuthenticatedForResourceUpload()
   if (!authenticated) {
-    uploadError.value = 'Please log in to upload assets.'
+    uploadError.value = authStore.isAuthenticated
+      ? '当前账号无上传权限（缺少 resource:write）。'
+      : 'Please log in to upload assets.'
     return
   }
 

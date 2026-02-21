@@ -12,7 +12,7 @@ export async function ensureAuthenticatedForResourceUpload(): Promise<boolean> {
 		console.warn('[uploadGuard] Failed to initialize auth store', error)
 	}
 	if (authStore.isAuthenticated) {
-		return true
+		return authStore.canResourceWrite
 	}
 	authStore.showLoginDialog()
 	return false

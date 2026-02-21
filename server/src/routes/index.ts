@@ -11,6 +11,7 @@ import userProjectRouter from './userProjects'
 import adminRouter from './admin'
 import adminAuthRouter from './adminAuth'
 import miniAuthRouter from './miniAuth'
+import authRouter from './auth'
 
 export const routes: Router[] = [
   roleRouter,
@@ -25,6 +26,7 @@ export const routes: Router[] = [
   adminRouter,
   adminAuthRouter,
   miniAuthRouter,
+  authRouter,
 ]
 
 export default routes

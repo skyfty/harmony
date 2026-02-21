@@ -11,6 +11,7 @@ import {
 } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import { useAuthStore } from '@/stores/authStore'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isWallPresetFilename } from '@/utils/wallPreset'
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
@@ -42,6 +43,7 @@ import type {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const authStore = useAuthStore()
 
 const PRESET_PROVIDER_ID = assetProvider.id
 const galleryRoot = ref<HTMLElement | null>(null)
@@ -1434,6 +1436,7 @@ const uploadableSelectedAssets = computed(() =>
 )
 
 const canUploadSelection = computed(() => uploadableSelectedAssets.value.length > 0)
+const canUploadSelectionToServer = computed(() => canUploadSelection.value && authStore.canResourceWrite)
 
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
   if (!selectedValues.length) {
@@ -1525,7 +1528,7 @@ function showDropFeedback(kind: 'success' | 'error', message: string) {
 }
 
 function openUploadDialog() {
-  if (!canUploadSelection.value) {
+  if (!canUploadSelectionToServer.value) {
     return
   }
   uploadDialogOpen.value = true
@@ -2468,8 +2471,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               variant="text"
               density="compact"
               icon="mdi-cloud-upload"
-              :disabled="!canUploadSelection"
-              :title="'Upload to Server'"
+              :disabled="!canUploadSelectionToServer"
+              :title="authStore.canResourceWrite ? 'Upload to Server' : 'Missing resource:write permission'"
               @click="openUploadDialog"
             />
             <v-divider vertical class="mx-1" />

@@ -22,7 +22,7 @@
           icon="mdi-cloud-upload"
           color="primary"
           variant="text"
-          :disabled="isUploading"
+          :disabled="isUploading || !canResourceWrite"
           :title="task.status === 'success' ? '重新上传' : '开始上传'"
           @click="startUpload"
         />
@@ -249,6 +249,7 @@
 import { computed, ref, watch } from 'vue'
 import type { AssetSeries, AssetTag, AssetType, ResourceCategory } from '@/types'
 import { useUploadStore, type UploadTask } from '@/stores/upload'
+import { useAuthStore } from '@/stores/auth'
 import PreviewRenderer from './UploadTaskPreviewRenderer.vue'
 import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
 import SeriesSelector from '@/components/SeriesSelector.vue'
@@ -263,8 +264,10 @@ interface Props {
 const props = defineProps<Props>()
 
 const uploadStore = useUploadStore()
+const authStore = useAuthStore()
 const tagInput = ref<Array<AssetTag | string>>([...props.task.tags])
 const isUploading = computed(() => props.task.status === 'uploading')
+const canResourceWrite = computed(() => authStore.canResourceWrite)
 const categories = computed(() => uploadStore.categories)
 const loadingCategories = computed(() => uploadStore.loadingCategories)
 const seriesOptions = computed(() => uploadStore.seriesOptions)
@@ -395,6 +398,9 @@ async function handleTagInput(values: Array<AssetTag | string>): Promise<void> {
 }
 
 function startUpload(): void {
+  if (!canResourceWrite.value) {
+    return
+  }
   uploadStore.startUpload(props.task.id)
 }
 

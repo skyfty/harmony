@@ -2,6 +2,7 @@ import '@/utils/cjsCompat'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/adminAuthService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
+import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 import { ensureCategoryPath } from '@/services/assetCategoryService'
 
@@ -77,6 +78,10 @@ async function main(): Promise<void> {
 
   await ensureMiniProgramTestUserV2().catch((error) => {
     console.warn('[seed] 跳过创建小程序测试账号：', error)
+  })
+
+  await ensureEditorAuthBootstrap().catch((error) => {
+    console.warn('[seed] 跳过创建编辑器/上传器账号：', error)
   })
 
   await ensureAdminPermissionsV2().catch((error) => {

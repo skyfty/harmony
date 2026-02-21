@@ -15,6 +15,7 @@ import { responseEnvelope } from '@/middleware/responseEnvelope'
 import routes from '@/routes'
 import { createInitialAdminV2 } from '@/services/adminAuthService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
+import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService } from '@/services/multiuserService'
 
@@ -31,6 +32,7 @@ async function bootstrap(): Promise<void> {
   await connectDatabase()
   await createInitialAdminV2()
   await ensureMiniProgramTestUserV2()
+  await ensureEditorAuthBootstrap()
 
   const app: HarmonyKoa = new Koa()
 

@@ -109,6 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
   const displayName = computed(() => user.value?.displayName ?? user.value?.username ?? '')
   const username = computed(() => user.value?.username ?? '')
   const avatarUrl = computed(() => user.value?.avatarUrl ?? null)
+  const canResourceWrite = computed(() => permissions.value.includes('resource:write'))
 
   function loadPreferences() {
     if (typeof window === 'undefined') {
@@ -344,6 +345,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function hasPermission(permission: string): boolean {
+    return permissions.value.includes(permission)
+  }
+
   return {
     token,
     user,
@@ -356,8 +361,10 @@ export const useAuthStore = defineStore('auth', () => {
     displayName,
     username,
     avatarUrl,
+    canResourceWrite,
     keepLoggedInPreference,
     initialized,
+    hasPermission,
     getLoginDefaults,
     initialize,
     login,

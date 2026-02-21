@@ -55,6 +55,11 @@ export const useAuthStore = defineStore('uploader-auth', () => {
   const rememberCache = ref<RememberedCredentials | null>(readRememberedCredentials())
 
   const isAuthenticated = computed(() => Boolean(token.value && user.value))
+  const canResourceWrite = computed(() => permissions.value.includes('resource:write'))
+
+  function hasPermission(permission: string): boolean {
+    return permissions.value.includes(permission)
+  }
 
   function setSession(payload: LoginResponse | (AuthProfileResponse & { token?: string | null })): void {
     if ('token' in payload && payload.token) {
@@ -127,6 +132,8 @@ export const useAuthStore = defineStore('uploader-auth', () => {
     permissions,
     initializing,
     isAuthenticated,
+    canResourceWrite,
+    hasPermission,
     login,
     logout,
     bootstrapFromStorage,

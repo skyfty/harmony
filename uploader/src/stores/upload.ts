@@ -13,6 +13,7 @@ import {
   searchResourceCategories,
   uploadAsset,
 } from '@/api/modules/resources'
+import { useAuthStore } from '@/stores/auth'
 import { buildCategoryPathString } from '@/utils/categoryPath'
 
 export type UploadStatus = 'pending' | 'uploading' | 'success' | 'error' | 'canceled'
@@ -306,6 +307,7 @@ function mapTagByName(tags: AssetTag[]): Map<string, AssetTag> {
 }
 
 export const useUploadStore = defineStore('uploader-upload', () => {
+  const authStore = useAuthStore()
   const tasks = ref<UploadTask[]>([])
   const activeTaskId = ref<string | null>(null)
   const availableTags = ref<AssetTag[]>([])
@@ -547,6 +549,9 @@ export const useUploadStore = defineStore('uploader-upload', () => {
   }
 
   async function addFiles(files: File[]): Promise<void> {
+    if (!authStore.canResourceWrite) {
+      return
+    }
     if (!files.length) {
       return
     }
@@ -718,6 +723,13 @@ export const useUploadStore = defineStore('uploader-upload', () => {
 
   async function startUpload(id: string): Promise<void> {
     const task = findTask(id)
+    if (!authStore.canResourceWrite) {
+      task.status = 'error'
+      task.error = '当前账号无上传权限（缺少 resource:write）'
+      task.progress = 0
+      task.updatedAt = Date.now()
+      return
+    }
     if (task.status === 'uploading') {
       return
     }
