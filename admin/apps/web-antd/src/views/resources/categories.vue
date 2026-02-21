@@ -17,6 +17,8 @@ import {
 import { Button, Form, Input, message, Modal, Select, Space, Switch } from 'ant-design-vue';
 
 interface CategoryFlatItem {
+  ancestorIds: string[];
+  children: CategoryFlatItem[];
   createdAt: string;
   depth: number;
   description: null | string;
@@ -40,6 +42,10 @@ interface MergeFormModel {
 }
 
 const categoryTree = ref<ResourceCategoryItem[]>([]);
+const draggingCategoryId = ref<null | string>(null);
+const draggingCategoryName = ref('');
+const dragOverCategoryId = ref<null | string>(null);
+const rootDropActive = ref(false);
 
 const categoryModalOpen = ref(false);
 const movingModalOpen = ref(false);
@@ -71,11 +77,20 @@ const mergeFormModel = reactive<MergeFormModel>({
 
 const categoryModalTitle = computed(() => (editingId.value ? '编辑分类' : '新增分类'));
 
-function flattenCategories(nodes: ResourceCategoryItem[], prefix = ''): CategoryFlatItem[] {
-  const rows: CategoryFlatItem[] = [];
-  nodes.forEach((node) => {
+function mapCategoryTree(
+  nodes: ResourceCategoryItem[],
+  prefix = '',
+  ancestorIds: string[] = [],
+): CategoryFlatItem[] {
+  return nodes.map((node) => {
     const pathLabel = prefix ? `${prefix} / ${node.name}` : node.name;
-    rows.push({
+    const nextAncestorIds = [...ancestorIds, node.id];
+    const children = Array.isArray(node.children)
+      ? mapCategoryTree(node.children, pathLabel, nextAncestorIds)
+      : [];
+    return {
+      ancestorIds,
+      children,
       createdAt: node.createdAt,
       depth: node.depth,
       description: node.description,
@@ -85,15 +100,66 @@ function flattenCategories(nodes: ResourceCategoryItem[], prefix = ''): Category
       parentId: node.parentId,
       pathLabel,
       updatedAt: node.updatedAt,
-    });
+    };
+  });
+}
+
+function flattenCategories(nodes: CategoryFlatItem[]): CategoryFlatItem[] {
+  const rows: CategoryFlatItem[] = [];
+  nodes.forEach((node) => {
+    rows.push(node);
     if (Array.isArray(node.children) && node.children.length) {
-      rows.push(...flattenCategories(node.children, pathLabel));
+      rows.push(...flattenCategories(node.children));
     }
   });
   return rows;
 }
 
-const categoryRows = computed(() => flattenCategories(categoryTree.value));
+function normalizeTree(nodes: ResourceCategoryItem[]): ResourceCategoryItem[] {
+  if (
+    nodes.length === 1 &&
+    !nodes[0]?.parentId &&
+    Array.isArray(nodes[0]?.children) &&
+    nodes[0].children.length > 0
+  ) {
+    return nodes[0].children;
+  }
+  return nodes;
+}
+
+const categoryTreeRows = computed(() => mapCategoryTree(categoryTree.value));
+const categoryRows = computed(() => flattenCategories(categoryTreeRows.value));
+const categoryRowMap = computed(() => {
+  const map = new Map<string, CategoryFlatItem>();
+  categoryRows.value.forEach((item) => map.set(item.id, item));
+  return map;
+});
+
+function filterTreeWithAncestors(nodes: CategoryFlatItem[], keyword: string): CategoryFlatItem[] {
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  if (!normalizedKeyword) {
+    return nodes;
+  }
+  return nodes
+    .map((node) => {
+      const children = filterTreeWithAncestors(node.children || [], normalizedKeyword);
+      const name = node.name.toLowerCase();
+      const path = node.pathLabel.toLowerCase();
+      const desc = (node.description || '').toLowerCase();
+      const matched =
+        name.includes(normalizedKeyword) ||
+        path.includes(normalizedKeyword) ||
+        desc.includes(normalizedKeyword);
+      if (!matched && children.length === 0) {
+        return null;
+      }
+      return {
+        ...node,
+        children,
+      };
+    })
+    .filter((item): item is CategoryFlatItem => Boolean(item));
+}
 
 const categorySelectOptions = computed(() => [
   { label: '根分类', value: 'root' },
@@ -102,14 +168,36 @@ const categorySelectOptions = computed(() => [
 
 const moveTargetOptions = computed(() => {
   const currentId = movingId.value;
-  return categorySelectOptions.value.filter((item) => item.value !== currentId);
+  return categorySelectOptions.value.filter((item) => {
+    if (item.value === 'root') {
+      return true;
+    }
+    if (item.value === currentId) {
+      return false;
+    }
+    const row = categoryRowMap.value.get(item.value);
+    return row ? !row.ancestorIds.includes(currentId || '') : true;
+  });
 });
 
 const mergeTargetOptions = computed(() => {
   const currentId = mergingSourceId.value;
   return categoryRows.value
-    .filter((item) => item.id !== currentId)
+    .filter((item) => item.id !== currentId && !item.ancestorIds.includes(currentId || ''))
     .map((item) => ({ label: item.pathLabel, value: item.id }));
+});
+
+const dragHintText = computed(() => {
+  if (!draggingCategoryId.value) {
+    return '拖拽“拖拽”按钮到任意行可设为其子分类，也可拖到此处移到根级';
+  }
+  if (dragOverCategoryId.value) {
+    const target = categoryRowMap.value.get(dragOverCategoryId.value);
+    if (target) {
+      return `正在拖拽：${draggingCategoryName.value} → 将移动到“${target.name}”下`;
+    }
+  }
+  return `正在拖拽：${draggingCategoryName.value}（拖到此处可移到根级）`;
 });
 
 function resetCategoryForm() {
@@ -119,7 +207,8 @@ function resetCategoryForm() {
 }
 
 async function loadCategories() {
-  categoryTree.value = await listResourceCategoriesApi();
+  const list = await listResourceCategoriesApi();
+  categoryTree.value = normalizeTree(list || []);
 }
 
 function openCreateModal() {
@@ -147,6 +236,141 @@ function openMergeModal(row: CategoryFlatItem) {
   mergeFormModel.targetCategoryId = undefined;
   mergeFormModel.moveChildren = true;
   mergingModalOpen.value = true;
+}
+
+function clearDraggingState() {
+  draggingCategoryId.value = null;
+  draggingCategoryName.value = '';
+  dragOverCategoryId.value = null;
+  rootDropActive.value = false;
+}
+
+async function moveCategoryByDrag(sourceId: string, targetParentId: null | string) {
+  if (submitting.value) {
+    return;
+  }
+  submitting.value = true;
+  try {
+    await moveResourceCategoryApi(sourceId, targetParentId);
+    message.success('分类移动成功');
+    await loadCategories();
+    categoryGridApi.reload();
+  } finally {
+    submitting.value = false;
+    clearDraggingState();
+  }
+}
+
+function handleDragStart(event: DragEvent, row: CategoryFlatItem) {
+  draggingCategoryId.value = row.id;
+  draggingCategoryName.value = row.name;
+  event.dataTransfer?.setData('text/plain', row.id);
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+  }
+}
+
+function resolveDragSourceId(event: DragEvent): null | string {
+  const sourceId = event.dataTransfer?.getData('text/plain') || draggingCategoryId.value;
+  return sourceId || null;
+}
+
+function resolveDropTargetRow(target: EventTarget | null): CategoryFlatItem | null {
+  if (!target || !(target instanceof HTMLElement)) {
+    return null;
+  }
+  const rowElement = target.closest('tr[rowid], tr[data-rowid]');
+  if (!rowElement) {
+    return null;
+  }
+  const rowId = rowElement.getAttribute('rowid') || rowElement.getAttribute('data-rowid');
+  if (!rowId) {
+    return null;
+  }
+  return categoryRowMap.value.get(rowId) || null;
+}
+
+function handleGridDragOver(event: DragEvent) {
+  if (!draggingCategoryId.value) {
+    return;
+  }
+  event.preventDefault();
+  const targetRow = resolveDropTargetRow(event.target);
+  dragOverCategoryId.value = targetRow?.id || null;
+}
+
+function handleGridDragLeave(event: DragEvent) {
+  if (!draggingCategoryId.value) {
+    return;
+  }
+  const nextElement = event.relatedTarget;
+  if (nextElement instanceof HTMLElement) {
+    const stillInGrid = nextElement.closest('.resource-category-grid-shell');
+    if (stillInGrid) {
+      return;
+    }
+  }
+  dragOverCategoryId.value = null;
+}
+
+async function handleGridDrop(event: DragEvent) {
+  event.preventDefault();
+  const targetRow = resolveDropTargetRow(event.target);
+  if (!targetRow) {
+    clearDraggingState();
+    return;
+  }
+  await handleDropToCategory(event, targetRow);
+}
+
+async function handleDropToCategory(event: DragEvent, targetRow: CategoryFlatItem) {
+  event.preventDefault();
+  dragOverCategoryId.value = targetRow.id;
+  const sourceId = resolveDragSourceId(event);
+  if (!sourceId) {
+    clearDraggingState();
+    return;
+  }
+  if (sourceId === targetRow.id) {
+    message.warning('不能移动到自身');
+    clearDraggingState();
+    return;
+  }
+  if (targetRow.ancestorIds.includes(sourceId)) {
+    message.warning('不能移动到后代分类下');
+    clearDraggingState();
+    return;
+  }
+  const sourceRow = categoryRowMap.value.get(sourceId);
+  if (!sourceRow) {
+    clearDraggingState();
+    return;
+  }
+  if (sourceRow.parentId === targetRow.id) {
+    clearDraggingState();
+    return;
+  }
+  await moveCategoryByDrag(sourceId, targetRow.id);
+}
+
+async function handleDropToRoot(event: DragEvent) {
+  event.preventDefault();
+  const sourceId = resolveDragSourceId(event);
+  rootDropActive.value = false;
+  if (!sourceId) {
+    clearDraggingState();
+    return;
+  }
+  const sourceRow = categoryRowMap.value.get(sourceId);
+  if (!sourceRow) {
+    clearDraggingState();
+    return;
+  }
+  if (!sourceRow.parentId) {
+    clearDraggingState();
+    return;
+  }
+  await moveCategoryByDrag(sourceId, null);
 }
 
 async function submitCategory() {
@@ -269,7 +493,7 @@ const [CategoryGrid, categoryGridApi] = useVbenVxeGrid<CategoryFlatItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 160, title: '名称' },
+      { field: 'name', minWidth: 220, title: '名称', treeNode: true },
       { field: 'pathLabel', minWidth: 280, title: '路径' },
       { field: 'depth', minWidth: 90, title: '层级' },
       { field: 'description', minWidth: 180, title: '描述' },
@@ -287,25 +511,35 @@ const [CategoryGrid, categoryGridApi] = useVbenVxeGrid<CategoryFlatItem>({
     pagerConfig: {
       enabled: false,
     },
+    rowClassName: ({ row }: any) => {
+      if (row?.id && row.id === dragOverCategoryId.value) {
+        return 'resource-category-drag-target';
+      }
+      if (row?.id && row.id === draggingCategoryId.value) {
+        return 'resource-category-drag-source';
+      }
+      return '';
+    },
+    rowConfig: {
+      keyField: 'id',
+    },
     proxyConfig: {
       ajax: {
         query: async (_params: any, formValues: Record<string, any>) => {
-          const keyword = (formValues.keyword || '').trim().toLowerCase();
-          const all = categoryRows.value;
-          const filtered = !keyword
-            ? all
-            : all.filter((item) => {
-                const name = item.name.toLowerCase();
-                const path = item.pathLabel.toLowerCase();
-                const desc = (item.description || '').toLowerCase();
-                return name.includes(keyword) || path.includes(keyword) || desc.includes(keyword);
-              });
+          const keyword = (formValues.keyword || '').trim();
+          const all = categoryTreeRows.value;
+          const filtered = filterTreeWithAncestors(all, keyword);
           return {
             items: filtered,
-            total: filtered.length,
+            total: flattenCategories(filtered).length,
           };
         },
       },
+    },
+    treeConfig: {
+      children: 'children',
+      expandAll: false,
+      line: true,
     },
     toolbarConfig: {
       custom: true,
@@ -324,20 +558,49 @@ onMounted(async () => {
 
 <template>
   <div class="p-5">
-    <CategoryGrid>
+    <div
+      class="resource-category-grid-shell"
+      @dragover="handleGridDragOver"
+      @dragleave="handleGridDragLeave"
+      @drop="handleGridDrop"
+    >
+      <CategoryGrid>
       <template #toolbar-actions>
-        <Button v-access:code="'category:write'" type="primary" @click="openCreateModal">新增分类</Button>
+        <Space>
+          <Button v-access:code="'category:write'" type="primary" @click="openCreateModal">新增分类</Button>
+          <div
+            v-access:code="'category:write'"
+            class="min-w-[340px] rounded border border-dashed px-3 py-1 text-xs"
+            :class="rootDropActive ? 'border-primary text-primary' : 'border-gray-300 text-gray-500'"
+            @dragover.prevent="rootDropActive = true"
+            @dragleave="rootDropActive = false"
+            @drop="handleDropToRoot"
+          >
+            {{ dragHintText }}
+          </div>
+        </Space>
       </template>
 
       <template #actions="{ row }">
         <Space>
+          <Button
+            v-access:code="'category:write'"
+            type="link"
+            size="small"
+            draggable="true"
+            @dragstart="(event: DragEvent) => handleDragStart(event, row)"
+            @dragend="clearDraggingState"
+          >
+            拖拽
+          </Button>
           <Button v-access:code="'category:write'" type="link" size="small" @click="openEditModal(row)">编辑</Button>
           <Button v-access:code="'category:write'" type="link" size="small" @click="openMoveModal(row)">移动</Button>
           <Button v-access:code="'category:write'" type="link" size="small" @click="openMergeModal(row)">合并</Button>
           <Button v-access:code="'category:write'" danger type="link" size="small" @click="handleDelete(row)">删除</Button>
         </Space>
       </template>
-    </CategoryGrid>
+      </CategoryGrid>
+    </div>
 
     <Modal
       :open="categoryModalOpen"
@@ -419,3 +682,13 @@ onMounted(async () => {
     </Modal>
   </div>
 </template>
+
+<style scoped>
+:deep(.resource-category-drag-target > td) {
+  background-color: var(--ant-color-primary-bg);
+}
+
+:deep(.resource-category-drag-source > td) {
+  opacity: 0.6;
+}
+</style>

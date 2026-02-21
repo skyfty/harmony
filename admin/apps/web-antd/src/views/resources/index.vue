@@ -20,7 +20,7 @@ import {
   type ResourceTagItem,
 } from '#/api';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Upload } from 'ant-design-vue';
+import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Upload } from 'ant-design-vue';
 
 interface AssetFormModel {
   categoryId: string;
@@ -61,6 +61,10 @@ const thumbnailFileList = ref<UploadFile[]>([]);
 const categories = ref<ResourceCategoryItem[]>([]);
 const tags = ref<ResourceTagItem[]>([]);
 const series = ref<ResourceSeriesItem[]>([]);
+const brokenThumbnailUrls = ref<Set<string>>(new Set());
+const previewVisible = ref(false);
+const previewImage = ref('');
+const previewTitle = ref('');
 
 const categoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
@@ -195,6 +199,22 @@ function handleThumbFileChange(info: UploadChangeParam<UploadFile<any>>) {
   thumbnailFileList.value = info.fileList.slice(-1);
 }
 
+function getUploadFileUrl(file?: UploadFile) {
+  if (!file) {
+    return '';
+  }
+  return ((file.response as any)?.url || file.url || '') as string;
+}
+
+async function handleThumbPreview(file: UploadFile) {
+  if (!file.url && !file.preview && file.originFileObj) {
+    file.preview = URL.createObjectURL(file.originFileObj as File);
+  }
+  previewImage.value = getUploadFileUrl(file) || String(file.preview || '');
+  previewVisible.value = true;
+  previewTitle.value = file.name || 'thumbnail';
+}
+
 function appendOptionalString(payload: FormData, key: string, value: string) {
   payload.append(key, value.trim());
 }
@@ -287,6 +307,25 @@ function handleDownload(id: string) {
   window.open(buildResourceDownloadUrl(id), '_blank');
 }
 
+function getThumbnailUrl(row: ResourceAssetItem) {
+  return row.thumbnailUrl || row.previewUrl || row.url || '';
+}
+
+function isThumbnailAvailable(row: ResourceAssetItem) {
+  const url = getThumbnailUrl(row);
+  return !!url && !brokenThumbnailUrls.value.has(url);
+}
+
+function handleThumbnailError(row: ResourceAssetItem) {
+  const url = getThumbnailUrl(row);
+  if (!url || brokenThumbnailUrls.value.has(url)) {
+    return;
+  }
+  const next = new Set(brokenThumbnailUrls.value);
+  next.add(url);
+  brokenThumbnailUrls.value = next;
+}
+
 const [AssetGrid, assetGridApi] = useVbenVxeGrid<ResourceAssetItem>({
   formOptions: {
     schema: [
@@ -341,6 +380,12 @@ const [AssetGrid, assetGridApi] = useVbenVxeGrid<ResourceAssetItem>({
   gridOptions: {
     border: true,
     columns: [
+      {
+        field: 'thumbnailUrl',
+        minWidth: 96,
+        slots: { default: 'thumbnail' },
+        title: '缩略图',
+      },
       { field: 'name', minWidth: 180, title: '名称' },
       { field: 'type', minWidth: 100, title: '类型' },
       { field: 'categoryPathString', minWidth: 220, title: '分类路径' },
@@ -396,6 +441,18 @@ onMounted(async () => {
     <AssetGrid>
       <template #toolbar-actions>
         <Button v-access:code="'resource:write'" type="primary" @click="openCreateModal">新增资产</Button>
+      </template>
+
+      <template #thumbnail="{ row }">
+        <Image
+          v-if="isThumbnailAvailable(row)"
+          :src="getThumbnailUrl(row)"
+          :width="52"
+          :height="52"
+          style="object-fit: cover; border-radius: 4px"
+          @error="() => handleThumbnailError(row)"
+        />
+        <span v-else>-</span>
       </template>
 
       <template #actions="{ row }">
@@ -461,8 +518,14 @@ onMounted(async () => {
           </Upload>
         </Form.Item>
         <Form.Item label="缩略图" name="thumbnail">
-          <Upload v-model:file-list="thumbnailFileList" v-bind="thumbUploadProps" @change="handleThumbFileChange">
-            <Button>上传缩略图</Button>
+          <Upload
+            v-model:file-list="thumbnailFileList"
+            v-bind="thumbUploadProps"
+            list-type="picture-card"
+            @change="handleThumbFileChange"
+            @preview="handleThumbPreview"
+          >
+            <div v-if="thumbnailFileList.length < 1">+ Upload</div>
           </Upload>
         </Form.Item>
         <Form.Item label="颜色" name="color">
@@ -491,6 +554,10 @@ onMounted(async () => {
           <TextArea v-model:value="assetFormModel.metadata" :rows="4" placeholder='例如：{"key":"value"}' />
         </Form.Item>
       </Form>
+    </Modal>
+
+    <Modal :open="previewVisible" :title="previewTitle" :footer="null" @cancel="previewVisible = false">
+      <img alt="preview" style="width: 100%" :src="previewImage" />
     </Modal>
   </div>
 </template>
