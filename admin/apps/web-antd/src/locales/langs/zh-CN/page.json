@@ -381,6 +381,7 @@
       },
       "table": {
         "keyword": "关键字",
+        "id": "用户ID",
         "username": "用户名",
         "displayName": "昵称",
         "email": "邮箱",

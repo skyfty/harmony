@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { FormInstance } from 'ant-design-vue';
-import type { CouponItem, CouponStatus } from '#/api';
+import type { CouponItem, CouponStatus, UserItem } from '#/api';
 import type { Dayjs } from 'dayjs';
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -11,6 +11,7 @@ import {
   distributeCouponBatchApi,
   getCouponStatsApi,
   listCouponsApi,
+  listUsersApi,
   listUserCouponsApi,
   useUserCouponByAdminApi,
 } from '#/api';
@@ -31,6 +32,11 @@ const distributeModalOpen = ref(false);
 const distributeSubmitting = ref(false);
 const distributeMode = ref<'single' | 'batch'>('single');
 const distributeFormRef = ref<FormInstance>();
+const userSearchLoading = ref(false);
+const userSearchOptions = ref<Array<{ label: string; value: string }>>([]);
+const selectedSingleUserId = ref<string>();
+const selectedBatchUserIds = ref<string[]>([]);
+const userSearchToken = ref(0);
 
 const distributeFormModel = reactive<DistributeFormModel>({
   couponId: '',
@@ -72,7 +78,46 @@ function openDistributeModal(mode: 'single' | 'batch') {
   distributeFormModel.userId = '';
   distributeFormModel.userIdsText = '';
   distributeFormModel.expiresAt = undefined;
+  selectedSingleUserId.value = undefined;
+  selectedBatchUserIds.value = [];
+  userSearchOptions.value = [];
   distributeModalOpen.value = true;
+}
+
+function parseManualUserIds(text: string) {
+  return text
+    .split(/[\n,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatUserOptionLabel(user: UserItem) {
+  const name = user.displayName || user.username || user.id;
+  const usernameText = user.username ? ` @${user.username}` : '';
+  return `${name}${usernameText} (${user.id})`;
+}
+
+async function handleUserSearch(keyword = '') {
+  const token = ++userSearchToken.value;
+  userSearchLoading.value = true;
+  try {
+    const res = await listUsersApi({
+      keyword: keyword.trim() || undefined,
+      page: 1,
+      pageSize: 20,
+    });
+    if (token !== userSearchToken.value) {
+      return;
+    }
+    userSearchOptions.value = (res.items || []).map((item: UserItem) => ({
+      label: formatUserOptionLabel(item),
+      value: item.id,
+    }));
+  } finally {
+    if (token === userSearchToken.value) {
+      userSearchLoading.value = false;
+    }
+  }
 }
 
 async function submitDistribute() {
@@ -84,16 +129,25 @@ async function submitDistribute() {
   try {
     const expiresAt = distributeFormModel.expiresAt?.toISOString();
     if (distributeMode.value === 'single') {
+      const selectedUserId = selectedSingleUserId.value?.trim() || '';
+      const manualUserId = distributeFormModel.userId.trim();
+      const userId = manualUserId || selectedUserId;
+      if (!userId) {
+        message.error('请选择用户或手动输入用户ID');
+        return;
+      }
       await distributeCouponApi(distributeFormModel.couponId, {
-        userId: distributeFormModel.userId.trim(),
+        userId,
         expiresAt,
       });
       message.success('分发成功');
     } else {
-      const userIds = distributeFormModel.userIdsText
-        .split(/[\n,，\s]+/)
-        .map((item) => item.trim())
-        .filter(Boolean);
+      const manualUserIds = parseManualUserIds(distributeFormModel.userIdsText);
+      const userIds = [...new Set([...selectedBatchUserIds.value, ...manualUserIds])];
+      if (userIds.length === 0) {
+        message.error('请选择用户或输入用户ID列表');
+        return;
+      }
       await distributeCouponBatchApi(distributeFormModel.couponId, {
         userIds,
         expiresAt,
@@ -260,25 +314,52 @@ onMounted(async () => {
           />
         </Form.Item>
 
+        <Form.Item label="搜索用户">
+          <Select
+            v-if="distributeMode === 'single'"
+            v-model:value="selectedSingleUserId"
+            :filter-option="false"
+            :loading="userSearchLoading"
+            :options="userSearchOptions"
+            allow-clear
+            show-search
+            placeholder="输入昵称/用户名搜索用户"
+            @focus="() => handleUserSearch()"
+            @search="handleUserSearch"
+          />
+
+          <Select
+            v-else
+            v-model:value="selectedBatchUserIds"
+            mode="multiple"
+            :filter-option="false"
+            :loading="userSearchLoading"
+            :options="userSearchOptions"
+            allow-clear
+            show-search
+            placeholder="输入昵称/用户名搜索并选择多个用户"
+            @focus="() => handleUserSearch()"
+            @search="handleUserSearch"
+          />
+        </Form.Item>
+
         <Form.Item
           v-if="distributeMode === 'single'"
-          label="用户ID"
+          label="用户ID(手动)"
           name="userId"
-          :rules="[{ required: true, message: '请输入用户ID' }]"
         >
-          <Input v-model:value="distributeFormModel.userId" placeholder="请输入用户ID" />
+          <Input v-model:value="distributeFormModel.userId" placeholder="未搜索到用户时可手动输入用户ID" />
         </Form.Item>
 
         <Form.Item
           v-else
-          label="用户ID列表"
+          label="用户ID列表(手动)"
           name="userIdsText"
-          :rules="[{ required: true, message: '请输入用户ID列表' }]"
         >
           <Input.TextArea
             v-model:value="distributeFormModel.userIdsText"
             :rows="5"
-            placeholder="每行一个用户ID，或使用逗号/空格分隔"
+            placeholder="可粘贴用户ID列表；每行一个，或使用逗号/空格分隔"
           />
         </Form.Item>
 

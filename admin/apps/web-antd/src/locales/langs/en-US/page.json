@@ -381,6 +381,7 @@
       },
       "table": {
         "keyword": "Keyword",
+        "id": "User ID",
         "username": "Username",
         "displayName": "Display Name",
         "email": "Email",

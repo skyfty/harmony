@@ -248,6 +248,7 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
     border: true,
     columns: [
       { field: 'avatarUrl', minWidth: 100, title: '头像', slots: { default: 'avatar' } },
+      { field: 'id', minWidth: 220, title: t('page.systemUsers.index.table.id') },
       { field: 'username', minWidth: 150, sortable: true, title: t('page.systemUsers.index.table.username') },
       { field: 'displayName', minWidth: 140, title: t('page.systemUsers.index.table.displayName') },
       { field: 'wxOpenId', minWidth: 180, title: '微信 OpenId' },
