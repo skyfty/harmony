@@ -50,4 +50,4 @@ editor/src/wasm/pkg/**
 .cache/**
 
 # Turborepo local cache (ignore per-package .turbo folders)
-/admin/.turbo/
+**/.turbo/
