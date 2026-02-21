@@ -99,11 +99,10 @@ import { computed, ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
 import { getScenic, rateScenic, toggleScenicFavorite, trackAnalyticsEvent } from '@/api/mini';
-import { listCommentsByScenic } from '@/mocks/comments';
 import type { ScenicDetail } from '@/types/scenic';
 
 const scenic = ref<ScenicDetail | null>(null);
-const comments = ref(listCommentsByScenic(''));
+const comments = ref([]);
 const favoriteLoading = ref(false);
 const ratingModalVisible = ref(false);
 const ratingSubmitting = ref(false);
@@ -118,7 +117,6 @@ const ratingLabel = computed(() => {
 
 onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
-  comments.value = id ? listCommentsByScenic(id) : [];
   if (!id) {
     scenic.value = null;
     return;
