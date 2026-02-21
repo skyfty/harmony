@@ -1,6 +1,5 @@
 import Router from 'koa-router'
 import { optionalMiniAuth, requireMiniAuth } from '@/middleware/authDomains'
-import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
 import {
   listSceneSpots,
   getSceneSpot,
@@ -66,10 +65,6 @@ import { trackAnalyticsEvent } from '@/controllers/miniprogram/analyticsControll
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
 
-// public auth endpoints
-miniRouter.post('/users/register', register)
-miniRouter.post('/users/login', login)
-
 // public readable resources
 miniRouter.get('/works/:id', optionalMiniAuth, getWork)
 miniRouter.get('/collections/:id', optionalMiniAuth, getCollection)
@@ -89,10 +84,6 @@ miniRouter.get('/products', optionalMiniAuth, listProducts)
 miniRouter.get('/products/:id', optionalMiniAuth, getProduct)
 
 miniRouter.use(requireMiniAuth)
-
-// profile
-miniRouter.get('/users/me', getProfile)
-miniRouter.patch('/users/me', updateProfile)
 
 // scenic interactions
 miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)

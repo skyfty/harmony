@@ -203,7 +203,7 @@ export function apiUpdateProfile(payload: {
   gender?: 'male' | 'female' | 'other';
   birthDate?: string;
 }): Promise<AuthSession> {
-  return patch<AuthSession>('/users/me', payload);
+  return patch<AuthSession>('/mini-auth/profile', payload);
 }
 
 export interface CreateWorkPayload {

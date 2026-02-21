@@ -1,4 +1,5 @@
 import type { Context } from 'koa'
+import { AppUserModel } from '@/models/AppUser'
 import {
   miniGetProfile,
   miniLoginWithOpenId,
@@ -7,6 +8,16 @@ import {
 } from '@/services/miniAuthService'
 import { recordLogin } from '@/services/loginAuditService'
 import { inferDeviceFromUserAgent, recordAnalyticsEvent } from '@/services/analyticsService'
+
+interface UpdateProfileBody {
+  displayName?: string
+  email?: string
+  avatarUrl?: string
+  phone?: string
+  bio?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: string
+}
 
 export async function miniRegister(ctx: Context): Promise<void> {
   const { username, password, displayName, email, phone } = ctx.request.body as {
@@ -154,6 +165,48 @@ export async function miniProfile(ctx: Context): Promise<void> {
   const userId = ctx.state.miniAuthUser?.id
   if (!userId) {
     ctx.throw(401, 'Unauthorized')
+  }
+  const session = await miniGetProfile(userId)
+  ctx.body = session
+}
+
+export async function miniUpdateProfile(ctx: Context): Promise<void> {
+  const userId = ctx.state.miniAuthUser?.id
+  if (!userId) {
+    ctx.throw(401, 'Unauthorized')
+  }
+  const { displayName, email, avatarUrl, phone, bio, gender, birthDate } = ctx.request.body as UpdateProfileBody
+  const updatePayload: Record<string, unknown> = {}
+  if (typeof displayName === 'string') {
+    updatePayload.displayName = displayName
+  }
+  if (typeof email === 'string') {
+    updatePayload.email = email
+  }
+  if (typeof avatarUrl === 'string') {
+    updatePayload.avatarUrl = avatarUrl
+  }
+  if (typeof phone === 'string') {
+    updatePayload.phone = phone
+  }
+  if (typeof bio === 'string') {
+    updatePayload.bio = bio
+  }
+  if (typeof gender === 'string' && ['male', 'female', 'other'].includes(gender)) {
+    updatePayload.gender = gender
+  }
+  if (typeof birthDate === 'string') {
+    const date = new Date(birthDate)
+    if (!isNaN(date.getTime())) {
+      updatePayload.birthDate = date
+    }
+  }
+  if (!Object.keys(updatePayload).length) {
+    ctx.throw(400, 'No profile fields provided')
+  }
+  const updated = await AppUserModel.findByIdAndUpdate(userId, updatePayload, { new: true }).lean().exec()
+  if (!updated) {
+    ctx.throw(404, 'User not found')
   }
   const session = await miniGetProfile(userId)
   ctx.body = session
