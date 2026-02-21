@@ -111,7 +111,7 @@ function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
 
 export async function listResourceAssetsApi(params: ListResourceAssetsParams) {
   const response = await requestClient.get<ServerPageResult<ResourceAssetItem>>(
-    '/resources/assets',
+    '/admin/resources/assets',
     {
       params,
     },
@@ -120,11 +120,11 @@ export async function listResourceAssetsApi(params: ListResourceAssetsParams) {
 }
 
 export async function getResourceAssetApi(id: string) {
-  return requestClient.get<ResourceAssetItem>(`/resources/assets/${id}`);
+  return requestClient.get<ResourceAssetItem>(`/admin/resources/assets/${id}`);
 }
 
 export async function createResourceAssetApi(payload: FormData) {
-  return requestClient.post<{ asset: ResourceAssetItem }>('/resources/assets', payload, {
+  return requestClient.post<{ asset: ResourceAssetItem }>('/admin/resources/assets', payload, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -132,7 +132,7 @@ export async function createResourceAssetApi(payload: FormData) {
 }
 
 export async function updateResourceAssetApi(id: string, payload: FormData) {
-  return requestClient.put<ResourceAssetItem>(`/resources/assets/${id}`, payload, {
+  return requestClient.put<ResourceAssetItem>(`/admin/resources/assets/${id}`, payload, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -140,18 +140,18 @@ export async function updateResourceAssetApi(id: string, payload: FormData) {
 }
 
 export async function deleteResourceAssetApi(id: string) {
-  return requestClient.delete(`/resources/assets/${id}`);
+  return requestClient.delete(`/admin/resources/assets/${id}`);
 }
 
 export async function bulkMoveResourceAssetsApi(payload: BulkMoveAssetsPayload) {
   return requestClient.post<{ matchedCount: number; modifiedCount: number }>(
-    '/resources/assets/bulk-move-category',
+    '/admin/resources/assets/bulk-move-category',
     payload,
   );
 }
 
 export async function listResourceCategoriesApi() {
-  return requestClient.get<ResourceCategoryItem[]>('/resources/categories');
+  return requestClient.get<ResourceCategoryItem[]>('/admin/resources/categories');
 }
 
 export async function createResourceCategoryApi(payload: {
@@ -159,22 +159,22 @@ export async function createResourceCategoryApi(payload: {
   name: string;
   parentId?: null | string;
 }) {
-  return requestClient.post<ResourceCategoryItem>('/resources/categories', payload);
+  return requestClient.post<ResourceCategoryItem>('/admin/resources/categories', payload);
 }
 
 export async function updateResourceCategoryApi(
   id: string,
   payload: { description?: null | string; name?: string },
 ) {
-  return requestClient.put<ResourceCategoryItem>(`/resources/categories/${id}`, payload);
+  return requestClient.put<ResourceCategoryItem>(`/admin/resources/categories/${id}`, payload);
 }
 
 export async function deleteResourceCategoryApi(id: string) {
-  return requestClient.delete(`/resources/categories/${id}`);
+  return requestClient.delete(`/admin/resources/categories/${id}`);
 }
 
 export async function moveResourceCategoryApi(id: string, targetParentId: null | string) {
-  return requestClient.post<ResourceCategoryItem>(`/resources/categories/${id}/move`, {
+  return requestClient.post<ResourceCategoryItem>(`/admin/resources/categories/${id}/move`, {
     targetParentId,
   });
 }
@@ -184,41 +184,41 @@ export async function mergeResourceCategoriesApi(payload: MergeCategoryPayload) 
     deletedCategoryId: string;
     movedAssetCount: number;
     movedChildCount: number;
-  }>('/resources/categories/merge', payload);
+  }>('/admin/resources/categories/merge', payload);
 }
 
 export async function listResourceTagsApi() {
-  return requestClient.get<ResourceTagItem[]>('/resources/tags');
+  return requestClient.get<ResourceTagItem[]>('/admin/resources/tags');
 }
 
 export async function createResourceTagApi(payload: { name?: string; names?: string[]; description?: string }) {
-  return requestClient.post<{ tags: ResourceTagItem[]; createdTagIds?: string[] }>('/resources/tags', payload);
+  return requestClient.post<{ tags: ResourceTagItem[]; createdTagIds?: string[] }>('/admin/resources/tags', payload);
 }
 
 export async function updateResourceTagApi(id: string, payload: { name: string; description?: null | string }) {
-  return requestClient.put<ResourceTagItem>(`/resources/tags/${id}`, payload);
+  return requestClient.put<ResourceTagItem>(`/admin/resources/tags/${id}`, payload);
 }
 
 export async function deleteResourceTagApi(id: string) {
-  return requestClient.delete(`/resources/tags/${id}`);
+  return requestClient.delete(`/admin/resources/tags/${id}`);
 }
 
 export async function listResourceSeriesApi() {
-  return requestClient.get<ResourceSeriesItem[]>('/resources/series');
+  return requestClient.get<ResourceSeriesItem[]>('/admin/resources/series');
 }
 
 export async function createResourceSeriesApi(payload: { name: string; description?: string | null }) {
-  return requestClient.post<ResourceSeriesItem>('/resources/series', payload);
+  return requestClient.post<ResourceSeriesItem>('/admin/resources/series', payload);
 }
 
 export async function updateResourceSeriesApi(id: string, payload: { name: string; description?: string | null }) {
-  return requestClient.put<ResourceSeriesItem>(`/resources/series/${id}`, payload);
+  return requestClient.put<ResourceSeriesItem>(`/admin/resources/series/${id}`, payload);
 }
 
 export async function deleteResourceSeriesApi(id: string) {
-  return requestClient.delete(`/resources/series/${id}`);
+  return requestClient.delete(`/admin/resources/series/${id}`);
 }
 
 export function buildResourceDownloadUrl(id: string) {
-  return `/api/resources/assets/${id}/download`;
+  return `/api/admin/resources/assets/${id}/download`;
 }

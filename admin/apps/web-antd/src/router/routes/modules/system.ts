@@ -178,6 +178,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.resources.series.title'),
         },
       },
+      {
+        name: 'ResourcesCategories',
+        path: 'categories',
+        component: () => import('#/views/resources/categories.vue'),
+        meta: {
+          icon: 'lucide:folder-tree',
+          title: '资源分类',
+        },
+      },
     ],
   },
   {

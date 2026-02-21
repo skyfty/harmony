@@ -65,14 +65,23 @@ import {
 } from '@/controllers/admin/adminAccountController'
 import {
   bulkMoveAssetsCategory,
+  createAssetSeries,
+  createAssetTag,
   createAssetCategory,
+  downloadAsset,
   deleteAsset,
+  deleteAssetSeries,
+  deleteAssetTag,
   deleteAssetCategory,
   getAsset,
+  listAssetSeries,
+  listAssetTags,
   listAssets,
   listResourceCategories,
   mergeAssetCategories,
   moveAssetCategory,
+  updateAssetSeries,
+  updateAssetTag,
   updateAsset,
   updateAssetCategory,
   uploadAsset,
@@ -192,6 +201,7 @@ adminRouter.delete('/admins/:id', requireAnyPermission(['admin:super']), deleteA
 
 adminRouter.get('/resources/assets', requireAnyPermission(['resource:read']), listAssets)
 adminRouter.get('/resources/assets/:id', requireAnyPermission(['resource:read']), getAsset)
+adminRouter.get('/resources/assets/:id/download', requireAnyPermission(['resource:read']), downloadAsset)
 adminRouter.post(
   '/resources/assets',
   requireAnyPermission(['resource:write']),
@@ -206,6 +216,23 @@ adminRouter.put(
 )
 adminRouter.delete('/resources/assets/:id', requireAnyPermission(['resource:write']), deleteAsset)
 adminRouter.post('/resources/assets/bulk-move-category', requireAnyPermission(['resource:write']), bulkMoveAssetsCategory)
+
+adminRouter.get('/resources/tags', requireAnyPermission(['resource:read']), listAssetTags)
+adminRouter.post('/resources/tags', requireAnyPermission(['resource:write']), createAssetTag)
+adminRouter.put('/resources/tags/:id', requireAnyPermission(['resource:write']), updateAssetTag)
+adminRouter.delete('/resources/tags/:id', requireAnyPermission(['resource:write']), deleteAssetTag)
+
+adminRouter.get('/resources/series', requireAnyPermission(['resource:read']), listAssetSeries)
+adminRouter.post('/resources/series', requireAnyPermission(['resource:write']), createAssetSeries)
+adminRouter.put('/resources/series/:id', requireAnyPermission(['resource:write']), updateAssetSeries)
+adminRouter.delete('/resources/series/:id', requireAnyPermission(['resource:write']), deleteAssetSeries)
+
+adminRouter.get('/resources/categories', requireAnyPermission(['category:read']), listResourceCategories)
+adminRouter.post('/resources/categories', requireAnyPermission(['category:write']), createAssetCategory)
+adminRouter.put('/resources/categories/:id', requireAnyPermission(['category:write']), updateAssetCategory)
+adminRouter.delete('/resources/categories/:id', requireAnyPermission(['category:write']), deleteAssetCategory)
+adminRouter.post('/resources/categories/:id/move', requireAnyPermission(['category:write']), moveAssetCategory)
+adminRouter.post('/resources/categories/merge', requireAnyPermission(['category:write']), mergeAssetCategories)
 
 adminRouter.get('/categories', requireAnyPermission(['category:read']), listResourceCategories)
 adminRouter.post('/categories', requireAnyPermission(['category:write']), createAssetCategory)

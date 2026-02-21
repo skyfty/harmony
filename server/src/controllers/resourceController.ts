@@ -136,6 +136,31 @@ type AssetMutationPayload = {
   imageWidth?: number | null
   imageHeight?: number | null
   terrainScatterPreset?: TerrainScatterCategory | null
+  metadata?: Record<string, unknown> | null
+}
+
+function sanitizeMetadata(value: unknown): Record<string, unknown> | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed.length || ['null', 'none'].includes(trimmed.toLowerCase())) {
+      return null
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 type ProjectDirectoryAsset = {
@@ -865,15 +890,16 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
   if (!rawBody) {
     return {}
   }
+  const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
+  const hasTagIds = hasOwn('tagIds') || hasOwn('tags')
   const tagIds = ensureArrayString(rawBody.tagIds ?? rawBody.tags)
   const payload: AssetMutationPayload = {
     name: sanitizeString(rawBody.name) ?? undefined,
     type: sanitizeString(rawBody.type) ?? undefined,
     description: sanitizeString(rawBody.description),
-    tagIds: tagIds.length ? tagIds : undefined,
+    tagIds: hasTagIds ? tagIds : undefined,
     categoryId: sanitizeString(rawBody.categoryId),
   }
-  const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
 
   const rawSeriesInput = hasOwn('seriesId') ? rawBody.seriesId : hasOwn('series') ? rawBody.series : undefined
   if (hasOwn('seriesId') || hasOwn('series')) {
@@ -952,6 +978,10 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     } else {
       payload.terrainScatterPreset = null
     }
+  }
+
+  if (hasOwn('metadata')) {
+    payload.metadata = sanitizeMetadata(rawBody.metadata)
   }
 
 
@@ -1552,6 +1582,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     previewUrl: thumbnailInfo?.url ?? (type === 'image' ? fileInfo.url : null),
     thumbnailUrl: thumbnailInfo?.url ?? (type === 'image' ? fileInfo.url : null),
     description: payload.description ?? null,
+    metadata: payload.metadata ?? undefined,
     originalFilename: fileInfo.originalFilename,
     mimeType: fileInfo.mimeType,
     terrainScatterPreset,
@@ -1592,13 +1623,23 @@ export async function updateAsset(ctx: Context): Promise<void> {
   if (payload.description !== undefined) {
     updates.description = payload.description
   }
+  if (payload.metadata !== undefined) {
+    if (payload.metadata === null) {
+      updates.$unset = {
+        ...(updates.$unset as Record<string, unknown> | undefined),
+        metadata: 1,
+      }
+    } else {
+      updates.metadata = payload.metadata
+    }
+  }
   if (payload.color !== undefined) {
     updates.color = payload.color ?? null
   }
   if (payload.terrainScatterPreset !== undefined) {
     updates.terrainScatterPreset = payload.terrainScatterPreset ?? null
   }
-  if (payload.tagIds) {
+  if (payload.tagIds !== undefined) {
     const tagIds = payload.tagIds.filter((tagId) => Types.ObjectId.isValid(tagId))
     if (tagIds.length !== payload.tagIds.length) {
       ctx.throw(400, 'Invalid tag ids provided')
