@@ -1,9 +1,26 @@
 const TOKEN_STORAGE_KEY = 'miniapp:authToken';
-const DEFAULT_BASE_URL = 'http://cdn.touchmagic.cn/api/mini';
+const DEFAULT_DEV_API_BASE_URL = 'http://localhost:4000/api/mini';
+const DEFAULT_PROD_API_BASE_URL = 'https://v.touchmagic.cn/api/mini';
+const DEFAULT_DEV_DOWNLOAD_CDN_BASE = 'http://localhost:4000';
+const DEFAULT_PROD_DOWNLOAD_CDN_BASE = 'https://cdn.touchmagic.cn';
+
+function resolveModeDefault(devValue: string, prodValue: string): string {
+  return import.meta.env?.DEV ? devValue : prodValue;
+}
 
 export function getBaseUrl(): string {
   const envBase = (import.meta as any)?.env?.VITE_MINI_TEST_API_BASE || (import.meta as any)?.env?.VITE_MINI_API_BASE;
-  const raw = typeof envBase === 'string' && envBase.length ? envBase : DEFAULT_BASE_URL;
+  const raw = typeof envBase === 'string' && envBase.length
+    ? envBase
+    : resolveModeDefault(DEFAULT_DEV_API_BASE_URL, DEFAULT_PROD_API_BASE_URL);
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+export function getDownloadCdnBaseUrl(): string {
+  const envBase = (import.meta as any)?.env?.VITE_MINI_DOWNLOAD_CDN_BASE;
+  const raw = typeof envBase === 'string' && envBase.length
+    ? envBase
+    : resolveModeDefault(DEFAULT_DEV_DOWNLOAD_CDN_BASE, DEFAULT_PROD_DOWNLOAD_CDN_BASE);
   return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
 

@@ -1,0 +1,4 @@
+{
+  "serverApiBaseUrl": "http://editor.v.touchmagic.cn",
+  "serverApiPrefix": "/api"
+}

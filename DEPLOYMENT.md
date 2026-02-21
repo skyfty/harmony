@@ -31,13 +31,17 @@ docker compose -f docker-compose.prod.yml ps
 
 ## 运行时要点
 - `server/.env.production`：设置 `NODE_ENV`, `PORT`, `MONGODB_URI`, `JWT_SECRET`, `ASSET_STORAGE_PATH`, `ASSET_PUBLIC_URL`, `MULTIUSER_PORT`
+	- 示例：`ASSET_PUBLIC_URL=http://v.touchmagic.cn/uploads`
 - `editor`/`uploader`：挂载 `config/*.json`，修改后无需重建镜像
+	- `editor` 生产示例：`serverApiBaseUrl=http://editor.v.touchmagic.cn`
+	- `uploader` 生产示例：`serverApiBaseUrl=http://uploader.v.touchmagic.cn`
 - `admin`：通过注入 `admin-app-config.js`（`window._VBEN_ADMIN_PRO_APP_CONF_`）配置 API 基址
+	- 生产示例：`VITE_GLOB_API_URL=http://v.touchmagic.cn/api`
 
 ## 检查点（快速验证）
-- API 健康： `curl -I https://<host>/api/auth/health` → 200
-- 静态资源： `curl -I https://<host>/uploads/<file>` → 200/404
-- 前端首页： `curl -I https://admin.<host>/`, `https://editor.<host>/`
+- API 健康： `curl -I http://v.touchmagic.cn/api/auth/health` → 200
+- 静态资源： `curl -I http://v.touchmagic.cn/uploads/<file>` → 200/404
+- 前端首页： `curl -I http://v.touchmagic.cn/`, `http://editor.v.touchmagic.cn/`, `http://uploader.v.touchmagic.cn/`
 
 ## 查看 Docker 日志
 生产环境排查常用命令：
@@ -91,6 +95,9 @@ pnpm run build:mp-weixin
 ```
 
 确认 `VITE_MINI_API_BASE` 指向生产 API。
+同时确认 `VITE_MINI_DOWNLOAD_CDN_BASE`：
+- 生产：`https://cdn.touchmagic.cn`
+- 开发：`http://localhost:4000`
 
 ## 运营与安全要点
 - 定期备份 `mongo-data` 与 `uploads`

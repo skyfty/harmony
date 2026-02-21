@@ -48,7 +48,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8087:80" # 通过反向代理映射到 https://admin.v.touchmagic.cn
+      - "8087:80" # 通过反向代理映射到 http://v.touchmagic.cn
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
@@ -66,7 +66,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8088:80" # 通过反向代理映射到 https://editor.v.touchmagic.cn
+      - "8088:80" # 通过反向代理映射到 http://editor.v.touchmagic.cn
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json
@@ -84,7 +84,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8090:80" # 可通过反向代理映射到上传服务域名
+      - "8090:80" # 可通过反向代理映射到 http://uploader.v.touchmagic.cn
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json

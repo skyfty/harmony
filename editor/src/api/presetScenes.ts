@@ -1,16 +1,11 @@
 import type { PresetSceneDetail, PresetSceneSummary } from '@/types/preset-scene'
 import { useAuthStore } from '@/stores/authStore'
+import { buildServerApiUrl } from './serverApiConfig'
 
-const RAW_BASE_URL = (import.meta.env?.VITE_SERVER_API_BASE_URL as string | undefined)?.trim() ?? ''
-const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -1) : RAW_BASE_URL
 const API_PREFIX = '/api/preset-scenes'
 
 function buildUrl(path: string): string {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  if (!API_BASE_URL) {
-    return normalizedPath
-  }
-  return `${API_BASE_URL}${normalizedPath}`
+  return buildServerApiUrl(path)
 }
 
 async function request<T>(path: string): Promise<T> {

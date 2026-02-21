@@ -21,7 +21,7 @@ COPY --from=build /app/admin/apps/web-antd/dist ./
 # 默认生产配置（可被 compose 挂载的 /usr/share/nginx/html/_app.config.js 覆盖）
 COPY <<'EOF' /usr/share/nginx/html/_app.config.js
 window._VBEN_ADMIN_PRO_APP_CONF_ = {
-  VITE_GLOB_API_URL: 'https://v.touchmagic.cn/api',
+  VITE_GLOB_API_URL: 'http://v.touchmagic.cn/api',
   VITE_GLOB_AUTH_DINGDING_CORP_ID: '',
   VITE_GLOB_AUTH_DINGDING_CLIENT_ID: ''
 };
