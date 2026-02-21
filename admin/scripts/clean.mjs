@@ -108,7 +108,8 @@ async function cleanTargetsRecursively(currentDir, targets, depth = 0) {
 
 (async function startCleanup() {
   // 要删除的目录及文件名称
-  const targets = ['node_modules', 'dist', '.turbo', 'dist.zip'];
+  // Note: 'dist.zip' removed to avoid cleaning a file that should no longer be produced automatically
+  const targets = ['node_modules', 'dist', '.turbo'];
   const deleteLockFile = process.argv.includes('--del-lock');
   const cleanupTargets = [...targets];
 

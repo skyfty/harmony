@@ -208,7 +208,9 @@ async function loadApplicationPlugins(
       ],
     },
     {
-      condition: archiver,
+      // Archiver plugin intentionally disabled to avoid auto-generating dist.zip
+      // Set condition to false to prevent zipping during build.
+      condition: false,
       plugins: async () => {
         return [await viteArchiverPlugin(archiverPluginOptions)];
       },
