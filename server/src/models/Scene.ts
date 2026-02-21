@@ -9,7 +9,8 @@ const sceneSchema = new Schema<SceneDocument>(
     fileSize: { type: Number, required: true, min: 0, default: 0 },
     fileType: { type: String, default: null },
     originalFilename: { type: String, default: null },
-    publishedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    publishedBy: { type: Schema.Types.ObjectId, default: null },
+    publishedByType: { type: String, enum: ['User', 'Admin'], required: true },
   },
   {
     timestamps: true,
@@ -19,6 +20,6 @@ const sceneSchema = new Schema<SceneDocument>(
 
 sceneSchema.index({ name: 1 })
 sceneSchema.index({ createdAt: -1 })
-sceneSchema.index({ publishedBy: 1, createdAt: -1 })
+sceneSchema.index({ publishedByType: 1, publishedBy: 1, createdAt: -1 })
 
 export const SceneModel = model<SceneDocument>('Scene', sceneSchema)

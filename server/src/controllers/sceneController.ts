@@ -14,6 +14,31 @@ type SceneMutationPayload = {
   name?: string
 }
 
+type ScenePublisher = {
+  id: string
+  type: 'User' | 'Admin'
+}
+
+function resolveScenePublisher(ctx: Context): ScenePublisher | null {
+  const adminAuthUserId = ctx.state.adminAuthUser?.id
+  if (adminAuthUserId && Types.ObjectId.isValid(adminAuthUserId)) {
+    return {
+      id: adminAuthUserId,
+      type: 'Admin',
+    }
+  }
+
+  const userId = ctx.state.user?.id
+  if (userId && Types.ObjectId.isValid(userId)) {
+    return {
+      id: userId,
+      type: 'User',
+    }
+  }
+
+  return null
+}
+
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
@@ -64,15 +89,16 @@ export async function createScene(ctx: Context): Promise<void> {
   if (!filePayload) {
     ctx.throw(400, 'Scene package file is required')
   }
-  const publishedBy = (ctx.state as { user?: { id?: string } } | undefined)?.user?.id
-  if (!publishedBy || !Types.ObjectId.isValid(publishedBy)) {
+  const publisher = resolveScenePublisher(ctx)
+  if (!publisher) {
     ctx.throw(401, 'Invalid user')
   }
 
   const created = await createSceneService({
     name,
     file: filePayload,
-    publishedBy,
+    publishedBy: publisher.id,
+    publishedByType: publisher.type,
   })
 
   ctx.status = 201

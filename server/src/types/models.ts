@@ -630,7 +630,8 @@ export interface AssetDocument extends Document<Types.ObjectId> {
  * @property {string | null} [fileType] - 文件的MIME类型，可选字段，支持null值
  * @property {string | null} [originalFilename] - 文件原始名称，可选字段，支持null值
  * @property {Record<string, unknown> | null} [metadata] - 自定义元数据对象，可选字段，支持null值
- * @property {Types.ObjectId | null} publishedBy - 发布者的用户ID，可为null表示未发布
+ * @property {Types.ObjectId | null} publishedBy - 发布者账号ID，可为null表示未发布
+ * @property {'User' | 'Admin'} publishedByType - 发布者账号类型，区分用户端与管理端
  * @property {Date} createdAt - 记录创建时间，由MongoDB自动管理
  * @property {Date} updatedAt - 记录最后修改时间，由MongoDB自动管理
  */
@@ -642,6 +643,7 @@ export interface SceneDocument extends Document<Types.ObjectId> {
   fileType?: string | null
   originalFilename?: string | null
   publishedBy: Types.ObjectId | null
+  publishedByType: 'User' | 'Admin'
   createdAt: Date
   updatedAt: Date
 }

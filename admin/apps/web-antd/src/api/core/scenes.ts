@@ -21,6 +21,7 @@ export interface SceneItem {
   fileType?: null | string;
   originalFilename?: null | string;
   publishedBy?: null | string;
+  publishedByType: 'Admin' | 'User';
   createdAt: string;
   updatedAt: string;
 }

@@ -33,6 +33,7 @@ export type SceneData = {
   fileType: string | null
   originalFilename: string | null
   publishedBy: string | null
+  publishedByType: 'User' | 'Admin'
   createdAt: string
   updatedAt: string
 }
@@ -49,6 +50,7 @@ export type SceneCreatePayload = {
   name: string
   file: UploadedFilePayload
   publishedBy: string
+  publishedByType: 'User' | 'Admin'
 }
 
 export type SceneUpdatePayload = {
@@ -137,6 +139,7 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
   } else if (scene.publishedBy) {
     publishedBy = String(scene.publishedBy)
   }
+  const publishedByType = scene.publishedByType === 'Admin' ? 'Admin' : 'User'
   return {
     id,
     name: scene.name,
@@ -146,6 +149,7 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
     fileType: sanitizeString(scene.fileType),
     originalFilename: sanitizeString(scene.originalFilename),
     publishedBy,
+    publishedByType,
     createdAt,
     updatedAt,
   }
@@ -193,6 +197,7 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
       fileType: stored.fileType,
       originalFilename: stored.originalFilename,
       publishedBy: new Types.ObjectId(payload.publishedBy),
+      publishedByType: payload.publishedByType,
     })
     return mapSceneDocument(created.toObject() as SceneDocLike)
   } catch (error) {
