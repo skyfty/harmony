@@ -183,7 +183,7 @@ const routes: RouteRecordRaw[] = [
   {
     meta: {
       icon: 'carbon:user-role',
-      order: 10,
+      order: 9999,
       title: $t('page.system.title'),
     },
     name: 'System',
