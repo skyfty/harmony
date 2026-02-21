@@ -137,6 +137,22 @@ export interface LoginAuditDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface AnalyticsEventDocument extends Document<Types.ObjectId> {
+  eventType: string
+  userId?: Types.ObjectId | null
+  sceneId?: Types.ObjectId | null
+  sceneSpotId?: Types.ObjectId | null
+  sessionId?: string
+  source?: string
+  device?: string
+  path?: string
+  dwellMs?: number
+  metadata?: Record<string, unknown> | null
+  occurredAt: Date
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface RatingEntry {
   /** 中文：评分用户 ID */
   userId: Types.ObjectId

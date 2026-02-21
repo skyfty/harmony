@@ -8,9 +8,9 @@
     "profile": "个人中心"
   },
   "dashboard": {
-    "title": "概览",
+    "title": "分析",
     "analytics": "分析页",
-    "workspace": "工作台"
+    "workspace": "数据工作台"
   },
   "scenes": {
     "title": "场景管理",

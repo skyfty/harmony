@@ -1,14 +1,28 @@
 <script lang="ts" setup>
 import type { EchartsUIType } from '@vben/plugins/echarts';
 
-import { onMounted, ref } from 'vue';
+import { ref, watch } from 'vue';
 
 import { EchartsUI, useEcharts } from '@vben/plugins/echarts';
+
+interface MetricItem {
+  name: string;
+  value: number;
+}
+
+const props = defineProps<{
+  data?: MetricItem[];
+}>();
 
 const chartRef = ref<EchartsUIType>();
 const { renderEcharts } = useEcharts(chartRef);
 
-onMounted(() => {
+watch(
+  () => props.data,
+  (items) => {
+    const list = Array.isArray(items) && items.length
+      ? items
+      : [{ name: '未知', value: 0 }];
   renderEcharts({
     legend: {
       bottom: 0,
@@ -16,24 +30,7 @@ onMounted(() => {
     },
     radar: {
       indicator: [
-        {
-          name: '网页',
-        },
-        {
-          name: '移动端',
-        },
-        {
-          name: 'Ipad',
-        },
-        {
-          name: '客户端',
-        },
-        {
-          name: '第三方',
-        },
-        {
-          name: '其它',
-        },
+        ...list.map((item) => ({ name: item.name, max: Math.max(item.value, 1) })),
       ],
       radius: '60%',
       splitNumber: 8,
@@ -50,17 +47,10 @@ onMounted(() => {
         data: [
           {
             itemStyle: {
-              color: '#b6a2de',
-            },
-            name: '访问',
-            value: [90, 50, 86, 40, 50, 20],
-          },
-          {
-            itemStyle: {
               color: '#5ab1ef',
             },
-            name: '趋势',
-            value: [70, 75, 70, 76, 20, 85],
+            name: '访问设备',
+            value: list.map((item) => item.value),
           },
         ],
         itemStyle: {
@@ -74,7 +64,9 @@ onMounted(() => {
     ],
     tooltip: {},
   });
-});
+  },
+  { immediate: true },
+);
 </script>
 
 <template>

@@ -5,6 +5,8 @@ import {
   miniLoginWithPassword,
   miniRegisterWithPassword,
 } from '@/services/miniAuthService'
+import { recordLogin } from '@/services/loginAuditService'
+import { inferDeviceFromUserAgent, recordAnalyticsEvent } from '@/services/analyticsService'
 
 export async function miniRegister(ctx: Context): Promise<void> {
   const { username, password, displayName, email, phone } = ctx.request.body as {
@@ -19,6 +21,24 @@ export async function miniRegister(ctx: Context): Promise<void> {
   }
   try {
     const session = await miniRegisterWithPassword({ username, password, displayName, email, phone })
+    const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
+    await recordLogin({
+      userId: session.user.id,
+      username: session.user.username,
+      action: 'login',
+      success: true,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent,
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+    })
+    await recordAnalyticsEvent({
+      eventType: 'login_success',
+      userId: session.user.id,
+      source: 'mini-auth',
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      path: '/mini-auth/register',
+      metadata: { username: session.user.username },
+    })
     ctx.status = 201
     ctx.body = session
   } catch (error) {
@@ -36,8 +56,43 @@ export async function miniLogin(ctx: Context): Promise<void> {
   }
   try {
     const session = await miniLoginWithPassword(username, password)
+    const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
+    await recordLogin({
+      userId: session.user.id,
+      username: session.user.username,
+      action: 'login',
+      success: true,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent,
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+    })
+    await recordAnalyticsEvent({
+      eventType: 'login_success',
+      userId: session.user.id,
+      source: 'mini-auth',
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      path: '/mini-auth/login',
+      metadata: { username: session.user.username },
+    })
     ctx.body = session
   } catch {
+    const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
+    await recordLogin({
+      username,
+      action: 'login',
+      success: false,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent,
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      note: 'mini-auth login failed',
+    })
+    await recordAnalyticsEvent({
+      eventType: 'login_fail',
+      source: 'mini-auth',
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      path: '/mini-auth/login',
+      metadata: { username },
+    })
     ctx.throw(401, 'Invalid credentials')
   }
 }
@@ -53,8 +108,44 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
   }
   try {
     const session = await miniLoginWithOpenId({ openId, displayName, avatarUrl })
+    const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
+    await recordLogin({
+      userId: session.user.id,
+      username: session.user.username,
+      action: 'login',
+      success: true,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent,
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      note: 'wechat login',
+    })
+    await recordAnalyticsEvent({
+      eventType: 'login_success',
+      userId: session.user.id,
+      source: 'mini-auth-wechat',
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      path: '/mini-auth/wechat-login',
+      metadata: { openId },
+    })
     ctx.body = session
   } catch {
+    const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
+    await recordLogin({
+      username: openId,
+      action: 'login',
+      success: false,
+      ip: ctx.ip || ctx.request.ip,
+      userAgent,
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      note: 'wechat login failed',
+    })
+    await recordAnalyticsEvent({
+      eventType: 'login_fail',
+      source: 'mini-auth-wechat',
+      device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
+      path: '/mini-auth/wechat-login',
+      metadata: { openId },
+    })
     ctx.throw(400, 'Wechat login failed')
   }
 }

@@ -61,6 +61,7 @@ import {
   listOrders,
   getOrder,
 } from '@/controllers/miniprogram/orderController'
+import { trackAnalyticsEvent } from '@/controllers/miniprogram/analyticsController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -81,6 +82,7 @@ miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
 miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
+miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 
 // products can be read anonymously; login adds purchased/state
 miniRouter.get('/products', optionalMiniAuth, listProducts)

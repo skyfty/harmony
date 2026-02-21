@@ -14,6 +14,17 @@ const routes: RouteRecordRaw[] = [
       title: $t('page.dashboard.analytics'),
     },
   },
+  {
+    name: 'AnalyticsSpot',
+    path: '/analytics/spot/:spotId',
+    component: () => import('#/views/dashboard/analytics/index.vue'),
+    meta: {
+      activePath: '/analytics',
+      hideInMenu: true,
+      icon: 'lucide:area-chart',
+      title: '景点分析',
+    },
+  },
 ];
 
 export default routes;

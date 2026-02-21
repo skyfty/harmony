@@ -97,6 +97,7 @@ import {
   bulkDeleteLoginLogs,
   exportLoginLogs,
 } from '@/controllers/admin/loginAuditController'
+import { getAnalyticsOverviewData } from '@/controllers/admin/analyticsController'
 import { koaBody } from '@/utils/bodyParser'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
@@ -241,5 +242,6 @@ adminRouter.get('/login-logs/:id', requireAnyPermission(['auth:read']), getLogin
 adminRouter.delete('/login-logs/:id', requireAnyPermission(['auth:delete']), deleteLoginLog)
 adminRouter.delete('/login-logs', requireAnyPermission(['auth:delete']), bulkDeleteLoginLogs)
 adminRouter.get('/login-logs/export', requireAnyPermission(['auth:export']), exportLoginLogs)
+adminRouter.get('/analytics/overview', requireAnyPermission(['auth:read']), getAnalyticsOverviewData)
 
 export default adminRouter

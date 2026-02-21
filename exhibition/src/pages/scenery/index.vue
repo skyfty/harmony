@@ -6,18 +6,51 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
+import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from '@harmony/scenery/components/SceneryViewer.vue';
+import { apiTrackAnalyticsEvent } from '@/api/miniprogram';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
 const sceneUrl = ref<string>('');
+const sceneSpotId = ref<string>('');
+const sceneId = ref<string>('');
+const enterAt = ref<number>(0);
 
-onLoad((query) => {
+onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
   sceneUrl.value = typeof record.sceneUrl === 'string' ? record.sceneUrl : '';
+  sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
+  sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+  enterAt.value = Date.now();
+
+  void apiTrackAnalyticsEvent({
+    eventType: 'enter_scene',
+    sceneId: sceneId.value || undefined,
+    sceneSpotId: sceneSpotId.value || undefined,
+    source: 'miniapp',
+    path: '/pages/scenery/index',
+    metadata: {
+      projectId: projectId.value,
+    },
+  });
+});
+
+onUnload(() => {
+  const stayMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
+  void apiTrackAnalyticsEvent({
+    eventType: 'leave_scene',
+    sceneId: sceneId.value || undefined,
+    sceneSpotId: sceneSpotId.value || undefined,
+    source: 'miniapp',
+    path: '/pages/scenery/index',
+    dwellMs: stayMs,
+    metadata: {
+      projectId: projectId.value,
+    },
+  });
 });
 </script>
 

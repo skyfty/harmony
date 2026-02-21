@@ -98,7 +98,7 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
-import { getScenic, rateScenic, toggleScenicFavorite } from '@/api/mini';
+import { getScenic, rateScenic, toggleScenicFavorite, trackAnalyticsEvent } from '@/api/mini';
 import { listCommentsByScenic } from '@/mocks/comments';
 import type { ScenicDetail } from '@/types/scenic';
 
@@ -126,6 +126,18 @@ onLoad((query) => {
   void getScenic(id)
     .then((scenicRes) => {
       scenic.value = scenicRes ?? null;
+      if (scenicRes) {
+        void trackAnalyticsEvent({
+          eventType: 'view_spot',
+          sceneId: scenicRes.sceneId,
+          sceneSpotId: scenicRes.id,
+          source: 'tour-miniapp',
+          path: '/pages/scenic/detail',
+          metadata: {
+            scenicTitle: scenicRes.title,
+          },
+        });
+      }
     })
     .catch(() => {
       scenic.value = null;
@@ -140,7 +152,7 @@ function goBack() {
 function enterScenery() {
   if (!scenic.value) return;
   uni.navigateTo({
-    url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
+    url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}&sceneSpotId=${encodeURIComponent(scenic.value.id)}&sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
   });
 }
 

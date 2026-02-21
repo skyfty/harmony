@@ -156,6 +156,7 @@ import {
   apiGetProfile,
   apiRateExhibition,
   apiShareExhibition,
+  apiTrackAnalyticsEvent,
   apiUpdateExhibition,
   apiVisitExhibition,
   apiWithdrawExhibition,
@@ -264,14 +265,24 @@ async function enterExhibition(): Promise<void> {
   if (!exhibition.value) {
     return;
   }
+  const spotId = typeof exhibition.value.sceneSpotId === 'string' ? exhibition.value.sceneSpotId.trim() : '';
   try {
     const result = await apiVisitExhibition(exhibition.value.id);
     exhibition.value = { ...exhibition.value, visitCount: result.visitCount };
+    await apiTrackAnalyticsEvent({
+      eventType: 'visit_exhibition',
+      sceneSpotId: spotId || undefined,
+      source: 'miniapp',
+      path: '/pages/exhibition/detail',
+      metadata: {
+        exhibitionId: exhibition.value.id,
+      },
+    });
   } catch (err) {
     // 记录参观失败不会阻止进入场景，仅在控制台输出便于排查
     console.warn('[enterExhibition] failed to record visit', err);
   }
-  const sceneSpotId = typeof exhibition.value.sceneSpotId === 'string' ? exhibition.value.sceneSpotId.trim() : '';
+  const sceneSpotId = spotId;
 
   let target = '/pages/scenery/index';
   if (sceneSpotId) {
@@ -279,8 +290,9 @@ async function enterExhibition(): Promise<void> {
       const entry = await apiGetSceneSpotEntry(sceneSpotId);
       const sceneUrl = typeof entry.sceneUrl === 'string' ? entry.sceneUrl.trim() : '';
       const packageUrl = typeof entry.packageUrl === 'string' ? entry.packageUrl.trim() : '';
+      const sceneId = typeof entry.sceneId === 'string' ? entry.sceneId.trim() : '';
       if (sceneUrl || packageUrl) {
-        target = `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl || packageUrl)}&packageUrl=${encodeURIComponent(packageUrl || sceneUrl)}`;
+        target = `/pages/scenery/index?sceneUrl=${encodeURIComponent(sceneUrl || packageUrl)}&packageUrl=${encodeURIComponent(packageUrl || sceneUrl)}&sceneSpotId=${encodeURIComponent(sceneSpotId)}&sceneId=${encodeURIComponent(sceneId)}`;
       }
     } catch (err) {
       console.warn('[enterExhibition] failed to resolve scene spot entry', err);
