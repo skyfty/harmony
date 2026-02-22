@@ -372,6 +372,7 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
     columns: [
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
+      { field: 'sceneCheckpointTotal', minWidth: 140, title: '场景打卡点总数' },
       { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
       { field: 'averageRating', minWidth: 120, title: t('page.sceneSpots.index.table.averageRating') },
       { field: 'ratingCount', minWidth: 120, title: t('page.sceneSpots.index.table.ratingCount') },

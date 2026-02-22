@@ -44,7 +44,7 @@
                 ★
               </text>
               <text class="progress-value">
-                {{ formatPercent(item.ratio) }}
+                {{ formatPercent(item) }}
               </text>
             </view>
           </view>
@@ -102,7 +102,7 @@ interface ScenicCardItem {
   slides?: string[];
   checkedCount: number;
   totalCount: number;
-  ratio: number;
+  ratio?: number;
 }
 
 const keyword = ref('');
@@ -162,7 +162,6 @@ function isScenicCardItem(value: unknown): value is ScenicCardItem {
     && typeof value.scenicTitle === 'string'
     && typeof value.checkedCount === 'number'
     && typeof value.totalCount === 'number'
-    && typeof value.ratio === 'number'
   );
 }
 
@@ -184,15 +183,24 @@ const filteredScenicCheckins = computed(() => {
   return filtered;
 });
 
-function clampRatio(value: number): number {
+function clampCount(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
-  return Math.min(Math.max(value, 0), 1);
+  return Math.max(value, 0);
 }
 
-function formatPercent(ratio: number): string {
-  return `${Math.round(clampRatio(ratio) * 100)}%`;
+function computeAchievementRatio(item: ScenicCardItem): number {
+  const checkedCount = clampCount(item.checkedCount);
+  const totalCount = clampCount(item.totalCount);
+  if (totalCount <= 0) {
+    return 0;
+  }
+  return Math.min(checkedCount / totalCount, 1);
+}
+
+function formatPercent(item: ScenicCardItem): string {
+  return `${Math.round(computeAchievementRatio(item) * 100)}%`;
 }
 
 function resolveBackgroundImage(item: ScenicCardItem): string {

@@ -10,6 +10,7 @@ const userSceneSchema = new Schema<UserSceneDocument>(
     thumbnail: { type: String, default: null },
     sceneCreatedAt: { type: Date, required: true },
     sceneUpdatedAt: { type: Date, required: true, index: true },
+    checkpointTotal: { type: Number, required: true, default: 0, min: 0 },
 
     bundleFileKey: { type: String, required: true },
     bundleFileSize: { type: Number, required: true },

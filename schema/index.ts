@@ -191,6 +191,10 @@ export interface ProjectExportBundleProjectConfig {
    * Scene ids in export order (matches Scene Manager UI creation-time order).
    */
   sceneOrder: string[]
+  /**
+   * Total number of checkpoints across all scenes in the exported zip package.
+   */
+  checkpointTotal?: number
 }
 
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';

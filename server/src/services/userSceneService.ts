@@ -90,6 +90,7 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   name: string
   projectId: string
   thumbnail: string | null
+  checkpointTotal: number
   createdAt: string
   updatedAt: string
 } {
@@ -115,9 +116,17 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
     throw new Error('scene.json missing projectId')
   }
   const thumbnail = typeof sceneRaw?.thumbnail === 'string' ? sceneRaw.thumbnail : null
+  let parsedCheckpointTotal = 0
+  try {
+    const projectRaw = JSON.parse(readTextFileFromScenePackage(pkg, 'project/project.json')) as Record<string, unknown>
+    parsedCheckpointTotal = Number(projectRaw?.checkpointTotal)
+  } catch {
+    parsedCheckpointTotal = 0
+  }
+  const checkpointTotal = Number.isFinite(parsedCheckpointTotal) && parsedCheckpointTotal > 0 ? Math.floor(parsedCheckpointTotal) : 0
   const updatedAt = toIsoString(sceneRaw?.updatedAt)
   const createdAt = toIsoString(sceneRaw?.createdAt ?? updatedAt)
-  return { id, name, projectId, thumbnail, createdAt, updatedAt }
+  return { id, name, projectId, thumbnail, checkpointTotal, createdAt, updatedAt }
 }
 
 export async function listUserScenes(userId: string): Promise<UserSceneSummary[]> {
@@ -129,6 +138,7 @@ export async function listUserScenes(userId: string): Promise<UserSceneSummary[]
       name: String(entry.name ?? '未命名场景'),
       projectId: String(entry.projectId ?? ''),
       thumbnail: typeof entry.thumbnail === 'string' ? entry.thumbnail : null,
+      checkpointTotal: typeof entry.checkpointTotal === 'number' && entry.checkpointTotal > 0 ? Math.floor(entry.checkpointTotal) : 0,
       createdAt: new Date(entry.sceneCreatedAt).toISOString(),
       updatedAt: new Date(entry.sceneUpdatedAt).toISOString(),
       bundle: {
@@ -150,6 +160,7 @@ export async function getUserSceneBundle(userId: string, sceneId: string): Promi
   return {
     id: sceneId,
     projectId: String(entry.projectId ?? ''),
+    checkpointTotal: typeof entry.checkpointTotal === 'number' && entry.checkpointTotal > 0 ? Math.floor(entry.checkpointTotal) : 0,
     bundle: {
       url: buildBundleApiUrl(sceneId),
       size: Number(entry.bundleFileSize ?? 0),
@@ -182,6 +193,7 @@ export async function saveUserSceneBundle(
       projectId: documentMeta.projectId,
       name: documentMeta.name,
       thumbnail: documentMeta.thumbnail,
+      checkpointTotal: documentMeta.checkpointTotal,
       sceneCreatedAt: new Date(documentMeta.createdAt),
       sceneUpdatedAt: new Date(documentMeta.updatedAt),
 
@@ -203,6 +215,7 @@ export async function saveUserSceneBundle(
     name: documentMeta.name,
     projectId: documentMeta.projectId,
     thumbnail: documentMeta.thumbnail,
+    checkpointTotal: documentMeta.checkpointTotal,
     createdAt: documentMeta.createdAt,
     updatedAt: documentMeta.updatedAt,
     bundle: {

@@ -24,7 +24,7 @@ export interface ScenicCheckinProgressItem {
   slides?: string[];
   checkedCount: number;
   totalCount: number;
-  ratio: number;
+  ratio?: number;
 }
 
 export interface TravelSummaryItem {

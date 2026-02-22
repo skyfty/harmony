@@ -273,10 +273,11 @@ function toNonNegativeInteger(value: unknown): number | null {
   return parsed
 }
 
-function mapSceneSpot(spot: any) {
+function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
+    sceneCheckpointTotal,
     title: spot.title,
     coverImage: toNullableString(spot.coverImage),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
@@ -298,6 +299,28 @@ async function ensureSceneExists(sceneId: string): Promise<void> {
   if (!exists) {
     throw new Error('Scene not found')
   }
+}
+
+async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<string, number>> {
+  const normalizedSceneIds = Array.from(new Set(sceneIds.filter((id) => Types.ObjectId.isValid(id))))
+  if (!normalizedSceneIds.length) {
+    return new Map()
+  }
+
+  const rows = await SceneModel.find(
+    { _id: { $in: normalizedSceneIds.map((id) => new Types.ObjectId(id)) } },
+    { _id: 1, checkpointTotal: 1 },
+  )
+    .lean()
+    .exec()
+
+  const out = new Map<string, number>()
+  for (const row of rows) {
+    const id = String((row as { _id?: unknown })._id ?? '')
+    const raw = Number((row as { checkpointTotal?: unknown }).checkpointTotal)
+    out.set(id, Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0)
+  }
+  return out
 }
 
 function toPositiveNumber(value: unknown, fallback: number): number {
@@ -339,8 +362,13 @@ export async function listSceneSpots(ctx: Context): Promise<void> {
     SceneSpotModel.countDocuments(query).exec(),
   ])
 
+  const checkpointMap = await loadSceneCheckpointTotalMap(rows.map((row) => String((row as { sceneId?: unknown }).sceneId ?? '')))
+
   ctx.body = {
-    data: rows.map(mapSceneSpot),
+    data: rows.map((row) => {
+      const sceneId = String((row as { sceneId?: unknown }).sceneId ?? '')
+      return mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
+    }),
     page: pageNumber,
     pageSize: limit,
     total,
@@ -357,7 +385,9 @@ export async function getSceneSpot(ctx: Context): Promise<void> {
   if (!row) {
     ctx.throw(404, 'Scene spot not found')
   }
-  ctx.body = mapSceneSpot(row)
+  const sceneId = String((row as { sceneId?: unknown }).sceneId ?? '')
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
+  ctx.body = mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
 }
 
 export async function createSceneSpot(ctx: Context): Promise<void> {
@@ -467,7 +497,8 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 
   const row = await SceneSpotModel.findById(created._id).lean().exec()
   ctx.status = 201
-  ctx.body = mapSceneSpot(row)
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
+  ctx.body = mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
 }
 
 export async function updateSceneSpot(ctx: Context): Promise<void> {
@@ -652,7 +683,9 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   })
   await deleteStoredFilesByUrls(removedUrls)
 
-  ctx.body = mapSceneSpot(updated)
+  const updatedSceneId = String((updated as { sceneId?: unknown }).sceneId ?? '')
+  const checkpointMap = await loadSceneCheckpointTotalMap([updatedSceneId])
+  ctx.body = mapSceneSpot(updated, checkpointMap.get(updatedSceneId) ?? 0)
 }
 
 export async function deleteSceneSpot(ctx: Context): Promise<void> {

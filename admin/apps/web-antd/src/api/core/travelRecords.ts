@@ -21,6 +21,7 @@ type ServerTravelRecordItem = {
   scenicId: string
   scenicTitle?: string
   sceneName?: string
+  sceneCheckpointTotal?: number
   enterTime: string
   leaveTime?: string
   durationSeconds?: number
@@ -41,6 +42,7 @@ export interface TravelRecordItem {
   scenicId: string
   scenicTitle?: string
   sceneName?: string
+  sceneCheckpointTotal?: number
   enterTime: string
   leaveTime?: string
   durationSeconds?: number

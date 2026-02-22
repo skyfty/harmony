@@ -18,6 +18,7 @@ export interface SceneItem {
   fileKey: string;
   fileUrl: string;
   fileSize: number;
+  checkpointTotal: number;
   fileType?: null | string;
   originalFilename?: null | string;
   publishedBy?: null | string;

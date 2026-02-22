@@ -36,6 +36,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
       { field: 'durationSeconds', minWidth: 120, title: '停留(秒)' },
       { field: 'scenicTitle', minWidth: 220, title: '景点名称', slots: { default: 'scenicTitle' } },
       { field: 'sceneName', minWidth: 160, title: '场景名称' },
+      { field: 'sceneCheckpointTotal', minWidth: 140, title: '场景打卡点总数' },
       { field: 'username', minWidth: 140, title: '用户名' },
       {
         field: 'status',
