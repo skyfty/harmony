@@ -1,9 +1,10 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">用户建议</text>
-      <button class="add" @tap="create">提交建议</button>
-    </view>
+    <PageHeader title="用户建议">
+      <template #right>
+        <button class="add" @tap="create">提交建议</button>
+      </template>
+    </PageHeader>
     <view class="content">
       <view v-if="items.length === 0" class="empty">暂无反馈记录</view>
       <view v-for="fb in items" :key="fb.id" class="card">
@@ -23,6 +24,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listFeedback } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { FeedbackCategory, FeedbackStatus, FeedbackTicket } from '@/types/feedback';
 
 const items = ref<FeedbackTicket[]>([]);
@@ -77,19 +79,6 @@ function formatDate(value: string) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .add {

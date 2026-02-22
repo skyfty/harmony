@@ -1,12 +1,9 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">订单详情</text>
-    </view>
+    <PageHeader title="订单详情" />
 
     <view v-if="!order" class="empty">
       <text class="empty-text">订单不存在</text>
-      <button class="btn" @tap="back">返回</button>
     </view>
 
     <view v-else class="content">
@@ -35,6 +32,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { getOrderDetail } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { OrderDetail, OrderStatus } from '@/types/order';
 
 const order = ref<OrderDetail | null>(null);
@@ -84,16 +82,6 @@ function formatDateTime(value: string) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

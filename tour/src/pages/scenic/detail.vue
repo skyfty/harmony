@@ -1,94 +1,85 @@
 <template>
   <view class="page">
+    <!-- Floating back button -->
+    <view
+      class="floating-back"
+      :style="{ top: (statusBarHeight + 8) + 'px' }"
+      @tap="handleBack"
+    >
+      <text class="floating-back__icon">‹</text>
+    </view>
+
     <view v-if="!scenic" class="state">
       <text class="state-title">景区不存在</text>
-      <button class="btn" @tap="goBack">返回</button>
     </view>
 
-    <view v-else class="content">
-      <ImageSwiper :image-urls="scenic.slides" />
-
-      <view class="card">
-        <view class="row">
-          <text class="name">{{ scenic.title }}</text>
-        </view>
-        <text class="summary">{{ scenic.description }}</text>
-      </view>
-
-      <view class="card">
-        <text class="section">景区介绍</text>
-        <text class="desc">{{ scenic.description }}</text>
-      </view>
-
-      <view class="card">
-        <text class="section">景区信息</text>
-        <view class="info-row">
-          <text class="label">地址</text>
-          <text class="value">{{ scenic.address }}</text>
+    <view v-else>
+      <!-- Full-bleed hero swiper -->
+      <view class="hero-wrap">
+        <swiper
+          class="hero-swiper"
+          circular
+          autoplay
+          :interval="3500"
+          :duration="400"
+          @change="onSwiperChange"
+        >
+          <swiper-item v-for="(url, idx) in scenic.slides" :key="idx">
+            <image class="hero-img" :src="url" mode="aspectFill" />
+          </swiper-item>
+        </swiper>
+        <!-- Page indicator badge -->
+        <view v-if="scenic.slides.length > 1" class="page-indicator">
+          <text class="page-indicator__text">{{ currentSlide + 1 }}/{{ scenic.slides.length }}</text>
         </view>
       </view>
 
-      <view class="stats-card">
-        <view class="stat stat--action" @tap="openRatingModal">
-          <text class="stat-icon">★</text>
-          <text class="stat-value">{{ ratingLabel }}</text>
-          <text class="stat-desc">评分 ({{ scenic.ratingCount || 0 }})</text>
+      <!-- Content body overlapping hero image -->
+      <view class="detail-body">
+        <!-- Title + rating + favorite -->
+        <view class="title-row">
+          <view class="title-left">
+            <text class="scenic-name">{{ scenic.title }}</text>
+            <view class="rating-row">
+              <view class="stars-inline">
+                <text
+                  v-for="n in 5"
+                  :key="'s' + n"
+                  class="star-char"
+                  :class="{ filled: n <= Math.round(scenic.averageRating || 0) }"
+                >★</text>
+              </view>
+              <text class="rating-num">{{ ratingLabel }}</text>
+              <text class="rating-count">({{ formatFavoriteCount(scenic.favoriteCount) }}点赞)</text>
+            </view>
+          </view>
+          <view
+            class="favorite-btn"
+            :class="{ 'favorite-btn--active': scenic.favorited }"
+            @tap="handleToggleFavorite"
+          >
+            <text class="favorite-btn__icon">{{ scenic.favorited ? '❤' : '♡' }}</text>
+            <text class="favorite-btn__label">点赞</text>
+          </view>
         </view>
-        <view class="stat stat--action" :class="{ 'stat--favorited': scenic.favorited }" @tap="handleToggleFavorite">
-          <text class="stat-icon">{{ scenic.favorited ? '❤' : '♡' }}</text>
-          <text class="stat-value">{{ scenic.favoriteCount || 0 }}</text>
-          <text class="stat-desc">{{ scenic.favorited ? '已收藏' : '收藏' }}</text>
+
+        <!-- 景区介绍 -->
+        <view class="intro-section">
+          <view class="section-header">
+            <view class="section-dot" />
+            <text class="section-title">景区介绍</text>
+          </view>
+          <text class="intro-text">{{ scenic.description }}</text>
         </view>
-        <view class="stat">
-          <text class="stat-icon">👤</text>
-          <text class="stat-value">{{ scenic.ratingCount || 0 }}</text>
-          <text class="stat-desc">评分人数</text>
+
+        <!-- CTA button -->
+        <view class="cta-area">
+          <button class="cta-btn" @tap="enterScenery">
+            <text class="cta-btn__icon">🚶</text>
+            <text class="cta-btn__text">进入景区</text>
+          </button>
         </view>
       </view>
-
-      <view class="card">
-        <text class="section">评论</text>
-        <view class="comments">
-          <UserCommentItem
-            v-for="c in comments"
-            :key="c.id"
-            :nickname="c.nickname"
-            :time-i-s-o="c.timeISO"
-            :content="c.content"
-          />
-          <view v-if="comments.length === 0" class="empty">暂无评论</view>
-        </view>
-      </view>
-
-      <view class="cta">
-        <button class="enter" @tap="enterScenery">进入景区</button>
-      </view>
-
-    </view>
-  </view>
-
-  <view v-if="ratingModalVisible" class="rating-modal-mask" @tap="closeRatingModal"></view>
-  <view v-if="ratingModalVisible" class="rating-modal-panel" @tap.stop="noop" catchtap="noop">
-    <text class="rating-modal__title">为该景区打分</text>
-    <view class="rating-modal__stars">
-      <view
-        v-for="n in 5"
-        :key="'star-' + n"
-        class="rating-modal__star"
-        :data-score="n"
-        :class="{ active: n <= ratingSelection }"
-        @tap.stop="selectRatingByEvent"
-        catchtap="selectRatingByEvent"
-      >
-        <text :data-score="n">★</text>
-      </view>
-    </view>
-    <view class="rating-modal__actions">
-      <button
-        class="rating-modal__submit"
-        :disabled="ratingSubmitting"
-        @tap="submitRating"
-      >{{ ratingSubmitting ? '提交中…' : ratingSelection ? `提交 ${ratingSelection} 星` : '请选择星级' }}</button>
     </view>
   </view>
 </template>
@@ -96,17 +87,19 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import ImageSwiper from '@/components/ImageSwiper.vue';
-import UserCommentItem from '@/components/UserCommentItem.vue';
-import { getScenic, rateScenic, toggleScenicFavorite, trackAnalyticsEvent } from '@/api/mini';
+import { getScenic, toggleScenicFavorite, trackAnalyticsEvent } from '@/api/mini';
 import type { ScenicDetail } from '@/types/scenic';
 
 const scenic = ref<ScenicDetail | null>(null);
-const comments = ref([]);
 const favoriteLoading = ref(false);
-const ratingModalVisible = ref(false);
-const ratingSubmitting = ref(false);
-const ratingSelection = ref(0);
+const currentSlide = ref(0);
+
+/* Status bar height for floating back button positioning */
+const statusBarHeight = ref(0);
+try {
+  const sysInfo = uni.getSystemInfoSync();
+  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
+} catch { /* fallback: keep 0 */ }
 
 const ratingLabel = computed(() => {
   const v = scenic.value?.averageRating ?? 0;
@@ -143,8 +136,14 @@ onLoad((query) => {
     });
 });
 
-function goBack() {
-  uni.navigateBack();
+/* ---- Navigation ---- */
+
+function handleBack() {
+  uni.navigateBack({
+    fail: () => {
+      void uni.redirectTo({ url: '/pages/home/index' });
+    },
+  });
 }
 
 function enterScenery() {
@@ -153,6 +152,14 @@ function enterScenery() {
     url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}&sceneSpotId=${encodeURIComponent(scenic.value.id)}&sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
   });
 }
+
+/* ---- Swiper ---- */
+
+function onSwiperChange(e: { detail: { current: number } }) {
+  currentSlide.value = e.detail.current;
+}
+
+/* ---- Interactions ---- */
 
 function applyInteractionState(next: {
   averageRating: number;
@@ -169,46 +176,6 @@ function applyInteractionState(next: {
   scenic.value.userRating = typeof next.userRating === 'number' ? next.userRating : null;
 }
 
-function openRatingModal(): void {
-  if (!scenic.value) return;
-  ratingSelection.value = 0;
-  ratingModalVisible.value = true;
-}
-
-function closeRatingModal(): void {
-  ratingModalVisible.value = false;
-  ratingSelection.value = 0;
-}
-
-function selectRating(n: number): void {
-  ratingSelection.value = n;
-}
-
-function selectRatingByEvent(event: { currentTarget?: { dataset?: { score?: string | number } }; target?: { dataset?: { score?: string | number } } }): void {
-  const scoreRaw = event?.currentTarget?.dataset?.score ?? event?.target?.dataset?.score;
-  const score = Number(scoreRaw);
-  if (Number.isFinite(score) && score >= 1 && score <= 5) {
-    selectRating(score);
-  }
-}
-
-function noop(): void {}
-
-async function submitRating(): Promise<void> {
-  if (!scenic.value || ratingSelection.value === 0) return;
-  ratingSubmitting.value = true;
-  try {
-    const next = await rateScenic(scenic.value.id, ratingSelection.value);
-    applyInteractionState(next);
-    uni.showToast({ title: '评分成功', icon: 'success' });
-    closeRatingModal();
-  } catch (err) {
-    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
-  } finally {
-    ratingSubmitting.value = false;
-  }
-}
-
 async function handleToggleFavorite(): Promise<void> {
   if (!scenic.value || favoriteLoading.value) return;
   favoriteLoading.value = true;
@@ -220,6 +187,15 @@ async function handleToggleFavorite(): Promise<void> {
   } finally {
     favoriteLoading.value = false;
   }
+}
+
+/* ---- Helpers ---- */
+
+function formatFavoriteCount(count: number | undefined): string {
+  const n = count || 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
 function getErrorMessage(reason: unknown): string {
@@ -237,232 +213,232 @@ function getErrorMessage(reason: unknown): string {
   background: #f8f8f8;
 }
 
-.content {
-  padding: 16px;
-  padding-bottom: 90px;
-}
-
-.card {
-  margin-top: 12px;
-  background: #ffffff;
-  border-radius: 18px;
-  padding: 14px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
-}
-
-.row {
+/* ---- Floating back button ---- */
+.floating-back {
+  position: fixed;
+  left: 16px;
+  z-index: 200;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: center;
 }
 
-.name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
+.floating-back__icon {
+  font-size: 24px;
+  color: #ffffff;
+  line-height: 1;
+  margin-top: -2px;
 }
 
-.summary {
+/* ---- Hero swiper ---- */
+.hero-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.hero-swiper {
+  width: 100%;
+  height: 340px;
+}
+
+.hero-img {
+  width: 100%;
+  height: 340px;
   display: block;
-  margin-top: 8px;
+}
+
+.page-indicator {
+  position: absolute;
+  right: 16px;
+  bottom: 36px; /* above the overlap region */
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 10px;
+  padding: 2px 10px;
+}
+
+.page-indicator__text {
   font-size: 12px;
-  color: #5f6b83;
-  line-height: 18px;
+  color: #ffffff;
 }
 
-.section {
-  display: block;
-  font-size: 14px;
-  font-weight: 700;
-  color: #1a1f2e;
+/* ---- Content body (overlaps hero) ---- */
+.detail-body {
+  position: relative;
+  margin-top: -24px;
+  background: #ffffff;
+  border-radius: 24px 24px 0 0;
+  padding: 24px 20px 120px;
+  min-height: 50vh;
 }
 
-.desc {
-  display: block;
-  margin-top: 10px;
-  font-size: 13px;
-  color: #5f6b83;
-  line-height: 20px;
-}
-
-.info-row {
+/* ---- Title + favorite row ---- */
+.title-row {
   display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.label {
-  width: 48px;
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.value {
-  flex: 1;
-  font-size: 12px;
-  color: #1a1f2e;
-}
-
-.comments {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-}
-
-.stats-card {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.stat {
-  background: #ffffff;
-  border-radius: 18px;
-  padding: 16px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.08);
+.title-left {
+  flex: 1;
+  min-width: 0;
 }
 
-.stat-icon {
-  font-size: 18px;
-  color: #1f7aec;
-}
-
-.stat-value {
+.scenic-name {
+  display: block;
   font-size: 20px;
+  font-weight: 700;
+  color: #1a1f2e;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.rating-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.stars-inline {
+  display: flex;
+  gap: 1px;
+}
+
+.star-char {
+  font-size: 14px;
+  color: #e3e9f2;
+}
+
+.star-char.filled {
+  color: #ffb400;
+}
+
+.rating-num {
+  font-size: 13px;
   font-weight: 600;
   color: #1a1f2e;
+  margin-left: 4px;
 }
 
-.stat-desc {
+.rating-count {
   font-size: 12px;
   color: #8a94a6;
 }
 
-.stat--action {
-  cursor: pointer;
+/* ---- Favorite button ---- */
+.favorite-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 16px;
+  border: 1px solid #e3e9f2;
+  flex-shrink: 0;
   transition: all 0.2s;
 }
 
-.stat--action:active {
-  transform: scale(0.95);
+.favorite-btn:active {
+  transform: scale(0.92);
   opacity: 0.8;
 }
 
-.stat--favorited {
-  background: rgba(31, 122, 236, 0.08);
+.favorite-btn--active {
+  border-color: #fdd;
+  background: rgba(231, 76, 60, 0.06);
 }
 
-.stat--favorited .stat-icon {
+.favorite-btn__icon {
+  font-size: 20px;
+  color: #8a94a6;
+}
+
+.favorite-btn--active .favorite-btn__icon {
   color: #e74c3c;
 }
 
-.rating-modal-mask {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+.favorite-btn__label {
+  font-size: 11px;
+  color: #8a94a6;
 }
 
-.rating-modal-panel {
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 280px;
-  background: #ffffff;
-  border-radius: 24px;
-  padding: 30px 24px 24px;
-  box-shadow: 0 24px 48px rgba(31, 122, 236, 0.2);
-  z-index: 1001;
+/* ---- Intro section ---- */
+.intro-section {
+  margin-top: 24px;
+}
+
+.section-header {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
+  align-items: center;
+  gap: 6px;
 }
 
-.rating-modal__title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1a1f2e;
-  text-align: center;
-}
-
-.rating-modal__stars {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-}
-
-.rating-modal__star {
-  font-size: 36px;
-  color: #e3e9f2;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.rating-modal__star.active {
-  color: #ffb400;
-  transform: scale(1.1);
-}
-
-.rating-modal__actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.rating-modal__submit {
-  width: 100%;
-  padding: 12px;
-  border-radius: 16px;
-  border: none;
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.rating-modal__submit:disabled {
-  opacity: 0.5;
-}
-
-.empty {
-  padding: 10px 0;
-  text-align: center;
-  color: #a8b0c1;
-  font-size: 12px;
-}
-
-.cta {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 12px 16px 20px;
-  background: rgba(248, 248, 248, 0.92);
-  backdrop-filter: blur(10px);
-}
-
-.enter {
-  width: 100%;
+.section-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   background: #1f7aec;
-  color: #ffffff;
-  border-radius: 14px;
-  height: 44px;
-  line-height: 44px;
+  flex-shrink: 0;
+}
+
+.section-title {
   font-size: 15px;
   font-weight: 700;
+  color: #1a1f2e;
 }
 
+.intro-text {
+  display: block;
+  margin-top: 12px;
+  font-size: 13px;
+  color: #5f6b83;
+  line-height: 22px;
+}
+
+/* ---- CTA button ---- */
+.cta-area {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 16px 28px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.cta-btn {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 70%;
+  height: 48px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #1a2744, #1f3a5f);
+  box-shadow: 0 8px 24px rgba(26, 39, 68, 0.35);
+  padding: 0;
+}
+
+.cta-btn__icon {
+  font-size: 18px;
+}
+
+.cta-btn__text {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* ---- Empty state ---- */
 .state {
   padding: 40px 16px;
   text-align: center;
@@ -472,16 +448,5 @@ function getErrorMessage(reason: unknown): string {
   display: block;
   font-size: 14px;
   color: #1a1f2e;
-}
-
-.btn {
-  margin-top: 14px;
-  width: 160px;
-  background: #1f7aec;
-  color: #ffffff;
-  border-radius: 999px;
-  height: 36px;
-  line-height: 36px;
-  font-size: 13px;
 }
 </style>
