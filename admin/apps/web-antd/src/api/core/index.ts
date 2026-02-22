@@ -11,3 +11,4 @@ export * from './scene-spots';
 export * from './user-projects';
 export * from './loginLogs';
 export * from './analytics';
+export * from './punchRecords';

@@ -25,6 +25,7 @@ import type {
   DebusBehaviorParams,
   LoadSceneBehaviorParams,
   ExitSceneBehaviorParams,
+  PunchBehaviorParams,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -341,6 +342,15 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Exit vehicle driving mode and restore default controls.',
     icon: 'mdi-car-off',
     createDefaultParams(): DebusBehaviorParams {
+      return {}
+    },
+  },
+  {
+    id: 'punch',
+    label: 'Punch',
+    description: 'Emit a punch event so external systems can record scene check-in data.',
+    icon: 'mdi-map-marker-check-outline',
+    createDefaultParams(): PunchBehaviorParams {
       return {}
     },
   },
@@ -691,6 +701,11 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'debus',
         params: {},
       }
+    case 'punch':
+      return {
+        type: 'punch',
+        params: {},
+      }
     case 'trigger': {
       const params = binding.params as TriggerBehaviorParams | undefined
       return {
@@ -963,6 +978,11 @@ export function ensureBehaviorParams(
       case 'debus':
         return {
           type: 'debus',
+          params: {},
+        }
+      case 'punch':
+        return {
+          type: 'punch',
           params: {},
         }
       case 'trigger': {

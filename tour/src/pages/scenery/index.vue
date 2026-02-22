@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <SceneryViewer :project-id="projectId" :package-url="packageUrl" :scene-url="sceneUrl" />
+    <SceneryViewer :project-id="projectId" :package-url="packageUrl" :scene-url="sceneUrl" @punch="handlePunch" />
   </view>
 </template>
 
@@ -8,7 +8,7 @@
 import { ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-import { trackAnalyticsEvent } from '@/api/mini';
+import { createPunchRecord, trackAnalyticsEvent } from '@/api/mini';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -16,6 +16,33 @@ const sceneUrl = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
+
+type PunchEventPayload = {
+  eventName: 'punch';
+  sceneId: string;
+  sceneName: string;
+  clientPunchTime: string;
+  behaviorPunchTime: string;
+  location: {
+    nodeId: string;
+    nodeName: string;
+  };
+};
+
+function handlePunch(payload: PunchEventPayload): void {
+  void createPunchRecord({
+    sceneId: payload.sceneId,
+    sceneName: payload.sceneName,
+    clientPunchTime: payload.clientPunchTime,
+    behaviorPunchTime: payload.behaviorPunchTime,
+    location: {
+      nodeId: payload.location.nodeId,
+      nodeName: payload.location.nodeName,
+    },
+    source: 'tour-miniapp',
+    path: '/pages/scenery/index',
+  });
+}
 
 onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;

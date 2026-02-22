@@ -144,6 +144,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'PunchRecords',
+    path: '/punch-records',
+    component: () => import('#/views/punch-records/index.vue'),
+    meta: {
+      icon: 'lucide:map-pin',
+      title: $t('page.punchRecords.title'),
+    },
+  },
+  {
     name: 'Resources',
     path: '/resources',
     meta: {

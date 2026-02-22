@@ -162,6 +162,7 @@
     }
   },
   "loginLogs": { "title": "Login Logs" },
+  "punchRecords": { "title": "Punch Records" },
   "project": {
     "title": "Projects",
     "index": { "title": "Project Management" },

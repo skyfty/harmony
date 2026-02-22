@@ -201,6 +201,15 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
     }
   | {
+      type: 'punch'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      punchedAt: string
+    }
+  | {
       type: 'sequence-complete'
       nodeId: string
       action: BehaviorEventType
@@ -733,6 +742,21 @@ function createHideCockpitEvent(
   }
 }
 
+function createPunchEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'punch' }> {
+  return {
+    type: 'punch',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    punchedAt: new Date().toISOString(),
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -824,6 +848,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         return events
       case 'debus':
         events.push(createDebusVehicleEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'punch':
+        events.push(createPunchEvent(state, behavior))
         state.index += 1
         continue
       default:

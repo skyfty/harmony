@@ -40,6 +40,7 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'auth:read', name: '登录审计查看', group: 'auth' },
   { code: 'auth:delete', name: '登录审计删除', group: 'auth' },
   { code: 'auth:export', name: '登录审计导出', group: 'auth' },
+  { code: 'punch:read', name: '打卡记录查看', group: 'scene' },
   { code: 'user:read', name: '用户查看', group: 'user' },
   { code: 'user:write', name: '用户管理', group: 'user' },
   { code: 'order:read', name: '订单查看', group: 'order' },

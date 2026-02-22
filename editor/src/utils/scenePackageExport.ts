@@ -8,6 +8,7 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { collectPunchPointsFromNodes } from './sceneExport'
 
 export type ScenePackageExportScene = {
   id: string
@@ -224,6 +225,12 @@ export async function exportScenePackageZip(payload: {
     // Prepare a clone of the scene document and ensure assetUrlOverrides exists
     const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneJsonExportDocument & { assetUrlOverrides?: Record<string, string> }
     docClone.assetUrlOverrides = docClone.assetUrlOverrides ?? {}
+    if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
+      const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)
+      if (computedPunchPoints.length) {
+        docClone.punchPoints = computedPunchPoints
+      }
+    }
 
     // Apply shared embedded asset overrides (paths within ZIP). These are informational today,
     // but also allow runtimes to redirect by key if they consult this field.

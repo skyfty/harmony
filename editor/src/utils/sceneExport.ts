@@ -3,7 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@schema'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
@@ -60,6 +60,31 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
     }
   }
   return null
+}
+
+export function collectPunchPointsFromNodes(nodes: SceneNode[]): ScenePunchPoint[] {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return []
+  }
+  const points: ScenePunchPoint[] = []
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    const behaviors = current.components?.behavior?.props?.behaviors
+    if (Array.isArray(behaviors) && behaviors.some((entry) => entry?.script?.type === 'punch')) {
+      points.push({
+        nodeId: current.id,
+        nodeName: typeof current.name === 'string' ? current.name : '',
+      })
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children)
+    }
+  }
+  return points
 }
 
 type RemovedSceneObject = {
@@ -303,6 +328,10 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     packageAssetMap: snapshot.packageAssetMap,
     resourceSummary: snapshot.resourceSummary,
     lazyLoadMeshes: options.lazyLoadMeshes ?? true,
+  }
+  const punchPoints = collectPunchPointsFromNodes(snapshot.nodes)
+  if (punchPoints.length) {
+    exportDocument.punchPoints = punchPoints
   }
   return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
 }

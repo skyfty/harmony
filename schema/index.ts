@@ -429,6 +429,7 @@ export type BehaviorScriptType =
   | 'hideCockpit'
   | 'drive'
   | 'debus'
+  | 'punch'
 
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
@@ -517,6 +518,10 @@ export interface DriveBehaviorParams {
 }
 
 export interface DebusBehaviorParams {
+  // no configuration required
+}
+
+export interface PunchBehaviorParams {
   // no configuration required
 }
 
@@ -626,6 +631,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'debus'
       params: DebusBehaviorParams
+    }
+  | {
+      type: 'punch'
+      params: PunchBehaviorParams
     }
 
 export interface SceneBehavior {
@@ -828,6 +837,12 @@ export interface SceneJsonExportDocument {
   resourceSummary?: SceneResourceSummary;
   lazyLoadMeshes?: boolean;
   assetPreload?: SceneAssetPreloadInfo;
+  punchPoints?: ScenePunchPoint[];
+}
+
+export interface ScenePunchPoint {
+  nodeId: string;
+  nodeName: string;
 }
 
 export interface SceneAssetPreloadMeshInfo {

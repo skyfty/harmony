@@ -73,6 +73,7 @@ import {
   createFeedback,
 } from '@/controllers/miniprogram/feedbackController'
 import { trackAnalyticsEvent } from '@/controllers/miniprogram/analyticsController'
+import { createMiniPunchRecord } from '@/controllers/miniprogram/punchRecordController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -100,6 +101,7 @@ miniRouter.use(requireMiniAuth)
 // scenic interactions
 miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)
 miniRouter.post('/scene-spots/:id/rate', rateSceneSpot)
+miniRouter.post('/punch-records', createMiniPunchRecord)
 
 // works
 miniRouter.get('/works', listWorks)

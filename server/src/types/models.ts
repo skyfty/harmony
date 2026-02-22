@@ -137,6 +137,24 @@ export interface LoginAuditDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface PunchRecordDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  username?: string
+  sceneId: string
+  sceneName?: string
+  nodeId: string
+  nodeName?: string
+  clientPunchTime?: Date
+  behaviorPunchTime?: Date
+  source?: string
+  path?: string
+  ip?: string
+  userAgent?: string
+  metadata?: Record<string, unknown>
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface AnalyticsEventDocument extends Document<Types.ObjectId> {
   eventType: string
   userId?: Types.ObjectId | null

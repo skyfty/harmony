@@ -449,6 +449,17 @@ const emit = defineEmits<{
     loaded: number;
     total: number;
   }];
+  punch: [payload: {
+    eventName: 'punch';
+    sceneId: string;
+    sceneName: string;
+    clientPunchTime: string;
+    behaviorPunchTime: string;
+    location: {
+      nodeId: string;
+      nodeName: string;
+    };
+  }];
 }>();
 import {
   buildSceneGraph,
@@ -8080,6 +8091,24 @@ async function handleExitSceneEvent(): Promise<void> {
   applySceneNodeTransformSnapshot(snapshot.nodeTransforms);
 }
 
+function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
+  const sceneId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+  const sceneName = (currentDocument?.name ?? '').trim();
+  const node = previewNodeMap.get(event.nodeId);
+  const nodeName = typeof node?.name === 'string' ? node.name : '';
+  emit('punch', {
+    eventName: 'punch',
+    sceneId,
+    sceneName,
+    clientPunchTime: new Date().toISOString(),
+    behaviorPunchTime: event.punchedAt,
+    location: {
+      nodeId: event.nodeId,
+      nodeName,
+    },
+  });
+}
+
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
@@ -8133,6 +8162,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'vehicle-hide-cockpit':
       handleHideVehicleCockpitEvent();
+      break;
+    case 'punch':
+      handlePunchEvent(event);
       break;
     case 'sequence-complete':
       resetLanternOverlay();
