@@ -1,5 +1,5 @@
 import type { Address } from '@/types/address'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type ListAddressesResponse = {

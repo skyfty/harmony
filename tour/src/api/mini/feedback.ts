@@ -1,5 +1,5 @@
 import type { FeedbackCategory, FeedbackTicket } from '@/types/feedback'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type ListFeedbackResponse = {

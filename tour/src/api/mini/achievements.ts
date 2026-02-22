@@ -1,5 +1,5 @@
 import type { Achievement } from '@/types/achievement'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type ListAchievementsResponse = {

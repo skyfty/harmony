@@ -1,4 +1,4 @@
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 import { getAccessToken, setAccessToken } from './token'
 
 export { getAccessToken, setAccessToken }

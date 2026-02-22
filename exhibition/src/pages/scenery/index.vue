@@ -13,7 +13,7 @@
 import { ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from '@harmony/scenery/components/SceneryViewer.vue';
-import { apiCreatePunchRecord, apiTrackAnalyticsEvent } from '@/api/miniprogram';
+import { createPunchRecord, trackAnalyticsEvent } from '@harmony/utils';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -35,7 +35,7 @@ type PunchEventPayload = {
 };
 
 function handlePunch(payload: PunchEventPayload): void {
-  void apiCreatePunchRecord({
+  void createPunchRecord({
     sceneId: payload.sceneId,
     sceneName: payload.sceneName,
     clientPunchTime: payload.clientPunchTime,
@@ -58,7 +58,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   enterAt.value = Date.now();
 
-  void apiTrackAnalyticsEvent({
+  void trackAnalyticsEvent({
     eventType: 'enter_scene',
     sceneId: sceneId.value || undefined,
     sceneSpotId: sceneSpotId.value || undefined,
@@ -72,7 +72,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
 
 onUnload(() => {
   const stayMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
-  void apiTrackAnalyticsEvent({
+  void trackAnalyticsEvent({
     eventType: 'leave_scene',
     sceneId: sceneId.value || undefined,
     sceneSpotId: sceneSpotId.value || undefined,

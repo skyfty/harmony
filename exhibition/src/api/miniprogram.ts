@@ -283,41 +283,8 @@ export interface SceneSpotEntry {
   sceneUrl: string;
 }
 
-export interface TrackAnalyticsEventPayload {
-  eventType: string;
-  sceneId?: string;
-  sceneSpotId?: string;
-  sessionId?: string;
-  source?: string;
-  device?: string;
-  path?: string;
-  dwellMs?: number;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PunchRecordPayload {
-  sceneId: string;
-  sceneName: string;
-  clientPunchTime: string;
-  behaviorPunchTime?: string;
-  location: {
-    nodeId: string;
-    nodeName: string;
-  };
-  source?: string;
-  path?: string;
-}
-
 export function apiGetSceneSpotEntry(id: string): Promise<SceneSpotEntry> {
   return get(`/scene-spots/${id}/entry`);
-}
-
-export function apiTrackAnalyticsEvent(payload: TrackAnalyticsEventPayload): Promise<{ success: boolean }> {
-  return post('/analytics/events', payload);
-}
-
-export function apiCreatePunchRecord(payload: PunchRecordPayload): Promise<{ success: boolean; id: string }> {
-  return post('/punch-records', payload);
 }
 
 export function apiCreateCollection(payload: {

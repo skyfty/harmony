@@ -1,5 +1,5 @@
 import type { OrderDetail, OrderListItem, OrderStatus } from '@/types/order'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type ListOrdersResponse = {

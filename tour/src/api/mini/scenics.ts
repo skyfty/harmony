@@ -1,5 +1,5 @@
 import type { ScenicDetail, ScenicSummary } from '@/types/scenic'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 
 export type ListScenicsResponse = {
   total: number

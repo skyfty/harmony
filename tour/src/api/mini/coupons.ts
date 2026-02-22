@@ -1,5 +1,5 @@
 import type { Coupon } from '@/types/coupon'
-import { MiniApiError, miniRequest } from './client'
+import { MiniApiError, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 type CouponsResponse = {

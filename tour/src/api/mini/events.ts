@@ -1,4 +1,4 @@
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 
 export type HotEvent = {
   id: string

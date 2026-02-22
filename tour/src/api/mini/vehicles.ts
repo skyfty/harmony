@@ -1,5 +1,5 @@
 import type { Vehicle } from '@/types/vehicle'
-import { miniRequest } from './client'
+import { miniRequest } from '@harmony/utils'
 
 type ProductApiDto = {
   id: string

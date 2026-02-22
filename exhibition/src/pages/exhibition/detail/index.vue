@@ -149,6 +149,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
+import { trackAnalyticsEvent } from '@harmony/utils';
 import {
   apiDeleteExhibition,
   apiGetExhibition,
@@ -156,7 +157,6 @@ import {
   apiGetProfile,
   apiRateExhibition,
   apiShareExhibition,
-  apiTrackAnalyticsEvent,
   apiUpdateExhibition,
   apiVisitExhibition,
   apiWithdrawExhibition,
@@ -269,7 +269,7 @@ async function enterExhibition(): Promise<void> {
   try {
     const result = await apiVisitExhibition(exhibition.value.id);
     exhibition.value = { ...exhibition.value, visitCount: result.visitCount };
-    await apiTrackAnalyticsEvent({
+    await trackAnalyticsEvent({
       eventType: 'visit_exhibition',
       sceneSpotId: spotId || undefined,
       source: 'miniapp',

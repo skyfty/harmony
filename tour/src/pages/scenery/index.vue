@@ -8,7 +8,7 @@
 import { ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-import { createPunchRecord, trackAnalyticsEvent } from '@/api/mini';
+import { createPunchRecord, trackAnalyticsEvent } from '@harmony/utils';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');

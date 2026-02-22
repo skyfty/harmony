@@ -98,7 +98,8 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import ImageSwiper from '@/components/ImageSwiper.vue';
 import UserCommentItem from '@/components/UserCommentItem.vue';
-import { getScenic, rateScenic, toggleScenicFavorite, trackAnalyticsEvent } from '@/api/mini';
+import { trackAnalyticsEvent } from '@harmony/utils';
+import { getScenic, rateScenic, toggleScenicFavorite } from '@/api/mini';
 import type { ScenicDetail } from '@/types/scenic';
 
 const scenic = ref<ScenicDetail | null>(null);

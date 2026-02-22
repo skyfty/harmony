@@ -32,12 +32,18 @@ importers:
       '@harmony/utils':
         specifier: file:../utils
         version: file:../utils
+      '@minisheep/mini-program-polyfill-core':
+        specifier: ^1.1.5
+        version: 1.1.5
       '@vue/shared':
         specifier: ^3.5.13
         version: 3.5.28
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
+      event-target-shim:
+        specifier: ^6.0.2
+        version: 6.0.2
       fflate:
         specifier: ^0.8.2
         version: 0.8.2
@@ -59,6 +65,9 @@ importers:
       vue-i18n:
         specifier: ^9.14.3
         version: 9.14.5(vue@3.5.28(typescript@5.6.3))
+      web-streams-polyfill:
+        specifier: ^3.2.1
+        version: 3.3.3
     devDependencies:
       '@dcloudio/types':
         specifier: ^3.4.14
@@ -84,6 +93,9 @@ importers:
       '@minisheep/vite-plugin-mp-chunk-splitter':
         specifier: ^1.0.2
         version: 1.0.4(@rollup/pluginutils@5.3.0(rollup@4.57.1))(debug@4.4.3)(rollup@4.57.1)(vite@5.4.21(@types/node@25.3.0)(sass@1.97.3)(terser@5.46.0))
+      '@resvg/resvg-js':
+        specifier: ^2.6.2
+        version: 2.6.2
       '@typescript-eslint/eslint-plugin':
         specifier: ^6.9.0
         version: 6.21.0(@typescript-eslint/parser@6.21.0(eslint@8.57.1)(typescript@5.6.3))(eslint@8.57.1)(typescript@5.6.3)
@@ -96,6 +108,9 @@ importers:
       '@vue/tsconfig':
         specifier: ^0.7.0
         version: 0.7.0(typescript@5.6.3)(vue@3.5.28(typescript@5.6.3))
+      cross-env:
+        specifier: ^7.0.3
+        version: 7.0.3
       eslint:
         specifier: ^8.50.0
         version: 8.57.1
@@ -114,6 +129,9 @@ importers:
       sass:
         specifier: ^1.85.1
         version: 1.97.3
+      svgo:
+        specifier: ^4.0.0
+        version: 4.0.0
       typescript:
         specifier: ~5.6.3
         version: 5.6.3
@@ -4271,6 +4289,10 @@ packages:
 
   walker@1.0.8:
     resolution: {integrity: sha512-ts/8E8l5b7kY0vlWLewOkDXMmPdLcVV4GmOQLyxuSswIJsweeFZtAsMF7k1Nszz+TYBQrlYRmzOnr398y1JemQ==}
+
+  web-streams-polyfill@3.3.3:
+    resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
+    engines: {node: '>= 8'}
 
   web-streams-polyfill@4.2.0:
     resolution: {integrity: sha512-0rYDzGOh9EZpig92umN5g5D/9A1Kff7k0/mzPSSCY8jEQeYkgRMoY7LhbXtUCWzLCMX0TUE9aoHkjFNB7D9pfA==}
@@ -9374,6 +9396,8 @@ snapshots:
   walker@1.0.8:
     dependencies:
       makeerror: 1.0.12
+
+  web-streams-polyfill@3.3.3: {}
 
   web-streams-polyfill@4.2.0: {}
 
