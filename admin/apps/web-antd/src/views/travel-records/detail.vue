@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { TableColumnsType } from 'ant-design-vue'
 import { Button, Card, Descriptions, Space, Table } from 'ant-design-vue'
 import type { GetTravelRecordResponse, PunchRecordItem } from '#/api'
 import { getTravelRecordApi, listPunchRecordsApi } from '#/api'
@@ -14,12 +15,12 @@ const punchLoading = ref(false)
 const record = ref<GetTravelRecordResponse | null>(null)
 const punchRecords = ref<PunchRecordItem[]>([])
 
-const punchColumns = [
+const punchColumns: TableColumnsType<PunchRecordItem> = [
   { title: '打卡时间', key: 'punchTime', width: 200 },
   { title: '打卡位置', key: 'nodeName', width: 180 },
   { title: '打卡点ID', dataIndex: 'nodeId', key: 'nodeId', width: 180 },
   { title: '来源', dataIndex: 'source', key: 'source', width: 120 },
-  { title: '操作', key: 'actions', width: 120, fixed: 'right' },
+  { title: '操作', key: 'actions', width: 120, fixed: 'right' as const },
 ]
 
 function resolvePunchTime(item: PunchRecordItem): string {
@@ -27,7 +28,7 @@ function resolvePunchTime(item: PunchRecordItem): string {
 }
 
 async function loadPunchRecords(): Promise<void> {
-  if (!record.value?.sceneId || !record.value?.userId) {
+  if (!record.value?.sceneId || !record.value?.scenicId || !record.value?.userId) {
     punchRecords.value = []
     return
   }
@@ -38,6 +39,7 @@ async function loadPunchRecords(): Promise<void> {
       page: 1,
       pageSize: 200,
       sceneId: record.value.sceneId,
+      scenicId: record.value.scenicId,
       userId: record.value.userId,
     })
     punchRecords.value = Array.isArray(result.items) ? result.items : []
@@ -93,6 +95,7 @@ onMounted(load)
         <Descriptions.Item label="停留时长(秒)">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
         <Descriptions.Item label="场景名称">{{ record?.sceneName || '-' }}</Descriptions.Item>
         <Descriptions.Item label="场景ID">{{ record?.sceneId || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="景点ID">{{ record?.scenicId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="用户名">{{ record?.username || '-' }}</Descriptions.Item>
         <Descriptions.Item label="用户ID">{{ record?.userId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="来源">{{ record?.source || '-' }}</Descriptions.Item>

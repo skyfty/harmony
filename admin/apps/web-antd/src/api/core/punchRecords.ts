@@ -18,6 +18,7 @@ type ServerPunchRecordItem = {
   userId?: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -35,6 +36,7 @@ export interface PunchRecordItem {
   userId?: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -51,6 +53,7 @@ export interface ListPunchRecordsParams {
   page?: number
   pageSize?: number
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   nodeId?: string
   nodeName?: string

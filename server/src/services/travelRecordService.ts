@@ -7,6 +7,7 @@ export interface CreateTravelEnterInput {
   userId: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   enterTime?: string
   source?: string
@@ -19,6 +20,7 @@ export interface CreateTravelEnterInput {
 export interface CompleteTravelLeaveInput {
   userId: string
   sceneId: string
+  scenicId: string
   leaveTime?: string
   source?: string
   path?: string
@@ -29,6 +31,7 @@ export interface QueryTravelRecordsOptions {
   page?: number
   pageSize?: number
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   userId?: string
   username?: string
@@ -73,8 +76,12 @@ function toPositiveDurationSeconds(enterTime: Date, leaveTime: Date): number {
 export async function createTravelEnterRecord(input: CreateTravelEnterInput): Promise<string> {
   const userObjectId = ensureObjectId(input.userId)
   const sceneId = normalizeText(input.sceneId)
+  const scenicId = normalizeText(input.scenicId)
   if (!sceneId) {
     throw new Error('sceneId is required')
+  }
+  if (!scenicId) {
+    throw new Error('scenicId is required')
   }
 
   const enterTime = parseDate(input.enterTime) ?? new Date()
@@ -83,6 +90,7 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
     userId: userObjectId,
     username: normalizeText(input.username) || undefined,
     sceneId,
+    scenicId,
     sceneName: normalizeText(input.sceneName) || undefined,
     enterTime,
     status: 'active',
@@ -99,8 +107,12 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
 export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput): Promise<string | null> {
   const userObjectId = ensureObjectId(input.userId)
   const sceneId = normalizeText(input.sceneId)
+  const scenicId = normalizeText(input.scenicId)
   if (!sceneId) {
     throw new Error('sceneId is required')
+  }
+  if (!scenicId) {
+    throw new Error('scenicId is required')
   }
 
   const leaveTime = parseDate(input.leaveTime) ?? new Date()
@@ -108,6 +120,7 @@ export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput)
   const activeRecord = await TravelRecordModel.findOne({
     userId: userObjectId,
     sceneId,
+    scenicId,
     status: 'active',
     leaveTime: null,
   })
@@ -145,6 +158,11 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
   const sceneId = normalizeText(options.sceneId)
   if (sceneId) {
     filter.sceneId = sceneId
+  }
+
+  const scenicId = normalizeText(options.scenicId)
+  if (scenicId) {
+    filter.scenicId = scenicId
   }
 
   const sceneName = normalizeText(options.sceneName)
@@ -246,7 +264,7 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
     return []
   }
 
-  const records = await PunchRecordModel.find({ userId: new Types.ObjectId(userId) }, { sceneId: 1, nodeId: 1, metadata: 1 })
+  const records = await PunchRecordModel.find({ userId: new Types.ObjectId(userId) }, { sceneId: 1, scenicId: 1 })
     .lean()
     .exec()
 
@@ -257,10 +275,7 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
     if (!sceneId) {
       continue
     }
-    const nodeId = normalizeText((record as { nodeId?: string }).nodeId)
-    const metadata = (record as { metadata?: Record<string, unknown> }).metadata
-    const scenicIdFromMetadata = normalizeText(metadata?.scenicId)
-    const scenicIdCandidate = scenicIdFromMetadata || nodeId
+    const scenicIdCandidate = normalizeText((record as { scenicId?: string }).scenicId)
     if (!Types.ObjectId.isValid(scenicIdCandidate)) {
       continue
     }

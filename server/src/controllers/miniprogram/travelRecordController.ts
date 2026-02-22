@@ -7,6 +7,7 @@ import {
 
 type EnterTravelBody = {
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   enterTime?: string
   source?: string
@@ -16,6 +17,7 @@ type EnterTravelBody = {
 
 type LeaveTravelBody = {
   sceneId?: string
+  scenicId?: string
   leaveTime?: string
   source?: string
   path?: string
@@ -31,8 +33,13 @@ export async function createMiniTravelEnterRecord(ctx: Context): Promise<void> {
 
   const body = (ctx.request.body ?? {}) as EnterTravelBody
   const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+  const scenicId = typeof body.scenicId === 'string' ? body.scenicId.trim() : ''
   if (!sceneId) {
     ctx.throw(400, 'sceneId is required')
+    return
+  }
+  if (!scenicId) {
+    ctx.throw(400, 'scenicId is required')
     return
   }
 
@@ -40,6 +47,7 @@ export async function createMiniTravelEnterRecord(ctx: Context): Promise<void> {
     userId,
     username: ctx.state.miniAuthUser?.username,
     sceneId,
+    scenicId,
     sceneName: typeof body.sceneName === 'string' ? body.sceneName : undefined,
     enterTime: typeof body.enterTime === 'string' ? body.enterTime : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
@@ -64,14 +72,20 @@ export async function completeMiniTravelLeaveRecord(ctx: Context): Promise<void>
 
   const body = (ctx.request.body ?? {}) as LeaveTravelBody
   const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+  const scenicId = typeof body.scenicId === 'string' ? body.scenicId.trim() : ''
   if (!sceneId) {
     ctx.throw(400, 'sceneId is required')
+    return
+  }
+  if (!scenicId) {
+    ctx.throw(400, 'scenicId is required')
     return
   }
 
   const id = await completeTravelLeaveRecord({
     userId,
     sceneId,
+    scenicId,
     leaveTime: typeof body.leaveTime === 'string' ? body.leaveTime : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
     path: typeof body.path === 'string' ? body.path : undefined,

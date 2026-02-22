@@ -27,20 +27,23 @@ type PunchEventPayload = {
   location: {
     nodeId: string;
     nodeName: string;
-    scenicId?: string;
   };
 };
 
 function handlePunch(payload: PunchEventPayload): void {
+  if (!sceneSpotId.value) {
+    return;
+  }
+
   void createPunchRecord({
     sceneId: payload.sceneId,
+    scenicId: sceneSpotId.value,
     sceneName: payload.sceneName,
     clientPunchTime: payload.clientPunchTime,
     behaviorPunchTime: payload.behaviorPunchTime,
     location: {
       nodeId: payload.location.nodeId,
       nodeName: payload.location.nodeName,
-      scenicId: payload.location.scenicId,
     },
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
@@ -57,9 +60,10 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneName.value = typeof record.sceneName === 'string' ? record.sceneName : '';
   enterAt.value = Date.now();
 
-  if (sceneId.value) {
+  if (sceneId.value && sceneSpotId.value) {
     void createTravelEnterRecord({
       sceneId: sceneId.value,
+      scenicId: sceneSpotId.value,
       sceneName: sceneName.value || undefined,
       enterTime: new Date(enterAt.value).toISOString(),
       source: 'tour-miniapp',
@@ -87,9 +91,10 @@ onLoad((query: Record<string, unknown> | undefined) => {
 onUnload(() => {
   const dwellMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
 
-  if (sceneId.value) {
+  if (sceneId.value && sceneSpotId.value) {
     void completeTravelLeaveRecord({
       sceneId: sceneId.value,
+      scenicId: sceneSpotId.value,
       leaveTime: new Date().toISOString(),
       source: 'tour-miniapp',
       path: '/pages/scenery/index',

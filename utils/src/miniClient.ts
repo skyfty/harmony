@@ -23,13 +23,13 @@ export interface TrackAnalyticsEventPayload {
 
 export interface CreatePunchRecordPayload {
   sceneId: string;
+  scenicId: string;
   sceneName: string;
   clientPunchTime: string;
   behaviorPunchTime?: string;
   location: {
     nodeId: string;
     nodeName: string;
-    scenicId?: string;
   };
   source?: string;
   path?: string;
@@ -37,6 +37,7 @@ export interface CreatePunchRecordPayload {
 
 export interface CreateTravelEnterPayload {
   sceneId: string;
+  scenicId: string;
   sceneName?: string;
   enterTime?: string;
   source?: string;
@@ -46,6 +47,7 @@ export interface CreateTravelEnterPayload {
 
 export interface CreateTravelLeavePayload {
   sceneId: string;
+  scenicId: string;
   leaveTime?: string;
   source?: string;
   path?: string;

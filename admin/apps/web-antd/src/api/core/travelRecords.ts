@@ -18,6 +18,7 @@ type ServerTravelRecordItem = {
   userId?: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   enterTime: string
   leaveTime?: string
@@ -35,6 +36,7 @@ export interface TravelRecordItem {
   userId?: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   enterTime: string
   leaveTime?: string
@@ -51,6 +53,7 @@ export interface ListTravelRecordsParams {
   page?: number
   pageSize?: number
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   userId?: string
   username?: string

@@ -10,6 +10,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
   formOptions: {
     schema: [
       { component: 'Input', fieldName: 'sceneId', label: '场景ID', componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'scenicId', label: '景点ID', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'sceneName', label: '场景名称', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'userId', label: '用户ID', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'username', label: '用户名', componentProps: { allowClear: true } },
@@ -33,13 +34,14 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
       { field: 'enterTime', minWidth: 180, title: '进入时间', sortable: true, formatter: 'formatDateTime' },
       { field: 'leaveTime', minWidth: 180, title: '离开时间', sortable: true, formatter: 'formatDateTime' },
       { field: 'durationSeconds', minWidth: 120, title: '停留(秒)' },
+      { field: 'scenicId', minWidth: 180, title: '景点ID' },
       { field: 'sceneName', minWidth: 160, title: '场景名称' },
       { field: 'username', minWidth: 140, title: '用户名' },
       {
         field: 'status',
         minWidth: 120,
         title: '状态',
-        formatter: ({ cellValue }) => (cellValue === 'completed' ? '已完成' : '进行中'),
+        formatter: (params: { cellValue?: string }) => (params.cellValue === 'completed' ? '已完成' : '进行中'),
       },
       { align: 'left', field: 'actions', minWidth: 160, fixed: 'right', title: '操作', slots: { default: 'actions' } },
     ],
@@ -51,6 +53,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
             page: page.currentPage,
             pageSize: page.pageSize,
             sceneId: formValues.sceneId,
+            scenicId: formValues.scenicId,
             sceneName: formValues.sceneName,
             userId: formValues.userId,
             username: formValues.username,

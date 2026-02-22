@@ -141,6 +141,7 @@ export interface PunchRecordDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -159,6 +160,7 @@ export interface TravelRecordDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   enterTime: Date
   leaveTime?: Date | null

@@ -6,6 +6,7 @@ const punchRecordSchema = new Schema<PunchRecordDocument>(
     userId: { type: Schema.Types.ObjectId, ref: 'AppUser', required: true, index: true },
     username: { type: String, required: false },
     sceneId: { type: String, required: true, trim: true, index: true },
+    scenicId: { type: String, required: true, trim: true, index: true },
     sceneName: { type: String, required: false, trim: true },
     nodeId: { type: String, required: true, trim: true, index: true },
     nodeName: { type: String, required: false, trim: true },
@@ -25,6 +26,8 @@ const punchRecordSchema = new Schema<PunchRecordDocument>(
 
 punchRecordSchema.index({ userId: 1, createdAt: -1 })
 punchRecordSchema.index({ sceneId: 1, createdAt: -1 })
+punchRecordSchema.index({ scenicId: 1, createdAt: -1 })
+punchRecordSchema.index({ userId: 1, sceneId: 1, scenicId: 1, createdAt: -1 })
 punchRecordSchema.index({ nodeId: 1, createdAt: -1 })
 punchRecordSchema.index({ createdAt: -1 })
 

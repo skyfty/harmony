@@ -35,8 +35,13 @@ type PunchEventPayload = {
 };
 
 function handlePunch(payload: PunchEventPayload): void {
+  if (!sceneSpotId.value) {
+    return;
+  }
+
   void createPunchRecord({
     sceneId: payload.sceneId,
+    scenicId: sceneSpotId.value,
     sceneName: payload.sceneName,
     clientPunchTime: payload.clientPunchTime,
     behaviorPunchTime: payload.behaviorPunchTime,

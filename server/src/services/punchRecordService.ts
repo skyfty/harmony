@@ -5,6 +5,7 @@ export interface CreatePunchRecordInput {
   userId: string
   username?: string
   sceneId: string
+  scenicId: string
   sceneName?: string
   nodeId: string
   nodeName?: string
@@ -21,6 +22,7 @@ export interface QueryPunchRecordsOptions {
   page?: number
   pageSize?: number
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   nodeId?: string
   nodeName?: string
@@ -53,9 +55,13 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
     throw new Error('Invalid userId')
   }
   const sceneId = normalizeText(input.sceneId)
+  const scenicId = normalizeText(input.scenicId)
   const nodeId = normalizeText(input.nodeId)
   if (!sceneId) {
     throw new Error('sceneId is required')
+  }
+  if (!scenicId) {
+    throw new Error('scenicId is required')
   }
   if (!nodeId) {
     throw new Error('nodeId is required')
@@ -65,6 +71,7 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
     userId: new Types.ObjectId(input.userId),
     username: normalizeText(input.username) || undefined,
     sceneId,
+    scenicId,
     sceneName: normalizeText(input.sceneName) || undefined,
     nodeId,
     nodeName: normalizeText(input.nodeName) || undefined,
@@ -89,6 +96,11 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
   const sceneId = normalizeText(options.sceneId)
   if (sceneId) {
     filter.sceneId = sceneId
+  }
+
+  const scenicId = normalizeText(options.scenicId)
+  if (scenicId) {
+    filter.scenicId = scenicId
   }
 
   const sceneName = normalizeText(options.sceneName)

@@ -64,6 +64,7 @@ onMounted(load)
         <Descriptions.Item label="行为触发时间">{{ record?.behaviorPunchTime || '-' }}</Descriptions.Item>
         <Descriptions.Item label="场景名称">{{ record?.sceneName || '-' }}</Descriptions.Item>
         <Descriptions.Item label="场景ID">{{ record?.sceneId || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="景点ID">{{ record?.scenicId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="打卡点名称">{{ record?.nodeName || '-' }}</Descriptions.Item>
         <Descriptions.Item label="打卡点ID">{{ record?.nodeId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="用户名">{{ record?.username || '-' }}</Descriptions.Item>

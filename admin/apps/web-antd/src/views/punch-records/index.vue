@@ -10,6 +10,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
   formOptions: {
     schema: [
       { component: 'Input', fieldName: 'sceneId', label: '场景ID', componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'scenicId', label: '景点ID', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'sceneName', label: '场景名称', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'nodeId', label: '打卡点ID', componentProps: { allowClear: true } },
       { component: 'Input', fieldName: 'nodeName', label: '打卡点名称', componentProps: { allowClear: true } },
@@ -21,6 +22,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
   gridOptions: {
     columns: [
       { field: 'createdAt', minWidth: 180, title: '服务端时间', sortable: true, formatter: 'formatDateTime' },
+      { field: 'scenicId', minWidth: 180, title: '景点ID' },
       { field: 'sceneName', minWidth: 160, title: '场景名称' },
       { field: 'nodeName', minWidth: 160, title: '打卡点名称' },
       { field: 'username', minWidth: 140, title: '用户名' },
@@ -35,6 +37,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
             page: page.currentPage,
             pageSize: page.pageSize,
             sceneId: formValues.sceneId,
+            scenicId: formValues.scenicId,
             sceneName: formValues.sceneName,
             nodeId: formValues.nodeId,
             nodeName: formValues.nodeName,

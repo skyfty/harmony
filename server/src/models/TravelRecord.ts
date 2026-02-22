@@ -6,6 +6,7 @@ const travelRecordSchema = new Schema<TravelRecordDocument>(
     userId: { type: Schema.Types.ObjectId, ref: 'AppUser', required: true, index: true },
     username: { type: String, required: false },
     sceneId: { type: String, required: true, trim: true, index: true },
+    scenicId: { type: String, required: true, trim: true, index: true },
     sceneName: { type: String, required: false, trim: true },
     enterTime: { type: Date, required: true, index: true },
     leaveTime: { type: Date, required: false, default: null },
@@ -25,7 +26,9 @@ const travelRecordSchema = new Schema<TravelRecordDocument>(
 
 travelRecordSchema.index({ userId: 1, enterTime: -1 })
 travelRecordSchema.index({ sceneId: 1, enterTime: -1 })
+travelRecordSchema.index({ scenicId: 1, enterTime: -1 })
 travelRecordSchema.index({ userId: 1, sceneId: 1, enterTime: -1 })
+travelRecordSchema.index({ userId: 1, sceneId: 1, scenicId: 1, status: 1, leaveTime: 1, enterTime: -1 })
 travelRecordSchema.index({ status: 1, updatedAt: -1 })
 travelRecordSchema.index({ createdAt: -1 })
 

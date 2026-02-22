@@ -3,13 +3,13 @@ import { createPunchRecord } from '@/services/punchRecordService'
 
 type CreatePunchRecordBody = {
   sceneId?: string
+  scenicId?: string
   sceneName?: string
   clientPunchTime?: string
   behaviorPunchTime?: string
   location?: {
     nodeId?: string
     nodeName?: string
-    scenicId?: string
   }
   source?: string
   path?: string
@@ -25,9 +25,14 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
 
   const body = (ctx.request.body ?? {}) as CreatePunchRecordBody
   const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+  const scenicId = typeof body.scenicId === 'string' ? body.scenicId.trim() : ''
   const nodeId = typeof body.location?.nodeId === 'string' ? body.location.nodeId.trim() : ''
   if (!sceneId) {
     ctx.throw(400, 'sceneId is required')
+    return
+  }
+  if (!scenicId) {
+    ctx.throw(400, 'scenicId is required')
     return
   }
   if (!nodeId) {
@@ -35,16 +40,11 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     return
   }
 
-  const scenicId = typeof body.location?.scenicId === 'string' ? body.location.scenicId.trim() : ''
-  const mergedMetadata = {
-    ...(body.metadata ?? {}),
-    ...(scenicId ? { scenicId } : {}),
-  }
-
   const id = await createPunchRecord({
     userId,
     username: ctx.state.miniAuthUser?.username,
     sceneId,
+    scenicId,
     sceneName: typeof body.sceneName === 'string' ? body.sceneName : undefined,
     nodeId,
     nodeName: typeof body.location?.nodeName === 'string' ? body.location.nodeName : undefined,
@@ -54,7 +54,7 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     path: typeof body.path === 'string' ? body.path : undefined,
     ip: ctx.ip,
     userAgent: ctx.get('User-Agent') || undefined,
-    metadata: mergedMetadata,
+    metadata: body.metadata,
   })
 
   ctx.body = {
