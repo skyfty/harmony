@@ -276,6 +276,7 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
+    sceneCheckpointTotal,
     title: spot.title,
     coverImage: toNullableString(spot.coverImage),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
