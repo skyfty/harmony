@@ -141,17 +141,23 @@
         <view v-if="overlayCardActive" class="viewer-overlay__content viewer-overlay__card">
           <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
           <view class="viewer-progress">
-            <view class="viewer-progress__bar">
+            <view
+              class="viewer-progress__bar"
+              :class="{ 'is-indeterminate': overlayIndeterminate }"
+            >
               <view
                 class="viewer-progress__bar-fill"
-                :style="{ width: overlayPercent + '%' }"
+                :class="{ 'is-indeterminate': overlayIndeterminate }"
+                :style="overlayProgressStyle"
               />
+              <view v-if="overlayIndeterminate" class="viewer-progress__bar-glow" />
             </view>
             <view class="viewer-progress__stats">
-              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text class="viewer-progress__percent">{{ overlayPercentText }}</text>
               <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
             </view>
           </view>
+          <text v-if="overlayCaption" class="viewer-overlay__caption">{{ overlayCaption }}</text>
         </view>
       </view>
       <view v-if="error" class="viewer-overlay error">
@@ -745,6 +751,7 @@ const resourcePreload = reactive({
 
 const sceneDownload = reactive({
   active: false,
+  phase: 'download' as 'download' | 'parse',
   loaded: 0,
   total: 0,
   percent: 0,
@@ -1216,7 +1223,7 @@ function endSceneSwitchTransition(token: number): void {
 
 const overlayTitle = computed(() => {
   if (sceneDownload.active) {
-    return '正在下载场景';
+    return sceneDownload.phase === 'parse' ? '正在解析场景包' : '正在下载场景包';
   }
   if (resourcePreload.active) {
     return '资源加载中';
@@ -1228,6 +1235,9 @@ const overlayTitle = computed(() => {
 });
 
 const overlayPercent = computed(() => {
+  if (overlayIndeterminate.value) {
+    return 0;
+  }
   if (sceneDownload.active) {
     if (sceneDownload.total > 0) {
       const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
@@ -1247,11 +1257,38 @@ const overlayPercent = computed(() => {
 });
 
 const overlayBytesLabel = computed(() => {
+  if (overlayIndeterminate.value) {
+    return '';
+  }
   if (sceneDownload.active && sceneDownload.total > 0) {
     return `${formatByteSize(sceneDownload.loaded)} / ${formatByteSize(sceneDownload.total)}`;
   }
   if (resourcePreload.active && resourcePreloadBytesLabel.value) {
     return resourcePreloadBytesLabel.value;
+  }
+  return '';
+});
+
+const overlayIndeterminate = computed(() => sceneDownload.active && sceneDownload.phase === 'parse');
+
+const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
+
+const overlayProgressStyle = computed(() => {
+  if (overlayIndeterminate.value) {
+    return {};
+  }
+  return { width: `${overlayPercent.value}%` };
+});
+
+const overlayCaption = computed(() => {
+  if (sceneDownload.active) {
+    return sceneDownload.label;
+  }
+  if (resourcePreload.active) {
+    return resourcePreload.label;
+  }
+  if (loading.value) {
+    return '正在准备渲染上下文…';
   }
   return '';
 });
@@ -8963,6 +9000,19 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
       },
     }) as SceneRequestTask;
     sceneDownloadTask = task;
+    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
+      sceneDownload.phase = 'download';
+      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+        sceneDownload.percent = info.progress;
+        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
+      }
+      if (typeof info.totalBytesWritten === 'number') {
+        sceneDownload.loaded = info.totalBytesWritten;
+      }
+      if (typeof info.totalBytesExpectedToWrite === 'number') {
+        sceneDownload.total = info.totalBytesExpectedToWrite;
+      }
+    });
   });
 }
 
@@ -8974,9 +9024,11 @@ async function loadProjectFromScenePackageUrl(url: string): Promise<void> {
   try {
     resetSceneDownloadState();
     sceneDownload.active = true;
+    sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
     const buffer = await requestBinary(url);
 
+    sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
   } finally {
@@ -9032,10 +9084,16 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
 }
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<void> {
+  sceneDownload.active = true;
+  sceneDownload.phase = 'parse';
+  sceneDownload.label = '正在解压场景包资源…';
   const pkg = unzipScenePackage(buffer);
+  sceneDownload.label = '正在解析资源映射…';
   activeScenePackagePkg = pkg;
   activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
+  sceneDownload.label = '正在解析场景数据…';
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
+  sceneDownload.label = '正在组装场景索引…';
   await loadProjectFromBundle(projectData);
 }
 
@@ -9045,6 +9103,10 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
   activeScenePackagePkg = null;
   loading.value = true;
   try {
+    resetSceneDownloadState();
+    sceneDownload.active = true;
+    sceneDownload.phase = 'parse';
+    sceneDownload.label = '正在读取本地场景包…';
     const buffer = await loadScenePackageZip(pointer);
     if (!buffer || buffer.byteLength <= 0) {
       throw new Error('项目数据为空，请重新导入');
@@ -9055,6 +9117,7 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
     error.value = '项目加载失败，请返回首页重新导入';
     previewPayload.value = null;
   } finally {
+    sceneDownload.active = false;
     loading.value = false;
   }
 }
@@ -9114,6 +9177,7 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
 
 function resetSceneDownloadState(): void {
   sceneDownload.active = false;
+  sceneDownload.phase = 'download';
   sceneDownload.loaded = 0;
   sceneDownload.total = 0;
   sceneDownload.percent = 0;
@@ -10040,12 +10104,14 @@ watch(
     if (!title) {
       return;
     }
+    const loaded = sceneDownload.active ? sceneDownload.loaded : resourcePreload.loadedBytes;
+    const total = sceneDownload.active ? sceneDownload.total : resourcePreload.totalBytes;
     emit('progress', {
       title,
       percent,
       bytesLabel,
-      loaded: sceneDownload.loaded,
-      total: sceneDownload.total,
+      loaded,
+      total,
     });
   },
   { flush: 'post' },
@@ -10444,12 +10510,61 @@ onUnmounted(() => {
   animation: viewer-progress-fill 1.8s linear infinite;
 }
 
+.viewer-progress__bar-fill.is-indeterminate {
+  width: 38%;
+  min-width: 120px;
+  transition: none;
+  background-image: linear-gradient(90deg, rgba(78, 221, 255, 0.18) 0%, rgba(94, 161, 255, 0.9) 35%, rgba(188, 120, 255, 0.95) 70%, rgba(114, 247, 255, 0.2) 100%);
+  background-size: 240% 100%;
+  animation: viewer-progress-indeterminate 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  filter: saturate(1.15);
+}
+
+.viewer-progress__bar.is-indeterminate {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.viewer-progress__bar-glow {
+  position: absolute;
+  inset: -6px;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 50%, rgba(124, 188, 255, 0.34) 0%, rgba(124, 188, 255, 0) 72%);
+  animation: viewer-progress-glow 1.6s ease-in-out infinite;
+}
+
 @keyframes viewer-progress-fill {
   0% {
     background-position: 0% 50%;
   }
   100% {
     background-position: -200% 50%;
+  }
+}
+
+@keyframes viewer-progress-indeterminate {
+  0% {
+    left: -40%;
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0.82;
+  }
+}
+
+@keyframes viewer-progress-glow {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.62;
+    transform: scale(1.03);
   }
 }
 
