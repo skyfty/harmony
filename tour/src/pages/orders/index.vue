@@ -1,8 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">订单中心</text>
-    </view>
+    <PageHeader title="订单中心" />
 
     <view class="content">
       <view v-if="orders.length === 0" class="empty">暂无订单</view>
@@ -29,6 +27,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listOrders } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';
 
 const orders = ref<OrderListItem[]>([]);
@@ -73,16 +72,6 @@ function formatDate(value: string) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

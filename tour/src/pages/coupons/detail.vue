@@ -1,10 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">
-        卡券详情
-      </text>
-    </view>
+    <PageHeader title="卡券详情" />
 
     <view
       v-if="!coupon"
@@ -13,12 +9,6 @@
       <text class="empty-text">
         卡券不存在
       </text>
-      <button
-        class="btn ghost"
-        @tap="back"
-      >
-        返回
-      </button>
     </view>
 
     <view
@@ -89,6 +79,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { getMyCouponDetail, useMyCoupon } from '@/api/mini/coupons';
+import PageHeader from '@/components/PageHeader.vue';
 import type { Coupon, CouponStatus } from '@/types/coupon';
 
 defineOptions({
@@ -156,16 +147,6 @@ function formatDateTime(value: string) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

@@ -1,9 +1,10 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">地址管理</text>
-      <button class="add" @tap="create">新增地址</button>
-    </view>
+    <PageHeader title="地址管理">
+      <template #right>
+        <button class="add" @tap="create">新增地址</button>
+      </template>
+    </PageHeader>
     <view class="content">
       <view v-if="items.length === 0" class="empty">暂无地址</view>
       <view v-for="addr in items" :key="addr.id" class="card">
@@ -29,6 +30,7 @@
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 import { listAddresses, removeAddress } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { Address } from '@/types/address';
 
 const items = ref<Address[]>([]);
@@ -80,19 +82,6 @@ async function removeAndReload(id: string) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .add {

@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header"><text class="title">个人信息编辑</text></view>
+    <PageHeader title="个人信息编辑" />
     <view class="content">
       <view class="card">
         <view class="avatar-row" @tap="pickAvatar">
@@ -35,6 +35,7 @@
 import { reactive } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { getProfile, saveProfile } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { Gender, UserProfile } from '@/types/profile';
 
 const form = reactive<UserProfile>({
@@ -120,16 +121,6 @@ async function submitProfile() {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

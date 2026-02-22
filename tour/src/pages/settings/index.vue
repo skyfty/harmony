@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header"><text class="title">系统设置</text></view>
+    <PageHeader title="系统设置" />
     <view class="content">
       <view class="card">
         <text class="section">通知偏好</text>
@@ -29,6 +29,7 @@
 <script setup lang="ts">
 import { reactive } from 'vue';
 import { readStorageJson, writeStorageJson } from '@/utils/storage';
+import PageHeader from '@/components/PageHeader.vue';
 
 const KEY = 'tour:settings:v1';
 
@@ -56,16 +57,6 @@ function logout() {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

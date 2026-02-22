@@ -1,8 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">提交建议</text>
-    </view>
+    <PageHeader title="提交建议" />
     <view class="content">
       <view class="card">
         <view class="field" @tap="pickCategory">
@@ -26,6 +24,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { createFeedback } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 import type { FeedbackCategory } from '@/types/feedback';
 
 const category = ref<FeedbackCategory>('other');
@@ -82,16 +81,6 @@ async function submitFeedback() {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {

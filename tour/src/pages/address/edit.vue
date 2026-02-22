@@ -1,8 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
-      <text class="title">{{ editing ? '编辑地址' : '新增地址' }}</text>
-    </view>
+    <PageHeader :title="editing ? '编辑地址' : '新增地址'" />
 
     <view class="content">
       <view class="card">
@@ -39,6 +37,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { reactive, ref } from 'vue';
 import { getAddressById, upsertAddress } from '@/api/mini';
+import PageHeader from '@/components/PageHeader.vue';
 
 const editing = ref(false);
 const editId = ref('');
@@ -106,16 +105,6 @@ async function submitAddress() {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-}
-
-.header {
-  padding: 16px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
 }
 
 .content {
