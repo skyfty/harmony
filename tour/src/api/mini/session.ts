@@ -26,12 +26,6 @@ export async function ensureMiniAuth(): Promise<string> {
   const token = getAccessToken()
   if (token) return token
 
-  const isDev = import.meta.env.DEV
-  const autoLogin = String(import.meta.env.VITE_MINI_AUTO_LOGIN ?? '') === '1'
-  if (!isDev || !autoLogin) {
-    return ''
-  }
-
   const username = String(import.meta.env.VITE_MINI_TEST_USERNAME ?? 'test')
   const password = String(import.meta.env.VITE_MINI_TEST_PASSWORD ?? 'test1234')
 
