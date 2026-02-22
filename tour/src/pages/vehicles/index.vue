@@ -25,10 +25,32 @@ import { onMounted, ref } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles } from '@/api/mini';
-import { getSelectedVehicleId, setSelectedVehicleId } from '@/mocks/vehicles';
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+
+const VEHICLE_SELECTION_STORAGE_KEY = 'tour:selectedVehicleId';
+
+function getSelectedVehicleId(): string | null {
+  try {
+    const value = uni.getStorageSync(VEHICLE_SELECTION_STORAGE_KEY);
+    return typeof value === 'string' && value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSelectedVehicleId(id: string | null): void {
+  try {
+    if (id) {
+      uni.setStorageSync(VEHICLE_SELECTION_STORAGE_KEY, id);
+    } else {
+      uni.removeStorageSync(VEHICLE_SELECTION_STORAGE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
 
 const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());

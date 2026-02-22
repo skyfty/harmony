@@ -28,13 +28,22 @@
 <script setup lang="ts">
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
-import { listAddresses, removeAddress } from '@/mocks/addresses';
+import { listAddresses, removeAddress } from '@/api/mini';
+import type { Address } from '@/types/address';
 
-const items = ref(listAddresses());
+const items = ref<Address[]>([]);
 
 onShow(() => {
-  items.value = listAddresses();
+  void reload();
 });
+
+async function reload() {
+  try {
+    items.value = await listAddresses();
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
 
 function create() {
   uni.navigateTo({ url: '/pages/address/edit' });
@@ -50,12 +59,20 @@ function remove(id: string) {
     content: '确定删除该地址吗？',
     success: (res) => {
       if (res.confirm) {
-        removeAddress(id);
-        items.value = listAddresses();
-        uni.showToast({ title: '已删除', icon: 'none' });
+        void removeAndReload(id);
       }
     },
   });
+}
+
+async function removeAndReload(id: string) {
+  try {
+    await removeAddress(id);
+    await reload();
+    uni.showToast({ title: '已删除', icon: 'none' });
+  } catch {
+    uni.showToast({ title: '删除失败', icon: 'none' });
+  }
 }
 </script>
 

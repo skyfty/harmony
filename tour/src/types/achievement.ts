@@ -4,4 +4,5 @@ export interface Achievement {
   description: string;
   progress: number; // 0-1
   scenicId?: string;
+  achievedAt?: string;
 }

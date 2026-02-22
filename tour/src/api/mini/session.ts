@@ -22,7 +22,7 @@ export async function loginWithCredentials(username: string, password: string): 
   return token
 }
 
-export async function ensureDevLogin(): Promise<string> {
+export async function ensureMiniAuth(): Promise<string> {
   const token = getAccessToken()
   if (token) return token
 
@@ -40,4 +40,8 @@ export async function ensureDevLogin(): Promise<string> {
   } catch {
     return ''
   }
+}
+
+export async function ensureDevLogin(): Promise<string> {
+  return await ensureMiniAuth()
 }

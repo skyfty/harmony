@@ -60,6 +60,18 @@ import {
   listOrders,
   getOrder,
 } from '@/controllers/miniprogram/orderController'
+import { listAchievements } from '@/controllers/miniprogram/achievementController'
+import {
+  listAddresses,
+  getAddress,
+  createAddress,
+  updateAddress,
+  deleteAddress,
+} from '@/controllers/miniprogram/addressController'
+import {
+  listFeedback,
+  createFeedback,
+} from '@/controllers/miniprogram/feedbackController'
 import { trackAnalyticsEvent } from '@/controllers/miniprogram/analyticsController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
@@ -134,5 +146,19 @@ miniRouter.post('/coupons/:id/claim', claimCoupon)
 // orders
 miniRouter.get('/orders', listOrders)
 miniRouter.get('/orders/:id', getOrder)
+
+// achievements
+miniRouter.get('/achievements', listAchievements)
+
+// addresses
+miniRouter.get('/addresses', listAddresses)
+miniRouter.get('/addresses/:id', getAddress)
+miniRouter.post('/addresses', createAddress)
+miniRouter.patch('/addresses/:id', updateAddress)
+miniRouter.delete('/addresses/:id', deleteAddress)
+
+// feedback
+miniRouter.get('/feedback', listFeedback)
+miniRouter.post('/feedback', createFeedback)
 
 export default miniRouter

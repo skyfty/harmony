@@ -38,7 +38,7 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { reactive, ref } from 'vue';
-import { getAddressById, upsertAddress } from '@/mocks/addresses';
+import { getAddressById, upsertAddress } from '@/api/mini';
 
 const editing = ref(false);
 const editId = ref('');
@@ -52,9 +52,13 @@ const form = reactive({
 });
 
 onLoad((query) => {
+  void initForm(query);
+});
+
+async function initForm(query: Record<string, any> | undefined) {
   const id = typeof query?.id === 'string' ? query.id : '';
   if (!id) return;
-  const addr = getAddressById(id);
+  const addr = await getAddressById(id);
   if (!addr) return;
   editing.value = true;
   editId.value = id;
@@ -63,7 +67,7 @@ onLoad((query) => {
   form.region = addr.region;
   form.detail = addr.detail;
   form.isDefault = addr.isDefault;
-});
+}
 
 function onRegionChange(e: any) {
   const value = e?.detail?.value;
@@ -77,16 +81,24 @@ function save() {
     uni.showToast({ title: '请填写完整信息', icon: 'none' });
     return;
   }
-  upsertAddress({
-    id: editId.value || undefined,
-    receiverName: form.receiverName.trim(),
-    phone: form.phone.trim(),
-    region: form.region.trim(),
-    detail: form.detail.trim(),
-    isDefault: form.isDefault,
-  });
-  uni.showToast({ title: '已保存', icon: 'none' });
-  setTimeout(() => uni.navigateBack(), 200);
+  void submitAddress();
+}
+
+async function submitAddress() {
+  try {
+    await upsertAddress({
+      id: editId.value || undefined,
+      receiverName: form.receiverName.trim(),
+      phone: form.phone.trim(),
+      region: form.region.trim(),
+      detail: form.detail.trim(),
+      isDefault: form.isDefault,
+    });
+    uni.showToast({ title: '已保存', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 200);
+  } catch {
+    uni.showToast({ title: '保存失败', icon: 'none' });
+  }
 }
 </script>
 

@@ -26,13 +26,27 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import AchievementCard from '@/components/AchievementCard.vue';
-import { listAchievements } from '@/mocks/achievements';
+import { listAchievements } from '@/api/mini';
+import type { Achievement } from '@/types/achievement';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const keyword = ref('');
-const achievements = computed(() => listAchievements());
+const achievements = ref<Achievement[]>([]);
+
+onShow(() => {
+  void reload();
+});
+
+async function reload() {
+  try {
+    achievements.value = await listAchievements();
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
 
 const filtered = computed(() => {
   const k = keyword.value.trim();

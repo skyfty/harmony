@@ -7,12 +7,12 @@
           <text class="label">头像</text>
           <view class="avatar">
             <image v-if="form.avatarUrl" class="avatar-img" :src="form.avatarUrl" mode="aspectFill" />
-            <text v-else class="avatar-text">{{ form.nickname.slice(0, 1) || 'U' }}</text>
+            <text v-else class="avatar-text">{{ form.displayName.slice(0, 1) || 'U' }}</text>
           </view>
         </view>
         <view class="field">
           <text class="label">昵称</text>
-          <input v-model="form.nickname" class="input" type="text" placeholder="请输入昵称" />
+          <input v-model="form.displayName" class="input" type="text" placeholder="请输入昵称" />
         </view>
         <view class="field" @tap="pickGender">
           <text class="label">性别</text>
@@ -33,11 +33,34 @@
 
 <script setup lang="ts">
 import { reactive } from 'vue';
-import { getProfile, saveProfile } from '@/mocks/profile';
+import { onShow } from '@dcloudio/uni-app';
+import { getProfile, saveProfile } from '@/api/mini';
 import type { Gender, UserProfile } from '@/types/profile';
 
-const current = getProfile();
-const form = reactive<UserProfile>({ ...current });
+const form = reactive<UserProfile>({
+  id: '',
+  avatarUrl: '',
+  displayName: '',
+  gender: 'other',
+  birthDate: '',
+});
+
+onShow(() => {
+  void loadProfile();
+});
+
+async function loadProfile() {
+  try {
+    const current = await getProfile();
+    form.id = current.id;
+    form.avatarUrl = current.avatarUrl || '';
+    form.displayName = current.displayName;
+    form.gender = current.gender;
+    form.birthDate = current.birthDate || '';
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
 
 const genderOptions: Array<{ value: Gender; label: string }> = [
   { value: 'male', label: '男' },
@@ -75,13 +98,21 @@ function pickAvatar() {
 }
 
 function save() {
-  if (!form.nickname.trim()) {
+  if (!form.displayName.trim()) {
     uni.showToast({ title: '请输入昵称', icon: 'none' });
     return;
   }
-  saveProfile({ ...form, nickname: form.nickname.trim() });
-  uni.showToast({ title: '已保存', icon: 'none' });
-  setTimeout(() => uni.navigateBack(), 200);
+  void submitProfile();
+}
+
+async function submitProfile() {
+  try {
+    await saveProfile({ ...form, displayName: form.displayName.trim() });
+    uni.showToast({ title: '已保存', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 200);
+  } catch {
+    uni.showToast({ title: '保存失败', icon: 'none' });
+  }
 }
 </script>
 

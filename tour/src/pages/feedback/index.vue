@@ -22,14 +22,22 @@
 <script setup lang="ts">
 import { onShow } from '@dcloudio/uni-app';
 import { ref } from 'vue';
-import { listFeedback } from '@/mocks/feedback';
-import type { FeedbackCategory, FeedbackStatus } from '@/types/feedback';
+import { listFeedback } from '@/api/mini';
+import type { FeedbackCategory, FeedbackStatus, FeedbackTicket } from '@/types/feedback';
 
-const items = ref(listFeedback());
+const items = ref<FeedbackTicket[]>([]);
 
 onShow(() => {
-  items.value = listFeedback();
+  void reload();
 });
+
+async function reload() {
+  try {
+    items.value = await listFeedback();
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
 
 function create() {
   uni.navigateTo({ url: '/pages/feedback/create' });

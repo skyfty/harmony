@@ -18,7 +18,7 @@
 
       <view class="card">
         <text class="section">商品明细</text>
-        <view v-for="item in order.items" :key="item.id" class="item">
+        <view v-for="item in order.items" :key="item.productId" class="item">
           <text class="item-name">{{ item.name }}</text>
           <text class="item-meta">¥ {{ item.price }} × {{ item.quantity }}</text>
         </view>
@@ -34,15 +34,29 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
-import { getOrderDetail } from '@/mocks/orders';
+import { getOrderDetail } from '@/api/mini';
 import type { OrderDetail, OrderStatus } from '@/types/order';
 
 const order = ref<OrderDetail | null>(null);
 
 onLoad((query) => {
-  const id = typeof query?.id === 'string' ? query.id : '';
-  order.value = id ? getOrderDetail(id) ?? null : null;
+  void loadOrder(query);
 });
+
+async function loadOrder(query: Record<string, any> | undefined) {
+  const id = typeof query?.id === 'string' ? query.id : '';
+  if (!id) {
+    order.value = null;
+    return;
+  }
+
+  try {
+    order.value = await getOrderDetail(id);
+  } catch {
+    order.value = null;
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
 
 function back() {
   uni.navigateBack();

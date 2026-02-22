@@ -33,6 +33,8 @@
     "@harmony/utils": "file:../utils",
     "@minisheep/mini-program-polyfill-core": "^1.1.5",
     "@vue/shared": "^3.5.13",
+    "event-target-shim": "^6.0.2",
+    "web-streams-polyfill": "^3.2.1",
     "cannon-es": "^0.20.0",
     "fflate": "^0.8.2",
     "pinia": "^2.2.6",

@@ -14,7 +14,7 @@
         </view>
         <view class="meta">
           <text class="meta-text">下单时间 {{ formatDate(order.createdAt) }}</text>
-          <text class="meta-text">共 {{ order.itemCount }} 件</text>
+          <text class="meta-text">共 {{ itemCount(order) }} 件</text>
         </view>
         <view class="footer">
           <text class="amount">¥ {{ order.totalAmount }}</text>
@@ -26,10 +26,28 @@
 </template>
 
 <script setup lang="ts">
-import { listOrders } from '@/mocks/orders';
-import type { OrderStatus } from '@/types/order';
+import { onShow } from '@dcloudio/uni-app';
+import { ref } from 'vue';
+import { listOrders } from '@/api/mini';
+import type { OrderListItem, OrderStatus } from '@/types/order';
 
-const orders = listOrders();
+const orders = ref<OrderListItem[]>([]);
+
+onShow(() => {
+  void reload();
+});
+
+async function reload() {
+  try {
+    orders.value = await listOrders();
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
+
+function itemCount(order: OrderListItem) {
+  return order.items.reduce((total, item) => total + (item.quantity || 0), 0);
+}
 
 function openDetail(id: string) {
   uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(id)}` });

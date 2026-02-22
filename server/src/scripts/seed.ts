@@ -4,6 +4,7 @@ import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/admin
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
+import { ensureMiniDemoDataSeeded } from '@/services/miniDemoSeedService'
 
 
 async function main(): Promise<void> {
@@ -29,6 +30,11 @@ async function main(): Promise<void> {
 
   await ensureOptimizeProductsSeeded().catch(() => undefined)
   console.log('[seed] 优化商城测试商品（若存在）已写入数据库')
+
+  await ensureMiniDemoDataSeeded().catch((error) => {
+    console.warn('[seed] 小程序演示数据写入失败：', error)
+  })
+  console.log('[seed] 小程序演示数据（成就/地址/反馈）已初始化')
 }
 
 main()

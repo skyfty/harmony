@@ -4,7 +4,7 @@ const DEFAULT_PROD_API_BASE_URL = 'https://v.touchmagic.cn/api/mini';
 const DEFAULT_DEV_DOWNLOAD_CDN_BASE = 'http://localhost:4000';
 const DEFAULT_PROD_DOWNLOAD_CDN_BASE = 'https://cdn.touchmagic.cn';
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS' | 'HEAD';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
 
 export type HttpRequestOptions = {
   method?: HttpMethod;

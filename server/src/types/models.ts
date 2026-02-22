@@ -688,6 +688,47 @@ export interface MiniEventDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface MiniAchievementDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  title: string
+  description: string
+  progress: number
+  scenicId?: Types.ObjectId | null
+  achievedAt?: Date | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface MiniAddressDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  receiverName: string
+  phone: string
+  region: string
+  detail: string
+  isDefault: boolean
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type MiniFeedbackCategory = 'bug' | 'ui' | 'feature' | 'content' | 'other'
+
+export type MiniFeedbackStatus = 'new' | 'in_progress' | 'resolved' | 'closed'
+
+export interface MiniFeedbackDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  category: MiniFeedbackCategory
+  content: string
+  contact?: string | null
+  status: MiniFeedbackStatus
+  reply?: string | null
+  repliedAt?: Date | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface CouponDocument extends Document<Types.ObjectId> {
   title: string
   description: string

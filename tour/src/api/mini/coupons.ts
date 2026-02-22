@@ -1,7 +1,6 @@
 import type { Coupon } from '@/types/coupon'
-import { HttpError } from '@harmony/utils'
-import { miniRequest } from './client'
-import { ensureDevLogin } from './session'
+import { MiniApiError, miniRequest } from './client'
+import { ensureMiniAuth } from './session'
 
 type CouponsResponse = {
   total: number
@@ -29,13 +28,13 @@ function buildQuery(params?: CouponListParams): string {
 }
 
 export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]> {
-  await ensureDevLogin()
+  await ensureMiniAuth()
 
   try {
     const res = await miniRequest<CouponsResponse>(`/coupons${buildQuery(params)}`, { method: 'GET' })
     return Array.isArray(res.coupons) ? res.coupons : []
   } catch (err) {
-    if (err instanceof HttpError && err.status === 401) {
+    if (err instanceof MiniApiError && err.kind === 'auth') {
       return []
     }
     throw err
@@ -43,11 +42,11 @@ export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]
 }
 
 export async function getMyCouponDetail(id: string): Promise<Coupon> {
-  await ensureDevLogin()
+  await ensureMiniAuth()
   return miniRequest<Coupon>(`/coupons/${encodeURIComponent(id)}`, { method: 'GET' })
 }
 
 export async function useMyCoupon(id: string): Promise<Coupon> {
-  await ensureDevLogin()
+  await ensureMiniAuth()
   return miniRequest<Coupon>(`/coupons/${encodeURIComponent(id)}/use`, { method: 'POST' })
 }

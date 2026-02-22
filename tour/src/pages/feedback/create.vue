@@ -25,7 +25,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { createFeedback } from '@/mocks/feedback';
+import { createFeedback } from '@/api/mini';
 import type { FeedbackCategory } from '@/types/feedback';
 
 const category = ref<FeedbackCategory>('other');
@@ -60,13 +60,21 @@ function submit() {
     uni.showToast({ title: '请填写内容', icon: 'none' });
     return;
   }
-  createFeedback({
-    category: category.value,
-    content: content.value.trim(),
-    contact: contact.value.trim(),
-  });
-  uni.showToast({ title: '已提交', icon: 'none' });
-  setTimeout(() => uni.navigateBack(), 200);
+  void submitFeedback();
+}
+
+async function submitFeedback() {
+  try {
+    await createFeedback({
+      category: category.value,
+      content: content.value.trim(),
+      contact: contact.value.trim(),
+    });
+    uni.showToast({ title: '已提交', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 200);
+  } catch {
+    uni.showToast({ title: '提交失败', icon: 'none' });
+  }
 }
 </script>
 

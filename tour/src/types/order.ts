@@ -1,10 +1,17 @@
 export type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled';
 
 export interface OrderItem {
-  id: string;
+  productId: string;
   name: string;
   price: number;
   quantity: number;
+  product?: {
+    id: string;
+    slug: string;
+    category: string;
+    imageUrl?: string;
+    description?: string;
+  };
 }
 
 export interface OrderListItem {
@@ -12,10 +19,13 @@ export interface OrderListItem {
   orderNumber: string;
   status: OrderStatus;
   createdAt: string;
+  updatedAt: string;
   totalAmount: number;
-  itemCount: number;
+  items: OrderItem[];
+  paymentMethod?: string;
+  shippingAddress?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface OrderDetail extends OrderListItem {
-  items: OrderItem[];
 }

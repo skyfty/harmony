@@ -7,7 +7,7 @@
           <text v-else class="avatar-text">{{ initials }}</text>
         </view>
         <view class="info">
-          <text class="name">{{ profile.nickname }}</text>
+          <text class="name">{{ profile.displayName }}</text>
           <text class="badge">会员</text>
         </view>
         <button class="edit" @tap="openProfileEdit">编辑个人资料</button>
@@ -43,17 +43,31 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
-import { getProfile } from '@/mocks/profile';
+import { getProfile } from '@/api/mini';
+import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
-const profile = ref(getProfile());
-
-onShow(() => {
-  profile.value = getProfile();
+const profile = ref<UserProfile>({
+  id: '',
+  displayName: '游客',
+  gender: 'other',
+  birthDate: '',
 });
 
+onShow(() => {
+  void reloadProfile();
+});
+
+async function reloadProfile() {
+  try {
+    profile.value = await getProfile();
+  } catch {
+    uni.showToast({ title: '加载失败', icon: 'none' });
+  }
+}
+
 const initials = computed(() => {
-  const name = profile.value.nickname || '游客';
+  const name = profile.value.displayName || '游客';
   return name.slice(0, 1);
 });
 
