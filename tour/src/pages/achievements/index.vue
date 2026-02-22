@@ -1,31 +1,6 @@
 <template>
   <view class="page">
-    <view
-      class="header"
-      :style="{ paddingTop: statusBarHeight + 'px' }"
-    >
-      <view class="title">
-        打卡成就
-      </view>
-      <view class="search-box">
-        <text class="search-icon">
-          🔎
-        </text>
-        <input
-          v-model="keyword"
-          class="search-input"
-          type="text"
-          placeholder="搜索已打卡景区..."
-        >
-        <text
-          v-if="keyword"
-          class="clear-icon"
-          @tap="keyword = ''"
-        >
-          ✕
-        </text>
-      </view>
-    </view>
+    <PageHeader title="打卡成就"  :showBack="false" />
 
     <view class="content">
       <view
@@ -86,6 +61,7 @@ try {
 } catch { /* fallback */ }
 
 import BottomNav from '@/components/BottomNav.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 

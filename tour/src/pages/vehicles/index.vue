@@ -1,9 +1,6 @@
 <template>
   <view class="page">
-    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
-      <text class="title">代步工具</text>
-      <text class="subtitle">选择偏好车型（不影响 3D 内实际可驾驶车辆）</text>
-    </view>
+    <PageHeader title="代步工具" :showBack="false" />
     <view class="content">
       <VehicleCard
         v-for="vehicle in vehicles"
@@ -29,6 +26,7 @@ try {
   statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
 } catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles } from '@/api/mini';
 import type { Vehicle } from '@/types/vehicle';

@@ -1,39 +1,6 @@
 <template>
   <view class="page">
-    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
-      <text class="title">
-        卡券中心
-      </text>
-      <view class="search-box">
-        <text class="search-icon">
-          🔍
-        </text>
-        <input
-          v-model="keyword"
-          class="search-input"
-          type="text"
-          placeholder="搜索卡券名称或描述"
-        >
-        <text
-          v-if="keyword"
-          class="clear-icon"
-          @tap="keyword = ''"
-        >
-          ✕
-        </text>
-      </view>
-      <view class="status-tabs">
-        <view
-          v-for="option in statusOptions"
-          :key="option.value"
-          class="status-tab"
-          :class="{ active: selectedStatus === option.value }"
-          @tap="selectedStatus = option.value"
-        >
-          {{ option.label }}
-        </view>
-      </view>
-    </view>
+    <PageHeader title="卡券中心"  :showBack="false" />
     <view class="content">
       <view
         v-for="coupon in filteredCoupons"
@@ -75,6 +42,7 @@ try {
 } catch { /* fallback */ }
 import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import CouponCard from '@/components/CouponCard.vue';
 import { listMyCoupons } from '@/api/mini/coupons';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
