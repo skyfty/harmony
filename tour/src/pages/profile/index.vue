@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
+    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
       <view class="profile">
         <view class="avatar">
           <image v-if="profile.avatarUrl" class="avatar-img" :src="profile.avatarUrl" mode="aspectFill" />
@@ -42,6 +42,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+
+const statusBarHeight = ref(0);
+try {
+  const sysInfo = uni.getSystemInfoSync();
+  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
+} catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
 import { getProfile } from '@/api/mini';
 import type { UserProfile } from '@/types/profile';

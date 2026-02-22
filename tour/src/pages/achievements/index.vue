@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
+    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
       <view class="search-box">
         <text class="search-icon">
           🔍
@@ -119,6 +119,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+
+const statusBarHeight = ref(0);
+try {
+  const sysInfo = uni.getSystemInfoSync();
+  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
+} catch { /* fallback */ }
+
 import BottomNav from '@/components/BottomNav.vue';
 import AchievementCard from '@/components/AchievementCard.vue';
 import { listAchievements } from '@/api/mini/achievements';

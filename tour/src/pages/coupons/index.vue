@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
+    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
       <text class="title">
         卡券中心
       </text>
@@ -67,6 +67,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+
+const statusBarHeight = ref(0);
+try {
+  const sysInfo = uni.getSystemInfoSync();
+  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
+} catch { /* fallback */ }
 import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import CouponCard from '@/components/CouponCard.vue';

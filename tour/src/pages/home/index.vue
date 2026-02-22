@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header">
+    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
       <view class="search-box">
         <text class="search-icon">🔍</text>
         <input
@@ -47,6 +47,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+
+const statusBarHeight = ref(0);
+try {
+  const sysInfo = uni.getSystemInfoSync();
+  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
+} catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listHotEvents, listScenics } from '@/api/mini';
