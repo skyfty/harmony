@@ -163,6 +163,7 @@
   },
   "loginLogs": { "title": "登录日志" },
   "punchRecords": { "title": "打卡记录" },
+  "travelRecords": { "title": "游历记录" },
   "project": {
     "title": "项目",
     "index": { "title": "项目管理" },

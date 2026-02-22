@@ -107,7 +107,8 @@ import {
   exportLoginLogs,
 } from '@/controllers/admin/loginAuditController'
 import { getAnalyticsOverviewData } from '@/controllers/admin/analyticsController'
-import { listPunchRecords } from '@/controllers/admin/punchRecordController'
+import { deletePunchRecord, getPunchRecord, listPunchRecords } from '@/controllers/admin/punchRecordController'
+import { deleteTravelRecord, getTravelRecord, listTravelRecords } from '@/controllers/admin/travelRecordController'
 import { koaBody } from '@/utils/bodyParser'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
@@ -272,5 +273,10 @@ adminRouter.delete('/login-logs', requireAnyPermission(['auth:delete']), bulkDel
 adminRouter.get('/login-logs/export', requireAnyPermission(['auth:export']), exportLoginLogs)
 adminRouter.get('/analytics/overview', requireAnyPermission(['auth:read']), getAnalyticsOverviewData)
 adminRouter.get('/punch-records', requireAnyPermission(['punch:read']), listPunchRecords)
+adminRouter.get('/punch-records/:id', requireAnyPermission(['punch:read']), getPunchRecord)
+adminRouter.delete('/punch-records/:id', requireAnyPermission(['punch:delete']), deletePunchRecord)
+adminRouter.get('/travel-records', requireAnyPermission(['travel:read']), listTravelRecords)
+adminRouter.get('/travel-records/:id', requireAnyPermission(['travel:read']), getTravelRecord)
+adminRouter.delete('/travel-records/:id', requireAnyPermission(['travel:delete']), deleteTravelRecord)
 
 export default adminRouter

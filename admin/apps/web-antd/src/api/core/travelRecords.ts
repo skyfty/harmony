@@ -12,17 +12,17 @@ interface GridPageResult<T> {
   total: number
 }
 
-type ServerPunchRecordItem = {
+type ServerTravelRecordItem = {
   _id?: string
   id?: string
   userId?: string
   username?: string
   sceneId: string
   sceneName?: string
-  nodeId: string
-  nodeName?: string
-  clientPunchTime?: string
-  behaviorPunchTime?: string
+  enterTime: string
+  leaveTime?: string
+  durationSeconds?: number
+  status: 'active' | 'completed'
   source?: string
   path?: string
   ip?: string
@@ -30,16 +30,16 @@ type ServerPunchRecordItem = {
   createdAt: string
 }
 
-export interface PunchRecordItem {
+export interface TravelRecordItem {
   id: string
   userId?: string
   username?: string
   sceneId: string
   sceneName?: string
-  nodeId: string
-  nodeName?: string
-  clientPunchTime?: string
-  behaviorPunchTime?: string
+  enterTime: string
+  leaveTime?: string
+  durationSeconds?: number
+  status: 'active' | 'completed'
   source?: string
   path?: string
   ip?: string
@@ -47,24 +47,23 @@ export interface PunchRecordItem {
   createdAt: string
 }
 
-export interface ListPunchRecordsParams {
+export interface ListTravelRecordsParams {
   page?: number
   pageSize?: number
   sceneId?: string
   sceneName?: string
-  nodeId?: string
-  nodeName?: string
   userId?: string
   username?: string
+  status?: 'active' | 'completed'
   start?: string
   end?: string
 }
 
-export interface GetPunchRecordResponse extends PunchRecordItem {
+export interface GetTravelRecordResponse extends TravelRecordItem {
   metadata?: Record<string, unknown>
 }
 
-function normalizeGridPage(result: ServerPageResult<ServerPunchRecordItem>): GridPageResult<PunchRecordItem> {
+function normalizeGridPage(result: ServerPageResult<ServerTravelRecordItem>): GridPageResult<TravelRecordItem> {
   const items = (result.data || []).map((entry) => ({
     ...entry,
     id: entry.id || entry._id || '',
@@ -75,19 +74,19 @@ function normalizeGridPage(result: ServerPageResult<ServerPunchRecordItem>): Gri
   }
 }
 
-export async function listPunchRecordsApi(params: ListPunchRecordsParams) {
-  const res = await requestClient.get<ServerPageResult<ServerPunchRecordItem>>('/admin/punch-records', { params })
+export async function listTravelRecordsApi(params: ListTravelRecordsParams) {
+  const res = await requestClient.get<ServerPageResult<ServerTravelRecordItem>>('/admin/travel-records', { params })
   return normalizeGridPage(res)
 }
 
-export async function getPunchRecordApi(id: string) {
-  const res = await requestClient.get<GetPunchRecordResponse>(`/admin/punch-records/${id}`)
+export async function getTravelRecordApi(id: string) {
+  const res = await requestClient.get<GetTravelRecordResponse>(`/admin/travel-records/${id}`)
   return {
     ...res,
     id: res.id || (res as any)._id || '',
   }
 }
 
-export async function deletePunchRecordApi(id: string) {
-  return await requestClient.delete(`/admin/punch-records/${id}`)
+export async function deleteTravelRecordApi(id: string) {
+  return await requestClient.delete(`/admin/travel-records/${id}`)
 }

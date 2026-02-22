@@ -29,9 +29,27 @@ export interface CreatePunchRecordPayload {
   location: {
     nodeId: string;
     nodeName: string;
+    scenicId?: string;
   };
   source?: string;
   path?: string;
+}
+
+export interface CreateTravelEnterPayload {
+  sceneId: string;
+  sceneName?: string;
+  enterTime?: string;
+  source?: string;
+  path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateTravelLeavePayload {
+  sceneId: string;
+  leaveTime?: string;
+  source?: string;
+  path?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export class MiniApiError extends Error {
@@ -283,6 +301,20 @@ export function trackAnalyticsEvent(payload: TrackAnalyticsEventPayload): Promis
 
 export function createPunchRecord(payload: CreatePunchRecordPayload): Promise<{ success: boolean; id: string }> {
   return miniRequest<{ success: boolean; id: string }>('/punch-records', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export function createTravelEnterRecord(payload: CreateTravelEnterPayload): Promise<{ success: boolean; id: string }> {
+  return miniRequest<{ success: boolean; id: string }>('/travel-records/enter', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export function completeTravelLeaveRecord(payload: CreateTravelLeavePayload): Promise<{ success: boolean; id: string | null }> {
+  return miniRequest<{ success: boolean; id: string | null }>('/travel-records/leave', {
     method: 'POST',
     body: payload,
   });

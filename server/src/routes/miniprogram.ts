@@ -74,6 +74,11 @@ import {
 } from '@/controllers/miniprogram/feedbackController'
 import { trackAnalyticsEvent } from '@/controllers/miniprogram/analyticsController'
 import { createMiniPunchRecord } from '@/controllers/miniprogram/punchRecordController'
+import {
+  completeMiniTravelLeaveRecord,
+  createMiniTravelEnterRecord,
+  listMiniTravelRecords,
+} from '@/controllers/miniprogram/travelRecordController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -102,6 +107,9 @@ miniRouter.use(requireMiniAuth)
 miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)
 miniRouter.post('/scene-spots/:id/rate', rateSceneSpot)
 miniRouter.post('/punch-records', createMiniPunchRecord)
+miniRouter.post('/travel-records/enter', createMiniTravelEnterRecord)
+miniRouter.post('/travel-records/leave', completeMiniTravelLeaveRecord)
+miniRouter.get('/travel-records', listMiniTravelRecords)
 
 // works
 miniRouter.get('/works', listWorks)

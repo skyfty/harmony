@@ -6,3 +6,28 @@ export interface Achievement {
   scenicId?: string;
   achievedAt?: string;
 }
+
+export interface CheckinProgressItem {
+  sceneId: string;
+  sceneName?: string;
+  checkedCount: number;
+  totalCount: number;
+  ratio: number;
+}
+
+export interface TravelSummaryItem {
+  sceneId: string;
+  sceneName?: string;
+  visitedCount: number;
+  totalDurationSeconds: number;
+}
+
+export interface TravelRecordItem {
+  id: string;
+  sceneId: string;
+  sceneName?: string;
+  enterTime: string;
+  leaveTime?: string;
+  durationSeconds?: number;
+  status: 'active' | 'completed';
+}

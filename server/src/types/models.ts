@@ -155,6 +155,24 @@ export interface PunchRecordDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface TravelRecordDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  username?: string
+  sceneId: string
+  sceneName?: string
+  enterTime: Date
+  leaveTime?: Date | null
+  durationSeconds?: number | null
+  status: 'active' | 'completed'
+  source?: string
+  path?: string
+  ip?: string
+  userAgent?: string
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface AnalyticsEventDocument extends Document<Types.ObjectId> {
   eventType: string
   userId?: Types.ObjectId | null

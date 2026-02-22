@@ -9,6 +9,7 @@ type CreatePunchRecordBody = {
   location?: {
     nodeId?: string
     nodeName?: string
+    scenicId?: string
   }
   source?: string
   path?: string
@@ -34,6 +35,12 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     return
   }
 
+  const scenicId = typeof body.location?.scenicId === 'string' ? body.location.scenicId.trim() : ''
+  const mergedMetadata = {
+    ...(body.metadata ?? {}),
+    ...(scenicId ? { scenicId } : {}),
+  }
+
   const id = await createPunchRecord({
     userId,
     username: ctx.state.miniAuthUser?.username,
@@ -47,7 +54,7 @@ export async function createMiniPunchRecord(ctx: Context): Promise<void> {
     path: typeof body.path === 'string' ? body.path : undefined,
     ip: ctx.ip,
     userAgent: ctx.get('User-Agent') || undefined,
-    metadata: body.metadata,
+    metadata: mergedMetadata,
   })
 
   ctx.body = {

@@ -8,13 +8,14 @@
 import { ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-import { createPunchRecord, trackAnalyticsEvent } from '@harmony/utils';
+import { completeTravelLeaveRecord, createPunchRecord, createTravelEnterRecord, trackAnalyticsEvent } from '@harmony/utils';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
 const sceneUrl = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
+const sceneName = ref<string>('');
 const enterAt = ref<number>(0);
 
 type PunchEventPayload = {
@@ -26,6 +27,7 @@ type PunchEventPayload = {
   location: {
     nodeId: string;
     nodeName: string;
+    scenicId?: string;
   };
 };
 
@@ -38,6 +40,7 @@ function handlePunch(payload: PunchEventPayload): void {
     location: {
       nodeId: payload.location.nodeId,
       nodeName: payload.location.nodeName,
+      scenicId: payload.location.scenicId,
     },
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
@@ -51,7 +54,23 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneUrl.value = typeof record.sceneUrl === 'string' ? record.sceneUrl : '';
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+  sceneName.value = typeof record.sceneName === 'string' ? record.sceneName : '';
   enterAt.value = Date.now();
+
+  if (sceneId.value) {
+    void createTravelEnterRecord({
+      sceneId: sceneId.value,
+      sceneName: sceneName.value || undefined,
+      enterTime: new Date(enterAt.value).toISOString(),
+      source: 'tour-miniapp',
+      path: '/pages/scenery/index',
+      metadata: {
+        projectId: projectId.value,
+        packageUrl: packageUrl.value,
+        sceneUrl: sceneUrl.value,
+      },
+    });
+  }
 
   void trackAnalyticsEvent({
     eventType: 'enter_scene',
@@ -67,6 +86,20 @@ onLoad((query: Record<string, unknown> | undefined) => {
 
 onUnload(() => {
   const dwellMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
+
+  if (sceneId.value) {
+    void completeTravelLeaveRecord({
+      sceneId: sceneId.value,
+      leaveTime: new Date().toISOString(),
+      source: 'tour-miniapp',
+      path: '/pages/scenery/index',
+      metadata: {
+        projectId: projectId.value,
+        dwellMs,
+      },
+    });
+  }
+
   void trackAnalyticsEvent({
     eventType: 'leave_scene',
     sceneId: sceneId.value || undefined,

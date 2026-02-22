@@ -153,6 +153,33 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'TravelRecords',
+    path: '/travel-records',
+    component: () => import('#/views/travel-records/index.vue'),
+    meta: {
+      icon: 'lucide:route',
+      title: $t('page.travelRecords.title'),
+    },
+  },
+  {
+    name: 'PunchRecordDetail',
+    path: '/punch-records/:id',
+    component: () => import('#/views/punch-records/detail.vue'),
+    meta: {
+      title: '打卡记录详情',
+      hideInMenu: true,
+    },
+  },
+  {
+    name: 'TravelRecordDetail',
+    path: '/travel-records/:id',
+    component: () => import('#/views/travel-records/detail.vue'),
+    meta: {
+      title: '游历记录详情',
+      hideInMenu: true,
+    },
+  },
+  {
     name: 'Resources',
     path: '/resources',
     meta: {

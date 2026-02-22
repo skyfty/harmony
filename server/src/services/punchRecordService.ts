@@ -140,3 +140,18 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
     pageSize,
   }
 }
+
+export async function getPunchRecordById(id: string) {
+  if (!Types.ObjectId.isValid(id)) {
+    return null
+  }
+  return await PunchRecordModel.findById(id).lean()
+}
+
+export async function deletePunchRecordById(id: string) {
+  if (!Types.ObjectId.isValid(id)) {
+    return 0
+  }
+  const deleted = await PunchRecordModel.findByIdAndDelete(id).exec()
+  return deleted ? 1 : 0
+}
