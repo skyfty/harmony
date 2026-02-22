@@ -15,6 +15,18 @@ export interface CheckinProgressItem {
   ratio: number;
 }
 
+export interface ScenicCheckinProgressItem {
+  scenicId: string;
+  sceneId: string;
+  sceneName?: string;
+  scenicTitle: string;
+  coverImage?: string;
+  slides?: string[];
+  checkedCount: number;
+  totalCount: number;
+  ratio: number;
+}
+
 export interface TravelSummaryItem {
   sceneId: string;
   sceneName?: string;

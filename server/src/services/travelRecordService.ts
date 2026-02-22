@@ -486,3 +486,102 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
     }
   })
 }
+
+export async function getCheckinProgressByScenicForUser(userId: string): Promise<Array<{
+  scenicId: string
+  sceneId: string
+  scenicTitle: string
+  coverImage: string
+  slides: string[]
+  checkedCount: number
+  totalCount: number
+  ratio: number
+}>> {
+  if (!Types.ObjectId.isValid(userId)) {
+    return []
+  }
+
+  const records = await PunchRecordModel.find({ userId: new Types.ObjectId(userId) }, { scenicId: 1, nodeId: 1 })
+    .lean()
+    .exec()
+
+  const scenicToNodeSet = new Map<string, Set<string>>()
+  for (const record of records) {
+    const scenicId = normalizeText((record as { scenicId?: string }).scenicId)
+    const nodeId = normalizeText((record as { nodeId?: string }).nodeId)
+    if (!Types.ObjectId.isValid(scenicId) || !nodeId) {
+      continue
+    }
+    if (!scenicToNodeSet.has(scenicId)) {
+      scenicToNodeSet.set(scenicId, new Set())
+    }
+    scenicToNodeSet.get(scenicId)?.add(nodeId)
+  }
+
+  const scenicIds = Array.from(scenicToNodeSet.keys())
+  if (!scenicIds.length) {
+    return []
+  }
+
+  const spots = await SceneSpotModel.find(
+    { _id: { $in: scenicIds.map((scenicId) => new Types.ObjectId(scenicId)) } },
+    { _id: 1, sceneId: 1, title: 1, coverImage: 1, slides: 1, checkpointTotal: 1 },
+  )
+    .lean()
+    .exec()
+
+  const spotMap = new Map<string, (typeof spots)[number]>()
+  for (const spot of spots) {
+    spotMap.set(String(spot._id), spot)
+  }
+
+  const result: Array<{
+    scenicId: string
+    sceneId: string
+    scenicTitle: string
+    coverImage: string
+    slides: string[]
+    checkedCount: number
+    totalCount: number
+    ratio: number
+  }> = []
+
+  for (const scenicId of scenicIds) {
+    const spot = spotMap.get(scenicId)
+    if (!spot) {
+      continue
+    }
+    const checkedCount = scenicToNodeSet.get(scenicId)?.size ?? 0
+    const totalCount =
+      typeof (spot as { checkpointTotal?: unknown }).checkpointTotal === 'number' &&
+      Number.isFinite((spot as { checkpointTotal?: unknown }).checkpointTotal) &&
+      (spot as { checkpointTotal?: number }).checkpointTotal! > 0
+        ? Math.floor((spot as { checkpointTotal: number }).checkpointTotal)
+        : 0
+
+    result.push({
+      scenicId,
+      sceneId: String(spot.sceneId),
+      scenicTitle: normalizeText((spot as { title?: string }).title),
+      coverImage: normalizeText((spot as { coverImage?: string | null }).coverImage ?? ''),
+      slides: Array.isArray((spot as { slides?: unknown[] }).slides)
+        ? ((spot as { slides?: unknown[] }).slides ?? []).map((item) => String(item)).filter(Boolean)
+        : [],
+      checkedCount,
+      totalCount,
+      ratio: totalCount > 0 ? checkedCount / totalCount : 0,
+    })
+  }
+
+  result.sort((a, b) => {
+    if (b.ratio !== a.ratio) {
+      return b.ratio - a.ratio
+    }
+    if (b.checkedCount !== a.checkedCount) {
+      return b.checkedCount - a.checkedCount
+    }
+    return a.scenicTitle.localeCompare(b.scenicTitle)
+  })
+
+  return result
+}

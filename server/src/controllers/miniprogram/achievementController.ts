@@ -2,7 +2,11 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { MiniAchievementModel } from '@/models/MiniAchievement'
 import { SceneModel } from '@/models/Scene'
-import { getCheckinProgressBySceneForUser, getTravelSummaryBySceneForUser } from '@/services/travelRecordService'
+import {
+  getCheckinProgressByScenicForUser,
+  getCheckinProgressBySceneForUser,
+  getTravelSummaryBySceneForUser,
+} from '@/services/travelRecordService'
 import { ensureUserId } from './utils'
 
 interface AchievementLean {
@@ -44,13 +48,19 @@ export async function listAchievements(ctx: Context): Promise<void> {
     .exec()) as AchievementLean[]
 
   const achievements = list.map(toAchievementResponse)
-  const [checkinProgresses, travelSummary] = await Promise.all([
+  const [scenicCheckinProgresses, checkinProgresses, travelSummary] = await Promise.all([
+    getCheckinProgressByScenicForUser(userId),
     getCheckinProgressBySceneForUser(userId),
     getTravelSummaryBySceneForUser(userId),
   ])
 
   const sceneIdSet = new Set<string>()
   checkinProgresses.forEach((item) => {
+    if (item.sceneId) {
+      sceneIdSet.add(item.sceneId)
+    }
+  })
+  scenicCheckinProgresses.forEach((item) => {
     if (item.sceneId) {
       sceneIdSet.add(item.sceneId)
     }
@@ -75,6 +85,17 @@ export async function listAchievements(ctx: Context): Promise<void> {
   ctx.body = {
     total: achievements.length,
     achievements,
+    scenicCheckinProgresses: scenicCheckinProgresses.map((item) => ({
+      scenicId: item.scenicId,
+      sceneId: item.sceneId,
+      sceneName: sceneMap.get(item.sceneId),
+      scenicTitle: item.scenicTitle,
+      coverImage: item.coverImage,
+      slides: item.slides,
+      checkedCount: item.checkedCount,
+      totalCount: item.totalCount,
+      ratio: item.ratio,
+    })),
     checkinProgresses: checkinProgresses.map((item) => ({
       sceneId: item.sceneId,
       sceneName: sceneMap.get(item.sceneId),

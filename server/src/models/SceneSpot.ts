@@ -7,6 +7,7 @@ const sceneSpotSchema = new Schema<SceneSpotDocument>(
     title: { type: String, required: true, trim: true },
     coverImage: { type: String, default: null },
     slides: { type: [String], default: [] },
+    checkpointTotal: { type: Number, default: 0, min: 0 },
     description: { type: String, default: '' },
     address: { type: String, default: '' },
     order: { type: Number, default: 0 },

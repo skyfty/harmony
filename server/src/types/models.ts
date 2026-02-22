@@ -691,6 +691,7 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   title: string
   coverImage?: string | null
   slides: string[]
+  checkpointTotal: number
   description: string
   address: string
   order: number

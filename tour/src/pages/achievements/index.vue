@@ -1,15 +1,21 @@
 <template>
   <view class="page">
-    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
+    <view
+      class="header"
+      :style="{ paddingTop: statusBarHeight + 'px' }"
+    >
+      <view class="title">
+        打卡成就
+      </view>
       <view class="search-box">
         <text class="search-icon">
-          🔍
+          🔎
         </text>
         <input
           v-model="keyword"
           class="search-input"
           type="text"
-          placeholder="搜索成就"
+          placeholder="搜索已打卡景区..."
         >
         <text
           v-if="keyword"
@@ -22,93 +28,43 @@
     </view>
 
     <view class="content">
-      <view class="section">
-        <view class="section-title">
-          成就
-        </view>
-        <AchievementCard
-          v-for="ach in filteredAchievements"
-          :key="ach.id"
-          :title="ach.title"
-          :description="ach.description"
-          :progress="ach.progress"
-          :scenic-id="ach.scenicId"
-          @enter="openScenic"
-        />
-        <view
-          v-if="!filteredAchievements.length"
-          class="empty"
-        >
-          暂无成就数据
+      <view
+        v-for="item in filteredScenicCheckins"
+        :key="item.scenicId"
+        class="scenic-card"
+        :style="buildCardStyle(item)"
+      >
+        <view class="scenic-card-mask">
+          <view class="scenic-header">
+            <text class="scenic-title">
+              {{ item.scenicTitle || item.sceneName || '未命名景区' }}
+            </text>
+            <view class="progress-badge">
+              <text class="progress-icon">
+                ★
+              </text>
+              <text class="progress-value">
+                {{ formatPercent(item.ratio) }}
+              </text>
+            </view>
+          </view>
+
+          <view class="card-spacer" />
+
+          <view
+            class="enter-btn"
+            @tap="openScenic(item.scenicId)"
+          >
+            进入景区
+          </view>
         </view>
       </view>
 
-      <view class="section">
-        <view class="section-title">
-          打卡成就
-        </view>
-        <view
-          v-for="item in filteredCheckinProgresses"
-          :key="item.sceneId"
-          class="ratio-card"
-        >
-          <view class="ratio-header">
-            <text class="ratio-scene">
-              {{ item.sceneName || item.sceneId }}
-            </text>
-            <text class="ratio-text">
-              {{ item.checkedCount }}/{{ item.totalCount }}
-            </text>
-          </view>
-          <view class="ratio-track">
-            <view
-              class="ratio-fill"
-              :style="{ width: `${Math.min(Math.max(item.ratio * 100, 0), 100)}%` }"
-            />
-          </view>
-        </view>
-        <view
-          v-if="!filteredCheckinProgresses.length"
-          class="empty"
-        >
-          暂无打卡成就数据
-        </view>
-      </view>
-
-      <view class="section">
-        <view class="section-title">
-          游历记录
-        </view>
-        <view
-          v-for="record in filteredTravelRecords"
-          :key="record.id"
-          class="travel-card"
-        >
-          <view class="travel-scene">
-            {{ record.sceneName || record.sceneId }}
-          </view>
-          <view class="travel-line">
-            进入时间：{{ formatDateTime(record.enterTime) }}
-          </view>
-          <view class="travel-line">
-            离开时间：{{ formatDateTime(record.leaveTime) }}
-          </view>
-          <view class="travel-line">
-            停留时长：{{ formatDuration(record.durationSeconds) }}
-          </view>
-          <view class="travel-line">
-            游历成就：{{ resolveAchievementCount(record) }}
-          </view>
-          <view class="travel-line">
-            状态：{{ record.status === 'completed' ? '已完成' : '进行中' }}
-          </view>
-        </view>
-        <view
-          v-if="!filteredTravelRecords.length"
-          class="empty"
-        >
-          暂无游历记录
-        </view>
+      <view
+        v-if="!filteredScenicCheckins.length"
+        class="empty"
+      >
+        暂无打卡成就数据
       </view>
     </view>
 
@@ -130,44 +86,27 @@ try {
 } catch { /* fallback */ }
 
 import BottomNav from '@/components/BottomNav.vue';
-import AchievementCard from '@/components/AchievementCard.vue';
 import { listAchievements } from '@/api/mini/achievements';
-import { listTravelRecords } from '@/api/mini/travel';
-import type { TravelRecordItem } from '@/types/achievement';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 defineOptions({
   name: 'AchievementsPage',
 });
 
-interface Achievement {
-  id: string;
-  title: string;
-  description: string;
-  progress: number;
-  scenicId?: string;
-}
-
-interface CheckinProgressItem {
+interface ScenicCardItem {
+  scenicId: string;
   sceneId: string;
   sceneName?: string;
+  scenicTitle: string;
+  coverImage?: string;
+  slides?: string[];
   checkedCount: number;
   totalCount: number;
   ratio: number;
 }
 
-interface TravelSummaryItem {
-  sceneId: string;
-  sceneName?: string;
-  visitedCount: number;
-  totalDurationSeconds: number;
-}
-
 const keyword = ref('');
-const achievements = ref<Achievement[]>([]);
-const checkinProgresses = ref<CheckinProgressItem[]>([]);
-const travelSummary = ref<TravelSummaryItem[]>([]);
-const travelRecords = ref<TravelRecordItem[]>([]);
+const scenicCheckinProgresses = ref<ScenicCardItem[]>([]);
 
 onShow(() => {
   void reload();
@@ -176,21 +115,10 @@ onShow(() => {
 async function reload() {
   try {
     const fetchAchievements = listAchievements as unknown as () => Promise<unknown>;
-    const fetchTravelRecords = listTravelRecords as unknown as (params?: {
-      page?: number;
-      pageSize?: number;
-      sceneId?: string;
-    }) => Promise<unknown>;
-
     const achievementPayload = await fetchAchievements();
-    const travelPayload = await fetchTravelRecords({ page: 1, pageSize: 100 });
     const achievementData = normalizeAchievementData(achievementPayload);
-    const travelData = normalizeTravelData(travelPayload);
 
-    achievements.value = achievementData.achievements;
-    checkinProgresses.value = achievementData.checkinProgresses;
-    travelSummary.value = achievementData.travelSummary;
-    travelRecords.value = travelData.records;
+    scenicCheckinProgresses.value = achievementData.scenicCheckinProgresses;
   } catch {
     void uni.showToast({ title: '加载失败', icon: 'none' });
   }
@@ -201,147 +129,54 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeAchievementData(value: unknown): {
-  achievements: Achievement[];
-  checkinProgresses: CheckinProgressItem[];
-  travelSummary: TravelSummaryItem[];
+  scenicCheckinProgresses: ScenicCardItem[];
 } {
   if (!isObject(value)) {
     return {
-      achievements: [],
-      checkinProgresses: [],
-      travelSummary: [],
+      scenicCheckinProgresses: [],
     };
   }
 
-  const achievements = Array.isArray(value.achievements) ? (value.achievements as Achievement[]) : [];
-  const checkinProgresses = Array.isArray(value.checkinProgresses)
-    ? (value.checkinProgresses as CheckinProgressItem[])
-    : [];
-  const travelSummary = Array.isArray(value.travelSummary) ? (value.travelSummary as TravelSummaryItem[]) : [];
-
-  return {
-    achievements,
-    checkinProgresses,
-    travelSummary,
-  };
-}
-
-function normalizeTravelData(value: unknown): { records: TravelRecordItem[] } {
-  if (!isObject(value)) {
-    return { records: [] };
+  const scenicCheckinProgresses: ScenicCardItem[] = [];
+  const rawList = value.scenicCheckinProgresses;
+  if (Array.isArray(rawList)) {
+    for (const item of rawList) {
+      if (isScenicCardItem(item)) {
+        scenicCheckinProgresses.push(item);
+      }
+    }
   }
 
   return {
-    records: Array.isArray(value.records) ? (value.records as TravelRecordItem[]) : [],
+    scenicCheckinProgresses,
   };
 }
 
-function isCheckinProgressItem(value: unknown): value is CheckinProgressItem {
+function isScenicCardItem(value: unknown): value is ScenicCardItem {
   if (!isObject(value)) {
     return false;
   }
-  return typeof value.sceneId === 'string' && typeof value.checkedCount === 'number' && typeof value.totalCount === 'number';
+  return (
+    typeof value.scenicId === 'string'
+    && typeof value.sceneId === 'string'
+    && typeof value.scenicTitle === 'string'
+    && typeof value.checkedCount === 'number'
+    && typeof value.totalCount === 'number'
+    && typeof value.ratio === 'number'
+  );
 }
 
-function isTravelSummaryItem(value: unknown): value is TravelSummaryItem {
-  if (!isObject(value)) {
-    return false;
-  }
-  return typeof value.sceneId === 'string' && typeof value.visitedCount === 'number';
-}
-
-function isTravelRecordItem(value: unknown): value is TravelRecordItem {
-  if (!isObject(value)) {
-    return false;
-  }
-  return typeof value.id === 'string' && typeof value.sceneId === 'string' && typeof value.enterTime === 'string';
-}
-
-function resolveAchievementCount(record: TravelRecordItem): number {
-  const count = Number(record.achievementCount);
-  if (Number.isFinite(count) && count >= 0) {
-    return count;
-  }
-  return 0;
-}
-
-const filteredAchievements = computed(() => {
+const filteredScenicCheckins = computed(() => {
   const k = keyword.value.trim();
-  if (!k) return achievements.value;
-  return achievements.value.filter((a) => a.title.includes(k) || a.description.includes(k));
-});
-
-const filteredCheckinProgresses = computed(() => {
-  const k = keyword.value.trim();
-  const sourceCheckins: CheckinProgressItem[] = [];
-  const sourceTravelSummary: TravelSummaryItem[] = [];
-
-  const rawCheckins = checkinProgresses.value as unknown;
-  if (Array.isArray(rawCheckins)) {
-    for (const entry of rawCheckins) {
-      if (isCheckinProgressItem(entry)) {
-        sourceCheckins.push(entry);
-      }
-    }
-  }
-
-  const rawTravelSummary = travelSummary.value as unknown;
-  if (Array.isArray(rawTravelSummary)) {
-    for (const entry of rawTravelSummary) {
-      if (isTravelSummaryItem(entry)) {
-        sourceTravelSummary.push(entry);
-      }
-    }
-  }
-
-  const merged: CheckinProgressItem[] = [];
-  for (const checkinItem of sourceCheckins) {
-    let mergedSceneName = checkinItem.sceneName;
-    for (const summaryItem of sourceTravelSummary) {
-      if (summaryItem.sceneId === checkinItem.sceneId) {
-        mergedSceneName = mergedSceneName || summaryItem.sceneName;
-        break;
-      }
-    }
-    merged.push({
-      ...checkinItem,
-      sceneName: mergedSceneName,
-    });
-  }
-
-  if (!k) {
-    return merged;
-  }
-
-  const filtered: CheckinProgressItem[] = [];
-  for (const item of merged) {
-    const sceneText = item.sceneName || item.sceneId;
-    if (sceneText.includes(k)) {
-      filtered.push(item);
-    }
-  }
-  return filtered;
-});
-
-const filteredTravelRecords = computed(() => {
-  const k = keyword.value.trim();
-  const source: TravelRecordItem[] = [];
-  const rawRecords = travelRecords.value as unknown;
-  if (Array.isArray(rawRecords)) {
-    for (const entry of rawRecords) {
-      if (isTravelRecordItem(entry)) {
-        source.push(entry);
-      }
-    }
-  }
+  const source = scenicCheckinProgresses.value;
 
   if (!k) {
     return source;
   }
 
-  const filtered: TravelRecordItem[] = [];
+  const filtered: ScenicCardItem[] = [];
   for (const item of source) {
-    const sceneText = item.sceneName || item.sceneId;
+    const sceneText = item.scenicTitle || item.sceneName || item.scenicId;
     if (sceneText.includes(k)) {
       filtered.push(item);
     }
@@ -349,31 +184,38 @@ const filteredTravelRecords = computed(() => {
   return filtered;
 });
 
-function formatDateTime(value?: string): string {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hour = String(date.getHours()).padStart(2, '0');
-  const minute = String(date.getMinutes()).padStart(2, '0');
-  const second = String(date.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(Math.max(value, 0), 1);
 }
 
-function formatDuration(value?: number): string {
-  if (typeof value !== 'number' || value <= 0) return '-';
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  const seconds = value % 60;
-  if (hours > 0) {
-    return `${hours}小时${minutes}分${seconds}秒`;
+function formatPercent(ratio: number): string {
+  return `${Math.round(clampRatio(ratio) * 100)}%`;
+}
+
+function resolveBackgroundImage(item: ScenicCardItem): string {
+  const cover = typeof item.coverImage === 'string' ? item.coverImage.trim() : '';
+  if (cover) {
+    return cover;
   }
-  if (minutes > 0) {
-    return `${minutes}分${seconds}秒`;
+  const firstSlide = Array.isArray(item.slides) ? String(item.slides[0] ?? '').trim() : '';
+  return firstSlide;
+}
+
+function buildCardStyle(item: ScenicCardItem): Record<string, string> {
+  const image = resolveBackgroundImage(item);
+  if (!image) {
+    return {
+      background: 'linear-gradient(135deg, #7f8599 0%, #6e7386 100%)',
+    };
   }
-  return `${seconds}秒`;
+  return {
+    backgroundImage: `linear-gradient(180deg, rgba(14, 20, 38, 0.16) 0%, rgba(14, 20, 38, 0.55) 100%), url(${image})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  };
 }
 
 function openScenic(scenicId: string) {
@@ -388,111 +230,129 @@ function handleNavigate(key: NavKey) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  background: #f8f8f8;
+  background: #f3f6fb;
   padding-bottom: 85px;
   padding-bottom: calc(85px + constant(safe-area-inset-bottom));
   padding-bottom: calc(85px + env(safe-area-inset-bottom));
 }
 
 .header {
-  padding: 16px 16px 10px;
+  padding: 8px 16px 12px;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #171f37;
+  text-align: center;
+  margin-bottom: 14px;
 }
 
 .search-box {
-  background: #ffffff;
-  border-radius: 14px;
-  padding: 10px 12px;
+  background: #e6ebf3;
+  border-radius: 999px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
 }
 
 .search-icon {
   font-size: 14px;
-  color: #8a94a6;
+  color: #94a0b6;
 }
 
 .search-input {
   flex: 1;
   font-size: 13px;
-  color: #1a1f2e;
+  color: #1b2438;
 }
 
 .clear-icon {
   font-size: 14px;
-  color: #a8b0c1;
+  color: #8f99ac;
 }
 
 .content {
   padding: 0 16px 18px;
-  display: grid;
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
 
-.section {
-  display: grid;
-  grid-template-columns: 1fr;
+.scenic-card {
+  min-height: 118px;
+  border-radius: 16px;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 8px 20px rgba(13, 22, 42, 0.14);
+}
+
+.scenic-card-mask {
+  min-height: 118px;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.scenic-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.section-title {
-  font-size: 15px;
+.scenic-title {
+  font-size: 32rpx;
   font-weight: 600;
-  color: #1a1f2e;
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(6, 12, 26, 0.42);
 }
 
-.ratio-card,
-.travel-card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 12px;
-  box-shadow: 0 8px 20px rgba(31, 122, 236, 0.08);
+.progress-badge {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(33, 42, 62, 0.72);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.ratio-header {
+.progress-icon {
+  font-size: 13px;
+  color: #00f7c2;
+}
+
+.progress-value {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #00f7c2;
+}
+
+.card-spacer {
+  flex: 1;
+  min-height: 10px;
+}
+
+.enter-btn {
+  height: 60rpx;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  color: #ffffff;
+  font-size: 26rpx;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.ratio-scene,
-.travel-scene {
-  font-size: 14px;
-  color: #1a1f2e;
-  font-weight: 600;
-}
-
-.ratio-text {
-  font-size: 12px;
-  color: #5b667a;
-}
-
-.ratio-track {
-  width: 100%;
-  height: 8px;
-  border-radius: 999px;
-  background: #edf2ff;
-  overflow: hidden;
-}
-
-.ratio-fill {
-  height: 100%;
-  background: #3a7afe;
-}
-
-.travel-line {
-  font-size: 12px;
-  color: #5b667a;
-  margin-top: 6px;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .empty {
-  font-size: 12px;
-  color: #8a94a6;
+  font-size: 13px;
+  color: #8b96aa;
   text-align: center;
-  padding: 8px 0;
+  padding: 28px 0;
 }
 </style>
