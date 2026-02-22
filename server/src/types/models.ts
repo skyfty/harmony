@@ -502,8 +502,6 @@ export interface UserSceneDocument extends Document<Types.ObjectId> {
   sceneCreatedAt: Date
   /** 中文：场景更新时间 */
   sceneUpdatedAt: Date
-  /** 中文：导出包内所有场景打卡点总数 */
-  checkpointTotal: number
 
   /** 中文：bundle 文件存储 key */
   bundleFileKey: string
@@ -694,7 +692,6 @@ export interface SceneSpotDocument extends Document<Types.ObjectId> {
   title: string
   coverImage?: string | null
   slides: string[]
-  checkpointTotal: number
   description: string
   address: string
   order: number

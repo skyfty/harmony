@@ -641,14 +641,35 @@ export async function getCheckinProgressByScenicForUser(userId: string): Promise
 
   const spots = await SceneSpotModel.find(
     { _id: { $in: scenicIds.map((scenicId) => new Types.ObjectId(scenicId)) } },
-    { _id: 1, sceneId: 1, title: 1, coverImage: 1, slides: 1, checkpointTotal: 1 },
+    { _id: 1, sceneId: 1, title: 1, coverImage: 1, slides: 1 },
   )
     .lean()
     .exec()
 
   const spotMap = new Map<string, (typeof spots)[number]>()
+  const sceneIds = new Set<string>()
   for (const spot of spots) {
     spotMap.set(String(spot._id), spot)
+    const sceneId = String((spot as { sceneId?: unknown }).sceneId ?? '')
+    if (Types.ObjectId.isValid(sceneId)) {
+      sceneIds.add(sceneId)
+    }
+  }
+
+  const sceneCheckpointTotalMap = new Map<string, number>()
+  if (sceneIds.size) {
+    const sceneRows = await SceneModel.find(
+      { _id: { $in: Array.from(sceneIds).map((sceneId) => new Types.ObjectId(sceneId)) } },
+      { _id: 1, checkpointTotal: 1 },
+    )
+      .lean()
+      .exec()
+
+    for (const scene of sceneRows) {
+      const sceneId = String((scene as { _id?: unknown })._id ?? '')
+      const rawCheckpointTotal = Number((scene as { checkpointTotal?: unknown }).checkpointTotal)
+      sceneCheckpointTotalMap.set(sceneId, Number.isFinite(rawCheckpointTotal) && rawCheckpointTotal > 0 ? Math.floor(rawCheckpointTotal) : 0)
+    }
   }
 
   const result: Array<{
@@ -668,16 +689,12 @@ export async function getCheckinProgressByScenicForUser(userId: string): Promise
       continue
     }
     const checkedCount = scenicToNodeSet.get(scenicId)?.size ?? 0
-    const totalCount =
-      typeof (spot as { checkpointTotal?: unknown }).checkpointTotal === 'number' &&
-      Number.isFinite((spot as { checkpointTotal?: unknown }).checkpointTotal) &&
-      (spot as { checkpointTotal?: number }).checkpointTotal! > 0
-        ? Math.floor((spot as { checkpointTotal: number }).checkpointTotal)
-        : 0
+    const sceneId = String((spot as { sceneId?: unknown }).sceneId ?? '')
+    const totalCount = sceneCheckpointTotalMap.get(sceneId) ?? 0
 
     result.push({
       scenicId,
-      sceneId: String(spot.sceneId),
+      sceneId,
       scenicTitle: normalizeText((spot as { title?: string }).title),
       coverImage: normalizeText((spot as { coverImage?: string | null }).coverImage ?? ''),
       slides: Array.isArray((spot as { slides?: unknown[] }).slides)

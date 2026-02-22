@@ -13,7 +13,6 @@ type SceneSpotMutationPayload = {
   title?: string
   description?: string | null
   address?: string | null
-  checkpointTotal?: number
   order?: number
   isFeatured?: boolean
   averageRating?: number
@@ -277,11 +276,10 @@ function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
-    sceneCheckpointTotal,
     title: spot.title,
     coverImage: toNullableString(spot.coverImage),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
-    checkpointTotal: typeof spot.checkpointTotal === 'number' && spot.checkpointTotal >= 0 ? Math.floor(spot.checkpointTotal) : 0,
+    checkpointTotal: sceneCheckpointTotal,
     description: typeof spot.description === 'string' ? spot.description : '',
     address: typeof spot.address === 'string' ? spot.address : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
@@ -413,6 +411,9 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
   if (body.coverImage !== undefined || body.slides !== undefined) {
     ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
   }
+  if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
+    ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
+  }
 
   const sceneId = toNonEmptyString(body.sceneId)
   if (!sceneId) {
@@ -448,11 +449,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const checkpointTotal = body.checkpointTotal === undefined ? 0 : toNonNegativeInteger(body.checkpointTotal)
-  if (checkpointTotal === null) {
-    ctx.throw(400, 'Checkpoint total must be a non-negative integer')
-  }
-
   const uploadedFileKeys: string[] = []
   let coverImageUrl: string | null = null
   const slideUrls: string[] = []
@@ -480,7 +476,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       title,
       coverImage: coverImageUrl,
       slides: slideUrls,
-      checkpointTotal,
       description: toNullableString(body.description) ?? '',
       address: toNullableString(body.address) ?? '',
       order: toNumberOrDefault(body.order, 0),
@@ -532,6 +527,9 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
 
   if (body.coverImage !== undefined || body.slides !== undefined) {
     ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
+  }
+  if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
+    ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
   }
 
   const removeCoverImage = toBoolean(body.removeCoverImage) === true
@@ -593,16 +591,6 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const nextCheckpointTotal =
-    body.checkpointTotal === undefined
-      ? typeof current.checkpointTotal === 'number' && current.checkpointTotal >= 0
-        ? Math.floor(current.checkpointTotal)
-        : 0
-      : toNonNegativeInteger(body.checkpointTotal)
-  if (nextCheckpointTotal === null) {
-    ctx.throw(400, 'Checkpoint total must be a non-negative integer')
-  }
-
   const uploadedFileKeys: string[] = []
   let uploadedCoverImageUrl: string | null = null
   const uploadedSlideUrls: string[] = []
@@ -650,7 +638,6 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
         averageRating: nextAverageRating,
         ratingCount: nextRatingCount,
         favoriteCount: nextFavoriteCount,
-        checkpointTotal: nextCheckpointTotal,
         ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
       },
       { new: true },
