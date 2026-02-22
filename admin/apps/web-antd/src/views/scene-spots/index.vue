@@ -3,6 +3,7 @@ import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'a
 import type { SceneItem, SceneSpotItem } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -31,6 +32,7 @@ interface SceneSpotFormModel {
 
 const { TextArea } = Input;
 const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
+const router = useRouter();
 
 const modalOpen = ref(false);
 const submitting = ref(false);
@@ -227,6 +229,13 @@ async function openEditModal(row: SceneSpotItem) {
   }));
 
   modalOpen.value = true;
+}
+
+function openDetail(row: SceneSpotItem) {
+  router.push({
+    name: 'SceneSpotDetail',
+    params: { id: row.id },
+  });
 }
 
 async function submitSceneSpot() {
@@ -441,6 +450,9 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
+          <Button size="small" type="link" @click="openDetail(row)">
+            {{ t('page.sceneSpots.index.actions.detail') }}
+          </Button>
           <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openEditModal(row)">
             {{ t('page.sceneSpots.index.actions.edit') }}
           </Button>

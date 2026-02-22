@@ -50,6 +50,7 @@
         "create": "New Scene"
       },
       "actions": {
+        "detail": "Detail",
         "edit": "Edit",
         "delete": "Delete"
       },
@@ -158,6 +159,30 @@
         "isFeatured": {
           "label": "Home Featured"
         }
+      }
+    },
+    "detail": {
+      "title": "Scene Spot Detail",
+      "button": {
+        "back": "Back"
+      },
+      "fields": {
+        "id": "Scene Spot ID",
+        "title": "Title",
+        "sceneId": "Scene ID",
+        "description": "Description",
+        "address": "Address",
+        "order": "Order",
+        "averageRating": "Average Rating",
+        "ratingCount": "Rating Count",
+        "favoriteCount": "Favorites",
+        "isFeatured": "Home Featured",
+        "isFeaturedYes": "Featured",
+        "isFeaturedNo": "Not Featured",
+        "coverImage": "Cover Image",
+        "slides": "Slides",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At"
       }
     }
   },

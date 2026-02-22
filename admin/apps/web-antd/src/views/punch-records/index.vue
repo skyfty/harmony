@@ -22,7 +22,7 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
   gridOptions: {
     columns: [
       { field: 'createdAt', minWidth: 180, title: '服务端时间', sortable: true, formatter: 'formatDateTime' },
-      { field: 'scenicId', minWidth: 180, title: '景点ID' },
+      { field: 'scenicTitle', minWidth: 220, title: '景点名称', slots: { default: 'scenicTitle' } },
       { field: 'sceneName', minWidth: 160, title: '场景名称' },
       { field: 'nodeName', minWidth: 160, title: '打卡点名称' },
       { field: 'username', minWidth: 140, title: '用户名' },
@@ -64,6 +64,16 @@ function openDetail(row: any) {
   })
 }
 
+function openScenicDetail(row: any) {
+  if (!row?.scenicId) {
+    return
+  }
+  router.push({
+    name: 'SceneSpotDetail',
+    params: { id: row.scenicId },
+  })
+}
+
 function handleDelete(row: any) {
   Modal.confirm({
     title: '确认删除该条打卡记录？',
@@ -80,6 +90,11 @@ function handleDelete(row: any) {
 <template>
   <div class="p-5">
     <Grid>
+      <template #scenicTitle="{ row }">
+        <Button type="link" size="small" @click="() => openScenicDetail(row)">
+          {{ row.scenicTitle || row.scenicId || '-' }}
+        </Button>
+      </template>
       <template #actions="{ row }">
         <Space>
           <Button size="small" type="link" @click="() => openDetail(row)">详情</Button>

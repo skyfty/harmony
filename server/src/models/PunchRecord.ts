@@ -27,6 +27,7 @@ const punchRecordSchema = new Schema<PunchRecordDocument>(
 punchRecordSchema.index({ userId: 1, createdAt: -1 })
 punchRecordSchema.index({ sceneId: 1, createdAt: -1 })
 punchRecordSchema.index({ scenicId: 1, createdAt: -1 })
+punchRecordSchema.index({ userId: 1, scenicId: 1, nodeId: 1 })
 punchRecordSchema.index({ userId: 1, sceneId: 1, scenicId: 1, createdAt: -1 })
 punchRecordSchema.index({ nodeId: 1, createdAt: -1 })
 punchRecordSchema.index({ createdAt: -1 })

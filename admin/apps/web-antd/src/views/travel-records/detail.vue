@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { TableColumnsType } from 'ant-design-vue'
 import { Button, Card, Descriptions, Space, Table } from 'ant-design-vue'
@@ -15,6 +15,25 @@ const punchLoading = ref(false)
 const record = ref<GetTravelRecordResponse | null>(null)
 const punchRecords = ref<PunchRecordItem[]>([])
 
+const dedupedNodeAchievementCount = computed(() => {
+  const nodeIds = new Set<string>()
+  for (const item of punchRecords.value) {
+    const nodeId = normalizeQueryValue(item.nodeId)
+    if (nodeId) {
+      nodeIds.add(nodeId)
+    }
+  }
+  return nodeIds.size
+})
+
+const displayAchievementCount = computed(() => {
+  const apiCount = Number(record.value?.achievementCount)
+  if (Number.isFinite(apiCount) && apiCount >= 0) {
+    return apiCount
+  }
+  return dedupedNodeAchievementCount.value
+})
+
 const punchColumns: TableColumnsType<PunchRecordItem> = [
   { title: '打卡时间', key: 'punchTime', width: 200 },
   { title: '打卡位置', key: 'nodeName', width: 180 },
@@ -27,21 +46,44 @@ function resolvePunchTime(item: PunchRecordItem): string {
   return item.clientPunchTime || item.behaviorPunchTime || item.createdAt || '-'
 }
 
+function normalizeQueryValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (typeof value === 'number') {
+    return String(value)
+  }
+  if (value && typeof value === 'object') {
+    const oid = (value as { $oid?: unknown }).$oid
+    if (typeof oid === 'string') {
+      return oid.trim()
+    }
+  }
+  return ''
+}
+
 async function loadPunchRecords(): Promise<void> {
-  if (!record.value?.sceneId || !record.value?.scenicId || !record.value?.userId) {
+  const scenicId = normalizeQueryValue(record.value?.scenicId)
+  const userId = normalizeQueryValue((record.value as { userId?: unknown } | null)?.userId)
+  if (!scenicId) {
     punchRecords.value = []
     return
   }
 
   punchLoading.value = true
   try {
-    const result = await listPunchRecordsApi({
+    const params: Parameters<typeof listPunchRecordsApi>[0] = {
       page: 1,
       pageSize: 200,
-      sceneId: record.value.sceneId,
-      scenicId: record.value.scenicId,
-      userId: record.value.userId,
-    })
+      scenicId,
+    }
+
+    if (userId) {
+      params.userId = userId
+    }
+
+
+    const result = await listPunchRecordsApi(params)
     punchRecords.value = Array.isArray(result.items) ? result.items : []
   } finally {
     punchLoading.value = false
@@ -58,16 +100,15 @@ async function load() {
   }
 }
 
-function openPunchDetailInNewTab(item: PunchRecordItem): void {
+function openPunchDetail(item: PunchRecordItem): void {
   if (!item.id) {
     return
   }
-  const resolved = router.resolve({
+  router.push({
     name: 'PunchRecordDetail',
     params: { id: item.id },
     query: { travelId: id },
   })
-  window.open(resolved.href, '_blank')
 }
 
 function goBack() {
@@ -93,6 +134,7 @@ onMounted(load)
         <Descriptions.Item label="进入时间">{{ record?.enterTime || '-' }}</Descriptions.Item>
         <Descriptions.Item label="离开时间">{{ record?.leaveTime || '-' }}</Descriptions.Item>
         <Descriptions.Item label="停留时长(秒)">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
+        <Descriptions.Item label="游历成就(去重打卡点)">{{ displayAchievementCount }}</Descriptions.Item>
         <Descriptions.Item label="场景名称">{{ record?.sceneName || '-' }}</Descriptions.Item>
         <Descriptions.Item label="场景ID">{{ record?.sceneId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="景点ID">{{ record?.scenicId || '-' }}</Descriptions.Item>
@@ -123,7 +165,7 @@ onMounted(load)
               {{ (row as PunchRecordItem).nodeName || (row as PunchRecordItem).nodeId || '-' }}
             </template>
             <template v-else-if="column.key === 'actions'">
-              <Button type="link" size="small" @click="openPunchDetailInNewTab(row as PunchRecordItem)">查看详情</Button>
+              <Button type="link" size="small" @click="openPunchDetail(row as PunchRecordItem)">查看详情</Button>
             </template>
           </template>
         </Table>

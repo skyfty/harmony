@@ -19,10 +19,12 @@ type ServerTravelRecordItem = {
   username?: string
   sceneId: string
   scenicId: string
+  scenicTitle?: string
   sceneName?: string
   enterTime: string
   leaveTime?: string
   durationSeconds?: number
+  achievementCount?: number
   status: 'active' | 'completed'
   source?: string
   path?: string
@@ -37,10 +39,12 @@ export interface TravelRecordItem {
   username?: string
   sceneId: string
   scenicId: string
+  scenicTitle?: string
   sceneName?: string
   enterTime: string
   leaveTime?: string
   durationSeconds?: number
+  achievementCount?: number
   status: 'active' | 'completed'
   source?: string
   path?: string

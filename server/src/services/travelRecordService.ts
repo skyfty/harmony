@@ -1,5 +1,6 @@
 import { Types } from 'mongoose'
 import { SceneSpotModel } from '@/models/SceneSpot'
+import { SceneModel } from '@/models/Scene'
 import { TravelRecordModel } from '@/models/TravelRecord'
 import { PunchRecordModel } from '@/models/PunchRecord'
 
@@ -40,6 +41,14 @@ export interface QueryTravelRecordsOptions {
   end?: string
 }
 
+type AchievementCountRow = {
+  _id: {
+    userId: Types.ObjectId
+    scenicId: string
+  }
+  count: number
+}
+
 function normalizeText(value: unknown): string {
   if (typeof value !== 'string') {
     return ''
@@ -71,6 +80,77 @@ function toPositiveDurationSeconds(enterTime: Date, leaveTime: Date): number {
     return 0
   }
   return Math.floor(deltaMs / 1000)
+}
+
+function normalizeUserId(value: unknown): string {
+  if (!value) {
+    return ''
+  }
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (value instanceof Types.ObjectId) {
+    return value.toString()
+  }
+  if (typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function') {
+    return (value as { toString: () => string }).toString().trim()
+  }
+  return ''
+}
+
+function buildAchievementCountKey(userId: string, scenicId: string): string {
+  return `${userId}::${scenicId}`
+}
+
+async function loadAchievementCountMap(
+  pairs: Array<{ userId: string; scenicId: string }>,
+): Promise<Map<string, number>> {
+  const validPairs = pairs.filter((pair) => Types.ObjectId.isValid(pair.userId) && Types.ObjectId.isValid(pair.scenicId))
+  if (!validPairs.length) {
+    return new Map()
+  }
+
+  const userIds = Array.from(new Set(validPairs.map((pair) => pair.userId))).map((id) => new Types.ObjectId(id))
+  const scenicIds = Array.from(new Set(validPairs.map((pair) => pair.scenicId)))
+
+  const rows = await PunchRecordModel.aggregate<AchievementCountRow>([
+    {
+      $match: {
+        userId: { $in: userIds },
+        scenicId: { $in: scenicIds },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          userId: '$userId',
+          scenicId: '$scenicId',
+          nodeId: '$nodeId',
+        },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          userId: '$_id.userId',
+          scenicId: '$_id.scenicId',
+        },
+        count: { $sum: 1 },
+      },
+    },
+  ]).exec()
+
+  const map = new Map<string, number>()
+  for (const row of rows) {
+    const userId = row._id.userId.toString()
+    const scenicId = normalizeText(row._id.scenicId)
+    if (!userId || !scenicId) {
+      continue
+    }
+    map.set(buildAchievementCountKey(userId, scenicId), row.count)
+  }
+
+  return map
 }
 
 export async function createTravelEnterRecord(input: CreateTravelEnterInput): Promise<string> {
@@ -201,8 +281,81 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
     TravelRecordModel.countDocuments(filter),
   ])
 
+  const sceneIds = Array.from(
+    new Set(
+      items
+        .map((item) => normalizeText((item as { sceneId?: string }).sceneId))
+        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+    ),
+  )
+
+  const sceneNameMap = new Map<string, string>()
+  if (sceneIds.length) {
+    const sceneRows = await SceneModel.find(
+      { _id: { $in: sceneIds.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, name: 1 },
+    )
+      .lean()
+      .exec()
+
+    for (const row of sceneRows) {
+      const id = (row as { _id: Types.ObjectId })._id.toString()
+      const name = normalizeText((row as { name?: string }).name)
+      if (name) {
+        sceneNameMap.set(id, name)
+      }
+    }
+  }
+
+  const scenicIds = Array.from(
+    new Set(
+      items
+        .map((item) => normalizeText((item as { scenicId?: string }).scenicId))
+        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+    ),
+  )
+
+  const scenicTitleMap = new Map<string, string>()
+  if (scenicIds.length) {
+    const scenicRows = await SceneSpotModel.find(
+      { _id: { $in: scenicIds.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, title: 1 },
+    )
+      .lean()
+      .exec()
+
+    for (const row of scenicRows) {
+      const scenicId = (row as { _id: Types.ObjectId })._id.toString()
+      const scenicTitle = normalizeText((row as { title?: string }).title)
+      if (scenicTitle) {
+        scenicTitleMap.set(scenicId, scenicTitle)
+      }
+    }
+  }
+
+  const achievementCountMap = await loadAchievementCountMap(
+    items.map((item) => ({
+      userId: normalizeUserId((item as { userId?: unknown }).userId),
+      scenicId: normalizeText((item as { scenicId?: string }).scenicId),
+    })),
+  )
+
+  const enrichedItems = items.map((item) => {
+    const sceneId = normalizeText((item as { sceneId?: string }).sceneId)
+    const sceneName = normalizeText((item as { sceneName?: string }).sceneName)
+    const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
+    const userId = normalizeUserId((item as { userId?: unknown }).userId)
+    const achievementCount = userId && scenicId ? achievementCountMap.get(buildAchievementCountKey(userId, scenicId)) ?? 0 : 0
+    return {
+      ...item,
+      sceneName: sceneName || sceneNameMap.get(sceneId) || undefined,
+      scenicTitle: scenicTitleMap.get(scenicId) || undefined,
+      achievementCount,
+    }
+  })
+
   return {
-    items,
+    items: enrichedItems,
     total,
     page,
     pageSize,
@@ -213,7 +366,26 @@ export async function getTravelRecordById(id: string) {
   if (!Types.ObjectId.isValid(id)) {
     return null
   }
-  return await TravelRecordModel.findById(id).lean()
+  const item = await TravelRecordModel.findById(id).lean()
+  if (!item) {
+    return null
+  }
+
+  const userId = normalizeUserId((item as { userId?: unknown }).userId)
+  const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
+  let achievementCount = 0
+  if (Types.ObjectId.isValid(userId) && Types.ObjectId.isValid(scenicId)) {
+    const distinctNodes = await PunchRecordModel.distinct('nodeId', {
+      userId: new Types.ObjectId(userId),
+      scenicId,
+    }).exec()
+    achievementCount = distinctNodes.length
+  }
+
+  return {
+    ...item,
+    achievementCount,
+  }
 }
 
 export async function deleteTravelRecordById(id: string) {
@@ -264,11 +436,11 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
     return []
   }
 
-  const records = await PunchRecordModel.find({ userId: new Types.ObjectId(userId) }, { sceneId: 1, scenicId: 1 })
+  const records = await PunchRecordModel.find({ userId: new Types.ObjectId(userId) }, { sceneId: 1, scenicId: 1, nodeId: 1 })
     .lean()
     .exec()
 
-  const sceneToScenicIds = new Map<string, Set<string>>()
+  const sceneToAchievementNodes = new Map<string, Set<string>>()
 
   for (const record of records) {
     const sceneId = normalizeText((record as { sceneId?: string }).sceneId)
@@ -276,16 +448,20 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
       continue
     }
     const scenicIdCandidate = normalizeText((record as { scenicId?: string }).scenicId)
+    const nodeId = normalizeText((record as { nodeId?: string }).nodeId)
     if (!Types.ObjectId.isValid(scenicIdCandidate)) {
       continue
     }
-    if (!sceneToScenicIds.has(sceneId)) {
-      sceneToScenicIds.set(sceneId, new Set())
+    if (!nodeId) {
+      continue
     }
-    sceneToScenicIds.get(sceneId)?.add(scenicIdCandidate)
+    if (!sceneToAchievementNodes.has(sceneId)) {
+      sceneToAchievementNodes.set(sceneId, new Set())
+    }
+    sceneToAchievementNodes.get(sceneId)?.add(`${scenicIdCandidate}::${nodeId}`)
   }
 
-  const sceneIds = Array.from(sceneToScenicIds.keys()).filter((sceneId) => Types.ObjectId.isValid(sceneId))
+  const sceneIds = Array.from(sceneToAchievementNodes.keys()).filter((sceneId) => Types.ObjectId.isValid(sceneId))
   if (!sceneIds.length) {
     return []
   }
@@ -301,7 +477,7 @@ export async function getCheckinProgressBySceneForUser(userId: string): Promise<
   }
 
   return sceneIds.map((sceneId) => {
-    const checkedCount = sceneToScenicIds.get(sceneId)?.size ?? 0
+    const checkedCount = sceneToAchievementNodes.get(sceneId)?.size ?? 0
     const totalCount = totalMap.get(sceneId) ?? 0
     return {
       sceneId,

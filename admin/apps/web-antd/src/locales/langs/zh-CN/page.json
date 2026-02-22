@@ -50,6 +50,7 @@
         "create": "新建场景"
       },
       "actions": {
+        "detail": "详情",
         "edit": "编辑",
         "delete": "删除"
       },
@@ -158,6 +159,30 @@
         "isFeatured": {
           "label": "首页推荐"
         }
+      }
+    },
+    "detail": {
+      "title": "景点详情",
+      "button": {
+        "back": "返回"
+      },
+      "fields": {
+        "id": "景点ID",
+        "title": "景点名称",
+        "sceneId": "所属场景ID",
+        "description": "描述",
+        "address": "地址",
+        "order": "排序",
+        "averageRating": "评分均值",
+        "ratingCount": "评分人数",
+        "favoriteCount": "收藏次数",
+        "isFeatured": "首页推荐",
+        "isFeaturedYes": "已推荐",
+        "isFeaturedNo": "未推荐",
+        "coverImage": "介绍图",
+        "slides": "幻灯片",
+        "createdAt": "创建时间",
+        "updatedAt": "更新时间"
       }
     }
   },

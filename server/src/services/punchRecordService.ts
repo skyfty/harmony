@@ -1,5 +1,6 @@
 import { Types } from 'mongoose'
 import { PunchRecordModel } from '@/models/PunchRecord'
+import { SceneSpotModel } from '@/models/SceneSpot'
 
 export interface CreatePunchRecordInput {
   userId: string
@@ -54,6 +55,7 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
   if (!Types.ObjectId.isValid(input.userId)) {
     throw new Error('Invalid userId')
   }
+  const userObjectId = new Types.ObjectId(input.userId)
   const sceneId = normalizeText(input.sceneId)
   const scenicId = normalizeText(input.scenicId)
   const nodeId = normalizeText(input.nodeId)
@@ -67,22 +69,41 @@ export async function createPunchRecord(input: CreatePunchRecordInput): Promise<
     throw new Error('nodeId is required')
   }
 
-  const doc = await PunchRecordModel.create({
-    userId: new Types.ObjectId(input.userId),
-    username: normalizeText(input.username) || undefined,
-    sceneId,
-    scenicId,
-    sceneName: normalizeText(input.sceneName) || undefined,
-    nodeId,
-    nodeName: normalizeText(input.nodeName) || undefined,
-    clientPunchTime: parseDate(input.clientPunchTime) ?? undefined,
-    behaviorPunchTime: parseDate(input.behaviorPunchTime) ?? undefined,
-    source: normalizeText(input.source) || 'miniapp',
-    path: normalizeText(input.path) || undefined,
-    ip: normalizeText(input.ip) || undefined,
-    userAgent: normalizeText(input.userAgent) || undefined,
-    metadata: input.metadata ?? undefined,
-  })
+  const doc = await PunchRecordModel.findOneAndUpdate(
+    {
+      userId: userObjectId,
+      scenicId,
+      nodeId,
+    },
+    {
+      $setOnInsert: {
+        userId: userObjectId,
+        username: normalizeText(input.username) || undefined,
+        sceneId,
+        scenicId,
+        sceneName: normalizeText(input.sceneName) || undefined,
+        nodeId,
+        nodeName: normalizeText(input.nodeName) || undefined,
+        clientPunchTime: parseDate(input.clientPunchTime) ?? undefined,
+        behaviorPunchTime: parseDate(input.behaviorPunchTime) ?? undefined,
+        source: normalizeText(input.source) || 'miniapp',
+        path: normalizeText(input.path) || undefined,
+        ip: normalizeText(input.ip) || undefined,
+        userAgent: normalizeText(input.userAgent) || undefined,
+        metadata: input.metadata ?? undefined,
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+
+  if (!doc) {
+    throw new Error('Failed to create punch record')
+  }
+
   return doc._id.toString()
 }
 
@@ -145,8 +166,42 @@ export async function queryPunchRecords(options: QueryPunchRecordsOptions) {
     PunchRecordModel.countDocuments(filter),
   ])
 
+  const scenicIds = Array.from(
+    new Set(
+      items
+        .map((item) => normalizeText((item as { scenicId?: string }).scenicId))
+        .filter((id) => Boolean(id) && Types.ObjectId.isValid(id)),
+    ),
+  )
+
+  const scenicTitleMap = new Map<string, string>()
+  if (scenicIds.length) {
+    const scenicRows = await SceneSpotModel.find(
+      { _id: { $in: scenicIds.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, title: 1 },
+    )
+      .lean()
+      .exec()
+
+    for (const row of scenicRows) {
+      const id = (row as { _id: Types.ObjectId })._id.toString()
+      const title = normalizeText((row as { title?: string }).title)
+      if (title) {
+        scenicTitleMap.set(id, title)
+      }
+    }
+  }
+
+  const enrichedItems = items.map((item) => {
+    const scenicId = normalizeText((item as { scenicId?: string }).scenicId)
+    return {
+      ...item,
+      scenicTitle: scenicTitleMap.get(scenicId) || undefined,
+    }
+  })
+
   return {
-    items,
+    items: enrichedItems,
     total,
     page,
     pageSize,

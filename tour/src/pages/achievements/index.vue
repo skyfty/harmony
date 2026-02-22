@@ -97,6 +97,9 @@
             停留时长：{{ formatDuration(record.durationSeconds) }}
           </view>
           <view class="travel-line">
+            游历成就：{{ resolveAchievementCount(record) }}
+          </view>
+          <view class="travel-line">
             状态：{{ record.status === 'completed' ? '已完成' : '进行中' }}
           </view>
         </view>
@@ -130,6 +133,7 @@ import BottomNav from '@/components/BottomNav.vue';
 import AchievementCard from '@/components/AchievementCard.vue';
 import { listAchievements } from '@/api/mini/achievements';
 import { listTravelRecords } from '@/api/mini/travel';
+import type { TravelRecordItem } from '@/types/achievement';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 defineOptions({
@@ -157,16 +161,6 @@ interface TravelSummaryItem {
   sceneName?: string;
   visitedCount: number;
   totalDurationSeconds: number;
-}
-
-interface TravelRecordItem {
-  id: string;
-  sceneId: string;
-  sceneName?: string;
-  enterTime: string;
-  leaveTime?: string;
-  durationSeconds?: number;
-  status: 'active' | 'completed';
 }
 
 const keyword = ref('');
@@ -261,6 +255,14 @@ function isTravelRecordItem(value: unknown): value is TravelRecordItem {
     return false;
   }
   return typeof value.id === 'string' && typeof value.sceneId === 'string' && typeof value.enterTime === 'string';
+}
+
+function resolveAchievementCount(record: TravelRecordItem): number {
+  const count = Number(record.achievementCount);
+  if (Number.isFinite(count) && count >= 0) {
+    return count;
+  }
+  return 0;
 }
 
 const filteredAchievements = computed(() => {

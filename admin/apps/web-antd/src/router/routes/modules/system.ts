@@ -22,6 +22,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'SceneSpotDetail',
+    path: '/scene-spots/:id',
+    component: () => import('../../../views/scene-spots/detail.vue'),
+    meta: {
+      title: $t('page.sceneSpots.detail.title'),
+      hideInMenu: true,
+    },
+  },
+  {
     meta: {
       icon: 'lucide:folder-kanban',
       order: 11,

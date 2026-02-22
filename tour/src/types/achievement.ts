@@ -29,5 +29,6 @@ export interface TravelRecordItem {
   enterTime: string;
   leaveTime?: string;
   durationSeconds?: number;
+  achievementCount?: number;
   status: 'active' | 'completed';
 }
