@@ -23,7 +23,7 @@
           v-for="scenic in filtered"
           :key="scenic.id"
           :name="scenic.title"
-          :summary="scenic.description"
+          :summary="null"
           :cover-url="scenic.coverImage"
           :rating="scenic.averageRating"
           @tap="openDetail(scenic.id)"

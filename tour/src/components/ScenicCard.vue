@@ -9,7 +9,7 @@
           <text class="value">{{ rating.toFixed(1) }}</text>
         </view>
       </view>
-      <text class="summary">{{ summary }}</text>
+      <text v-if="summary" class="summary">{{ summary }}</text>
     </view>
   </view>
 </template>
@@ -17,7 +17,7 @@
 <script setup lang="ts">
 defineProps<{
   name: string;
-  summary: string;
+  summary: string | null;
   coverUrl: string;
   rating?: number;
 }>();
