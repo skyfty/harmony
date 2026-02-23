@@ -9,7 +9,7 @@ function mapVehicle(row: any, owned: boolean) {
     id: row._id.toString(),
     name: row.name,
     description: row.description ?? '',
-    imageUrl: row.imageUrl ?? '',
+    coverUrl: row.coverUrl ?? '',
     isActive: row.isActive !== false,
     owned,
   }
@@ -26,7 +26,7 @@ function mapUserVehicle(row: any) {
           id: vehicle?._id?.toString?.() ?? '',
           name: vehicle.name ?? '',
           description: vehicle.description ?? '',
-          imageUrl: vehicle.imageUrl ?? '',
+          coverUrl: vehicle.coverUrl ?? '',
           isActive: vehicle.isActive !== false,
         }
       : null,
@@ -62,7 +62,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
 export async function listUserVehicles(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const rows = await UserVehicleModel.find({ userId })
-    .populate('vehicleId', 'name description imageUrl isActive')
+    .populate('vehicleId', 'name description coverUrl isActive')
     .sort({ ownedAt: -1, createdAt: -1 })
     .lean()
     .exec()

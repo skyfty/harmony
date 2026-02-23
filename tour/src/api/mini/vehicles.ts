@@ -6,7 +6,7 @@ type VehicleApiDto = {
   id: string
   name: string
   description?: string
-  imageUrl?: string
+  coverUrl?: string
   isActive?: boolean
   owned?: boolean
 }
@@ -24,7 +24,7 @@ type UserVehicleApiDto = {
     id: string
     name: string
     description?: string
-    imageUrl?: string
+    coverUrl?: string
     isActive?: boolean
   } | null
 }
@@ -43,13 +43,13 @@ export async function listVehicles(): Promise<Vehicle[]> {
     const owned = Boolean(vehicle.owned)
     const locked = vehicle.isActive === false
     const status: Vehicle['status'] = owned ? 'owned' : locked ? 'locked' : 'available'
+    const coverUrl = vehicle.coverUrl ?? ''
     return {
       id: vehicle.id,
       name: vehicle.name,
       description: vehicle.description ?? '',
-      imageUrl: vehicle.imageUrl ?? '',
       summary: vehicle.description ?? '',
-      coverUrl: vehicle.imageUrl ?? '',
+      coverUrl,
       status,
     }
   })
@@ -69,7 +69,7 @@ export async function listUserVehicles(): Promise<UserVehicle[]> {
           id: row.vehicle.id,
           name: row.vehicle.name,
           description: row.vehicle.description ?? '',
-          imageUrl: row.vehicle.imageUrl ?? '',
+          coverUrl: row.vehicle.coverUrl ?? '',
           isActive: row.vehicle.isActive !== false,
         }
       : null,

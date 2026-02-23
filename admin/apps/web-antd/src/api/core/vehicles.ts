@@ -23,7 +23,7 @@ export interface VehicleItem {
   id: string;
   name: string;
   description: string;
-  imageUrl: string;
+  coverUrl: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -39,7 +39,7 @@ export interface ListVehiclesParams {
 export interface VehiclePayload {
   name?: string;
   description?: string;
-  imageUrl?: string;
+  coverUrl?: string;
   isActive?: boolean;
 }
 
@@ -56,7 +56,7 @@ export interface UserVehicleItem {
     id: string;
     name: string;
     description: string;
-    imageUrl: string;
+    coverUrl: string;
     isActive: boolean;
   } | null;
   ownedAt?: string | null;

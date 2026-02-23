@@ -2,7 +2,7 @@
   <view class="page">
     <SceneryViewer :project-id="projectId" :package-url="packageUrl" :scene-url="sceneUrl" @punch="handlePunch" />
     <view v-if="selectedVehicleName" class="vehicle-tag">
-      <image v-if="selectedVehicleImageUrl" class="vehicle-tag__image" :src="selectedVehicleImageUrl" mode="aspectFill" />
+      <image v-if="selectedVehicleCoverUrl" class="vehicle-tag__image" :src="selectedVehicleCoverUrl" mode="aspectFill" />
       <text class="vehicle-tag__text">当前车辆：{{ selectedVehicleName }}</text>
     </view>
   </view>
@@ -23,7 +23,7 @@ const sceneName = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleId = ref<string>('');
 const selectedVehicleName = ref<string>('');
-const selectedVehicleImageUrl = ref<string>('');
+const selectedVehicleCoverUrl = ref<string>('');
 
 type PunchEventPayload = {
   eventName: 'punch';
@@ -67,7 +67,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneName.value = typeof record.sceneName === 'string' ? record.sceneName : '';
   selectedVehicleId.value = typeof record.vehicleId === 'string' ? decodeURIComponent(record.vehicleId) : '';
   selectedVehicleName.value = typeof record.vehicleName === 'string' ? decodeURIComponent(record.vehicleName) : '';
-  selectedVehicleImageUrl.value = typeof record.vehicleImageUrl === 'string' ? decodeURIComponent(record.vehicleImageUrl) : '';
+  selectedVehicleCoverUrl.value = typeof record.vehicleCoverUrl === 'string' ? decodeURIComponent(record.vehicleCoverUrl) : '';
 
   if (!selectedVehicleId.value || !selectedVehicleName.value) {
     try {
@@ -76,7 +76,6 @@ onLoad((query: Record<string, unknown> | undefined) => {
         const selectedVehicle = JSON.parse(selectedVehicleText) as {
           id?: string;
           name?: string;
-          imageUrl?: string;
           coverUrl?: string;
         };
         if (!selectedVehicleId.value && typeof selectedVehicle.id === 'string') {
@@ -85,12 +84,8 @@ onLoad((query: Record<string, unknown> | undefined) => {
         if (!selectedVehicleName.value && typeof selectedVehicle.name === 'string') {
           selectedVehicleName.value = selectedVehicle.name;
         }
-        if (!selectedVehicleImageUrl.value) {
-          const image =
-            typeof selectedVehicle.imageUrl === 'string' && selectedVehicle.imageUrl
-              ? selectedVehicle.imageUrl
-              : selectedVehicle.coverUrl;
-          selectedVehicleImageUrl.value = typeof image === 'string' ? image : '';
+        if (!selectedVehicleCoverUrl.value) {
+          selectedVehicleCoverUrl.value = typeof selectedVehicle.coverUrl === 'string' ? selectedVehicle.coverUrl : '';
         }
       }
     } catch {

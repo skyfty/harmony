@@ -28,7 +28,7 @@ import { createResourceAssetApi } from '#/api/core/resources';
 interface VehicleFormModel {
   name: string;
   description: string;
-  imageUrl: string;
+  coverUrl: string;
   isActive: boolean;
 }
 
@@ -40,7 +40,7 @@ const vehicleFormRef = ref<FormInstance>();
 const vehicleFormModel = reactive<VehicleFormModel>({
   name: '',
   description: '',
-  imageUrl: '',
+  coverUrl: '',
   isActive: true,
 });
 
@@ -58,7 +58,7 @@ const modalTitle = computed(() => (editingId.value ? '编辑车辆' : '新增车
 function resetForm() {
   vehicleFormModel.name = '';
   vehicleFormModel.description = '';
-  vehicleFormModel.imageUrl = '';
+  vehicleFormModel.coverUrl = '';
   vehicleFormModel.isActive = true;
   imageFileList.value = [];
   imagePreview.value = '';
@@ -76,10 +76,10 @@ async function openEditModal(row: VehicleItem) {
     const data = await getVehicleApi(row.id);
     vehicleFormModel.name = data.name || '';
     vehicleFormModel.description = data.description || '';
-    vehicleFormModel.imageUrl = data.imageUrl || '';
+    vehicleFormModel.coverUrl = data.coverUrl || '';
     vehicleFormModel.isActive = data.isActive !== false;
     imageFileList.value = [];
-    imagePreview.value = data.imageUrl || '';
+    imagePreview.value = data.coverUrl || '';
     modalOpen.value = true;
   } catch {
     message.error('读取车辆信息失败');
@@ -88,16 +88,16 @@ async function openEditModal(row: VehicleItem) {
 
 async function uploadImageIfNeeded() {
   if (!imageFileList.value.length) {
-    return vehicleFormModel.imageUrl;
+    return vehicleFormModel.coverUrl;
   }
   const origin = (imageFileList.value[0] as any).originFileObj as File;
   if (!origin) {
-    return vehicleFormModel.imageUrl;
+    return vehicleFormModel.coverUrl;
   }
   const fd = new FormData();
   fd.append('file', origin);
   const res = await createResourceAssetApi(fd);
-  return res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || vehicleFormModel.imageUrl;
+  return res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || vehicleFormModel.coverUrl;
 }
 
 async function submitVehicle() {
@@ -106,11 +106,11 @@ async function submitVehicle() {
   await form.validate();
   submitting.value = true;
   try {
-    const imageUrl = await uploadImageIfNeeded();
+    const coverUrl = await uploadImageIfNeeded();
     const payload = {
       name: vehicleFormModel.name.trim(),
       description: vehicleFormModel.description.trim(),
-      imageUrl: imageUrl || '',
+      coverUrl: coverUrl || '',
       isActive: vehicleFormModel.isActive,
     };
     if (editingId.value) {
@@ -168,7 +168,7 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
     border: true,
     columns: [
       { field: 'name', minWidth: 180, title: '名称' },
-      { field: 'imageUrl', minWidth: 120, title: '图片', slots: { default: 'image' } },
+      { field: 'coverUrl', minWidth: 120, title: '图片', slots: { default: 'image' } },
       { field: 'description', minWidth: 260, title: '描述' },
       { field: 'isActive', minWidth: 110, title: '状态', slots: { default: 'status' } },
       { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
@@ -204,8 +204,8 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
 
       <template #image="{ row }">
         <img
-          v-if="row.imageUrl"
-          :src="row.imageUrl"
+          v-if="row.coverUrl"
+          :src="row.coverUrl"
           alt="vehicle"
           style="width: 56px; height: 56px; object-fit: cover; border-radius: 8px"
         />
@@ -253,8 +253,8 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
             style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px"
           />
         </Form.Item>
-        <Form.Item label="图片URL" name="imageUrl">
-          <Input v-model:value="vehicleFormModel.imageUrl" placeholder="可手工填写 URL，上传优先" />
+        <Form.Item label="封面URL" name="coverUrl">
+          <Input v-model:value="vehicleFormModel.coverUrl" placeholder="可手工填写 URL，上传优先" />
         </Form.Item>
         <Form.Item label="启用" name="isActive">
           <Switch v-model:checked="vehicleFormModel.isActive" />

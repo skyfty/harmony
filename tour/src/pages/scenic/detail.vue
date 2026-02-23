@@ -154,7 +154,7 @@ function enterScenery() {
   if (!scenic.value) return;
   let vehicleId = '';
   let vehicleName = '';
-  let vehicleImageUrl = '';
+  let vehicleCoverUrl = '';
   try {
     const selectedVehicleId = uni.getStorageSync('tour:selectedVehicleId');
     if (typeof selectedVehicleId === 'string' && selectedVehicleId) {
@@ -165,14 +165,9 @@ function enterScenery() {
       const selectedVehicle = JSON.parse(selectedVehicleText) as {
         name?: string;
         coverUrl?: string;
-        imageUrl?: string;
       };
       vehicleName = typeof selectedVehicle?.name === 'string' ? selectedVehicle.name : '';
-      const image =
-        typeof selectedVehicle?.imageUrl === 'string' && selectedVehicle.imageUrl
-          ? selectedVehicle.imageUrl
-          : selectedVehicle?.coverUrl;
-      vehicleImageUrl = typeof image === 'string' ? image : '';
+      vehicleCoverUrl = typeof selectedVehicle?.coverUrl === 'string' ? selectedVehicle.coverUrl : '';
     }
   } catch {
     // ignore
@@ -189,8 +184,8 @@ function enterScenery() {
   if (vehicleName) {
     queryParts.push(`vehicleName=${encodeURIComponent(vehicleName)}`);
   }
-  if (vehicleImageUrl) {
-    queryParts.push(`vehicleImageUrl=${encodeURIComponent(vehicleImageUrl)}`);
+  if (vehicleCoverUrl) {
+    queryParts.push(`vehicleCoverUrl=${encodeURIComponent(vehicleCoverUrl)}`);
   }
 
   uni.navigateTo({

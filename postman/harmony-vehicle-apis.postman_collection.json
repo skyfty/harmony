@@ -149,7 +149,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"观光车\",\n  \"description\": \"园区通勤车辆\",\n  \"imageUrl\": \"https://example.com/vehicle/sightseeing.png\",\n  \"isActive\": true\n}"
+              "raw": "{\n  \"name\": \"观光车\",\n  \"description\": \"园区通勤车辆\",\n  \"coverUrl\": \"https://example.com/vehicle/sightseeing.png\",\n  \"isActive\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/admin/vehicles",

@@ -5,7 +5,7 @@ const vehicleSchema = new Schema<VehicleDocument>(
   {
     name: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    imageUrl: { type: String, default: '' },
+    coverUrl: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
   },
   {

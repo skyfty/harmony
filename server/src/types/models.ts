@@ -443,8 +443,8 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   name: string
   /** 中文：车辆描述 */
   description?: string
-  /** 中文：车辆图片 URL */
-  imageUrl?: string
+  /** 中文：车辆封面 URL */
+  coverUrl?: string
   /** 中文：是否启用 */
   isActive: boolean
   /** 中文：创建时间 */

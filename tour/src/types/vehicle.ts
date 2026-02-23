@@ -4,7 +4,6 @@ export interface Vehicle {
   id: string;
   name: string;
   description: string;
-  imageUrl: string;
   summary: string;
   coverUrl: string;
   status: VehicleStatus;
@@ -18,7 +17,7 @@ export interface UserVehicle {
     id: string;
     name: string;
     description: string;
-    imageUrl: string;
+    coverUrl: string;
     isActive: boolean;
   } | null;
 }

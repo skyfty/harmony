@@ -7,7 +7,7 @@ import { UserModel } from '@/models/User'
 type VehiclePayload = {
   name?: string
   description?: string
-  imageUrl?: string
+  coverUrl?: string
   isActive?: boolean
 }
 
@@ -29,7 +29,7 @@ function mapVehicle(row: any) {
     id: row._id.toString(),
     name: row.name,
     description: row.description ?? '',
-    imageUrl: row.imageUrl ?? '',
+    coverUrl: row.coverUrl ?? '',
     isActive: row.isActive !== false,
     createdAt: row.createdAt?.toISOString?.() ?? null,
     updatedAt: row.updatedAt?.toISOString?.() ?? null,
@@ -55,7 +55,7 @@ function mapUserVehicle(row: any) {
           id: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
           name: vehicle.name ?? '',
           description: vehicle.description ?? '',
-          imageUrl: vehicle.imageUrl ?? '',
+          coverUrl: vehicle.coverUrl ?? '',
           isActive: vehicle.isActive !== false,
         }
       : null,
@@ -109,7 +109,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as VehiclePayload
   const name = toStringValue(body.name)
   const description = toStringValue(body.description) ?? ''
-  const imageUrl = toStringValue(body.imageUrl) ?? ''
+  const coverUrl = toStringValue(body.coverUrl) ?? ''
   if (!name) {
     ctx.throw(400, 'name is required')
   }
@@ -117,7 +117,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
   const created = await VehicleModel.create({
     name,
     description,
-    imageUrl,
+    coverUrl,
     isActive: body.isActive !== false,
   })
   const row = await VehicleModel.findById(created._id).lean().exec()
@@ -141,7 +141,10 @@ export async function updateVehicle(ctx: Context): Promise<void> {
     {
       name: toStringValue(body.name) ?? current.name,
       description: body.description === undefined ? current.description : (toStringValue(body.description) ?? ''),
-      imageUrl: body.imageUrl === undefined ? current.imageUrl : (toStringValue(body.imageUrl) ?? ''),
+      coverUrl:
+        body.coverUrl === undefined
+          ? (current as any).coverUrl ?? ''
+          : (toStringValue(body.coverUrl) ?? ''),
       isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
     },
     { new: true },
@@ -215,7 +218,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
   const [rows, total] = await Promise.all([
     UserVehicleModel.find(filter)
       .populate('userId', 'username displayName')
-      .populate('vehicleId', 'name description imageUrl isActive')
+      .populate('vehicleId', 'name description coverUrl isActive')
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -239,7 +242,7 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
   }
   const row = await UserVehicleModel.findById(id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description imageUrl isActive')
+    .populate('vehicleId', 'name description coverUrl isActive')
     .lean()
     .exec()
   if (!row) {
@@ -284,7 +287,7 @@ export async function createUserVehicle(ctx: Context): Promise<void> {
 
   const row = await UserVehicleModel.findById(created._id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description imageUrl isActive')
+    .populate('vehicleId', 'name description coverUrl isActive')
     .lean()
     .exec()
 
@@ -346,7 +349,7 @@ export async function updateUserVehicle(ctx: Context): Promise<void> {
     { new: true },
   )
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description imageUrl isActive')
+    .populate('vehicleId', 'name description coverUrl isActive')
     .lean()
     .exec()
 
