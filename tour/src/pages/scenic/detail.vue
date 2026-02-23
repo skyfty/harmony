@@ -152,8 +152,49 @@ function handleBack() {
 
 function enterScenery() {
   if (!scenic.value) return;
+  let vehicleId = '';
+  let vehicleName = '';
+  let vehicleImageUrl = '';
+  try {
+    const selectedVehicleId = uni.getStorageSync('tour:selectedVehicleId');
+    if (typeof selectedVehicleId === 'string' && selectedVehicleId) {
+      vehicleId = selectedVehicleId;
+    }
+    const selectedVehicleText = uni.getStorageSync('tour:selectedVehicle');
+    if (typeof selectedVehicleText === 'string' && selectedVehicleText) {
+      const selectedVehicle = JSON.parse(selectedVehicleText) as {
+        name?: string;
+        coverUrl?: string;
+        imageUrl?: string;
+      };
+      vehicleName = typeof selectedVehicle?.name === 'string' ? selectedVehicle.name : '';
+      const image =
+        typeof selectedVehicle?.imageUrl === 'string' && selectedVehicle.imageUrl
+          ? selectedVehicle.imageUrl
+          : selectedVehicle?.coverUrl;
+      vehicleImageUrl = typeof image === 'string' ? image : '';
+    }
+  } catch {
+    // ignore
+  }
+
+  const queryParts = [
+    `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
+    `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
+    `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
+  ];
+  if (vehicleId) {
+    queryParts.push(`vehicleId=${encodeURIComponent(vehicleId)}`);
+  }
+  if (vehicleName) {
+    queryParts.push(`vehicleName=${encodeURIComponent(vehicleName)}`);
+  }
+  if (vehicleImageUrl) {
+    queryParts.push(`vehicleImageUrl=${encodeURIComponent(vehicleImageUrl)}`);
+  }
+
   uni.navigateTo({
-    url: `/pages/scenery/index?packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}&sceneSpotId=${encodeURIComponent(scenic.value.id)}&sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
+    url: `/pages/scenery/index?${queryParts.join('&')}`,
   });
 }
 

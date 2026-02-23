@@ -50,6 +50,8 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'order:write', name: '订单管理', group: 'order' },
   { code: 'product:read', name: '商品查看', group: 'product' },
   { code: 'product:write', name: '商品管理', group: 'product' },
+  { code: 'vehicle:read', name: '车辆查看', group: 'vehicle' },
+  { code: 'vehicle:write', name: '车辆管理', group: 'vehicle' },
   { code: 'coupon:read', name: '卡券查看', group: 'coupon' },
   { code: 'coupon:write', name: '卡券管理', group: 'coupon' },
   { code: 'scene:read', name: '场景查看', group: 'scene' },

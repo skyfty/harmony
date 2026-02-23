@@ -1,37 +1,77 @@
 import type { Vehicle } from '@/types/vehicle'
+import type { UserVehicle } from '@/types/vehicle'
 import { miniRequest } from '@harmony/utils'
 
-type ProductApiDto = {
+type VehicleApiDto = {
   id: string
   name: string
-  category: string
-  summary?: string
-  coverUrl?: string
-  purchased?: boolean
-  locked?: boolean
+  description?: string
+  imageUrl?: string
+  isActive?: boolean
+  owned?: boolean
 }
 
-type ProductsResponse = {
+type VehiclesResponse = {
   total: number
-  products: ProductApiDto[]
+  vehicles: VehicleApiDto[]
+}
+
+type UserVehicleApiDto = {
+  id: string
+  vehicleId: string
+  ownedAt?: string | null
+  vehicle: {
+    id: string
+    name: string
+    description?: string
+    imageUrl?: string
+    isActive?: boolean
+  } | null
+}
+
+type UserVehiclesResponse = {
+  total: number
+  userVehicles: UserVehicleApiDto[]
 }
 
 export async function listVehicles(): Promise<Vehicle[]> {
-  const res = await miniRequest<ProductsResponse>('/products', {
+  const res = await miniRequest<VehiclesResponse>('/vehicles', {
     method: 'GET',
-    query: { category: 'vehicle' },
   })
-  const products = Array.isArray(res.products) ? res.products : []
-  return products.map((product) => {
-    const owned = Boolean(product.purchased)
-    const locked = Boolean(product.locked)
+  const vehicles = Array.isArray(res.vehicles) ? res.vehicles : []
+  return vehicles.map((vehicle) => {
+    const owned = Boolean(vehicle.owned)
+    const locked = vehicle.isActive === false
     const status: Vehicle['status'] = owned ? 'owned' : locked ? 'locked' : 'available'
     return {
-      id: product.id,
-      name: product.name,
-      summary: product.summary ?? '',
-      coverUrl: product.coverUrl ?? '',
+      id: vehicle.id,
+      name: vehicle.name,
+      description: vehicle.description ?? '',
+      imageUrl: vehicle.imageUrl ?? '',
+      summary: vehicle.description ?? '',
+      coverUrl: vehicle.imageUrl ?? '',
       status,
     }
   })
+}
+
+export async function listUserVehicles(): Promise<UserVehicle[]> {
+  const res = await miniRequest<UserVehiclesResponse>('/user-vehicles', {
+    method: 'GET',
+  })
+  const rows = Array.isArray(res.userVehicles) ? res.userVehicles : []
+  return rows.map((row) => ({
+    id: row.id,
+    vehicleId: row.vehicleId,
+    ownedAt: row.ownedAt ?? null,
+    vehicle: row.vehicle
+      ? {
+          id: row.vehicle.id,
+          name: row.vehicle.name,
+          description: row.vehicle.description ?? '',
+          imageUrl: row.vehicle.imageUrl ?? '',
+          isActive: row.vehicle.isActive !== false,
+        }
+      : null,
+  }))
 }

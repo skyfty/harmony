@@ -438,6 +438,34 @@ export interface UserProductDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface VehicleDocument extends Document<Types.ObjectId> {
+  /** 中文：车辆名称 */
+  name: string
+  /** 中文：车辆描述 */
+  description?: string
+  /** 中文：车辆图片 URL */
+  imageUrl?: string
+  /** 中文：是否启用 */
+  isActive: boolean
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export interface UserVehicleDocument extends Document<Types.ObjectId> {
+  /** 中文：用户 ID */
+  userId: Types.ObjectId
+  /** 中文：车辆 ID */
+  vehicleId: Types.ObjectId
+  /** 中文：拥有时间 */
+  ownedAt: Date
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
 export interface SceneProductBindingDocument extends Document<Types.ObjectId> {
   /** 中文：场景 ID */
   sceneId: Types.ObjectId

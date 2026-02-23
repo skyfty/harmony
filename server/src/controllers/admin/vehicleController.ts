@@ -1,0 +1,364 @@
+import type { Context } from 'koa'
+import { Types } from 'mongoose'
+import { VehicleModel } from '@/models/Vehicle'
+import { UserVehicleModel } from '@/models/UserVehicle'
+import { UserModel } from '@/models/User'
+
+type VehiclePayload = {
+  name?: string
+  description?: string
+  imageUrl?: string
+  isActive?: boolean
+}
+
+type UserVehiclePayload = {
+  userId?: string
+  vehicleId?: string
+}
+
+function toStringValue(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function mapVehicle(row: any) {
+  return {
+    id: row._id.toString(),
+    name: row.name,
+    description: row.description ?? '',
+    imageUrl: row.imageUrl ?? '',
+    isActive: row.isActive !== false,
+    createdAt: row.createdAt?.toISOString?.() ?? null,
+    updatedAt: row.updatedAt?.toISOString?.() ?? null,
+  }
+}
+
+function mapUserVehicle(row: any) {
+  const user = row.userId
+  const vehicle = row.vehicleId
+  return {
+    id: row._id.toString(),
+    userId: user?._id?.toString?.() ?? user?.toString?.() ?? '',
+    user: user
+      ? {
+          id: user?._id?.toString?.() ?? user?.toString?.() ?? '',
+          username: user.username ?? null,
+          displayName: user.displayName ?? null,
+        }
+      : null,
+    vehicleId: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
+    vehicle: vehicle
+      ? {
+          id: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
+          name: vehicle.name ?? '',
+          description: vehicle.description ?? '',
+          imageUrl: vehicle.imageUrl ?? '',
+          isActive: vehicle.isActive !== false,
+        }
+      : null,
+    ownedAt: row.ownedAt?.toISOString?.() ?? null,
+    createdAt: row.createdAt?.toISOString?.() ?? null,
+    updatedAt: row.updatedAt?.toISOString?.() ?? null,
+  }
+}
+
+export async function listVehicles(ctx: Context): Promise<void> {
+  const { page = '1', pageSize = '10', keyword, isActive } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(Number(page) || 1, 1)
+  const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
+  const skip = (pageNumber - 1) * limit
+
+  const filter: Record<string, unknown> = {}
+  if (keyword?.trim()) {
+    const pattern = new RegExp(keyword.trim(), 'i')
+    filter.$or = [{ name: pattern }, { description: pattern }]
+  }
+  if (isActive === 'true' || isActive === 'false') {
+    filter.isActive = isActive === 'true'
+  }
+
+  const [rows, total] = await Promise.all([
+    VehicleModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+    VehicleModel.countDocuments(filter),
+  ])
+
+  ctx.body = {
+    data: rows.map(mapVehicle),
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
+}
+
+export async function getVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid vehicle id')
+  }
+  const row = await VehicleModel.findById(id).lean().exec()
+  if (!row) {
+    ctx.throw(404, 'Vehicle not found')
+  }
+  ctx.body = mapVehicle(row)
+}
+
+export async function createVehicle(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as VehiclePayload
+  const name = toStringValue(body.name)
+  const description = toStringValue(body.description) ?? ''
+  const imageUrl = toStringValue(body.imageUrl) ?? ''
+  if (!name) {
+    ctx.throw(400, 'name is required')
+  }
+
+  const created = await VehicleModel.create({
+    name,
+    description,
+    imageUrl,
+    isActive: body.isActive !== false,
+  })
+  const row = await VehicleModel.findById(created._id).lean().exec()
+  ctx.status = 201
+  ctx.body = mapVehicle(row)
+}
+
+export async function updateVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid vehicle id')
+  }
+  const current = await VehicleModel.findById(id).lean().exec()
+  if (!current) {
+    ctx.throw(404, 'Vehicle not found')
+  }
+
+  const body = (ctx.request.body ?? {}) as VehiclePayload
+  const updated = await VehicleModel.findByIdAndUpdate(
+    id,
+    {
+      name: toStringValue(body.name) ?? current.name,
+      description: body.description === undefined ? current.description : (toStringValue(body.description) ?? ''),
+      imageUrl: body.imageUrl === undefined ? current.imageUrl : (toStringValue(body.imageUrl) ?? ''),
+      isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
+    },
+    { new: true },
+  )
+    .lean()
+    .exec()
+
+  ctx.body = mapVehicle(updated)
+}
+
+export async function deleteVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid vehicle id')
+  }
+  await VehicleModel.findByIdAndDelete(id).exec()
+  await UserVehicleModel.deleteMany({ vehicleId: id }).exec()
+  ctx.status = 200
+  ctx.body = {}
+}
+
+export async function listUserVehicles(ctx: Context): Promise<void> {
+  const { page = '1', pageSize = '10', keyword, userId, vehicleId } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(Number(page) || 1, 1)
+  const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
+  const skip = (pageNumber - 1) * limit
+
+  const filter: Record<string, unknown> = {}
+  if (userId && Types.ObjectId.isValid(userId)) {
+    filter.userId = new Types.ObjectId(userId)
+  }
+  if (vehicleId && Types.ObjectId.isValid(vehicleId)) {
+    filter.vehicleId = new Types.ObjectId(vehicleId)
+  }
+
+  const keywordText = keyword?.trim()
+  if (keywordText) {
+    const [userRows, vehicleRows] = await Promise.all([
+      UserModel.find({
+        $or: [{ username: new RegExp(keywordText, 'i') }, { displayName: new RegExp(keywordText, 'i') }],
+      })
+        .select({ _id: 1 })
+        .lean()
+        .exec(),
+      VehicleModel.find({
+        $or: [{ name: new RegExp(keywordText, 'i') }, { description: new RegExp(keywordText, 'i') }],
+      })
+        .select({ _id: 1 })
+        .lean()
+        .exec(),
+    ])
+
+    const userIds = userRows.map((row: any) => row._id)
+    const vehicleIds = vehicleRows.map((row: any) => row._id)
+    if (userIds.length || vehicleIds.length) {
+      filter.$or = [
+        ...(userIds.length ? [{ userId: { $in: userIds } }] : []),
+        ...(vehicleIds.length ? [{ vehicleId: { $in: vehicleIds } }] : []),
+      ]
+    } else {
+      ctx.body = {
+        data: [],
+        page: pageNumber,
+        pageSize: limit,
+        total: 0,
+      }
+      return
+    }
+  }
+
+  const [rows, total] = await Promise.all([
+    UserVehicleModel.find(filter)
+      .populate('userId', 'username displayName')
+      .populate('vehicleId', 'name description imageUrl isActive')
+      .sort({ ownedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec(),
+    UserVehicleModel.countDocuments(filter),
+  ])
+
+  ctx.body = {
+    data: (rows as any[]).map(mapUserVehicle),
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
+}
+
+export async function getUserVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid user vehicle id')
+  }
+  const row = await UserVehicleModel.findById(id)
+    .populate('userId', 'username displayName')
+    .populate('vehicleId', 'name description imageUrl isActive')
+    .lean()
+    .exec()
+  if (!row) {
+    ctx.throw(404, 'User vehicle not found')
+  }
+  ctx.body = mapUserVehicle(row)
+}
+
+export async function createUserVehicle(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as UserVehiclePayload
+  const userId = toStringValue(body.userId)
+  const vehicleId = toStringValue(body.vehicleId)
+
+  if (!userId || !Types.ObjectId.isValid(userId)) {
+    ctx.throw(400, 'Valid userId is required')
+  }
+  if (!vehicleId || !Types.ObjectId.isValid(vehicleId)) {
+    ctx.throw(400, 'Valid vehicleId is required')
+  }
+
+  const [user, vehicle] = await Promise.all([
+    UserModel.findById(userId).select({ _id: 1 }).lean().exec(),
+    VehicleModel.findById(vehicleId).select({ _id: 1 }).lean().exec(),
+  ])
+  if (!user) {
+    ctx.throw(404, 'User not found')
+  }
+  if (!vehicle) {
+    ctx.throw(404, 'Vehicle not found')
+  }
+
+  const existing = await UserVehicleModel.findOne({ userId, vehicleId }).lean().exec()
+  if (existing) {
+    ctx.throw(409, 'User already owns this vehicle')
+  }
+
+  const created = await UserVehicleModel.create({
+    userId,
+    vehicleId,
+    ownedAt: new Date(),
+  })
+
+  const row = await UserVehicleModel.findById(created._id)
+    .populate('userId', 'username displayName')
+    .populate('vehicleId', 'name description imageUrl isActive')
+    .lean()
+    .exec()
+
+  ctx.status = 201
+  ctx.body = mapUserVehicle(row)
+}
+
+export async function updateUserVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid user vehicle id')
+  }
+
+  const current = await UserVehicleModel.findById(id).lean().exec()
+  if (!current) {
+    ctx.throw(404, 'User vehicle not found')
+  }
+
+  const body = (ctx.request.body ?? {}) as UserVehiclePayload
+  const nextUserId = toStringValue(body.userId) ?? current.userId.toString()
+  const nextVehicleId = toStringValue(body.vehicleId) ?? current.vehicleId.toString()
+
+  if (!Types.ObjectId.isValid(nextUserId)) {
+    ctx.throw(400, 'Valid userId is required')
+  }
+  if (!Types.ObjectId.isValid(nextVehicleId)) {
+    ctx.throw(400, 'Valid vehicleId is required')
+  }
+
+  const [user, vehicle] = await Promise.all([
+    UserModel.findById(nextUserId).select({ _id: 1 }).lean().exec(),
+    VehicleModel.findById(nextVehicleId).select({ _id: 1 }).lean().exec(),
+  ])
+  if (!user) {
+    ctx.throw(404, 'User not found')
+  }
+  if (!vehicle) {
+    ctx.throw(404, 'Vehicle not found')
+  }
+
+  const duplicated = await UserVehicleModel.findOne({
+    _id: { $ne: id },
+    userId: nextUserId,
+    vehicleId: nextVehicleId,
+  })
+    .select({ _id: 1 })
+    .lean()
+    .exec()
+  if (duplicated) {
+    ctx.throw(409, 'User already owns this vehicle')
+  }
+
+  const row = await UserVehicleModel.findByIdAndUpdate(
+    id,
+    {
+      userId: nextUserId,
+      vehicleId: nextVehicleId,
+    },
+    { new: true },
+  )
+    .populate('userId', 'username displayName')
+    .populate('vehicleId', 'name description imageUrl isActive')
+    .lean()
+    .exec()
+
+  ctx.body = mapUserVehicle(row)
+}
+
+export async function deleteUserVehicle(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid user vehicle id')
+  }
+  await UserVehicleModel.findByIdAndDelete(id).exec()
+  ctx.status = 200
+  ctx.body = {}
+}

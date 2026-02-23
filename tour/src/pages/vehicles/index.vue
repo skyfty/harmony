@@ -34,6 +34,7 @@ import type { VehicleStatus } from '@/types/vehicle';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const VEHICLE_SELECTION_STORAGE_KEY = 'tour:selectedVehicleId';
+const VEHICLE_SELECTION_OBJECT_STORAGE_KEY = 'tour:selectedVehicle';
 
 function getSelectedVehicleId(): string | null {
   try {
@@ -50,6 +51,18 @@ function setSelectedVehicleId(id: string | null): void {
       uni.setStorageSync(VEHICLE_SELECTION_STORAGE_KEY, id);
     } else {
       uni.removeStorageSync(VEHICLE_SELECTION_STORAGE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function setSelectedVehicle(vehicle: Vehicle | null): void {
+  try {
+    if (vehicle) {
+      uni.setStorageSync(VEHICLE_SELECTION_OBJECT_STORAGE_KEY, JSON.stringify(vehicle));
+    } else {
+      uni.removeStorageSync(VEHICLE_SELECTION_OBJECT_STORAGE_KEY);
     }
   } catch {
     // ignore
@@ -74,8 +87,10 @@ function select(id: string, status: VehicleStatus) {
     uni.showToast({ title: '未解锁', icon: 'none' });
     return;
   }
+  const selectedVehicle = vehicles.value.find((item) => item.id === id) || null;
   selectedId.value = id;
   setSelectedVehicleId(id);
+  setSelectedVehicle(selectedVehicle);
   uni.showToast({ title: '已选择', icon: 'none' });
 }
 

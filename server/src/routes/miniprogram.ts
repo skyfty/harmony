@@ -57,6 +57,10 @@ import {
   purchaseProduct,
 } from '@/controllers/miniprogram/productController'
 import {
+  listUserVehicles,
+  listVehicles,
+} from '@/controllers/miniprogram/vehicleController'
+import {
   listOrders,
   getOrder,
 } from '@/controllers/miniprogram/orderController'
@@ -100,6 +104,7 @@ miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 // products can be read anonymously; login adds purchased/state
 miniRouter.get('/products', optionalMiniAuth, listProducts)
 miniRouter.get('/products/:id', optionalMiniAuth, getProduct)
+miniRouter.get('/vehicles', optionalMiniAuth, listVehicles)
 
 miniRouter.use(requireMiniAuth)
 
@@ -146,6 +151,7 @@ miniRouter.post('/exhibitions/:id/share', shareExhibition)
 
 // products
 miniRouter.post('/products/:id/purchase', purchaseProduct)
+miniRouter.get('/user-vehicles', listUserVehicles)
 
 // coupons (user-scoped)
 miniRouter.get('/coupons', listUserCoupons)
