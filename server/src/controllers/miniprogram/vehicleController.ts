@@ -7,6 +7,7 @@ import { ensureUserId, getOptionalUserId } from './utils'
 function mapVehicle(row: any, owned: boolean) {
   return {
     id: row._id.toString(),
+    identifier: String(row.identifier ?? ''),
     name: row.name,
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
@@ -24,6 +25,7 @@ function mapUserVehicle(row: any) {
     vehicle: vehicle
       ? {
           id: vehicle?._id?.toString?.() ?? '',
+          identifier: String(vehicle.identifier ?? ''),
           name: vehicle.name ?? '',
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
@@ -39,7 +41,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
   const filter: Record<string, unknown> = { isActive: true }
   if (keyword?.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
-    filter.$or = [{ name: pattern }, { description: pattern }]
+    filter.$or = [{ identifier: pattern }, { name: pattern }, { description: pattern }]
   }
 
   const vehicles = await VehicleModel.find(filter).sort({ createdAt: -1 }).lean().exec()
@@ -62,7 +64,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
 export async function listUserVehicles(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const rows = await UserVehicleModel.find({ userId })
-    .populate('vehicleId', 'name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive')
     .sort({ ownedAt: -1, createdAt: -1 })
     .lean()
     .exec()

@@ -21,6 +21,7 @@ function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
 
 export interface VehicleItem {
   id: string;
+  identifier: string;
   name: string;
   description: string;
   coverUrl: string;
@@ -37,6 +38,7 @@ export interface ListVehiclesParams {
 }
 
 export interface VehiclePayload {
+  identifier?: number | string;
   name?: string;
   description?: string;
   coverUrl?: string;
@@ -54,6 +56,7 @@ export interface UserVehicleItem {
   vehicleId: string;
   vehicle: {
     id: string;
+    identifier: string;
     name: string;
     description: string;
     coverUrl: string;

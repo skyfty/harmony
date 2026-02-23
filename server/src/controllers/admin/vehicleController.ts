@@ -5,6 +5,7 @@ import { UserVehicleModel } from '@/models/UserVehicle'
 import { UserModel } from '@/models/User'
 
 type VehiclePayload = {
+  identifier?: number | string
   name?: string
   description?: string
   coverUrl?: string
@@ -24,9 +25,17 @@ function toStringValue(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function toIdentifierValue(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return toStringValue(value)
+}
+
 function mapVehicle(row: any) {
   return {
     id: row._id.toString(),
+    identifier: String(row.identifier ?? ''),
     name: row.name,
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
@@ -53,6 +62,7 @@ function mapUserVehicle(row: any) {
     vehicle: vehicle
       ? {
           id: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
+          identifier: String(vehicle.identifier ?? ''),
           name: vehicle.name ?? '',
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
@@ -74,7 +84,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
   const filter: Record<string, unknown> = {}
   if (keyword?.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
-    filter.$or = [{ name: pattern }, { description: pattern }]
+    filter.$or = [{ identifier: pattern }, { name: pattern }, { description: pattern }]
   }
   if (isActive === 'true' || isActive === 'false') {
     filter.isActive = isActive === 'true'
@@ -107,14 +117,24 @@ export async function getVehicle(ctx: Context): Promise<void> {
 
 export async function createVehicle(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as VehiclePayload
+  const identifier = toIdentifierValue(body.identifier)
   const name = toStringValue(body.name)
   const description = toStringValue(body.description) ?? ''
   const coverUrl = toStringValue(body.coverUrl) ?? ''
+  if (!identifier) {
+    ctx.throw(400, 'identifier is required')
+  }
   if (!name) {
     ctx.throw(400, 'name is required')
   }
 
+  const identifierExists = await VehicleModel.findOne({ identifier }).select({ _id: 1 }).lean().exec()
+  if (identifierExists) {
+    ctx.throw(409, 'identifier already exists')
+  }
+
   const created = await VehicleModel.create({
+    identifier,
     name,
     description,
     coverUrl,
@@ -136,9 +156,27 @@ export async function updateVehicle(ctx: Context): Promise<void> {
   }
 
   const body = (ctx.request.body ?? {}) as VehiclePayload
+  const nextIdentifier = body.identifier === undefined ? current.identifier : toIdentifierValue(body.identifier)
+  if (!nextIdentifier) {
+    ctx.throw(400, 'identifier is required')
+  }
+  if (nextIdentifier !== current.identifier) {
+    const duplicatedIdentifier = await VehicleModel.findOne({
+      _id: { $ne: id },
+      identifier: nextIdentifier,
+    })
+      .select({ _id: 1 })
+      .lean()
+      .exec()
+    if (duplicatedIdentifier) {
+      ctx.throw(409, 'identifier already exists')
+    }
+  }
+
   const updated = await VehicleModel.findByIdAndUpdate(
     id,
     {
+      identifier: nextIdentifier,
       name: toStringValue(body.name) ?? current.name,
       description: body.description === undefined ? current.description : (toStringValue(body.description) ?? ''),
       coverUrl:
@@ -190,7 +228,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
         .lean()
         .exec(),
       VehicleModel.find({
-        $or: [{ name: new RegExp(keywordText, 'i') }, { description: new RegExp(keywordText, 'i') }],
+        $or: [{ identifier: new RegExp(keywordText, 'i') }, { name: new RegExp(keywordText, 'i') }, { description: new RegExp(keywordText, 'i') }],
       })
         .select({ _id: 1 })
         .lean()
@@ -218,7 +256,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
   const [rows, total] = await Promise.all([
     UserVehicleModel.find(filter)
       .populate('userId', 'username displayName')
-      .populate('vehicleId', 'name description coverUrl isActive')
+      .populate('vehicleId', 'identifier name description coverUrl isActive')
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -242,7 +280,7 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
   }
   const row = await UserVehicleModel.findById(id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive')
     .lean()
     .exec()
   if (!row) {
@@ -287,7 +325,7 @@ export async function createUserVehicle(ctx: Context): Promise<void> {
 
   const row = await UserVehicleModel.findById(created._id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive')
     .lean()
     .exec()
 
@@ -349,7 +387,7 @@ export async function updateUserVehicle(ctx: Context): Promise<void> {
     { new: true },
   )
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive')
     .lean()
     .exec()
 

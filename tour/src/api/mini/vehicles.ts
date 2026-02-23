@@ -4,6 +4,7 @@ import { miniRequest } from '@harmony/utils'
 
 type VehicleApiDto = {
   id: string
+  identifier?: number | string
   name: string
   description?: string
   coverUrl?: string
@@ -22,6 +23,7 @@ type UserVehicleApiDto = {
   ownedAt?: string | null
   vehicle: {
     id: string
+    identifier?: number | string
     name: string
     description?: string
     coverUrl?: string
@@ -46,6 +48,7 @@ export async function listVehicles(): Promise<Vehicle[]> {
     const coverUrl = vehicle.coverUrl ?? ''
     return {
       id: vehicle.id,
+      identifier: String(vehicle.identifier ?? ''),
       name: vehicle.name,
       description: vehicle.description ?? '',
       summary: vehicle.description ?? '',
@@ -67,6 +70,7 @@ export async function listUserVehicles(): Promise<UserVehicle[]> {
     vehicle: row.vehicle
       ? {
           id: row.vehicle.id,
+          identifier: String(row.vehicle.identifier ?? ''),
           name: row.vehicle.name,
           description: row.vehicle.description ?? '',
           coverUrl: row.vehicle.coverUrl ?? '',

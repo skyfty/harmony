@@ -26,6 +26,7 @@ import {
 import { createResourceAssetApi } from '#/api/core/resources';
 
 interface VehicleFormModel {
+  identifier: string;
   name: string;
   description: string;
   coverUrl: string;
@@ -38,6 +39,7 @@ const editingId = ref<null | string>(null);
 const vehicleFormRef = ref<FormInstance>();
 
 const vehicleFormModel = reactive<VehicleFormModel>({
+  identifier: '',
   name: '',
   description: '',
   coverUrl: '',
@@ -56,6 +58,7 @@ const imageUploadProps: UploadProps = {
 const modalTitle = computed(() => (editingId.value ? '编辑车辆' : '新增车辆'));
 
 function resetForm() {
+  vehicleFormModel.identifier = '';
   vehicleFormModel.name = '';
   vehicleFormModel.description = '';
   vehicleFormModel.coverUrl = '';
@@ -74,6 +77,7 @@ async function openEditModal(row: VehicleItem) {
   editingId.value = row.id;
   try {
     const data = await getVehicleApi(row.id);
+    vehicleFormModel.identifier = data.identifier || '';
     vehicleFormModel.name = data.name || '';
     vehicleFormModel.description = data.description || '';
     vehicleFormModel.coverUrl = data.coverUrl || '';
@@ -108,6 +112,7 @@ async function submitVehicle() {
   try {
     const coverUrl = await uploadImageIfNeeded();
     const payload = {
+      identifier: vehicleFormModel.identifier.trim(),
       name: vehicleFormModel.name.trim(),
       description: vehicleFormModel.description.trim(),
       coverUrl: coverUrl || '',
@@ -147,7 +152,7 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
         component: 'Input',
         fieldName: 'keyword',
         label: '关键字',
-        componentProps: { allowClear: true, placeholder: '车辆名称/描述' },
+        componentProps: { allowClear: true, placeholder: '标识符/名称/描述' },
       },
       {
         component: 'Select',
@@ -167,6 +172,7 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
   gridOptions: {
     border: true,
     columns: [
+      { field: 'identifier', minWidth: 180, title: '标识符' },
       { field: 'name', minWidth: 180, title: '名称' },
       { field: 'coverUrl', minWidth: 120, title: '图片', slots: { default: 'image' } },
       { field: 'description', minWidth: 260, title: '描述' },
@@ -235,6 +241,9 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
       @ok="submitVehicle"
     >
       <Form ref="vehicleFormRef" :label-col="{ span: 6 }" :model="vehicleFormModel" :wrapper-col="{ span: 17 }">
+        <Form.Item label="标识符" name="identifier" :rules="[{ required: true, message: '请输入唯一标识符' }]">
+          <Input v-model:value="vehicleFormModel.identifier" placeholder="如：car-001 或 1001" />
+        </Form.Item>
         <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入名称' }]">
           <Input v-model:value="vehicleFormModel.name" placeholder="如：观光车、跑车" />
         </Form.Item>
@@ -252,9 +261,6 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
             alt="preview"
             style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px"
           />
-        </Form.Item>
-        <Form.Item label="封面URL" name="coverUrl">
-          <Input v-model:value="vehicleFormModel.coverUrl" placeholder="可手工填写 URL，上传优先" />
         </Form.Item>
         <Form.Item label="启用" name="isActive">
           <Switch v-model:checked="vehicleFormModel.isActive" />

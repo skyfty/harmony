@@ -2,6 +2,7 @@ export type VehicleStatus = 'owned' | 'available' | 'locked';
 
 export interface Vehicle {
   id: string;
+  identifier: string;
   name: string;
   description: string;
   summary: string;
@@ -15,6 +16,7 @@ export interface UserVehicle {
   ownedAt?: string | null;
   vehicle: {
     id: string;
+    identifier: string;
     name: string;
     description: string;
     coverUrl: string;

@@ -439,6 +439,8 @@ export interface UserProductDocument extends Document<Types.ObjectId> {
 }
 
 export interface VehicleDocument extends Document<Types.ObjectId> {
+  /** 中文：车辆唯一标识符（用于快速检索和外部关联） */
+  identifier: string
   /** 中文：车辆名称 */
   name: string
   /** 中文：车辆描述 */

@@ -18,7 +18,7 @@ import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService } from '@/services/multiuserService'
-import { ensureVehicleCoverUrlField } from '@/services/vehicleMigrationService'
+import { ensureVehicleCoverUrlField, ensureVehicleIdentifierField } from '@/services/vehicleMigrationService'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
 
@@ -35,6 +35,7 @@ async function bootstrap(): Promise<void> {
   await ensureMiniProgramTestUserV2()
   await ensureEditorAuthBootstrap()
   await ensureVehicleCoverUrlField()
+  await ensureVehicleIdentifierField()
 
   const app: HarmonyKoa = new Koa()
 

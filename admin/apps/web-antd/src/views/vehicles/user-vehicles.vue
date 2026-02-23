@@ -75,7 +75,7 @@ async function handleUserSearch(keyword = '') {
 async function loadVehicleOptions() {
   const response = await listVehiclesApi({ page: 1, pageSize: 500 });
   vehicleOptions.value = (response.items || []).map((item: VehicleItem) => ({
-    label: item.name,
+    label: `${item.name} (${item.identifier})`,
     value: item.id,
   }));
 }
@@ -176,6 +176,7 @@ const [UserVehicleGrid, userVehicleGridApi] = useVbenVxeGrid<UserVehicleItem>({
   gridOptions: {
     border: true,
     columns: [
+      { field: 'vehicle.identifier', minWidth: 180, title: '车辆标识符' },
       { field: 'vehicle.name', minWidth: 160, title: '车辆名称' },
       { field: 'user.displayName', minWidth: 160, title: '用户昵称' },
       { field: 'user.username', minWidth: 180, title: '用户名' },
