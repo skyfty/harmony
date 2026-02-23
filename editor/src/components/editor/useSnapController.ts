@@ -57,29 +57,33 @@ type SnapSourceCandidate = {
   vertexIndex: number
 }
 
-type WorldVertexCandidate = {
+type LocalVertexCandidate = {
   mesh: THREE.Mesh | THREE.InstancedMesh
   instanceId: number | null
   localPosition: THREE.Vector3
-  worldPosition: THREE.Vector3
+  previewLocalPosition: THREE.Vector3
   vertexIndex: number
-  thresholdWorld: number | null
 }
 
-type SourceVertexSet = {
-  vertices: WorldVertexCandidate[]
+type LocalSourceVertexSet = {
+  vertices: LocalVertexCandidate[]
   bounds: THREE.Box3 | null
-  maxThresholdWorld: number | null
   grid: Map<string, number[]> | null
   cellSize: number | null
-  kdTree: KDNode | null
+  kdTree: LocalKDNode | null
 }
 
-type KDNode = {
-  point: WorldVertexCandidate
+type LocalKDNode = {
+  point: LocalVertexCandidate
   axis: 0 | 1 | 2
-  left: KDNode | null
-  right: KDNode | null
+  left: LocalKDNode | null
+  right: LocalKDNode | null
+}
+
+type PlacementSourceCacheEntry = {
+  object: THREE.Object3D
+  signature: string
+  localSet: LocalSourceVertexSet
 }
 
 export type UseSnapControllerOptions = {
@@ -154,13 +158,19 @@ export function useSnapController(options: UseSnapControllerOptions) {
   const placementInverseMatrixHelper = new THREE.Matrix4()
   const placementLocalBoundsHelper = new THREE.Box3()
   const placementVertexIndexSet = new Set<number>()
+  const placementWorldThresholdCache = new Map<string, number | null>()
   const bvhCache = new WeakMap<THREE.BufferGeometry, MeshBVH>()
+  const placementSourceCache = new WeakMap<THREE.Object3D, PlacementSourceCacheEntry>()
 
   const instancedRaycaster = new THREE.Raycaster()
   const pointerNdc = new THREE.Vector2()
   const instancedMatrixHelper = new THREE.Matrix4()
   const instancedWorldHelper = new THREE.Matrix4()
   const instancedVertexWorldHelper = new THREE.Vector3()
+  const sourceSearchWorldHelper = new THREE.Vector3()
+  const sourceSearchPreviewLocalHelper = new THREE.Vector3()
+  const sourceSearchPreviewWorldHelper = new THREE.Vector3()
+  const sourceSearchPreviewInverseHelper = new THREE.Matrix4()
 
   const MAX_VERTEX_SCAN = 20000
 
@@ -185,6 +195,219 @@ export function useSnapController(options: UseSnapControllerOptions) {
     placementSideSnapResult = null
   }
 
+  function getPlacementSourceCacheSignature(object: THREE.Object3D): string {
+    const parts: string[] = []
+    object.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+        return
+      }
+      if ((mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+        return
+      }
+      if (isInternalHelperMesh(mesh)) {
+        return
+      }
+
+      const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+      const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (!position || position.itemSize < 3) {
+        return
+      }
+
+      parts.push([
+        mesh.id,
+        mesh.visible ? 1 : 0,
+        geometry?.uuid ?? 'none',
+        position.version,
+        position.count,
+        position.itemSize,
+      ].join(':'))
+    })
+    return parts.join('|')
+  }
+
+  function computeThresholdCacheKey(
+    worldPosition: THREE.Vector3,
+    pixelDistance: number,
+  ): string {
+    const quantizedX = Math.round(worldPosition.x * 1000)
+    const quantizedY = Math.round(worldPosition.y * 1000)
+    const quantizedZ = Math.round(worldPosition.z * 1000)
+    return `${pixelDistance}:${quantizedX}:${quantizedY}:${quantizedZ}`
+  }
+
+  function computeWorldDistanceThresholdCached(worldPosition: THREE.Vector3, pixelDistance: number): number | null {
+    const key = computeThresholdCacheKey(worldPosition, pixelDistance)
+    const cached = placementWorldThresholdCache.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    const computed = computeWorldDistanceThreshold(worldPosition, pixelDistance)
+    placementWorldThresholdCache.set(key, computed)
+    return computed
+  }
+
+  function buildSourceSpatialGridForLocal(vertices: LocalVertexCandidate[], cellSize: number): Map<string, number[]> {
+    const grid = new Map<string, number[]>()
+    const inv = 1 / cellSize
+    for (let i = 0; i < vertices.length; i += 1) {
+      const v = vertices[i]
+      if (!v) {
+        continue
+      }
+      const ix = Math.floor(v.previewLocalPosition.x * inv)
+      const iz = Math.floor(v.previewLocalPosition.z * inv)
+      const key = `${ix},${iz}`
+      const bucket = grid.get(key)
+      if (bucket) {
+        bucket.push(i)
+      } else {
+        grid.set(key, [i])
+      }
+    }
+    return grid
+  }
+
+  function buildLocalSourceKdTree(vertices: LocalVertexCandidate[], depth = 0): LocalKDNode | null {
+    if (vertices.length === 0) {
+      return null
+    }
+    const axis = (depth % 3) as 0 | 1 | 2
+    const sorted = vertices.slice().sort((a, b) => {
+      const av = axis === 0 ? a.previewLocalPosition.x : axis === 1 ? a.previewLocalPosition.y : a.previewLocalPosition.z
+      const bv = axis === 0 ? b.previewLocalPosition.x : axis === 1 ? b.previewLocalPosition.y : b.previewLocalPosition.z
+      return av - bv
+    })
+    const mid = Math.floor(sorted.length / 2)
+    const point = sorted[mid]!
+    return {
+      point,
+      axis,
+      left: buildLocalSourceKdTree(sorted.slice(0, mid), depth + 1),
+      right: buildLocalSourceKdTree(sorted.slice(mid + 1), depth + 1),
+    }
+  }
+
+  function findNearestSourceInLocalKdTree(
+    node: LocalKDNode | null,
+    targetPreviewLocal: THREE.Vector3,
+    best: { source: LocalVertexCandidate; distance: number } | null,
+  ): { source: LocalVertexCandidate; distance: number } | null {
+    if (!node) {
+      return best
+    }
+
+    const point = node.point
+    const distance = targetPreviewLocal.distanceTo(point.previewLocalPosition)
+    if (!best || distance < best.distance) {
+      best = { source: point, distance }
+    }
+
+    const axis = node.axis
+    const targetAxis = axis === 0 ? targetPreviewLocal.x : axis === 1 ? targetPreviewLocal.y : targetPreviewLocal.z
+    const pointAxis = axis === 0 ? point.previewLocalPosition.x : axis === 1 ? point.previewLocalPosition.y : point.previewLocalPosition.z
+    const delta = targetAxis - pointAxis
+
+    const near = delta <= 0 ? node.left : node.right
+    const far = delta <= 0 ? node.right : node.left
+
+    best = findNearestSourceInLocalKdTree(near, targetPreviewLocal, best)
+
+    const bestDistance = best?.distance ?? Number.POSITIVE_INFINITY
+    if (delta * delta < bestDistance * bestDistance) {
+      best = findNearestSourceInLocalKdTree(far, targetPreviewLocal, best)
+    }
+
+    return best
+  }
+
+  function collectLocalVerticesForObject(object: THREE.Object3D): LocalSourceVertexSet {
+    const vertices: LocalVertexCandidate[] = []
+    let bounds: THREE.Box3 | null = null
+
+    object.updateMatrixWorld(true)
+    sourceSearchPreviewInverseHelper.copy(object.matrixWorld).invert()
+
+    object.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
+        return
+      }
+      if ((mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+        return
+      }
+      if (isInternalHelperMesh(mesh)) {
+        return
+      }
+      if (!mesh.visible) {
+        return
+      }
+
+      const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+      const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (!position || position.itemSize < 3) {
+        return
+      }
+
+      mesh.updateMatrixWorld(true)
+
+      const stride = position.count > MAX_VERTEX_SCAN ? Math.ceil(position.count / MAX_VERTEX_SCAN) : 1
+      for (let i = 0; i < position.count; i += stride) {
+        vertexLocalHelper.fromBufferAttribute(position, i)
+        sourceSearchWorldHelper.copy(vertexLocalHelper).applyMatrix4(mesh.matrixWorld)
+        sourceSearchPreviewLocalHelper.copy(sourceSearchWorldHelper).applyMatrix4(sourceSearchPreviewInverseHelper)
+
+        if (!bounds) {
+          bounds = placementSourceBoundsHelper.clone()
+          bounds.min.copy(sourceSearchPreviewLocalHelper)
+          bounds.max.copy(sourceSearchPreviewLocalHelper)
+        } else {
+          bounds.expandByPoint(sourceSearchPreviewLocalHelper)
+        }
+
+        vertices.push({
+          mesh,
+          instanceId: null,
+          localPosition: vertexLocalHelper.clone(),
+          previewLocalPosition: sourceSearchPreviewLocalHelper.clone(),
+          vertexIndex: i,
+        })
+      }
+    })
+
+    const localBounds = bounds as THREE.Box3 | null
+    const localWidth = localBounds ? Math.max(localBounds.max.x - localBounds.min.x, localBounds.max.z - localBounds.min.z) : 0
+    const cellSize = Number.isFinite(localWidth) && localWidth > 0
+      ? Math.max(localWidth / 24, 0.01)
+      : null
+    const shouldBuildKdTree = vertices.length >= 800
+
+    return {
+      vertices,
+      bounds: localBounds,
+      grid: !shouldBuildKdTree && cellSize ? buildSourceSpatialGridForLocal(vertices, cellSize) : null,
+      cellSize: !shouldBuildKdTree ? cellSize : null,
+      kdTree: shouldBuildKdTree ? buildLocalSourceKdTree(vertices) : null,
+    }
+  }
+
+  function getOrCreatePlacementLocalSourceSet(previewObject: THREE.Object3D): LocalSourceVertexSet {
+    const signature = getPlacementSourceCacheSignature(previewObject)
+    const cached = placementSourceCache.get(previewObject)
+    if (cached && cached.object === previewObject && cached.signature === signature) {
+      return cached.localSet
+    }
+
+    const built = collectLocalVerticesForObject(previewObject)
+    placementSourceCache.set(previewObject, {
+      object: previewObject,
+      signature,
+      localSet: built,
+    })
+    return built
+  }
+
   function computeWorldDistanceThreshold(worldPosition: THREE.Vector3, pixelDistance: number): number | null {
     const projected = projectWorldToViewportPixels(worldPosition, placementProjectedHelper)
     if (!projected) {
@@ -200,27 +423,6 @@ export function useSnapController(options: UseSnapControllerOptions) {
       return null
     }
     return Math.hypot(unprojected.x - worldPosition.x, unprojected.z - worldPosition.z)
-  }
-
-  function buildSourceSpatialGrid(vertices: WorldVertexCandidate[], cellSize: number): Map<string, number[]> {
-    const grid = new Map<string, number[]>()
-    const inv = 1 / cellSize
-    for (let i = 0; i < vertices.length; i += 1) {
-      const v = vertices[i]
-      if (!v) {
-        continue
-      }
-      const ix = Math.floor(v.worldPosition.x * inv)
-      const iz = Math.floor(v.worldPosition.z * inv)
-      const key = `${ix},${iz}`
-      const bucket = grid.get(key)
-      if (bucket) {
-        bucket.push(i)
-      } else {
-        grid.set(key, [i])
-      }
-    }
-    return grid
   }
 
   function ensureGeometryBvh(geometry: THREE.BufferGeometry): MeshBVH {
@@ -270,83 +472,38 @@ export function useSnapController(options: UseSnapControllerOptions) {
     })
   }
 
-  function buildSourceKdTree(vertices: WorldVertexCandidate[], depth = 0): KDNode | null {
-    if (vertices.length === 0) {
-      return null
-    }
-    const axis = (depth % 3) as 0 | 1 | 2
-    const sorted = vertices.slice().sort((a, b) => {
-      const av = axis === 0 ? a.worldPosition.x : axis === 1 ? a.worldPosition.y : a.worldPosition.z
-      const bv = axis === 0 ? b.worldPosition.x : axis === 1 ? b.worldPosition.y : b.worldPosition.z
-      return av - bv
-    })
-    const mid = Math.floor(sorted.length / 2)
-    const point = sorted[mid]!
-    return {
-      point,
-      axis,
-      left: buildSourceKdTree(sorted.slice(0, mid), depth + 1),
-      right: buildSourceKdTree(sorted.slice(mid + 1), depth + 1),
-    }
-  }
-
-  function findNearestSourceInKdTree(
-    node: KDNode | null,
-    target: THREE.Vector3,
-    thresholdPx: number,
-    best: { source: WorldVertexCandidate; distance: number } | null,
-  ): { source: WorldVertexCandidate; distance: number } | null {
-    if (!node) {
-      return best
-    }
-
-    const point = node.point
-    const distance = target.distanceTo(point.worldPosition)
-    const maxDistance = point.thresholdWorld ?? computeWorldDistanceThreshold(point.worldPosition, thresholdPx)
-    if (typeof maxDistance !== 'number' || !Number.isFinite(maxDistance) || distance <= maxDistance) {
-      if (!best || distance < best.distance) {
-        best = { source: point, distance }
-      }
-    }
-
-    const axis = node.axis
-    const targetAxis = axis === 0 ? target.x : axis === 1 ? target.y : target.z
-    const pointAxis = axis === 0 ? point.worldPosition.x : axis === 1 ? point.worldPosition.y : point.worldPosition.z
-    const delta = targetAxis - pointAxis
-
-    const near = delta <= 0 ? node.left : node.right
-    const far = delta <= 0 ? node.right : node.left
-
-    best = findNearestSourceInKdTree(near, target, thresholdPx, best)
-
-    const bestDistance = best?.distance ?? Number.POSITIVE_INFINITY
-    if (delta * delta < bestDistance * bestDistance) {
-      best = findNearestSourceInKdTree(far, target, thresholdPx, best)
-    }
-
-    return best
-  }
-
   function findNearestSourceVertex(
     worldPosition: THREE.Vector3,
-    sourceSet: SourceVertexSet,
+    previewObject: THREE.Object3D,
+    localSet: LocalSourceVertexSet,
     thresholdPx: number,
-  ): { source: WorldVertexCandidate; distance: number } | null {
-    const vertices = sourceSet.vertices
+  ): {
+    sourceWorld: THREE.Vector3
+    sourceMesh: THREE.Mesh | THREE.InstancedMesh
+    sourceInstanceId: number | null
+    sourceThresholdWorld: number | null
+    distance: number
+  } | null {
+    const vertices = localSet.vertices
     if (vertices.length === 0) {
       return null
     }
 
-    const cellSize = sourceSet.cellSize
-    const grid = sourceSet.grid
-    const kdTree = sourceSet.kdTree
+    previewObject.updateMatrixWorld(true)
+    sourceSearchPreviewInverseHelper.copy(previewObject.matrixWorld).invert()
+    sourceSearchPreviewLocalHelper.copy(worldPosition).applyMatrix4(sourceSearchPreviewInverseHelper)
 
-    let bestSource: WorldVertexCandidate | null = null
+    const cellSize = localSet.cellSize
+    const grid = localSet.grid
+    const kdTree = localSet.kdTree
+
+    let bestSource: LocalVertexCandidate | null = null
     let bestDistance = Number.POSITIVE_INFINITY
 
-    const considerSource = (source: WorldVertexCandidate) => {
-      const distance = worldPosition.distanceTo(source.worldPosition)
-      const maxDistance = source.thresholdWorld ?? computeWorldDistanceThreshold(source.worldPosition, thresholdPx)
+    const considerSource = (source: LocalVertexCandidate) => {
+      sourceSearchPreviewWorldHelper.copy(source.previewLocalPosition).applyMatrix4(previewObject.matrixWorld)
+      const distance = worldPosition.distanceTo(sourceSearchPreviewWorldHelper)
+      const maxDistance = computeWorldDistanceThresholdCached(sourceSearchPreviewWorldHelper, thresholdPx)
       if (typeof maxDistance === 'number' && Number.isFinite(maxDistance) && distance > maxDistance) {
         return
       }
@@ -357,20 +514,34 @@ export function useSnapController(options: UseSnapControllerOptions) {
     }
 
     if (kdTree) {
-      const found = findNearestSourceInKdTree(kdTree, worldPosition, thresholdPx, null)
+      const found = findNearestSourceInLocalKdTree(kdTree, sourceSearchPreviewLocalHelper, null)
       if (found && found.distance <= 1e-6) {
-        return found
+        bestSource = found.source
+        sourceSearchPreviewWorldHelper.copy(found.source.previewLocalPosition).applyMatrix4(previewObject.matrixWorld)
+        const distance = worldPosition.distanceTo(sourceSearchPreviewWorldHelper)
+        const thresholdWorld = computeWorldDistanceThresholdCached(sourceSearchPreviewWorldHelper, thresholdPx)
+        if (typeof thresholdWorld === 'number' && Number.isFinite(thresholdWorld) && distance > thresholdWorld) {
+          return null
+        }
+        return {
+          sourceWorld: sourceSearchPreviewWorldHelper.clone(),
+          sourceMesh: found.source.mesh,
+          sourceInstanceId: found.source.instanceId,
+          sourceThresholdWorld: thresholdWorld,
+          distance,
+        }
       }
       if (found) {
         bestSource = found.source
-        bestDistance = found.distance
+        sourceSearchPreviewWorldHelper.copy(found.source.previewLocalPosition).applyMatrix4(previewObject.matrixWorld)
+        bestDistance = worldPosition.distanceTo(sourceSearchPreviewWorldHelper)
       }
     }
 
     if (!kdTree && cellSize && grid) {
       const inv = 1 / cellSize
-      const ix = Math.floor(worldPosition.x * inv)
-      const iz = Math.floor(worldPosition.z * inv)
+      const ix = Math.floor(sourceSearchPreviewLocalHelper.x * inv)
+      const iz = Math.floor(sourceSearchPreviewLocalHelper.z * inv)
       for (let dx = -1; dx <= 1; dx += 1) {
         for (let dz = -1; dz <= 1; dz += 1) {
           const key = `${ix + dx},${iz + dz}`
@@ -385,9 +556,15 @@ export function useSnapController(options: UseSnapControllerOptions) {
             }
             considerSource(candidate)
             if (bestDistance <= 1e-6) {
-              return { source: bestSource!, distance: bestDistance }
+              break
             }
           }
+          if (bestDistance <= 1e-6) {
+            break
+          }
+        }
+        if (bestDistance <= 1e-6) {
+          break
         }
       }
     } else {
@@ -403,80 +580,18 @@ export function useSnapController(options: UseSnapControllerOptions) {
       return null
     }
 
-    return { source: bestSource, distance: bestDistance }
-  }
-
-  function collectWorldVerticesForObject(object: THREE.Object3D, thresholdPx: number): SourceVertexSet {
-    const vertices: WorldVertexCandidate[] = []
-    let bounds: THREE.Box3 | null = null
-    let maxThresholdWorld: number | null = null
-
-    object.traverse((child) => {
-      const mesh = child as THREE.Mesh
-      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
-        return
-      }
-      if ((mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
-        return
-      }
-      if (isInternalHelperMesh(mesh)) {
-        return
-      }
-      if (!mesh.visible) {
-        return
-      }
-
-      const geometry = mesh.geometry as THREE.BufferGeometry | undefined
-      const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
-      if (!position || position.itemSize < 3) {
-        return
-      }
-
-      mesh.updateMatrixWorld(true)
-
-      const stride = position.count > MAX_VERTEX_SCAN ? Math.ceil(position.count / MAX_VERTEX_SCAN) : 1
-      for (let i = 0; i < position.count; i += stride) {
-        vertexLocalHelper.fromBufferAttribute(position, i)
-        vertexWorldHelper.copy(vertexLocalHelper).applyMatrix4(mesh.matrixWorld)
-
-        const thresholdWorld = computeWorldDistanceThreshold(vertexWorldHelper, thresholdPx)
-        if (typeof thresholdWorld === 'number' && Number.isFinite(thresholdWorld)) {
-          maxThresholdWorld = typeof maxThresholdWorld === 'number'
-            ? Math.max(maxThresholdWorld, thresholdWorld)
-            : thresholdWorld
-        }
-
-        if (!bounds) {
-          bounds = placementSourceBoundsHelper.clone()
-          bounds.min.copy(vertexWorldHelper)
-          bounds.max.copy(vertexWorldHelper)
-        } else {
-          bounds.expandByPoint(vertexWorldHelper)
-        }
-
-        vertices.push({
-          mesh,
-          instanceId: null,
-          localPosition: vertexLocalHelper.clone(),
-          worldPosition: vertexWorldHelper.clone(),
-          vertexIndex: i,
-          thresholdWorld,
-        })
-      }
-    })
-
-    const cellSize = typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && maxThresholdWorld > 0
-      ? maxThresholdWorld
-      : null
-    const shouldBuildKdTree = vertices.length >= 800
+    sourceSearchPreviewWorldHelper.copy(bestSource.previewLocalPosition).applyMatrix4(previewObject.matrixWorld)
+    const sourceThresholdWorld = computeWorldDistanceThresholdCached(sourceSearchPreviewWorldHelper, thresholdPx)
+    if (typeof sourceThresholdWorld === 'number' && Number.isFinite(sourceThresholdWorld) && bestDistance > sourceThresholdWorld) {
+      return null
+    }
 
     return {
-      vertices,
-      bounds,
-      maxThresholdWorld,
-      grid: !shouldBuildKdTree && cellSize ? buildSourceSpatialGrid(vertices, cellSize) : null,
-      cellSize: !shouldBuildKdTree ? cellSize : null,
-      kdTree: shouldBuildKdTree ? buildSourceKdTree(vertices) : null,
+      sourceWorld: sourceSearchPreviewWorldHelper.clone(),
+      sourceMesh: bestSource.mesh,
+      sourceInstanceId: bestSource.instanceId,
+      sourceThresholdWorld,
+      distance: bestDistance,
     }
   }
 
@@ -766,12 +881,14 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
     previewObject.updateMatrixWorld(true)
 
-    // 放置吸附改为使用预览模型所有顶点与场景顶点的世界距离计算候选点
-    const sourceSet = collectWorldVerticesForObject(previewObject, threshold)
-    if (sourceSet.vertices.length === 0) {
+    // 放置吸附使用预览模型局部顶点缓存，避免鼠标移动时重复构建全量世界顶点与 KD 树
+    const localSourceSet = getOrCreatePlacementLocalSourceSet(previewObject)
+    if (localSourceSet.vertices.length === 0) {
       resetPlacementSideSnap()
       return null
     }
+
+    placementWorldThresholdCache.clear()
 
     const sideThresholdPx = threshold * placementSideHorizontalRatio
 
@@ -849,7 +966,8 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
     const instancedBest = findNearestVertexOnInstancedMeshes(query.event, canvas, camera, threshold, {
       excludeNodeIds,
-      sourceVertices: sourceSet,
+      sourceVertices: localSourceSet,
+      previewObject,
     })
     if (instancedBest && instancedBest.sourceWorld && instancedBest.sourceMesh) {
       considerCandidate({
@@ -885,7 +1003,7 @@ export function useSnapController(options: UseSnapControllerOptions) {
       }
 
       object.updateMatrixWorld(true)
-      const candidate = findNearestVertexOnObjectByWorldDistance(object, sourceSet, threshold)
+      const candidate = findNearestVertexOnObjectByWorldDistance(object, previewObject, localSourceSet, threshold)
       if (!candidate) {
         continue
       }
@@ -1024,7 +1142,8 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
   function findNearestVertexOnObjectByWorldDistance(
     object: THREE.Object3D,
-    sourceSet: SourceVertexSet,
+    previewObject: THREE.Object3D,
+    localSourceSet: LocalSourceVertexSet,
     thresholdPx: number,
   ): (SnapTargetCandidate & {
     mesh: THREE.Mesh
@@ -1047,8 +1166,33 @@ export function useSnapController(options: UseSnapControllerOptions) {
       sourceThresholdWorld: number | null
     }) | null = null
 
-    const sourceBounds = sourceSet.bounds
-    const maxThresholdWorld = sourceSet.maxThresholdWorld
+    const sourceBounds = localSourceSet.bounds
+    let sourceBoundsWorld: THREE.Box3 | null = null
+    let maxThresholdWorld: number | null = null
+
+    if (sourceBounds) {
+      sourceBoundsWorld = placementSourceBoundsHelper.copy(sourceBounds).applyMatrix4(previewObject.matrixWorld)
+      const corners = [
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.min.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.min.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.max.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.max.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.min.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.min.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.max.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.max.y, sourceBounds.max.z),
+      ]
+      for (const corner of corners) {
+        corner.applyMatrix4(previewObject.matrixWorld)
+        const thresholdWorld = computeWorldDistanceThresholdCached(corner, thresholdPx)
+        if (typeof thresholdWorld === 'number' && Number.isFinite(thresholdWorld)) {
+          maxThresholdWorld = typeof maxThresholdWorld === 'number'
+            ? Math.max(maxThresholdWorld, thresholdWorld)
+            : thresholdWorld
+        }
+      }
+    }
+
     object.traverse((child) => {
       const mesh = child as THREE.Mesh
       if (!(mesh as unknown as { isMesh?: boolean }).isMesh) {
@@ -1073,13 +1217,13 @@ export function useSnapController(options: UseSnapControllerOptions) {
       mesh.updateMatrixWorld(true)
 
       // 若存在源顶点包围盒与最大阈值，先用包围盒快速剔除不可能匹配的网格
-      if (sourceBounds && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometry) {
+      if (sourceBoundsWorld && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometry) {
         const geometryBounds = geometry.boundingBox ?? (geometry.computeBoundingBox(), geometry.boundingBox)
         if (geometryBounds) {
           placementTargetBoundsHelper.copy(geometryBounds)
           placementTargetBoundsHelper.applyMatrix4(mesh.matrixWorld)
           placementExpandedBoundsHelper.copy(placementTargetBoundsHelper).expandByScalar(maxThresholdWorld)
-          if (!placementExpandedBoundsHelper.intersectsBox(sourceBounds)) {
+          if (!placementExpandedBoundsHelper.intersectsBox(sourceBoundsWorld)) {
             return
           }
         }
@@ -1089,11 +1233,11 @@ export function useSnapController(options: UseSnapControllerOptions) {
         vertexLocalHelper.fromBufferAttribute(position, i)
         vertexWorldHelper.copy(vertexLocalHelper).applyMatrix4(mesh.matrixWorld)
 
-        const nearest = findNearestSourceVertex(vertexWorldHelper, sourceSet, thresholdPx)
-        const bestSource = nearest?.source ?? null
+        const nearest = findNearestSourceVertex(vertexWorldHelper, previewObject, localSourceSet, thresholdPx)
+        const bestSourceWorld = nearest?.sourceWorld ?? null
         const bestDistance = nearest?.distance ?? Number.POSITIVE_INFINITY
 
-        if (!bestSource || !Number.isFinite(bestDistance)) {
+        if (!bestSourceWorld || !Number.isFinite(bestDistance)) {
           continue
         }
 
@@ -1106,10 +1250,10 @@ export function useSnapController(options: UseSnapControllerOptions) {
             instanceId: null,
             vertexIndex: i,
             localPosition: vertexLocalHelper.clone(),
-            sourceWorld: bestSource.worldPosition.clone(),
-            sourceMesh: bestSource.mesh,
-            sourceInstanceId: bestSource.instanceId,
-            sourceThresholdWorld: bestSource.thresholdWorld,
+            sourceWorld: bestSourceWorld.clone(),
+            sourceMesh: nearest!.sourceMesh,
+            sourceInstanceId: nearest!.sourceInstanceId,
+            sourceThresholdWorld: nearest!.sourceThresholdWorld,
           }
         }
       }
@@ -1299,7 +1443,8 @@ export function useSnapController(options: UseSnapControllerOptions) {
     filters: {
       excludeNodeIds?: Set<string>
       includeNodeIds?: Set<string>
-      sourceVertices?: SourceVertexSet
+      sourceVertices?: LocalSourceVertexSet
+      previewObject?: THREE.Object3D
     },
   ): (SnapTargetCandidate & {
     mesh: THREE.InstancedMesh
@@ -1325,7 +1470,8 @@ export function useSnapController(options: UseSnapControllerOptions) {
     }
 
     const sourceSet = filters.sourceVertices
-    const usingSourceVertices = Boolean(sourceSet && sourceSet.vertices.length > 0)
+    const previewObject = filters.previewObject ?? null
+    const usingSourceVertices = Boolean(sourceSet && sourceSet.vertices.length > 0 && previewObject)
 
     // 若存在 sourceVertices，则采用“预览顶点 vs 场景实例顶点”的世界距离计算模式；
     // 否则保持原有鼠标射线拾取模式。
@@ -1452,7 +1598,32 @@ export function useSnapController(options: UseSnapControllerOptions) {
 
     // 世界距离模式：对所有 instanced meshes 与所有实例顶点进行扫描
     const sourceBounds = sourceSet?.bounds ?? null
-    const maxThresholdWorld = sourceSet?.maxThresholdWorld ?? null
+    let sourceBoundsWorld: THREE.Box3 | null = null
+    let maxThresholdWorld: number | null = null
+
+    if (previewObject && sourceBounds) {
+      sourceBoundsWorld = placementSourceBoundsHelper.copy(sourceBounds).applyMatrix4(previewObject.matrixWorld)
+      const corners = [
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.min.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.min.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.max.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.min.x, sourceBounds.max.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.min.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.min.y, sourceBounds.max.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.max.y, sourceBounds.min.z),
+        new THREE.Vector3(sourceBounds.max.x, sourceBounds.max.y, sourceBounds.max.z),
+      ]
+      for (const corner of corners) {
+        corner.applyMatrix4(previewObject.matrixWorld)
+        const thresholdWorld = computeWorldDistanceThresholdCached(corner, threshold)
+        if (typeof thresholdWorld === 'number' && Number.isFinite(thresholdWorld)) {
+          maxThresholdWorld = typeof maxThresholdWorld === 'number'
+            ? Math.max(maxThresholdWorld, thresholdWorld)
+            : thresholdWorld
+        }
+      }
+    }
+
     for (const instancedMesh of meshes) {
       if (!instancedMesh.visible) {
         continue
@@ -1501,18 +1672,18 @@ export function useSnapController(options: UseSnapControllerOptions) {
         instancedMesh.getMatrixAt(instanceId, instancedMatrixHelper)
         instancedWorldHelper.multiplyMatrices(instancedMesh.matrixWorld, instancedMatrixHelper)
 
-        if (sourceBounds && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometryBounds) {
+        if (sourceBoundsWorld && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometryBounds) {
           placementTargetBoundsHelper.copy(geometryBounds)
           placementTargetBoundsHelper.applyMatrix4(instancedWorldHelper)
           placementExpandedBoundsHelper.copy(placementTargetBoundsHelper).expandByScalar(maxThresholdWorld)
-          if (!placementExpandedBoundsHelper.intersectsBox(sourceBounds)) {
+          if (!placementExpandedBoundsHelper.intersectsBox(sourceBoundsWorld)) {
             continue
           }
         }
 
         placementVertexIndexSet.clear()
-        if (sourceBounds && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometry) {
-          placementExpandedBoundsHelper.copy(sourceBounds).expandByScalar(maxThresholdWorld)
+        if (sourceBoundsWorld && typeof maxThresholdWorld === 'number' && Number.isFinite(maxThresholdWorld) && geometry) {
+          placementExpandedBoundsHelper.copy(sourceBoundsWorld).expandByScalar(maxThresholdWorld)
           placementInverseMatrixHelper.copy(instancedWorldHelper).invert()
           placementLocalBoundsHelper.copy(placementExpandedBoundsHelper).applyMatrix4(placementInverseMatrixHelper)
           collectCandidateVertexIndicesFromBvh(geometry, placementLocalBoundsHelper, placementVertexIndexSet)
@@ -1526,10 +1697,12 @@ export function useSnapController(options: UseSnapControllerOptions) {
             vertexLocalHelper.fromBufferAttribute(position, i)
             instancedVertexWorldHelper.copy(vertexLocalHelper).applyMatrix4(instancedWorldHelper)
 
-            const nearest = sourceSet ? findNearestSourceVertex(instancedVertexWorldHelper, sourceSet, threshold) : null
-            const bestSource = nearest?.source ?? null
+            const nearest = (sourceSet && previewObject)
+              ? findNearestSourceVertex(instancedVertexWorldHelper, previewObject, sourceSet, threshold)
+              : null
+            const bestSourceWorld = nearest?.sourceWorld ?? null
             const bestDistance = nearest?.distance ?? Number.POSITIVE_INFINITY
-            if (!bestSource || !Number.isFinite(bestDistance)) {
+            if (!bestSourceWorld || !Number.isFinite(bestDistance)) {
               continue
             }
 
@@ -1542,10 +1715,10 @@ export function useSnapController(options: UseSnapControllerOptions) {
                 instanceId,
                 vertexIndex: i,
                 localPosition: vertexLocalHelper.clone(),
-                sourceWorld: bestSource.worldPosition.clone(),
-                sourceMesh: bestSource.mesh,
-                sourceInstanceId: bestSource.instanceId,
-                sourceThresholdWorld: bestSource.thresholdWorld,
+                sourceWorld: bestSourceWorld.clone(),
+                sourceMesh: nearest!.sourceMesh,
+                sourceInstanceId: nearest!.sourceInstanceId,
+                sourceThresholdWorld: nearest!.sourceThresholdWorld,
               }
             }
           }
@@ -1556,11 +1729,13 @@ export function useSnapController(options: UseSnapControllerOptions) {
           vertexLocalHelper.fromBufferAttribute(position, i)
           instancedVertexWorldHelper.copy(vertexLocalHelper).applyMatrix4(instancedWorldHelper)
 
-          const nearest = sourceSet ? findNearestSourceVertex(instancedVertexWorldHelper, sourceSet, threshold) : null
-          const bestSource = nearest?.source ?? null
+          const nearest = (sourceSet && previewObject)
+            ? findNearestSourceVertex(instancedVertexWorldHelper, previewObject, sourceSet, threshold)
+            : null
+          const bestSourceWorld = nearest?.sourceWorld ?? null
           const bestDistance = nearest?.distance ?? Number.POSITIVE_INFINITY
 
-          if (!bestSource || !Number.isFinite(bestDistance)) {
+          if (!bestSourceWorld || !Number.isFinite(bestDistance)) {
             continue
           }
 
@@ -1573,10 +1748,10 @@ export function useSnapController(options: UseSnapControllerOptions) {
               instanceId,
               vertexIndex: i,
               localPosition: vertexLocalHelper.clone(),
-              sourceWorld: bestSource.worldPosition.clone(),
-              sourceMesh: bestSource.mesh,
-              sourceInstanceId: bestSource.instanceId,
-              sourceThresholdWorld: bestSource.thresholdWorld,
+              sourceWorld: bestSourceWorld.clone(),
+              sourceMesh: nearest!.sourceMesh,
+              sourceInstanceId: nearest!.sourceInstanceId,
+              sourceThresholdWorld: nearest!.sourceThresholdWorld,
             }
           }
         }
