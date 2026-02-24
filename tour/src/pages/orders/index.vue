@@ -16,7 +16,10 @@
         </view>
         <view class="footer">
           <text class="amount">¥ {{ order.totalAmount }}</text>
-          <text class="link">查看详情 ›</text>
+          <view class="footer-action">
+            <button class="detail-btn" @tap.stop="openDetail(order.id)">详情</button>
+            <text class="link">查看详情 ›</text>
+          </view>
         </view>
       </view>
     </view>
@@ -121,6 +124,23 @@ function formatDate(value: string) {
   justify-content: space-between;
   align-items: center;
   margin-top: 12px;
+}
+
+.footer-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-btn {
+  margin: 0;
+  background: rgba(31, 122, 236, 0.1);
+  color: #1f7aec;
+  border-radius: 999px;
+  height: 28px;
+  line-height: 28px;
+  font-size: 12px;
+  padding: 0 12px;
 }
 
 .amount {

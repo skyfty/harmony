@@ -3,6 +3,7 @@ import { Types } from 'mongoose'
 import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
 import { VehicleModel } from '@/models/Vehicle'
+import { AppUserModel } from '@/models/AppUser'
 import { ensureUserId } from './utils'
 
 interface OrderItemLean {
@@ -44,6 +45,12 @@ interface VehicleLean {
   coverUrl?: string
 }
 
+interface AppUserLean {
+  _id: Types.ObjectId
+  displayName?: string
+  username?: string
+}
+
 interface OrderResponseItem {
   productId: string
   name: string
@@ -67,6 +74,7 @@ interface OrderResponseItem {
 interface OrderResponse {
   id: string
   orderNumber: string
+  customerName: string
   status: 'pending' | 'paid' | 'completed' | 'cancelled'
   totalAmount: number
   paymentMethod?: string
@@ -95,11 +103,22 @@ async function buildVehicleMapByProductId(productIds: string[]): Promise<Map<str
   return new Map(rows.map((row) => [row.productId.toString(), row]))
 }
 
+async function buildUserMap(userIds: string[]): Promise<Map<string, AppUserLean>> {
+  if (!userIds.length) {
+    return new Map()
+  }
+  const users = (await AppUserModel.find({ _id: { $in: userIds } }).lean().exec()) as AppUserLean[]
+  return new Map(users.map((user) => [user._id.toString(), user]))
+}
+
 function buildOrderResponse(
   order: OrderLean,
   productMap: Map<string, ProductLean>,
   vehicleMapByProductId: Map<string, VehicleLean>,
+  userMap: Map<string, AppUserLean>,
 ): OrderResponse {
+  const user = userMap.get(order.userId.toString())
+  const customerName = user?.displayName || user?.username || ''
   const items: OrderResponseItem[] = order.items.map((item) => {
     const productId = item.productId.toString()
     const product = productMap.get(productId)
@@ -131,6 +150,7 @@ function buildOrderResponse(
   return {
     id: order._id.toString(),
     orderNumber: order.orderNumber,
+    customerName,
     status: order.status,
     totalAmount: order.totalAmount,
     paymentMethod: order.paymentMethod ?? undefined,
@@ -158,7 +178,9 @@ export async function listOrders(ctx: Context): Promise<void> {
   })
   const productMap = await buildProductMap(Array.from(productIds))
   const vehicleMapByProductId = await buildVehicleMapByProductId(Array.from(productIds))
-  const data = orders.map((order) => buildOrderResponse(order, productMap, vehicleMapByProductId))
+  const userIds = Array.from(new Set(orders.map((order) => order.userId.toString())))
+  const userMap = await buildUserMap(userIds)
+  const data = orders.map((order) => buildOrderResponse(order, productMap, vehicleMapByProductId, userMap))
   ctx.body = {
     total: data.length,
     orders: data,
@@ -179,5 +201,6 @@ export async function getOrder(ctx: Context): Promise<void> {
   const productIds = Array.from(new Set(order.items.map((item) => item.productId.toString())))
   const productMap = await buildProductMap(productIds)
   const vehicleMapByProductId = await buildVehicleMapByProductId(productIds)
-  ctx.body = buildOrderResponse(order, productMap, vehicleMapByProductId)
+  const userMap = await buildUserMap([order.userId.toString()])
+  ctx.body = buildOrderResponse(order, productMap, vehicleMapByProductId, userMap)
 }

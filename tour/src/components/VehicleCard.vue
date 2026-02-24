@@ -55,7 +55,7 @@ const badgeClass = computed(() => {
 
 .cover {
   width: 100%;
-  height: 150px;
+  height: 100px;
   display: block;
 }
 

@@ -2,31 +2,150 @@
   <view class="page">
     <PageHeader title="订单详情" />
 
-    <view v-if="!order" class="empty">
-      <text class="empty-text">订单不存在</text>
+    <view
+      v-if="!order"
+      class="empty"
+    >
+      <text class="empty-text">
+        订单不存在
+      </text>
     </view>
 
-    <view v-else class="content">
+    <view
+      v-else
+      class="content"
+    >
       <view class="card">
-        <view class="row"><text class="label">订单编号</text><text class="value">{{ order.orderNumber }}</text></view>
-        <view class="row"><text class="label">订单状态</text><text class="value">{{ statusText(order.status) }}</text></view>
-        <view class="row"><text class="label">下单时间</text><text class="value">{{ formatDateTime(order.createdAt) }}</text></view>
+        <text class="section-title">
+          订单信息
+        </text>
+
+        <view class="row">
+          <text class="label">
+            订单编号
+          </text>
+          <text class="value">
+            {{ order.orderNumber }}
+          </text>
+        </view>
+        <view class="row">
+          <text class="label">
+            客户姓名
+          </text>
+          <text class="value">
+            {{ order.customerName || '-' }}
+          </text>
+        </view>
+        <view class="row">
+          <text class="label">
+            订单金额
+          </text>
+          <text class="value amount">
+            ¥ {{ order.totalAmount }}
+          </text>
+        </view>
+        <view class="row">
+          <text class="label">
+            订单状态
+          </text>
+          <text class="value">
+            {{ statusText(order.status) }}
+          </text>
+        </view>
+        <view class="row">
+          <text class="label">
+            下单时间
+          </text>
+          <text class="value">
+            {{ formatDateTime(order.createdAt) }}
+          </text>
+        </view>
       </view>
 
       <view class="card">
-        <text class="section">商品明细</text>
-        <view v-for="item in order.items" :key="item.productId" class="item">
-          <view class="item-main">
-            <text class="item-name">{{ item.name }}</text>
-            <text v-if="item.vehicle" class="vehicle-tag">车辆商品</text>
-            <text v-if="item.vehicle?.name" class="vehicle-meta">车辆名称：{{ item.vehicle?.name }}</text>
-            <text v-if="item.vehicle?.identifier" class="vehicle-meta">车辆编号：{{ item.vehicle?.identifier }}</text>
-          </view>
-          <text class="item-meta">¥ {{ item.price }} × {{ item.quantity }}</text>
+        <text class="section-title">
+          商品信息
+        </text>
+
+        <view
+          v-if="!order.items.length"
+          class="sub-empty"
+        >
+          <text class="sub-empty-text">
+            暂无商品
+          </text>
         </view>
-        <view class="total">
-          <text class="total-label">合计</text>
-          <text class="total-value">¥ {{ order.totalAmount }}</text>
+
+        <view
+          v-for="(item, index) in order.items"
+          :key="`${item.productId}-${index}`"
+          class="item-row"
+        >
+          <view class="item-main">
+            <text class="item-name">
+              {{ item.name }}
+            </text>
+            <text class="item-qty">
+              x {{ item.quantity }}
+            </text>
+          </view>
+          <text class="item-price">
+            ¥ {{ item.price }}
+          </text>
+        </view>
+      </view>
+
+      <view
+        v-if="vehicleItems.length"
+        class="card"
+      >
+        <text class="section-title">
+          交通工具信息
+        </text>
+
+        <view
+          v-for="(item, index) in vehicleItems"
+          :key="`${item.productId}-vehicle-${index}`"
+          class="vehicle-block"
+        >
+          <view class="row">
+            <text class="label">
+              关联商品
+            </text>
+            <text class="value">
+              {{ item.name }}
+            </text>
+          </view>
+          <view class="row">
+            <text class="label">
+              交通工具名称
+            </text>
+            <text class="value">
+              {{ item.vehicle?.name || '-' }}
+            </text>
+          </view>
+          <view class="row">
+            <text class="label">
+              标识
+            </text>
+            <text class="value">
+              {{ item.vehicle?.identifier || '-' }}
+            </text>
+          </view>
+          <view class="row">
+            <text class="label">
+              描述
+            </text>
+            <text class="value">
+              {{ item.vehicle?.description || '-' }}
+            </text>
+          </view>
+          <image
+            v-if="item.vehicle?.coverUrl"
+            class="vehicle-cover"
+            :src="item.vehicle.coverUrl"
+            mode="aspectFill"
+          />
         </view>
       </view>
     </view>
@@ -35,29 +154,37 @@
 
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { getOrderDetail } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
-import type { OrderDetail, OrderStatus } from '@/types/order';
+import type { OrderDetail, OrderItem, OrderStatus } from '@/types/order';
+
+defineOptions({
+  name: 'OrderDetailPage',
+});
 
 const order = ref<OrderDetail | null>(null);
 
-onLoad((query) => {
-  void loadOrder(query);
+const vehicleItems = computed<OrderItem[]>(() => {
+  if (!order.value) return [];
+  return order.value.items.filter((item) => item.vehicle);
 });
 
-async function loadOrder(query: Record<string, any> | undefined) {
+onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
   if (!id) {
     order.value = null;
     return;
   }
+  void loadOrder(id);
+});
 
+async function loadOrder(id: string) {
   try {
     order.value = await getOrderDetail(id);
   } catch {
     order.value = null;
-    uni.showToast({ title: '加载失败', icon: 'none' });
+    void uni.showToast({ title: '加载失败', icon: 'none' });
   }
 }
 
@@ -69,13 +196,13 @@ function statusText(status: OrderStatus) {
 }
 
 function formatDateTime(value: string) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  const mm = `${d.getMonth() + 1}`.padStart(2, '0');
-  const dd = `${d.getDate()}`.padStart(2, '0');
-  const hh = `${d.getHours()}`.padStart(2, '0');
-  const mi = `${d.getMinutes()}`.padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const mm = `${date.getMonth() + 1}`.padStart(2, '0');
+  const dd = `${date.getDate()}`.padStart(2, '0');
+  const hh = `${date.getHours()}`.padStart(2, '0');
+  const mi = `${date.getMinutes()}`.padStart(2, '0');
+  return `${date.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
 }
 </script>
 
@@ -88,7 +215,6 @@ function formatDateTime(value: string) {
 .content {
   padding: 12px 16px 24px;
   display: grid;
-  grid-template-columns: 1fr;
   gap: 12px;
 }
 
@@ -99,15 +225,19 @@ function formatDateTime(value: string) {
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
 }
 
+.section-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a1f2e;
+  margin-bottom: 8px;
+}
+
 .row {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   margin-top: 10px;
-}
-
-.row:first-child {
-  margin-top: 0;
 }
 
 .label {
@@ -116,73 +246,70 @@ function formatDateTime(value: string) {
 }
 
 .value {
+  flex: 1;
+  text-align: right;
   font-size: 12px;
   color: #1a1f2e;
+  word-break: break-all;
 }
 
-.section {
-  display: block;
-  font-size: 14px;
+.amount {
+  color: #1f7aec;
   font-weight: 700;
-  color: #1a1f2e;
 }
 
-.item {
+.item-row {
+  margin-top: 10px;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  margin-top: 10px;
+  align-items: center;
+  gap: 12px;
 }
 
 .item-main {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .item-name {
-  font-size: 12px;
+  font-size: 13px;
   color: #1a1f2e;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.vehicle-tag {
-  display: inline-flex;
-  align-self: flex-start;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(31, 122, 236, 0.1);
-  color: #1f7aec;
-  font-size: 11px;
-}
-
-.vehicle-meta {
-  font-size: 11px;
-  color: #5f6b83;
-}
-
-.item-meta {
-  font-size: 12px;
-  color: #5f6b83;
-}
-
-.total {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #f2f4f7;
-}
-
-.total-label {
+.item-qty {
   font-size: 12px;
   color: #8a94a6;
 }
 
-.total-value {
-  font-size: 15px;
-  font-weight: 700;
+.item-price {
+  font-size: 13px;
   color: #1a1f2e;
+  font-weight: 600;
+}
+
+.vehicle-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f2f4f7;
+}
+
+.vehicle-block:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.vehicle-cover {
+  width: 100%;
+  height: 120px;
+  border-radius: 12px;
+  margin-top: 10px;
 }
 
 .empty {
@@ -190,20 +317,13 @@ function formatDateTime(value: string) {
   text-align: center;
 }
 
-.empty-text {
-  display: block;
-  font-size: 13px;
-  color: #1a1f2e;
+.empty-text,
+.sub-empty-text {
+  color: #a8b0c1;
+  font-size: 12px;
 }
 
-.btn {
-  margin-top: 14px;
-  width: 160px;
-  background: #1f7aec;
-  color: #ffffff;
-  border-radius: 999px;
-  height: 36px;
-  line-height: 36px;
-  font-size: 13px;
+.sub-empty {
+  padding: 8px 0;
 }
 </style>
