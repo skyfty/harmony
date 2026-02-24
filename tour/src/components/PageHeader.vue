@@ -1,36 +1,44 @@
 <template>
   <view
     class="page-header"
-    :style="{ paddingTop: topInset + 'px' }"
+    :style="{ height: headerHeight + 'px' }"
   >
-    <view class="page-header__navbar" :style="{ height: navBarHeight + 'px' }">
+    <view
+      class="page-header__fixed"
+      :style="{ paddingTop: topInset + 'px' }"
+    >
       <view
-        v-if="showBack"
-        class="page-header__back"
-        @tap="handleBack"
+        class="page-header__navbar"
+        :style="{ height: navBarHeight + 'px' }"
       >
-        <text class="page-header__back-icon">
-          ‹
+        <view
+          v-if="showBack"
+          class="page-header__back"
+          @tap="handleBack"
+        >
+          <text class="page-header__back-icon">
+            ‹
+          </text>
+        </view>
+        <view
+          v-else
+          class="page-header__back-placeholder"
+        />
+
+        <text class="page-header__title">
+          {{ title }}
         </text>
-      </view>
-      <view
-        v-else
-        class="page-header__back-placeholder"
-      />
 
-      <text class="page-header__title">
-        {{ title }}
-      </text>
-
-      <view class="page-header__right">
-        <slot name="right" />
+        <view class="page-header__right">
+          <slot name="right" />
+        </view>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
 
@@ -47,6 +55,7 @@ withDefaults(
 
 const topInset = ref(0);
 const navBarHeight = ref(44);
+const headerHeight = computed(() => topInset.value + navBarHeight.value);
 
 function syncLayoutMetrics() {
   const metrics = getTopSafeAreaMetrics();
@@ -77,9 +86,17 @@ function handleBack() {
 
 <style scoped lang="scss">
 .page-header {
+  position: relative;
+  z-index: 100;
+}
+
+.page-header__fixed {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   background: #ffffff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-  position: relative;
   z-index: 100;
 }
 
