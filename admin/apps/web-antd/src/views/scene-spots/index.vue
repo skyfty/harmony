@@ -418,7 +418,6 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
       zoom: true,
     },
   },
-  tableTitle: t('page.sceneSpots.index.table.tableTitle'),
 });
 
 onMounted(async () => {

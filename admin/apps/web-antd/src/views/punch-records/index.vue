@@ -54,7 +54,6 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
     },
     toolbarConfig: { refresh: true, search: true },
   },
-  tableTitle: '打卡记录',
 })
 
 function openDetail(row: any) {

@@ -70,7 +70,6 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
     },
     toolbarConfig: { refresh: true, search: true },
   },
-  tableTitle: '游历记录',
 })
 
 function openDetail(row: any) {

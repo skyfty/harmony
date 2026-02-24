@@ -201,7 +201,6 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
       zoom: true,
     },
   },
-  tableTitle: t('page.scenes.index.table.title'),
 });
 </script>
 

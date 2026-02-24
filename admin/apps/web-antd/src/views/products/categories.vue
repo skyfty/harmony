@@ -171,7 +171,6 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
       pageSize: 50,
     },
   },
-  tableTitle: '商品分类',
 });
 </script>
 

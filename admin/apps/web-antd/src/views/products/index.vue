@@ -202,7 +202,6 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
     },
     toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
   },
-  tableTitle: '商品管理',
 });
 
 onMounted(() => {

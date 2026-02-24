@@ -312,7 +312,6 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
       zoom: true,
     },
   },
-  tableTitle: '普通用户管理',
 });
 
 function handleAvatarBeforeUpload(file: UploadFile) {

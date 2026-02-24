@@ -166,7 +166,6 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
       pageSize: 50,
     },
   },
-    tableTitle: t('page.userProjects.categories.table.title'),
 });
 </script>
 

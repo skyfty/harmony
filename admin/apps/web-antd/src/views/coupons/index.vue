@@ -136,7 +136,6 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
     },
     toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
   },
-  tableTitle: '卡券模板管理',
 });
 </script>
 

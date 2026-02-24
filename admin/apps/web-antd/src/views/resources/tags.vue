@@ -148,7 +148,6 @@ const [TagGrid, tagGridApi] = useVbenVxeGrid<ResourceTagItem>({
       zoom: true,
     },
   },
-  tableTitle: '资源标签管理',
 });
 </script>
 

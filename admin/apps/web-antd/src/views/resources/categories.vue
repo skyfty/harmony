@@ -548,7 +548,6 @@ const [CategoryGrid, categoryGridApi] = useVbenVxeGrid<CategoryFlatItem>({
       zoom: true,
     },
   },
-  tableTitle: '资源分类管理',
 });
 
 onMounted(async () => {

@@ -237,7 +237,6 @@ const [UserCouponGrid, userCouponGridApi] = useVbenVxeGrid({
     },
     toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
   },
-  tableTitle: '用户卡券管理',
 });
 
 onMounted(async () => {

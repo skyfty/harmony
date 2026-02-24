@@ -428,7 +428,6 @@ const [AssetGrid, assetGridApi] = useVbenVxeGrid<ResourceAssetItem>({
       zoom: true,
     },
   },
-  tableTitle: '资产管理',
 });
 
 onMounted(async () => {

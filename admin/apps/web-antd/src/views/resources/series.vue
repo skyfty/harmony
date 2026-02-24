@@ -149,7 +149,6 @@ const [SeriesGrid, seriesGridApi] = useVbenVxeGrid<ResourceSeriesItem>({
       zoom: true,
     },
   },
-  tableTitle: '资源系列管理',
 });
 </script>
 

@@ -51,7 +51,6 @@ const [Grid, gridApi] = useVbenVxeGrid<any>({
     },
     toolbarConfig: { refresh: true, search: true },
   },
-  tableTitle: '登录日志',
 })
 
 function handleDelete(row: any) {

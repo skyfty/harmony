@@ -109,7 +109,6 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
     },
     toolbarConfig: { custom: true, refresh: true, search: true },
   },
-  tableTitle: t('page.orders.index.table.title'),
 });
 </script>
 

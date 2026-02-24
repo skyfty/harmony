@@ -200,7 +200,6 @@ const [UserVehicleGrid, userVehicleGridApi] = useVbenVxeGrid<UserVehicleItem>({
     },
     toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
   },
-  tableTitle: '用户车辆管理',
 });
 
 onMounted(async () => {

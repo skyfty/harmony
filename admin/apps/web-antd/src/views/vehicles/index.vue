@@ -197,7 +197,6 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
     },
     toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
   },
-  tableTitle: '车辆管理',
 });
 </script>
 

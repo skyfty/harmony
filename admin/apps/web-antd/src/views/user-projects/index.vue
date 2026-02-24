@@ -261,7 +261,6 @@ const [ProjectGrid, projectGridApi] = useVbenVxeGrid<UserProjectListItem>({
       zoom: true,
     },
   },
-  tableTitle: t('page.userProjects.index.table.title'),
 });
 
 onMounted(async () => {
