@@ -122,6 +122,26 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     }
   }
 
+  const requiredOffsetLocal = (value: unknown, label: string): { x: number; y: number; z: number } => {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}`)
+    }
+    const obj = value as Record<string, unknown>
+    const requiredAxis = (axis: 'x' | 'y' | 'z'): number => {
+      const raw = obj[axis]
+      const num = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(num)) {
+        throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}.${axis}`)
+      }
+      return num
+    }
+    return {
+      x: requiredAxis('x'),
+      y: requiredAxis('y'),
+      z: requiredAxis('z'),
+    }
+  }
+
   const cornerModelsRaw = record.cornerModels
   if (!Array.isArray(cornerModelsRaw)) {
     throw new Error('墙体预设 wallProps 缺少或无效字段: cornerModels')
@@ -152,7 +172,20 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     const bodyYawDeg = requiredYawDeg(row.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`)
     const headForwardAxis = requiredForwardAxis(row.headForwardAxis, `cornerModels[${index}].headForwardAxis`)
     const headYawDeg = requiredYawDeg(row.headYawDeg, `cornerModels[${index}].headYawDeg`)
-    return { bodyAssetId: bodyAssetId ?? null, headAssetId: headAssetId ?? null, bodyForwardAxis, bodyYawDeg, headForwardAxis, headYawDeg, angle, tolerance }
+    const bodyOffsetLocal = requiredOffsetLocal(row.bodyOffsetLocal, `cornerModels[${index}].bodyOffsetLocal`)
+    const headOffsetLocal = requiredOffsetLocal(row.headOffsetLocal, `cornerModels[${index}].headOffsetLocal`)
+    return {
+      bodyAssetId: bodyAssetId ?? null,
+      headAssetId: headAssetId ?? null,
+      bodyOffsetLocal,
+      headOffsetLocal,
+      bodyForwardAxis,
+      bodyYawDeg,
+      headForwardAxis,
+      headYawDeg,
+      angle,
+      tolerance,
+    }
   })
 
   return {
