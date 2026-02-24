@@ -20,7 +20,7 @@ export interface CreateTravelEnterInput {
 
 export interface CompleteTravelLeaveInput {
   userId: string
-  sceneId: string
+  sceneId?: string
   scenicId: string
   leaveTime?: string
   source?: string
@@ -166,31 +166,102 @@ export async function createTravelEnterRecord(input: CreateTravelEnterInput): Pr
 
   const enterTime = parseDate(input.enterTime) ?? new Date()
 
-  const doc = await TravelRecordModel.create({
-    userId: userObjectId,
-    username: normalizeText(input.username) || undefined,
+  const updateSet: Record<string, unknown> = {
     sceneId,
-    scenicId,
-    sceneName: normalizeText(input.sceneName) || undefined,
     enterTime,
+    leaveTime: null,
+    durationSeconds: null,
     status: 'active',
     source: normalizeText(input.source) || 'tour-miniapp',
-    path: normalizeText(input.path) || undefined,
-    ip: normalizeText(input.ip) || undefined,
-    userAgent: normalizeText(input.userAgent) || undefined,
-    metadata: input.metadata ?? undefined,
-  })
+  }
+  const updateUnset: Record<string, ''> = {}
+
+  if (input.username !== undefined) {
+    const username = normalizeText(input.username)
+    if (username) {
+      updateSet.username = username
+    } else {
+      updateUnset.username = ''
+    }
+  }
+
+  if (input.sceneName !== undefined) {
+    const sceneName = normalizeText(input.sceneName)
+    if (sceneName) {
+      updateSet.sceneName = sceneName
+    } else {
+      updateUnset.sceneName = ''
+    }
+  }
+
+  if (input.path !== undefined) {
+    const path = normalizeText(input.path)
+    if (path) {
+      updateSet.path = path
+    } else {
+      updateUnset.path = ''
+    }
+  }
+
+  if (input.ip !== undefined) {
+    const ip = normalizeText(input.ip)
+    if (ip) {
+      updateSet.ip = ip
+    } else {
+      updateUnset.ip = ''
+    }
+  }
+
+  if (input.userAgent !== undefined) {
+    const userAgent = normalizeText(input.userAgent)
+    if (userAgent) {
+      updateSet.userAgent = userAgent
+    } else {
+      updateUnset.userAgent = ''
+    }
+  }
+
+  if (input.metadata !== undefined) {
+    updateSet.metadata = input.metadata ?? null
+  }
+
+  const updateDoc: {
+    $set: Record<string, unknown>
+    $setOnInsert: Record<string, unknown>
+    $unset?: Record<string, ''>
+  } = {
+    $set: updateSet,
+    $setOnInsert: {
+      userId: userObjectId,
+      scenicId,
+    },
+  }
+
+  if (Object.keys(updateUnset).length) {
+    updateDoc.$unset = updateUnset
+  }
+
+  const doc = await TravelRecordModel.findOneAndUpdate(
+    {
+      userId: userObjectId,
+      scenicId,
+    },
+    updateDoc,
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .sort({ updatedAt: -1, enterTime: -1, createdAt: -1 })
+    .exec()
 
   return doc._id.toString()
 }
 
 export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput): Promise<string | null> {
   const userObjectId = ensureObjectId(input.userId)
-  const sceneId = normalizeText(input.sceneId)
   const scenicId = normalizeText(input.scenicId)
-  if (!sceneId) {
-    throw new Error('sceneId is required')
-  }
   if (!scenicId) {
     throw new Error('scenicId is required')
   }
@@ -199,12 +270,11 @@ export async function completeTravelLeaveRecord(input: CompleteTravelLeaveInput)
 
   const activeRecord = await TravelRecordModel.findOne({
     userId: userObjectId,
-    sceneId,
     scenicId,
     status: 'active',
     leaveTime: null,
   })
-    .sort({ enterTime: -1 })
+    .sort({ enterTime: -1, updatedAt: -1, createdAt: -1 })
     .exec()
 
   if (!activeRecord) {
@@ -276,10 +346,32 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
     }
   }
 
-  const [items, total] = await Promise.all([
-    TravelRecordModel.find(filter).sort({ enterTime: -1, createdAt: -1 }).skip(skip).limit(pageSize).lean(),
-    TravelRecordModel.countDocuments(filter),
-  ])
+  const [result] = await TravelRecordModel.aggregate<{
+    items: Array<Record<string, unknown>>
+    totalRows: Array<{ total: number }>
+  }>([
+    { $sort: { enterTime: -1, updatedAt: -1, createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: {
+          userId: '$userId',
+          scenicId: '$scenicId',
+        },
+        doc: { $first: '$$ROOT' },
+      },
+    },
+    { $replaceRoot: { newRoot: '$doc' } },
+    { $match: filter },
+    {
+      $facet: {
+        items: [{ $sort: { enterTime: -1, createdAt: -1, _id: -1 } }, { $skip: skip }, { $limit: pageSize }],
+        totalRows: [{ $count: 'total' }],
+      },
+    },
+  ]).exec()
+
+  const items = result?.items ?? []
+  const total = result?.totalRows?.[0]?.total ?? 0
 
   const sceneIds = Array.from(
     new Set(
@@ -290,10 +382,11 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
   )
 
   const sceneNameMap = new Map<string, string>()
+  const sceneCheckpointTotalMap = new Map<string, number>()
   if (sceneIds.length) {
     const sceneRows = await SceneModel.find(
       { _id: { $in: sceneIds.map((id) => new Types.ObjectId(id)) } },
-      { _id: 1, name: 1 },
+      { _id: 1, name: 1, checkpointTotal: 1 },
     )
       .lean()
       .exec()
@@ -304,6 +397,8 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
       if (name) {
         sceneNameMap.set(id, name)
       }
+      const rawCheckpointTotal = Number((row as { checkpointTotal?: unknown }).checkpointTotal)
+      sceneCheckpointTotalMap.set(id, Number.isFinite(rawCheckpointTotal) && rawCheckpointTotal > 0 ? Math.floor(rawCheckpointTotal) : 0)
     }
   }
 
@@ -349,6 +444,7 @@ export async function queryTravelRecords(options: QueryTravelRecordsOptions) {
     return {
       ...item,
       sceneName: sceneName || sceneNameMap.get(sceneId) || undefined,
+      sceneCheckpointTotal: sceneCheckpointTotalMap.get(sceneId) ?? 0,
       scenicTitle: scenicTitleMap.get(scenicId) || undefined,
       achievementCount,
     }
@@ -382,8 +478,17 @@ export async function getTravelRecordById(id: string) {
     achievementCount = distinctNodes.length
   }
 
+  const sceneId = normalizeText((item as { sceneId?: string }).sceneId)
+  let sceneCheckpointTotal = 0
+  if (Types.ObjectId.isValid(sceneId)) {
+    const scene = await SceneModel.findById(sceneId, { checkpointTotal: 1 }).lean().exec()
+    const rawCheckpointTotal = Number((scene as { checkpointTotal?: unknown } | null)?.checkpointTotal)
+    sceneCheckpointTotal = Number.isFinite(rawCheckpointTotal) && rawCheckpointTotal > 0 ? Math.floor(rawCheckpointTotal) : 0
+  }
+
   return {
     ...item,
+    sceneCheckpointTotal,
     achievementCount,
   }
 }
@@ -408,6 +513,17 @@ export async function getTravelSummaryBySceneForUser(userId: string): Promise<Ar
     totalDurationSeconds: number
   }>([
     { $match: { userId: new Types.ObjectId(userId) } },
+    { $sort: { enterTime: -1, updatedAt: -1, createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: {
+          sceneId: '$sceneId',
+          scenicId: '$scenicId',
+        },
+        doc: { $first: '$$ROOT' },
+      },
+    },
+    { $replaceRoot: { newRoot: '$doc' } },
     {
       $group: {
         _id: '$sceneId',
@@ -525,14 +641,35 @@ export async function getCheckinProgressByScenicForUser(userId: string): Promise
 
   const spots = await SceneSpotModel.find(
     { _id: { $in: scenicIds.map((scenicId) => new Types.ObjectId(scenicId)) } },
-    { _id: 1, sceneId: 1, title: 1, coverImage: 1, slides: 1, checkpointTotal: 1 },
+    { _id: 1, sceneId: 1, title: 1, coverImage: 1, slides: 1 },
   )
     .lean()
     .exec()
 
   const spotMap = new Map<string, (typeof spots)[number]>()
+  const sceneIds = new Set<string>()
   for (const spot of spots) {
     spotMap.set(String(spot._id), spot)
+    const sceneId = String((spot as { sceneId?: unknown }).sceneId ?? '')
+    if (Types.ObjectId.isValid(sceneId)) {
+      sceneIds.add(sceneId)
+    }
+  }
+
+  const sceneCheckpointTotalMap = new Map<string, number>()
+  if (sceneIds.size) {
+    const sceneRows = await SceneModel.find(
+      { _id: { $in: Array.from(sceneIds).map((sceneId) => new Types.ObjectId(sceneId)) } },
+      { _id: 1, checkpointTotal: 1 },
+    )
+      .lean()
+      .exec()
+
+    for (const scene of sceneRows) {
+      const sceneId = String((scene as { _id?: unknown })._id ?? '')
+      const rawCheckpointTotal = Number((scene as { checkpointTotal?: unknown }).checkpointTotal)
+      sceneCheckpointTotalMap.set(sceneId, Number.isFinite(rawCheckpointTotal) && rawCheckpointTotal > 0 ? Math.floor(rawCheckpointTotal) : 0)
+    }
   }
 
   const result: Array<{
@@ -552,16 +689,12 @@ export async function getCheckinProgressByScenicForUser(userId: string): Promise
       continue
     }
     const checkedCount = scenicToNodeSet.get(scenicId)?.size ?? 0
-    const totalCount =
-      typeof (spot as { checkpointTotal?: unknown }).checkpointTotal === 'number' &&
-      Number.isFinite((spot as { checkpointTotal?: unknown }).checkpointTotal) &&
-      (spot as { checkpointTotal?: number }).checkpointTotal! > 0
-        ? Math.floor((spot as { checkpointTotal: number }).checkpointTotal)
-        : 0
+    const sceneId = String((spot as { sceneId?: unknown }).sceneId ?? '')
+    const totalCount = sceneCheckpointTotalMap.get(sceneId) ?? 0
 
     result.push({
       scenicId,
-      sceneId: String(spot.sceneId),
+      sceneId,
       scenicTitle: normalizeText((spot as { title?: string }).title),
       coverImage: normalizeText((spot as { coverImage?: string | null }).coverImage ?? ''),
       slides: Array.isArray((spot as { slides?: unknown[] }).slides)

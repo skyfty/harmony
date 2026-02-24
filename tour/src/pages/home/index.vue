@@ -1,18 +1,5 @@
 <template>
   <view class="page">
-    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
-      <view class="search-box">
-        <text class="search-icon">🔍</text>
-        <input
-          v-model="keyword"
-          class="search-input"
-          type="text"
-          placeholder="搜索景区名称"
-          confirm-type="search"
-        />
-        <text v-if="keyword" class="clear-icon" @tap="keyword = ''">✕</text>
-      </view>
-    </view>
 
     <view class="content">
       <view class="section-title">
@@ -23,7 +10,7 @@
           v-for="scenic in filtered"
           :key="scenic.id"
           :name="scenic.title"
-          :summary="scenic.description"
+          :summary="null"
           :cover-url="scenic.coverImage"
           :rating="scenic.averageRating"
           @tap="openDetail(scenic.id)"
@@ -54,6 +41,7 @@ try {
   statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
 } catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listHotEvents, listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';

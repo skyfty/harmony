@@ -123,6 +123,19 @@ function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<st
   return out
 }
 
+function countSceneCheckpoints(document: SceneJsonExportDocument | null | undefined): number {
+  if (!document || typeof document !== 'object') {
+    return 0
+  }
+
+  if (Array.isArray(document.punchPoints)) {
+    return document.punchPoints.length
+  }
+
+  const computed = collectPunchPointsFromNodes(document.nodes)
+  return computed.length
+}
+
 export async function exportScenePackageZip(payload: {
   project: ProjectExportBundleProjectConfig
   scenes: ScenePackageExportScene[]
@@ -135,7 +148,15 @@ export async function exportScenePackageZip(payload: {
 
   // project
   const projectPath = 'project/project.json'
-  files[projectPath] = jsonBytes(payload.project)
+  let checkpointTotal = 0
+  for (const scene of payload.scenes) {
+    checkpointTotal += countSceneCheckpoints(scene.document)
+  }
+  const projectWithCheckpointTotal: ProjectExportBundleProjectConfig = {
+    ...payload.project,
+    checkpointTotal,
+  }
+  files[projectPath] = jsonBytes(projectWithCheckpointTotal)
 
   // scenes + per-scene resources (referenced local assets)
   const manifestScenes: ScenePackageManifestV1['scenes'] = []

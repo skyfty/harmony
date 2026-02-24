@@ -13,7 +13,6 @@ type SceneSpotMutationPayload = {
   title?: string
   description?: string | null
   address?: string | null
-  checkpointTotal?: number
   order?: number
   isFeatured?: boolean
   averageRating?: number
@@ -273,14 +272,15 @@ function toNonNegativeInteger(value: unknown): number | null {
   return parsed
 }
 
-function mapSceneSpot(spot: any) {
+function mapSceneSpot(spot: any, sceneCheckpointTotal = 0) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
+    sceneCheckpointTotal,
     title: spot.title,
     coverImage: toNullableString(spot.coverImage),
     slides: Array.isArray(spot.slides) ? spot.slides.map((item: unknown) => String(item)) : [],
-    checkpointTotal: typeof spot.checkpointTotal === 'number' && spot.checkpointTotal >= 0 ? Math.floor(spot.checkpointTotal) : 0,
+    checkpointTotal: sceneCheckpointTotal,
     description: typeof spot.description === 'string' ? spot.description : '',
     address: typeof spot.address === 'string' ? spot.address : '',
     order: typeof spot.order === 'number' ? spot.order : 0,
@@ -298,6 +298,28 @@ async function ensureSceneExists(sceneId: string): Promise<void> {
   if (!exists) {
     throw new Error('Scene not found')
   }
+}
+
+async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<string, number>> {
+  const normalizedSceneIds = Array.from(new Set(sceneIds.filter((id) => Types.ObjectId.isValid(id))))
+  if (!normalizedSceneIds.length) {
+    return new Map()
+  }
+
+  const rows = await SceneModel.find(
+    { _id: { $in: normalizedSceneIds.map((id) => new Types.ObjectId(id)) } },
+    { _id: 1, checkpointTotal: 1 },
+  )
+    .lean()
+    .exec()
+
+  const out = new Map<string, number>()
+  for (const row of rows) {
+    const id = String((row as { _id?: unknown })._id ?? '')
+    const raw = Number((row as { checkpointTotal?: unknown }).checkpointTotal)
+    out.set(id, Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0)
+  }
+  return out
 }
 
 function toPositiveNumber(value: unknown, fallback: number): number {
@@ -339,8 +361,13 @@ export async function listSceneSpots(ctx: Context): Promise<void> {
     SceneSpotModel.countDocuments(query).exec(),
   ])
 
+  const checkpointMap = await loadSceneCheckpointTotalMap(rows.map((row) => String((row as { sceneId?: unknown }).sceneId ?? '')))
+
   ctx.body = {
-    data: rows.map(mapSceneSpot),
+    data: rows.map((row) => {
+      const sceneId = String((row as { sceneId?: unknown }).sceneId ?? '')
+      return mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
+    }),
     page: pageNumber,
     pageSize: limit,
     total,
@@ -357,7 +384,9 @@ export async function getSceneSpot(ctx: Context): Promise<void> {
   if (!row) {
     ctx.throw(404, 'Scene spot not found')
   }
-  ctx.body = mapSceneSpot(row)
+  const sceneId = String((row as { sceneId?: unknown }).sceneId ?? '')
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
+  ctx.body = mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
 }
 
 export async function createSceneSpot(ctx: Context): Promise<void> {
@@ -382,6 +411,9 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 
   if (body.coverImage !== undefined || body.slides !== undefined) {
     ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
+  }
+  if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
+    ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
   }
 
   const sceneId = toNonEmptyString(body.sceneId)
@@ -418,11 +450,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const checkpointTotal = body.checkpointTotal === undefined ? 0 : toNonNegativeInteger(body.checkpointTotal)
-  if (checkpointTotal === null) {
-    ctx.throw(400, 'Checkpoint total must be a non-negative integer')
-  }
-
   const uploadedFileKeys: string[] = []
   let coverImageUrl: string | null = null
   const slideUrls: string[] = []
@@ -450,7 +477,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
       title,
       coverImage: coverImageUrl,
       slides: slideUrls,
-      checkpointTotal,
       description: toNullableString(body.description) ?? '',
       address: toNullableString(body.address) ?? '',
       order: toNumberOrDefault(body.order, 0),
@@ -467,7 +493,8 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 
   const row = await SceneSpotModel.findById(created._id).lean().exec()
   ctx.status = 201
-  ctx.body = mapSceneSpot(row)
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
+  ctx.body = mapSceneSpot(row, checkpointMap.get(sceneId) ?? 0)
 }
 
 export async function updateSceneSpot(ctx: Context): Promise<void> {
@@ -501,6 +528,9 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
 
   if (body.coverImage !== undefined || body.slides !== undefined) {
     ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
+  }
+  if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
+    ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
   }
 
   const removeCoverImage = toBoolean(body.removeCoverImage) === true
@@ -562,16 +592,6 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const nextCheckpointTotal =
-    body.checkpointTotal === undefined
-      ? typeof current.checkpointTotal === 'number' && current.checkpointTotal >= 0
-        ? Math.floor(current.checkpointTotal)
-        : 0
-      : toNonNegativeInteger(body.checkpointTotal)
-  if (nextCheckpointTotal === null) {
-    ctx.throw(400, 'Checkpoint total must be a non-negative integer')
-  }
-
   const uploadedFileKeys: string[] = []
   let uploadedCoverImageUrl: string | null = null
   const uploadedSlideUrls: string[] = []
@@ -619,7 +639,6 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
         averageRating: nextAverageRating,
         ratingCount: nextRatingCount,
         favoriteCount: nextFavoriteCount,
-        checkpointTotal: nextCheckpointTotal,
         ratingTotalScore: Number((nextAverageRating * nextRatingCount).toFixed(2)),
       },
       { new: true },
@@ -652,7 +671,9 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
   })
   await deleteStoredFilesByUrls(removedUrls)
 
-  ctx.body = mapSceneSpot(updated)
+  const updatedSceneId = String((updated as { sceneId?: unknown }).sceneId ?? '')
+  const checkpointMap = await loadSceneCheckpointTotalMap([updatedSceneId])
+  ctx.body = mapSceneSpot(updated, checkpointMap.get(updatedSceneId) ?? 0)
 }
 
 export async function deleteSceneSpot(ctx: Context): Promise<void> {

@@ -1,31 +1,6 @@
 <template>
   <view class="page">
-    <view
-      class="header"
-      :style="{ paddingTop: statusBarHeight + 'px' }"
-    >
-      <view class="title">
-        打卡成就
-      </view>
-      <view class="search-box">
-        <text class="search-icon">
-          🔎
-        </text>
-        <input
-          v-model="keyword"
-          class="search-input"
-          type="text"
-          placeholder="搜索已打卡景区..."
-        >
-        <text
-          v-if="keyword"
-          class="clear-icon"
-          @tap="keyword = ''"
-        >
-          ✕
-        </text>
-      </view>
-    </view>
+    <PageHeader title="打卡成就"  :showBack="false" />
 
     <view class="content">
       <view
@@ -44,7 +19,7 @@
                 ★
               </text>
               <text class="progress-value">
-                {{ formatPercent(item.ratio) }}
+                {{ formatPercent(item) }}
               </text>
             </view>
           </view>
@@ -86,6 +61,7 @@ try {
 } catch { /* fallback */ }
 
 import BottomNav from '@/components/BottomNav.vue';
+import PageHeader from '@/components/PageHeader.vue';
 import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 
@@ -102,7 +78,7 @@ interface ScenicCardItem {
   slides?: string[];
   checkedCount: number;
   totalCount: number;
-  ratio: number;
+  ratio?: number;
 }
 
 const keyword = ref('');
@@ -162,7 +138,6 @@ function isScenicCardItem(value: unknown): value is ScenicCardItem {
     && typeof value.scenicTitle === 'string'
     && typeof value.checkedCount === 'number'
     && typeof value.totalCount === 'number'
-    && typeof value.ratio === 'number'
   );
 }
 
@@ -184,15 +159,24 @@ const filteredScenicCheckins = computed(() => {
   return filtered;
 });
 
-function clampRatio(value: number): number {
+function clampCount(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
-  return Math.min(Math.max(value, 0), 1);
+  return Math.max(value, 0);
 }
 
-function formatPercent(ratio: number): string {
-  return `${Math.round(clampRatio(ratio) * 100)}%`;
+function computeAchievementRatio(item: ScenicCardItem): number {
+  const checkedCount = clampCount(item.checkedCount);
+  const totalCount = clampCount(item.totalCount);
+  if (totalCount <= 0) {
+    return 0;
+  }
+  return Math.min(checkedCount / totalCount, 1);
+}
+
+function formatPercent(item: ScenicCardItem): string {
+  return `${Math.round(computeAchievementRatio(item) * 100)}%`;
 }
 
 function resolveBackgroundImage(item: ScenicCardItem): string {

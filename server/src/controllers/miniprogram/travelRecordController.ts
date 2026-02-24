@@ -71,12 +71,7 @@ export async function completeMiniTravelLeaveRecord(ctx: Context): Promise<void>
   }
 
   const body = (ctx.request.body ?? {}) as LeaveTravelBody
-  const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
   const scenicId = typeof body.scenicId === 'string' ? body.scenicId.trim() : ''
-  if (!sceneId) {
-    ctx.throw(400, 'sceneId is required')
-    return
-  }
   if (!scenicId) {
     ctx.throw(400, 'scenicId is required')
     return
@@ -84,7 +79,7 @@ export async function completeMiniTravelLeaveRecord(ctx: Context): Promise<void>
 
   const id = await completeTravelLeaveRecord({
     userId,
-    sceneId,
+    sceneId: typeof body.sceneId === 'string' ? body.sceneId : undefined,
     scenicId,
     leaveTime: typeof body.leaveTime === 'string' ? body.leaveTime : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,

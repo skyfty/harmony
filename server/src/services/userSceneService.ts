@@ -1,7 +1,9 @@
 import path from 'node:path'
 import fs from 'fs-extra'
 import { nanoid } from 'nanoid'
+import { Types } from 'mongoose'
 import { UserSceneModel } from '@/models/UserScene'
+import { SceneModel } from '@/models/Scene'
 import { appConfig } from '@/config/env'
 import type { UploadedFilePayload } from '@/services/sceneService'
 import type { UserSceneBundleRecord, UserSceneSummary } from '@/types/userScene'
@@ -120,8 +122,32 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   return { id, name, projectId, thumbnail, createdAt, updatedAt }
 }
 
+async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<string, number>> {
+  const normalizedSceneIds = Array.from(new Set(sceneIds.filter((id) => Types.ObjectId.isValid(id))))
+  if (!normalizedSceneIds.length) {
+    return new Map()
+  }
+
+  const rows = await SceneModel.find(
+    { _id: { $in: normalizedSceneIds.map((id) => new Types.ObjectId(id)) } },
+    { _id: 1, checkpointTotal: 1 },
+  )
+    .lean()
+    .exec()
+
+  const out = new Map<string, number>()
+  for (const row of rows) {
+    const id = String((row as { _id?: unknown })._id ?? '')
+    const raw = Number((row as { checkpointTotal?: unknown }).checkpointTotal)
+    out.set(id, Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0)
+  }
+  return out
+}
+
 export async function listUserScenes(userId: string): Promise<UserSceneSummary[]> {
   const records = await UserSceneModel.find({ userId }).sort({ sceneUpdatedAt: -1 }).lean()
+  const sceneIds = (records as any[]).map((entry) => String(entry.sceneId ?? '')).filter(Boolean)
+  const checkpointMap = await loadSceneCheckpointTotalMap(sceneIds)
   return (records as any[]).map((entry) => {
     const sceneId = String(entry.sceneId)
     return {
@@ -129,6 +155,7 @@ export async function listUserScenes(userId: string): Promise<UserSceneSummary[]
       name: String(entry.name ?? '未命名场景'),
       projectId: String(entry.projectId ?? ''),
       thumbnail: typeof entry.thumbnail === 'string' ? entry.thumbnail : null,
+      checkpointTotal: checkpointMap.get(sceneId) ?? 0,
       createdAt: new Date(entry.sceneCreatedAt).toISOString(),
       updatedAt: new Date(entry.sceneUpdatedAt).toISOString(),
       bundle: {
@@ -146,10 +173,12 @@ export async function getUserSceneBundle(userId: string, sceneId: string): Promi
   if (!record) {
     return null
   }
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
   const entry = record as any
   return {
     id: sceneId,
     projectId: String(entry.projectId ?? ''),
+    checkpointTotal: checkpointMap.get(sceneId) ?? 0,
     bundle: {
       url: buildBundleApiUrl(sceneId),
       size: Number(entry.bundleFileSize ?? 0),
@@ -198,11 +227,14 @@ export async function saveUserSceneBundle(
     await deleteBundleFile(previousFileKey)
   }
 
+  const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
+
   return {
     id: sceneId,
     name: documentMeta.name,
     projectId: documentMeta.projectId,
     thumbnail: documentMeta.thumbnail,
+    checkpointTotal: checkpointMap.get(sceneId) ?? 0,
     createdAt: documentMeta.createdAt,
     updatedAt: documentMeta.updatedAt,
     bundle: {

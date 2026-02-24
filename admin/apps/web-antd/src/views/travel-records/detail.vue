@@ -136,6 +136,7 @@ onMounted(load)
         <Descriptions.Item label="停留时长(秒)">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
         <Descriptions.Item label="游历成就(去重打卡点)">{{ displayAchievementCount }}</Descriptions.Item>
         <Descriptions.Item label="场景名称">{{ record?.sceneName || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="场景打卡点总数">{{ record?.sceneCheckpointTotal ?? 0 }}</Descriptions.Item>
         <Descriptions.Item label="场景ID">{{ record?.sceneId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="景点ID">{{ record?.scenicId || '-' }}</Descriptions.Item>
         <Descriptions.Item label="用户名">{{ record?.username || '-' }}</Descriptions.Item>

@@ -47,6 +47,7 @@ onMounted(load);
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.id')">{{ sceneSpot?.id || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.title')">{{ sceneSpot?.title || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.sceneId')">{{ sceneSpot?.sceneId || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="场景打卡点总数">{{ sceneSpot?.sceneCheckpointTotal ?? 0 }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.description')">{{ sceneSpot?.description || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.address')">{{ sceneSpot?.address || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.sceneSpots.detail.fields.order')">{{ sceneSpot?.order ?? '-' }}</Descriptions.Item>

@@ -27,8 +27,9 @@ const travelRecordSchema = new Schema<TravelRecordDocument>(
 travelRecordSchema.index({ userId: 1, enterTime: -1 })
 travelRecordSchema.index({ sceneId: 1, enterTime: -1 })
 travelRecordSchema.index({ scenicId: 1, enterTime: -1 })
+travelRecordSchema.index({ userId: 1, scenicId: 1, enterTime: -1 })
 travelRecordSchema.index({ userId: 1, sceneId: 1, enterTime: -1 })
-travelRecordSchema.index({ userId: 1, sceneId: 1, scenicId: 1, status: 1, leaveTime: 1, enterTime: -1 })
+travelRecordSchema.index({ userId: 1, scenicId: 1, status: 1, leaveTime: 1, enterTime: -1 })
 travelRecordSchema.index({ status: 1, updatedAt: -1 })
 travelRecordSchema.index({ createdAt: -1 })
 

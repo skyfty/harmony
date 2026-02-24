@@ -154,6 +154,7 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
     border: true,
     columns: [
       { field: 'name', minWidth: 180, title: t('page.scenes.index.table.name') },
+      { field: 'checkpointTotal', minWidth: 140, title: '打卡点总数' },
       { field: 'fileUrl', minWidth: 280, title: t('page.scenes.index.table.fileUrl'), slots: { default: 'fileUrl' } },
       { field: 'fileSize', minWidth: 120, title: t('page.scenes.index.table.fileSize') },
       {

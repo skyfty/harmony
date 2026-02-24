@@ -5920,6 +5920,7 @@ async function spawnAssetFromSelectionClick(params: {
 let selectionPreviewActive = false
 let selectionPreviewAssetId: string | null = null
 let lastSelectionPreviewUpdate = 0
+let lastDragHoverPreviewUpdate = 0
 let placementPreviewYaw = 0
 
 let lastPointerClientX = 0
@@ -11358,15 +11359,19 @@ function handleViewportDragOver(event: DragEvent) {
       dragPreviewGroup.position.copy(aligned)
       dragPreviewGroup.visible = true
 
-      const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
-      const result = snapController.updatePlacementSideSnap({
-        event,
-        previewObject: dragPreviewGroup,
-        active: placementSnapActive,
-        pixelThresholdPx: vertexSnapThresholdPx.value,
-        excludeNodeIds: new Set([GROUND_NODE_ID]),
-      })
-      updatePlacementSideSnapMarkers(result)
+      const now = Date.now()
+      if (now - lastDragHoverPreviewUpdate > 8) {
+        lastDragHoverPreviewUpdate = now
+        const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+        const result = snapController.updatePlacementSideSnap({
+          event,
+          previewObject: dragPreviewGroup,
+          active: placementSnapActive,
+          pixelThresholdPx: vertexSnapThresholdPx.value,
+          excludeNodeIds: new Set([GROUND_NODE_ID]),
+        })
+        updatePlacementSideSnapMarkers(result)
+      }
     } else {
       snapController.resetPlacementSideSnap()
       clearPlacementSideSnapMarkers()

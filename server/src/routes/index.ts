@@ -12,6 +12,7 @@ import adminRouter from './admin'
 import adminAuthRouter from './adminAuth'
 import miniAuthRouter from './miniAuth'
 import authRouter from './auth'
+import menuRouter from './menu'
 
 export const routes: Router[] = [
   roleRouter,
@@ -27,6 +28,7 @@ export const routes: Router[] = [
   adminAuthRouter,
   miniAuthRouter,
   authRouter,
+  menuRouter,
 ]
 
 export default routes

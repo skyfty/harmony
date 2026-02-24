@@ -97,6 +97,34 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'Vehicles',
+    path: '/vehicles',
+    meta: {
+      icon: 'lucide:car',
+      title: '车辆管理',
+    },
+    children: [
+      {
+        name: 'VehiclesIndex',
+        path: '',
+        component: () => import('#/views/vehicles/index.vue'),
+        meta: {
+          icon: 'lucide:car',
+          title: '车辆管理',
+        },
+      },
+      {
+        name: 'UserVehicles',
+        path: 'user-vehicles',
+        component: () => import('#/views/vehicles/user-vehicles.vue'),
+        meta: {
+          icon: 'lucide:car-front',
+          title: '用户车辆',
+        },
+      },
+    ],
+  },
+  {
     name: 'Coupons',
     path: '/coupons',
     meta: {

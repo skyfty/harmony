@@ -13,3 +13,4 @@ export * from './loginLogs';
 export * from './analytics';
 export * from './punchRecords';
 export * from './travelRecords';
+export * from './vehicles';

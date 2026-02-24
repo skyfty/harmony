@@ -15,6 +15,7 @@ interface GridPageResult<T> {
 export interface SceneSpotItem {
   id: string;
   sceneId: string;
+  sceneCheckpointTotal: number;
   title: string;
   coverImage?: null | string;
   slides: string[];

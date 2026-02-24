@@ -29,6 +29,18 @@ import {
   updateProduct,
 } from '@/controllers/admin/productController'
 import {
+  createUserVehicle,
+  createVehicle,
+  deleteUserVehicle,
+  deleteVehicle,
+  getUserVehicle,
+  getVehicle,
+  listUserVehicles,
+  listVehicles,
+  updateUserVehicle,
+  updateVehicle,
+} from '@/controllers/admin/vehicleController'
+import {
   createCoupon,
   deleteCoupon,
   distributeCouponBatch,
@@ -167,6 +179,18 @@ adminRouter.get('/products/:id', requireAnyPermission(['product:read']), getProd
 adminRouter.post('/products', requireAnyPermission(['product:write']), createProduct)
 adminRouter.put('/products/:id', requireAnyPermission(['product:write']), updateProduct)
 adminRouter.delete('/products/:id', requireAnyPermission(['product:write']), deleteProduct)
+
+adminRouter.get('/vehicles', requireAnyPermission(['vehicle:read']), listVehicles)
+adminRouter.get('/vehicles/:id', requireAnyPermission(['vehicle:read']), getVehicle)
+adminRouter.post('/vehicles', requireAnyPermission(['vehicle:write']), createVehicle)
+adminRouter.put('/vehicles/:id', requireAnyPermission(['vehicle:write']), updateVehicle)
+adminRouter.delete('/vehicles/:id', requireAnyPermission(['vehicle:write']), deleteVehicle)
+
+adminRouter.get('/user-vehicles', requireAnyPermission(['vehicle:read']), listUserVehicles)
+adminRouter.get('/user-vehicles/:id', requireAnyPermission(['vehicle:read']), getUserVehicle)
+adminRouter.post('/user-vehicles', requireAnyPermission(['vehicle:write']), createUserVehicle)
+adminRouter.put('/user-vehicles/:id', requireAnyPermission(['vehicle:write']), updateUserVehicle)
+adminRouter.delete('/user-vehicles/:id', requireAnyPermission(['vehicle:write']), deleteUserVehicle)
 
 adminRouter.get('/coupons', requireAnyPermission(['coupon:read']), listCoupons)
 adminRouter.get('/coupons/stats', requireAnyPermission(['coupon:read']), getCouponStats)

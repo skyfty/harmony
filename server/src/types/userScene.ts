@@ -11,6 +11,7 @@ export interface UserSceneSummary {
   name: string
   projectId: string
   thumbnail: string | null
+  checkpointTotal: number
   createdAt: string
   updatedAt: string
   bundle: Omit<UserSceneBundleInfo, 'fileKey'>
@@ -19,5 +20,6 @@ export interface UserSceneSummary {
 export interface UserSceneBundleRecord {
   id: string
   projectId: string
+  checkpointTotal: number
   bundle: UserSceneBundleInfo
 }

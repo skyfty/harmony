@@ -5,6 +5,7 @@ import { Types, type FilterQuery } from 'mongoose'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'
+import { readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema'
 
 const SCENE_STORAGE_PREFIX = 'scenes'
 
@@ -30,6 +31,7 @@ export type SceneData = {
   fileKey: string
   fileUrl: string
   fileSize: number
+  checkpointTotal: number
   fileType: string | null
   originalFilename: string | null
   publishedBy: string | null
@@ -94,6 +96,22 @@ function resolveAbsolutePath(fileKey: string): string {
   return absolute
 }
 
+async function parseCheckpointTotalFromSceneFile(file: UploadedFilePayload): Promise<number> {
+  try {
+    const sourcePath = file.filepath
+    if (!sourcePath) {
+      return 0
+    }
+    const zipBytes = await fs.readFile(sourcePath)
+    const pkg = unzipScenePackage(zipBytes)
+    const projectRaw = JSON.parse(readTextFileFromScenePackage(pkg, 'project/project.json')) as Record<string, unknown>
+    const parsed = Number(projectRaw?.checkpointTotal)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+  } catch {
+    return 0
+  }
+}
+
 async function storeSceneFile(file: UploadedFilePayload): Promise<StoredSceneFile> {
   const sourcePath = file.filepath
   if (!sourcePath) {
@@ -146,6 +164,7 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
     fileKey: scene.fileKey,
     fileUrl: scene.fileUrl,
     fileSize: scene.fileSize ?? 0,
+    checkpointTotal: typeof scene.checkpointTotal === 'number' && scene.checkpointTotal > 0 ? Math.floor(scene.checkpointTotal) : 0,
     fileType: sanitizeString(scene.fileType),
     originalFilename: sanitizeString(scene.originalFilename),
     publishedBy,
@@ -187,6 +206,7 @@ export async function listScenes(query: SceneListQuery): Promise<{ data: SceneDa
 }
 
 export async function createScene(payload: SceneCreatePayload): Promise<SceneData> {
+  const checkpointTotal = await parseCheckpointTotalFromSceneFile(payload.file)
   const stored = await storeSceneFile(payload.file)
   try {
     const created = await SceneModel.create({
@@ -194,6 +214,7 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
       fileKey: stored.fileKey,
       fileUrl: stored.fileUrl,
       fileSize: stored.fileSize,
+      checkpointTotal,
       fileType: stored.fileType,
       originalFilename: stored.originalFilename,
       publishedBy: new Types.ObjectId(payload.publishedBy),
@@ -212,7 +233,9 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
     return null
   }
   let newFile: StoredSceneFile | null = null
+  let newCheckpointTotal: number | null = null
   if (payload.file) {
+    newCheckpointTotal = await parseCheckpointTotalFromSceneFile(payload.file)
     newFile = await storeSceneFile(payload.file)
   }
   const previousFileKey = scene.fileKey
@@ -223,6 +246,7 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
     scene.fileKey = newFile.fileKey
     scene.fileUrl = newFile.fileUrl
     scene.fileSize = newFile.fileSize
+    scene.checkpointTotal = newCheckpointTotal ?? 0
     scene.fileType = newFile.fileType
     scene.originalFilename = newFile.originalFilename
   }
