@@ -101,75 +101,60 @@ function handleNavigate(key: NavKey) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  background: #f8f8f8;
+  background: #f3f6fb;
   padding-bottom: 85px;
   padding-bottom: calc(85px + constant(safe-area-inset-bottom));
   padding-bottom: calc(85px + env(safe-area-inset-bottom));
 }
 
 .header {
-  padding: 16px;
+  padding: 8px 16px 12px;
 }
 
 .title {
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
-  color: #1a1f2e;
+  color: #171f37;
+  text-align: center;
+  margin-bottom: 14px;
 }
 
 .search-box {
-  margin-top: 12px;
-  background: #ffffff;
-  border-radius: 14px;
-  padding: 10px 12px;
+  background: #e6ebf3;
+  border-radius: 999px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+}
+
+.search-icon {
+  font-size: 14px;
+  color: #94a0b6;
 }
 
 .search-input {
   flex: 1;
   font-size: 13px;
-  color: #1a1f2e;
+  color: #1b2438;
 }
 
 .clear-icon {
   font-size: 14px;
-  color: #a8b0c1;
-}
-
-.status-tabs {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.status-tab {
-  background: #ffffff;
-  border-radius: 999px;
-  text-align: center;
-  padding: 6px 0;
-  font-size: 12px;
-  color: #5f6b83;
-}
-
-.status-tab.active {
-  background: #1f7aec;
-  color: #ffffff;
+  color: #8f99ac;
 }
 
 .content {
   padding: 0 16px 18px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .empty {
-  padding: 40px 0;
+  font-size: 13px;
+  color: #8b96aa;
   text-align: center;
-  color: #8a94a6;
+  padding: 28px 0;
 }
 </style>

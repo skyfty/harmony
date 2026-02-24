@@ -17,6 +17,7 @@
     { "path": "pages/settings/index" },
     { "path": "pages/profile/edit" }
   ],
+  
   "subPackages": [
     {
       "root": "pages/scenery",

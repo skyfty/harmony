@@ -102,33 +102,53 @@ function handleNavigate(key: NavKey) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  background: #f8f8f8;
+  background: #f3f6fb;
   padding-bottom: 85px;
   padding-bottom: calc(85px + constant(safe-area-inset-bottom));
   padding-bottom: calc(85px + env(safe-area-inset-bottom));
 }
 
 .header {
-  padding: 16px;
+  padding: 8px 16px 12px;
 }
 
 .title {
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
-  color: #1a1f2e;
+  color: #171f37;
+  text-align: center;
+  margin-bottom: 14px;
 }
 
-.subtitle {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: #8a94a6;
+.search-box {
+  background: #e6ebf3;
+  border-radius: 999px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-icon {
+  font-size: 14px;
+  color: #94a0b6;
+}
+
+.search-input {
+  flex: 1;
+  font-size: 13px;
+  color: #1b2438;
+}
+
+.clear-icon {
+  font-size: 14px;
+  color: #8f99ac;
 }
 
 .content {
   padding: 0 16px 18px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 </style>
