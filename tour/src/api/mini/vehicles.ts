@@ -1,6 +1,7 @@
 import type { Vehicle } from '@/types/vehicle'
 import type { UserVehicle } from '@/types/vehicle'
 import { miniRequest } from '@harmony/utils'
+import { ensureMiniAuth } from './session'
 
 type VehicleApiDto = {
   id: string
@@ -10,6 +11,8 @@ type VehicleApiDto = {
   coverUrl?: string
   isActive?: boolean
   owned?: boolean
+  isCurrent?: boolean
+  productId?: string | null
 }
 
 type VehiclesResponse = {
@@ -37,14 +40,14 @@ type UserVehiclesResponse = {
 }
 
 export async function listVehicles(): Promise<Vehicle[]> {
+  await ensureMiniAuth()
   const res = await miniRequest<VehiclesResponse>('/vehicles', {
     method: 'GET',
   })
   const vehicles = Array.isArray(res.vehicles) ? res.vehicles : []
   return vehicles.map((vehicle) => {
     const owned = Boolean(vehicle.owned)
-    const locked = vehicle.isActive === false
-    const status: Vehicle['status'] = owned ? 'owned' : locked ? 'locked' : 'available'
+    const status: Vehicle['status'] = owned ? 'owned' : 'locked'
     const coverUrl = vehicle.coverUrl ?? ''
     return {
       id: vehicle.id,
@@ -54,7 +57,37 @@ export async function listVehicles(): Promise<Vehicle[]> {
       summary: vehicle.description ?? '',
       coverUrl,
       status,
+      owned,
+      isCurrent: Boolean(vehicle.isCurrent),
+      productId: typeof vehicle.productId === 'string' ? vehicle.productId : null,
     }
+  })
+}
+
+type PurchaseVehicleResponse = {
+  order?: {
+    id: string
+  }
+}
+
+export async function purchaseVehicleByProduct(productId: string): Promise<PurchaseVehicleResponse> {
+  await ensureMiniAuth()
+  return await miniRequest<PurchaseVehicleResponse>(`/products/${encodeURIComponent(productId)}/purchase`, {
+    method: 'POST',
+    body: {
+      paymentMethod: 'wechat',
+      metadata: {
+        source: 'tour-vehicles',
+      },
+    },
+  })
+}
+
+export async function selectCurrentVehicle(vehicleId: string): Promise<{ currentVehicleId: string }> {
+  await ensureMiniAuth()
+  return await miniRequest<{ currentVehicleId: string }>(`/vehicles/${encodeURIComponent(vehicleId)}/select`, {
+    method: 'POST',
+    body: {},
   })
 }
 

@@ -108,6 +108,7 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   gender?: 'male' | 'female' | 'other'
   birthDate?: Date
   status: 'active' | 'disabled'
+  currentVehicleId?: Types.ObjectId | null
   workShareCount?: number
   exhibitionShareCount?: number
   createdAt: Date
@@ -449,6 +450,8 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   coverUrl?: string
   /** 中文：是否启用 */
   isActive: boolean
+  /** 中文：关联商品 ID（可选） */
+  productId?: Types.ObjectId | null
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */

@@ -8,6 +8,9 @@ export interface Vehicle {
   summary: string;
   coverUrl: string;
   status: VehicleStatus;
+  owned: boolean;
+  isCurrent: boolean;
+  productId?: string | null;
 }
 
 export interface UserVehicle {

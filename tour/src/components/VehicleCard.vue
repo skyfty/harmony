@@ -26,7 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (event: 'tap'): void }>();
 
 const badgeText = computed(() => {
-  if (props.status === 'locked') return '未解锁';
+  if (props.status === 'locked') return '未拥有';
   if (props.selected) return '使用中';
   if (props.status === 'owned') return '已拥有';
   return '可使用';

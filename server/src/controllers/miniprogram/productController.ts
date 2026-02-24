@@ -1,8 +1,10 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ProductModel } from '@/models/Product'
+import { VehicleModel } from '@/models/Vehicle'
 import { OrderModel } from '@/models/Order'
 import { UserProductModel } from '@/models/UserProduct'
+import { UserVehicleModel } from '@/models/UserVehicle'
 import { ensureUserId, getOptionalUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
@@ -206,6 +208,20 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     status: paymentResult.status,
   }
 
+    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
+    if (boundVehicle?._id) {
+      await UserVehicleModel.updateOne(
+        { userId, vehicleId: boundVehicle._id },
+        {
+          $setOnInsert: {
+            userId: new Types.ObjectId(userId),
+            vehicleId: boundVehicle._id,
+            ownedAt: now,
+          },
+        },
+        { upsert: true },
+      ).exec()
+    }
   if (paymentResult.transactionId) {
     paymentInfo.transactionId = paymentResult.transactionId
   }

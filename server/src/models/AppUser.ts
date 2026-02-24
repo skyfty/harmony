@@ -14,6 +14,7 @@ const appUserSchema = new Schema<AppUserDocument>(
     gender: { type: String, enum: ['male', 'female', 'other'], default: undefined },
     birthDate: { type: Date },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
+    currentVehicleId: { type: Schema.Types.ObjectId, ref: 'Vehicle', default: null },
     workShareCount: { type: Number, default: 0 },
     exhibitionShareCount: { type: Number, default: 0 },
   },
