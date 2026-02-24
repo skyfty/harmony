@@ -97,10 +97,7 @@ type ProductWithStateDto = {
   id: string
   slug: string
   name: string
-  category: string
-  summary: string
   coverUrl: string
-  imageUrl?: string
   price: number
   validityDays?: number | null
   applicableSceneTags: string[]
@@ -120,10 +117,7 @@ function buildProductDto(product: ProductDocument, userEntry: { state: string; e
     id: objectIdString(product._id),
     slug: product.slug,
     name: product.name,
-    category: product.category,
-    summary: asString(product.summary, ''),
     coverUrl: asString(product.coverUrl, ''),
-    imageUrl: product.imageUrl ?? undefined,
     price: product.price ?? 0,
     validityDays: product.validityDays ?? null,
     applicableSceneTags: Array.isArray(product.applicableSceneTags) ? product.applicableSceneTags : [],

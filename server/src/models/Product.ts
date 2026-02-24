@@ -16,17 +16,17 @@ const productSchema = new Schema<ProductDocument>(
   {
     name: { type: String, required: true, trim: true },
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    category: { type: String, required: true, trim: true },
+    categoryId: { type: Schema.Types.ObjectId, ref: 'ProductCategory', default: null },
     price: { type: Number, required: true, min: 0 },
-    imageUrl: { type: String },
     coverUrl: { type: String },
-    summary: { type: String, default: '' },
     description: { type: String, default: '' },
     tags: { type: [String], default: [] },
     usageConfig: { type: usageConfigSchema, default: undefined },
     validityDays: { type: Number, default: null, min: 1 },
     applicableSceneTags: { type: [String], default: [] },
     metadata: { type: Schema.Types.Mixed, default: null },
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null },
   },
   {
     timestamps: true,
@@ -34,7 +34,7 @@ const productSchema = new Schema<ProductDocument>(
   },
 )
 
-productSchema.index({ category: 1 })
-productSchema.index({ name: 'text', summary: 'text', description: 'text', tags: 'text' })
+productSchema.index({ categoryId: 1 })
+productSchema.index({ name: 'text', description: 'text', tags: 'text' })
 
 export const ProductModel = model<ProductDocument>('Product', productSchema)

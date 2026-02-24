@@ -3,7 +3,6 @@ import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/adminAuthService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
-import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 import { ensureMiniDemoDataSeeded } from '@/services/miniDemoSeedService'
 
 
@@ -28,8 +27,7 @@ async function main(): Promise<void> {
   })
   console.log('[seed] 管理权限数据已初始化')
 
-  await ensureOptimizeProductsSeeded().catch(() => undefined)
-  console.log('[seed] 优化商城测试商品（若存在）已写入数据库')
+  // Removed optimize product seeding
 
   await ensureMiniDemoDataSeeded().catch((error) => {
     console.warn('[seed] 小程序演示数据写入失败：', error)

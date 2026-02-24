@@ -1,10 +1,11 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
+import { AppUserModel } from '@/models/AppUser'
 import { VehicleModel } from '@/models/Vehicle'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import { ensureUserId, getOptionalUserId } from './utils'
 
-function mapVehicle(row: any, owned: boolean) {
+function mapVehicle(row: any, owned: boolean, isCurrent: boolean) {
   return {
     id: row._id.toString(),
     identifier: String(row.identifier ?? ''),
@@ -12,7 +13,9 @@ function mapVehicle(row: any, owned: boolean) {
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
     isActive: row.isActive !== false,
+    productId: row.productId?.toString?.() ?? null,
     owned,
+    isCurrent,
   }
 }
 
@@ -47,17 +50,25 @@ export async function listVehicles(ctx: Context): Promise<void> {
   const vehicles = await VehicleModel.find(filter).sort({ createdAt: -1 }).lean().exec()
 
   let ownedSet = new Set<string>()
+  let currentVehicleId = ''
   if (userId && Types.ObjectId.isValid(userId) && vehicles.length) {
-    const userVehicles = await UserVehicleModel.find({ userId, vehicleId: { $in: vehicles.map((item) => item._id) } })
+    const [userVehicles, user] = await Promise.all([
+      UserVehicleModel.find({ userId, vehicleId: { $in: vehicles.map((item) => item._id) } })
       .select({ vehicleId: 1 })
       .lean()
-      .exec()
+      .exec(),
+      AppUserModel.findById(userId).select({ currentVehicleId: 1 }).lean().exec(),
+    ])
     ownedSet = new Set(userVehicles.map((item: any) => item.vehicleId.toString()))
+    currentVehicleId = user?.currentVehicleId?.toString?.() ?? ''
   }
 
   ctx.body = {
     total: vehicles.length,
-    vehicles: vehicles.map((row) => mapVehicle(row, ownedSet.has(row._id.toString()))),
+    vehicles: vehicles.map((row) => {
+      const vehicleId = row._id.toString()
+      return mapVehicle(row, ownedSet.has(vehicleId), currentVehicleId === vehicleId)
+    }),
   }
 }
 
@@ -72,5 +83,35 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
   ctx.body = {
     total: rows.length,
     userVehicles: (rows as any[]).map(mapUserVehicle),
+  }
+}
+
+export async function setCurrentVehicle(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid vehicle id')
+  }
+
+  const [vehicle, ownership] = await Promise.all([
+    VehicleModel.findById(id).lean().exec(),
+    UserVehicleModel.findOne({ userId, vehicleId: id }).lean().exec(),
+  ])
+
+  if (!vehicle || vehicle.isActive === false) {
+    ctx.throw(404, 'Vehicle not found')
+  }
+  if (!ownership) {
+    ctx.throw(403, 'Vehicle not owned')
+  }
+
+  await AppUserModel.updateOne(
+    { _id: userId },
+    { $set: { currentVehicleId: new Types.ObjectId(id) } },
+  ).exec()
+
+  ctx.body = {
+    success: true,
+    currentVehicleId: id,
   }
 }

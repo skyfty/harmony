@@ -3,6 +3,8 @@ import { Types } from 'mongoose'
 import { VehicleModel } from '@/models/Vehicle'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import { UserModel } from '@/models/User'
+import { ProductModel } from '@/models/Product'
+import { getTransportProductCategory } from '@/services/productCategoryService'
 
 type VehiclePayload = {
   identifier?: number | string
@@ -40,9 +42,29 @@ function mapVehicle(row: any) {
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
     isActive: row.isActive !== false,
+    productId: row.productId?.toString?.() ?? null,
     createdAt: row.createdAt?.toISOString?.() ?? null,
     updatedAt: row.updatedAt?.toISOString?.() ?? null,
   }
+}
+
+function normalizeSlugPart(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+async function buildVehicleProductSlug(base: string): Promise<string> {
+  const normalized = normalizeSlugPart(base) || 'vehicle-product'
+  let next = normalized
+  let cursor = 1
+  while (await ProductModel.exists({ slug: next })) {
+    cursor += 1
+    next = `${normalized}-${cursor}`
+  }
+  return next
 }
 
 function mapUserVehicle(row: any) {
@@ -133,13 +155,39 @@ export async function createVehicle(ctx: Context): Promise<void> {
     ctx.throw(409, 'identifier already exists')
   }
 
-  const created = await VehicleModel.create({
-    identifier,
+  const transportCategory = await getTransportProductCategory()
+  if (!transportCategory) {
+    ctx.throw(500, 'Transport product category is not initialized')
+  }
+
+  const slug = await buildVehicleProductSlug(`vehicle-${identifier}-${name}`)
+  const product = await ProductModel.create({
     name,
+    slug,
+    categoryId: new Types.ObjectId(transportCategory.id),
     description,
     coverUrl,
-    isActive: body.isActive !== false,
+    price: 0,
+    metadata: {
+      source: 'vehicle',
+      vehicleIdentifier: identifier,
+    },
   })
+
+  let created: any = null
+  try {
+    created = await VehicleModel.create({
+      identifier,
+      name,
+      description,
+      coverUrl,
+      isActive: body.isActive !== false,
+      productId: product._id,
+    })
+  } catch (error) {
+    await ProductModel.findByIdAndDelete(product._id).exec()
+    throw error
+  }
   const row = await VehicleModel.findById(created._id).lean().exec()
   ctx.status = 201
   ctx.body = mapVehicle(row)
@@ -190,6 +238,22 @@ export async function updateVehicle(ctx: Context): Promise<void> {
     .lean()
     .exec()
 
+  if (updated?.productId) {
+    const linkedProduct = await ProductModel.findById(updated.productId).select({ metadata: 1 }).lean().exec()
+    await ProductModel.findByIdAndUpdate(updated.productId, {
+      name: updated.name,
+      description: updated.description ?? '',
+      coverUrl: updated.coverUrl ?? '',
+      isDeleted: false,
+      deletedAt: null,
+      metadata: {
+        ...(typeof linkedProduct?.metadata === 'object' && linkedProduct?.metadata ? linkedProduct.metadata : {}),
+        source: 'vehicle',
+        vehicleIdentifier: updated.identifier,
+      },
+    }).exec()
+  }
+
   ctx.body = mapVehicle(updated)
 }
 
@@ -198,7 +262,11 @@ export async function deleteVehicle(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid vehicle id')
   }
+  const current = await VehicleModel.findById(id).lean().exec()
   await VehicleModel.findByIdAndDelete(id).exec()
+  if (current?.productId) {
+    await ProductModel.findByIdAndUpdate(current.productId, { isDeleted: true, deletedAt: new Date() }).exec()
+  }
   await UserVehicleModel.deleteMany({ vehicleId: id }).exec()
   ctx.status = 200
   ctx.body = {}

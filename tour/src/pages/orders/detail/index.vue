@@ -16,7 +16,12 @@
       <view class="card">
         <text class="section">商品明细</text>
         <view v-for="item in order.items" :key="item.productId" class="item">
-          <text class="item-name">{{ item.name }}</text>
+          <view class="item-main">
+            <text class="item-name">{{ item.name }}</text>
+            <text v-if="item.vehicle" class="vehicle-tag">车辆商品</text>
+            <text v-if="item.vehicle?.name" class="vehicle-meta">车辆名称：{{ item.vehicle?.name }}</text>
+            <text v-if="item.vehicle?.identifier" class="vehicle-meta">车辆编号：{{ item.vehicle?.identifier }}</text>
+          </view>
           <text class="item-meta">¥ {{ item.price }} × {{ item.quantity }}</text>
         </view>
         <view class="total">
@@ -54,10 +59,6 @@ async function loadOrder(query: Record<string, any> | undefined) {
     order.value = null;
     uni.showToast({ title: '加载失败', icon: 'none' });
   }
-}
-
-function back() {
-  uni.navigateBack();
 }
 
 function statusText(status: OrderStatus) {
@@ -129,12 +130,35 @@ function formatDateTime(value: string) {
 .item {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
   margin-top: 10px;
+}
+
+.item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .item-name {
   font-size: 12px;
   color: #1a1f2e;
+}
+
+.vehicle-tag {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(31, 122, 236, 0.1);
+  color: #1f7aec;
+  font-size: 11px;
+}
+
+.vehicle-meta {
+  font-size: 11px;
+  color: #5f6b83;
 }
 
 .item-meta {

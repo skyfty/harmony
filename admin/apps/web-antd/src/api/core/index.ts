@@ -4,6 +4,7 @@ export * from './rbac';
 export * from './resources';
 export * from './user';
 export * from './products';
+export * from './product-categories';
 export * from './coupons';
 export * from './orders';
 export * from './scenes';

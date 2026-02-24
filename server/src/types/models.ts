@@ -108,6 +108,7 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   gender?: 'male' | 'female' | 'other'
   birthDate?: Date
   status: 'active' | 'disabled'
+  currentVehicleId?: Types.ObjectId | null
   workShareCount?: number
   exhibitionShareCount?: number
   createdAt: Date
@@ -343,12 +344,10 @@ export interface ProductUsageConfig {
 export interface WarehouseSnapshot {
   /** 中文：商品名称 */
   name: string
-  /** 中文：商品分类 */
-  category: string
   /** 中文：商品价格（单位：分或元按约定） */
   price: number
-  /** 中文：商品图片 URL（可选） */
-  imageUrl?: string
+  /** 中文：商品封面 URL（可选） */
+  coverUrl?: string
   /** 中文：商品描述（可选） */
   description?: string
   /** 中文：商品使用配置快照（可选） */
@@ -385,16 +384,12 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   name: string
   /** 中文：短链接或标识符（slug） */
   slug: string
-  /** 中文：商品分类 */
-  category: string
+  /** 中文：商品分类 ID（可选） */
+  categoryId?: Types.ObjectId | null
   /** 中文：商品价格 */
   price: number
-  /** 中文：图片 URL（可选） */
-  imageUrl?: string
   /** 中文：封面 URL（可选） */
   coverUrl?: string | null
-  /** 中文：摘要（可选） */
-  summary?: string | null
   /** 中文：详细描述（可选） */
   description?: string
   /** 中文：标签数组 */
@@ -407,6 +402,29 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   applicableSceneTags: string[]
   /** 中文：额外元数据（可选） */
   metadata?: Record<string, unknown> | null
+  /** 中文：软删除标记 */
+  isDeleted: boolean
+  /** 中文：软删除时间（可选） */
+  deletedAt?: Date | null
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export interface ProductCategoryDocument extends Document<Types.ObjectId> {
+  /** 中文：分类名称 */
+  name: string
+  /** 中文：分类描述（可选） */
+  description?: string | null
+  /** 中文：排序值 */
+  sortOrder: number
+  /** 中文：是否启用 */
+  enabled: boolean
+  /** 中文：规范化名称 */
+  normalizedName: string
+  /** 中文：是否内置 */
+  isBuiltin: boolean
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */
@@ -449,6 +467,8 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   coverUrl?: string
   /** 中文：是否启用 */
   isActive: boolean
+  /** 中文：关联商品 ID（可选） */
+  productId?: Types.ObjectId | null
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */

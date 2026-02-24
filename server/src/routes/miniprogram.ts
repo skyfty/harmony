@@ -59,6 +59,7 @@ import {
 import {
   listUserVehicles,
   listVehicles,
+  setCurrentVehicle,
 } from '@/controllers/miniprogram/vehicleController'
 import {
   listOrders,
@@ -152,6 +153,7 @@ miniRouter.post('/exhibitions/:id/share', shareExhibition)
 // products
 miniRouter.post('/products/:id/purchase', purchaseProduct)
 miniRouter.get('/user-vehicles', listUserVehicles)
+miniRouter.post('/vehicles/:id/select', setCurrentVehicle)
 
 // coupons (user-scoped)
 miniRouter.get('/coupons', listUserCoupons)

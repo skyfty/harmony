@@ -1,8 +1,10 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ProductModel } from '@/models/Product'
+import { VehicleModel } from '@/models/Vehicle'
 import { OrderModel } from '@/models/Order'
 import { UserProductModel } from '@/models/UserProduct'
+import { UserVehicleModel } from '@/models/UserVehicle'
 import { ensureUserId, getOptionalUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
@@ -34,11 +36,8 @@ interface ProductResponse {
   id: string
   slug: string
   name: string
-  category: string
   price: number
-  imageUrl?: string
   coverUrl?: string
-  summary?: string
   description?: string
   tags?: string[]
   usageConfig?: ProductUsageConfig
@@ -62,11 +61,8 @@ interface ProductLean {
   _id: Types.ObjectId
   slug: string
   name: string
-  category: string
   price: number
-  imageUrl?: string
   coverUrl?: string | null
-  summary?: string | null
   description?: string
   tags?: string[]
   usageConfig?: ProductUsageConfig | null
@@ -90,11 +86,8 @@ function buildProductResponse(product: ProductLean, userEntry?: {
     id: product._id.toString(),
     slug: product.slug,
     name: product.name,
-    category: product.category,
     price: product.price,
-    imageUrl: product.imageUrl ?? undefined,
     coverUrl: (product.coverUrl ?? undefined) ?? undefined,
-    summary: (product.summary ?? undefined) ?? undefined,
     description: product.description ?? undefined,
     tags: Array.isArray(product.tags) ? product.tags : [],
     usageConfig: product.usageConfig ?? undefined,
@@ -111,11 +104,7 @@ function buildProductResponse(product: ProductLean, userEntry?: {
 
 export async function listProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
-  const { category } = ctx.query as { category?: string }
-  const filter: Record<string, unknown> = {}
-  if (category) {
-    filter.category = category
-  }
+  const filter: Record<string, unknown> = { isDeleted: { $ne: true } }
 
   const products = (await ProductModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as ProductLean[]
 
@@ -142,7 +131,7 @@ export async function listProducts(ctx: Context): Promise<void> {
 export async function getProduct(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { id } = ctx.params as { id: string }
-  const product = (await ProductModel.findById(id).lean().exec()) as ProductLean | null
+  const product = (await ProductModel.findOne({ _id: id, isDeleted: { $ne: true } }).lean().exec()) as ProductLean | null
   if (!product) {
     ctx.throw(404, 'Product not found')
     return
@@ -172,7 +161,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid product id')
   }
-  const product = await ProductModel.findById(id).exec()
+  const product = await ProductModel.findOne({ _id: id, isDeleted: { $ne: true } }).exec()
   if (!product) {
     ctx.throw(404, 'Product not found')
     return
@@ -206,6 +195,20 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     status: paymentResult.status,
   }
 
+    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
+    if (boundVehicle?._id) {
+      await UserVehicleModel.updateOne(
+        { userId, vehicleId: boundVehicle._id },
+        {
+          $setOnInsert: {
+            userId: new Types.ObjectId(userId),
+            vehicleId: boundVehicle._id,
+            ownedAt: now,
+          },
+        },
+        { upsert: true },
+      ).exec()
+    }
   if (paymentResult.transactionId) {
     paymentInfo.transactionId = paymentResult.transactionId
   }

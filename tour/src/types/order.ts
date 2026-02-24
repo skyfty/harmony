@@ -8,9 +8,15 @@ export interface OrderItem {
   product?: {
     id: string;
     slug: string;
-    category: string;
-    imageUrl?: string;
+    coverUrl?: string;
     description?: string;
+  };
+  vehicle?: {
+    id: string;
+    identifier: string;
+    name: string;
+    description?: string;
+    coverUrl?: string;
   };
 }
 

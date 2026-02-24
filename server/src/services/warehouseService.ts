@@ -15,9 +15,8 @@ export async function addProductToWarehouse({ userId, product, orderId }: AddPro
   const now = new Date()
   const snapshot = {
     name: product.name,
-    category: product.category,
     price: product.price,
-    imageUrl: product.imageUrl ?? undefined,
+    coverUrl: product.coverUrl ?? undefined,
     description: product.description ?? undefined,
     usageConfig: product.usageConfig ?? undefined,
   }

@@ -16,11 +16,10 @@ export interface ProductItem {
   id: string;
   name: string;
   slug: string;
-  type: string;
-  category: string;
+  categoryId: null | string;
+  coverUrl?: null | string;
   validityDays: number | null;
   applicableSceneTags: string[];
-  summary: string | null;
   description: string | null;
   price: number;
   metadata: Record<string, unknown> | null;
@@ -32,17 +31,16 @@ export interface ListProductsParams {
   keyword?: string;
   page?: number;
   pageSize?: number;
-  type?: string;
+  categoryId?: string;
 }
 
 export interface CreateProductPayload {
   name: string;
   slug: string;
-  type: string;
-  category?: string;
+  categoryId?: null | string;
+  coverUrl?: null | string;
   validityDays?: number | null;
   applicableSceneTags?: string[];
-  summary?: string | null;
   description?: string | null;
   price?: number;
   metadata?: Record<string, unknown> | null;
@@ -51,11 +49,10 @@ export interface CreateProductPayload {
 export interface UpdateProductPayload {
   name?: string;
   slug?: string;
-  type?: string;
-  category?: string;
+  categoryId?: null | string;
+  coverUrl?: null | string;
   validityDays?: number | null;
   applicableSceneTags?: string[];
-  summary?: string | null;
   description?: string | null;
   price?: number;
   metadata?: Record<string, unknown> | null;

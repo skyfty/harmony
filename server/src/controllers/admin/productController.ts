@@ -1,16 +1,17 @@
 import type { Context } from 'koa'
 import { ProductModel } from '@/models/Product'
+import { ProductCategoryModel } from '@/models/ProductCategory'
+import { VehicleModel } from '@/models/Vehicle'
 import { Types } from 'mongoose'
 
 type ProductPayload = {
   name?: string
   slug?: string
-  type?: string
-  category?: string
+  categoryId?: string | null
   validityDays?: number | null
   applicableSceneTags?: string[]
-  summary?: string | null
   description?: string | null
+  coverUrl?: string | null
   price?: number
   metadata?: Record<string, unknown> | null
 }
@@ -40,11 +41,10 @@ function mapProduct(row: any) {
     id: row._id.toString(),
     name: row.name,
     slug: row.slug,
-    type: row.category,
-    category: row.category,
+    categoryId: row.categoryId?.toString?.() ?? null,
+    coverUrl: row.coverUrl ?? null,
     validityDays: row.validityDays ?? null,
     applicableSceneTags: Array.isArray(row.applicableSceneTags) ? row.applicableSceneTags : [],
-    summary: row.summary ?? null,
     description: row.description ?? null,
     price: row.price,
     metadata: row.metadata ?? null,
@@ -53,17 +53,37 @@ function mapProduct(row: any) {
   }
 }
 
+async function resolveCategoryPayload(payload: ProductPayload, fallback: { categoryId?: any | null }) {
+  const categoryIdText = toStringValue(payload.categoryId)
+  if (categoryIdText) {
+    if (!Types.ObjectId.isValid(categoryIdText)) {
+      throw new Error('Invalid category id')
+    }
+    const categoryRow = await ProductCategoryModel.findById(categoryIdText).lean().exec()
+    if (!categoryRow || categoryRow.enabled === false) {
+      throw new Error('Category not found or disabled')
+    }
+    return {
+      categoryId: categoryRow._id,
+    }
+  }
+
+  return {
+    categoryId: fallback.categoryId ?? null,
+  }
+}
+
 export async function listProducts(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, type } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, categoryId } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
-  const filter: Record<string, unknown> = {}
+  const filter: Record<string, unknown> = { isDeleted: { $ne: true } }
   if (keyword && keyword.trim()) {
     filter.$or = [{ name: new RegExp(keyword.trim(), 'i') }, { slug: new RegExp(keyword.trim(), 'i') }]
   }
-  if (type && type.trim()) {
-    filter.category = type.trim()
+  if (categoryId && Types.ObjectId.isValid(categoryId)) {
+    filter.categoryId = new Types.ObjectId(categoryId)
   }
   const [rows, total] = await Promise.all([
     ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
@@ -82,7 +102,7 @@ export async function getProduct(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid product id')
   }
-  const row = await ProductModel.findById(id).lean().exec()
+  const row = await ProductModel.findOne({ _id: id, isDeleted: { $ne: true } }).lean().exec()
   if (!row) {
     ctx.throw(404, 'Product not found')
   }
@@ -93,11 +113,17 @@ export async function createProduct(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as ProductPayload
   const name = toStringValue(body.name)
   const slug = toStringValue(body.slug)?.toLowerCase()
-  const category = toStringValue(body.type) ?? toStringValue(body.category)
+  let categoryPayload: { categoryId: Types.ObjectId | null }
+  try {
+    categoryPayload = await resolveCategoryPayload(body, {})
+  } catch (error) {
+    ctx.throw(400, (error as Error).message)
+    return
+  }
   const validityDays = body.validityDays === null || body.validityDays === undefined ? null : toNumberValue(body.validityDays)
   const price = toNumberValue(body.price) ?? 0
-  if (!name || !slug || !category) {
-    ctx.throw(400, 'name, slug and type are required')
+  if (!name || !slug || !categoryPayload.categoryId) {
+    ctx.throw(400, 'name, slug and categoryId are required')
   }
   if (validityDays !== null && validityDays < 1) {
     ctx.throw(400, 'validityDays must be greater than 0')
@@ -112,11 +138,11 @@ export async function createProduct(ctx: Context): Promise<void> {
   const created = await ProductModel.create({
     name,
     slug,
-    category,
+    categoryId: categoryPayload.categoryId,
     validityDays,
     applicableSceneTags: toStringArray(body.applicableSceneTags),
-    summary: toStringValue(body.summary) ?? '',
     description: toStringValue(body.description) ?? '',
+    coverUrl: toStringValue(body.coverUrl) ?? undefined,
     price,
     metadata: body.metadata ?? null,
   })
@@ -130,14 +156,22 @@ export async function updateProduct(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid product id')
   }
-  const current = await ProductModel.findById(id).lean().exec()
+  const current = await ProductModel.findOne({ _id: id, isDeleted: { $ne: true } }).lean().exec()
   if (!current) {
     ctx.throw(404, 'Product not found')
   }
   const body = (ctx.request.body ?? {}) as ProductPayload
   const nextName = toStringValue(body.name) ?? current.name
   const nextSlug = toStringValue(body.slug)?.toLowerCase() ?? current.slug
-  const nextCategory = toStringValue(body.type) ?? toStringValue(body.category) ?? current.category
+  let nextCategory: { categoryId: Types.ObjectId | null }
+  try {
+    nextCategory = await resolveCategoryPayload(body, {
+      categoryId: current.categoryId ?? null,
+    })
+  } catch (error) {
+    ctx.throw(400, (error as Error).message)
+    return
+  }
   const nextValidityDays =
     body.validityDays === undefined
       ? current.validityDays ?? null
@@ -162,12 +196,12 @@ export async function updateProduct(ctx: Context): Promise<void> {
     {
       name: nextName,
       slug: nextSlug,
-      category: nextCategory,
+      categoryId: nextCategory.categoryId ?? null,
       validityDays: nextValidityDays,
       applicableSceneTags:
         body.applicableSceneTags === undefined ? current.applicableSceneTags : toStringArray(body.applicableSceneTags),
-      summary: body.summary === undefined ? current.summary : toStringValue(body.summary) ?? '',
       description: body.description === undefined ? current.description : toStringValue(body.description) ?? '',
+      coverUrl: body.coverUrl === undefined ? current.coverUrl : (toStringValue(body.coverUrl) ?? ''),
       price: nextPrice,
       metadata: body.metadata === undefined ? current.metadata : body.metadata,
     },
@@ -183,8 +217,11 @@ export async function deleteProduct(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid product id')
   }
-  await ProductModel.findByIdAndDelete(id).exec()
-  // Return explicit body to avoid client-side JSON parse errors when receiving 204 No Content
+  const vehicle = await VehicleModel.findOne({ productId: id }).select({ _id: 1, name: 1 }).lean().exec()
+  if (vehicle) {
+    ctx.throw(409, `该商品已关联车辆“${vehicle.name ?? '未知'}”，请先删除车辆`)
+  }
+  await ProductModel.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() }).exec()
   ctx.status = 200
   ctx.body = {}
 }
