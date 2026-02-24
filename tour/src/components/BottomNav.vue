@@ -99,15 +99,15 @@ function go(value: NavKey) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 10px;
   background: #ffffff;
   border-top: 1px solid #f3f4f6;
-  height: 85px;
+  height: 65px;
   box-sizing: border-box;
   padding-bottom: constant(safe-area-inset-bottom);
   padding-bottom: env(safe-area-inset-bottom);
-  height: calc(85px + constant(safe-area-inset-bottom));
-  height: calc(85px + env(safe-area-inset-bottom));
+  height: calc(65px + constant(safe-area-inset-bottom));
+  height: calc(65px + env(safe-area-inset-bottom));
   z-index: 100;
 }
 

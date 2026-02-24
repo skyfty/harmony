@@ -1,6 +1,6 @@
 <template>
-  <view class="page">
-    <view class="header" :style="{ paddingTop: statusBarHeight + 'px' }">
+  <view class="page" :style="{ paddingTop: topInset + 'px' }">
+    <view class="header">
       <view class="profile">
         <view class="avatar">
           <image v-if="profile.avatarUrl" class="avatar-img" :src="profile.avatarUrl" mode="aspectFill" />
@@ -43,15 +43,13 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
-const statusBarHeight = ref(0);
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
 import { getProfile } from '@/api/mini';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
+
+const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
 const profile = ref<UserProfile>({
   id: '',
@@ -61,6 +59,8 @@ const profile = ref<UserProfile>({
 });
 
 onShow(() => {
+  topInset.value = getTopSafeAreaMetrics().contentTopInset;
+  applyLightNavigationBar();
   void reloadProfile();
 });
 

@@ -1,9 +1,9 @@
 <template>
   <view
     class="page-header"
-    :style="{ paddingTop: statusBarHeight + 'px' }"
+    :style="{ paddingTop: topInset + 'px' }"
   >
-    <view class="page-header__navbar">
+    <view class="page-header__navbar" :style="{ height: navBarHeight + 'px' }">
       <view
         v-if="showBack"
         class="page-header__back"
@@ -30,7 +30,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
+import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
 
 withDefaults(
   defineProps<{
@@ -43,14 +45,26 @@ withDefaults(
   },
 );
 
-const statusBarHeight = ref(0);
+const topInset = ref(0);
+const navBarHeight = ref(44);
 
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch {
-  /* fallback: keep 0 */
+function syncLayoutMetrics() {
+  const metrics = getTopSafeAreaMetrics();
+  topInset.value = metrics.topInset;
+  navBarHeight.value = metrics.navBarHeight;
 }
+
+syncLayoutMetrics();
+
+onMounted(() => {
+  syncLayoutMetrics();
+  applyLightNavigationBar();
+});
+
+onShow(() => {
+  syncLayoutMetrics();
+  applyLightNavigationBar();
+});
 
 function handleBack() {
   uni.navigateBack({
@@ -72,7 +86,6 @@ function handleBack() {
 .page-header__navbar {
   display: flex;
   align-items: center;
-  height: 44px;
   padding: 0 12px;
 }
 

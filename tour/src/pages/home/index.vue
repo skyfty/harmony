@@ -1,10 +1,7 @@
 <template>
-  <view class="page">
+  <view class="page" :style="{ paddingTop: topInset + 'px' }">
 
     <view class="content">
-      <view class="section-title">
-        <text class="section-text">景区推荐</text>
-      </view>
       <view class="grid">
         <ScenicCard
           v-for="scenic in filtered"
@@ -17,15 +14,6 @@
         />
       </view>
 
-      <view class="section-title">
-        <text class="section-text">热门活动</text>
-      </view>
-      <view class="activity">
-        <view v-for="event in events" :key="event.id" class="activity-card">
-          <text class="activity-title">{{ event.title }}</text>
-          <text class="activity-desc">{{ event.description }}</text>
-        </view>
-      </view>
     </view>
 
     <BottomNav active="scenic" @navigate="handleNavigate" />
@@ -34,18 +22,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 
-const statusBarHeight = ref(0);
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch { /* fallback */ }
 import BottomNav from '@/components/BottomNav.vue';
-import PageHeader from '@/components/PageHeader.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listHotEvents, listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
 import type { ScenicSummary } from '@/types/scenic';
+
+const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
 const keyword = ref('');
 const scenics = ref<ScenicSummary[]>([]);
@@ -91,6 +77,11 @@ onMounted(() => {
   });
 });
 
+onShow(() => {
+  topInset.value = getTopSafeAreaMetrics().contentTopInset;
+  applyLightNavigationBar();
+});
+
 const filtered = computed(() => {
   const k = keyword.value.trim();
   if (!k) return scenics.value;
@@ -110,9 +101,9 @@ function handleNavigate(key: NavKey) {
 .page {
   min-height: 100vh;
   background: #f8f8f8;
-  padding-bottom: 85px;
-  padding-bottom: calc(85px + constant(safe-area-inset-bottom));
-  padding-bottom: calc(85px + env(safe-area-inset-bottom));
+  padding-bottom: 65px;
+  padding-bottom: calc(65px + constant(safe-area-inset-bottom));
+  padding-bottom: calc(65px + env(safe-area-inset-bottom));
 }
 
 .header {
