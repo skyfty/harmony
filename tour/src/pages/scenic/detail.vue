@@ -63,6 +63,17 @@
           </view>
         </view>
 
+        <view class="progress-section">
+          <view class="progress-badge">
+            <text class="progress-badge__value">{{ scenicProgressPercentText }}</text>
+          </view>
+          <view class="progress-content">
+            <text class="progress-title">打卡进度</text>
+            <text class="progress-desc">{{ scenicProgressDescription }}</text>
+          </view>
+          <view class="progress-check">✓</view>
+        </view>
+
         <!-- 景区介绍 -->
         <view class="intro-section">
           <view class="section-header">
@@ -87,16 +98,15 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import ImageSwiper from '@/components/ImageSwiper.vue';
-import UserCommentItem from '@/components/UserCommentItem.vue';
 import { trackAnalyticsEvent } from '@harmony/utils';
-import { rateScenic } from '@/api/mini';
-import { getScenic, toggleScenicFavorite } from '@/api/mini';
+import { getScenic, listAchievements, toggleScenicFavorite } from '@/api/mini';
+import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicDetail } from '@/types/scenic';
 
 const scenic = ref<ScenicDetail | null>(null);
 const favoriteLoading = ref(false);
 const currentSlide = ref(0);
+const scenicCheckinProgress = ref<ScenicCheckinProgressItem | null>(null);
 
 /* Status bar height for floating back button positioning */
 const statusBarHeight = ref(0);
@@ -112,16 +122,34 @@ const ratingLabel = computed(() => {
   return v.toFixed(v >= 10 ? 0 : 1);
 });
 
+const scenicProgressPercentText = computed(() => `${Math.round(computeScenicCheckinRatio() * 100)}%`);
+
+const scenicProgressDescription = computed(() => {
+  const checked = getSafeCount(scenicCheckinProgress.value?.checkedCount);
+  const total = getSafeCount(scenicCheckinProgress.value?.totalCount);
+  const percent = Math.round(computeScenicCheckinRatio() * 100);
+  if (percent >= 100 && total > 0) {
+    return '已完成该景区所有景点打卡';
+  }
+  if (total > 0) {
+    return `已完成该景区${checked}/${total}个景点打卡`;
+  }
+  return '暂未开始该景区景点打卡';
+});
+
 onLoad((query) => {
   const id = typeof query?.id === 'string' ? query.id : '';
   if (!id) {
     scenic.value = null;
+    scenicCheckinProgress.value = null;
     return;
   }
+  scenicCheckinProgress.value = null;
   void getScenic(id)
     .then((scenicRes) => {
       scenic.value = scenicRes ?? null;
       if (scenicRes) {
+        void loadScenicCheckinProgress(scenicRes.id);
         void trackAnalyticsEvent({
           eventType: 'view_spot',
           sceneId: scenicRes.sceneId,
@@ -148,6 +176,18 @@ function handleBack() {
       void uni.redirectTo({ url: '/pages/home/index' });
     },
   });
+}
+
+async function loadScenicCheckinProgress(scenicId: string): Promise<void> {
+  try {
+    const achievementData = await listAchievements();
+    const progressList = Array.isArray(achievementData.scenicCheckinProgresses)
+      ? achievementData.scenicCheckinProgresses
+      : [];
+    scenicCheckinProgress.value = progressList.find((item) => item.scenicId === scenicId) ?? null;
+  } catch {
+    scenicCheckinProgress.value = null;
+  }
 }
 
 function enterScenery() {
@@ -244,6 +284,22 @@ function getErrorMessage(reason: unknown): string {
   }
   if (typeof reason === 'string') return reason;
   return '操作失败，请稍后重试';
+}
+
+function getSafeCount(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(Number(value), 0);
+}
+
+function computeScenicCheckinRatio(): number {
+  const checked = getSafeCount(scenicCheckinProgress.value?.checkedCount);
+  const total = getSafeCount(scenicCheckinProgress.value?.totalCount);
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.min(checked / total, 1);
 }
 </script>
 
@@ -378,8 +434,6 @@ function getErrorMessage(reason: unknown): string {
   align-items: center;
   gap: 2px;
   padding: 8px 12px;
-  border-radius: 16px;
-  border: 1px solid #e3e9f2;
   flex-shrink: 0;
   transition: all 0.2s;
 }
@@ -408,6 +462,68 @@ function getErrorMessage(reason: unknown): string {
   color: #8a94a6;
 }
 
+.progress-section {
+  margin-top: 16px;
+  padding: 14px 14px;
+  border-radius: 16px;
+  border: 1px solid #dbe3f0;
+  background: #f5f7fb;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-badge {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(32, 188, 126, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.progress-badge__value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #14a16b;
+}
+
+.progress-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.progress-title {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a1f2e;
+}
+
+.progress-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8a94a6;
+  line-height: 1.4;
+}
+
+.progress-check {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #16b574;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 /* ---- Intro section ---- */
 .intro-section {
   margin-top: 24px;
@@ -420,11 +536,11 @@ function getErrorMessage(reason: unknown): string {
 }
 
 .section-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #1f7aec;
-  flex-shrink: 0;
+    width: 6px;
+    height: 15px;
+    border-radius: 30%;
+    background: #4b96f3;
+    flex-shrink: 0;
 }
 
 .section-title {

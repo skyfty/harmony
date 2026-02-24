@@ -9,6 +9,12 @@
           <text class="value">{{ rating.toFixed(1) }}</text>
         </view>
       </view>
+      <view v-if="typeof progressPercent === 'number'" class="progress-row">
+        <text class="progress-label">{{ progressText || '打卡进度' }}</text>
+        <view class="progress-tag">
+          <text class="progress-value">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
+        </view>
+      </view>
       <text v-if="summary" class="summary">{{ summary }}</text>
     </view>
   </view>
@@ -20,6 +26,8 @@ defineProps<{
   summary: string | null;
   coverUrl: string;
   rating?: number;
+  progressPercent?: number;
+  progressText?: string;
 }>();
 
 const emit = defineEmits<{ (event: 'tap'): void }>();
@@ -78,5 +86,33 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   font-size: 12px;
   color: #8a94a6;
   line-height: 18px;
+}
+
+.progress-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: #8a94a6;
+}
+
+.progress-tag {
+  height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: rgba(32, 188, 126, 0.14);
+  display: flex;
+  align-items: center;
+}
+
+.progress-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: #16a16d;
 }
 </style>
