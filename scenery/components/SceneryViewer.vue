@@ -434,7 +434,6 @@ import { loadScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
 type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
-  sceneUrl?: string;
   physicsInterpolation?: boolean;
 };
 
@@ -10178,15 +10177,12 @@ function configurePhysicsInterpolation(physinterpParam: string): void {
 function applyInput(params: {
   projectId?: string;
   packageUrl?: string;
-  sceneUrl?: string;
   physinterp?: string;
 }): void {
   bootstrapRuntimeIfNeeded();
 
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
-  const packageUrlParamRaw = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
-  const sceneUrlParamRaw = typeof params.sceneUrl === 'string' ? params.sceneUrl.trim() : '';
-  const packageUrlParam = packageUrlParamRaw || sceneUrlParamRaw;
+  const packageUrlParam = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
   const physinterpParam = typeof params.physinterp === 'string' ? params.physinterp.trim() : '';
 
   const inputKey = `${projectIdParam}::${packageUrlParam}::${String(props.physicsInterpolation ?? '')}::${physinterpParam}`;
@@ -10233,7 +10229,6 @@ function applyInput(params: {
 function hasAnyPropInput(): boolean {
   return Boolean(
     (typeof props.packageUrl === 'string' && props.packageUrl.trim())
-    || (typeof props.sceneUrl === 'string' && props.sceneUrl.trim())
     || (typeof props.projectId === 'string' && props.projectId.trim()),
   );
 }
@@ -10248,14 +10243,13 @@ onMounted(() => {
     applyInput({
       projectId: props.projectId,
       packageUrl: props.packageUrl,
-      sceneUrl: props.sceneUrl,
       physinterp: '',
     });
   }
 });
 
 watch(
-  () => [props.projectId, props.packageUrl, props.sceneUrl, props.physicsInterpolation],
+  () => [props.projectId, props.packageUrl, props.physicsInterpolation],
   () => {
     if (!hasAnyPropInput()) {
       return;
@@ -10263,7 +10257,6 @@ watch(
     applyInput({
       projectId: props.projectId,
       packageUrl: props.packageUrl,
-      sceneUrl: props.sceneUrl,
       physinterp: '',
     });
   },

@@ -3,7 +3,6 @@
     <SceneryViewer
       :project-id="projectId"
       :package-url="packageUrl"
-      :scene-url="sceneUrl"
       @punch="handlePunch"
     />
   </view>
@@ -17,7 +16,7 @@ import { createPunchRecord, trackAnalyticsEvent } from '@harmony/utils';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
-const sceneUrl = ref<string>('');
+// sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
@@ -58,7 +57,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
-  sceneUrl.value = typeof record.sceneUrl === 'string' ? record.sceneUrl : '';
+  // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   enterAt.value = Date.now();
