@@ -84,6 +84,34 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     }
     return raw
   }
+
+  const requiredJointTrimMode = (key: string): 'auto' | 'manual' => {
+    const raw = record[key]
+    if (raw === 'auto' || raw === 'manual') {
+      return raw
+    }
+    throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
+  }
+
+  const requiredJointTrimManual = (key: string): { start: number; end: number } => {
+    const raw = record[key]
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
+    }
+    const obj = raw as Record<string, unknown>
+    const start = typeof obj.start === 'number' ? obj.start : Number(obj.start)
+    const end = typeof obj.end === 'number' ? obj.end : Number(obj.end)
+    if (!Number.isFinite(start)) {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}.start`)
+    }
+    if (!Number.isFinite(end)) {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}.end`)
+    }
+    return {
+      start: Math.max(0, start),
+      end: Math.max(0, end),
+    }
+  }
   const requiredAssetIdOrNull = (key: string): string | null => {
     const raw = record[key]
     if (raw === null) {
@@ -193,6 +221,8 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     width: requiredNumber('width'),
     thickness: requiredNumber('thickness'),
     smoothing: requiredNumber('smoothing'),
+    jointTrimMode: requiredJointTrimMode('jointTrimMode'),
+    jointTrimManual: requiredJointTrimManual('jointTrimManual'),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
@@ -627,6 +657,8 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         width: wallProps.width,
         thickness: wallProps.thickness,
         smoothing: wallProps.smoothing,
+        jointTrimMode: wallProps.jointTrimMode,
+        jointTrimManual: wallProps.jointTrimManual,
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
         bodyOrientation: (wallProps as any).bodyOrientation,

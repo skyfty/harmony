@@ -30,6 +30,7 @@ export interface ServerAssetDto {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  size?: number | null
   seriesId?: string | null
   seriesName?: string | null
   terrainScatterPreset?: TerrainScatterCategory | null

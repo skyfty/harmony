@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 3
+export const WALL_PRESET_FORMAT_VERSION = 4
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
@@ -38,6 +38,11 @@ export type StrictWallPresetWallProps = {
   width: number
   thickness: number
   smoothing: number
+  jointTrimMode: 'auto' | 'manual'
+  jointTrimManual: {
+    start: number
+    end: number
+  }
   isAirWall: boolean
   bodyAssetId: string | null
   bodyOrientation: WallModelOrientation
