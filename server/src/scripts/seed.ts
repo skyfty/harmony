@@ -3,7 +3,6 @@ import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/adminAuthService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
-import { ensureMiniDemoDataSeeded } from '@/services/miniDemoSeedService'
 
 
 async function main(): Promise<void> {
@@ -27,11 +26,6 @@ async function main(): Promise<void> {
   })
   console.log('[seed] 管理权限数据已初始化')
 
-  // Removed optimize product seeding
-
-  await ensureMiniDemoDataSeeded().catch((error) => {
-    console.warn('[seed] 小程序演示数据写入失败：', error)
-  })
   console.log('[seed] 小程序演示数据（成就/地址/反馈）已初始化')
 }
 
