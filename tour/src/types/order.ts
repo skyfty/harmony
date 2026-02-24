@@ -8,8 +8,6 @@ export interface OrderItem {
   product?: {
     id: string;
     slug: string;
-    category: string;
-    imageUrl?: string;
     coverUrl?: string;
     description?: string;
   };

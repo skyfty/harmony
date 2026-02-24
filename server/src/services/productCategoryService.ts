@@ -132,7 +132,6 @@ export async function ensureTransportProductCategory(): Promise<void> {
         sortOrder: 10,
         enabled: true,
         normalizedName,
-        isBuiltin: true,
       },
       $set: {
         isBuiltin: true,
