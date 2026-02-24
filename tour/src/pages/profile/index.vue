@@ -15,24 +15,31 @@
     </view>
 
     <view class="content">
-      <view class="menu">
+      <view class="card">
         <view class="row" @tap="nav('/pages/orders/index')">
-          <text class="row-text">订单中心</text>
-          <text class="arrow">›</text>
-        </view>
-        <view class="row" @tap="nav('/pages/address/index')">
-          <text class="row-text">地址管理</text>
-          <text class="arrow">›</text>
-        </view>
-        <view class="row" @tap="nav('/pages/feedback/index')">
-          <text class="row-text">用户建议</text>
-          <text class="arrow">›</text>
-        </view>
-        <view class="row" @tap="nav('/pages/settings/index')">
-          <text class="row-text">系统设置</text>
+          <text class="label">订单中心</text>
           <text class="arrow">›</text>
         </view>
       </view>
+
+      <view class="card">
+        <view class="row">
+          <text class="label">消息提醒</text>
+          <switch :checked="settings.notify" @change="(e:any)=>toggle('notify', !!e.detail.value)" />
+        </view>
+        <view class="row">
+          <text class="label">自动下载资源</text>
+          <switch :checked="settings.autoDownload" @change="(e:any)=>toggle('autoDownload', !!e.detail.value)" />
+        </view>
+      </view>
+
+      <view class="card">
+        <view class="row" @tap="show('使用指南（mock）')"><text class="label">使用指南</text><text class="arrow">›</text></view>
+        <view class="row" @tap="show('隐私政策（mock）')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
+        <view class="row" @tap="show('已是最新版本（mock）')"><text class="label">版本更新</text><text class="arrow">›</text></view>
+      </view>
+
+      <button class="logout" @tap="logout">退出登录</button>
     </view>
 
     <BottomNav active="profile" @navigate="handleNavigate" />
@@ -40,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, reactive } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
@@ -48,6 +55,9 @@ import { getProfile } from '@/api/mini';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
+import { readStorageJson, writeStorageJson } from '@/utils/storage';
+
+const KEY = 'tour:settings:v1';
 
 const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
@@ -57,6 +67,8 @@ const profile = ref<UserProfile>({
   gender: 'other',
   birthDate: '',
 });
+
+const settings = reactive(readStorageJson(KEY, { notify: true, autoDownload: false }));
 
 onShow(() => {
   topInset.value = getTopSafeAreaMetrics().contentTopInset;
@@ -72,6 +84,15 @@ async function reloadProfile() {
   }
 }
 
+function persist() {
+  writeStorageJson(KEY, settings);
+}
+
+function toggle<K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) {
+  settings[key] = value;
+  persist();
+}
+
 const initials = computed(() => {
   const name = profile.value.displayName || '游客';
   return name.slice(0, 1);
@@ -83,6 +104,14 @@ function openProfileEdit() {
 
 function nav(url: string) {
   uni.navigateTo({ url });
+}
+
+function show(message: string) {
+  uni.showToast({ title: message, icon: 'none' });
+}
+
+function logout() {
+  uni.showToast({ title: '已退出（mock）', icon: 'none' });
 }
 
 function handleNavigate(key: NavKey) {
@@ -168,6 +197,39 @@ function handleNavigate(key: NavKey) {
 
 .content {
   padding: 0 16px 18px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+  margin-bottom: 12px;
+}
+
+.section {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a1f2e;
+  margin-bottom: 8px;
+}
+
+.label {
+  font-size: 13px;
+  color: #1a1f2e;
+}
+
+.logout {
+  width: 100%;
+  background: #ffffff;
+  color: #ff3b57;
+  border-radius: 14px;
+  height: 44px;
+  line-height: 44px;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.06);
 }
 
 .menu {

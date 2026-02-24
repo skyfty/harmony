@@ -1,55 +1,21 @@
 <template>
   <view class="page">
     <PageHeader title="系统设置" />
-    <view class="content">
-      <view class="card">
-        <text class="section">通知偏好</text>
-        <view class="row">
-          <text class="label">消息提醒</text>
-          <switch :checked="state.notify" @change="(e:any)=>toggle('notify', !!e.detail.value)" />
+      <view class="content">
+        <view class="card">
+          <text class="section">系统设置已移动</text>
+          <view class="row"><text class="label">设置项已整合至个人中心页面</text></view>
         </view>
-        <view class="row">
-          <text class="label">自动下载资源</text>
-          <switch :checked="state.autoDownload" @change="(e:any)=>toggle('autoDownload', !!e.detail.value)" />
-        </view>
+        <button class="logout" @tap="goProfile">前往个人中心</button>
       </view>
-
-      <view class="card">
-        <text class="section">关于</text>
-        <view class="row" @tap="show('使用指南（mock）')"><text class="label">使用指南</text><text class="arrow">›</text></view>
-        <view class="row" @tap="show('隐私政策（mock）')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
-        <view class="row" @tap="show('已是最新版本（mock）')"><text class="label">版本更新</text><text class="arrow">›</text></view>
-      </view>
-
-      <button class="logout" @tap="logout">退出登录</button>
-    </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue';
-import { readStorageJson, writeStorageJson } from '@/utils/storage';
 import PageHeader from '@/components/PageHeader.vue';
 
-const KEY = 'tour:settings:v1';
-
-const state = reactive(readStorageJson(KEY, { notify: true, autoDownload: false }));
-
-function persist() {
-  writeStorageJson(KEY, state);
-}
-
-function toggle<K extends keyof typeof state>(key: K, value: (typeof state)[K]) {
-  state[key] = value;
-  persist();
-}
-
-function show(message: string) {
-  uni.showToast({ title: message, icon: 'none' });
-}
-
-function logout() {
-  uni.showToast({ title: '已退出（mock）', icon: 'none' });
+function goProfile() {
+  uni.navigateTo({ url: '/pages/profile/index' });
 }
 </script>
 
