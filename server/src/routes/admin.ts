@@ -29,6 +29,12 @@ import {
   updateProduct,
 } from '@/controllers/admin/productController'
 import {
+  createCategory as createProductCategory,
+  listCategories as listProductCategories,
+  removeCategory as removeProductCategory,
+  updateCategory as updateProductCategory,
+} from '@/controllers/admin/productCategoryController'
+import {
   createUserVehicle,
   createVehicle,
   deleteUserVehicle,
@@ -179,6 +185,11 @@ adminRouter.get('/products/:id', requireAnyPermission(['product:read']), getProd
 adminRouter.post('/products', requireAnyPermission(['product:write']), createProduct)
 adminRouter.put('/products/:id', requireAnyPermission(['product:write']), updateProduct)
 adminRouter.delete('/products/:id', requireAnyPermission(['product:write']), deleteProduct)
+
+adminRouter.get('/product-categories', requireAnyPermission(['product:read']), listProductCategories)
+adminRouter.post('/product-categories', requireAnyPermission(['product:write']), createProductCategory)
+adminRouter.put('/product-categories/:id', requireAnyPermission(['product:write']), updateProductCategory)
+adminRouter.delete('/product-categories/:id', requireAnyPermission(['product:write']), removeProductCategory)
 
 adminRouter.get('/vehicles', requireAnyPermission(['vehicle:read']), listVehicles)
 adminRouter.get('/vehicles/:id', requireAnyPermission(['vehicle:read']), getVehicle)

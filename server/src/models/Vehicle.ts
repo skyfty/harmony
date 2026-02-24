@@ -27,5 +27,14 @@ vehicleSchema.index(
 )
 vehicleSchema.index({ name: 1 })
 vehicleSchema.index({ name: 'text', description: 'text' })
+vehicleSchema.index(
+  { productId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      productId: { $type: 'objectId' },
+    },
+  },
+)
 
 export const VehicleModel = model<VehicleDocument>('Vehicle', vehicleSchema)

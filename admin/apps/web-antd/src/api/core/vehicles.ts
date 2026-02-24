@@ -26,6 +26,7 @@ export interface VehicleItem {
   description: string;
   coverUrl: string;
   isActive: boolean;
+  productId?: null | string;
   createdAt: string;
   updatedAt: string;
 }

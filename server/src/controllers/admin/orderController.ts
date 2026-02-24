@@ -91,7 +91,6 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
           ? {
               id: product._id.toString(),
               name: product.name,
-              category: product.category,
             }
           : null,
       }

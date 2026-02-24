@@ -2,6 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
+import { VehicleModel } from '@/models/Vehicle'
 import { ensureUserId } from './utils'
 
 interface OrderItemLean {
@@ -29,10 +30,18 @@ interface ProductLean {
   _id: Types.ObjectId
   slug: string
   name: string
-  category: string
   price: number
-  imageUrl?: string
+  coverUrl?: string
   description?: string
+}
+
+interface VehicleLean {
+  _id: Types.ObjectId
+  productId: Types.ObjectId
+  identifier: string
+  name: string
+  description?: string
+  coverUrl?: string
 }
 
 interface OrderResponseItem {
@@ -43,9 +52,15 @@ interface OrderResponseItem {
   product?: {
     id: string
     slug: string
-    category: string
-    imageUrl?: string
+    coverUrl?: string
     description?: string
+  }
+  vehicle?: {
+    id: string
+    identifier: string
+    name: string
+    description?: string
+    coverUrl?: string
   }
 }
 
@@ -72,11 +87,25 @@ async function buildProductMap(productIds: string[]): Promise<Map<string, Produc
   return new Map(products.map((product) => [product._id.toString(), product]))
 }
 
-function buildOrderResponse(order: OrderLean, productMap: Map<string, ProductLean>): OrderResponse {
+async function buildVehicleMapByProductId(productIds: string[]): Promise<Map<string, VehicleLean>> {
+  if (!productIds.length) {
+    return new Map()
+  }
+  const rows = (await VehicleModel.find({ productId: { $in: productIds } }).lean().exec()) as VehicleLean[]
+  return new Map(rows.map((row) => [row.productId.toString(), row]))
+}
+
+function buildOrderResponse(
+  order: OrderLean,
+  productMap: Map<string, ProductLean>,
+  vehicleMapByProductId: Map<string, VehicleLean>,
+): OrderResponse {
   const items: OrderResponseItem[] = order.items.map((item) => {
-    const product = productMap.get(item.productId.toString())
+    const productId = item.productId.toString()
+    const product = productMap.get(productId)
+    const vehicle = vehicleMapByProductId.get(productId)
     return {
-      productId: item.productId.toString(),
+      productId,
       name: item.name,
       price: item.price,
       quantity: item.quantity,
@@ -84,9 +113,17 @@ function buildOrderResponse(order: OrderLean, productMap: Map<string, ProductLea
         ? {
             id: product._id.toString(),
             slug: product.slug,
-            category: product.category,
-            imageUrl: product.imageUrl ?? undefined,
+            coverUrl: product.coverUrl ?? undefined,
             description: product.description ?? undefined,
+          }
+        : undefined,
+      vehicle: vehicle
+        ? {
+            id: vehicle._id.toString(),
+            identifier: vehicle.identifier,
+            name: vehicle.name,
+            description: vehicle.description ?? undefined,
+            coverUrl: vehicle.coverUrl ?? undefined,
           }
         : undefined,
     }
@@ -120,7 +157,8 @@ export async function listOrders(ctx: Context): Promise<void> {
     })
   })
   const productMap = await buildProductMap(Array.from(productIds))
-  const data = orders.map((order) => buildOrderResponse(order, productMap))
+  const vehicleMapByProductId = await buildVehicleMapByProductId(Array.from(productIds))
+  const data = orders.map((order) => buildOrderResponse(order, productMap, vehicleMapByProductId))
   ctx.body = {
     total: data.length,
     orders: data,
@@ -140,5 +178,6 @@ export async function getOrder(ctx: Context): Promise<void> {
   }
   const productIds = Array.from(new Set(order.items.map((item) => item.productId.toString())))
   const productMap = await buildProductMap(productIds)
-  ctx.body = buildOrderResponse(order, productMap)
+  const vehicleMapByProductId = await buildVehicleMapByProductId(productIds)
+  ctx.body = buildOrderResponse(order, productMap, vehicleMapByProductId)
 }

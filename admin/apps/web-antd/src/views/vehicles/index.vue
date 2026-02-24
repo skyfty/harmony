@@ -135,7 +135,7 @@ async function submitVehicle() {
 function handleDelete(row: VehicleItem) {
   Modal.confirm({
     title: `确认删除车辆 “${row.name}” 吗？`,
-    content: '删除后会同时删除对应的用户车辆关系。',
+    content: '删除后会同时下线对应商品并删除用户车辆关系。',
     okType: 'danger',
     onOk: async () => {
       await deleteVehicleApi(row.id);
@@ -249,6 +249,9 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
         </Form.Item>
         <Form.Item label="描述" name="description">
           <Input v-model:value="vehicleFormModel.description" placeholder="用于 tour 展示" />
+        </Form.Item>
+        <Form.Item label="商品联动">
+          <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>
         </Form.Item>
         <Form.Item label="图片上传">
           <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card">

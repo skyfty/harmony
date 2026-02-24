@@ -1,11 +1,236 @@
 <script setup lang="ts">
-// Product categories are stored as free-form strings on products in the current schema.
-// This view is a placeholder explaining that categories are edited per-product.
+import type { FormInstance } from 'ant-design-vue';
+import type { ProductCategoryItem } from '#/api';
+
+import { computed, reactive, ref } from 'vue';
+
+import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import {
+  createProductCategoryApi,
+  deleteProductCategoryApi,
+  listProductCategoriesApi,
+  updateProductCategoryApi,
+} from '#/api';
+
+import {
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  message,
+  Modal,
+  Space,
+  Switch,
+} from 'ant-design-vue';
+
+interface CategoryFormModel {
+  description: string;
+  enabled: boolean;
+  name: string;
+  sortOrder: number;
+}
+
+const modalOpen = ref(false);
+const submitting = ref(false);
+const editingId = ref<null | string>(null);
+const formRef = ref<FormInstance>();
+
+const formModel = reactive<CategoryFormModel>({
+  name: '',
+  description: '',
+  sortOrder: 0,
+  enabled: true,
+});
+
+const modalTitle = computed(() => (editingId.value ? '编辑商品分类' : '新增商品分类'));
+
+function resetForm() {
+  formModel.name = '';
+  formModel.description = '';
+  formModel.sortOrder = 0;
+  formModel.enabled = true;
+}
+
+function openCreate() {
+  editingId.value = null;
+  resetForm();
+  modalOpen.value = true;
+}
+
+function openEdit(row: ProductCategoryItem) {
+  editingId.value = row.id;
+  formModel.name = row.name;
+  formModel.description = row.description || '';
+  formModel.sortOrder = row.sortOrder || 0;
+  formModel.enabled = row.enabled !== false;
+  modalOpen.value = true;
+}
+
+async function submit() {
+  const form = formRef.value;
+  if (!form) {
+    return;
+  }
+  await form.validate();
+  submitting.value = true;
+  try {
+    if (editingId.value) {
+      await updateProductCategoryApi(editingId.value, {
+        name: formModel.name.trim(),
+        description: formModel.description || null,
+        sortOrder: formModel.sortOrder,
+        enabled: formModel.enabled,
+      });
+      message.success('商品分类更新成功');
+    } else {
+      await createProductCategoryApi({
+        name: formModel.name.trim(),
+        description: formModel.description || undefined,
+        sortOrder: formModel.sortOrder,
+        enabled: formModel.enabled,
+      });
+      message.success('商品分类创建成功');
+    }
+    modalOpen.value = false;
+    gridApi.reload();
+  } finally {
+    submitting.value = false;
+  }
+}
+
+function handleDelete(row: ProductCategoryItem) {
+  if (row.isBuiltin) {
+    message.warning('内置分类不可删除');
+    return;
+  }
+  Modal.confirm({
+    title: `确认删除商品分类 “${row.name}” 吗？`,
+    content: '删除后不会自动删除已关联商品，但商品需要重新设置分类。',
+    okType: 'danger',
+    onOk: async () => {
+      await deleteProductCategoryApi(row.id);
+      message.success('商品分类已删除');
+      gridApi.reload();
+    },
+  });
+}
+
+const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
+  formOptions: {
+    schema: [],
+  },
+  gridOptions: {
+    border: true,
+    columns: [
+      { field: 'name', minWidth: 220, title: '名称' },
+      { field: 'description', minWidth: 260, title: '描述' },
+      { field: 'sortOrder', minWidth: 100, title: '排序' },
+      {
+        field: 'enabled',
+        minWidth: 100,
+        title: '启用',
+        slots: { default: 'enabled' },
+      },
+      {
+        field: 'isBuiltin',
+        minWidth: 100,
+        title: '内置',
+        slots: { default: 'builtin' },
+      },
+      {
+        field: 'updatedAt',
+        minWidth: 180,
+        formatter: 'formatDateTime',
+        title: '更新时间',
+      },
+      {
+        align: 'left',
+        field: 'actions',
+        fixed: 'right',
+        minWidth: 180,
+        slots: { default: 'actions' },
+        title: '操作',
+      },
+    ],
+    proxyConfig: {
+      ajax: {
+        query: async () => {
+          const list = await listProductCategoriesApi();
+          return {
+            items: list || [],
+            total: (list || []).length,
+          };
+        },
+      },
+    },
+    toolbarConfig: {
+      refresh: true,
+      search: false,
+    },
+    pagerConfig: {
+      pageSize: 50,
+    },
+  },
+  tableTitle: '商品分类',
+});
 </script>
 
 <template>
   <div class="p-5">
-    <h3>商品分类</h3>
-    <p>当前商品分类以字符串形式存储在商品项中，暂无独立分类 API。如需独立管理，请添加服务端模型/接口。</p>
+    <Grid>
+      <template #toolbar-actions>
+        <Button v-access:code="'product:write'" type="primary" @click="openCreate">新增分类</Button>
+      </template>
+
+      <template #enabled="{ row }">
+        <Switch :checked="row.enabled" disabled />
+      </template>
+
+      <template #builtin="{ row }">
+        <span>{{ row.isBuiltin ? '是' : '否' }}</span>
+      </template>
+
+      <template #actions="{ row }">
+        <Space>
+          <Button v-access:code="'product:write'" size="small" type="link" @click="openEdit(row)">编辑</Button>
+          <Button
+            v-access:code="'product:write'"
+            :disabled="row.isBuiltin"
+            danger
+            size="small"
+            type="link"
+            @click="handleDelete(row)"
+          >
+            删除
+          </Button>
+        </Space>
+      </template>
+    </Grid>
+
+    <Modal
+      :open="modalOpen"
+      :title="modalTitle"
+      :confirm-loading="submitting"
+      ok-text="保存"
+      cancel-text="取消"
+      destroy-on-close
+      @cancel="() => (modalOpen = false)"
+      @ok="submit"
+    >
+      <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
+        <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入分类名称' }]">
+          <Input v-model:value="formModel.name" allow-clear />
+        </Form.Item>
+        <Form.Item label="描述" name="description">
+          <Input v-model:value="formModel.description" allow-clear />
+        </Form.Item>
+        <Form.Item label="排序" name="sortOrder">
+          <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />
+        </Form.Item>
+        <Form.Item label="启用" name="enabled">
+          <Switch v-model:checked="formModel.enabled" />
+        </Form.Item>
+      </Form>
+    </Modal>
   </div>
 </template>
