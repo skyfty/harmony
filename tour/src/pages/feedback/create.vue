@@ -84,7 +84,7 @@ async function submitFeedback() {
 }
 
 .content {
-  padding: 0 16px 18px;
+  padding: 12px 16px 24px;
 }
 
 .card {

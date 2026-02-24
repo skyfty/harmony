@@ -86,7 +86,7 @@ function formatDateTime(value: string) {
 }
 
 .content {
-  padding: 0 16px 18px;
+  padding: 12px 16px 24px;
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;

@@ -60,7 +60,7 @@ function logout() {
 }
 
 .content {
-  padding: 0 16px 18px;
+  padding: 12px 16px 24px;
   display: grid;
   gap: 12px;
 }
