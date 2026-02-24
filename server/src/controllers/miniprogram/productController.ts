@@ -245,7 +245,6 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
       $setOnInsert: {
         userId: new Types.ObjectId(userId),
         productId: product._id,
-        acquiredAt: now,
       },
       $set: {
         state: 'unused',
