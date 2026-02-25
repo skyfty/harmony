@@ -1,5 +1,5 @@
 <template>
-  <view class="page" :style="{ paddingTop: topInset + 'px' }">
+  <view class="page">
     <view class="hero">
       <view class="hero-bg">
         <view class="hero-orb hero-orb-left" />
@@ -53,10 +53,9 @@ import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
+import { applyLightNavigationBar } from '@/utils/safeArea';
 import type { ScenicSummary } from '@/types/scenic';
 
-const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
 const keyword = ref('');
 const scenics = ref<ScenicSummary[]>([]);
@@ -95,7 +94,6 @@ onMounted(() => {
 });
 
 onShow(() => {
-  topInset.value = getTopSafeAreaMetrics().contentTopInset;
   applyLightNavigationBar();
 });
 

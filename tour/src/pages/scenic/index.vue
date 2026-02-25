@@ -124,6 +124,7 @@ function handleNavigate(key: NavKey) {
 .search-box {
   background: #ffffff;
   border-radius: 14px;
+  margin-top: 12px;
   padding: 10px 12px;
   display: flex;
   align-items: center;
