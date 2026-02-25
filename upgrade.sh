@@ -119,11 +119,6 @@ main() {
   check_prerequisites
   parse_target_services "$@"
 
-  log_step 1 6 "校验工作区状态..."
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    log_error "当前仓库有未提交改动，请先提交或暂存后再执行升级"
-    exit 1
-  fi
 
   log_step 2 6 "拉取最新代码..."
   git pull --ff-only
