@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <PageHeader title="全部景区" />
+    <PageHeader title="全部景区" :show-back="false" />
 
     <view class="content">
       <view class="search-box">
@@ -13,8 +13,8 @@
           @input="handleKeywordInput"
           @confirm="handleSearch"
         />
-        <view class="search-button" @tap="handleSearch">
-          <text class="search-button-text">搜索</text>
+        <view class="search-button" @tap="handleSearch" role="button" aria-label="搜索">
+          <text class="search-icon">🔍</text>
         </view>
       </view>
 
@@ -142,17 +142,22 @@ function handleNavigate(key: NavKey) {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 66px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
   background: linear-gradient(135deg, #5b8cff, #8a63ff);
 }
 
 .search-button-text {
-  font-size: 12px;
+  display: none;
+}
+
+.search-icon {
+  font-size: 16px;
   color: #ffffff;
-  font-weight: 500;
+  line-height: 36px;
+  text-align: center;
 }
 
 .clear-icon {

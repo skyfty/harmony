@@ -20,23 +20,23 @@
     </view>
 
     <view class="content">
-      <view class="section-title">
-        <text class="section-text">推荐景区</text>
-        <text class="section-tip">共 {{ filtered.length }} 个</text>
-      </view>
 
       <view class="grid">
-        <ScenicCard
+        <view
           v-for="scenic in filtered"
           :key="scenic.id"
-          :name="scenic.title"
-          :summary="null"
-          :cover-url="scenic.coverImage"
-          :rating="scenic.averageRating"
-          :progress-percent="resolveScenicProgress(scenic.id).percent"
-          :progress-text="resolveScenicProgress(scenic.id).description"
-          @tap="openDetail(scenic.id)"
-        />
+          class="card-item"
+        >
+          <ScenicCard
+            :name="scenic.title"
+            :summary="null"
+            :cover-url="scenic.coverImage"
+            :rating="scenic.averageRating"
+            :progress-percent="resolveScenicProgress(scenic.id).percent"
+            :progress-text="resolveScenicProgress(scenic.id).description"
+            @tap="openDetail(scenic.id)"
+          />
+        </view>
       </view>
 
     </view>
@@ -257,6 +257,10 @@ function handleNavigate(key: NavKey) {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+.card-item {
+  overflow: visible;
 }
 
 @keyframes hero-float {

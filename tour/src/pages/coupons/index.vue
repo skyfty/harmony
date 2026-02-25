@@ -8,6 +8,7 @@
       <view
         v-for="coupon in filteredCoupons"
         :key="coupon.id"
+        class="card-item"
         @tap="openDetail(coupon.id)"
       >
         <CouponCard
@@ -113,6 +114,10 @@ function handleNavigate(key: NavKey) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.card-item {
+  overflow: visible;
 }
 
 .empty {

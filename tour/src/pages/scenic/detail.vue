@@ -86,7 +86,6 @@
         <!-- CTA button -->
         <view class="cta-area">
           <button class="cta-btn" @tap="enterScenery">
-            <text class="cta-btn__icon">🚶</text>
             <text class="cta-btn__text">进入景区</text>
           </button>
         </view>

@@ -49,8 +49,16 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 .card {
   background: #ffffff;
   border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+  overflow: visible;
+  -webkit-box-shadow: 0 6px 18px rgba(26, 31, 46, 0.08), 0 2px 6px rgba(31, 122, 236, 0.06);
+  box-shadow: 0 6px 18px rgba(26, 31, 46, 0.08), 0 2px 6px rgba(31, 122, 236, 0.06);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.card:active {
+  transform: translateY(1px) scale(0.998);
+  -webkit-box-shadow: 0 10px 26px rgba(26, 31, 46, 0.12), 0 4px 10px rgba(31, 122, 236, 0.08);
+  box-shadow: 0 10px 26px rgba(26, 31, 46, 0.12), 0 4px 10px rgba(31, 122, 236, 0.08);
 }
 
 .cover {
