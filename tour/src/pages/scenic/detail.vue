@@ -244,21 +244,10 @@ async function loadScenicCheckinProgress(scenicId: string): Promise<void> {
 function enterScenery() {
   if (!scenic.value) return;
   let vehicleId = '';
-  let vehicleName = '';
-  let vehicleCoverUrl = '';
   try {
     const selectedVehicleId = uni.getStorageSync('tour:selectedVehicleId');
     if (typeof selectedVehicleId === 'string' && selectedVehicleId) {
       vehicleId = selectedVehicleId;
-    }
-    const selectedVehicleText = uni.getStorageSync('tour:selectedVehicle');
-    if (typeof selectedVehicleText === 'string' && selectedVehicleText) {
-      const selectedVehicle = JSON.parse(selectedVehicleText) as {
-        name?: string;
-        coverUrl?: string;
-      };
-      vehicleName = typeof selectedVehicle?.name === 'string' ? selectedVehicle.name : '';
-      vehicleCoverUrl = typeof selectedVehicle?.coverUrl === 'string' ? selectedVehicle.coverUrl : '';
     }
   } catch {
     // ignore
@@ -272,13 +261,6 @@ function enterScenery() {
   if (vehicleId) {
     queryParts.push(`vehicleId=${encodeURIComponent(vehicleId)}`);
   }
-  if (vehicleName) {
-    queryParts.push(`vehicleName=${encodeURIComponent(vehicleName)}`);
-  }
-  if (vehicleCoverUrl) {
-    queryParts.push(`vehicleCoverUrl=${encodeURIComponent(vehicleCoverUrl)}`);
-  }
-
   uni.navigateTo({
     url: `/pages/scenery/index?${queryParts.join('&')}`,
   });

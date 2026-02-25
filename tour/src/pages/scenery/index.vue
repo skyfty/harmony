@@ -29,6 +29,21 @@ type PunchEventPayload = {
   };
 };
 
+function decodeQueryValue(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed.includes('%')) {
+    return trimmed;
+  }
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;

@@ -15,70 +15,132 @@ COMPOSE_FILE="docker-compose.prod.yml"
 ALLOWED_SERVICES=("server" "admin" "editor" "uploader")
 BOOTSTRAP_SCRIPT="./bootstrap-prod-config.sh"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "[ERROR] docker 未安装或不在 PATH" >&2
-  exit 1
-fi
-if ! docker compose version >/dev/null 2>&1; then
-  echo "[ERROR] docker compose 插件未安装，或版本过旧" >&2
-  exit 1
-fi
-if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "[ERROR] 未找到 $COMPOSE_FILE" >&2
-  exit 1
-fi
-if [ ! -f "$BOOTSTRAP_SCRIPT" ]; then
-  echo "[ERROR] 未找到 $BOOTSTRAP_SCRIPT" >&2
-  exit 1
-fi
+usage() {
+  cat <<EOF
+用法：
+  ./upgrade.sh all           # 升级所有服务（server, admin, editor, uploader）
+  ./upgrade.sh server        # 仅升级 server
+  ./upgrade.sh admin editor  # 升级指定多个服务
+  ./upgrade.sh uploader      # 仅升级 uploader
+  ./upgrade.sh -h | --help   # 查看帮助
+EOF
+}
 
-# 保护本地改动，避免被 pull 覆盖
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "[ERROR] 当前仓库有未提交改动，请先提交或暂存后再执行升级" >&2
-  exit 1
-fi
+log_error() {
+  echo "[ERROR] $1" >&2
+}
 
-echo "[1/4] 拉取最新代码..."
-# 使用 --ff-only 防止意外合并
-git pull --ff-only
+log_hint() {
+  echo "[HINT] $1" >&2
+}
 
-echo "[2/4] 选择升级的服务..."
-TARGET_SERVICES=("server" "admin" "editor" "uploader")
-if [ "$#" -gt 0 ]; then
-  if [ "$1" != "all" ]; then
-    TARGET_SERVICES=("$@")
-  fi
-fi
+log_step() {
+  local idx="$1"
+  local total="$2"
+  local message="$3"
+  echo "[$idx/$total] $message"
+}
 
-for svc in "${TARGET_SERVICES[@]}"; do
-  is_valid=false
+service_allowed() {
+  local svc="$1"
+  local allowed
   for allowed in "${ALLOWED_SERVICES[@]}"; do
     if [ "$svc" = "$allowed" ]; then
-      is_valid=true
-      break
+      return 0
     fi
   done
-  if [ "$is_valid" = false ]; then
-    echo "[ERROR] 非法服务名: $svc" >&2
-    echo "[HINT] 仅支持: ${ALLOWED_SERVICES[*]} 或 all" >&2
+  return 1
+}
+
+check_prerequisites() {
+  if ! command -v git >/dev/null 2>&1; then
+    log_error "git 未安装或不在 PATH"
     exit 1
   fi
-done
 
-echo "[3/5] 校验 compose 配置..."
-echo "[3/6] 自动准备前端运行时配置文件..."
-bash "$BOOTSTRAP_SCRIPT"
+  if ! command -v docker >/dev/null 2>&1; then
+    log_error "docker 未安装或不在 PATH"
+    exit 1
+  fi
 
-echo "[4/6] 校验 compose 配置..."
-docker compose -f "$COMPOSE_FILE" config >/dev/null
+  if ! docker compose version >/dev/null 2>&1; then
+    log_error "docker compose 插件未安装，或版本过旧"
+    exit 1
+  fi
 
-echo "[5/6] 构建镜像: ${TARGET_SERVICES[*]}"
-docker compose -f "$COMPOSE_FILE" build "${TARGET_SERVICES[@]}"
+  if [ ! -f "$COMPOSE_FILE" ]; then
+    log_error "未找到 $COMPOSE_FILE"
+    exit 1
+  fi
 
-echo "[6/6] 以无中断方式更新容器..."
-docker compose -f "$COMPOSE_FILE" up -d "${TARGET_SERVICES[@]}"
+  if [ ! -f "$BOOTSTRAP_SCRIPT" ]; then
+    log_error "未找到 $BOOTSTRAP_SCRIPT"
+    exit 1
+  fi
 
-echo "\n当前容器状态："
-docker compose -f "$COMPOSE_FILE" ps
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    log_error "当前目录不是 git 仓库"
+    exit 1
+  fi
+}
 
-echo "\n完成。可查看日志： docker compose -f $COMPOSE_FILE logs -f <service>"
+parse_target_services() {
+  TARGET_SERVICES=("${ALLOWED_SERVICES[@]}")
+
+  if [ "$#" -eq 0 ]; then
+    return
+  fi
+
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    all)
+      TARGET_SERVICES=("${ALLOWED_SERVICES[@]}")
+      ;;
+    *)
+      TARGET_SERVICES=("$@")
+      ;;
+  esac
+
+  local svc
+  for svc in "${TARGET_SERVICES[@]}"; do
+    if ! service_allowed "$svc"; then
+      log_error "非法服务名: $svc"
+      log_hint "仅支持: ${ALLOWED_SERVICES[*]} 或 all"
+      usage
+      exit 1
+    fi
+  done
+}
+
+main() {
+  check_prerequisites
+  parse_target_services "$@"
+
+
+  log_step 2 6 "拉取最新代码..."
+  git pull --ff-only
+
+  log_step 3 6 "自动准备前端运行时配置文件..."
+  bash "$BOOTSTRAP_SCRIPT"
+
+  log_step 4 6 "校验 compose 配置..."
+  docker compose -f "$COMPOSE_FILE" config >/dev/null
+
+  log_step 5 6 "构建镜像: ${TARGET_SERVICES[*]}"
+  docker compose -f "$COMPOSE_FILE" build "${TARGET_SERVICES[@]}"
+
+  log_step 6 6 "以无中断方式更新容器..."
+  docker compose -f "$COMPOSE_FILE" up -d "${TARGET_SERVICES[@]}"
+
+  echo
+  echo "当前容器状态："
+  docker compose -f "$COMPOSE_FILE" ps
+
+  echo
+  echo "完成。可查看日志： docker compose -f $COMPOSE_FILE logs -f <service>"
+}
+
+main "$@"

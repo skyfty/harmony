@@ -33,7 +33,6 @@ import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { extractExtension } from '@/utils/blob'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -2218,55 +2217,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           points: worldPoints,
           name: nodeName,
         })
-
-        // 设置默认水面材质贴图（albedo 和 normal）
-        if (waterNode) {
-          // 默认贴图资产ID
-          const defaultTextureId = '694be79d9a9cceb7dd16834d'
-
-          const projectAsset: ProjectAsset = {
-            id: defaultTextureId,
-            name: 'Default Water Texture',
-            type: 'texture',
-            downloadUrl:'https://v.touchmagic.cn/uploads/FhhKc4p770XqX71U.jpg',
-            previewColor: '#ffffff',
-            thumbnail: 'https://v.touchmagic.cn/uploads/thumb-xjq8ZTRJEQo8_7e0.jpg',
-            description: "waternormals.jpg",
-            gleaned: true,
-            extension: extractExtension('https://v.touchmagic.cn/uploads/FhhKc4p770XqX71U.jpg') ?? extractExtension('waternormals.jpg') ?? null,
-          }
-          await sceneStore.registerAsset(projectAsset)
-  
-          // 构造SceneNodeMaterial类型材质，补全必需字段
-          sceneStore.setNodeMaterials(waterNode.id, [
-            {
-              id: generateUuid(),
-              materialId: null,
-              type: 'MeshStandardMaterial',
-              name: 'Water Material',
-              color: '#ffffff',
-              transparent: false,
-              opacity: 1,
-              side: 'front',
-              wireframe: false,
-              metalness: 0.5,
-              roughness: 0.5,
-              emissive: '#000000',
-              emissiveIntensity: 0,
-              aoStrength: 1,
-              envMapIntensity: 1,
-              textures: {
-                albedo: { assetId: defaultTextureId },
-                normal: { assetId: defaultTextureId },
-                metalness: null,
-                roughness: null,
-                ao: null,
-                emissive: null,
-                displacement: null,
-              },
-            },
-          ])
-        }
 
         if (!waterNode) {
           continue

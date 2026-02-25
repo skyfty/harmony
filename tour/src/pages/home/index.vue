@@ -137,7 +137,7 @@ function handleNavigate(key: NavKey) {
 
 .hero {
   position: relative;
-  min-height: 206px;
+  min-height: 236px;
   overflow: hidden;
 }
 
@@ -188,6 +188,7 @@ function handleNavigate(key: NavKey) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 20px;
 }
 
 .hero-tag {

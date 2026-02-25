@@ -63,7 +63,7 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 
 .cover {
   width: 100%;
-  height: 130px;
+  height: 120px;
   display: block;
 }
 
