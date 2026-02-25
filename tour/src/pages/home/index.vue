@@ -1,10 +1,28 @@
 <template>
   <view class="page" :style="{ paddingTop: topInset + 'px' }">
+    <view class="hero">
+      <view class="hero-bg">
+        <view class="hero-orb hero-orb-left" />
+        <view class="hero-orb hero-orb-right" />
+        <view class="hero-curve" />
+      </view>
+
+      <view class="hero-content">
+        <text class="hero-tag">热门目的地</text>
+        <text class="hero-title">探索你想去的景点</text>
+        <text class="hero-subtitle">轻松查找景区路线与游玩进度</text>
+
+        <view class="search-box" @tap="openScenicSearch">
+          <text class="search-icon">🔍</text>
+          <text class="search-input">搜索景点名称</text>
+        </view>
+      </view>
+    </view>
 
     <view class="content">
-      <view class="search-box" @tap="openScenicSearch">
-        <text class="search-icon">🔍</text>
-        <text class="search-input">搜索景点名称</text>
+      <view class="section-title">
+        <text class="section-text">推荐景区</text>
+        <text class="section-tip">共 {{ filtered.length }} 个</text>
       </view>
 
       <view class="grid">
@@ -42,8 +60,6 @@ const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 
 const keyword = ref('');
 const scenics = ref<ScenicSummary[]>([]);
-const events = ref<{ id: string; title: string; description: string }[]>([]);
-// achievements and hot events removed — `events` kept for future use if needed
 const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>;
 
 function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: ScenicSummary[]) {
@@ -118,49 +134,114 @@ function handleNavigate(key: NavKey) {
   padding-bottom: calc(65px + env(safe-area-inset-bottom));
 }
 
-.header {
-  padding: 16px 16px 10px;
+.hero {
+  position: relative;
+  min-height: 206px;
+  overflow: hidden;
+}
+
+.hero-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #4e8bff 0%, #7f60ff 55%, #a768ff 100%);
+}
+
+.hero-curve {
+  position: absolute;
+  left: 50%;
+  bottom: -122px;
+  width: 152%;
+  height: 170px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: #f8f8f8;
+}
+
+.hero-orb {
+  position: absolute;
+  border-radius: 999px;
+  opacity: 0.35;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.1));
+  animation: hero-float 6s ease-in-out infinite;
+}
+
+.hero-orb-left {
+  width: 86px;
+  height: 86px;
+  left: -8px;
+  top: 20px;
+}
+
+.hero-orb-right {
+  width: 54px;
+  height: 54px;
+  right: 34px;
+  top: 28px;
+  animation-duration: 7s;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hero-tag {
+  width: fit-content;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #f8fbff;
+  background: rgba(255, 255, 255, 0.24);
+  animation: hero-pulse 3.4s ease-in-out infinite;
+}
+
+.hero-title {
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.hero-subtitle {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.88);
 }
 
 .search-box {
-  background: #ffffff;
+  margin-top: 12px;
+  background: rgba(255, 255, 255, 0.98);
   border-radius: 14px;
-  padding: 10px 12px;
+  padding: 11px 12px;
   display: flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.16);
 }
 
 .search-icon {
   font-size: 14px;
-  color: #8a94a6;
+  color: #7b74e7;
 }
 
 .search-input {
   flex: 1;
   font-size: 13px;
-  color: #1a1f2e;
-}
-
-.clear-icon {
-  font-size: 14px;
-  color: #a8b0c1;
+  color: #55617a;
 }
 
 .content {
   padding: 0 16px 18px;
 }
 
-.search-box {
-  margin: 8px 0 14px;
-}
-
 .section-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 14px 0 10px;
+  margin: 6px 0 10px;
 }
 
 .section-text {
@@ -169,36 +250,34 @@ function handleNavigate(key: NavKey) {
   color: #1a1f2e;
 }
 
+.section-tip {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
 }
 
-.activity {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+@keyframes hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
 }
 
-.activity-card {
-  background: #ffffff;
-  border-radius: 16px;
-  padding: 14px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
-}
-
-.activity-title {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1f2e;
-}
-
-.activity-desc {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: #5f6b83;
+@keyframes hero-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 </style>
