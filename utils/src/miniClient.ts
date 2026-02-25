@@ -106,8 +106,8 @@ function buildQueryString(query?: Record<string, string | number | boolean | nul
     .map(([key, value]) => [key, String(value)]);
 
   if (!params.length) return '';
-  const usp = new URLSearchParams(params);
-  const text = usp.toString();
+  const parts = params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+  const text = parts.join('&');
   return text ? `?${text}` : '';
 }
 
