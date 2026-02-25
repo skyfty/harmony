@@ -1,5 +1,7 @@
 import type { ScenicDetail, ScenicSummary } from '@/types/scenic'
+import type { ScenicComment, ScenicCommentStatus } from '@/types/comment'
 import { miniRequest } from '@harmony/utils'
+import { ensureMiniAuth } from './session'
 
 export type ListScenicsResponse = {
   total: number
@@ -46,4 +48,66 @@ export async function rateScenic(id: string, score: number): Promise<ScenicInter
     method: 'POST',
     body: { score },
   })
+}
+
+type ListScenicCommentsResponse = {
+  data: ScenicComment[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+type CreateScenicCommentResponse = {
+  comment: ScenicComment
+}
+
+export async function listScenicComments(
+  id: string,
+  query?: { page?: number; pageSize?: number },
+): Promise<{ items: ScenicComment[]; total: number }> {
+  if (!id) {
+    return { items: [], total: 0 }
+  }
+  const response = await miniRequest<ListScenicCommentsResponse>(
+    `/scene-spots/${encodeURIComponent(id)}/comments`,
+    {
+      method: 'GET',
+      query: {
+        page: query?.page,
+        pageSize: query?.pageSize,
+      },
+    },
+  )
+  return {
+    items: Array.isArray(response.data) ? response.data : [],
+    total: Number(response.total || 0),
+  }
+}
+
+export async function createScenicComment(
+  id: string,
+  content: string,
+): Promise<ScenicComment> {
+  await ensureMiniAuth()
+  const response = await miniRequest<CreateScenicCommentResponse>(
+    `/scene-spots/${encodeURIComponent(id)}/comments`,
+    {
+      method: 'POST',
+      body: { content },
+    },
+  )
+  return response.comment
+}
+
+export async function deleteScenicComment(id: string, commentId: string): Promise<void> {
+  await ensureMiniAuth()
+  await miniRequest(`/scene-spots/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function getScenicCommentStatusLabel(status: ScenicCommentStatus): string {
+  if (status === 'approved') return '已通过'
+  if (status === 'rejected') return '已驳回'
+  return '待审核'
 }

@@ -22,6 +22,24 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'SceneSpotComments',
+    path: '/scene-spot-comments',
+    component: () => import('#/views/scene-spot-comments/index.vue'),
+    meta: {
+      icon: 'lucide:message-square',
+      title: '留言管理',
+    },
+  },
+  {
+    name: 'SceneSpotCommentsBySceneSpot',
+    path: '/scene-spots/:sceneSpotId/comments',
+    component: () => import('#/views/scene-spot-comments/index.vue'),
+    meta: {
+      title: '景点留言',
+      hideInMenu: true,
+    },
+  },
+  {
     name: 'SceneSpotDetail',
     path: '/scene-spots/:id',
     component: () => import('../../../views/scene-spots/detail.vue'),

@@ -238,6 +238,13 @@ function openDetail(row: SceneSpotItem) {
   });
 }
 
+function openComments(row: SceneSpotItem) {
+  router.push({
+    name: 'SceneSpotCommentsBySceneSpot',
+    params: { sceneSpotId: row.id },
+  });
+}
+
 async function submitSceneSpot() {
   const form = sceneSpotFormRef.value;
   if (!form) {
@@ -452,6 +459,9 @@ onMounted(async () => {
         <Space>
           <Button size="small" type="link" @click="openDetail(row)">
             {{ t('page.sceneSpots.index.actions.detail') }}
+          </Button>
+          <Button v-access:code="'comment:read'" size="small" type="link" @click="openComments(row)">
+            留言
           </Button>
           <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openEditModal(row)">
             {{ t('page.sceneSpots.index.actions.edit') }}

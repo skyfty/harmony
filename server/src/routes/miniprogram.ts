@@ -7,6 +7,9 @@ import {
   listSceneProducts,
   toggleSceneSpotFavorite,
   rateSceneSpot,
+  listSceneSpotComments,
+  createSceneSpotComment,
+  deleteSceneSpotComment,
 } from '@/controllers/miniprogram/sceneSpotController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import {
@@ -97,6 +100,7 @@ miniRouter.get('/exhibitions/:id', optionalMiniAuth, getExhibition)
 miniRouter.get('/scene-spots', optionalMiniAuth, listSceneSpots)
 miniRouter.get('/scene-spots/:id', optionalMiniAuth, getSceneSpot)
 miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
+miniRouter.get('/scene-spots/:id/comments', optionalMiniAuth, listSceneSpotComments)
 miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
@@ -112,6 +116,8 @@ miniRouter.use(requireMiniAuth)
 // scenic interactions
 miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)
 miniRouter.post('/scene-spots/:id/rate', rateSceneSpot)
+miniRouter.post('/scene-spots/:id/comments', createSceneSpotComment)
+miniRouter.delete('/scene-spots/:id/comments/:commentId', deleteSceneSpotComment)
 miniRouter.post('/punch-records', createMiniPunchRecord)
 miniRouter.post('/travel-records/enter', createMiniTravelEnterRecord)
 miniRouter.post('/travel-records/leave', completeMiniTravelLeaveRecord)

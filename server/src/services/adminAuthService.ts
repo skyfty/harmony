@@ -58,6 +58,8 @@ const ADMIN_PERMISSION_SEEDS = [
   { code: 'scene:write', name: '场景管理', group: 'scene' },
   { code: 'sceneSpot:read', name: '点位查看', group: 'scene' },
   { code: 'sceneSpot:write', name: '点位管理', group: 'scene' },
+  { code: 'comment:read', name: '留言查看', group: 'scene' },
+  { code: 'comment:write', name: '留言管理', group: 'scene' },
   { code: 'resource:read', name: '资源查看', group: 'resource' },
   { code: 'resource:write', name: '资源管理', group: 'resource' },
   { code: 'category:read', name: '资源分类查看', group: 'resource' },

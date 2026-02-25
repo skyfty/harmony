@@ -9,6 +9,7 @@ export * from './coupons';
 export * from './orders';
 export * from './scenes';
 export * from './scene-spots';
+export * from './scene-spot-comments';
 export * from './user-projects';
 export * from './loginLogs';
 export * from './analytics';

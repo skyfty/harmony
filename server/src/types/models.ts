@@ -763,6 +763,23 @@ export interface SceneSpotInteractionDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export type SceneSpotCommentStatus = 'pending' | 'approved' | 'rejected'
+
+export interface SceneSpotCommentDocument extends Document<Types.ObjectId> {
+  sceneSpotId: Types.ObjectId
+  userId: Types.ObjectId
+  content: string
+  status: SceneSpotCommentStatus
+  rejectReason?: string | null
+  reviewedAt?: Date | null
+  reviewedBy?: Types.ObjectId | null
+  editedAt?: Date | null
+  editedBy?: Types.ObjectId | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface MiniEventDocument extends Document<Types.ObjectId> {
   title: string
   description?: string | null

@@ -133,6 +133,15 @@ import {
 import { getAnalyticsOverviewData } from '@/controllers/admin/analyticsController'
 import { deletePunchRecord, getPunchRecord, listPunchRecords } from '@/controllers/admin/punchRecordController'
 import { deleteTravelRecord, getTravelRecord, listTravelRecords } from '@/controllers/admin/travelRecordController'
+import {
+  createSceneSpotCommentByAdmin,
+  deleteSceneSpotComment,
+  getSceneSpotComment,
+  listSceneSpotComments,
+  listSceneSpotCommentsBySceneSpot,
+  updateSceneSpotComment,
+  updateSceneSpotCommentStatus,
+} from '@/controllers/admin/sceneSpotCommentController'
 import { koaBody } from '@/utils/bodyParser'
 
 const adminRouter = new Router({ prefix: '/api/admin' })
@@ -179,6 +188,15 @@ adminRouter.put(
   updateSceneSpot,
 )
 adminRouter.delete('/scene-spots/:id', requireAnyPermission(['sceneSpot:write']), deleteSceneSpot)
+adminRouter.get('/scene-spots/:sceneSpotId/comments', requireAnyPermission(['comment:read']), listSceneSpotCommentsBySceneSpot)
+
+adminRouter.get('/scene-spot-comments', requireAnyPermission(['comment:read']), listSceneSpotComments)
+adminRouter.get('/scene-spot-comments/:id', requireAnyPermission(['comment:read']), getSceneSpotComment)
+adminRouter.post('/scene-spot-comments', requireAnyPermission(['comment:write']), createSceneSpotCommentByAdmin)
+adminRouter.put('/scene-spot-comments/:id', requireAnyPermission(['comment:write']), updateSceneSpotComment)
+adminRouter.patch('/scene-spot-comments/:id/status', requireAnyPermission(['comment:write']), updateSceneSpotCommentStatus)
+adminRouter.put('/scene-spot-comments/:id/status', requireAnyPermission(['comment:write']), updateSceneSpotCommentStatus)
+adminRouter.delete('/scene-spot-comments/:id', requireAnyPermission(['comment:write']), deleteSceneSpotComment)
 
 // Scene - Product bindings
 adminRouter.get('/scenes/:scenicId/bindings', requireAnyPermission(['scene:read']), listBindings)

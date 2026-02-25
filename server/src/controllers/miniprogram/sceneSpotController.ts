@@ -6,6 +6,8 @@ import { SceneSpotInteractionModel } from '@/models/SceneSpotInteraction'
 import { SceneProductBindingModel } from '@/models/SceneProductBinding'
 import { ProductModel } from '@/models/Product'
 import { UserProductModel } from '@/models/UserProduct'
+import { AppUserModel } from '@/models/AppUser'
+import { SceneSpotCommentModel } from '@/models/SceneSpotComment'
 import { ensureUserId, getOptionalUserId } from '@/controllers/miniprogram/utils'
 import {
   asString,
@@ -15,8 +17,153 @@ import {
 } from './miniDtoUtils'
 import type { ProductDocument, SceneDocument } from '@/types/models'
 
+const COMMENT_CONTENT_MAX_LENGTH = 500
+
 function toStringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
+}
+
+function toSafePage(value: unknown, fallback = 1): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback
+  }
+  return parsed
+}
+
+function toSafePageSize(value: unknown, fallback = 20): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback
+  }
+  return Math.min(parsed, 100)
+}
+
+function toCommentDto(comment: any, userDisplayName?: string, currentUserId?: string) {
+  const ownerId = String(comment.userId)
+  return {
+    id: String(comment._id),
+    sceneSpotId: String(comment.sceneSpotId),
+    userId: ownerId,
+    userDisplayName: userDisplayName || '',
+    content: String(comment.content || ''),
+    status: String(comment.status || 'pending'),
+    rejectReason: typeof comment.rejectReason === 'string' ? comment.rejectReason : null,
+    isMine: Boolean(currentUserId && ownerId === currentUserId),
+    canDelete: Boolean(currentUserId && ownerId === currentUserId),
+    reviewedAt: comment.reviewedAt ? new Date(comment.reviewedAt).toISOString() : null,
+    createdAt: comment.createdAt ? new Date(comment.createdAt).toISOString() : null,
+    updatedAt: comment.updatedAt ? new Date(comment.updatedAt).toISOString() : null,
+  }
+}
+
+export async function listSceneSpotComments(ctx: Context): Promise<void> {
+  const userId = getOptionalUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  const { page = '1', pageSize = '20' } = ctx.query as { page?: string; pageSize?: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene spot id')
+  }
+
+  const exists = await SceneSpotModel.exists({ _id: id })
+  if (!exists) {
+    ctx.throw(404, 'Scene spot not found')
+  }
+
+  const pageNumber = toSafePage(page, 1)
+  const size = toSafePageSize(pageSize, 20)
+  const skip = (pageNumber - 1) * size
+
+  const baseFilter: Record<string, unknown> = { sceneSpotId: id, status: 'approved' }
+  const filter = userId
+    ? {
+        sceneSpotId: id,
+        $or: [{ status: 'approved' }, { userId: new Types.ObjectId(userId) }],
+      }
+    : baseFilter
+
+  const [total, rows] = await Promise.all([
+    SceneSpotCommentModel.countDocuments(filter),
+    SceneSpotCommentModel.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(size)
+      .lean()
+      .exec(),
+  ])
+
+  const userIds = Array.from(new Set(rows.map((row) => String(row.userId))))
+  const users = userIds.length
+    ? await AppUserModel.find({ _id: { $in: userIds } }, { _id: 1, displayName: 1, username: 1 }).lean().exec()
+    : []
+  const userMap = new Map<string, string>()
+  for (const user of users as Array<{ _id: Types.ObjectId; displayName?: string; username?: string }>) {
+    userMap.set(String(user._id), user.displayName || user.username || '匿名用户')
+  }
+
+  ctx.body = {
+    data: rows.map((row) => toCommentDto(row, userMap.get(String(row.userId)), userId)),
+    total,
+    page: pageNumber,
+    pageSize: size,
+  }
+}
+
+export async function createSceneSpotComment(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  const { content } = ctx.request.body as { content?: string }
+
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene spot id')
+  }
+  const normalizedContent = typeof content === 'string' ? content.trim() : ''
+  if (!normalizedContent) {
+    ctx.throw(400, 'Comment content is required')
+  }
+  if (normalizedContent.length > COMMENT_CONTENT_MAX_LENGTH) {
+    ctx.throw(400, `Comment content cannot exceed ${COMMENT_CONTENT_MAX_LENGTH} characters`)
+  }
+
+  const exists = await SceneSpotModel.exists({ _id: id })
+  if (!exists) {
+    ctx.throw(404, 'Scene spot not found')
+  }
+
+  const created = await SceneSpotCommentModel.create({
+    sceneSpotId: id,
+    userId,
+    content: normalizedContent,
+    status: 'pending',
+  })
+
+  const user = await AppUserModel.findById(userId, { _id: 1, displayName: 1, username: 1 }).lean().exec()
+  ctx.status = 201
+  ctx.body = {
+    comment: toCommentDto(created.toObject(), user?.displayName || user?.username || '匿名用户', userId),
+  }
+}
+
+export async function deleteSceneSpotComment(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id, commentId } = ctx.params as { id: string; commentId: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene spot id')
+  }
+  if (!Types.ObjectId.isValid(commentId)) {
+    ctx.throw(400, 'Invalid comment id')
+  }
+
+  const comment = await SceneSpotCommentModel.findOne({ _id: commentId, sceneSpotId: id }).exec()
+  if (!comment) {
+    ctx.throw(404, 'Comment not found')
+  }
+  if (String(comment.userId) !== userId) {
+    ctx.throw(403, 'You can only delete your own comments')
+  }
+
+  await comment.deleteOne()
+  ctx.body = {}
 }
 
 function buildSceneDto(scene: any) {
