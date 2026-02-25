@@ -52,7 +52,7 @@ COPY server/src ./src
 # Build to dist (package.json build already runs tsc, tsc-alias, and extension fixer)
 RUN pnpm run build
 # Remove dev dependencies after build to shrink node_modules copied to runtime
-RUN pnpm prune --prod --registry=${NPM_REGISTRY_URL}
+RUN pnpm prune --prod
 
 # --- Runtime Stage ---
 FROM node:20-alpine AS runtime
