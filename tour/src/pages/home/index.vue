@@ -2,6 +2,11 @@
   <view class="page" :style="{ paddingTop: topInset + 'px' }">
 
     <view class="content">
+      <view class="search-box" @tap="openScenicSearch">
+        <text class="search-icon">🔍</text>
+        <text class="search-input">搜索景点名称</text>
+      </view>
+
       <view class="grid">
         <ScenicCard
           v-for="scenic in filtered"
@@ -88,6 +93,10 @@ function openDetail(id: string) {
   void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` });
 }
 
+function openScenicSearch() {
+  void uni.navigateTo({ url: '/pages/scenic/index' });
+}
+
 function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
   return {
     percent: 0,
@@ -141,6 +150,10 @@ function handleNavigate(key: NavKey) {
 
 .content {
   padding: 0 16px 18px;
+}
+
+.search-box {
+  margin: 8px 0 14px;
 }
 
 .section-title {
