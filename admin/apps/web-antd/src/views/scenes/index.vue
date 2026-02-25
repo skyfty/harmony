@@ -10,6 +10,7 @@ import { createSceneApi, deleteSceneApi, listScenesApi, updateSceneApi } from '#
 import { $t } from '#/locales';
 
 import { Button, Form, Input, message, Modal, Space, Upload } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface SceneFormModel {
   fileList: UploadFile[];
@@ -220,11 +221,24 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'scene:write'" size="small" type="link" @click="openEditSceneModal(row)">
-            {{ t('page.scenes.index.actions.edit') }}
+          <Button
+            v-access:code="'scene:write'"
+            size="small"
+            type="text"
+            @click="openEditSceneModal(row)"
+            :title="t('page.scenes.index.actions.edit')"
+          >
+            <EditOutlined />
           </Button>
-          <Button v-access:code="'scene:write'" danger size="small" type="link" @click="handleDeleteScene(row)">
-            {{ t('page.scenes.index.actions.delete') }}
+          <Button
+            v-access:code="'scene:write'"
+            danger
+            size="small"
+            type="text"
+            @click="handleDeleteScene(row)"
+            :title="t('page.scenes.index.actions.delete')"
+          >
+            <DeleteOutlined />
           </Button>
         </Space>
       </template>
