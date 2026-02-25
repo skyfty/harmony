@@ -112,15 +112,15 @@ const defaultTypeName = computed(() => {
 
 /* ---------- icon ---------- */
 const iconMap: Record<string, string> = {
-  ticket: '/static/icons/coupons/ticket.svg',
-  souvenir: '/static/icons/coupons/souvenir.svg',
-  photo: '/static/icons/coupons/photo.svg',
-  discount: '/static/icons/coupons/discount.svg',
+  ticket: '/static/icons/coupons/ticket.png',
+  souvenir: '/static/icons/coupons/souvenir.png',
+  photo: '/static/icons/coupons/photo.png',
+  discount: '/static/icons/coupons/discount.png',
 };
 
 const typeIconSrc = computed(() => {
   const code = (props.typeCode || '').toLowerCase();
-  return iconMap[code] ?? '/static/icons/coupons/default.svg';
+  return iconMap[code] ?? '/static/icons/coupons/default.png';
 });
 
 /* ---------- date formatting ---------- */
