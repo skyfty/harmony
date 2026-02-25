@@ -14,7 +14,10 @@
           @confirm="handleSearch"
         />
         <view class="search-button" @tap="handleSearch" role="button" aria-label="搜索">
-          <text class="search-icon">🔍</text>
+          <svg class="search-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
         </view>
       </view>
 
@@ -154,10 +157,10 @@ function handleNavigate(key: NavKey) {
 }
 
 .search-icon {
-  font-size: 16px;
+  width: 16px;
+  height: 16px;
   color: #ffffff;
-  line-height: 36px;
-  text-align: center;
+  display: block;
 }
 
 .clear-icon {
