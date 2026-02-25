@@ -819,11 +819,22 @@ export interface MiniFeedbackDocument extends Document<Types.ObjectId> {
 }
 
 export interface CouponDocument extends Document<Types.ObjectId> {
+  typeId: Types.ObjectId
   title: string
   description: string
   validUntil: Date
   usageRules?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface CouponTypeDocument extends Document<Types.ObjectId> {
+  name: string
+  code: string
+  iconUrl?: string
+  sort: number
+  enabled: boolean
   createdAt: Date
   updatedAt: Date
 }

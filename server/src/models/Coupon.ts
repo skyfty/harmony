@@ -3,6 +3,7 @@ import type { CouponDocument } from '@/types/models'
 
 const couponSchema = new Schema<CouponDocument>(
   {
+    typeId: { type: Schema.Types.ObjectId, ref: 'CouponType', required: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },
     validUntil: { type: Date, required: true },

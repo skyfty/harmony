@@ -14,8 +14,22 @@ interface GridPageResult<T> {
 
 export type CouponStatus = 'unused' | 'used' | 'expired';
 
+export interface CouponTypeItem {
+  id: string;
+  name: string;
+  code: string;
+  iconUrl?: string;
+  sort: number;
+  enabled: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface CouponItem {
   id: string;
+  typeId: string;
+  type?: CouponTypeItem | null;
+  typeName?: string;
   name: string;
   title: string;
   description: string;
@@ -75,12 +89,21 @@ export interface ListCouponsParams {
 }
 
 export interface CouponPayload {
+  typeId: string;
   name?: string;
   title?: string;
   description: string;
   validUntil: string;
   usageRules?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
+}
+
+export interface CouponTypePayload {
+  name: string;
+  code: string;
+  iconUrl?: string;
+  sort?: number;
+  enabled?: boolean;
 }
 
 export interface ListUserCouponsParams {
@@ -151,4 +174,20 @@ export async function useUserCouponByAdminApi(userCouponId: string) {
 
 export async function getCouponStatsApi(params?: { keyword?: string; couponId?: string }) {
   return requestClient.get<CouponStats>('/admin/coupons/stats', { params });
+}
+
+export async function listCouponTypesApi(params?: { keyword?: string }) {
+  return requestClient.get<CouponTypeItem[]>('/admin/coupon-types', { params });
+}
+
+export async function createCouponTypeApi(payload: CouponTypePayload) {
+  return requestClient.post<CouponTypeItem>('/admin/coupon-types', payload);
+}
+
+export async function updateCouponTypeApi(id: string, payload: Partial<CouponTypePayload>) {
+  return requestClient.put<CouponTypeItem>(`/admin/coupon-types/${id}`, payload);
+}
+
+export async function deleteCouponTypeApi(id: string) {
+  return requestClient.delete(`/admin/coupon-types/${id}`);
 }

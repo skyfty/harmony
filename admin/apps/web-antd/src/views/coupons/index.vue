@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { FormInstance } from 'ant-design-vue';
+import type { CouponTypeItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -9,13 +10,15 @@ import {
   createCouponApi,
   deleteCouponApi,
   getCouponApi,
+  listCouponTypesApi,
   listCouponsApi,
   updateCouponApi,
 } from '#/api';
 
-import { Button, DatePicker, Form, Input, message, Modal, Space } from 'ant-design-vue';
+import { Button, DatePicker, Form, Input, message, Modal, Select, Space } from 'ant-design-vue';
 
 interface CouponFormModel {
+  typeId: string;
   title: string;
   description: string;
   validUntil?: Dayjs;
@@ -25,8 +28,11 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<string | null>(null);
 const couponFormRef = ref<FormInstance>();
+const couponTypes = ref<CouponTypeItem[]>([]);
+const loadingCouponTypes = ref(false);
 
 const couponFormModel = reactive<CouponFormModel>({
+  typeId: '',
   title: '',
   description: '',
   validUntil: undefined,
@@ -35,21 +41,47 @@ const couponFormModel = reactive<CouponFormModel>({
 const modalTitle = computed(() => (editingId.value ? '编辑卡券' : '新建卡券'));
 
 function resetForm() {
+  couponFormModel.typeId = '';
   couponFormModel.title = '';
   couponFormModel.description = '';
   couponFormModel.validUntil = undefined;
 }
 
+const typeOptions = computed(() =>
+  couponTypes.value
+    .filter((item) => item.enabled !== false)
+    .map((item) => ({
+      label: `${item.name} (${item.code})`,
+      value: item.id,
+    })),
+);
+
+async function loadCouponTypes() {
+  loadingCouponTypes.value = true;
+  try {
+    couponTypes.value = await listCouponTypesApi();
+  } finally {
+    loadingCouponTypes.value = false;
+  }
+}
+
 function openCreateModal() {
   editingId.value = null;
   resetForm();
-  modalOpen.value = true;
+  void loadCouponTypes()
+    .then(() => {
+      modalOpen.value = true;
+    })
+    .catch(() => {
+      message.error('加载卡券类型失败');
+    });
 }
 
 async function openEditModal(row: any) {
   editingId.value = row.id;
   try {
-    const data = await getCouponApi(row.id);
+    const [data] = await Promise.all([getCouponApi(row.id), loadCouponTypes()]);
+    couponFormModel.typeId = data.typeId || data.type?.id || '';
     couponFormModel.title = data.title || data.name || '';
     couponFormModel.description = data.description || '';
     couponFormModel.validUntil = data.validUntil ? dayjs(data.validUntil) : undefined;
@@ -66,6 +98,7 @@ async function submitCoupon() {
   submitting.value = true;
   try {
     const payload = {
+      typeId: couponFormModel.typeId,
       name: couponFormModel.title.trim(),
       title: couponFormModel.title.trim(),
       description: couponFormModel.description.trim(),
@@ -113,6 +146,7 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
   gridOptions: {
     border: true,
     columns: [
+      { field: 'typeName', minWidth: 160, title: '类型' },
       { field: 'title', minWidth: 180, title: '名称' },
       { field: 'description', minWidth: 260, title: '描述' },
       { field: 'validUntil', minWidth: 180, formatter: 'formatDateTime', title: '有效期至' },
@@ -165,6 +199,16 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
       @ok="submitCoupon"
     >
       <Form ref="couponFormRef" :label-col="{ span: 6 }" :model="couponFormModel" :wrapper-col="{ span: 17 }">
+        <Form.Item label="类型" name="typeId" :rules="[{ required: true, message: '请选择类型' }]">
+          <Select
+            v-model:value="couponFormModel.typeId"
+            :options="typeOptions"
+            :loading="loadingCouponTypes"
+            placeholder="请选择卡券类型"
+            show-search
+            option-filter-prop="label"
+          />
+        </Form.Item>
         <Form.Item label="名称" name="title" :rules="[{ required: true, message: '请输入名称' }]">
           <Input v-model:value="couponFormModel.title" placeholder="卡券名称" />
         </Form.Item>

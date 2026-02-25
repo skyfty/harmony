@@ -198,7 +198,8 @@
   "coupons": {
     "title": "Coupons",
     "index": { "title": "Coupon Templates" },
-    "userCoupons": { "title": "User Coupons" }
+    "userCoupons": { "title": "User Coupons" },
+    "types": { "title": "Coupon Types" }
   },
   "system": {
     "title": "System",

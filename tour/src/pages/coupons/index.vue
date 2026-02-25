@@ -8,6 +8,8 @@
         @tap="openDetail(coupon.id)"
       >
         <CouponCard
+          :type-code="coupon.type?.code"
+          :type-name="coupon.type?.name"
           :title="coupon.title"
           :description="coupon.description"
           :valid-until="coupon.validUntil"

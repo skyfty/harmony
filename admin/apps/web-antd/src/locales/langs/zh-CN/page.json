@@ -199,7 +199,8 @@
   "coupons": {
     "title": "卡券管理",
     "index": { "title": "卡券模板" },
-    "userCoupons": { "title": "用户卡券" }
+    "userCoupons": { "title": "用户卡券" },
+    "types": { "title": "卡券类型" }
   },
   "system": {
     "title": "系统管理",
