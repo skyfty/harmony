@@ -13,17 +13,14 @@ import { completeTravelLeaveRecord, createPunchRecord, createTravelEnterRecord, 
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
-// sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
-const sceneName = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleId = ref<string>('');
 
 type PunchEventPayload = {
   eventName: 'punch';
   sceneId: string;
-  sceneName: string;
   clientPunchTime: string;
   behaviorPunchTime: string;
   location: {
@@ -40,7 +37,6 @@ function handlePunch(payload: PunchEventPayload): void {
   void createPunchRecord({
     sceneId: payload.sceneId,
     scenicId: sceneSpotId.value,
-    sceneName: payload.sceneName,
     clientPunchTime: payload.clientPunchTime,
     behaviorPunchTime: payload.behaviorPunchTime,
     location: {
@@ -56,12 +52,9 @@ onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
-  // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-  sceneName.value = typeof record.sceneName === 'string' ? record.sceneName : '';
   selectedVehicleId.value = typeof record.vehicleId === 'string' ? decodeURIComponent(record.vehicleId) : '';
-
 
   enterAt.value = Date.now();
 
@@ -69,7 +62,6 @@ onLoad((query: Record<string, unknown> | undefined) => {
     void createTravelEnterRecord({
       sceneId: sceneId.value,
       scenicId: sceneSpotId.value,
-      sceneName: sceneName.value || undefined,
       enterTime: new Date(enterAt.value).toISOString(),
       source: 'tour-miniapp',
       path: '/pages/scenery/index',
