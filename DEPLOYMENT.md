@@ -34,7 +34,7 @@ docker compose -f docker-compose.prod.yml up -d server
 
 ## 运行时要点
 - `server/.env.production`：设置 `NODE_ENV`, `PORT`, `MONGODB_URI`, `JWT_SECRET`, `ASSET_STORAGE_PATH`, `ASSET_PUBLIC_URL`, `MULTIUSER_PORT`
-	- 示例：`ASSET_PUBLIC_URL=http://v.touchmagic.cn/uploads`
+	- 示例：`ASSET_PUBLIC_URL=https://v.touchmagic.cn/uploads`
 - `editor`/`uploader`：挂载 `config/*.json`，修改后无需重建镜像
 	- `editor` 生产示例：`serverApiBaseUrl=http://editor.v.touchmagic.cn`
 	- `uploader` 生产示例：`serverApiBaseUrl=http://uploader.v.touchmagic.cn`
