@@ -249,11 +249,17 @@ class SceneGraphBuilder {
           if (props.headAssetId) {
             ids.add(props.headAssetId);
           }
+          if (props.footAssetId) {
+            ids.add(props.footAssetId);
+          }
           if (props.bodyEndCapAssetId) {
             ids.add(props.bodyEndCapAssetId);
           }
           if (props.headEndCapAssetId) {
             ids.add(props.headEndCapAssetId);
+          }
+          if (props.footEndCapAssetId) {
+            ids.add(props.footEndCapAssetId);
           }
           const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : []
           for (const rule of cornerModels) {
@@ -264,6 +270,10 @@ class SceneGraphBuilder {
             const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''
             if (headCornerAssetId) {
               ids.add(headCornerAssetId)
+            }
+            const footCornerAssetId = typeof rule?.footAssetId === 'string' ? rule.footAssetId.trim() : ''
+            if (footCornerAssetId) {
+              ids.add(footCornerAssetId)
             }
           }
         } else if (meshInfo?.type === 'Road') {
@@ -524,11 +534,17 @@ class SceneGraphBuilder {
     if (props.headAssetId) {
       ids.add(props.headAssetId);
     }
+    if (props.footAssetId) {
+      ids.add(props.footAssetId);
+    }
     if (props.bodyEndCapAssetId) {
       ids.add(props.bodyEndCapAssetId);
     }
     if (props.headEndCapAssetId) {
       ids.add(props.headEndCapAssetId);
+    }
+    if (props.footEndCapAssetId) {
+      ids.add(props.footEndCapAssetId);
     }
     const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : [];
     for (const rule of cornerModels) {
@@ -539,6 +555,10 @@ class SceneGraphBuilder {
       const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : '';
       if (headCornerAssetId) {
         ids.add(headCornerAssetId);
+      }
+      const footCornerAssetId = typeof rule?.footAssetId === 'string' ? rule.footAssetId.trim() : '';
+      if (footCornerAssetId) {
+        ids.add(footCornerAssetId);
       }
     }
   }

@@ -48,16 +48,19 @@ const isApplyingDimensions = ref(false)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-type WallAssetDialogTarget = 'body' | 'head' | 'bodyCap' | 'headCap' | 'cornerBody' | 'cornerHead'
+type WallAssetDialogTarget = 'body' | 'head' | 'foot' | 'bodyCap' | 'headCap' | 'footCap' | 'cornerBody' | 'cornerHead' | 'cornerFoot'
 const assetDialogTarget = ref<WallAssetDialogTarget | null>(null)
 const assetDialogCornerIndex = ref<number | null>(null)
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'body') return 'Select Wall Body Asset'
   if (assetDialogTarget.value === 'head') return 'Select Wall Head Asset'
+  if (assetDialogTarget.value === 'foot') return 'Select Wall Foot Asset'
   if (assetDialogTarget.value === 'bodyCap') return 'Select Wall End Cap (Body) Asset'
   if (assetDialogTarget.value === 'headCap') return 'Select Wall End Cap (Head) Asset'
+  if (assetDialogTarget.value === 'footCap') return 'Select Wall End Cap (Foot) Asset'
   if (assetDialogTarget.value === 'cornerBody') return 'Select Wall Corner Model (Body)'
   if (assetDialogTarget.value === 'cornerHead') return 'Select Wall Corner Model (Head)'
+  if (assetDialogTarget.value === 'cornerFoot') return 'Select Wall Corner Model (Foot)'
   return 'Select Wall Asset'
 })
 
@@ -79,19 +82,27 @@ const overwriteTargetFilename = ref<string | null>(null)
 const bodyDropAreaRef = ref<HTMLElement | null>(null)
 const capDropAreaRef = ref<HTMLElement | null>(null)
 const headDropAreaRef = ref<HTMLElement | null>(null)
+const footDropAreaRef = ref<HTMLElement | null>(null)
 const headCapDropAreaRef = ref<HTMLElement | null>(null)
+const footCapDropAreaRef = ref<HTMLElement | null>(null)
 const bodyDropActive = ref(false)
 const capDropActive = ref(false)
 const headDropActive = ref(false)
+const footDropActive = ref(false)
 const headCapDropActive = ref(false)
+const footCapDropActive = ref(false)
 const bodyDropProcessing = ref(false)
 const capDropProcessing = ref(false)
 const headDropProcessing = ref(false)
+const footDropProcessing = ref(false)
 const headCapDropProcessing = ref(false)
+const footCapDropProcessing = ref(false)
 const bodyFeedbackMessage = ref<string | null>(null)
 const capFeedbackMessage = ref<string | null>(null)
 const headFeedbackMessage = ref<string | null>(null)
+const footFeedbackMessage = ref<string | null>(null)
 const headCapFeedbackMessage = ref<string | null>(null)
+const footCapFeedbackMessage = ref<string | null>(null)
 
 const bodyAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyAssetId
@@ -109,6 +120,14 @@ const headAsset = computed(() => {
   return sceneStore.getAsset(assetId) ?? null
 })
 
+const footAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.footAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
 const bodyCapAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyEndCapAssetId
   if (!assetId) {
@@ -119,6 +138,14 @@ const bodyCapAsset = computed(() => {
 
 const headCapAsset = computed(() => {
   const assetId = wallComponent.value?.props?.headEndCapAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const footCapAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.footEndCapAssetId
   if (!assetId) {
     return null
   }
@@ -182,7 +209,7 @@ function normalizeOrientation(value: unknown, fallback: WallModelOrientation): W
 }
 
 function updateWallOrientation(
-  key: 'bodyOrientation' | 'headOrientation' | 'bodyEndCapOrientation' | 'headEndCapOrientation',
+  key: 'bodyOrientation' | 'headOrientation' | 'footOrientation' | 'bodyEndCapOrientation' | 'headEndCapOrientation' | 'footEndCapOrientation',
   patch: Partial<WallModelOrientation>,
 ): void {
   const nodeId = selectedNodeId.value
@@ -202,6 +229,9 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const headAssetId = typeof (row as any)?.headAssetId === 'string' && (row as any).headAssetId.trim().length
     ? (row as any).headAssetId
     : null
+  const footAssetId = typeof (row as any)?.footAssetId === 'string' && (row as any).footAssetId.trim().length
+    ? (row as any).footAssetId
+    : null
   const angle = clampAngleDegrees((row as any)?.angle, 90)
   const tolerance = clampTolerance((row as any)?.tolerance, 5)
 
@@ -209,6 +239,8 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const bodyYawDeg = clampYawDeg((row as any)?.bodyYawDeg, 0)
   const headForwardAxis = normalizeForwardAxis((row as any)?.headForwardAxis, '+z')
   const headYawDeg = clampYawDeg((row as any)?.headYawDeg, 0)
+  const footForwardAxis = normalizeForwardAxis((row as any)?.footForwardAxis, '+z')
+  const footYawDeg = clampYawDeg((row as any)?.footYawDeg, 0)
 
   const normalizeOffsetLocal = (value: unknown): { x: number; y: number; z: number } => {
     const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
@@ -222,16 +254,21 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
 
   const bodyOffsetLocal = normalizeOffsetLocal((row as any)?.bodyOffsetLocal)
   const headOffsetLocal = normalizeOffsetLocal((row as any)?.headOffsetLocal)
+  const footOffsetLocal = normalizeOffsetLocal((row as any)?.footOffsetLocal)
 
   return {
     bodyAssetId,
     headAssetId,
+    footAssetId,
     bodyOffsetLocal,
     headOffsetLocal,
+    footOffsetLocal,
     bodyForwardAxis,
     bodyYawDeg,
     headForwardAxis,
     headYawDeg,
+    footForwardAxis,
+    footYawDeg,
     angle,
     tolerance,
   } as WallCornerModelRow
@@ -251,12 +288,16 @@ function addCornerModel(): void {
   const next = [...cornerModels.value, normalizeCornerModelRow({
     bodyAssetId: null,
     headAssetId: null,
+    footAssetId: null,
     bodyOffsetLocal: { x: 0, y: 0, z: 0 },
     headOffsetLocal: { x: 0, y: 0, z: 0 },
+    footOffsetLocal: { x: 0, y: 0, z: 0 },
     bodyForwardAxis: '+z',
     bodyYawDeg: 0,
     headForwardAxis: '+z',
     headYawDeg: 0,
+    footForwardAxis: '+z',
+    footYawDeg: 0,
     angle: 90,
     tolerance: 5,
   } as any)]
@@ -379,11 +420,15 @@ function recommendJointTrim(): void {
   for (const rule of cornerModels.value) {
     const bodyId = (rule as any)?.bodyAssetId
     const headId = (rule as any)?.headAssetId
+    const footId = (rule as any)?.footAssetId
     if (typeof bodyId === 'string' && bodyId.trim().length) {
       cornerAssetIds.add(bodyId.trim())
     }
     if (typeof headId === 'string' && headId.trim().length) {
       cornerAssetIds.add(headId.trim())
+    }
+    if (typeof footId === 'string' && footId.trim().length) {
+      cornerAssetIds.add(footId.trim())
     }
   }
 
@@ -430,18 +475,24 @@ watch(selectedNode, () => {
   bodyDropActive.value = false
   capDropActive.value = false
   headDropActive.value = false
+  footDropActive.value = false
   headCapDropActive.value = false
+  footCapDropActive.value = false
   wallPresetDropActive.value = false
   bodyDropProcessing.value = false
   capDropProcessing.value = false
   headDropProcessing.value = false
+  footDropProcessing.value = false
   headCapDropProcessing.value = false
+  footCapDropProcessing.value = false
   wallPresetFeedbackMessage.value = null
   jointTrimFeedbackMessage.value = null
   bodyFeedbackMessage.value = null
   capFeedbackMessage.value = null
   headFeedbackMessage.value = null
+  footFeedbackMessage.value = null
   headCapFeedbackMessage.value = null
+  footCapFeedbackMessage.value = null
 })
 
 watch(assetDialogVisible, (open) => {
@@ -621,20 +672,24 @@ function openWallAssetDialog(target: WallAssetDialogTarget, event?: MouseEvent):
   assetDialogSelectedId.value = (() => {
     if (target === 'body') return wallComponent.value?.props?.bodyAssetId ?? ''
     if (target === 'head') return wallComponent.value?.props?.headAssetId ?? ''
+    if (target === 'foot') return wallComponent.value?.props?.footAssetId ?? ''
     if (target === 'bodyCap') return wallComponent.value?.props?.bodyEndCapAssetId ?? ''
     if (target === 'headCap') return wallComponent.value?.props?.headEndCapAssetId ?? ''
+    if (target === 'footCap') return wallComponent.value?.props?.footEndCapAssetId ?? ''
     return ''
   })()
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
 
-function openWallCornerModelDialog(index: number, mode: 'body' | 'head', event?: MouseEvent): void {
-  assetDialogTarget.value = mode === 'body' ? 'cornerBody' : 'cornerHead'
+function openWallCornerModelDialog(index: number, mode: 'body' | 'head' | 'foot', event?: MouseEvent): void {
+  assetDialogTarget.value = mode === 'body' ? 'cornerBody' : mode === 'head' ? 'cornerHead' : 'cornerFoot'
   assetDialogCornerIndex.value = index
   assetDialogSelectedId.value = mode === 'body'
     ? (cornerModels.value[index] as any)?.bodyAssetId ?? ''
-    : (cornerModels.value[index] as any)?.headAssetId ?? ''
+    : mode === 'head'
+      ? (cornerModels.value[index] as any)?.headAssetId ?? ''
+      : (cornerModels.value[index] as any)?.footAssetId ?? ''
   assetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   assetDialogVisible.value = true
 }
@@ -654,19 +709,27 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
     } else if (target === 'head') {
       headFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: null } as any)
+    } else if (target === 'foot') {
+      footFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: null } as any)
     } else if (target === 'bodyCap') {
       capFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: null } as any)
     } else if (target === 'headCap') {
       headCapFeedbackMessage.value = null
       sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: null } as any)
+    } else if (target === 'footCap') {
+      footCapFeedbackMessage.value = null
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { footEndCapAssetId: null } as any)
     } else {
       const index = assetDialogCornerIndex.value
       if (typeof index === 'number' && index >= 0) {
         if (target === 'cornerBody') {
           updateCornerModel(index, { bodyAssetId: null } as any)
-        } else {
+        } else if (target === 'cornerHead') {
           updateCornerModel(index, { headAssetId: null } as any)
+        } else {
+          updateCornerModel(index, { footAssetId: null } as any)
         }
       }
     }
@@ -684,19 +747,27 @@ function handleWallAssetDialogUpdate(asset: ProjectAsset | null): void {
   } else if (target === 'head') {
     headFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: asset.id } as any)
+  } else if (target === 'foot') {
+    footFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: asset.id } as any)
   } else if (target === 'bodyCap') {
     capFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: asset.id } as any)
   } else if (target === 'headCap') {
     headCapFeedbackMessage.value = null
     sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: asset.id } as any)
+  } else if (target === 'footCap') {
+    footCapFeedbackMessage.value = null
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { footEndCapAssetId: asset.id } as any)
   } else {
     const index = assetDialogCornerIndex.value
     if (typeof index === 'number' && index >= 0) {
       if (target === 'cornerBody') {
         updateCornerModel(index, { bodyAssetId: asset.id } as any)
-      } else {
+      } else if (target === 'cornerHead') {
         updateCornerModel(index, { headAssetId: asset.id } as any)
+      } else {
+        updateCornerModel(index, { footAssetId: asset.id } as any)
       }
     }
   }
@@ -707,7 +778,7 @@ function handleWallAssetDialogCancel(): void {
   assetDialogVisible.value = false
 }
 
-async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'bodyCap' | 'headCap') {
+async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot' | 'bodyCap' | 'headCap' | 'footCap') {
   event.preventDefault()
 
   if (target === 'body') {
@@ -716,12 +787,18 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
   } else if (target === 'head') {
     headDropActive.value = false
     headFeedbackMessage.value = null
+  } else if (target === 'foot') {
+    footDropActive.value = false
+    footFeedbackMessage.value = null
   } else if (target === 'bodyCap') {
     capDropActive.value = false
     capFeedbackMessage.value = null
-  } else {
+  } else if (target === 'headCap') {
     headCapDropActive.value = false
     headCapFeedbackMessage.value = null
+  } else {
+    footCapDropActive.value = false
+    footCapFeedbackMessage.value = null
   }
 
   const nodeId = selectedNodeId.value
@@ -734,8 +811,16 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
     headFeedbackMessage.value = 'Assign a wall body model first.'
     return
   }
+  if (target === 'foot' && !component.props?.bodyAssetId) {
+    footFeedbackMessage.value = 'Assign a wall body model first.'
+    return
+  }
   if (target === 'headCap' && !component.props?.bodyEndCapAssetId) {
     headCapFeedbackMessage.value = 'Assign a body end cap first.'
+    return
+  }
+  if (target === 'footCap' && !component.props?.bodyEndCapAssetId) {
+    footCapFeedbackMessage.value = 'Assign a body end cap first.'
     return
   }
 
@@ -743,9 +828,13 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
     ? bodyDropProcessing
     : target === 'head'
       ? headDropProcessing
+      : target === 'foot'
+        ? footDropProcessing
       : target === 'bodyCap'
         ? capDropProcessing
-        : headCapDropProcessing
+        : target === 'headCap'
+          ? headCapDropProcessing
+          : footCapDropProcessing
   if (processing.value) {
     return
   }
@@ -755,8 +844,10 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
     const message = 'Drag a model asset from the Asset Panel.'
     if (target === 'body') bodyFeedbackMessage.value = message
     else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'foot') footFeedbackMessage.value = message
     else if (target === 'bodyCap') capFeedbackMessage.value = message
-    else headCapFeedbackMessage.value = message
+    else if (target === 'headCap') headCapFeedbackMessage.value = message
+    else footCapFeedbackMessage.value = message
     return
   }
 
@@ -764,8 +855,10 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
   if (invalid) {
     if (target === 'body') bodyFeedbackMessage.value = invalid
     else if (target === 'head') headFeedbackMessage.value = invalid
+    else if (target === 'foot') footFeedbackMessage.value = invalid
     else if (target === 'bodyCap') capFeedbackMessage.value = invalid
-    else headCapFeedbackMessage.value = invalid
+    else if (target === 'headCap') headCapFeedbackMessage.value = invalid
+    else footCapFeedbackMessage.value = invalid
     return
   }
 
@@ -773,15 +866,21 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
     ? component.props?.bodyAssetId
     : target === 'head'
       ? (component.props as any)?.headAssetId
+      : target === 'foot'
+        ? (component.props as any)?.footAssetId
       : target === 'bodyCap'
         ? (component.props as any)?.bodyEndCapAssetId
-        : (component.props as any)?.headEndCapAssetId
+        : target === 'headCap'
+          ? (component.props as any)?.headEndCapAssetId
+          : (component.props as any)?.footEndCapAssetId
   if (assetId === currentId) {
     const message = 'This model is already assigned.'
     if (target === 'body') bodyFeedbackMessage.value = message
     else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'foot') footFeedbackMessage.value = message
     else if (target === 'bodyCap') capFeedbackMessage.value = message
-    else headCapFeedbackMessage.value = message
+    else if (target === 'headCap') headCapFeedbackMessage.value = message
+    else footCapFeedbackMessage.value = message
     return
   }
 
@@ -791,18 +890,24 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'body
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
     } else if (target === 'head') {
       sceneStore.updateNodeComponentProps(nodeId, component.id, { headAssetId: assetId } as any)
+    } else if (target === 'foot') {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { footAssetId: assetId } as any)
     } else if (target === 'bodyCap') {
       sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: assetId } as any)
-    } else {
+    } else if (target === 'headCap') {
       sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: assetId } as any)
+    } else {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, { footEndCapAssetId: assetId } as any)
     }
   } catch (error) {
     console.error('Failed to assign wall asset model', error)
     const message = (error as Error).message ?? 'Failed to assign the model asset.'
     if (target === 'body') bodyFeedbackMessage.value = message
     else if (target === 'head') headFeedbackMessage.value = message
+    else if (target === 'foot') footFeedbackMessage.value = message
     else if (target === 'bodyCap') capFeedbackMessage.value = message
-    else headCapFeedbackMessage.value = message
+    else if (target === 'headCap') headCapFeedbackMessage.value = message
+    else footCapFeedbackMessage.value = message
   } finally {
     processing.value = false
   }
@@ -1190,6 +1295,58 @@ function applyAirWallUpdate(rawValue: unknown) {
 
                 <div
                   class="asset-pair-item"
+                  ref="footDropAreaRef"
+                  :class="{ 'is-active': footDropActive, 'is-processing': footDropProcessing, 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; footDropActive = true }"
+                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyAssetId) return; footDropActive = true }"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(footDropAreaRef, e)) footDropActive = false }"
+                  @drop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; assignWallAsset(e, 'foot') }"
+                >
+                  <div class="asset-pair-label">Foot</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !footAsset }"
+                        :style="footAsset
+                          ? (footAsset.thumbnail?.trim() ? { backgroundImage: `url(${footAsset.thumbnail})` } : (footAsset.previewColor ? { backgroundColor: footAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallAssetDialog('foot', e) }"
+                      />
+                    </div>
+
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).footOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('footOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).footOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('footOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
+                  </div>
+
+                  <p v-if="footFeedbackMessage" class="asset-feedback">{{ footFeedbackMessage }}</p>
+                </div>
+
+                <div
+                  class="asset-pair-item"
                   ref="capDropAreaRef"
                   :class="{ 'is-active': capDropActive, 'is-processing': capDropProcessing }"
                   @dragenter.prevent="capDropActive = true"
@@ -1290,6 +1447,58 @@ function applyAirWallUpdate(rawValue: unknown) {
                   </div>
 
                   <p v-if="headCapFeedbackMessage" class="asset-feedback">{{ headCapFeedbackMessage }}</p>
+                </div>
+
+                <div
+                  class="asset-pair-item"
+                  ref="footCapDropAreaRef"
+                  :class="{ 'is-active': footCapDropActive, 'is-processing': footCapDropProcessing, 'is-disabled': !wallComponent?.props?.bodyEndCapAssetId }"
+                  @dragenter.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; footCapDropActive = true }"
+                  @dragover.prevent="() => { if (!wallComponent?.props?.bodyEndCapAssetId) return; footCapDropActive = true }"
+                  @dragleave="(e) => { if (shouldDeactivateDropArea(footCapDropAreaRef, e)) footCapDropActive = false }"
+                  @drop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; assignWallAsset(e, 'footCap') }"
+                >
+                  <div class="asset-pair-label">End Cap (Foot)</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !footCapAsset }"
+                        :style="footCapAsset
+                          ? (footCapAsset.thumbnail?.trim() ? { backgroundImage: `url(${footCapAsset.thumbnail})` } : (footCapAsset.previewColor ? { backgroundColor: footCapAsset.previewColor } : undefined))
+                          : undefined"
+                        @click.stop="(e) => { if (!wallComponent?.props?.bodyEndCapAssetId) return; openWallAssetDialog('footCap', e) }"
+                      />
+                    </div>
+
+                    <div v-if="wallComponent" class="wall-asset-orientation-grid">
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="Forward"
+                        :items="FORWARD_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).footEndCapOrientation.forwardAxis"
+                        @update:modelValue="(value) => updateWallOrientation('footEndCapOrientation', { forwardAxis: value as any })"
+                      />
+                      <v-text-field
+                        density="compact"
+                        variant="underlined"
+                        type="number"
+                        label="Yaw (deg)"
+                        hide-details
+                        step="1"
+                        min="-180"
+                        max="180"
+                        :model-value="(wallComponent.props as any).footEndCapOrientation.yawDeg"
+                        @update:modelValue="(value) => updateWallOrientation('footEndCapOrientation', { yawDeg: Number(value) })"
+                      />
+                    </div>
+                  </div>
+
+                  <p v-if="footCapFeedbackMessage" class="asset-feedback">{{ footCapFeedbackMessage }}</p>
                 </div>
               </div>
             </div>
@@ -1594,6 +1803,101 @@ function applyAirWallUpdate(rawValue: unknown) {
                   inputmode="decimal"
                   :model-value="(entry as any).headOffsetLocal?.z ?? 0"
                   @update:modelValue="(value) => updateCornerModel(index, { headOffsetLocal: { ...((entry as any).headOffsetLocal ?? { x: 0, y: 0, z: 0 }), z: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
+            </div>
+
+            <v-divider class="wall-corner-divider" />
+
+            <div
+              class="wall-corner-model-row"
+              :class="{ 'is-disabled': !wallComponent?.props?.bodyAssetId }"
+            >
+              <div
+                class="wall-corner-model-picker"
+                @click.stop="(e) => { if (!wallComponent?.props?.bodyAssetId) return; openWallCornerModelDialog(index, 'foot', e) }"
+              >
+                <template v-if="resolveCornerModelAsset((entry as any).footAssetId)">
+                  <div
+                    class="asset-thumbnail"
+                    :style="(() => {
+                      const asset = resolveCornerModelAsset((entry as any).footAssetId)
+                      if (!asset) return undefined
+                      return asset.thumbnail?.trim()
+                        ? { backgroundImage: `url(${asset.thumbnail})` }
+                        : (asset.previewColor ? { backgroundColor: asset.previewColor } : undefined)
+                    })()"
+                  />
+                </template>
+                <template v-else>
+                  <div class="asset-thumbnail placeholder" />
+                </template>
+              </div>
+
+              <div class="wall-corner-orientation-stack">
+                <v-select
+                  density="compact"
+                  variant="underlined"
+                  label="Foot Forward"
+                  :items="FORWARD_AXIS_ITEMS"
+                  item-title="title"
+                  item-value="value"
+                  hide-details
+                  :model-value="(entry as any).footForwardAxis"
+                  @update:modelValue="(value) => updateCornerModel(index, { footForwardAxis: value as any } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Foot Yaw"
+                  hide-details
+                  step="1"
+                  min="-180"
+                  max="180"
+                  :model-value="(entry as any).footYawDeg"
+                  @update:modelValue="(value) => updateCornerModel(index, { footYawDeg: Number(value) } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+              </div>
+
+              <div class="wall-corner-offset-grid">
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset X"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).footOffsetLocal?.x ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { footOffsetLocal: { ...((entry as any).footOffsetLocal ?? { x: 0, y: 0, z: 0 }), x: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Y"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).footOffsetLocal?.y ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { footOffsetLocal: { ...((entry as any).footOffsetLocal ?? { x: 0, y: 0, z: 0 }), y: Number(value) } } as any)"
+                  @blur="() => updateCornerModel(index, {})"
+                />
+                <v-text-field
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  label="Offset Z"
+                  hide-details
+                  step="0.01"
+                  inputmode="decimal"
+                  :model-value="(entry as any).footOffsetLocal?.z ?? 0"
+                  @update:modelValue="(value) => updateCornerModel(index, { footOffsetLocal: { ...((entry as any).footOffsetLocal ?? { x: 0, y: 0, z: 0 }), z: Number(value) } } as any)"
                   @blur="() => updateCornerModel(index, {})"
                 />
               </div>

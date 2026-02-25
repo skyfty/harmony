@@ -362,14 +362,17 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const headAssetId = wallComponent?.props?.headAssetId ?? null
+    const footAssetId = wallComponent?.props?.footAssetId ?? null
     const bodyEndCapAssetId = wallComponent?.props?.bodyEndCapAssetId ?? null
     const headEndCapAssetId = wallComponent?.props?.headEndCapAssetId ?? null
+    const footEndCapAssetId = wallComponent?.props?.footEndCapAssetId ?? null
     const cornerModels = wallProps?.cornerModels ?? []
     const hasBodyCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.bodyAssetId === 'string' && (entry as any).bodyAssetId.trim().length)
     const hasHeadCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.headAssetId === 'string' && (entry as any).headAssetId.trim().length)
+    const hasFootCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.footAssetId === 'string' && (entry as any).footAssetId.trim().length)
     const definition = node.dynamicMesh as WallDynamicMesh
-    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets) && definition.segments.length >= 2
-    const wantsInstancing = Boolean(bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints)
+    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets || hasFootCornerAssets) && definition.segments.length >= 2
+    const wantsInstancing = Boolean(bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
     }
@@ -415,6 +418,26 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
+    if (footAssetId) {
+      const group = getCachedModelObject(footAssetId)
+      if (group) {
+        const localMatrices = wallProps
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
+          : []
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: footAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-foot:${nodeId}:`,
+            useNodeIdForIndex0: false,
+          })
+        }
+      }
+    }
+
     const getBoundsFromCache = (assetId: string): THREE.Box3 | null => {
       const group = getCachedModelObject(assetId)
       return group?.boundingBox ?? null
@@ -430,9 +453,14 @@ export function createWallRenderer(options: WallRendererOptions) {
       mode: 'head',
       getAssetBounds: getBoundsFromCache,
     })
-    const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId
+    const footJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      cornerModels,
+      mode: 'foot',
+      getAssetBounds: getBoundsFromCache,
+    })
+    const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId ?? footJointBuckets.primaryAssetId
 
-    for (const jointBuckets of [bodyJointBuckets, headJointBuckets] as const) {
+    for (const jointBuckets of [bodyJointBuckets, headJointBuckets, footJointBuckets] as const) {
       if (!jointBuckets.matricesByAssetId.size) {
         continue
       }
@@ -479,6 +507,23 @@ export function createWallRenderer(options: WallRendererOptions) {
             assetId: headEndCapAssetId,
             localMatrices,
             bindingIdPrefix: `wall-cap-head:${nodeId}:`,
+            useNodeIdForIndex0: false,
+          })
+        }
+      }
+    }
+
+    if (footEndCapAssetId) {
+      const group = getCachedModelObject(footEndCapAssetId)
+      if (group) {
+        const localMatrices = wallProps
+          ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+          : []
+        if (localMatrices.length > 0) {
+          bindings.push({
+            assetId: footEndCapAssetId,
+            localMatrices,
+            bindingIdPrefix: `wall-cap-foot:${nodeId}:`,
             useNodeIdForIndex0: false,
           })
         }
@@ -601,7 +646,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   function computeWallBodyLocalMatrices(
     definition: WallDynamicMesh,
     bounds: THREE.Box3,
-    mode: 'body' | 'head',
+    mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
     trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
   ): THREE.Matrix4[] {
@@ -718,7 +763,9 @@ export function createWallRenderer(options: WallRendererOptions) {
         const baselineY = wallSyncPosHelper.y
         const posY = mode === 'body'
           ? (baselineY - scaleY * minY)
-          : (baselineY + bodyHeight - minY)
+          : mode === 'head'
+            ? (baselineY + bodyHeight - minY)
+            : (baselineY - minY)
         wallSyncPosHelper.y = posY
 
         wallSyncScaleHelper.set(1, scaleY, 1)
@@ -748,7 +795,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   function pickWallCornerRule(
     angleRadians: number,
     rules: WallCornerModelRule[],
-    mode: 'body' | 'head',
+    mode: 'body' | 'head' | 'foot',
   ): WallCornerModelRule | null {
     if (!Number.isFinite(angleRadians)) {
       return null
@@ -761,7 +808,11 @@ export function createWallRenderer(options: WallRendererOptions) {
     const RAD_STRAIGHT_EPS = 1e-3
     if (Math.abs(angleRadians - Math.PI) < RAD_STRAIGHT_EPS) {
       for (const rule of rules) {
-        const rawAsset = mode === 'body' ? (rule as any)?.bodyAssetId : (rule as any)?.headAssetId
+        const rawAsset = mode === 'body'
+          ? (rule as any)?.bodyAssetId
+          : mode === 'head'
+            ? (rule as any)?.headAssetId
+            : (rule as any)?.footAssetId
         const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
         if (!assetId) {
           continue
@@ -777,7 +828,11 @@ export function createWallRenderer(options: WallRendererOptions) {
     let best: { rule: WallCornerModelRule; diff: number; ruleAngle: number } | null = null
 
     for (const rule of rules) {
-      const rawAsset = mode === 'body' ? (rule as any)?.bodyAssetId : (rule as any)?.headAssetId
+      const rawAsset = mode === 'body'
+        ? (rule as any)?.bodyAssetId
+        : mode === 'head'
+          ? (rule as any)?.headAssetId
+          : (rule as any)?.footAssetId
       const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
       if (!assetId) {
         continue
@@ -811,8 +866,8 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   function computeWallJointLocalMatricesByAsset(
     definition: WallDynamicMesh,
-    options: { cornerModels?: WallCornerModelRule[]; mode: 'body' | 'head'; getAssetBounds: (assetId: string) => THREE.Box3 | null },
-  ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null; mode: 'body' | 'head' } {
+    options: { cornerModels?: WallCornerModelRule[]; mode: 'body' | 'head' | 'foot'; getAssetBounds: (assetId: string) => THREE.Box3 | null },
+  ): { matricesByAssetId: Map<string, THREE.Matrix4[]>; primaryAssetId: string | null; mode: 'body' | 'head' | 'foot' } {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     let primaryAssetId: string | null = null
 
@@ -879,7 +934,11 @@ export function createWallRenderer(options: WallRendererOptions) {
         return
       }
 
-      const rawAsset = options.mode === 'body' ? (rule as any)?.bodyAssetId : (rule as any)?.headAssetId
+      const rawAsset = options.mode === 'body'
+        ? (rule as any)?.bodyAssetId
+        : options.mode === 'head'
+          ? (rule as any)?.headAssetId
+          : (rule as any)?.footAssetId
       const assetId = typeof rawAsset === 'string' ? rawAsset.trim() : ''
       if (!assetId) {
         return
@@ -893,7 +952,9 @@ export function createWallRenderer(options: WallRendererOptions) {
       const baselineY = corner.y
       const posY = options.mode === 'body'
         ? (baselineY - scaleY * minY)
-        : (baselineY + bodyHeight - minY)
+        : options.mode === 'head'
+          ? (baselineY + bodyHeight - minY)
+          : (baselineY - minY)
 
       // 7) 计算“内角”的角平分线（bisector）作为模型朝向的基准
       //    - 如果两向量几乎反向（相加后接近 0），使用出射向量作为退化情况下的朝向
@@ -903,8 +964,16 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
 
       const localForward = new THREE.Vector3()
-      const forwardAxis = options.mode === 'body' ? (rule as any)?.bodyForwardAxis : (rule as any)?.headForwardAxis
-      const yawDeg = options.mode === 'body' ? (rule as any)?.bodyYawDeg : (rule as any)?.headYawDeg
+      const forwardAxis = options.mode === 'body'
+        ? (rule as any)?.bodyForwardAxis
+        : options.mode === 'head'
+          ? (rule as any)?.headForwardAxis
+          : (rule as any)?.footForwardAxis
+      const yawDeg = options.mode === 'body'
+        ? (rule as any)?.bodyYawDeg
+        : options.mode === 'head'
+          ? (rule as any)?.headYawDeg
+          : (rule as any)?.footYawDeg
       writeWallLocalForward(localForward, forwardAxis as WallForwardAxis)
 
       // 8) 将平分线转换为四元数（模型局部 forwardAxis 对准平分线）
@@ -920,7 +989,11 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallSyncPosHelper.set(corner.x, posY, corner.z)
 
       // Option A: per-rule local offset in the model's local frame, rotated by the final corner orientation.
-      const rawOffset = options.mode === 'body' ? (rule as any)?.bodyOffsetLocal : (rule as any)?.headOffsetLocal
+      const rawOffset = options.mode === 'body'
+        ? (rule as any)?.bodyOffsetLocal
+        : options.mode === 'head'
+          ? (rule as any)?.headOffsetLocal
+          : (rule as any)?.footOffsetLocal
       const offsetRecord = rawOffset && typeof rawOffset === 'object' ? (rawOffset as Record<string, unknown>) : null
       const readOffset = (key: 'x' | 'y' | 'z'): number => {
         const raw = offsetRecord ? offsetRecord[key] : 0
@@ -967,7 +1040,7 @@ export function createWallRenderer(options: WallRendererOptions) {
   function computeWallEndCapLocalMatrices(
     definition: WallDynamicMesh,
     bounds: THREE.Box3,
-    mode: 'body' | 'head',
+    mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
   ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
@@ -1025,7 +1098,9 @@ export function createWallRenderer(options: WallRendererOptions) {
         const baselineY = firstSeg.start.y
         const posY = mode === 'body'
           ? (baselineY - scaleY * minY)
-          : (baselineY + bodyHeight - minY)
+          : mode === 'head'
+            ? (baselineY + bodyHeight - minY)
+            : (baselineY - minY)
         wallSyncPosHelper.set(firstSeg.start.x, posY, firstSeg.start.z)
         wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
         wallSyncScaleHelper.set(1, scaleY, 1)
@@ -1049,7 +1124,9 @@ export function createWallRenderer(options: WallRendererOptions) {
         const baselineY = lastSeg.end.y
         const posY = mode === 'body'
           ? (baselineY - scaleY * minY)
-          : (baselineY + bodyHeight - minY)
+          : mode === 'head'
+            ? (baselineY + bodyHeight - minY)
+            : (baselineY - minY)
         wallSyncPosHelper.set(lastSeg.end.x, posY, lastSeg.end.z)
         wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
         wallSyncScaleHelper.set(1, scaleY, 1)
@@ -1218,8 +1295,10 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - endCaps：首尾端盖（仅非闭合路径时才会放置）。
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const headAssetId = wallComponent?.props?.headAssetId ?? null
+    const footAssetId = wallComponent?.props?.footAssetId ?? null
     const bodyEndCapAssetId = wallComponent?.props?.bodyEndCapAssetId ?? null
     const headEndCapAssetId = wallComponent?.props?.headEndCapAssetId ?? null
+    const footEndCapAssetId = wallComponent?.props?.footEndCapAssetId ?? null
     // 拐角模型规则：根据相邻墙段形成的“内角”在规则表中匹配对应模型。
     // 规则既可以配置 body 的拐角模型，也可以配置 head 的拐角模型。
     const cornerModels = Array.isArray(wallComponent?.props?.cornerModels)
@@ -1239,6 +1318,13 @@ export function createWallRenderer(options: WallRendererOptions) {
           .filter((id) => Boolean(id)),
       ),
     ).sort()
+    const footCornerAssetIds = Array.from(
+      new Set(
+        cornerModels
+          .map((entry) => (typeof (entry as any)?.footAssetId === 'string' ? (entry as any).footAssetId.trim() : ''))
+          .filter((id) => Boolean(id)),
+      ),
+    ).sort()
     // definition：节点当前的 wall 动态网格（由用户编辑/运行时生成）。
     // effectiveDefinition：在渲染前，将 wall props（width/height/thickness）覆盖到每段 segment 上，
     // 以保证程序墙体与实例化计算使用一致的尺寸数据。
@@ -1247,12 +1333,12 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     // 拐角 joint 需要至少两段才可能存在。
     const canHaveCornerJoints =
-      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0) && definition.segments.length >= 2
+      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0) && definition.segments.length >= 2
 
     // wantsInstancing：只要配置了任何一种实例化相关资源（body/head/caps/corners），
     // 就尝试走实例化渲染（资源未就绪时会回退到程序墙体）。
     const wantsInstancing = Boolean(
-      bodyAssetId || headAssetId || bodyEndCapAssetId || headEndCapAssetId || canHaveCornerJoints,
+      bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints,
     )
 
     const userData = container.userData ?? (container.userData = {})
@@ -1311,16 +1397,22 @@ export function createWallRenderer(options: WallRendererOptions) {
     // Instanced rendering is enabled, but we may need to fall back to the procedural wall while assets load.
     const needsBodyLoad = Boolean(bodyAssetId && !getCachedModelObject(bodyAssetId))
     const needsHeadLoad = Boolean(headAssetId && !getCachedModelObject(headAssetId))
+    const needsFootLoad = Boolean(footAssetId && !getCachedModelObject(footAssetId))
     const needsBodyCornerLoad = bodyCornerAssetIds.some((id) => !getCachedModelObject(id))
     const needsHeadCornerLoad = headCornerAssetIds.some((id) => !getCachedModelObject(id))
+    const needsFootCornerLoad = footCornerAssetIds.some((id) => !getCachedModelObject(id))
     const needsBodyCapLoad = Boolean(bodyEndCapAssetId && !getCachedModelObject(bodyEndCapAssetId))
     const needsHeadCapLoad = Boolean(headEndCapAssetId && !getCachedModelObject(headEndCapAssetId))
+    const needsFootCapLoad = Boolean(footEndCapAssetId && !getCachedModelObject(footEndCapAssetId))
 
     if (needsBodyLoad && bodyAssetId) {
       scheduleWallAssetLoad(bodyAssetId, node.id, signatureKey)
     }
     if (needsHeadLoad && headAssetId) {
       scheduleWallAssetLoad(headAssetId, node.id, signatureKey)
+    }
+    if (needsFootLoad && footAssetId) {
+      scheduleWallAssetLoad(footAssetId, node.id, signatureKey)
     }
     if (needsBodyCornerLoad) {
       bodyCornerAssetIds.forEach((assetId) => {
@@ -1336,11 +1428,21 @@ export function createWallRenderer(options: WallRendererOptions) {
         }
       })
     }
+    if (needsFootCornerLoad) {
+      footCornerAssetIds.forEach((assetId) => {
+        if (!getCachedModelObject(assetId)) {
+          scheduleWallAssetLoad(assetId, node.id, signatureKey)
+        }
+      })
+    }
     if (needsBodyCapLoad && bodyEndCapAssetId) {
       scheduleWallAssetLoad(bodyEndCapAssetId, node.id, signatureKey)
     }
     if (needsHeadCapLoad && headEndCapAssetId) {
       scheduleWallAssetLoad(headEndCapAssetId, node.id, signatureKey)
+    }
+    if (needsFootCapLoad && footEndCapAssetId) {
+      scheduleWallAssetLoad(footEndCapAssetId, node.id, signatureKey)
     }
 
     // 任何一种资源还没进入缓存（getCachedModelObject 为空）就认为“未就绪”。
@@ -1348,7 +1450,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     // - 触发对应资源的异步加载（scheduleWallAssetLoad）
     // - 立即回退到程序墙体，让用户可见并可继续编辑
     // - 等加载完成后由 scheduleWallResync 在同一帧批量刷新等待的 node
-    if (needsBodyLoad || needsHeadLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsBodyCapLoad || needsHeadCapLoad) {
+    if (needsBodyLoad || needsHeadLoad || needsFootLoad || needsBodyCornerLoad || needsHeadCornerLoad || needsFootCornerLoad || needsBodyCapLoad || needsHeadCapLoad || needsFootCapLoad) {
       releaseModelInstancesForNode(node.id)
       delete userData.instancedAssetId
       delete userData.instancedBounds
@@ -1372,10 +1474,13 @@ export function createWallRenderer(options: WallRendererOptions) {
     // primaryAssetId 用于标记“本节点当前的实例化主资源”，便于调试/拾取代理/缓存。
     const primaryAssetId = bodyAssetId
       ?? headAssetId
+      ?? footAssetId
       ?? (bodyCornerAssetIds[0] ?? null)
       ?? (headCornerAssetIds[0] ?? null)
+      ?? (footCornerAssetIds[0] ?? null)
       ?? bodyEndCapAssetId
       ?? headEndCapAssetId
+      ?? footEndCapAssetId
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
@@ -1447,6 +1552,33 @@ export function createWallRenderer(options: WallRendererOptions) {
       }
     }
 
+    if (footAssetId) {
+      const group = getCachedModelObject(footAssetId)
+      if (group) {
+        const localMatrices = wallProps
+          ? computeWallBodyLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footOrientation, {
+            mode: wallProps.jointTrimMode,
+            manual: wallProps.jointTrimManual,
+          })
+          : []
+        if (localMatrices.length > 0) {
+          for (const localMatrix of localMatrices) {
+            expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+            hasWallBounds = true
+          }
+          syncInstancedModelCommittedLocalMatrices({
+            nodeId: node.id,
+            assetId: footAssetId,
+            object: container,
+            localMatrices,
+            bindingIdPrefix: `wall-foot:${node.id}:`,
+            useNodeIdForIndex0: false,
+          })
+          hasBindings = true
+        }
+      }
+    }
+
     {
       // corner joints（拐角件）与端盖：
       // - 按 assetId 分桶生成 localMatrices（同一种拐角模型可能出现多次）。
@@ -1466,9 +1598,14 @@ export function createWallRenderer(options: WallRendererOptions) {
         mode: 'head',
         getAssetBounds: getBoundsFromCache,
       })
-      const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId
+      const footJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+        cornerModels,
+        mode: 'foot',
+        getAssetBounds: getBoundsFromCache,
+      })
+      const primaryCornerAssetId = bodyJointBuckets.primaryAssetId ?? headJointBuckets.primaryAssetId ?? footJointBuckets.primaryAssetId
 
-      for (const jointBuckets of [bodyJointBuckets, headJointBuckets] as const) {
+      for (const jointBuckets of [bodyJointBuckets, headJointBuckets, footJointBuckets] as const) {
         if (!jointBuckets.matricesByAssetId.size) {
           continue
         }
@@ -1545,6 +1682,30 @@ export function createWallRenderer(options: WallRendererOptions) {
               object: container,
               localMatrices,
               bindingIdPrefix: `wall-cap-head:${node.id}:`,
+              useNodeIdForIndex0: false,
+            })
+            hasBindings = hasBindings || localMatrices.length > 0
+          }
+        }
+      }
+
+      if (footEndCapAssetId) {
+        const group = getCachedModelObject(footEndCapAssetId)
+        if (group) {
+          const localMatrices = wallProps
+            ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+            : []
+          if (localMatrices.length > 0) {
+            for (const localMatrix of localMatrices) {
+              expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
+              hasWallBounds = true
+            }
+            syncInstancedModelCommittedLocalMatrices({
+              nodeId: node.id,
+              assetId: footEndCapAssetId,
+              object: container,
+              localMatrices,
+              bindingIdPrefix: `wall-cap-foot:${node.id}:`,
               useNodeIdForIndex0: false,
             })
             hasBindings = hasBindings || localMatrices.length > 0

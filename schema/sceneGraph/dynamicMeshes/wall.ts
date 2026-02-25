@@ -23,12 +23,16 @@ export async function buildWallMesh(
 
   const bodyObject = wallProps.bodyAssetId ? await deps.loadAssetMesh(wallProps.bodyAssetId) : null;
   const headObject = bodyObject && wallProps.headAssetId ? await deps.loadAssetMesh(wallProps.headAssetId) : null;
+  const footObject = bodyObject && wallProps.footAssetId ? await deps.loadAssetMesh(wallProps.footAssetId) : null;
 
   const bodyEndCapObject = bodyObject && wallProps.bodyEndCapAssetId
     ? await deps.loadAssetMesh(wallProps.bodyEndCapAssetId)
     : null;
   const headEndCapObject = bodyEndCapObject && wallProps.headEndCapAssetId
     ? await deps.loadAssetMesh(wallProps.headEndCapAssetId)
+    : null;
+  const footEndCapObject = bodyEndCapObject && wallProps.footEndCapAssetId
+    ? await deps.loadAssetMesh(wallProps.footEndCapAssetId)
     : null;
 
   const cornerModels = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
@@ -47,9 +51,17 @@ export async function buildWallMesh(
         .filter((value: string) => value.length > 0),
     ),
   )
+  const uniqueFootCornerAssetIds = Array.from(
+    new Set<string>(
+      cornerModels
+        .map((rule: any) => (typeof rule?.footAssetId === 'string' ? rule.footAssetId.trim() : ''))
+        .filter((value: string) => value.length > 0),
+    ),
+  )
 
   const bodyCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
   const headCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
+  const footCornerObjectsByAssetId: Record<string, THREE.Object3D | null> = {}
 
   const bodyCornerObjectsEntries = await Promise.all(
     uniqueBodyCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
@@ -65,23 +77,35 @@ export async function buildWallMesh(
     headCornerObjectsByAssetId[assetId] = object
   }
 
+  const footCornerObjectsEntries = await Promise.all(
+    uniqueFootCornerAssetIds.map(async (assetId: string) => [assetId, await deps.loadAssetMesh(assetId)] as const),
+  )
+  for (const [assetId, object] of footCornerObjectsEntries) {
+    footCornerObjectsByAssetId[assetId] = object
+  }
+
   const group = createWallRenderGroup(
     meshInfo,
     {
       bodyObject,
       headObject,
+      footObject,
       bodyEndCapObject,
       headEndCapObject,
+      footEndCapObject,
       bodyCornerObjectsByAssetId,
       headCornerObjectsByAssetId,
+      footCornerObjectsByAssetId,
     },
     {
       smoothing: wallProps.smoothing,
       cornerModels,
       bodyOrientation: wallProps.bodyOrientation,
       headOrientation: wallProps.headOrientation,
+      footOrientation: wallProps.footOrientation,
       bodyEndCapOrientation: wallProps.bodyEndCapOrientation,
       headEndCapOrientation: wallProps.headEndCapOrientation,
+      footEndCapOrientation: wallProps.footEndCapOrientation,
       jointTrimMode: wallProps.jointTrimMode,
       jointTrimManual: wallProps.jointTrimManual,
     },

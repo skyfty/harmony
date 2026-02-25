@@ -182,11 +182,15 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     const row = entry as Record<string, unknown>
     const bodyAssetId = row.bodyAssetId === null ? null : normalizeOptionalAssetId(row.bodyAssetId)
     const headAssetId = row.headAssetId === null ? null : normalizeOptionalAssetId(row.headAssetId)
+    const footAssetId = row.footAssetId === null ? null : normalizeOptionalAssetId(row.footAssetId)
     if (row.bodyAssetId !== null && bodyAssetId === null) {
       throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: bodyAssetId`)
     }
     if (row.headAssetId !== null && headAssetId === null) {
       throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: headAssetId`)
+    }
+    if (row.footAssetId !== null && footAssetId === null) {
+      throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: footAssetId`)
     }
     const angle = typeof row.angle === 'number' && Number.isFinite(row.angle) ? row.angle : Number.NaN
     const tolerance = typeof row.tolerance === 'number' && Number.isFinite(row.tolerance) ? row.tolerance : Number.NaN
@@ -200,17 +204,24 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     const bodyYawDeg = requiredYawDeg(row.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`)
     const headForwardAxis = requiredForwardAxis(row.headForwardAxis, `cornerModels[${index}].headForwardAxis`)
     const headYawDeg = requiredYawDeg(row.headYawDeg, `cornerModels[${index}].headYawDeg`)
+    const footForwardAxis = requiredForwardAxis(row.footForwardAxis, `cornerModels[${index}].footForwardAxis`)
+    const footYawDeg = requiredYawDeg(row.footYawDeg, `cornerModels[${index}].footYawDeg`)
     const bodyOffsetLocal = requiredOffsetLocal(row.bodyOffsetLocal, `cornerModels[${index}].bodyOffsetLocal`)
     const headOffsetLocal = requiredOffsetLocal(row.headOffsetLocal, `cornerModels[${index}].headOffsetLocal`)
+    const footOffsetLocal = requiredOffsetLocal(row.footOffsetLocal, `cornerModels[${index}].footOffsetLocal`)
     return {
       bodyAssetId: bodyAssetId ?? null,
       headAssetId: headAssetId ?? null,
+      footAssetId: footAssetId ?? null,
       bodyOffsetLocal,
       headOffsetLocal,
+      footOffsetLocal,
       bodyForwardAxis,
       bodyYawDeg,
       headForwardAxis,
       headYawDeg,
+      footForwardAxis,
+      footYawDeg,
       angle,
       tolerance,
     }
@@ -228,10 +239,14 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
     headAssetId: requiredAssetIdOrNull('headAssetId'),
     headOrientation: requiredOrientation(record.headOrientation, 'headOrientation') as any,
+    footAssetId: requiredAssetIdOrNull('footAssetId'),
+    footOrientation: requiredOrientation(record.footOrientation, 'footOrientation') as any,
     bodyEndCapAssetId: requiredAssetIdOrNull('bodyEndCapAssetId'),
     bodyEndCapOrientation: requiredOrientation(record.bodyEndCapOrientation, 'bodyEndCapOrientation') as any,
     headEndCapAssetId: requiredAssetIdOrNull('headEndCapAssetId'),
     headEndCapOrientation: requiredOrientation(record.headEndCapOrientation, 'headEndCapOrientation') as any,
+    footEndCapAssetId: requiredAssetIdOrNull('footEndCapAssetId'),
+    footEndCapOrientation: requiredOrientation(record.footEndCapOrientation, 'footEndCapOrientation') as any,
     cornerModels,
   }
 }
@@ -427,10 +442,12 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           [
             wallProps.bodyAssetId,
             wallProps.headAssetId,
+            wallProps.footAssetId,
             wallProps.bodyEndCapAssetId,
             wallProps.headEndCapAssetId,
+            wallProps.footEndCapAssetId,
             ...(((wallProps as any).cornerModels ?? []) as any[])
-              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId])
+              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
               .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
             ...nodeMaterials.flatMap((material) => {
@@ -600,10 +617,12 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           [
             wallProps.bodyAssetId,
             wallProps.headAssetId,
+            wallProps.footAssetId,
             wallProps.bodyEndCapAssetId,
             wallProps.headEndCapAssetId,
+            wallProps.footEndCapAssetId,
             ...(((wallProps as any).cornerModels ?? []) as any[])
-              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId])
+              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
               .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
             ...Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
@@ -664,10 +683,14 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         bodyOrientation: (wallProps as any).bodyOrientation,
         headAssetId: wallProps.headAssetId ?? null,
         headOrientation: (wallProps as any).headOrientation,
+        footAssetId: wallProps.footAssetId ?? null,
+        footOrientation: (wallProps as any).footOrientation,
         bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
         bodyEndCapOrientation: (wallProps as any).bodyEndCapOrientation,
         headEndCapAssetId: wallProps.headEndCapAssetId ?? null,
         headEndCapOrientation: (wallProps as any).headEndCapOrientation,
+        footEndCapAssetId: wallProps.footEndCapAssetId ?? null,
+        footEndCapOrientation: (wallProps as any).footEndCapOrientation,
         cornerModels: wallProps.cornerModels ?? [],
       } as unknown as Partial<Record<string, unknown>>)
 

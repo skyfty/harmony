@@ -11610,8 +11610,10 @@ export const useSceneStore = defineStore('scene', {
         ...(previousProps ?? {}),
         bodyOrientation: previousProps?.bodyOrientation ?? meshProps.bodyOrientation,
         headOrientation: previousProps?.headOrientation ?? meshProps.headOrientation,
+        footOrientation: previousProps?.footOrientation ?? meshProps.footOrientation,
         bodyEndCapOrientation: previousProps?.bodyEndCapOrientation ?? meshProps.bodyEndCapOrientation,
         headEndCapOrientation: previousProps?.headEndCapOrientation ?? meshProps.headEndCapOrientation,
+        footEndCapOrientation: previousProps?.footEndCapOrientation ?? meshProps.footEndCapOrientation,
         height: meshProps.height,
         width: meshProps.width,
         thickness: meshProps.thickness,
@@ -11963,12 +11965,16 @@ export const useSceneStore = defineStore('scene', {
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
+        const hasFootAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetId')
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
+        const hasFootEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapAssetId')
         const hasBodyOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyOrientation')
         const hasHeadOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headOrientation')
+        const hasFootOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footOrientation')
         const hasBodyEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOrientation')
         const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
+        const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
@@ -11995,7 +12001,7 @@ export const useSceneStore = defineStore('scene', {
           if (arrA.length !== arrB.length) {
             return false
           }
-          const readOffset = (entry: any, key: 'bodyOffsetLocal' | 'headOffsetLocal'): { x: number; y: number; z: number } => {
+          const readOffset = (entry: any, key: 'bodyOffsetLocal' | 'headOffsetLocal' | 'footOffsetLocal'): { x: number; y: number; z: number } => {
             const record = entry?.[key] && typeof entry[key] === 'object' ? entry[key] : null
             const read = (axis: 'x' | 'y' | 'z'): number => {
               const raw = record ? (record as any)[axis] : 0
@@ -12011,6 +12017,8 @@ export const useSceneStore = defineStore('scene', {
             const bodyAssetB = typeof entryB?.bodyAssetId === 'string' ? entryB.bodyAssetId : null
             const headAssetA = typeof entryA?.headAssetId === 'string' ? entryA.headAssetId : null
             const headAssetB = typeof entryB?.headAssetId === 'string' ? entryB.headAssetId : null
+            const footAssetA = typeof entryA?.footAssetId === 'string' ? entryA.footAssetId : null
+            const footAssetB = typeof entryB?.footAssetId === 'string' ? entryB.footAssetId : null
             const angleA = typeof entryA?.angle === 'number' ? entryA.angle : Number(entryA?.angle)
             const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
             const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
@@ -12026,15 +12034,25 @@ export const useSceneStore = defineStore('scene', {
             const headYawDegA = typeof entryA?.headYawDeg === 'number' ? entryA.headYawDeg : Number(entryA?.headYawDeg)
             const headYawDegB = typeof entryB?.headYawDeg === 'number' ? entryB.headYawDeg : Number(entryB?.headYawDeg)
 
+            const footForwardAxisA = typeof entryA?.footForwardAxis === 'string' ? entryA.footForwardAxis : null
+            const footForwardAxisB = typeof entryB?.footForwardAxis === 'string' ? entryB.footForwardAxis : null
+            const footYawDegA = typeof entryA?.footYawDeg === 'number' ? entryA.footYawDeg : Number(entryA?.footYawDeg)
+            const footYawDegB = typeof entryB?.footYawDeg === 'number' ? entryB.footYawDeg : Number(entryB?.footYawDeg)
+
             const bodyOffsetA = readOffset(entryA, 'bodyOffsetLocal')
             const bodyOffsetB = readOffset(entryB, 'bodyOffsetLocal')
             const headOffsetA = readOffset(entryA, 'headOffsetLocal')
             const headOffsetB = readOffset(entryB, 'headOffsetLocal')
+            const footOffsetA = readOffset(entryA, 'footOffsetLocal')
+            const footOffsetB = readOffset(entryB, 'footOffsetLocal')
 
             if ((bodyAssetA ?? null) !== (bodyAssetB ?? null)) {
               return false
             }
             if ((headAssetA ?? null) !== (headAssetB ?? null)) {
+              return false
+            }
+            if ((footAssetA ?? null) !== (footAssetB ?? null)) {
               return false
             }
             if (!Number.isFinite(angleA) || !Number.isFinite(angleB) || Math.abs(angleA - angleB) > 1e-6) {
@@ -12056,11 +12074,20 @@ export const useSceneStore = defineStore('scene', {
             if (!Number.isFinite(headYawDegA) || !Number.isFinite(headYawDegB) || Math.abs(headYawDegA - headYawDegB) > 1e-6) {
               return false
             }
+            if ((footForwardAxisA ?? null) !== (footForwardAxisB ?? null)) {
+              return false
+            }
+            if (!Number.isFinite(footYawDegA) || !Number.isFinite(footYawDegB) || Math.abs(footYawDegA - footYawDegB) > 1e-6) {
+              return false
+            }
 
             if (Math.abs(bodyOffsetA.x - bodyOffsetB.x) > 1e-6 || Math.abs(bodyOffsetA.y - bodyOffsetB.y) > 1e-6 || Math.abs(bodyOffsetA.z - bodyOffsetB.z) > 1e-6) {
               return false
             }
             if (Math.abs(headOffsetA.x - headOffsetB.x) > 1e-6 || Math.abs(headOffsetA.y - headOffsetB.y) > 1e-6 || Math.abs(headOffsetA.z - headOffsetB.z) > 1e-6) {
+              return false
+            }
+            if (Math.abs(footOffsetA.x - footOffsetB.x) > 1e-6 || Math.abs(footOffsetA.y - footOffsetB.y) > 1e-6 || Math.abs(footOffsetA.z - footOffsetB.z) > 1e-6) {
               return false
             }
           }
@@ -12089,24 +12116,36 @@ export const useSceneStore = defineStore('scene', {
           headAssetId: hasHeadAssetId
             ? (typedPatch.headAssetId as string | null | undefined)
             : currentProps.headAssetId,
+          footAssetId: hasFootAssetId
+            ? (typedPatch.footAssetId as string | null | undefined)
+            : currentProps.footAssetId,
           bodyEndCapAssetId: hasBodyEndCapAssetId
             ? (typedPatch.bodyEndCapAssetId as string | null | undefined)
             : currentProps.bodyEndCapAssetId,
           headEndCapAssetId: hasHeadEndCapAssetId
             ? (typedPatch.headEndCapAssetId as string | null | undefined)
             : currentProps.headEndCapAssetId,
+          footEndCapAssetId: hasFootEndCapAssetId
+            ? (typedPatch.footEndCapAssetId as string | null | undefined)
+            : currentProps.footEndCapAssetId,
           bodyOrientation: hasBodyOrientation
             ? (typedPatch.bodyOrientation as any)
             : currentProps.bodyOrientation,
           headOrientation: hasHeadOrientation
             ? (typedPatch.headOrientation as any)
             : currentProps.headOrientation,
+          footOrientation: hasFootOrientation
+            ? (typedPatch.footOrientation as any)
+            : currentProps.footOrientation,
           bodyEndCapOrientation: hasBodyEndCapOrientation
             ? (typedPatch.bodyEndCapOrientation as any)
             : currentProps.bodyEndCapOrientation,
           headEndCapOrientation: hasHeadEndCapOrientation
             ? (typedPatch.headEndCapOrientation as any)
             : currentProps.headEndCapOrientation,
+          footEndCapOrientation: hasFootEndCapOrientation
+            ? (typedPatch.footEndCapOrientation as any)
+            : currentProps.footEndCapOrientation,
           cornerModels: hasCornerModels
             ? (typedPatch.cornerModels as any)
             : currentProps.cornerModels,
@@ -12123,12 +12162,16 @@ export const useSceneStore = defineStore('scene', {
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
+          (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&
           (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
           (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&
+          (currentProps.footEndCapAssetId ?? null) === (merged.footEndCapAssetId ?? null) &&
           orientationsEqual(currentProps.bodyOrientation, merged.bodyOrientation) &&
           orientationsEqual(currentProps.headOrientation, merged.headOrientation) &&
+          orientationsEqual(currentProps.footOrientation, merged.footOrientation) &&
           orientationsEqual(currentProps.bodyEndCapOrientation, merged.bodyEndCapOrientation) &&
           orientationsEqual(currentProps.headEndCapOrientation, merged.headEndCapOrientation) &&
+          orientationsEqual(currentProps.footEndCapOrientation, merged.footEndCapOrientation) &&
           cornerModelsEqual(currentProps.cornerModels, merged.cornerModels)
         if (unchanged) {
           return false

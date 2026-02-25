@@ -47,6 +47,14 @@ export type WallCornerModelRule = {
   headForwardAxis: WallForwardAxis
   /** Extra yaw offset in degrees for the head corner model. */
   headYawDeg: number
+  /** Asset id of the lower wall foot corner/joint model to be instanced. */
+  footAssetId: string | null
+  /** Local positional offset (meters) applied to the foot corner instance, in the model's local frame (Option A). */
+  footOffsetLocal: { x: number; y: number; z: number }
+  /** Local forward axis for the foot corner model. */
+  footForwardAxis: WallForwardAxis
+  /** Extra yaw offset in degrees for the foot corner model. */
+  footYawDeg: number
   /**
    * Target interior corner angle (degrees). Straight = 180°.
    * Runtime picks the closest match within tolerance.
@@ -79,6 +87,10 @@ export interface WallComponentProps {
   headAssetId: string | null
   /** Orientation overrides for the head model. */
   headOrientation: WallModelOrientation
+  /** Lower wall foot model asset id (optional; only valid when bodyAssetId is set). */
+  footAssetId: string | null
+  /** Orientation overrides for the foot model. */
+  footOrientation: WallModelOrientation
   /** Lower wall end-cap model asset id (optional; only valid when bodyAssetId is set; not used for closed loops). */
   bodyEndCapAssetId: string | null
   /** Orientation overrides for the body end-cap model. */
@@ -87,6 +99,10 @@ export interface WallComponentProps {
   headEndCapAssetId: string | null
   /** Orientation overrides for the head end-cap model. */
   headEndCapOrientation: WallModelOrientation
+  /** Lower wall foot end-cap model asset id (optional; only valid when bodyEndCapAssetId is set; not used for closed loops). */
+  footEndCapAssetId: string | null
+  /** Orientation overrides for the foot end-cap model. */
+  footEndCapOrientation: WallModelOrientation
   /**
    * Optional corner model overrides. At runtime the system will pick a model
    * based on the interior corner angle between adjacent wall segments.
@@ -227,15 +243,20 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
 
     const bodyAssetId = parseRuleAssetId(record.bodyAssetId, 'bodyAssetId')
     const headAssetId = parseRuleAssetId(record.headAssetId, 'headAssetId')
+    const footAssetId = parseRuleAssetId(record.footAssetId, 'footAssetId')
     return {
       bodyAssetId,
       headAssetId,
+      footAssetId,
       bodyOffsetLocal: normalizeCornerOffsetLocal(record.bodyOffsetLocal),
       headOffsetLocal: normalizeCornerOffsetLocal(record.headOffsetLocal),
+      footOffsetLocal: normalizeCornerOffsetLocal(record.footOffsetLocal),
       bodyForwardAxis: requiredForwardAxis(record.bodyForwardAxis, `cornerModels[${index}].bodyForwardAxis`),
       bodyYawDeg: requiredYawDeg(record.bodyYawDeg, `cornerModels[${index}].bodyYawDeg`),
       headForwardAxis: requiredForwardAxis(record.headForwardAxis, `cornerModels[${index}].headForwardAxis`),
       headYawDeg: requiredYawDeg(record.headYawDeg, `cornerModels[${index}].headYawDeg`),
+      footForwardAxis: requiredForwardAxis(record.footForwardAxis, `cornerModels[${index}].footForwardAxis`),
+      footYawDeg: requiredYawDeg(record.footYawDeg, `cornerModels[${index}].footYawDeg`),
       angle: normalizeAngle(record.angle),
       tolerance: normalizeTolerance(record.tolerance),
     } satisfies WallCornerModelRule
@@ -248,14 +269,18 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
   const headAssetId = bodyAssetId ? requiredAssetIdOrNull('headAssetId') : null
+  const footAssetId = bodyAssetId ? requiredAssetIdOrNull('footAssetId') : null
 
   const bodyEndCapAssetId = bodyAssetId ? requiredAssetIdOrNull('bodyEndCapAssetId') : null
   const headEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('headEndCapAssetId') : null
+  const footEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('footEndCapAssetId') : null
 
   const bodyOrientation = requiredOrientation((props as any).bodyOrientation, 'bodyOrientation')
   const headOrientation = requiredOrientation((props as any).headOrientation, 'headOrientation')
+  const footOrientation = requiredOrientation((props as any).footOrientation, 'footOrientation')
   const bodyEndCapOrientation = requiredOrientation((props as any).bodyEndCapOrientation, 'bodyEndCapOrientation')
   const headEndCapOrientation = requiredOrientation((props as any).headEndCapOrientation, 'headEndCapOrientation')
+  const footEndCapOrientation = requiredOrientation((props as any).footEndCapOrientation, 'footEndCapOrientation')
 
   return {
     height,
@@ -269,10 +294,14 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     bodyOrientation,
     headAssetId,
     headOrientation,
+    footAssetId,
+    footOrientation,
     bodyEndCapAssetId,
     bodyEndCapOrientation,
     headEndCapAssetId,
     headEndCapOrientation,
+    footEndCapAssetId,
+    footEndCapOrientation,
     cornerModels,
   }
 }
@@ -291,10 +320,14 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headAssetId: null,
       headOrientation: { forwardAxis: '+z', yawDeg: 0 },
+      footAssetId: null,
+      footOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyEndCapAssetId: null,
       bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headEndCapAssetId: null,
       headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+      footEndCapAssetId: null,
+      footEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
       cornerModels: [],
     }
   }
@@ -309,12 +342,16 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     isAirWall: false,
     bodyAssetId: null,
     headAssetId: null,
+    footAssetId: null,
     bodyEndCapAssetId: null,
     headEndCapAssetId: null,
+    footEndCapAssetId: null,
     bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
     headOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    footOrientation: { forwardAxis: '+z', yawDeg: 0 },
     bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     headEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
+    footEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
     cornerModels: [],
   })
 }
@@ -341,6 +378,11 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       forwardAxis: props.headOrientation.forwardAxis,
       yawDeg: props.headOrientation.yawDeg,
     },
+    footAssetId: props.footAssetId ?? null,
+    footOrientation: {
+      forwardAxis: props.footOrientation.forwardAxis,
+      yawDeg: props.footOrientation.yawDeg,
+    },
     bodyEndCapAssetId: props.bodyEndCapAssetId ?? null,
     bodyEndCapOrientation: {
       forwardAxis: props.bodyEndCapOrientation.forwardAxis,
@@ -351,10 +393,16 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       forwardAxis: props.headEndCapOrientation.forwardAxis,
       yawDeg: props.headEndCapOrientation.yawDeg,
     },
+    footEndCapAssetId: props.footEndCapAssetId ?? null,
+    footEndCapOrientation: {
+      forwardAxis: props.footEndCapOrientation.forwardAxis,
+      yawDeg: props.footEndCapOrientation.yawDeg,
+    },
     cornerModels: Array.isArray(props.cornerModels)
       ? props.cornerModels.map((entry) => ({
         bodyAssetId: typeof entry?.bodyAssetId === 'string' ? entry.bodyAssetId : null,
         headAssetId: typeof entry?.headAssetId === 'string' ? entry.headAssetId : null,
+        footAssetId: typeof entry?.footAssetId === 'string' ? entry.footAssetId : null,
         bodyOffsetLocal: {
           x: Number((entry as any)?.bodyOffsetLocal?.x) || 0,
           y: Number((entry as any)?.bodyOffsetLocal?.y) || 0,
@@ -365,10 +413,17 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
           y: Number((entry as any)?.headOffsetLocal?.y) || 0,
           z: Number((entry as any)?.headOffsetLocal?.z) || 0,
         },
+        footOffsetLocal: {
+          x: Number((entry as any)?.footOffsetLocal?.x) || 0,
+          y: Number((entry as any)?.footOffsetLocal?.y) || 0,
+          z: Number((entry as any)?.footOffsetLocal?.z) || 0,
+        },
         bodyForwardAxis: entry.bodyForwardAxis,
         bodyYawDeg: entry.bodyYawDeg,
         headForwardAxis: entry.headForwardAxis,
         headYawDeg: entry.headYawDeg,
+        footForwardAxis: entry.footForwardAxis,
+        footYawDeg: entry.footYawDeg,
         angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
         tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
       }))
@@ -444,10 +499,14 @@ export function createWallComponentState(
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
     headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
+    footAssetId: overrides?.footAssetId ?? defaults.footAssetId,
+    footOrientation: (overrides as any)?.footOrientation ?? defaults.footOrientation,
     bodyEndCapAssetId: overrides?.bodyEndCapAssetId ?? defaults.bodyEndCapAssetId,
     bodyEndCapOrientation: (overrides as any)?.bodyEndCapOrientation ?? defaults.bodyEndCapOrientation,
     headEndCapAssetId: overrides?.headEndCapAssetId ?? defaults.headEndCapAssetId,
     headEndCapOrientation: (overrides as any)?.headEndCapOrientation ?? defaults.headEndCapOrientation,
+    footEndCapAssetId: overrides?.footEndCapAssetId ?? defaults.footEndCapAssetId,
+    footEndCapOrientation: (overrides as any)?.footEndCapOrientation ?? defaults.footEndCapOrientation,
     cornerModels: overrides?.cornerModels ?? defaults.cornerModels,
   })
   return {

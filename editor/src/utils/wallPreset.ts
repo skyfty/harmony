@@ -5,7 +5,7 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 4
+export const WALL_PRESET_FORMAT_VERSION = 5
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
@@ -23,12 +23,16 @@ export type WallOffsetLocal = {
 export type StrictWallPresetCornerModelRule = {
   bodyAssetId: string | null
   headAssetId: string | null
+  footAssetId: string | null
   bodyOffsetLocal: WallOffsetLocal
   headOffsetLocal: WallOffsetLocal
+  footOffsetLocal: WallOffsetLocal
   bodyForwardAxis: WallForwardAxis
   bodyYawDeg: number
   headForwardAxis: WallForwardAxis
   headYawDeg: number
+  footForwardAxis: WallForwardAxis
+  footYawDeg: number
   angle: number
   tolerance: number
 }
@@ -48,10 +52,14 @@ export type StrictWallPresetWallProps = {
   bodyOrientation: WallModelOrientation
   headAssetId: string | null
   headOrientation: WallModelOrientation
+  footAssetId: string | null
+  footOrientation: WallModelOrientation
   bodyEndCapAssetId: string | null
   bodyEndCapOrientation: WallModelOrientation
   headEndCapAssetId: string | null
   headEndCapOrientation: WallModelOrientation
+  footEndCapAssetId: string | null
+  footEndCapOrientation: WallModelOrientation
   cornerModels: StrictWallPresetCornerModelRule[]
 }
 
