@@ -1,4 +1,6 @@
 import type { Context, Next } from 'koa'
+import { appConfig } from '@/config/env'
+import { getMiniProgramTestSessionUser } from '@/services/miniAuthService'
 import { verifyAdminAuthToken, verifyMiniAuthToken } from '@/utils/domainJwt'
 
 function readBearerToken(ctx: Context): string {
@@ -26,25 +28,56 @@ export async function requireAdminAuth(ctx: Context, next: Next): Promise<void> 
 }
 
 export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
-  const token = readBearerToken(ctx)
-  try {
-    const payload = verifyMiniAuthToken(token)
-    ctx.state.miniAuthUser = {
-      id: payload.sub,
-      username: payload.username,
-      wxOpenId: payload.wxOpenId,
+  const authorization = ctx.headers.authorization
+  const hasBearerToken = Boolean(authorization && authorization.startsWith('Bearer '))
+
+  if (hasBearerToken) {
+    const token = authorization!.slice('Bearer '.length)
+    try {
+      const payload = verifyMiniAuthToken(token)
+      ctx.state.miniAuthUser = {
+        id: payload.sub,
+        username: payload.username,
+        wxOpenId: payload.wxOpenId,
+      }
+      ctx.state.user = {
+        id: payload.sub,
+        username: payload.username ?? payload.wxOpenId ?? payload.sub,
+        roles: [],
+        permissions: [],
+        accountType: 'user',
+      }
+      await next()
+      return
+    } catch {
+      // Fall through to optional non-production bypass.
     }
-    ctx.state.user = {
-      id: payload.sub,
-      username: payload.username ?? payload.wxOpenId ?? payload.sub,
-      roles: [],
-      permissions: [],
-      accountType: 'user',
-    }
-  } catch {
-    ctx.throw(401, 'Invalid user token')
   }
-  await next()
+
+  if (appConfig.isDevelopment && appConfig.miniAuth.allowTestBypassInNonProd) {
+    const testUser = await getMiniProgramTestSessionUser()
+    if (testUser) {
+      ctx.state.miniAuthUser = {
+        id: testUser.id,
+        username: testUser.username,
+        wxOpenId: testUser.wxOpenId,
+      }
+      ctx.state.user = {
+        id: testUser.id,
+        username: testUser.username ?? testUser.wxOpenId ?? testUser.id,
+        roles: [],
+        permissions: [],
+        accountType: 'user',
+      }
+      await next()
+      return
+    }
+  }
+
+  if (!hasBearerToken) {
+    ctx.throw(401, 'Unauthorized')
+  }
+  ctx.throw(401, 'Invalid user token')
 }
 
 export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> {

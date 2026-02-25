@@ -215,3 +215,17 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
     await existing.save()
   }
 }
+
+export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser | null> {
+  const username = appConfig.miniProgramTestUser.username.trim()
+  if (!username) {
+    return null
+  }
+
+  const user = await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
+  if (!user || user.status !== 'active') {
+    return null
+  }
+
+  return buildMiniUser(user)
+}

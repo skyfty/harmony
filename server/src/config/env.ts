@@ -28,6 +28,9 @@ export const appConfig = {
     audience: process.env.MINI_JWT_AUDIENCE ?? 'harmony-mini-api',
     expiresIn: process.env.MINI_JWT_EXPIRES_IN ?? '12h',
     defaultDisplayName: process.env.MINI_DEFAULT_DISPLAY_NAME ?? '微信用户',
+    allowTestBypassInNonProd: process.env.MINI_AUTH_ALLOW_TEST_BYPASS_IN_NON_PROD
+      ? process.env.MINI_AUTH_ALLOW_TEST_BYPASS_IN_NON_PROD === 'true'
+      : true,
   },
   assetStoragePath: path.resolve(process.cwd(), process.env.ASSET_STORAGE_PATH ?? './uploads'),
   assetPublicUrl: process.env.ASSET_PUBLIC_URL ?? 'http://localhost:4000/uploads',
