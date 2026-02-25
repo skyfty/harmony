@@ -15,8 +15,10 @@ import {
   createSceneSpotCommentApi,
   deleteSceneSpotCommentApi,
   getSceneSpotApi,
+  listSceneSpotsApi,
   listSceneSpotCommentsApi,
   listSceneSpotCommentsBySceneSpotApi,
+  listUsersApi,
   updateSceneSpotCommentApi,
   updateSceneSpotCommentStatusApi,
 } from '#/api';
@@ -45,6 +47,10 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
 const commentFormRef = ref<FormInstance>();
+const sceneSpotOptions = ref<Array<{ label: string; value: string }>>([]);
+const userOptions = ref<Array<{ label: string; value: string }>>([]);
+const sceneSpotSearching = ref(false);
+const userSearching = ref(false);
 
 const commentFormModel = reactive<CommentFormModel>({
   sceneSpotId: '',
@@ -87,9 +93,60 @@ function resetForm() {
   commentFormModel.status = 'approved';
 }
 
+function ensureOption(
+  options: Array<{ label: string; value: string }>,
+  value: string,
+  label: string,
+) {
+  if (!value) {
+    return;
+  }
+  if (!options.some((option) => option.value === value)) {
+    options.unshift({ label, value });
+  }
+}
+
+async function loadSceneSpotOptions(keyword = '') {
+  sceneSpotSearching.value = true;
+  try {
+    const response = await listSceneSpotsApi({
+      keyword: keyword || undefined,
+      page: 1,
+      pageSize: 20,
+    });
+    sceneSpotOptions.value = response.items.map((item) => ({
+      label: item.title || item.id,
+      value: item.id,
+    }));
+  } finally {
+    sceneSpotSearching.value = false;
+  }
+}
+
+async function loadUserOptions(keyword = '') {
+  userSearching.value = true;
+  try {
+    const response = await listUsersApi({
+      keyword: keyword || undefined,
+      page: 1,
+      pageSize: 20,
+    });
+    userOptions.value = response.items.map((item) => ({
+      label: item.displayName || item.username || item.id,
+      value: item.id,
+    }));
+  } finally {
+    userSearching.value = false;
+  }
+}
+
 function openCreateModal() {
   editingId.value = null;
   resetForm();
+  loadUserOptions();
+  if (!fixedSceneSpotId.value) {
+    loadSceneSpotOptions();
+  }
   modalOpen.value = true;
 }
 
@@ -99,6 +156,20 @@ function openEditModal(row: SceneSpotCommentItem) {
   commentFormModel.userId = row.userId;
   commentFormModel.content = row.content;
   commentFormModel.status = row.status;
+  ensureOption(
+    sceneSpotOptions.value,
+    row.sceneSpotId,
+    row.sceneSpotTitle || row.sceneSpotId,
+  );
+  ensureOption(
+    userOptions.value,
+    row.userId,
+    row.userDisplayName || row.userId,
+  );
+  loadUserOptions();
+  if (!fixedSceneSpotId.value) {
+    loadSceneSpotOptions();
+  }
   modalOpen.value = true;
 }
 
@@ -333,14 +404,33 @@ onMounted(async () => {
       <Form ref="commentFormRef" :label-col="{ span: 5 }" :model="commentFormModel" :wrapper-col="{ span: 18 }">
         <Form.Item
           v-if="!fixedSceneSpotId"
-          label="景点ID"
+          label="景点"
           name="sceneSpotId"
-          :rules="[{ required: true, message: '请输入景点ID' }]"
+          :rules="[{ required: true, message: '请选择景点' }]"
         >
-          <Input v-model:value="commentFormModel.sceneSpotId" allow-clear />
+          <Select
+            v-model:value="commentFormModel.sceneSpotId"
+            allow-clear
+            show-search
+            :filter-option="false"
+            :options="sceneSpotOptions"
+            :loading="sceneSpotSearching"
+            placeholder="请输入景点名称搜索"
+            @search="loadSceneSpotOptions"
+          />
         </Form.Item>
-        <Form.Item label="用户ID" name="userId" :rules="[{ required: true, message: '请输入用户ID' }]">
-          <Input v-model:value="commentFormModel.userId" allow-clear :disabled="!!editingId" />
+        <Form.Item label="用户" name="userId" :rules="[{ required: true, message: '请选择用户' }]">
+          <Select
+            v-model:value="commentFormModel.userId"
+            allow-clear
+            show-search
+            :filter-option="false"
+            :options="userOptions"
+            :loading="userSearching"
+            placeholder="请输入用户名/昵称搜索"
+            :disabled="!!editingId"
+            @search="loadUserOptions"
+          />
         </Form.Item>
         <Form.Item label="状态" name="status" :rules="[{ required: true, message: '请选择状态' }]">
           <Select v-model:value="commentFormModel.status" :options="statusOptions" />
