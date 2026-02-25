@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <PageHeader title="全部景区" :show-back="false" />
+    <PageHeader title="全部景区" />
 
     <view class="content">
       <view class="search-box">
