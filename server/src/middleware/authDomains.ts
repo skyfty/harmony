@@ -54,7 +54,7 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     }
   }
 
-  if (appConfig.isDevelopment && appConfig.miniAuth.allowTestBypassInNonProd) {
+  if (appConfig.miniAuth.allowTestBypassInNonProd) {
     const testUser = await getMiniProgramTestSessionUser()
     if (testUser) {
       ctx.state.miniAuthUser = {
