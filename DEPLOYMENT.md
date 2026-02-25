@@ -25,6 +25,9 @@ docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
 docker compose -f docker-compose.prod.yml ps
+
+docker compose -f docker-compose.prod.yml build server
+docker compose -f docker-compose.prod.yml up -d server
 ```
 
 说明：`bootstrap-prod-config.sh` 会创建缺失挂载文件和目录。
