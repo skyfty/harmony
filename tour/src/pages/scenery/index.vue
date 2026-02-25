@@ -32,6 +32,21 @@ type PunchEventPayload = {
   };
 };
 
+function decodeQueryValue(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed.includes('%')) {
+    return trimmed;
+  }
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;
@@ -55,12 +70,12 @@ function handlePunch(payload: PunchEventPayload): void {
 onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
-  packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
+  packageUrl.value = decodeQueryValue(record.packageUrl);
   // sceneUrl parameter removed; ignore record.sceneUrl
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   sceneName.value = typeof record.sceneName === 'string' ? record.sceneName : '';
-  selectedVehicleId.value = typeof record.vehicleId === 'string' ? decodeURIComponent(record.vehicleId) : '';
+  selectedVehicleId.value = decodeQueryValue(record.vehicleId);
 
 
   enterAt.value = Date.now();

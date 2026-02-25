@@ -10182,7 +10182,15 @@ function applyInput(params: {
   bootstrapRuntimeIfNeeded();
 
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
-  const packageUrlParam = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
+  const packageUrlParamRaw = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
+  let packageUrlParam = packageUrlParamRaw;
+  if (packageUrlParam.includes('%')) {
+    try {
+      packageUrlParam = decodeURIComponent(packageUrlParam);
+    } catch {
+      packageUrlParam = packageUrlParamRaw;
+    }
+  }
   const physinterpParam = typeof params.physinterp === 'string' ? params.physinterp.trim() : '';
 
   const inputKey = `${projectIdParam}::${packageUrlParam}::${String(props.physicsInterpolation ?? '')}::${physinterpParam}`;
