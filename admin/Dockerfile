@@ -10,8 +10,9 @@ RUN corepack enable
 ENV PNPM_VERSION=10.28.2
 ENV NPM_REGISTRY_URL=https://registry.npmmirror.com
 
-# Install pnpm globally using the mirror (avoids corepack downloading during RUN)
-RUN npm install -g pnpm@${PNPM_VERSION} --registry=${NPM_REGISTRY_URL}
+# Install pnpm globally using the mirror (avoid existing symlink causing EEXIST)
+# Remove existing pnpm binary if present, then install and force overwrite.
+RUN rm -f /usr/local/bin/pnpm || true && npm install -g pnpm@${PNPM_VERSION} --registry=${NPM_REGISTRY_URL} --force
 
 COPY admin/ ./
 
