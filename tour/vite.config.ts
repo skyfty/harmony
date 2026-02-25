@@ -53,7 +53,12 @@ export default {
 
     server: {
       port: 8092,
-      open: true //启动后是否自动打开浏览器
+      open: true, //启动后是否自动打开浏览器
+      watch: {
+        usePolling: true,
+        interval: 300,
+      },
+      hmr: true,
     },
     plugins: [
       // esm-only 的包

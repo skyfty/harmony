@@ -83,14 +83,14 @@ interface ThemeColors {
 }
 
 const themeMap: Record<string, ThemeColors> = {
-  ticket: { gradient: 'linear-gradient(135deg, #4f46e5, #6366f1)' },
-  souvenir: { gradient: 'linear-gradient(135deg, #d97706, #f59e0b)' },
-  photo: { gradient: 'linear-gradient(135deg, #0284c7, #38bdf8)' },
-  discount: { gradient: 'linear-gradient(135deg, #059669, #34d399)' },
+  ticket: { gradient: 'linear-gradient(135deg, #7c6fae, #a78bce)' },
+  souvenir: { gradient: 'linear-gradient(135deg, #c08b5c, #dbb896)' },
+  photo: { gradient: 'linear-gradient(135deg, #6a99b5, #95bfd6)' },
+  discount: { gradient: 'linear-gradient(135deg, #6d9e7e, #9cc5a8)' },
 };
 
 const defaultTheme: ThemeColors = {
-  gradient: 'linear-gradient(135deg, #6366f1, #818cf8)',
+  gradient: 'linear-gradient(135deg, #8a8db8, #b0b3d6)',
 };
 
 const resolvedTheme = computed(() => {
@@ -175,8 +175,8 @@ $page-bg: #f3f6fb;
   position: relative;
 
   &__icon {
-    width: 36px;
-    height: 36px;
+    width: 48px;
+    height: 48px;
     display: block;
   }
 
