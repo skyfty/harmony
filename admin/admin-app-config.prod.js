@@ -1,6 +1,6 @@
 // Production runtime config for admin
 window._VBEN_ADMIN_PRO_APP_CONF_ = {
-  VITE_GLOB_API_URL: 'http://v.touchmagic.cn/api',
+  VITE_GLOB_API_URL: 'https://v.touchmagic.cn/api',
   VITE_GLOB_AUTH_DINGDING_CORP_ID: '',
   VITE_GLOB_AUTH_DINGDING_CLIENT_ID: ''
 };

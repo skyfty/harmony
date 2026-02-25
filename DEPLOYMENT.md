@@ -42,9 +42,9 @@ docker compose -f docker-compose.prod.yml up -d server
 	- 生产示例：`VITE_GLOB_API_URL=http://v.touchmagic.cn/api`
 
 ## 检查点（快速验证）
-- API 健康： `curl -I http://v.touchmagic.cn/api/auth/health` → 200
-- 静态资源： `curl -I http://v.touchmagic.cn/uploads/<file>` → 200/404
-- 前端首页： `curl -I http://v.touchmagic.cn/`, `http://editor.v.touchmagic.cn/`, `http://uploader.v.touchmagic.cn/`
+- API 健康： `curl -I https://v.touchmagic.cn/api/auth/health` → 200
+- 静态资源： `curl -I https://v.touchmagic.cn/uploads/<file>` → 200/404
+- 前端首页： `curl -I https://v.touchmagic.cn/`, `http://editor.v.touchmagic.cn/`, `http://uploader.v.touchmagic.cn/`
 
 ## 查看 Docker 日志
 生产环境排查常用命令：
