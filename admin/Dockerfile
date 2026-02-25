@@ -6,9 +6,19 @@ ENV NODE_ENV=development
 
 RUN corepack enable
 
+# Use a fixed pnpm version and a faster registry mirror to avoid timeouts
+ENV PNPM_VERSION=10.28.2
+ENV NPM_REGISTRY_URL=https://registry.npmmirror.com
+
+# Install pnpm globally using the mirror (avoids corepack downloading during RUN)
+RUN npm install -g pnpm@${PNPM_VERSION} --registry=${NPM_REGISTRY_URL}
+
 COPY admin/ ./
 
-RUN pnpm install --frozen-lockfile
+# Ensure pnpm uses the mirror for all installs in the container
+RUN echo "registry=${NPM_REGISTRY_URL}" > .npmrc
+
+RUN pnpm install --frozen-lockfile --registry=${NPM_REGISTRY_URL}
 RUN pnpm -F @vben/web-antd run build
 
 # --- Runtime Stage ---
