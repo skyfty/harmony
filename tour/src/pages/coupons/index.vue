@@ -25,7 +25,10 @@
         class="empty"
       >
         <text>
-          暂无符合条件的卡券
+          🎫
+        </text>
+        <text>
+          暂无卡券
         </text>
       </view>
     </view>
@@ -105,54 +108,18 @@ function handleNavigate(key: NavKey) {
   padding-bottom: calc(85px + env(safe-area-inset-bottom));
 }
 
-.header {
-  padding: 8px 16px 12px;
-}
-
-.title {
-  font-size: 22px;
-  font-weight: 700;
-  color: #171f37;
-  text-align: center;
-  margin-bottom: 14px;
-}
-
-.search-box {
-  background: #e6ebf3;
-  border-radius: 999px;
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.search-icon {
-  font-size: 14px;
-  color: #94a0b6;
-}
-
-.search-input {
-  flex: 1;
-  font-size: 13px;
-  color: #1b2438;
-}
-
-.clear-icon {
-  font-size: 14px;
-  color: #8f99ac;
-}
-
 .content {
-  padding: 10px 14px 18px;
+  padding: 14px 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .empty {
-  font-size: 13px;
-  color: #8b96aa;
+  font-size: 14px;
+  color: #8a94a6;
   text-align: center;
-  padding: 28px 0;
+  padding: 48px 0 32px;
+  line-height: 2;
 }
 </style>
