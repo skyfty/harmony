@@ -28,10 +28,9 @@ import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
-import { listAchievements, listHotEvents, listScenics } from '@/api/mini';
+import { listScenics } from '@/api/mini';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
-import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicSummary } from '@/types/scenic';
 
 const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
@@ -39,7 +38,7 @@ const topInset = ref(getTopSafeAreaMetrics().contentTopInset);
 const keyword = ref('');
 const scenics = ref<ScenicSummary[]>([]);
 const events = ref<{ id: string; title: string; description: string }[]>([]);
-const scenicProgressMap = ref<Record<string, ScenicCheckinProgressItem>>({});
+// achievements and hot events removed — `events` kept for future use if needed
 const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicSummary[]>;
 
 function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: ScenicSummary[]) {
@@ -60,33 +59,12 @@ function composeFeaturedFirst(featuredScenics: ScenicSummary[], allScenics: Scen
 }
 
 async function reload() {
-  const [featuredScenicsRes, allScenicsRes, eventsRes, achievementsRes] = await Promise.all([
+  const [featuredScenicsRes, allScenicsRes] = await Promise.all([
     listScenicsSafe({ featured: true }),
     listScenicsSafe(),
-    listHotEvents(),
-    listAchievements().catch(() => null),
   ]);
-  const normalizedEvents = Array.isArray(eventsRes)
-    ? eventsRes
-    : [];
-  const progressMap: Record<string, ScenicCheckinProgressItem> = {};
-  const progressList = Array.isArray(achievementsRes?.scenicCheckinProgresses)
-    ? achievementsRes.scenicCheckinProgresses
-    : [];
-  for (const item of progressList) {
-    if (!item || typeof item.scenicId !== 'string' || !item.scenicId) {
-      continue;
-    }
-    progressMap[item.scenicId] = item;
-  }
 
   scenics.value = composeFeaturedFirst(featuredScenicsRes, allScenicsRes);
-  scenicProgressMap.value = progressMap;
-  events.value = normalizedEvents.map((event) => ({
-    id: event.id,
-    title: event.title,
-    description: event.description,
-  }));
 }
 
 onMounted(() => {
@@ -110,23 +88,9 @@ function openDetail(id: string) {
   void uni.navigateTo({ url: `/pages/scenic/detail?id=${encodeURIComponent(id)}` });
 }
 
-function resolveScenicProgress(scenicId: string): { percent: number; description: string } {
-  const progress = scenicProgressMap.value[scenicId];
-  if (!progress) {
-    return {
-      percent: 0,
-      description: '打卡进度',
-    };
-  }
-
-  const checked = Number.isFinite(progress.checkedCount) ? Math.max(progress.checkedCount, 0) : 0;
-  const total = Number.isFinite(progress.totalCount) ? Math.max(progress.totalCount, 0) : 0;
-  const ratio = total > 0
-    ? Math.min(checked / total, 1)
-    : 0;
-  const percent = Math.round(ratio * 100);
+function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
   return {
-    percent,
+    percent: 0,
     description: '打卡进度',
   };
 }

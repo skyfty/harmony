@@ -11,8 +11,20 @@
       </view>
       <view v-if="typeof progressPercent === 'number'" class="progress-row">
         <text class="progress-label">{{ progressText || '打卡进度' }}</text>
-        <view class="progress-tag">
-          <text class="progress-value">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
+        <view class="progress-bar-wrap">
+          <view
+            class="progress-bar-bg"
+            role="progressbar"
+            :aria-valuenow="Math.max(0, Math.min(100, Math.round(progressPercent)))"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <view
+              class="progress-bar-fill"
+              :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
+            ></view>
+          </view>
+          <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
         </view>
       </view>
       <text v-if="summary" class="summary">{{ summary }}</text>
@@ -43,7 +55,7 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
 
 .cover {
   width: 100%;
-  height: 160px;
+  height: 130px;
   display: block;
 }
 
@@ -92,7 +104,8 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   margin-top: 8px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  width: 100%;
   gap: 6px;
 }
 
@@ -110,7 +123,29 @@ const emit = defineEmits<{ (event: 'tap'): void }>();
   align-items: center;
 }
 
-.progress-value {
+.progress-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 60%;
+}
+
+.progress-bar-bg {
+  flex: 1;
+  height: 8px;
+  background: #eef3f7;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #20bc7e, #16a16d);
+  border-radius: 8px;
+  transition: width 0.36s cubic-bezier(.2,.8,.2,1);
+}
+
+.progress-perc {
   font-size: 11px;
   font-weight: 700;
   color: #16a16d;
