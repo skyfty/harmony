@@ -9,6 +9,7 @@ RUN corepack enable
 # Use a fixed pnpm version and a faster registry mirror to avoid timeouts
 ENV PNPM_VERSION=10.28.2
 ENV NPM_REGISTRY_URL=https://registry.npmmirror.com
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY_URL}
 
 # Install pnpm globally using the mirror (avoid existing symlink causing EEXIST)
 RUN rm -f /usr/local/bin/pnpm || true && npm install -g pnpm@${PNPM_VERSION} --registry=${NPM_REGISTRY_URL} --force
@@ -19,8 +20,10 @@ COPY schema/package.json ../schema/package.json
 # Copy tools to /app/tools so pnpm --dir /app/tools can access it
 COPY tools /app/tools
 # Install and build local tools package so its `dist` and `bin` exist (if needed)
+
 # Ensure pnpm uses the mirror for all installs in the container
-RUN echo "registry=${NPM_REGISTRY_URL}" > .npmrc
+# Write registry to workspace and root .npmrc so pnpm invoked for other dirs picks it up
+RUN echo "registry=${NPM_REGISTRY_URL}" > /app/.npmrc && echo "registry=${NPM_REGISTRY_URL}" > /root/.npmrc
 
 # Install and build local tools package so its `dist` and `bin` exist (if needed)
 RUN pnpm --dir /app/tools install --frozen-lockfile --registry=${NPM_REGISTRY_URL} && pnpm --dir /app/tools run build
@@ -35,7 +38,7 @@ COPY schema/ ../schema/
 # 确保依赖实际指向完整 schema 源码（安装阶段仅拷贝了 schema/package.json）
 RUN rm -rf /app/editor/node_modules/@harmony/schema && ln -s /app/schema /app/editor/node_modules/@harmony/schema
 # 安装 schema 自身依赖（schema/node_modules 不会随 Docker 上下文拷贝）
-RUN pnpm --dir /app/schema install --frozen-lockfile
+RUN pnpm --dir /app/schema install --frozen-lockfile --registry=${NPM_REGISTRY_URL}
 # 先构建 schema（生成 dist/ 供 @harmony/schema 的 exports 使用）
 RUN pnpm --dir /app/schema run build
 # 仅使用 vite 构建，跳过类型检查以避免编译时因未使用变量而失败
