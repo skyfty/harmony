@@ -213,27 +213,13 @@ export function createWallBuildTool(options: {
   const hydrateFromSelection = (target: WallBuildToolSession) => {
     const isFreshSession = !target.nodeId && target.segments.length === 0
     if (isFreshSession) {
-      let hydrated = false
-      const selectedId = options.sceneStore.selectedNodeId
-      if (selectedId) {
-        const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
-        if (selectedNode?.dynamicMesh?.type === 'Wall') {
-          target.dimensions = getWallNodeDimensions(selectedNode)
-          const wallComponent = selectedNode.components?.[WALL_COMPONENT_TYPE] as
-            | SceneNodeComponentState<WallComponentProps>
-            | undefined
-          target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-          target.brushPresetAssetId = null
-          target.brushPresetData = null
-          hydrated = true
-        }
-      }
+      const brush = options.getWallBrush()
+      const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
+        ? brush.presetAssetId.trim()
+        : null
+      const hasActiveBrushPreset = Boolean(presetAssetId)
 
-      if (!hydrated) {
-        const brush = options.getWallBrush()
-        const presetAssetId = typeof brush?.presetAssetId === 'string' && brush.presetAssetId.trim().length
-          ? brush.presetAssetId.trim()
-          : null
+      if (hasActiveBrushPreset) {
         target.brushPresetAssetId = presetAssetId
         target.brushPresetData = brush?.presetData ?? null
 
@@ -246,6 +232,21 @@ export function createWallBuildTool(options: {
           })
           target.bodyAssetId = wallProps.bodyAssetId ?? null
         }
+      } else {
+        const selectedId = options.sceneStore.selectedNodeId
+        if (selectedId) {
+          const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
+          if (selectedNode?.dynamicMesh?.type === 'Wall') {
+            target.dimensions = getWallNodeDimensions(selectedNode)
+            const wallComponent = selectedNode.components?.[WALL_COMPONENT_TYPE] as
+              | SceneNodeComponentState<WallComponentProps>
+              | undefined
+            target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
+          }
+        }
+
+        target.brushPresetAssetId = null
+        target.brushPresetData = null
       }
 
       target.dimensions = options.normalizeWallDimensionsForViewport(target.dimensions)

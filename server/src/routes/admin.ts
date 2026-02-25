@@ -59,6 +59,12 @@ import {
   updateCoupon,
 } from '@/controllers/admin/couponController'
 import {
+  createCouponType,
+  deleteCouponType,
+  listCouponTypes,
+  updateCouponType,
+} from '@/controllers/admin/couponTypeController'
+import {
   createOrder,
   deleteOrder,
   getOrder,
@@ -213,6 +219,10 @@ adminRouter.get('/coupons/:id', requireAnyPermission(['coupon:read']), getCoupon
 adminRouter.post('/coupons', requireAnyPermission(['coupon:write']), createCoupon)
 adminRouter.put('/coupons/:id', requireAnyPermission(['coupon:write']), updateCoupon)
 adminRouter.delete('/coupons/:id', requireAnyPermission(['coupon:write']), deleteCoupon)
+adminRouter.get('/coupon-types', requireAnyPermission(['coupon:read']), listCouponTypes)
+adminRouter.post('/coupon-types', requireAnyPermission(['coupon:write']), createCouponType)
+adminRouter.put('/coupon-types/:id', requireAnyPermission(['coupon:write']), updateCouponType)
+adminRouter.delete('/coupon-types/:id', requireAnyPermission(['coupon:write']), deleteCouponType)
 
 adminRouter.get('/orders', requireAnyPermission(['order:read']), listOrders)
 adminRouter.get('/orders/:id', requireAnyPermission(['order:read']), getOrder)

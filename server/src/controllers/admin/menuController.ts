@@ -155,6 +155,13 @@ const BACKEND_MENU_TREE: MenuNode[] = [
         requiredPermissions: ['coupon:read'],
         meta: { icon: 'lucide:ticket-check', title: '用户卡券' },
       },
+      {
+        name: 'CouponTypes',
+        path: '/coupons/types',
+        component: '/views/coupons/types.vue',
+        requiredPermissions: ['coupon:read'],
+        meta: { icon: 'lucide:tags', title: '卡券类型' },
+      },
     ],
   },
   {

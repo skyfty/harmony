@@ -3,6 +3,7 @@ import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { createInitialAdminV2, ensureAdminPermissionsV2 } from '@/services/adminAuthService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
+import { ensureBuiltinCouponTypes } from '@/controllers/admin/couponTypeController'
 
 
 async function main(): Promise<void> {
@@ -25,6 +26,11 @@ async function main(): Promise<void> {
     console.warn('[seed] 初始化管理权限失败：', error)
   })
   console.log('[seed] 管理权限数据已初始化')
+
+  await ensureBuiltinCouponTypes().catch((error) => {
+    console.warn('[seed] 初始化卡券类型失败：', error)
+  })
+  console.log('[seed] 卡券类型数据已初始化')
 
   console.log('[seed] 小程序演示数据（成就/地址/反馈）已初始化')
 }

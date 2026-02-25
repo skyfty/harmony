@@ -10,6 +10,12 @@ type CouponDto = {
   title: string
   description: string
   validUntil: string
+  type: {
+    id: string
+    name: string
+    code: string
+    iconUrl: string
+  } | null
   status: 'unused' | 'used' | 'expired'
   claimedAt?: string | null
   usedAt?: string | null
@@ -33,6 +39,15 @@ function mapUserCouponDto(entry: any): CouponDto | null {
     title: coupon.title,
     description: coupon.description,
     validUntil: (coupon.validUntil as Date).toISOString().slice(0, 10),
+    type:
+      coupon.typeId && typeof coupon.typeId === 'object'
+        ? {
+            id: objectIdString(coupon.typeId._id),
+            name: coupon.typeId.name ?? '',
+            code: coupon.typeId.code ?? '',
+            iconUrl: coupon.typeId.iconUrl ?? '',
+          }
+        : null,
     status,
     claimedAt: entry.claimedAt?.toISOString?.() ?? null,
     usedAt: entry.usedAt?.toISOString?.() ?? null,
@@ -45,7 +60,7 @@ export async function listUserCoupons(ctx: Context): Promise<void> {
   const { status, keyword } = ctx.query as Record<string, string>
 
   const entries = await UserCouponModel.find({ userId })
-    .populate('couponId')
+    .populate({ path: 'couponId', populate: { path: 'typeId' } })
     .sort({ createdAt: -1 })
     .lean()
     .exec()
@@ -72,7 +87,10 @@ export async function getUserCouponDetail(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid user coupon id')
   }
 
-  const entry = await UserCouponModel.findOne({ _id: id, userId }).populate('couponId').lean().exec()
+  const entry = await UserCouponModel.findOne({ _id: id, userId })
+    .populate({ path: 'couponId', populate: { path: 'typeId' } })
+    .lean()
+    .exec()
   if (!entry) {
     ctx.throw(404, 'Coupon not found')
   }
@@ -91,7 +109,10 @@ export async function useUserCoupon(ctx: Context): Promise<void> {
     ctx.throw(400, 'Invalid user coupon id')
   }
 
-  const entry = await UserCouponModel.findOne({ _id: id, userId }).populate('couponId').lean().exec()
+  const entry = await UserCouponModel.findOne({ _id: id, userId })
+    .populate({ path: 'couponId', populate: { path: 'typeId' } })
+    .lean()
+    .exec()
   if (!entry) {
     ctx.throw(404, 'Coupon not found')
   }
@@ -124,7 +145,7 @@ export async function useUserCoupon(ctx: Context): Promise<void> {
     },
     { new: true },
   )
-    .populate('couponId')
+    .populate({ path: 'couponId', populate: { path: 'typeId' } })
     .lean()
     .exec()
 

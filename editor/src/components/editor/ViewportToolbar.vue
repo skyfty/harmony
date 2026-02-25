@@ -859,7 +859,6 @@ function handleWallShapeMenuModelUpdate(value: boolean) {
 function handleWallPresetSelect(asset: any) {
   // propagate selection to parent; parent will handle activating the wall tool
   emit('select-wall-preset', asset)
-  emit('update:wall-shape-menu-open', false)
 }
 
 function handleWallShapeSelect(shape: WallBuildShape) {

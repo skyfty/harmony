@@ -1,11 +1,13 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { CouponModel } from '@/models/Coupon'
+import { CouponTypeModel } from '@/models/CouponType'
 import { UserCouponModel } from '@/models/UserCoupon'
 import { UserModel } from '@/models/User'
 import { computeUserCouponStatus } from '@/controllers/miniprogram/miniDtoUtils'
 
 type CouponPayload = {
+  typeId?: string
   name?: string
   title?: string
   description?: string
@@ -49,8 +51,23 @@ function toDateValue(value: unknown): Date | null {
 }
 
 function mapCoupon(row: any) {
+  const typeValue = row.typeId
+  const normalizedType =
+    typeValue && typeof typeValue === 'object'
+      ? {
+          id: typeValue._id?.toString?.() ?? '',
+          name: typeValue.name ?? '',
+          code: typeValue.code ?? '',
+          iconUrl: typeValue.iconUrl ?? '',
+          enabled: typeValue.enabled !== false,
+        }
+      : null
+
   return {
     id: row._id.toString(),
+    typeId: normalizedType?.id ?? row.typeId?.toString?.() ?? '',
+    type: normalizedType,
+    typeName: normalizedType?.name ?? '',
     name: row.title,
     title: row.title,
     description: row.description,
@@ -61,6 +78,20 @@ function mapCoupon(row: any) {
     createdAt: row.createdAt?.toISOString?.() ?? new Date(row.createdAt).toISOString(),
     updatedAt: row.updatedAt?.toISOString?.() ?? new Date(row.updatedAt).toISOString(),
   }
+}
+
+async function resolveCouponTypeId(typeId: unknown): Promise<Types.ObjectId> {
+  if (typeof typeId !== 'string' || !Types.ObjectId.isValid(typeId)) {
+    throw new Error('Valid typeId is required')
+  }
+  const type = await CouponTypeModel.findById(typeId).lean().exec()
+  if (!type) {
+    throw new Error('Coupon type not found')
+  }
+  if (type.enabled === false) {
+    throw new Error('Coupon type is disabled')
+  }
+  return new Types.ObjectId(typeId)
 }
 
 function normalizeStatus(value: unknown): UserCouponStatus | null {
@@ -118,7 +149,13 @@ export async function listCoupons(ctx: Context): Promise<void> {
     filter.$or = [{ title: new RegExp(keyword.trim(), 'i') }, { description: new RegExp(keyword.trim(), 'i') }]
   }
   const [rows, total] = await Promise.all([
-    CouponModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+    CouponModel.find(filter)
+      .populate('typeId')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec(),
     CouponModel.countDocuments(filter),
   ])
   ctx.body = {
@@ -134,7 +171,7 @@ export async function getCoupon(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid coupon id')
   }
-  const row = await CouponModel.findById(id).lean().exec()
+  const row = await CouponModel.findById(id).populate('typeId').lean().exec()
   if (!row) {
     ctx.throw(404, 'Coupon not found')
   }
@@ -147,16 +184,26 @@ export async function createCoupon(ctx: Context): Promise<void> {
   const description = toStringValue(body.description)
   const validUntil = toDateValue(body.validUntil)
   if (!title || !description || !validUntil) {
-    ctx.throw(400, 'name/title, description and validUntil are required')
+    ctx.throw(400, 'typeId, name/title, description and validUntil are required')
   }
+
+  let typeId: Types.ObjectId
+  try {
+    typeId = await resolveCouponTypeId(body.typeId)
+  } catch (error) {
+    ctx.throw(400, (error as Error).message)
+    return
+  }
+
   const created = await CouponModel.create({
+    typeId,
     title,
     description,
     validUntil,
     usageRules: body.useConditions ?? body.usageRules ?? null,
     metadata: body.metadata ?? null,
   })
-  const row = await CouponModel.findById(created._id).lean().exec()
+  const row = await CouponModel.findById(created._id).populate('typeId').lean().exec()
   ctx.status = 201
   ctx.body = mapCoupon(row)
 }
@@ -171,9 +218,21 @@ export async function updateCoupon(ctx: Context): Promise<void> {
     ctx.throw(404, 'Coupon not found')
   }
   const body = (ctx.request.body ?? {}) as CouponPayload
+
+  let nextTypeId = current.typeId
+  if (body.typeId !== undefined) {
+    try {
+      nextTypeId = await resolveCouponTypeId(body.typeId)
+    } catch (error) {
+      ctx.throw(400, (error as Error).message)
+      return
+    }
+  }
+
   const updated = await CouponModel.findByIdAndUpdate(
     id,
     {
+      typeId: nextTypeId,
       title: toStringValue(body.title) ?? toStringValue(body.name) ?? current.title,
       description: toStringValue(body.description) ?? current.description,
       validUntil: body.validUntil === undefined ? current.validUntil : toDateValue(body.validUntil) ?? current.validUntil,
@@ -185,6 +244,7 @@ export async function updateCoupon(ctx: Context): Promise<void> {
     },
     { new: true },
   )
+    .populate('typeId')
     .lean()
     .exec()
   ctx.body = mapCoupon(updated)

@@ -150,6 +150,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.coupons.userCoupons.title'),
         },
       },
+      {
+        name: 'CouponTypes',
+        path: 'types',
+        component: () => import('#/views/coupons/types.vue'),
+        meta: {
+          icon: 'lucide:tags',
+          title: $t('page.coupons.types.title'),
+        },
+      },
     ],
   },
   {
