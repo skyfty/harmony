@@ -175,8 +175,8 @@ $page-bg: #f3f6fb;
   position: relative;
 
   &__icon {
-    width: 48px;
-    height: 48px;
+    width: 52px;
+    height: 52px;
     display: block;
   }
 
