@@ -3,6 +3,7 @@ import type { FormInstance } from 'ant-design-vue';
 import type { CouponTypeItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import dayjs, { type Dayjs } from 'dayjs';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -38,7 +39,8 @@ const couponFormModel = reactive<CouponFormModel>({
   validUntil: undefined,
 });
 
-const modalTitle = computed(() => (editingId.value ? '编辑卡券' : '新建卡券'));
+const { t } = useI18n();
+const modalTitle = computed(() => (editingId.value ? t('page.coupons.index.modal.edit') : t('page.coupons.index.modal.create')));
 
 function resetForm() {
   couponFormModel.typeId = '';
@@ -73,7 +75,7 @@ function openCreateModal() {
       modalOpen.value = true;
     })
     .catch(() => {
-      message.error('加载卡券类型失败');
+      message.error(t('page.coupons.index.message.loadTypesFailed'));
     });
 }
 
@@ -87,7 +89,7 @@ async function openEditModal(row: any) {
     couponFormModel.validUntil = data.validUntil ? dayjs(data.validUntil) : undefined;
     modalOpen.value = true;
   } catch {
-    message.error('读取卡券信息失败');
+    message.error(t('page.coupons.index.message.readFailed'));
   }
 }
 
@@ -107,10 +109,10 @@ async function submitCoupon() {
 
     if (editingId.value) {
       await updateCouponApi(editingId.value, payload);
-      message.success('卡券更新成功');
+      message.success(t('page.coupons.index.message.updateSuccess'));
     } else {
       await createCouponApi(payload);
-      message.success('卡券创建成功');
+      message.success(t('page.coupons.index.message.createSuccess'));
     }
     modalOpen.value = false;
     couponGridApi.reload();
@@ -121,12 +123,12 @@ async function submitCoupon() {
 
 function handleDelete(row: any) {
   Modal.confirm({
-    title: `确认删除卡券“${row.title || row.name}”吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.coupons.index.confirm.delete.title', { name: row.title || row.name }),
+    content: t('page.coupons.index.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteCouponApi(row.id);
-      message.success('卡券已删除');
+      message.success(t('page.coupons.index.message.deleteSuccess'));
       couponGridApi.reload();
     },
   });
@@ -138,21 +140,21 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
-        componentProps: { allowClear: true, placeholder: '名称 / 描述' },
+        label: t('page.coupons.index.form.keyword.label'),
+        componentProps: { allowClear: true, placeholder: t('page.coupons.index.form.keyword.placeholder') },
       },
     ],
   },
   gridOptions: {
     border: true,
     columns: [
-      { field: 'typeName', minWidth: 160, title: '类型' },
-      { field: 'title', minWidth: 180, title: '名称' },
-      { field: 'description', minWidth: 260, title: '描述' },
-      { field: 'validUntil', minWidth: 180, formatter: 'formatDateTime', title: '有效期至' },
-      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
-      { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: '更新时间' },
-      { align: 'left', fixed: 'right', minWidth: 160, field: 'actions', slots: { default: 'actions' }, title: '操作' },
+      { field: 'typeName', minWidth: 160, title: t('page.coupons.index.table.typeName') },
+      { field: 'title', minWidth: 180, title: t('page.coupons.index.table.title') },
+      { field: 'description', minWidth: 260, title: t('page.coupons.index.table.description') },
+      { field: 'validUntil', minWidth: 180, formatter: 'formatDateTime', title: t('page.coupons.index.table.validUntil') },
+      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.coupons.index.table.createdAt') },
+      { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.coupons.index.table.updatedAt') },
+      { align: 'left', fixed: 'right', minWidth: 160, field: 'actions', slots: { default: 'actions' }, title: t('page.coupons.index.table.actions') },
     ],
     keepSource: true,
     pagerConfig: { pageSize: 20 },
@@ -177,13 +179,13 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
   <div class="p-5">
     <CouponGrid>
       <template #toolbar-actions>
-        <Button v-access:code="'coupon:write'" type="primary" @click="openCreateModal">新建卡券</Button>
+        <Button v-access:code="'coupon:write'" type="primary" @click="openCreateModal">{{ t('page.coupons.index.toolbar.create') }}</Button>
       </template>
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEditModal(row)">{{ t('page.coupons.index.actions.edit') }}</Button>
+          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.coupons.index.actions.delete') }}</Button>
         </Space>
       </template>
     </CouponGrid>
@@ -192,30 +194,30 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
       :open="modalOpen"
       :confirm-loading="submitting"
       :title="modalTitle"
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.coupons.index.modal.ok')"
+      :cancel-text="t('page.coupons.index.modal.cancel')"
       destroy-on-close
       @cancel="() => (modalOpen = false)"
       @ok="submitCoupon"
     >
       <Form ref="couponFormRef" :label-col="{ span: 6 }" :model="couponFormModel" :wrapper-col="{ span: 17 }">
-        <Form.Item label="类型" name="typeId" :rules="[{ required: true, message: '请选择类型' }]">
+        <Form.Item :label="t('page.coupons.index.formFields.typeId.label')" name="typeId" :rules="[{ required: true, message: t('page.coupons.index.formFields.typeId.required') }]">
           <Select
             v-model:value="couponFormModel.typeId"
             :options="typeOptions"
             :loading="loadingCouponTypes"
-            placeholder="请选择卡券类型"
+            :placeholder="t('page.coupons.index.formFields.typeId.placeholder')"
             show-search
             option-filter-prop="label"
           />
         </Form.Item>
-        <Form.Item label="名称" name="title" :rules="[{ required: true, message: '请输入名称' }]">
-          <Input v-model:value="couponFormModel.title" placeholder="卡券名称" />
+        <Form.Item :label="t('page.coupons.index.formFields.title.label')" name="title" :rules="[{ required: true, message: t('page.coupons.index.formFields.title.required') }]">
+          <Input v-model:value="couponFormModel.title" :placeholder="t('page.coupons.index.formFields.title.placeholder')" />
         </Form.Item>
-        <Form.Item label="描述" name="description" :rules="[{ required: true, message: '请输入描述' }]">
-          <Input v-model:value="couponFormModel.description" placeholder="卡券描述" />
+        <Form.Item :label="t('page.coupons.index.formFields.description.label')" name="description" :rules="[{ required: true, message: t('page.coupons.index.formFields.description.required') }]">
+          <Input v-model:value="couponFormModel.description" :placeholder="t('page.coupons.index.formFields.description.placeholder')" />
         </Form.Item>
-        <Form.Item label="有效期" name="validUntil" :rules="[{ required: true, message: '请选择有效期' }]">
+        <Form.Item :label="t('page.coupons.index.formFields.validUntil.label')" name="validUntil" :rules="[{ required: true, message: t('page.coupons.index.formFields.validUntil.required') }]">
           <DatePicker v-model:value="couponFormModel.validUntil" style="width: 100%" show-time />
         </Form.Item>
       </Form>

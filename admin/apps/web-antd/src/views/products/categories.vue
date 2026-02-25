@@ -3,6 +3,7 @@ import type { FormInstance } from 'ant-design-vue';
 import type { ProductCategoryItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -42,7 +43,8 @@ const formModel = reactive<CategoryFormModel>({
   enabled: true,
 });
 
-const modalTitle = computed(() => (editingId.value ? '编辑商品分类' : '新增商品分类'));
+const { t } = useI18n();
+const modalTitle = computed(() => (editingId.value ? t('page.products.categories.modal.edit') : t('page.products.categories.modal.create')));
 
 function resetForm() {
   formModel.name = '';
@@ -81,7 +83,7 @@ async function submit() {
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
       });
-      message.success('商品分类更新成功');
+      message.success(t('page.products.categories.message.updateSuccess'));
     } else {
       await createProductCategoryApi({
         name: formModel.name.trim(),
@@ -89,7 +91,7 @@ async function submit() {
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
       });
-      message.success('商品分类创建成功');
+      message.success(t('page.products.categories.message.createSuccess'));
     }
     modalOpen.value = false;
     gridApi.reload();
@@ -100,16 +102,16 @@ async function submit() {
 
 function handleDelete(row: ProductCategoryItem) {
   if (row.isBuiltin) {
-    message.warning('内置分类不可删除');
+    message.warning(t('page.products.categories.message.builtinCannotDelete'));
     return;
   }
   Modal.confirm({
-    title: `确认删除商品分类 “${row.name}” 吗？`,
-    content: '删除后不会自动删除已关联商品，但商品需要重新设置分类。',
+    title: t('page.products.categories.confirm.delete.title', { name: row.name }),
+    content: t('page.products.categories.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteProductCategoryApi(row.id);
-      message.success('商品分类已删除');
+      message.success(t('page.products.categories.message.deleteSuccess'));
       gridApi.reload();
     },
   });
@@ -122,26 +124,26 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 220, title: '名称' },
-      { field: 'description', minWidth: 260, title: '描述' },
-      { field: 'sortOrder', minWidth: 100, title: '排序' },
+      { field: 'name', minWidth: 220, title: t('page.products.categories.table.name') },
+      { field: 'description', minWidth: 260, title: t('page.products.categories.table.description') },
+      { field: 'sortOrder', minWidth: 100, title: t('page.products.categories.table.sortOrder') },
       {
         field: 'enabled',
         minWidth: 100,
-        title: '启用',
+        title: t('page.products.categories.table.enabled'),
         slots: { default: 'enabled' },
       },
       {
         field: 'isBuiltin',
         minWidth: 100,
-        title: '内置',
+        title: t('page.products.categories.table.isBuiltin'),
         slots: { default: 'builtin' },
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.products.categories.table.updatedAt'),
       },
       {
         align: 'left',
@@ -149,7 +151,7 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
         fixed: 'right',
         minWidth: 180,
         slots: { default: 'actions' },
-        title: '操作',
+        title: t('page.products.categories.table.actions'),
       },
     ],
     proxyConfig: {
@@ -178,7 +180,7 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
   <div class="p-5">
     <Grid>
       <template #toolbar-actions>
-        <Button v-access:code="'product:write'" type="primary" @click="openCreate">新增分类</Button>
+        <Button v-access:code="'product:write'" type="primary" @click="openCreate">{{ t('page.products.categories.toolbar.create') }}</Button>
       </template>
 
       <template #enabled="{ row }">
@@ -186,12 +188,12 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
       </template>
 
       <template #builtin="{ row }">
-        <span>{{ row.isBuiltin ? '是' : '否' }}</span>
+        <span>{{ row.isBuiltin ? t('page.products.categories.values.yes') : t('page.products.categories.values.no') }}</span>
       </template>
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'product:write'" size="small" type="link" @click="openEdit(row)">编辑</Button>
+          <Button v-access:code="'product:write'" size="small" type="link" @click="openEdit(row)">{{ t('page.products.categories.actions.edit') }}</Button>
           <Button
             v-access:code="'product:write'"
             :disabled="row.isBuiltin"
@@ -200,7 +202,7 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
             type="link"
             @click="handleDelete(row)"
           >
-            删除
+            {{ t('page.products.categories.actions.delete') }}
           </Button>
         </Space>
       </template>
@@ -210,23 +212,23 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
       :open="modalOpen"
       :title="modalTitle"
       :confirm-loading="submitting"
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.products.categories.modal.ok')"
+      :cancel-text="t('page.products.categories.modal.cancel')"
       destroy-on-close
       @cancel="() => (modalOpen = false)"
       @ok="submit"
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
-        <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入分类名称' }]">
+        <Form.Item :label="t('page.products.categories.form.name.label')" name="name" :rules="[{ required: true, message: t('page.products.categories.form.name.required') }]">
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>
-        <Form.Item label="描述" name="description">
+        <Form.Item :label="t('page.products.categories.form.description.label')" name="description">
           <Input v-model:value="formModel.description" allow-clear />
         </Form.Item>
-        <Form.Item label="排序" name="sortOrder">
+        <Form.Item :label="t('page.products.categories.form.sortOrder.label')" name="sortOrder">
           <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />
         </Form.Item>
-        <Form.Item label="启用" name="enabled">
+        <Form.Item :label="t('page.products.categories.form.enabled.label')" name="enabled">
           <Switch v-model:checked="formModel.enabled" />
         </Form.Item>
       </Form>

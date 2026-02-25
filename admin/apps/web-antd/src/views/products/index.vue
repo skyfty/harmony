@@ -2,6 +2,7 @@
 import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -52,7 +53,8 @@ const imageUploadProps: UploadProps = {
   accept: 'image/*',
 };
 
-const modalTitle = computed(() => (editingId.value ? '编辑商品' : '新增商品'));
+const { t } = useI18n();
+const modalTitle = computed(() => (editingId.value ? t('page.products.index.modal.edit') : t('page.products.index.modal.create')));
 
 function resetForm() {
   productFormModel.name = '';
@@ -87,7 +89,7 @@ async function openEditModal(row: any) {
     imagePreview.value = productFormModel.coverUrl;
     modalOpen.value = true;
   } catch (err) {
-    message.error('读取商品信息失败');
+    message.error(t('page.products.index.message.readFailed'));
   }
 }
 
@@ -124,10 +126,10 @@ async function submitProduct() {
 
     if (editingId.value) {
       await updateProductApi(editingId.value, payload);
-      message.success('商品更新成功');
+      message.success(t('page.products.index.message.updateSuccess'));
     } else {
       await createProductApi(payload);
-      message.success('商品创建成功');
+      message.success(t('page.products.index.message.createSuccess'));
     }
     modalOpen.value = false;
     productGridApi.reload();
@@ -140,12 +142,12 @@ async function submitProduct() {
 
 function handleDelete(row: any) {
   Modal.confirm({
-    title: `确认删除商品 “${row.name}” 吗？`,
-    content: '删除后不可恢复。',
+    title: t('page.products.index.confirm.delete.title', { name: row.name }),
+    content: t('page.products.index.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteProductApi(row.id);
-      message.success('商品已删除');
+      message.success(t('page.products.index.message.deleteSuccess'));
       productGridApi.reload();
     },
   });
@@ -157,16 +159,16 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
-        componentProps: { allowClear: true, placeholder: '名称 / Slug' },
+        label: t('page.products.index.form.keyword.label'),
+        componentProps: { allowClear: true, placeholder: t('page.products.index.form.keyword.placeholder') },
       },
       {
         component: 'Select',
         fieldName: 'categoryId',
-        label: '分类',
+        label: t('page.products.index.form.categoryId.label'),
         componentProps: {
           allowClear: true,
-          placeholder: '选择分类',
+          placeholder: t('page.products.index.form.categoryId.placeholder'),
           options: categoryOptions,
         },
       },
@@ -175,15 +177,15 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 200, title: '名称' },
-      { field: 'slug', minWidth: 180, title: 'Slug' },
-      { field: 'coverUrl', minWidth: 120, title: '封面', slots: { default: 'cover' } },
-      { field: 'categoryId', minWidth: 140, title: '分类', slots: { default: 'category' } },
-      { field: 'price', minWidth: 120, title: '价格' },
-      { field: 'validityDays', minWidth: 120, title: '有效期(天)' },
-      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
-      { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: '更新时间' },
-      { align: 'left', fixed: 'right', minWidth: 160, field: 'actions', slots: { default: 'actions' }, title: '操作' },
+      { field: 'name', minWidth: 200, title: t('page.products.index.table.name') },
+      { field: 'slug', minWidth: 180, title: t('page.products.index.table.slug') },
+      { field: 'coverUrl', minWidth: 120, title: t('page.products.index.table.cover'), slots: { default: 'cover' } },
+      { field: 'categoryId', minWidth: 140, title: t('page.products.index.table.category'), slots: { default: 'category' } },
+      { field: 'price', minWidth: 120, title: t('page.products.index.table.price') },
+      { field: 'validityDays', minWidth: 120, title: t('page.products.index.table.validityDays') },
+      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.products.index.table.createdAt') },
+      { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.products.index.table.updatedAt') },
+      { align: 'left', fixed: 'right', minWidth: 160, field: 'actions', slots: { default: 'actions' }, title: t('page.products.index.table.actions') },
     ],
     keepSource: true,
     pagerConfig: { pageSize: 20 },
@@ -226,7 +228,7 @@ onMounted(() => {
   <div class="p-5">
     <ProductGrid>
       <template #toolbar-actions>
-        <Button v-access:code="'product:write'" type="primary" @click="openCreateModal">新增商品</Button>
+        <Button v-access:code="'product:write'" type="primary" @click="openCreateModal">{{ t('page.products.index.toolbar.create') }}</Button>
       </template>
 
       <template #cover="{ row }">
@@ -245,38 +247,38 @@ onMounted(() => {
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'product:write'" size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'product:write'" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Button v-access:code="'product:write'" size="small" type="link" @click="openEditModal(row)">{{ t('page.products.index.actions.edit') }}</Button>
+          <Button v-access:code="'product:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.products.index.actions.delete') }}</Button>
         </Space>
       </template>
     </ProductGrid>
 
-    <Modal :open="modalOpen" :confirm-loading="submitting" :title="modalTitle" ok-text="保存" cancel-text="取消" destroy-on-close @cancel="() => (modalOpen = false)" @ok="submitProduct">
+    <Modal :open="modalOpen" :confirm-loading="submitting" :title="modalTitle" :ok-text="t('page.products.index.modal.ok')" :cancel-text="t('page.products.index.modal.cancel')" destroy-on-close @cancel="() => (modalOpen = false)" @ok="submitProduct">
       <Form ref="productFormRef" :label-col="{ span: 6 }" :model="productFormModel" :wrapper-col="{ span: 17 }">
-          <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入名称' }]">
-            <Input v-model:value="productFormModel.name" placeholder="商品名称" />
+          <Form.Item :label="t('page.products.index.formFields.name.label')" name="name" :rules="[{ required: true, message: t('page.products.index.formFields.name.required') }]">
+            <Input v-model:value="productFormModel.name" :placeholder="t('page.products.index.formFields.name.placeholder')" />
           </Form.Item>
-          <Form.Item label="Slug" name="slug" :rules="[{ required: true, message: '请输入 slug' }, { pattern: /^[a-z0-9-]+$/, message: '只允许小写字母/数字/横杠' }]">
-            <Input v-model:value="productFormModel.slug" placeholder="唯一标识(小写英文)" />
+          <Form.Item :label="t('page.products.index.formFields.slug.label')" name="slug" :rules="[{ required: true, message: t('page.products.index.formFields.slug.required') }, { pattern: /^[a-z0-9-]+$/, message: t('page.products.index.formFields.slug.pattern') }]">
+            <Input v-model:value="productFormModel.slug" :placeholder="t('page.products.index.formFields.slug.placeholder')" />
           </Form.Item>
-          <Form.Item label="分类" name="categoryId" :rules="[{ required: true, message: '请选择商品分类' }]">
-            <Select v-model:value="productFormModel.categoryId" :options="categoryOptions" allowClear placeholder="选择商品分类" />
+          <Form.Item :label="t('page.products.index.formFields.categoryId.label')" name="categoryId" :rules="[{ required: true, message: t('page.products.index.formFields.categoryId.required') }]">
+            <Select v-model:value="productFormModel.categoryId" :options="categoryOptions" allowClear :placeholder="t('page.products.index.formFields.categoryId.placeholder')" />
           </Form.Item>
-          <Form.Item label="价格" name="price" :rules="[{ type: 'number', min: 0, message: '价格不能小于 0' }]">
+          <Form.Item :label="t('page.products.index.formFields.price.label')" name="price" :rules="[{ type: 'number', min: 0, message: t('page.products.index.formFields.price.min') }]">
             <InputNumber v-model:value="productFormModel.price" style="width:100%" min="0" />
           </Form.Item>
-          <Form.Item label="有效期(天)" name="validityDays" :rules="[{ type: 'number', min: 1, message: '有效期必须大于等于 1' }]">
+          <Form.Item :label="t('page.products.index.formFields.validityDays.label')" name="validityDays" :rules="[{ type: 'number', min: 1, message: t('page.products.index.formFields.validityDays.min') }]">
             <InputNumber v-model:value="productFormModel.validityDays" style="width:100%" min="1" />
           </Form.Item>
-        <Form.Item label="描述" name="description">
-          <Input v-model:value="productFormModel.description" placeholder="详细描述" />
+        <Form.Item :label="t('page.products.index.formFields.description.label')" name="description">
+          <Input v-model:value="productFormModel.description" :placeholder="t('page.products.index.formFields.description.placeholder')" />
         </Form.Item>
-        <Form.Item label="封面上传">
+        <Form.Item :label="t('page.products.index.formFields.coverUpload.label')">
           <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card">
-            <div>上传</div>
+            <div>{{ t('page.products.index.formFields.coverUpload.upload') }}</div>
           </Upload>
         </Form.Item>
-        <Form.Item v-if="imagePreview" label="当前封面">
+        <Form.Item v-if="imagePreview" :label="t('page.products.index.formFields.currentCover.label')">
           <img
             :src="imagePreview"
             alt="preview"

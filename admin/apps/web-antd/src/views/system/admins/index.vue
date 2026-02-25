@@ -61,14 +61,14 @@ const adminFormModel = reactive<AdminFormModel>({
 const { t } = useI18n();
 const modalTitle = computed(() =>
   editingAdminId.value
-    ? t('page.systemUsers.index.modal.edit')
-    : t('page.systemUsers.index.modal.create'),
+    ? t('page.systemAdmins.index.modal.edit')
+    : t('page.systemAdmins.index.modal.create'),
 );
 
 const adminRules = computed(() => ({
   username: [
     {
-      message: t('page.systemUsers.index.form.username.required'),
+      message: t('page.systemAdmins.index.form.username.required'),
       required: true,
       type: 'string',
       trigger: 'blur',
@@ -78,7 +78,7 @@ const adminRules = computed(() => ({
     ? []
     : [
         {
-          message: t('page.systemUsers.index.form.password.required'),
+          message: t('page.systemAdmins.index.form.password.required'),
           required: true,
           type: 'string',
           trigger: 'blur',
@@ -147,7 +147,7 @@ async function submitAdmin() {
         payload.password = adminFormModel.password.trim();
       }
       await updateAdminApi(editingAdminId.value, payload);
-      message.success(t('page.systemUsers.index.message.updateSuccess'));
+      message.success(t('page.systemAdmins.index.message.updateSuccess'));
     } else {
       const payload: CreateAdminPayload = {
         username: adminFormModel.username.trim(),
@@ -158,7 +158,7 @@ async function submitAdmin() {
         status: adminFormModel.status,
       };
       await createAdminApi(payload);
-      message.success(t('page.systemUsers.index.message.createSuccess'));
+      message.success(t('page.systemAdmins.index.message.createSuccess'));
     }
     modalOpen.value = false;
     adminGridApi.reload();
@@ -169,14 +169,14 @@ async function submitAdmin() {
 
 function handleDelete(record: AdminItem) {
   Modal.confirm({
-    title: t('page.systemUsers.index.confirm.delete.title', {
+    title: t('page.systemAdmins.index.confirm.delete.title', {
       username: record.username,
     }),
-    content: t('page.systemUsers.index.confirm.delete.content'),
+    content: t('page.systemAdmins.index.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteAdminApi(record.id);
-      message.success(t('page.systemUsers.index.message.deleteSuccess'));
+      message.success(t('page.systemAdmins.index.message.deleteSuccess'));
       adminGridApi.reload();
     },
   });
@@ -186,7 +186,7 @@ async function handleStatusChange(record: AdminItem, checked: boolean) {
   changingStatusId.value = record.id;
   try {
     await updateAdminStatusApi(record.id, checked ? 'active' : 'disabled');
-    message.success(t('page.systemUsers.index.message.statusUpdate'));
+    message.success(t('page.systemAdmins.index.message.statusUpdate'));
     adminGridApi.reload();
   } finally {
     changingStatusId.value = null;
@@ -199,29 +199,29 @@ const [AdminGrid, adminGridApi] = useVbenVxeGrid<AdminItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: t('page.systemUsers.index.table.keyword'),
+        label: t('page.systemAdmins.index.table.keyword'),
         componentProps: {
           allowClear: true,
-          placeholder: t('page.systemUsers.index.table.keyword'),
+          placeholder: t('page.systemAdmins.index.table.keyword'),
         },
       },
       {
         component: 'Select',
         fieldName: 'status',
-        label: t('page.systemUsers.index.table.status'),
+        label: t('page.systemAdmins.index.table.status'),
         componentProps: {
           allowClear: true,
           options: [
             {
-              label: t('page.systemUsers.index.form.status.options.active'),
+              label: t('page.systemAdmins.index.form.status.options.active'),
               value: 'active',
             },
             {
-              label: t('page.systemUsers.index.form.status.options.disabled'),
+              label: t('page.systemAdmins.index.form.status.options.disabled'),
               value: 'disabled',
             },
           ],
-          placeholder: t('page.systemUsers.index.form.status.placeholder'),
+          placeholder: t('page.systemAdmins.index.form.status.placeholder'),
         },
       },
     ],
@@ -233,28 +233,28 @@ const [AdminGrid, adminGridApi] = useVbenVxeGrid<AdminItem>({
         field: 'username',
         minWidth: 150,
         sortable: true,
-        title: t('page.systemUsers.index.table.username'),
+        title: t('page.systemAdmins.index.table.username'),
       },
       {
         field: 'displayName',
         minWidth: 140,
-        title: t('page.systemUsers.index.table.displayName'),
+        title: t('page.systemAdmins.index.table.displayName'),
       },
       {
         field: 'email',
         minWidth: 180,
-        title: t('page.systemUsers.index.table.email'),
+        title: t('page.systemAdmins.index.table.email'),
       },
       {
         field: 'roles',
         minWidth: 220,
-        title: t('page.systemUsers.index.table.roles'),
+        title: t('page.systemAdmins.index.table.roles'),
         slots: { default: 'roles' },
       },
       {
         field: 'status',
         minWidth: 160,
-        title: t('page.systemUsers.index.table.status'),
+        title: t('page.systemAdmins.index.table.status'),
         slots: { default: 'status' },
       },
       {
@@ -262,14 +262,14 @@ const [AdminGrid, adminGridApi] = useVbenVxeGrid<AdminItem>({
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: t('page.systemUsers.index.table.createdAt'),
+        title: t('page.systemAdmins.index.table.createdAt'),
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         sortable: true,
         formatter: 'formatDateTime',
-        title: t('page.systemUsers.index.table.updatedAt'),
+        title: t('page.systemAdmins.index.table.updatedAt'),
       },
       {
         align: 'left',
@@ -277,7 +277,7 @@ const [AdminGrid, adminGridApi] = useVbenVxeGrid<AdminItem>({
         fixed: 'right',
         minWidth: 220,
         slots: { default: 'actions' },
-        title: t('page.systemUsers.index.table.actions'),
+        title: t('page.systemAdmins.index.table.actions'),
       },
     ],
     keepSource: true,
@@ -312,7 +312,7 @@ const [AdminGrid, adminGridApi] = useVbenVxeGrid<AdminItem>({
       zoom: true,
     },
   },
-  tableTitle: '管理员管理',
+  tableTitle: t('page.systemAdmins.index.table.title'),
 });
 
 onMounted(async () => {
@@ -325,7 +325,7 @@ onMounted(async () => {
     <AdminGrid>
       <template #toolbar-actions>
         <Button v-access:code="'admin:super'" type="primary" @click="openCreateModal">
-          新增管理员
+          {{ t('page.systemAdmins.index.toolbar.create') }}
         </Button>
       </template>
 
@@ -341,14 +341,14 @@ onMounted(async () => {
       <template #status="{ row }">
         <Space>
           <Tag :color="row.status === 'active' ? 'success' : 'default'">
-            {{ row.status === 'active' ? '启用' : '禁用' }}
+            {{ row.status === 'active' ? t('page.systemAdmins.index.form.status.options.active') : t('page.systemAdmins.index.form.status.options.disabled') }}
           </Tag>
           <Switch
             v-access:code="'admin:super'"
             :checked="row.status === 'active'"
             :loading="changingStatusId === row.id"
-            checked-children="启"
-            un-checked-children="停"
+            :checked-children="t('page.systemAdmins.index.form.status.checkedChildren')"
+            :un-checked-children="t('page.systemAdmins.index.form.status.unCheckedChildren')"
             @change="(checked) => handleStatusChange(row, !!checked)"
           />
         </Space>
@@ -362,7 +362,7 @@ onMounted(async () => {
             type="link"
             @click="openEditModal(row)"
           >
-            编辑
+            {{ t('page.systemAdmins.index.actions.edit') }}
           </Button>
           <Button
             v-access:code="'admin:super'"
@@ -371,7 +371,7 @@ onMounted(async () => {
             type="link"
             @click="handleDelete(row)"
           >
-            删除
+            {{ t('page.systemAdmins.index.actions.delete') }}
           </Button>
         </Space>
       </template>
@@ -382,8 +382,8 @@ onMounted(async () => {
       :open="modalOpen"
       :title="modalTitle"
       destroy-on-close
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.systemAdmins.index.modal.ok')"
+      :cancel-text="t('page.systemAdmins.index.modal.cancel')"
       @cancel="closeModal"
       @ok="submitAdmin"
     >
@@ -394,51 +394,51 @@ onMounted(async () => {
         :rules="adminRules"
         :wrapper-col="{ span: 17 }"
       >
-        <Form.Item label="用户名" name="username">
+        <Form.Item :label="t('page.systemAdmins.index.form.username.label')" name="username">
           <Input
             v-model:value="adminFormModel.username"
             :disabled="!!editingAdminId"
             allow-clear
-            placeholder="请输入用户名"
+            :placeholder="t('page.systemAdmins.index.form.username.placeholder')"
           />
         </Form.Item>
-        <Form.Item :label="editingAdminId ? '重置密码' : '密码'" name="password">
+        <Form.Item :label="editingAdminId ? t('page.systemAdmins.index.form.password.reset') : t('page.systemAdmins.index.form.password.label')" name="password">
           <Input.Password
             v-model:value="adminFormModel.password"
             allow-clear
-            :placeholder="editingAdminId ? '不填写则保持原密码' : '请输入密码'"
+            :placeholder="editingAdminId ? t('page.systemAdmins.index.form.password.keep') : t('page.systemAdmins.index.form.password.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="昵称" name="displayName">
+        <Form.Item :label="t('page.systemAdmins.index.form.displayName.label')" name="displayName">
           <Input
             v-model:value="adminFormModel.displayName"
             allow-clear
-            placeholder="请输入昵称"
+            :placeholder="t('page.systemAdmins.index.form.displayName.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="邮箱" name="email">
+        <Form.Item :label="t('page.systemAdmins.index.form.email.label')" name="email">
           <Input
             v-model:value="adminFormModel.email"
             allow-clear
-            placeholder="请输入邮箱"
+            :placeholder="t('page.systemAdmins.index.form.email.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="状态" name="status">
+        <Form.Item :label="t('page.systemAdmins.index.form.status.label')" name="status">
           <Select
             v-model:value="adminFormModel.status"
             :options="[
-              { label: '启用', value: 'active' },
-              { label: '禁用', value: 'disabled' },
+              { label: t('page.systemAdmins.index.form.status.options.active'), value: 'active' },
+              { label: t('page.systemAdmins.index.form.status.options.disabled'), value: 'disabled' },
             ]"
           />
         </Form.Item>
-        <Form.Item label="角色" name="roleIds">
+        <Form.Item :label="t('page.systemAdmins.index.form.roles.label')" name="roleIds">
           <Select
             v-model:value="adminFormModel.roleIds"
             :options="roleOptions"
             allow-clear
             mode="multiple"
-            placeholder="请选择角色"
+            :placeholder="t('page.systemAdmins.index.form.roles.placeholder')"
           />
         </Form.Item>
       </Form>

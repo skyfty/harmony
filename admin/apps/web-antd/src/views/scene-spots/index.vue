@@ -339,7 +339,7 @@ async function toggleFeatured(row: SceneSpotItem, checked: unknown) {
     setTimeout(() => {
       featuredError[row.id] = false;
     }, 1400);
-    message.error(t('page.sceneSpots.index.message.updateFailed') || '更新失败');
+    message.error(t('page.sceneSpots.index.message.updateFailed'));
   } finally {
     featuredLoading[row.id] = false;
   }
@@ -379,12 +379,10 @@ const [SceneSpotGrid, sceneSpotGridApi] = useVbenVxeGrid<SceneSpotItem>({
     columns: [
       { field: 'title', minWidth: 180, title: t('page.sceneSpots.index.table.titleCol') },
       { field: 'sceneId', minWidth: 220, title: t('page.sceneSpots.index.table.sceneId'), slots: { default: 'sceneName' } },
-      { field: 'sceneCheckpointTotal', minWidth: 140, title: '场景打卡点总数' },
       { field: 'isFeatured', minWidth: 120, title: t('page.sceneSpots.index.table.isFeatured'), slots: { default: 'isFeatured' } },
       { field: 'averageRating', minWidth: 120, title: t('page.sceneSpots.index.table.averageRating') },
       { field: 'ratingCount', minWidth: 120, title: t('page.sceneSpots.index.table.ratingCount') },
       { field: 'favoriteCount', minWidth: 120, title: t('page.sceneSpots.index.table.favoriteCount') },
-      { field: 'address', minWidth: 220, title: t('page.sceneSpots.index.table.address') },
       { field: 'order', minWidth: 100, title: t('page.sceneSpots.index.table.order') },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.sceneSpots.index.table.updatedAt') },
       {
@@ -461,7 +459,7 @@ onMounted(async () => {
             {{ t('page.sceneSpots.index.actions.detail') }}
           </Button>
           <Button v-access:code="'comment:read'" size="small" type="link" @click="openComments(row)">
-            留言
+            {{ t('page.sceneSpots.index.actions.comments') }}
           </Button>
           <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openEditModal(row)">
             {{ t('page.sceneSpots.index.actions.edit') }}
@@ -508,7 +506,7 @@ onMounted(async () => {
             @change="handleCoverImageChange"
             @preview="handlePreview"
           >
-            <div v-if="coverImageFileList.length < 1">+ Upload</div>
+            <div v-if="coverImageFileList.length < 1">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
           </Upload>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
@@ -520,7 +518,7 @@ onMounted(async () => {
             @change="handleSlidesChange"
             @preview="handlePreview"
           >
-            <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ Upload</div>
+            <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
           </Upload>
         </Form.Item>
         <Form.Item :label="t('page.sceneSpots.index.formFields.description.label')" name="description">

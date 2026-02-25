@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import type { TableColumnsType } from 'ant-design-vue'
 import { Button, Card, Descriptions, Space, Table } from 'ant-design-vue'
 import type { GetTravelRecordResponse, PunchRecordItem } from '#/api'
@@ -8,6 +9,7 @@ import { getTravelRecordApi, listPunchRecordsApi } from '#/api'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const id = String(route.params.id ?? '')
 
 const loading = ref(true)
@@ -35,11 +37,11 @@ const displayAchievementCount = computed(() => {
 })
 
 const punchColumns: TableColumnsType<PunchRecordItem> = [
-  { title: '打卡时间', key: 'punchTime', width: 200 },
-  { title: '打卡位置', key: 'nodeName', width: 180 },
-  { title: '打卡点ID', dataIndex: 'nodeId', key: 'nodeId', width: 180 },
-  { title: '来源', dataIndex: 'source', key: 'source', width: 120 },
-  { title: '操作', key: 'actions', width: 120, fixed: 'right' as const },
+  { title: t('page.travelRecords.detail.punchTable.punchTime'), key: 'punchTime', width: 200 },
+  { title: t('page.travelRecords.detail.punchTable.nodeName'), key: 'nodeName', width: 180 },
+  { title: t('page.travelRecords.detail.punchTable.nodeId'), dataIndex: 'nodeId', key: 'nodeId', width: 180 },
+  { title: t('page.travelRecords.detail.punchTable.source'), dataIndex: 'source', key: 'source', width: 120 },
+  { title: t('page.travelRecords.detail.punchTable.actions'), key: 'actions', width: 120, fixed: 'right' as const },
 ]
 
 function resolvePunchTime(item: PunchRecordItem): string {
@@ -122,34 +124,34 @@ onMounted(load)
   <div class="p-5">
     <Card :loading="loading">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 style="margin:0">游历记录详情</h3>
+        <h3 style="margin:0">{{ t('page.travelRecords.detail.title') }}</h3>
         <Space>
-          <Button type="default" @click="goBack">返回</Button>
+          <Button type="default" @click="goBack">{{ t('page.travelRecords.detail.buttons.back') }}</Button>
         </Space>
       </div>
 
       <Descriptions bordered :column="1" size="small">
-        <Descriptions.Item label="记录ID">{{ record?.id || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="状态">{{ record?.status === 'completed' ? '已完成' : '进行中' }}</Descriptions.Item>
-        <Descriptions.Item label="进入时间">{{ record?.enterTime || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="离开时间">{{ record?.leaveTime || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="停留时长(秒)">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
-        <Descriptions.Item label="游历成就(去重打卡点)">{{ displayAchievementCount }}</Descriptions.Item>
-        <Descriptions.Item label="场景名称">{{ record?.sceneName || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="场景打卡点总数">{{ record?.sceneCheckpointTotal ?? 0 }}</Descriptions.Item>
-        <Descriptions.Item label="场景ID">{{ record?.sceneId || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="景点ID">{{ record?.scenicId || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="用户名">{{ record?.username || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="用户ID">{{ record?.userId || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="来源">{{ record?.source || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="路径">{{ record?.path || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="来源IP">{{ record?.ip || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="User-Agent">{{ record?.userAgent || '-' }}</Descriptions.Item>
-        <Descriptions.Item label="创建时间">{{ record?.createdAt || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.id')">{{ record?.id || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.status')">{{ record?.status === 'completed' ? t('page.travelRecords.detail.status.completed') : t('page.travelRecords.detail.status.active') }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.enterTime')">{{ record?.enterTime || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.leaveTime')">{{ record?.leaveTime || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.durationSeconds')">{{ record?.durationSeconds ?? '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.achievementCount')">{{ displayAchievementCount }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneName')">{{ record?.sceneName || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneCheckpointTotal')">{{ record?.sceneCheckpointTotal ?? 0 }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.sceneId')">{{ record?.sceneId || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.scenicId')">{{ record?.scenicId || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.username')">{{ record?.username || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.userId')">{{ record?.userId || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.source')">{{ record?.source || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.path')">{{ record?.path || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.ip')">{{ record?.ip || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.userAgent')">{{ record?.userAgent || '-' }}</Descriptions.Item>
+        <Descriptions.Item :label="t('page.travelRecords.detail.fields.createdAt')">{{ record?.createdAt || '-' }}</Descriptions.Item>
       </Descriptions>
 
       <div style="margin-top: 16px;">
-        <h4 style="margin:0 0 12px;">场景打卡记录</h4>
+        <h4 style="margin:0 0 12px;">{{ t('page.travelRecords.detail.punchTable.title') }}</h4>
         <Table
           :columns="punchColumns"
           :data-source="punchRecords"
@@ -166,7 +168,7 @@ onMounted(load)
               {{ (row as PunchRecordItem).nodeName || (row as PunchRecordItem).nodeId || '-' }}
             </template>
             <template v-else-if="column.key === 'actions'">
-              <Button type="link" size="small" @click="openPunchDetail(row as PunchRecordItem)">查看详情</Button>
+              <Button type="link" size="small" @click="openPunchDetail(row as PunchRecordItem)">{{ t('page.travelRecords.detail.buttons.viewPunchDetail') }}</Button>
             </template>
           </template>
         </Table>

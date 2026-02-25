@@ -1,33 +1,35 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useVbenVxeGrid } from '#/adapter/vxe-table'
 import { Button, Space, Modal, message } from 'ant-design-vue'
 import { deletePunchRecordApi, listPunchRecordsApi } from '#/api'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const [Grid, gridApi] = useVbenVxeGrid<any>({
   formOptions: {
     schema: [
-      { component: 'Input', fieldName: 'sceneId', label: '场景ID', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'scenicId', label: '景点ID', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'sceneName', label: '场景名称', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'nodeId', label: '打卡点ID', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'nodeName', label: '打卡点名称', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'userId', label: '用户ID', componentProps: { allowClear: true } },
-      { component: 'Input', fieldName: 'username', label: '用户名', componentProps: { allowClear: true } },
-      { component: 'RangePicker', fieldName: 'createdAt', label: '时间范围' },
+      { component: 'Input', fieldName: 'sceneId', label: t('page.punchRecords.index.form.sceneId'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'scenicId', label: t('page.punchRecords.index.form.scenicId'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'sceneName', label: t('page.punchRecords.index.form.sceneName'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'nodeId', label: t('page.punchRecords.index.form.nodeId'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'nodeName', label: t('page.punchRecords.index.form.nodeName'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'userId', label: t('page.punchRecords.index.form.userId'), componentProps: { allowClear: true } },
+      { component: 'Input', fieldName: 'username', label: t('page.punchRecords.index.form.username'), componentProps: { allowClear: true } },
+      { component: 'RangePicker', fieldName: 'createdAt', label: t('page.punchRecords.index.form.createdAt') },
     ],
   },
   gridOptions: {
     columns: [
-      { field: 'createdAt', minWidth: 180, title: '服务端时间', sortable: true, formatter: 'formatDateTime' },
-      { field: 'scenicTitle', minWidth: 220, title: '景点名称', slots: { default: 'scenicTitle' } },
-      { field: 'sceneName', minWidth: 160, title: '场景名称' },
-      { field: 'nodeName', minWidth: 160, title: '打卡点名称' },
-      { field: 'username', minWidth: 140, title: '用户名' },
-      { field: 'source', minWidth: 120, title: '来源' },
-      {align: 'left', field: 'actions', minWidth: 160, fixed: 'right', title: '操作', slots: { default: 'actions' } },
+      { field: 'createdAt', minWidth: 180, title: t('page.punchRecords.index.table.createdAt'), sortable: true, formatter: 'formatDateTime' },
+      { field: 'scenicTitle', minWidth: 220, title: t('page.punchRecords.index.table.scenicTitle'), slots: { default: 'scenicTitle' } },
+      { field: 'sceneName', minWidth: 160, title: t('page.punchRecords.index.table.sceneName') },
+      { field: 'nodeName', minWidth: 160, title: t('page.punchRecords.index.table.nodeName') },
+      { field: 'username', minWidth: 140, title: t('page.punchRecords.index.table.username') },
+      { field: 'source', minWidth: 120, title: t('page.punchRecords.index.table.source') },
+      {align: 'left', field: 'actions', minWidth: 160, fixed: 'right', title: t('page.punchRecords.index.table.actions'), slots: { default: 'actions' } },
     ],
     pagerConfig: { pageSize: 20 },
     proxyConfig: {
@@ -75,11 +77,11 @@ function openScenicDetail(row: any) {
 
 function handleDelete(row: any) {
   Modal.confirm({
-    title: '确认删除该条打卡记录？',
+    title: t('page.punchRecords.index.confirm.delete.title'),
     okType: 'danger',
     onOk: async () => {
       await deletePunchRecordApi(row.id)
-      message.success('删除成功')
+      message.success(t('page.punchRecords.index.message.deleteSuccess'))
       gridApi.reload()
     },
   })
@@ -96,8 +98,8 @@ function handleDelete(row: any) {
       </template>
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="() => openDetail(row)">详情</Button>
-          <Button v-access:code="'punch:delete'" size="small" type="link" danger @click="() => handleDelete(row)">删除</Button>
+          <Button size="small" type="link" @click="() => openDetail(row)">{{ t('page.punchRecords.index.actions.detail') }}</Button>
+          <Button v-access:code="'punch:delete'" size="small" type="link" danger @click="() => handleDelete(row)">{{ t('page.punchRecords.index.actions.delete') }}</Button>
         </Space>
       </template>
     </Grid>

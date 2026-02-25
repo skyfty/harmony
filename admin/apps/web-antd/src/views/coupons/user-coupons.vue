@@ -4,6 +4,7 @@ import type { CouponItem, CouponStatus, UserItem } from '#/api';
 import type { Dayjs } from 'dayjs';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -45,12 +46,13 @@ const distributeFormModel = reactive<DistributeFormModel>({
   expiresAt: undefined,
 });
 
-const distributeTitle = computed(() => (distributeMode.value === 'single' ? '单个分发卡券' : '批量分发卡券'));
+const { t } = useI18n();
+const distributeTitle = computed(() => (distributeMode.value === 'single' ? t('page.coupons.userCoupons.modal.singleTitle') : t('page.coupons.userCoupons.modal.batchTitle')));
 
 function normalizeStatusText(status: CouponStatus) {
-  if (status === 'used') return '已使用';
-  if (status === 'expired') return '已过期';
-  return '未使用';
+  if (status === 'used') return t('page.coupons.userCoupons.status.used');
+  if (status === 'expired') return t('page.coupons.userCoupons.status.expired');
+  return t('page.coupons.userCoupons.status.unused');
 }
 
 function normalizeStatusColor(status: CouponStatus) {
@@ -133,26 +135,26 @@ async function submitDistribute() {
       const manualUserId = distributeFormModel.userId.trim();
       const userId = manualUserId || selectedUserId;
       if (!userId) {
-        message.error('请选择用户或手动输入用户ID');
+        message.error(t('page.coupons.userCoupons.message.singleUserRequired'));
         return;
       }
       await distributeCouponApi(distributeFormModel.couponId, {
         userId,
         expiresAt,
       });
-      message.success('分发成功');
+      message.success(t('page.coupons.userCoupons.message.distributeSuccess'));
     } else {
       const manualUserIds = parseManualUserIds(distributeFormModel.userIdsText);
       const userIds = [...new Set([...selectedBatchUserIds.value, ...manualUserIds])];
       if (userIds.length === 0) {
-        message.error('请选择用户或输入用户ID列表');
+        message.error(t('page.coupons.userCoupons.message.batchUsersRequired'));
         return;
       }
       await distributeCouponBatchApi(distributeFormModel.couponId, {
         userIds,
         expiresAt,
       });
-      message.success('批量分发已提交');
+      message.success(t('page.coupons.userCoupons.message.batchDistributeSubmitted'));
     }
     distributeModalOpen.value = false;
     userCouponGridApi.reload();
@@ -166,7 +168,7 @@ async function handleUse(row: any) {
     return;
   }
   await useUserCouponByAdminApi(row.id);
-  message.success('卡券已核销');
+  message.success(t('page.coupons.userCoupons.message.usedSuccess'));
   userCouponGridApi.reload();
 }
 
@@ -176,30 +178,30 @@ const [UserCouponGrid, userCouponGridApi] = useVbenVxeGrid({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
-        componentProps: { allowClear: true, placeholder: '用户/卡券关键词' },
+        label: t('page.coupons.userCoupons.form.keyword.label'),
+        componentProps: { allowClear: true, placeholder: t('page.coupons.userCoupons.form.keyword.placeholder') },
       },
       {
         component: 'Select',
         fieldName: 'status',
-        label: '状态',
+        label: t('page.coupons.userCoupons.form.status.label'),
         componentProps: {
           allowClear: true,
-          placeholder: '全部状态',
+          placeholder: t('page.coupons.userCoupons.form.status.placeholder'),
           options: [
-            { label: '未使用', value: 'unused' },
-            { label: '已使用', value: 'used' },
-            { label: '已过期', value: 'expired' },
+            { label: t('page.coupons.userCoupons.status.unused'), value: 'unused' },
+            { label: t('page.coupons.userCoupons.status.used'), value: 'used' },
+            { label: t('page.coupons.userCoupons.status.expired'), value: 'expired' },
           ],
         },
       },
       {
         component: 'Select',
         fieldName: 'couponId',
-        label: '卡券模板',
+        label: t('page.coupons.userCoupons.form.couponId.label'),
         componentProps: {
           allowClear: true,
-          placeholder: '全部卡券',
+          placeholder: t('page.coupons.userCoupons.form.couponId.placeholder'),
           options: couponOptions,
         },
       },
@@ -208,14 +210,14 @@ const [UserCouponGrid, userCouponGridApi] = useVbenVxeGrid({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'coupon.title', minWidth: 180, title: '卡券名称' },
-      { field: 'user.displayName', minWidth: 160, title: '用户昵称' },
-      { field: 'user.username', minWidth: 160, title: '用户名' },
-      { field: 'status', minWidth: 120, title: '状态', slots: { default: 'status' } },
-      { field: 'claimedAt', minWidth: 170, formatter: 'formatDateTime', title: '领取时间' },
-      { field: 'expiresAt', minWidth: 170, formatter: 'formatDateTime', title: '过期时间' },
-      { field: 'usedAt', minWidth: 170, formatter: 'formatDateTime', title: '使用时间' },
-      { align: 'left', fixed: 'right', minWidth: 150, field: 'actions', slots: { default: 'actions' }, title: '操作' },
+      { field: 'coupon.title', minWidth: 180, title: t('page.coupons.userCoupons.table.couponTitle') },
+      { field: 'user.displayName', minWidth: 160, title: t('page.coupons.userCoupons.table.userDisplayName') },
+      { field: 'user.username', minWidth: 160, title: t('page.coupons.userCoupons.table.username') },
+      { field: 'status', minWidth: 120, title: t('page.coupons.userCoupons.table.status'), slots: { default: 'status' } },
+      { field: 'claimedAt', minWidth: 170, formatter: 'formatDateTime', title: t('page.coupons.userCoupons.table.claimedAt') },
+      { field: 'expiresAt', minWidth: 170, formatter: 'formatDateTime', title: t('page.coupons.userCoupons.table.expiresAt') },
+      { field: 'usedAt', minWidth: 170, formatter: 'formatDateTime', title: t('page.coupons.userCoupons.table.usedAt') },
+      { align: 'left', fixed: 'right', minWidth: 150, field: 'actions', slots: { default: 'actions' }, title: t('page.coupons.userCoupons.table.actions') },
     ],
     keepSource: true,
     pagerConfig: { pageSize: 20 },
@@ -249,19 +251,19 @@ onMounted(async () => {
   <div class="p-5">
     <div class="mb-4 grid grid-cols-4 gap-3">
       <div class="rounded bg-white p-4">
-        <div class="text-text-secondary">总卡券</div>
+        <div class="text-text-secondary">{{ t('page.coupons.userCoupons.stats.total') }}</div>
         <div class="mt-2 text-2xl font-semibold">{{ stats.total }}</div>
       </div>
       <div class="rounded bg-white p-4">
-        <div class="text-text-secondary">未使用</div>
+        <div class="text-text-secondary">{{ t('page.coupons.userCoupons.stats.unused') }}</div>
         <div class="mt-2 text-2xl font-semibold text-green-600">{{ stats.unused }}</div>
       </div>
       <div class="rounded bg-white p-4">
-        <div class="text-text-secondary">已使用</div>
+        <div class="text-text-secondary">{{ t('page.coupons.userCoupons.stats.used') }}</div>
         <div class="mt-2 text-2xl font-semibold text-blue-600">{{ stats.used }}</div>
       </div>
       <div class="rounded bg-white p-4">
-        <div class="text-text-secondary">已过期</div>
+        <div class="text-text-secondary">{{ t('page.coupons.userCoupons.stats.expired') }}</div>
         <div class="mt-2 text-2xl font-semibold text-gray-500">{{ stats.expired }}</div>
       </div>
     </div>
@@ -269,8 +271,8 @@ onMounted(async () => {
     <UserCouponGrid>
       <template #toolbar-actions>
         <Space>
-          <Button v-access:code="'coupon:write'" type="primary" @click="openDistributeModal('single')">单个分发</Button>
-          <Button v-access:code="'coupon:write'" @click="openDistributeModal('batch')">批量分发</Button>
+          <Button v-access:code="'coupon:write'" type="primary" @click="openDistributeModal('single')">{{ t('page.coupons.userCoupons.toolbar.single') }}</Button>
+          <Button v-access:code="'coupon:write'" @click="openDistributeModal('batch')">{{ t('page.coupons.userCoupons.toolbar.batch') }}</Button>
         </Space>
       </template>
 
@@ -288,7 +290,7 @@ onMounted(async () => {
           :disabled="row.status !== 'unused'"
           @click="handleUse(row)"
         >
-          核销
+          {{ t('page.coupons.userCoupons.actions.use') }}
         </Button>
       </template>
     </UserCouponGrid>
@@ -297,23 +299,23 @@ onMounted(async () => {
       :open="distributeModalOpen"
       :title="distributeTitle"
       :confirm-loading="distributeSubmitting"
-      ok-text="确认"
-      cancel-text="取消"
+      :ok-text="t('page.coupons.userCoupons.modal.ok')"
+      :cancel-text="t('page.coupons.userCoupons.modal.cancel')"
       @cancel="() => (distributeModalOpen = false)"
       @ok="submitDistribute"
     >
       <Form ref="distributeFormRef" :label-col="{ span: 6 }" :model="distributeFormModel" :wrapper-col="{ span: 17 }">
-        <Form.Item label="卡券" name="couponId" :rules="[{ required: true, message: '请选择卡券' }]">
+        <Form.Item :label="t('page.coupons.userCoupons.formFields.couponId.label')" name="couponId" :rules="[{ required: true, message: t('page.coupons.userCoupons.formFields.couponId.required') }]">
           <Select
             v-model:value="distributeFormModel.couponId"
             :options="couponOptions"
             show-search
             option-filter-prop="label"
-            placeholder="请选择卡券"
+            :placeholder="t('page.coupons.userCoupons.formFields.couponId.placeholder')"
           />
         </Form.Item>
 
-        <Form.Item label="搜索用户">
+        <Form.Item :label="t('page.coupons.userCoupons.formFields.searchUser.label')">
           <Select
             v-if="distributeMode === 'single'"
             v-model:value="selectedSingleUserId"
@@ -322,7 +324,7 @@ onMounted(async () => {
             :options="userSearchOptions"
             allow-clear
             show-search
-            placeholder="输入昵称/用户名搜索用户"
+            :placeholder="t('page.coupons.userCoupons.formFields.searchUser.singlePlaceholder')"
             @focus="() => handleUserSearch()"
             @search="handleUserSearch"
           />
@@ -336,7 +338,7 @@ onMounted(async () => {
             :options="userSearchOptions"
             allow-clear
             show-search
-            placeholder="输入昵称/用户名搜索并选择多个用户"
+            :placeholder="t('page.coupons.userCoupons.formFields.searchUser.batchPlaceholder')"
             @focus="() => handleUserSearch()"
             @search="handleUserSearch"
           />
@@ -344,25 +346,25 @@ onMounted(async () => {
 
         <Form.Item
           v-if="distributeMode === 'single'"
-          label="用户ID(手动)"
+          :label="t('page.coupons.userCoupons.formFields.manualUserId.label')"
           name="userId"
         >
-          <Input v-model:value="distributeFormModel.userId" placeholder="未搜索到用户时可手动输入用户ID" />
+          <Input v-model:value="distributeFormModel.userId" :placeholder="t('page.coupons.userCoupons.formFields.manualUserId.placeholder')" />
         </Form.Item>
 
         <Form.Item
           v-else
-          label="用户ID列表(手动)"
+          :label="t('page.coupons.userCoupons.formFields.manualUserIds.label')"
           name="userIdsText"
         >
           <Input.TextArea
             v-model:value="distributeFormModel.userIdsText"
             :rows="5"
-            placeholder="可粘贴用户ID列表；每行一个，或使用逗号/空格分隔"
+            :placeholder="t('page.coupons.userCoupons.formFields.manualUserIds.placeholder')"
           />
         </Form.Item>
 
-        <Form.Item label="过期时间" name="expiresAt">
+        <Form.Item :label="t('page.coupons.userCoupons.formFields.expiresAt.label')" name="expiresAt">
           <DatePicker v-model:value="distributeFormModel.expiresAt" style="width: 100%" show-time />
         </Form.Item>
       </Form>

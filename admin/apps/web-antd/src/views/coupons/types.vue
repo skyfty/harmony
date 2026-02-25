@@ -3,6 +3,7 @@ import type { FormInstance } from 'ant-design-vue';
 import type { CouponTypeItem } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
@@ -44,7 +45,8 @@ const formModel = reactive<CouponTypeFormModel>({
   enabled: true,
 });
 
-const modalTitle = computed(() => (editingId.value ? '编辑卡券类型' : '新增卡券类型'));
+const { t } = useI18n();
+const modalTitle = computed(() => (editingId.value ? t('page.coupons.types.modal.edit') : t('page.coupons.types.modal.create')));
 
 function resetForm() {
   formModel.name = '';
@@ -86,7 +88,7 @@ async function submit() {
         sort: formModel.sort,
         enabled: formModel.enabled,
       });
-      message.success('卡券类型更新成功');
+      message.success(t('page.coupons.types.message.updateSuccess'));
     } else {
       await createCouponTypeApi({
         name: formModel.name.trim(),
@@ -95,7 +97,7 @@ async function submit() {
         sort: formModel.sort,
         enabled: formModel.enabled,
       });
-      message.success('卡券类型创建成功');
+      message.success(t('page.coupons.types.message.createSuccess'));
     }
     modalOpen.value = false;
     gridApi.reload();
@@ -106,12 +108,12 @@ async function submit() {
 
 function handleDelete(row: CouponTypeItem) {
   Modal.confirm({
-    title: `确认删除卡券类型“${row.name}”吗？`,
-    content: '删除后不可恢复，且被卡券引用的类型无法删除。',
+    title: t('page.coupons.types.confirm.delete.title', { name: row.name }),
+    content: t('page.coupons.types.confirm.delete.content'),
     okType: 'danger',
     onOk: async () => {
       await deleteCouponTypeApi(row.id);
-      message.success('卡券类型已删除');
+      message.success(t('page.coupons.types.message.deleteSuccess'));
       gridApi.reload();
     },
   });
@@ -123,29 +125,29 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
-        componentProps: { allowClear: true, placeholder: '名称 / 编码' },
+        label: t('page.coupons.types.form.keyword.label'),
+        componentProps: { allowClear: true, placeholder: t('page.coupons.types.form.keyword.placeholder') },
       },
     ],
   },
   gridOptions: {
     border: true,
     columns: [
-      { field: 'name', minWidth: 180, title: '名称' },
-      { field: 'code', minWidth: 140, title: '编码' },
-      { field: 'iconUrl', minWidth: 280, title: '图标地址' },
-      { field: 'sort', minWidth: 100, title: '排序' },
+      { field: 'name', minWidth: 180, title: t('page.coupons.types.table.name') },
+      { field: 'code', minWidth: 140, title: t('page.coupons.types.table.code') },
+      { field: 'iconUrl', minWidth: 280, title: t('page.coupons.types.table.iconUrl') },
+      { field: 'sort', minWidth: 100, title: t('page.coupons.types.table.sort') },
       {
         field: 'enabled',
         minWidth: 100,
-        title: '启用',
+        title: t('page.coupons.types.table.enabled'),
         slots: { default: 'enabled' },
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: '更新时间',
+        title: t('page.coupons.types.table.updatedAt'),
       },
       {
         align: 'left',
@@ -153,7 +155,7 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
         fixed: 'right',
         minWidth: 180,
         slots: { default: 'actions' },
-        title: '操作',
+        title: t('page.coupons.types.table.actions'),
       },
     ],
     proxyConfig: {
@@ -182,7 +184,7 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
   <div class="p-5">
     <Grid>
       <template #toolbar-actions>
-        <Button v-access:code="'coupon:write'" type="primary" @click="openCreate">新增类型</Button>
+        <Button v-access:code="'coupon:write'" type="primary" @click="openCreate">{{ t('page.coupons.types.toolbar.create') }}</Button>
       </template>
 
       <template #enabled="{ row }">
@@ -191,8 +193,8 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEdit(row)">编辑</Button>
-          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEdit(row)">{{ t('page.coupons.types.actions.edit') }}</Button>
+          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.coupons.types.actions.delete') }}</Button>
         </Space>
       </template>
     </Grid>
@@ -201,26 +203,26 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
       :open="modalOpen"
       :title="modalTitle"
       :confirm-loading="submitting"
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.coupons.types.modal.ok')"
+      :cancel-text="t('page.coupons.types.modal.cancel')"
       destroy-on-close
       @cancel="() => (modalOpen = false)"
       @ok="submit"
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
-        <Form.Item label="名称" name="name" :rules="[{ required: true, message: '请输入类型名称' }]">
+        <Form.Item :label="t('page.coupons.types.formFields.name.label')" name="name" :rules="[{ required: true, message: t('page.coupons.types.formFields.name.required') }]">
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>
-        <Form.Item label="编码" name="code" :rules="[{ required: true, message: '请输入类型编码' }]">
-          <Input v-model:value="formModel.code" allow-clear placeholder="例如：ticket" />
+        <Form.Item :label="t('page.coupons.types.formFields.code.label')" name="code" :rules="[{ required: true, message: t('page.coupons.types.formFields.code.required') }]">
+          <Input v-model:value="formModel.code" allow-clear :placeholder="t('page.coupons.types.formFields.code.placeholder')" />
         </Form.Item>
-        <Form.Item label="图标地址" name="iconUrl">
-          <Input v-model:value="formModel.iconUrl" allow-clear placeholder="可选" />
+        <Form.Item :label="t('page.coupons.types.formFields.iconUrl.label')" name="iconUrl">
+          <Input v-model:value="formModel.iconUrl" allow-clear :placeholder="t('page.coupons.types.formFields.iconUrl.placeholder')" />
         </Form.Item>
-        <Form.Item label="排序" name="sort">
+        <Form.Item :label="t('page.coupons.types.formFields.sort.label')" name="sort">
           <InputNumber v-model:value="formModel.sort" style="width: 100%" />
         </Form.Item>
-        <Form.Item label="启用" name="enabled">
+        <Form.Item :label="t('page.coupons.types.formFields.enabled.label')" name="enabled">
           <Switch v-model:checked="formModel.enabled" />
         </Form.Item>
       </Form>

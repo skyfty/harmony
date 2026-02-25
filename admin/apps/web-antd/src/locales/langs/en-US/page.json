@@ -118,6 +118,8 @@
         "create": "New Scene Spot"
       },
       "actions": {
+        "detail": "Detail",
+        "comments": "Comments",
         "edit": "Edit",
         "delete": "Delete"
       },
@@ -132,7 +134,8 @@
           "required": "Please enter scene spot title"
         },
         "coverImage": {
-          "label": "Cover Image"
+          "label": "Cover Image",
+          "upload": "Upload"
         },
         "slides": {
           "label": "Slides",
@@ -186,20 +189,400 @@
       }
     }
   },
+  "sceneSpotComments": {
+    "title": "Scene Spot Comments",
+    "index": {
+      "modal": {
+        "edit": "Edit Comment",
+        "create": "New Comment",
+        "ok": "Confirm",
+        "cancel": "Cancel"
+      },
+      "message": {
+        "updateSuccess": "Comment updated successfully",
+        "createSuccess": "Comment created successfully",
+        "deleteSuccess": "Comment deleted",
+        "reviewUpdated": "Review status updated"
+      },
+      "confirm": {
+        "delete": { "title": "Confirm delete this comment?" }
+      },
+      "form": {
+        "keyword": { "label": "Keyword", "placeholder": "Comment keyword" },
+        "status": { "label": "Status", "placeholder": "Please select status" }
+      },
+      "table": {
+        "sceneSpot": "Scene",
+        "user": "User",
+        "content": "Content",
+        "status": "Status",
+        "createdAt": "Created At",
+        "actions": "Actions"
+      },
+      "toolbar": { "create": "New Comment" },
+      "actions": { "edit": "Edit", "approve": "Approve", "reject": "Reject", "delete": "Delete" },
+      "formFields": {
+        "scene": { "label": "Scene", "required": "Please select a scene", "placeholder": "Search scene by name" },
+        "user": { "label": "User", "required": "Please select a user", "placeholder": "Search by username/display name" },
+        "status": { "label": "Status", "required": "Please select status" },
+        "content": { "label": "Comment Content", "required": "Please enter comment content" }
+      },
+      "title": { "index": "Comments", "sceneSpot": "Scene Spot Comments" }
+    }
+  },
   "loginLogs": { "title": "Login Logs" },
-  "punchRecords": { "title": "Punch Records" },
+  "travelRecords": {
+    "title": "Travel Records",
+    "index": {
+      "form": {
+        "sceneId": "Scene ID",
+        "scenicId": "Scene Spot ID",
+        "sceneName": "Scene Name",
+        "userId": "User ID",
+        "username": "Username",
+        "status": "Status",
+        "enterTimeRange": "Enter Time Range"
+      },
+      "status": {
+        "active": "In Progress",
+        "completed": "Completed"
+      },
+      "table": {
+        "enterTime": "Enter Time",
+        "leaveTime": "Leave Time",
+        "durationSeconds": "Duration (sec)",
+        "scenicTitle": "Scene Spot",
+        "sceneName": "Scene Name",
+        "sceneCheckpointTotal": "Checkpoints",
+        "username": "Username",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "actions": {
+        "detail": "Detail",
+        "delete": "Delete"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete this travel record?"
+        }
+      },
+      "message": {
+        "deleteSuccess": "Deleted successfully"
+      }
+    },
+    "detail": {
+      "title": "Travel Record Detail",
+      "buttons": {
+        "back": "Back",
+        "viewPunchDetail": "View Detail"
+      },
+      "status": {
+        "active": "In Progress",
+        "completed": "Completed"
+      },
+      "fields": {
+        "id": "Record ID",
+        "status": "Status",
+        "enterTime": "Enter Time",
+        "leaveTime": "Leave Time",
+        "durationSeconds": "Duration (sec)",
+        "achievementCount": "Achievements (dedup checkpoints)",
+        "sceneName": "Scene Name",
+        "sceneCheckpointTotal": "Scene Checkpoints",
+        "sceneId": "Scene ID",
+        "scenicId": "Scene Spot ID",
+        "username": "Username",
+        "userId": "User ID",
+        "source": "Source",
+        "path": "Path",
+        "ip": "IP",
+        "userAgent": "User-Agent",
+        "createdAt": "Created At"
+      },
+      "punchTable": {
+        "title": "Scene Punch Records",
+        "punchTime": "Punch Time",
+        "nodeName": "Punch Location",
+        "nodeId": "Checkpoint ID",
+        "source": "Source",
+        "actions": "Actions"
+      }
+    }
+  },
+  "punchRecords": {
+    "title": "Punch Records",
+    "index": {
+      "form": {
+        "sceneId": "Scene ID",
+        "scenicId": "Scene Spot ID",
+        "sceneName": "Scene Name",
+        "nodeId": "Checkpoint ID",
+        "nodeName": "Checkpoint Name",
+        "userId": "User ID",
+        "username": "Username",
+        "createdAt": "Time Range"
+      },
+      "table": {
+        "createdAt": "Server Time",
+        "scenicTitle": "Scene Spot",
+        "sceneName": "Scene Name",
+        "nodeName": "Checkpoint Name",
+        "username": "Username",
+        "source": "Source",
+        "actions": "Actions"
+      },
+      "actions": {
+        "detail": "Detail",
+        "delete": "Delete"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete this punch record?"
+        }
+      },
+      "message": {
+        "deleteSuccess": "Deleted successfully"
+      }
+    },
+    "detail": {
+      "title": "Punch Record Detail",
+      "buttons": {
+        "back": "Back",
+        "backToTravelDetail": "Back to Travel Detail"
+      },
+      "fields": {
+        "id": "Record ID",
+        "createdAt": "Server Time",
+        "clientPunchTime": "Client Time",
+        "behaviorPunchTime": "Behavior Trigger Time",
+        "sceneName": "Scene Name",
+        "sceneId": "Scene ID",
+        "scenicId": "Scene Spot ID",
+        "nodeName": "Checkpoint Name",
+        "nodeId": "Checkpoint ID",
+        "username": "Username",
+        "userId": "User ID",
+        "source": "Source",
+        "path": "Path",
+        "ip": "IP",
+        "userAgent": "User-Agent"
+      }
+    }
+  },
   "project": {
     "title": "Projects",
     "index": { "title": "Project Management" },
     "detail": { "title": "Project Details" },
     "categories": { "title": "Project Categories" }
   },
-  "products": { "title": "Products", "index": { "title": "Product Management" }, "categories": { "title": "Product Categories" } },
+  "products": {
+    "title": "Products",
+    "index": {
+      "title": "Product Management",
+      "modal": { "edit": "Edit Product", "create": "New Product", "ok": "Save", "cancel": "Cancel" },
+      "message": {
+        "readFailed": "Failed to load product",
+        "updateSuccess": "Product updated",
+        "createSuccess": "Product created",
+        "deleteSuccess": "Product deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete product \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": { "label": "Keyword", "placeholder": "Name / Slug" },
+        "categoryId": { "label": "Category", "placeholder": "Select category" }
+      },
+      "table": {
+        "name": "Name",
+        "slug": "Slug",
+        "cover": "Cover",
+        "category": "Category",
+        "price": "Price",
+        "validityDays": "Validity (days)",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": { "create": "New Product" },
+      "actions": { "edit": "Edit", "delete": "Delete" },
+      "formFields": {
+        "name": { "label": "Name", "required": "Please enter name", "placeholder": "Product name" },
+        "slug": {
+          "label": "Slug",
+          "required": "Please enter slug",
+          "pattern": "Only lowercase letters/numbers/hyphens are allowed",
+          "placeholder": "Unique identifier (lowercase)"
+        },
+        "categoryId": { "label": "Category", "required": "Please select product category", "placeholder": "Select product category" },
+        "price": { "label": "Price", "min": "Price must be greater than or equal to 0" },
+        "validityDays": { "label": "Validity (days)", "min": "Validity must be greater than or equal to 1" },
+        "description": { "label": "Description", "placeholder": "Detailed description" },
+        "coverUpload": { "label": "Cover Upload", "upload": "Upload" },
+        "currentCover": { "label": "Current Cover" }
+      }
+    },
+    "categories": {
+      "title": "Product Categories",
+      "modal": { "edit": "Edit Product Category", "create": "New Product Category", "ok": "Save", "cancel": "Cancel" },
+      "message": {
+        "updateSuccess": "Product category updated",
+        "createSuccess": "Product category created",
+        "deleteSuccess": "Product category deleted",
+        "builtinCannotDelete": "Built-in category cannot be deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete product category \"{name}\"?",
+          "content": "Linked products will not be deleted automatically, but must be re-categorized."
+        }
+      },
+      "table": {
+        "name": "Name",
+        "description": "Description",
+        "sortOrder": "Sort Order",
+        "enabled": "Enabled",
+        "isBuiltin": "Built-in",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "values": { "yes": "Yes", "no": "No" },
+      "toolbar": { "create": "New Category" },
+      "actions": { "edit": "Edit", "delete": "Delete" },
+      "form": {
+        "name": { "label": "Name", "required": "Please enter category name" },
+        "description": { "label": "Description" },
+        "sortOrder": { "label": "Sort Order" },
+        "enabled": { "label": "Enabled" }
+      }
+    }
+  },
   "coupons": {
     "title": "Coupons",
-    "index": { "title": "Coupon Templates" },
-    "userCoupons": { "title": "User Coupons" },
-    "types": { "title": "Coupon Types" }
+    "index": {
+      "title": "Coupon Templates",
+      "modal": { "edit": "Edit Coupon", "create": "New Coupon", "ok": "Save", "cancel": "Cancel" },
+      "message": {
+        "loadTypesFailed": "Failed to load coupon types",
+        "readFailed": "Failed to load coupon",
+        "updateSuccess": "Coupon updated",
+        "createSuccess": "Coupon created",
+        "deleteSuccess": "Coupon deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete coupon \"{name}\"?",
+          "content": "This action cannot be undone."
+        }
+      },
+      "form": {
+        "keyword": { "label": "Keyword", "placeholder": "Name / Description" }
+      },
+      "table": {
+        "typeName": "Type",
+        "title": "Name",
+        "description": "Description",
+        "validUntil": "Valid Until",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": { "create": "New Coupon" },
+      "actions": { "edit": "Edit", "delete": "Delete" },
+      "formFields": {
+        "typeId": { "label": "Type", "required": "Please select type", "placeholder": "Please select coupon type" },
+        "title": { "label": "Name", "required": "Please enter name", "placeholder": "Coupon name" },
+        "description": { "label": "Description", "required": "Please enter description", "placeholder": "Coupon description" },
+        "validUntil": { "label": "Validity", "required": "Please select validity" }
+      }
+    },
+    "userCoupons": {
+      "title": "User Coupons",
+      "stats": { "total": "Total", "unused": "Unused", "used": "Used", "expired": "Expired" },
+      "status": { "unused": "Unused", "used": "Used", "expired": "Expired" },
+      "message": {
+        "singleUserRequired": "Please select a user or enter user ID manually",
+        "batchUsersRequired": "Please select users or enter a user ID list",
+        "distributeSuccess": "Distributed successfully",
+        "batchDistributeSubmitted": "Batch distribution submitted",
+        "usedSuccess": "Coupon redeemed"
+      },
+      "form": {
+        "keyword": { "label": "Keyword", "placeholder": "User/Coupon keyword" },
+        "status": { "label": "Status", "placeholder": "All statuses" },
+        "couponId": { "label": "Coupon Template", "placeholder": "All coupons" }
+      },
+      "table": {
+        "couponTitle": "Coupon Name",
+        "userDisplayName": "User Display Name",
+        "username": "Username",
+        "status": "Status",
+        "claimedAt": "Claimed At",
+        "expiresAt": "Expires At",
+        "usedAt": "Used At",
+        "actions": "Actions"
+      },
+      "toolbar": { "single": "Single Distribute", "batch": "Batch Distribute" },
+      "actions": { "use": "Redeem" },
+      "modal": {
+        "singleTitle": "Single Coupon Distribution",
+        "batchTitle": "Batch Coupon Distribution",
+        "ok": "Confirm",
+        "cancel": "Cancel"
+      },
+      "formFields": {
+        "couponId": { "label": "Coupon", "required": "Please select coupon", "placeholder": "Please select coupon" },
+        "searchUser": {
+          "label": "Search User",
+          "singlePlaceholder": "Search by display name/username",
+          "batchPlaceholder": "Search and select multiple users"
+        },
+        "manualUserId": { "label": "User ID (manual)", "placeholder": "Enter user ID manually when no user found" },
+        "manualUserIds": {
+          "label": "User IDs (manual)",
+          "placeholder": "Paste user IDs; one per line, or separated by comma/space"
+        },
+        "expiresAt": { "label": "Expires At" }
+      }
+    },
+    "types": {
+      "title": "Coupon Types",
+      "modal": { "edit": "Edit Coupon Type", "create": "New Coupon Type", "ok": "Save", "cancel": "Cancel" },
+      "message": {
+        "updateSuccess": "Coupon type updated",
+        "createSuccess": "Coupon type created",
+        "deleteSuccess": "Coupon type deleted"
+      },
+      "confirm": {
+        "delete": {
+          "title": "Confirm delete coupon type \"{name}\"?",
+          "content": "This action cannot be undone, and referenced types cannot be deleted."
+        }
+      },
+      "form": { "keyword": { "label": "Keyword", "placeholder": "Name / Code" } },
+      "table": {
+        "name": "Name",
+        "code": "Code",
+        "iconUrl": "Icon URL",
+        "sort": "Sort",
+        "enabled": "Enabled",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": { "create": "New Type" },
+      "actions": { "edit": "Edit", "delete": "Delete" },
+      "formFields": {
+        "name": { "label": "Name", "required": "Please enter type name" },
+        "code": { "label": "Code", "required": "Please enter type code", "placeholder": "e.g.: ticket" },
+        "iconUrl": { "label": "Icon URL", "placeholder": "Optional" },
+        "sort": { "label": "Sort" },
+        "enabled": { "label": "Enabled" }
+      }
+    }
   },
   "system": {
     "title": "System",
@@ -396,21 +779,27 @@
   "systemUsers": {
     "index": {
       "modal": { "edit": "Edit User", "create": "New User", "ok": "Save", "cancel": "Cancel" },
-      "message": { "updateSuccess": "User updated", "createSuccess": "User created", "deleteSuccess": "User deleted", "statusUpdate": "Status updated" },
+      "message": { "updateSuccess": "User updated", "createSuccess": "User created", "deleteSuccess": "User deleted", "statusUpdate": "Status updated", "avatarUploadFailed": "Avatar upload failed" },
       "confirm": { "delete": { "title": "Confirm delete user \"{username}\"?", "content": "This action cannot be undone." } },
       "form": {
+        "avatar": { "label": "Avatar" },
         "username": { "label": "Username", "required": "Please enter username", "placeholder": "Please enter username" },
         "password": { "label": "Password", "required": "Please enter password", "placeholder": "Please enter password", "reset": "Reset Password", "keep": "Leave blank to keep current password" },
         "displayName": { "label": "Display Name", "placeholder": "Please enter display name" },
         "email": { "label": "Email", "placeholder": "Please enter email" },
+        "phone": { "label": "Phone", "placeholder": "Please enter phone" },
+        "bio": { "label": "Bio", "placeholder": "Please enter bio" },
         "status": { "label": "Status", "options": { "active": "Active", "disabled": "Disabled" }, "checkedChildren": "On", "unCheckedChildren": "Off" },
         "roles": { "label": "Roles", "placeholder": "Please select roles" }
       },
       "table": {
         "keyword": "Keyword",
+        "avatar": "Avatar",
         "id": "User ID",
         "username": "Username",
         "displayName": "Display Name",
+        "wxOpenId": "WeChat OpenId",
+        "phone": "Phone",
         "email": "Email",
         "roles": "Roles",
         "status": "Status",
@@ -420,6 +809,35 @@
         "title": "User Management"
       },
       "toolbar": { "create": "New User" },
+      "actions": { "edit": "Edit", "delete": "Delete" }
+    }
+  },
+  "systemAdmins": {
+    "index": {
+      "modal": { "edit": "Edit Admin", "create": "New Admin", "ok": "Save", "cancel": "Cancel" },
+      "message": { "updateSuccess": "Admin updated", "createSuccess": "Admin created", "deleteSuccess": "Admin deleted", "statusUpdate": "Status updated" },
+      "confirm": { "delete": { "title": "Confirm delete admin \"{username}\"?", "content": "This action cannot be undone." } },
+      "form": {
+        "username": { "label": "Username", "required": "Please enter username", "placeholder": "Please enter username" },
+        "password": { "label": "Password", "required": "Please enter password", "placeholder": "Please enter password", "reset": "Reset Password", "keep": "Leave blank to keep current password" },
+        "displayName": { "label": "Display Name", "placeholder": "Please enter display name" },
+        "email": { "label": "Email", "placeholder": "Please enter email" },
+        "status": { "label": "Status", "options": { "active": "Active", "disabled": "Disabled" }, "checkedChildren": "On", "unCheckedChildren": "Off", "placeholder": "Please select status" },
+        "roles": { "label": "Roles", "placeholder": "Please select roles" }
+      },
+      "table": {
+        "title": "Admin Management",
+        "keyword": "Keyword",
+        "username": "Username",
+        "displayName": "Display Name",
+        "email": "Email",
+        "roles": "Roles",
+        "status": "Status",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "toolbar": { "create": "New Admin" },
       "actions": { "edit": "Edit", "delete": "Delete" }
     }
   },

@@ -24,6 +24,9 @@ import {
 } from '#/api';
 
 import { Button, Form, Input, message, Modal, Select, Space, Tag } from 'ant-design-vue';
+import { $t } from '#/locales';
+
+const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
 
 interface CommentFormModel {
   sceneSpotId: string;
@@ -60,9 +63,9 @@ const commentFormModel = reactive<CommentFormModel>({
 });
 
 const statusOptions: Array<{ label: string; value: SceneSpotCommentStatus }> = [
-  { label: '待审核', value: 'pending' },
-  { label: '已通过', value: 'approved' },
-  { label: '已驳回', value: 'rejected' },
+  { label: t('page.sceneSpotComments.index.status.pending'), value: 'pending' },
+  { label: t('page.sceneSpotComments.index.status.approved'), value: 'approved' },
+  { label: t('page.sceneSpotComments.index.status.rejected'), value: 'rejected' },
 ];
 
 const statusColorMap: Record<SceneSpotCommentStatus, string> = {
@@ -72,19 +75,21 @@ const statusColorMap: Record<SceneSpotCommentStatus, string> = {
 };
 
 const statusLabelMap: Record<SceneSpotCommentStatus, string> = {
-  pending: '待审核',
-  approved: '已通过',
-  rejected: '已驳回',
+  pending: 'page.sceneSpotComments.index.status.pending',
+  approved: 'page.sceneSpotComments.index.status.approved',
+  rejected: 'page.sceneSpotComments.index.status.rejected',
 };
 
 const pageTitle = computed(() => {
   if (fixedSceneSpotId.value) {
-    return fixedSceneSpotTitle.value ? `景点留言 - ${fixedSceneSpotTitle.value}` : '景点留言';
+    return fixedSceneSpotTitle.value
+      ? `${t('page.sceneSpotComments.index.title.sceneSpot')} - ${fixedSceneSpotTitle.value}`
+      : t('page.sceneSpotComments.index.title.sceneSpot');
   }
-  return '留言管理';
+  return t('page.sceneSpotComments.index.title.index');
 });
 
-const modalTitle = computed(() => (editingId.value ? '编辑留言' : '新增留言'));
+const modalTitle = computed(() => (editingId.value ? t('page.sceneSpotComments.index.modal.edit') : t('page.sceneSpotComments.index.modal.create')));
 
 function resetForm() {
   commentFormModel.sceneSpotId = fixedSceneSpotId.value || '';
@@ -188,7 +193,7 @@ async function submitComment() {
       };
       await updateSceneSpotCommentApi(editingId.value, payload);
       await updateSceneSpotCommentStatusApi(editingId.value, { status: commentFormModel.status });
-      message.success('留言更新成功');
+      message.success(t('page.sceneSpotComments.index.message.updateSuccess'));
     } else {
       const payload: CreateSceneSpotCommentPayload = {
         sceneSpotId: (fixedSceneSpotId.value || commentFormModel.sceneSpotId).trim(),
@@ -197,7 +202,7 @@ async function submitComment() {
         status: commentFormModel.status,
       };
       await createSceneSpotCommentApi(payload);
-      message.success('留言创建成功');
+      message.success(t('page.sceneSpotComments.index.message.createSuccess'));
     }
     modalOpen.value = false;
     gridApi.reload();
@@ -208,11 +213,11 @@ async function submitComment() {
 
 function handleDelete(row: SceneSpotCommentItem) {
   Modal.confirm({
-    title: '确认删除该留言？',
+    title: t('page.sceneSpotComments.index.confirm.delete.title'),
     okType: 'danger',
     onOk: async () => {
       await deleteSceneSpotCommentApi(row.id);
-      message.success('删除成功');
+      message.success(t('page.sceneSpotComments.index.message.deleteSuccess'));
       gridApi.reload();
     },
   });
@@ -223,7 +228,7 @@ async function handleReview(row: SceneSpotCommentItem, status: SceneSpotCommentS
     return;
   }
   await updateSceneSpotCommentStatusApi(row.id, { status });
-  message.success('审核状态已更新');
+  message.success(t('page.sceneSpotComments.index.message.reviewUpdated'));
   gridApi.reload();
 }
 
@@ -238,7 +243,8 @@ function goSceneSpotDetail(row: SceneSpotCommentItem) {
 }
 
 function resolveStatusLabel(status: SceneSpotCommentStatus) {
-  return statusLabelMap[status] || status;
+  const key = statusLabelMap[status];
+  return key ? t(key) : status;
 }
 
 const [Grid, gridApi] = useVbenVxeGrid<SceneSpotCommentItem>({
@@ -247,20 +253,20 @@ const [Grid, gridApi] = useVbenVxeGrid<SceneSpotCommentItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: '关键字',
+        label: t('page.sceneSpotComments.index.form.keyword.label'),
         componentProps: {
           allowClear: true,
-          placeholder: '留言内容关键字',
+          placeholder: t('page.sceneSpotComments.index.form.keyword.placeholder'),
         },
       },
       {
         component: 'Select',
         fieldName: 'status',
-        label: '状态',
+        label: t('page.sceneSpotComments.index.form.status.label'),
         componentProps: {
           allowClear: true,
           options: statusOptions,
-          placeholder: '请选择状态',
+          placeholder: t('page.sceneSpotComments.index.form.status.placeholder'),
         },
       },
     ],
@@ -271,29 +277,29 @@ const [Grid, gridApi] = useVbenVxeGrid<SceneSpotCommentItem>({
       {
         field: 'sceneSpotTitle',
         minWidth: 200,
-        title: '景点',
+        title: t('page.sceneSpotComments.index.table.sceneSpot'),
         slots: { default: 'sceneSpotTitle' },
       },
       {
         field: 'userDisplayName',
         minWidth: 140,
-        title: '用户',
+        title: t('page.sceneSpotComments.index.table.user'),
       },
       {
         field: 'content',
         minWidth: 260,
-        title: '留言内容',
+        title: t('page.sceneSpotComments.index.table.content'),
       },
       {
         field: 'status',
         minWidth: 120,
-        title: '状态',
+        title: t('page.sceneSpotComments.index.table.status'),
         slots: { default: 'status' },
       },
       {
         field: 'createdAt',
         minWidth: 180,
-        title: '创建时间',
+        title: t('page.sceneSpotComments.index.table.createdAt'),
         formatter: 'formatDateTime',
       },
       {
@@ -302,7 +308,7 @@ const [Grid, gridApi] = useVbenVxeGrid<SceneSpotCommentItem>({
         fixed: 'right',
         minWidth: 260,
         slots: { default: 'actions' },
-        title: '操作',
+        title: t('page.sceneSpotComments.index.table.actions'),
       },
     ],
     pagerConfig: {
@@ -354,7 +360,7 @@ onMounted(async () => {
     <div class="mb-3 text-[16px] font-semibold">{{ pageTitle }}</div>
     <Grid>
       <template #toolbar-actions>
-        <Button v-access:code="'comment:write'" type="primary" @click="openCreateModal">新增留言</Button>
+        <Button v-access:code="'comment:write'" type="primary" @click="openCreateModal">{{ t('page.sceneSpotComments.index.toolbar.create') }}</Button>
       </template>
 
       <template #sceneSpotTitle="{ row }">
@@ -369,26 +375,10 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'comment:write'" size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button
-            v-access:code="'comment:write'"
-            size="small"
-            type="link"
-            @click="handleReview(row, 'approved')"
-          >通过</Button>
-          <Button
-            v-access:code="'comment:write'"
-            size="small"
-            type="link"
-            @click="handleReview(row, 'rejected')"
-          >驳回</Button>
-          <Button
-            v-access:code="'comment:write'"
-            danger
-            size="small"
-            type="link"
-            @click="handleDelete(row)"
-          >删除</Button>
+          <Button v-access:code="'comment:write'" size="small" type="link" @click="openEditModal(row)">{{ t('page.sceneSpotComments.index.actions.edit') }}</Button>
+          <Button v-access:code="'comment:write'" size="small" type="link" @click="handleReview(row, 'approved')">{{ t('page.sceneSpotComments.index.actions.approve') }}</Button>
+          <Button v-access:code="'comment:write'" size="small" type="link" @click="handleReview(row, 'rejected')">{{ t('page.sceneSpotComments.index.actions.reject') }}</Button>
+          <Button v-access:code="'comment:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.sceneSpotComments.index.actions.delete') }}</Button>
         </Space>
       </template>
     </Grid>
@@ -404,9 +394,9 @@ onMounted(async () => {
       <Form ref="commentFormRef" :label-col="{ span: 5 }" :model="commentFormModel" :wrapper-col="{ span: 18 }">
         <Form.Item
           v-if="!fixedSceneSpotId"
-          label="景点"
+          :label="t('page.sceneSpotComments.index.formFields.scene.label')"
           name="sceneSpotId"
-          :rules="[{ required: true, message: '请选择景点' }]"
+          :rules="[{ required: true, message: t('page.sceneSpotComments.index.formFields.scene.required') }]"
         >
           <Select
             v-model:value="commentFormModel.sceneSpotId"
@@ -415,11 +405,11 @@ onMounted(async () => {
             :filter-option="false"
             :options="sceneSpotOptions"
             :loading="sceneSpotSearching"
-            placeholder="请输入景点名称搜索"
+            :placeholder="t('page.sceneSpotComments.index.formFields.scene.placeholder')"
             @search="loadSceneSpotOptions"
           />
         </Form.Item>
-        <Form.Item label="用户" name="userId" :rules="[{ required: true, message: '请选择用户' }]">
+        <Form.Item :label="t('page.sceneSpotComments.index.formFields.user.label')" name="userId" :rules="[{ required: true, message: t('page.sceneSpotComments.index.formFields.user.required') }]">
           <Select
             v-model:value="commentFormModel.userId"
             allow-clear
@@ -427,15 +417,15 @@ onMounted(async () => {
             :filter-option="false"
             :options="userOptions"
             :loading="userSearching"
-            placeholder="请输入用户名/昵称搜索"
+            :placeholder="t('page.sceneSpotComments.index.formFields.user.placeholder')"
             :disabled="!!editingId"
             @search="loadUserOptions"
           />
         </Form.Item>
-        <Form.Item label="状态" name="status" :rules="[{ required: true, message: '请选择状态' }]">
+        <Form.Item :label="t('page.sceneSpotComments.index.formFields.status.label')" name="status" :rules="[{ required: true, message: t('page.sceneSpotComments.index.formFields.status.required') }]">
           <Select v-model:value="commentFormModel.status" :options="statusOptions" />
         </Form.Item>
-        <Form.Item label="留言内容" name="content" :rules="[{ required: true, message: '请输入留言内容' }]">
+        <Form.Item :label="t('page.sceneSpotComments.index.formFields.content.label')" name="content" :rules="[{ required: true, message: t('page.sceneSpotComments.index.formFields.content.required') }]">
           <TextArea v-model:value="commentFormModel.content" :maxlength="500" :rows="4" />
         </Form.Item>
       </Form>

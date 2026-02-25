@@ -152,7 +152,7 @@ async function submitUser() {
           uploadedAvatarUrl = res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || uploadedAvatarUrl;
         } catch (err) {
           // upload failed — show error and abort
-          message.error(t('page.systemUsers.index.message.avatarUploadFailed') || 'Avatar upload failed');
+          message.error(t('page.systemUsers.index.message.avatarUploadFailed'));
           throw err;
         }
       }
@@ -247,12 +247,12 @@ const [UserGrid, userGridApi] = useVbenVxeGrid<UserItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'avatarUrl', minWidth: 100, title: '头像', slots: { default: 'avatar' } },
+      { field: 'avatarUrl', minWidth: 100, title: t('page.systemUsers.index.table.avatar'), slots: { default: 'avatar' } },
       { field: 'id', minWidth: 220, title: t('page.systemUsers.index.table.id') },
       { field: 'username', minWidth: 150, sortable: true, title: t('page.systemUsers.index.table.username') },
       { field: 'displayName', minWidth: 140, title: t('page.systemUsers.index.table.displayName') },
-      { field: 'wxOpenId', minWidth: 180, title: '微信 OpenId' },
-      { field: 'phone', minWidth: 140, title: '手机号' },
+      { field: 'wxOpenId', minWidth: 180, title: t('page.systemUsers.index.table.wxOpenId') },
+      { field: 'phone', minWidth: 140, title: t('page.systemUsers.index.table.phone') },
       { field: 'email', minWidth: 180, title: t('page.systemUsers.index.table.email') },
       {
         field: 'status',
@@ -332,21 +332,21 @@ function handleAvatarBeforeUpload(file: UploadFile) {
     <UserGrid>
       <template #toolbar-actions>
         <Button v-access:code="'user:write'" type="primary" @click="openCreateModal">
-          新增用户
+          {{ t('page.systemUsers.index.toolbar.create') }}
         </Button>
       </template>
 
       <template #status="{ row }">
         <Space>
           <Tag :color="row.status === 'active' ? 'success' : 'default'">
-            {{ row.status === 'active' ? '启用' : '禁用' }}
+            {{ row.status === 'active' ? t('page.systemUsers.index.form.status.options.active') : t('page.systemUsers.index.form.status.options.disabled') }}
           </Tag>
           <Switch
             v-access:code="'user:write'"
             :checked="row.status === 'active'"
             :loading="changingStatusId === row.id"
-            checked-children="启"
-            un-checked-children="停"
+            :checked-children="t('page.systemUsers.index.form.status.checkedChildren')"
+            :un-checked-children="t('page.systemUsers.index.form.status.unCheckedChildren')"
             @change="(checked) => handleStatusChange(row, !!checked)"
           />
         </Space>
@@ -367,7 +367,7 @@ function handleAvatarBeforeUpload(file: UploadFile) {
             type="link"
             @click="openEditModal(row)"
           >
-            编辑
+            {{ t('page.systemUsers.index.actions.edit') }}
           </Button>
           <Button
             v-access:code="'user:write'"
@@ -376,7 +376,7 @@ function handleAvatarBeforeUpload(file: UploadFile) {
             type="link"
             @click="handleDelete(row)"
           >
-            删除
+            {{ t('page.systemUsers.index.actions.delete') }}
           </Button>
         </Space>
       </template>
@@ -387,8 +387,8 @@ function handleAvatarBeforeUpload(file: UploadFile) {
       :open="modalOpen"
       :title="modalTitle"
       destroy-on-close
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="t('page.systemUsers.index.modal.ok')"
+      :cancel-text="t('page.systemUsers.index.modal.cancel')"
       @cancel="closeModal"
       @ok="submitUser"
     >
@@ -399,7 +399,7 @@ function handleAvatarBeforeUpload(file: UploadFile) {
         :rules="userRules"
         :wrapper-col="{ span: 17 }"
       >
-        <Form.Item label="头像" name="avatar">
+        <Form.Item :label="t('page.systemUsers.index.form.avatar.label')" name="avatar">
           <Upload v-model:file-list="avatarFileList" v-bind="avatarUploadProps" :beforeUpload="handleAvatarBeforeUpload">
             <div style="display:flex;align-items:center;gap:12px">
               <div style="width:40px;height:40px;border-radius:50%;overflow:hidden;border:1px solid #eee">
@@ -409,55 +409,55 @@ function handleAvatarBeforeUpload(file: UploadFile) {
             </div>
           </Upload>
         </Form.Item>
-        <Form.Item label="用户名" name="username">
+        <Form.Item :label="t('page.systemUsers.index.form.username.label')" name="username">
           <Input
             v-model:value="userFormModel.username"
             :disabled="!!editingUserId"
             allow-clear
-            placeholder="请输入用户名"
+            :placeholder="t('page.systemUsers.index.form.username.placeholder')"
           />
         </Form.Item>
-        <Form.Item :label="editingUserId ? '重置密码' : '密码'" name="password">
+        <Form.Item :label="editingUserId ? t('page.systemUsers.index.form.password.reset') : t('page.systemUsers.index.form.password.label')" name="password">
           <Input.Password
             v-model:value="userFormModel.password"
             allow-clear
-            :placeholder="editingUserId ? '不填写则保持原密码' : '请输入密码'"
+            :placeholder="editingUserId ? t('page.systemUsers.index.form.password.keep') : t('page.systemUsers.index.form.password.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="昵称" name="displayName">
+        <Form.Item :label="t('page.systemUsers.index.form.displayName.label')" name="displayName">
           <Input
             v-model:value="userFormModel.displayName"
             allow-clear
-            placeholder="请输入昵称"
+            :placeholder="t('page.systemUsers.index.form.displayName.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="邮箱" name="email">
+        <Form.Item :label="t('page.systemUsers.index.form.email.label')" name="email">
           <Input
             v-model:value="userFormModel.email"
             allow-clear
-            placeholder="请输入邮箱"
+            :placeholder="t('page.systemUsers.index.form.email.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="手机号" name="phone">
+        <Form.Item :label="t('page.systemUsers.index.form.phone.label')" name="phone">
           <Input
             v-model:value="userFormModel.phone"
             allow-clear
-            placeholder="请输入手机号"
+            :placeholder="t('page.systemUsers.index.form.phone.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="简介" name="bio">
+        <Form.Item :label="t('page.systemUsers.index.form.bio.label')" name="bio">
           <Input
             v-model:value="userFormModel.bio"
             allow-clear
-            placeholder="请输入简介"
+            :placeholder="t('page.systemUsers.index.form.bio.placeholder')"
           />
         </Form.Item>
-        <Form.Item label="状态" name="status">
+        <Form.Item :label="t('page.systemUsers.index.form.status.label')" name="status">
           <Select
             v-model:value="userFormModel.status"
             :options="[
-              { label: '启用', value: 'active' },
-              { label: '禁用', value: 'disabled' },
+              { label: t('page.systemUsers.index.form.status.options.active'), value: 'active' },
+              { label: t('page.systemUsers.index.form.status.options.disabled'), value: 'disabled' },
             ]"
           />
         </Form.Item>
