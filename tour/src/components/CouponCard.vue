@@ -1,17 +1,27 @@
 <template>
   <view class="card">
     <view class="icon-box">
-      <text class="icon">{{ typeIcon }}</text>
+      <image
+        class="icon"
+        mode="aspectFit"
+        :src="typeIconSrc"
+      />
     </view>
-    <view class="left">
-      <text class="title">{{ title }}</text>
-      <text class="type">{{ typeName }}</text>
-      <text class="desc">{{ description }}</text>
-      <text class="meta">有效期至 {{ validUntil }}</text>
+    <view class="main">
+      <text class="title">
+        {{ title }}
+      </text>
     </view>
-    <button class="action" :class="{ disabled: status !== 'unused' }" :disabled="status !== 'unused'" @tap="emit('use')">
-      {{ statusText }}
-    </button>
+    <view class="action-wrap">
+      <button
+        class="action"
+        :class="{ disabled: status !== 'unused' }"
+        :disabled="status !== 'unused'"
+        @tap.stop="emit('use')"
+      >
+        {{ statusText }}
+      </button>
+    </view>
   </view>
 </template>
 
@@ -36,32 +46,34 @@ const statusText = computed(() => {
   return '已过期';
 });
 
-const typeIcon = computed(() => {
+const iconMap: Record<string, string> = {
+  ticket: '/static/icons/coupons/ticket.svg',
+  souvenir: '/static/icons/coupons/souvenir.svg',
+  photo: '/static/icons/coupons/photo.svg',
+  discount: '/static/icons/coupons/discount.svg',
+};
+
+const typeIconSrc = computed(() => {
   const code = (props.typeCode || '').toLowerCase();
-  if (code === 'ticket') return '🎫';
-  if (code === 'souvenir') return '🎁';
-  if (code === 'photo') return '📷';
-  if (code === 'discount') return '💸';
-  return '🏷️';
+  return iconMap[code] ?? '/static/icons/coupons/default.svg';
 });
 </script>
 
 <style scoped lang="scss">
 .card {
-  background: #ffffff;
+  background: #d4e7f6;
   border-radius: 16px;
-  padding: 14px;
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #9ec5ea;
+  box-shadow: 0 4px 10px rgba(31, 122, 236, 0.12);
+  min-height: 58px;
 }
 
 .icon-box {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: #eef4ff;
+  width: 58px;
+  background: #c2c8f0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -69,57 +81,54 @@ const typeIcon = computed(() => {
 }
 
 .icon {
-  font-size: 22px;
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
-.left {
+.main {
   flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  min-width: 0;
 }
 
 .title {
   display: block;
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 600;
-  color: #1a1f2e;
+  color: #2c3a4f;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.type {
-  display: inline-block;
-  margin-top: 6px;
-  font-size: 11px;
-  color: #1f7aec;
-  background: #ebf3ff;
-  border-radius: 999px;
-  padding: 2px 8px;
-}
-
-.desc {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: #5f6b83;
-}
-
-.meta {
-  display: block;
-  margin-top: 8px;
-  font-size: 11px;
-  color: #a8b0c1;
+.action-wrap {
+  width: 74px;
+  background: #dbeaf7;
+  border-left: 1px solid #c3dbef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .action {
-  align-self: center;
-  background: #1f7aec;
+  background: #ff7a00;
   color: #ffffff;
-  border-radius: 999px;
+  border-radius: 10px;
   font-size: 12px;
-  padding: 0 14px;
-  height: 32px;
-  line-height: 32px;
+  font-weight: 600;
+  padding: 0;
+  width: 52px;
+  height: 28px;
+  line-height: 28px;
 }
 
 .action.disabled {
-  background: #d0d5dd;
+  background: #b7bec9;
   color: #ffffff;
 }
 </style>

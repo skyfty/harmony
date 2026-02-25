@@ -1,6 +1,9 @@
 <template>
   <view class="page">
-    <PageHeader title="卡券中心"  :showBack="false" />
+    <PageHeader
+      title="卡券中心"
+      :show-back="false"
+    />
     <view class="content">
       <view
         v-for="coupon in filteredCoupons"
@@ -57,13 +60,6 @@ defineOptions({
 const coupons = ref<Coupon[]>([]);
 const keyword = ref('');
 const selectedStatus = ref<'all' | CouponStatus>('all');
-
-const statusOptions: Array<{ label: string; value: 'all' | CouponStatus }> = [
-  { label: '全部', value: 'all' },
-  { label: '未使用', value: 'unused' },
-  { label: '已使用', value: 'used' },
-  { label: '已过期', value: 'expired' },
-];
 
 async function reload() {
   coupons.value = await listMyCoupons();
@@ -147,10 +143,10 @@ function handleNavigate(key: NavKey) {
 }
 
 .content {
-  padding: 12px 16px 18px;
+  padding: 10px 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .empty {
