@@ -22,10 +22,12 @@
         @dimensions="(payload) => emit('dimensions', payload)"
       />
       <HDRPreview
-        v-else-if="showHdrPreview"
+        v-else-if="showEnvironmentPreview"
         :file="previewState.file"
         :src="previewState.imageUrl"
+        :mode="previewEnvironmentMode"
         class="upload-preview__renderer"
+        ref="environmentPreviewRef"
       />
       <v-img
         v-else-if="previewState.imageUrl"
@@ -47,6 +49,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import ModelPreview from '@/components/common/ModelPreview.vue'
@@ -72,17 +75,31 @@ const previewState = reactive({
   imageUrl: null as string | null,
 })
 type ThreePreviewInstance = InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview>
+type EnvironmentPreviewInstance = InstanceType<typeof HDRPreview>
 
 const threePreviewRef = ref<ThreePreviewInstance | null>(null)
+const environmentPreviewRef = ref<EnvironmentPreviewInstance | null>(null)
 
-const requiresFileTypes = new Set(['model', 'prefab', 'mesh', 'hdri'])
 let objectUrl: string | null = null
 let loadToken = 0
 const metaProbes = new Set<HTMLImageElement>()
 
 const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
 const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab')
-const showHdrPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'hdri')
+const isSkycubeAsset = computed(() => {
+  if (props.asset.type !== 'file') {
+    return false
+  }
+  const extension = getLastExtensionFromFilenameOrUrl(props.asset.name || props.asset.downloadUrl || props.asset.id)
+  return isSkyCubeArchiveExtension(extension)
+})
+const previewEnvironmentMode = computed<'hdri' | 'skycube'>(() => (props.asset.type === 'hdri' ? 'hdri' : 'skycube'))
+const showEnvironmentPreview = computed(
+  () => Boolean(previewState.file) && (props.asset.type === 'hdri' || isSkycubeAsset.value),
+)
+const requiresLocalFile = computed(
+  () => ['model', 'prefab', 'mesh', 'hdri'].includes(props.asset.type) || isSkycubeAsset.value,
+)
 
 const fallbackColor = computed(() => {
   const candidates = [props.primaryColor, props.asset.color, props.asset.previewColor]
@@ -101,6 +118,8 @@ const fallbackIcon = computed(() => {
       return 'mdi-image-outline'
     case 'hdri':
       return 'mdi-weather-night'
+    case 'file':
+      return isSkycubeAsset.value ? 'mdi-weather-night' : 'mdi-file-outline'
     default:
       return 'mdi-file-outline'
   }
@@ -173,7 +192,7 @@ async function preparePreview(): Promise<void> {
     return
   }
 
-  if (requiresFileTypes.has(type)) {
+  if (requiresLocalFile.value) {
     previewState.loading = true
     try {
       const file = await ensureAssetFile()
@@ -221,7 +240,7 @@ async function preparePreview(): Promise<void> {
 }
 
 watch(
-  () => [props.asset.id, props.asset.type, props.asset.thumbnail, props.asset.downloadUrl],
+  () => [props.asset.id, props.asset.type, props.asset.name, props.asset.thumbnail, props.asset.downloadUrl],
   () => {
     void preparePreview()
   },
@@ -254,12 +273,41 @@ async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
   return false
 }
 
-async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
-  const ready = await waitForThreePreviewReady()
-  if (!ready) {
-    return null
+async function waitForEnvironmentPreviewReady(timeoutMs = 4000): Promise<boolean> {
+  if (showEnvironmentPreview.value && environmentPreviewRef.value) {
+    return true
   }
-  return (await threePreviewRef.value?.captureSnapshot?.()) ?? null
+  if (typeof performance === 'undefined') {
+    return Boolean(environmentPreviewRef.value)
+  }
+  const start = performance.now()
+  while (performance.now() - start < timeoutMs) {
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    if (showEnvironmentPreview.value && environmentPreviewRef.value) {
+      return true
+    }
+  }
+  return false
+}
+
+async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
+  if (showModelPreview.value || showPrefabPreview.value) {
+    const ready = await waitForThreePreviewReady()
+    if (!ready) {
+      return null
+    }
+    return (await threePreviewRef.value?.captureSnapshot?.()) ?? null
+  }
+
+  if (showEnvironmentPreview.value) {
+    const ready = await waitForEnvironmentPreviewReady()
+    if (!ready) {
+      return null
+    }
+    return (await environmentPreviewRef.value?.captureSnapshot?.()) ?? null
+  }
+
+  return null
 }
 
 defineExpose({

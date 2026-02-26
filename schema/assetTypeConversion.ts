@@ -343,6 +343,14 @@ export function isHdriLikeExtension(extension: string | null | undefined): boole
     || normalized === 'exr'
 }
 
+export function isSkyCubeArchiveExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  if (!normalized) {
+    return false
+  }
+  return normalized === 'skycube'
+}
+
 export function getAssetTypeFromCategoryIdSuffix(categoryId: string | null | undefined): AssetType | null {
   if (!categoryId) {
     return null

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -774,8 +775,26 @@ function handleThumbnailFileSelected(entry: UploadAssetEntry, event: Event): voi
   input.value = ''
 }
 
+function isSkycubeFileAsset(asset: ProjectAsset): boolean {
+  if (asset.type !== 'file') {
+    return false
+  }
+  const extension = getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id)
+  return isSkyCubeArchiveExtension(extension)
+}
+
+function getAssetTypeLabel(asset: ProjectAsset): string {
+  if (isSkycubeFileAsset(asset)) {
+    return 'skycube'
+  }
+  return asset.type
+}
+
 function isModelAsset(asset: ProjectAsset): boolean {
-  return ['model', 'mesh', 'prefab'].includes(asset.type)
+  if (['model', 'mesh', 'prefab', 'hdri'].includes(asset.type)) {
+    return true
+  }
+  return isSkycubeFileAsset(asset)
 }
 
 async function capturePreviewThumbnail(entry: UploadAssetEntry, options: { silent?: boolean } = {}): Promise<void> {
@@ -1100,7 +1119,7 @@ function handleUploadAll(): void {
                     <div class="upload-entry__name">{{ entry.asset.name }}</div>
                     <div class="upload-entry__meta">Local ID: {{ entry.assetId }}</div>
                   </div>
-                  <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
+                  <v-chip size="small" color="primary" variant="tonal">{{ getAssetTypeLabel(entry.asset) }}</v-chip>
                 </div>
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
 
@@ -1352,7 +1371,8 @@ function handleUploadAll(): void {
                         @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
                         @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
                       />
-                      <div v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type)" class="upload-preview__actions">
+
+                      <div v-if="isModelAsset(entry.asset)" class="upload-preview__actions">
                         <v-btn
                           color="primary"
                           variant="tonal"

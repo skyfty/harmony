@@ -1,6 +1,8 @@
 import Pica from 'pica'
 import * as THREE from 'three'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
+import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
 import type { ProjectAsset } from '@/types/project-asset'
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
@@ -36,6 +38,11 @@ export async function generateAssetThumbnail(options: GenerateThumbnailOptions):
 
   if (HDRI_ASSET_TYPES.has(options.asset.type)) {
     const blob = await generateHdriThumbnail(options.file, width, height)
+    return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
+  }
+
+  if (isSkycubeArchiveFile(options.asset, options.file)) {
+    const blob = await generateSkycubeThumbnail(options.file, width, height)
     return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
   }
 
@@ -264,6 +271,167 @@ async function generateHdriThumbnail(file: File, width: number, height: number):
       renderer.forceContextLoss()
     }
     URL.revokeObjectURL(url)
+  }
+}
+
+function isSkycubeArchiveFile(asset: ProjectAsset, file: File): boolean {
+  if (asset.type !== 'file') {
+    return false
+  }
+  const extension = getLastExtensionFromFilenameOrUrl(file.name || asset.name || asset.downloadUrl || asset.id)
+  return isSkyCubeArchiveExtension(extension)
+}
+
+function buildObjectUrlsFromSkycubeZipFaces(
+  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+): { urls: Array<string | null>; dispose: () => void } {
+  const urls: Array<string | null> = []
+  const created: string[] = []
+  for (const face of facesInOrder) {
+    if (!face) {
+      urls.push(null)
+      continue
+    }
+    const mimeType = face.mimeType ?? 'application/octet-stream'
+    const bytes = face.bytes as unknown as Uint8Array<ArrayBuffer>
+    const blob = new Blob([bytes], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    created.push(url)
+    urls.push(url)
+  }
+  return {
+    urls,
+    dispose: () => {
+      for (const url of created) {
+        try {
+          URL.revokeObjectURL(url)
+        } catch (_error) {
+          // ignore
+        }
+      }
+    },
+  }
+}
+
+async function generateSkycubeThumbnail(file: File, width: number, height: number): Promise<Blob> {
+  if (typeof window === 'undefined') {
+    throw new Error('SkyCube thumbnail generation requires a browser environment')
+  }
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.0
+  const renderScale = Math.min(window.devicePixelRatio || 1, 2)
+  renderer.setPixelRatio(renderScale)
+  renderer.setSize(width, height, false)
+
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 50)
+  camera.position.set(0, 1.05, 3.2)
+  camera.lookAt(0, 0.8, 0)
+
+  const disposeStack: Array<() => void> = []
+  let skyCubeTexture: THREE.CubeTexture | null = null
+  let faceUrlCleanup: (() => void) | null = null
+
+  try {
+    const buffer = await file.arrayBuffer()
+    const extracted = extractSkycubeZipFaces(buffer)
+    const facesResult = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
+    faceUrlCleanup = facesResult.dispose
+    const loaded = await loadSkyCubeTexture(facesResult.urls)
+    if (!loaded.texture) {
+      throw new Error(loaded.error || 'Failed to load skycube texture')
+    }
+    skyCubeTexture = loaded.texture
+    scene.background = skyCubeTexture
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer)
+    pmremGenerator.compileCubemapShader()
+    const envTarget = pmremGenerator.fromCubemap(skyCubeTexture)
+    const envTexture = envTarget.texture
+    scene.environment = envTexture
+    disposeStack.push(() => {
+      scene.environment = null
+      envTexture.dispose()
+      envTarget.dispose()
+      pmremGenerator.dispose()
+    })
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.25)
+    scene.add(ambient)
+    disposeStack.push(() => {
+      scene.remove(ambient)
+    })
+
+    const demoGroup = new THREE.Group()
+    demoGroup.rotation.y = -Math.PI / 10
+
+    const sphereGeometry = new THREE.SphereGeometry(0.9, 64, 64)
+    const sphereMaterial = new THREE.MeshStandardMaterial({ metalness: 1, roughness: 0.1, envMapIntensity: 1.2 })
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+    sphere.position.set(-0.95, 0.8, 0)
+    demoGroup.add(sphere)
+    disposeStack.push(() => {
+      sphereGeometry.dispose()
+      sphereMaterial.dispose()
+    })
+
+    const boxGeometry = new THREE.BoxGeometry(1.2, 1.2, 1.2)
+    const boxMaterial = new THREE.MeshStandardMaterial({ metalness: 0.25, roughness: 0.35, envMapIntensity: 1 })
+    const box = new THREE.Mesh(boxGeometry, boxMaterial)
+    box.position.set(1.05, 0.6, 0)
+    demoGroup.add(box)
+    disposeStack.push(() => {
+      boxGeometry.dispose()
+      boxMaterial.dispose()
+    })
+
+    const groundGeometry = new THREE.CircleGeometry(4.5, 64)
+    const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0, roughness: 1 })
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial)
+    ground.rotation.x = -Math.PI / 2
+    ground.position.y = -0.05
+    demoGroup.add(ground)
+    disposeStack.push(() => {
+      groundGeometry.dispose()
+      groundMaterial.dispose()
+    })
+
+    scene.add(demoGroup)
+    disposeStack.push(() => {
+      scene.remove(demoGroup)
+    })
+
+    renderer.render(scene, camera)
+
+    const sourceCanvas = renderer.domElement
+    const targetCanvas = ensureCanvas(width, height)
+    if (thumbnailResizer) {
+      await thumbnailResizer.resize(sourceCanvas, targetCanvas, { alpha: false })
+    } else {
+      const targetContext = targetCanvas.getContext('2d')
+      targetContext?.drawImage(sourceCanvas, 0, 0, width, height)
+    }
+
+    return await canvasToBlob(targetCanvas, IMAGE_OUTPUT_TYPE, IMAGE_OUTPUT_QUALITY)
+  } catch (error) {
+    throw new Error((error as Error).message || 'Failed to render SkyCube thumbnail')
+  } finally {
+    disposeStack.reverse().forEach((dispose) => {
+      try {
+        dispose()
+      } catch (error) {
+        console.warn('SkyCube thumbnail cleanup failed', error)
+      }
+    })
+    disposeSkyCubeTexture(skyCubeTexture)
+    faceUrlCleanup?.()
+    renderer.dispose()
+    if (typeof renderer.forceContextLoss === 'function') {
+      renderer.forceContextLoss()
+    }
   }
 }
 
