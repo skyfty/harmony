@@ -840,6 +840,9 @@ packages:
   roboto-fontface@0.10.0:
     resolution: {integrity: sha512-OlwfYEgA2RdboZohpldlvJ1xngOins5d7ejqnIBWr9KaMxsnBqotpptRXTyfNRLnFpqzX6sTDt+X+a+6udnU8g==}
 
+  robust-predicates@1.1.0:
+    resolution: {integrity: sha512-i7QBspa755E84FsqI7XSRBmds34Bn/dVuGcaH0Iuw47vBeHiroPFeUgy8dwq1HJLCmm3FarbCJorDuRqRq5xsA==}
+
   robust-predicates@3.0.2:
     resolution: {integrity: sha512-IXgzBWvWQwE6PrDI05OvmXUIruQTcoMDzRsOd5CDvHCVLcLHMTSYvOK5Cm46kWqlV3yAbuSpBZdJ5oP5OUoStg==}
 
@@ -1146,6 +1149,8 @@ snapshots:
       cannon-es: 0.20.0
       fflate: 0.8.2
       polygon-clipping: 0.15.7
+      robust-predicates: 1.1.0
+      splaytree: 3.2.3
       three: 0.172.0
       three-mesh-bvh: 0.9.8(three@0.172.0)
 
@@ -1619,6 +1624,8 @@ snapshots:
   readdirp@4.1.2: {}
 
   roboto-fontface@0.10.0: {}
+
+  robust-predicates@1.1.0: {}
 
   robust-predicates@3.0.2: {}
 
