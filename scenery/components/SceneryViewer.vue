@@ -406,20 +406,6 @@
         </view>
       </view>
 
-      <view class="viewer-log-overlay" aria-label="控制台日志">
-        <text class="viewer-log-overlay__title">控制台日志</text>
-        <scroll-view class="viewer-log-overlay__list" scroll-y :scroll-into-view="logOverlayScrollIntoViewId">
-          <text v-if="!logOverlayEntries.length" class="viewer-log-overlay__empty">暂无日志</text>
-          <text
-            v-for="item in logOverlayEntries"
-            :id="`viewer-log-entry-${item.id}`"
-            :key="item.id"
-            class="viewer-log-overlay__item"
-            :class="`is-${item.level}`"
-          >
-            [{{ item.time }}][{{ item.level.toUpperCase() }}] {{ item.message }}
-          </text>
-        </scroll-view>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -829,177 +815,6 @@ const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : TH
 const debugEnabled = ref(true);
 const debugOverlayVisible = computed(() => debugEnabled.value);
 const debugFps = ref(0);
-
-type ViewerConsoleLevel = 'log' | 'info' | 'warn' | 'error';
-
-type ViewerConsoleEntry = {
-  id: number;
-  level: ViewerConsoleLevel;
-  time: string;
-  message: string;
-};
-
-const LOG_OVERLAY_ENTRY_LIMIT = 240;
-const LOG_OVERLAY_FLUSH_INTERVAL = 120;
-const LOG_OVERLAY_MESSAGE_MAX_LEN = 1200;
-
-const logOverlayEntries = ref<ViewerConsoleEntry[]>([]);
-const logOverlayPendingEntries: ViewerConsoleEntry[] = [];
-const logOverlayScrollIntoViewId = computed(() => {
-  const lastEntry = logOverlayEntries.value[logOverlayEntries.value.length - 1];
-  return lastEntry ? `viewer-log-entry-${lastEntry.id}` : '';
-});
-
-const originalConsoleMethods: Partial<Record<ViewerConsoleLevel, (...args: unknown[]) => void>> = {};
-let logOverlayEntryIdSeed = 0;
-let logOverlayFlushTimer: ReturnType<typeof setTimeout> | null = null;
-let consoleHookedForOverlay = false;
-
-function formatLogOverlayTime(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
-  return `${hours}:${minutes}:${seconds}.${milliseconds}`;
-}
-
-function truncateLogOverlayText(input: string): string {
-  if (input.length <= LOG_OVERLAY_MESSAGE_MAX_LEN) {
-    return input;
-  }
-  return `${input.slice(0, LOG_OVERLAY_MESSAGE_MAX_LEN)}…`;
-}
-
-function stringifyLogOverlayValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value);
-  }
-  if (typeof value === 'undefined') {
-    return 'undefined';
-  }
-  if (value === null) {
-    return 'null';
-  }
-  if (typeof value === 'symbol') {
-    return value.toString();
-  }
-  if (typeof value === 'function') {
-    return `[Function ${value.name || 'anonymous'}]`;
-  }
-  if (value instanceof Error) {
-    return value.stack || `${value.name}: ${value.message}`;
-  }
-
-  const seen = new WeakSet<object>();
-  try {
-    return JSON.stringify(value, (_key, nestedValue: unknown) => {
-      if (typeof nestedValue === 'bigint') {
-        return `${nestedValue}n`;
-      }
-      if (nestedValue instanceof Error) {
-        return {
-          name: nestedValue.name,
-          message: nestedValue.message,
-          stack: nestedValue.stack,
-        };
-      }
-      if (nestedValue && typeof nestedValue === 'object') {
-        const objectValue = nestedValue as object;
-        if (seen.has(objectValue)) {
-          return '[Circular]';
-        }
-        seen.add(objectValue);
-      }
-      return nestedValue;
-    });
-  } catch {
-    try {
-      return String(value);
-    } catch {
-      return '[Unserializable Value]';
-    }
-  }
-}
-
-function flushLogOverlayPendingEntries(): void {
-  logOverlayFlushTimer = null;
-  if (!logOverlayPendingEntries.length) {
-    return;
-  }
-
-  const mergedEntries = logOverlayEntries.value.concat(logOverlayPendingEntries);
-  logOverlayPendingEntries.length = 0;
-  logOverlayEntries.value = mergedEntries.slice(-LOG_OVERLAY_ENTRY_LIMIT);
-}
-
-function scheduleLogOverlayFlush(): void {
-  if (logOverlayFlushTimer) {
-    return;
-  }
-  logOverlayFlushTimer = setTimeout(() => {
-    flushLogOverlayPendingEntries();
-  }, LOG_OVERLAY_FLUSH_INTERVAL);
-}
-
-function enqueueLogOverlayEntry(level: ViewerConsoleLevel, args: unknown[]): void {
-  const message = truncateLogOverlayText(args.map((arg) => stringifyLogOverlayValue(arg)).join(' '));
-  logOverlayPendingEntries.push({
-    id: ++logOverlayEntryIdSeed,
-    level,
-    time: formatLogOverlayTime(new Date()),
-    message,
-  });
-  scheduleLogOverlayFlush();
-}
-
-function hookConsoleForLogOverlay(): void {
-  if (consoleHookedForOverlay) {
-    return;
-  }
-
-  const levels: ViewerConsoleLevel[] = ['log', 'info', 'warn', 'error'];
-  for (const level of levels) {
-    const method = console[level];
-    if (typeof method !== 'function') {
-      continue;
-    }
-    const original = method.bind(console) as (...args: unknown[]) => void;
-    originalConsoleMethods[level] = original;
-    console[level] = (...args: unknown[]): void => {
-      try {
-        enqueueLogOverlayEntry(level, args);
-      } catch {
-      }
-      original(...args);
-    };
-  }
-
-  consoleHookedForOverlay = true;
-}
-
-function restoreConsoleForLogOverlay(): void {
-  if (!consoleHookedForOverlay) {
-    return;
-  }
-
-  if (logOverlayFlushTimer) {
-    clearTimeout(logOverlayFlushTimer);
-    logOverlayFlushTimer = null;
-  }
-  flushLogOverlayPendingEntries();
-
-  const levels: ViewerConsoleLevel[] = ['log', 'info', 'warn', 'error'];
-  for (const level of levels) {
-    const original = originalConsoleMethods[level];
-    if (typeof original === 'function') {
-      console[level] = original;
-    }
-  }
-  consoleHookedForOverlay = false;
-}
 
 const instancingDebug = reactive({
   instancedMeshAssets: 0,
@@ -10369,7 +10184,7 @@ function applyInput(params: {
   packageUrl?: string;
   physinterp?: string;
 }): void {
-  console.log('[SceneViewer] Applying input', params);
+  // debug: removed console logging
   bootstrapRuntimeIfNeeded();
 
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
@@ -10433,7 +10248,7 @@ function hasAnyPropInput(): boolean {
 }
 
 onMounted(() => {
-  hookConsoleForLogOverlay();
+  // log overlay removed
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
@@ -10463,7 +10278,7 @@ watch(
 );
 
 function cleanupRuntime(): void {
-  restoreConsoleForLogOverlay();
+  // log overlay removed
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {
