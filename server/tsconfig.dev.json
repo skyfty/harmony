@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./*"],
+      "@schema/*": ["../schema/*"],
+      "@schema": ["../schema"],
+      "@harmony/schema": ["../schema/index.ts"],
+      "@harmony/schema/*": ["../schema/*"],
+      "@harmony/utils": ["../utils/src/index.ts"],
+      "@harmony/utils/*": ["../utils/src/*"]
+    }
+  }
+}
