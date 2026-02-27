@@ -299,6 +299,15 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'SystemMiniApps',
+    path: 'mini-apps',
+    component: () => import('#/views/mini-apps/index.vue'),
+    meta: {
+      icon: 'lucide:smartphone',
+      title: '小程序配置',
+    },
+  },
+  {
     meta: {
       icon: 'carbon:user-role',
       order: 9999,
@@ -323,15 +332,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:shield-check',
           title: $t('page.system.rbac'),
-        },
-      },
-      {
-        name: 'SystemMiniApps',
-        path: '/system/mini-apps',
-        component: () => import('#/views/system/mini-apps/index.vue'),
-        meta: {
-          icon: 'lucide:smartphone',
-          title: '小程序配置',
         },
       },
       

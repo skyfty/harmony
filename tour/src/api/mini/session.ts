@@ -11,7 +11,7 @@ type LoginResponse = {
 let pendingAuthPromise: Promise<string> | null = null
 
 function getMiniAppId(): string {
-  return String(import.meta.env.VITE_MINI_APP_ID ?? '').trim()
+  return String(import.meta.env.VITE_MINI_APP_ID ?? 'tour').trim() || 'tour'
 }
 
 function shouldUseTestLogin(): boolean {
