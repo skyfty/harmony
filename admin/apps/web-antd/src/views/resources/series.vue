@@ -182,7 +182,7 @@ const [SeriesGrid, seriesGridApi] = useVbenVxeGrid<ResourceSeriesItem>({
           <Input v-model:value="seriesFormModel.name" allow-clear placeholder="系列名称" />
         </Form.Item>
         <Form.Item label="描述" name="description">
-          <Input v-model:value="seriesFormModel.description" allow-clear placeholder="描述（可选）" />
+          <Input.TextArea v-model:value="seriesFormModel.description" allow-clear placeholder="描述（可选）" rows="4" />
         </Form.Item>
       </Form>
     </Modal>

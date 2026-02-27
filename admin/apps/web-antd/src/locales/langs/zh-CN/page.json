@@ -41,6 +41,7 @@
       "table": {
         "title": "场景管理",
         "name": "名称",
+        "checkpointTotal": "打卡点总数",
         "fileUrl": "场景文件地址",
         "fileSize": "文件大小(B)",
         "updatedAt": "更新时间",

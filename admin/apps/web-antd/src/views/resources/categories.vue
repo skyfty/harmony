@@ -626,7 +626,7 @@ onMounted(async () => {
           />
         </Form.Item>
         <Form.Item label="描述" name="description">
-          <Input v-model:value="categoryFormModel.description" allow-clear placeholder="描述（可选）" />
+          <Input.TextArea v-model:value="categoryFormModel.description" allow-clear placeholder="描述（可选）" rows="4" />
         </Form.Item>
       </Form>
     </Modal>

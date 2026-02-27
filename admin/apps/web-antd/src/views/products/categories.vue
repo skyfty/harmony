@@ -223,7 +223,7 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>
         <Form.Item :label="t('page.products.categories.form.description.label')" name="description">
-          <Input v-model:value="formModel.description" allow-clear />
+          <Input.TextArea v-model:value="formModel.description" allow-clear rows="4" />
         </Form.Item>
         <Form.Item :label="t('page.products.categories.form.sortOrder.label')" name="sortOrder">
           <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />

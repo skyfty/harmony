@@ -152,7 +152,15 @@ watch(
       </Form.Item>
 
       <Form.Item :label="t('page.orders.form.labels.status')" name="status">
-        <Select v-model:value="localModel.status" :options="[{label:'pending',value:'pending'},{label:'paid',value:'paid'},{label:'completed',value:'completed'},{label:'cancelled',value:'cancelled'}]" />
+        <Select
+          v-model:value="localModel.status"
+          :options="[
+            { label: t('page.orders.index.statusOptions.pending'), value: 'pending' },
+            { label: t('page.orders.index.statusOptions.paid'), value: 'paid' },
+            { label: t('page.orders.index.statusOptions.completed'), value: 'completed' },
+            { label: t('page.orders.index.statusOptions.cancelled'), value: 'cancelled' },
+          ]"
+        />
       </Form.Item>
 
       <Form.Item :label="t('page.orders.form.labels.paymentMethod')" name="paymentMethod">

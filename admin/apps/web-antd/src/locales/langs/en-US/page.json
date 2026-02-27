@@ -41,6 +41,7 @@
       "table": {
         "title": "Scene Management",
         "name": "Name",
+        "checkpointTotal": "Checkpoints",
         "fileUrl": "Scene File URL",
         "fileSize": "File Size (B)",
         "updatedAt": "Updated At",

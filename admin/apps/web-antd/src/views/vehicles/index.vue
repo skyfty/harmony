@@ -247,7 +247,7 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
           <Input v-model:value="vehicleFormModel.name" placeholder="如：观光车、跑车" />
         </Form.Item>
         <Form.Item label="描述" name="description">
-          <Input v-model:value="vehicleFormModel.description" placeholder="用于 tour 展示" />
+          <Input.TextArea v-model:value="vehicleFormModel.description" placeholder="用于 tour 展示" rows="4" />
         </Form.Item>
         <Form.Item label="商品联动">
           <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>

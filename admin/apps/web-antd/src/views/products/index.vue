@@ -271,7 +271,7 @@ onMounted(() => {
             <InputNumber v-model:value="productFormModel.validityDays" style="width:100%" min="1" />
           </Form.Item>
         <Form.Item :label="t('page.products.index.formFields.description.label')" name="description">
-          <Input v-model:value="productFormModel.description" :placeholder="t('page.products.index.formFields.description.placeholder')" />
+          <Input.TextArea v-model:value="productFormModel.description" :placeholder="t('page.products.index.formFields.description.placeholder')" rows="4" />
         </Form.Item>
         <Form.Item :label="t('page.products.index.formFields.coverUpload.label')">
           <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card">

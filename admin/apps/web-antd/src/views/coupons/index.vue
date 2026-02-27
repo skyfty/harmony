@@ -215,7 +215,7 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
           <Input v-model:value="couponFormModel.title" :placeholder="t('page.coupons.index.formFields.title.placeholder')" />
         </Form.Item>
         <Form.Item :label="t('page.coupons.index.formFields.description.label')" name="description" :rules="[{ required: true, message: t('page.coupons.index.formFields.description.required') }]">
-          <Input v-model:value="couponFormModel.description" :placeholder="t('page.coupons.index.formFields.description.placeholder')" />
+          <Input.TextArea v-model:value="couponFormModel.description" :placeholder="t('page.coupons.index.formFields.description.placeholder')" rows="4" />
         </Form.Item>
         <Form.Item :label="t('page.coupons.index.formFields.validUntil.label')" name="validUntil" :rules="[{ required: true, message: t('page.coupons.index.formFields.validUntil.required') }]">
           <DatePicker v-model:value="couponFormModel.validUntil" style="width: 100%" show-time />

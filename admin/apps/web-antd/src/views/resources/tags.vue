@@ -181,7 +181,7 @@ const [TagGrid, tagGridApi] = useVbenVxeGrid<ResourceTagItem>({
           <Input v-model:value="tagFormModel.name" allow-clear placeholder="标签名称" />
         </Form.Item>
         <Form.Item label="描述" name="description">
-          <Input v-model:value="tagFormModel.description" allow-clear placeholder="描述（可选）" />
+          <Input.TextArea v-model:value="tagFormModel.description" allow-clear placeholder="描述（可选）" rows="4" />
         </Form.Item>
       </Form>
     </Modal>
