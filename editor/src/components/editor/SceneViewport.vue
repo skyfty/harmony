@@ -12330,6 +12330,34 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
   helpers.forEach((entry) => entry.update?.())
 }
 
+function applyLightNodeEditorVisibility(container: THREE.Object3D, visible: boolean) {
+  const nodeId = container.userData?.nodeId
+  const light = container.children.find((child) => (child as THREE.Light).isLight) as THREE.Light | undefined
+
+  // Keep light functionality always enabled in editor viewport; hierarchy visibility
+  // for light nodes only controls editor affordances (helper/handles).
+  container.visible = true
+  if (light) {
+    light.visible = true
+  }
+
+  container.traverse((child) => {
+    if (child === container || child === light) {
+      return
+    }
+
+    if (child.userData?.isDirectionalLightTargetHandle === true) {
+      child.visible = visible
+      return
+    }
+
+    const helper = child as LightHelperObject
+    if (typeof helper.update === 'function' && child.userData?.nodeId === nodeId) {
+      child.visible = visible
+    }
+  })
+}
+
 function tryFitDirectionalLightShadowsToGround(light: THREE.DirectionalLight): void {
   const groundNode = findGroundNodeInTree(sceneStore.nodes)
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
@@ -12401,7 +12429,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
-  object.visible = node.visible ?? true
+  const isVisible = node.visible ?? true
+  if (nodeType === 'Light') {
+    applyLightNodeEditorVisibility(object, isVisible)
+  } else {
+    object.visible = isVisible
+  }
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
   } else {
@@ -12569,6 +12602,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 
   if (nodeType === 'Light') {
     updateLightObjectProperties(object, node)
+    applyLightNodeEditorVisibility(object, isVisible)
   }
 
   if (node.dynamicMesh?.type === 'Wall') {
@@ -13595,7 +13629,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   applyInstanceLayoutVisibilityAndAssetBinding(object, node)
 
   const isVisible = node.visible ?? true
-  object.visible = isVisible
+  if (nodeType === 'Light') {
+    applyLightNodeEditorVisibility(object, isVisible)
+  } else {
+    object.visible = isVisible
+  }
 
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
