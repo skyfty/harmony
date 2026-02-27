@@ -43,12 +43,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+import { getStatusBarHeight } from '@/utils/systemInfo';
 
-const statusBarHeight = ref(0);
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch { /* fallback */ }
+const statusBarHeight = ref(getStatusBarHeight());
 import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import PageHeader from '@/components/PageHeader.vue';

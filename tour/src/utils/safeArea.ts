@@ -5,6 +5,8 @@ export interface TopSafeAreaMetrics {
   contentTopInset: number;
 }
 
+import { getStatusBarHeight } from './systemInfo';
+
 const DEFAULT_STATUS_BAR_HEIGHT = 24;
 const DEFAULT_CAPSULE_GAP = 8;
 const DEFAULT_CAPSULE_HEIGHT = 32;
@@ -36,8 +38,7 @@ function resolveMenuButtonHeight(): number {
 
 export function getTopSafeAreaMetrics(): TopSafeAreaMetrics {
   try {
-    const sysInfo = uni.getSystemInfoSync();
-    const statusBarHeight = sysInfo?.statusBarHeight ?? DEFAULT_STATUS_BAR_HEIGHT;
+    const statusBarHeight = getStatusBarHeight(DEFAULT_STATUS_BAR_HEIGHT);
     const menuButtonGap = resolveMenuButtonGap(statusBarHeight);
     const menuButtonHeight = resolveMenuButtonHeight();
     const navBarHeight = Math.max(40, menuButtonHeight + menuButtonGap * 2);

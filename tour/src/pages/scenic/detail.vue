@@ -148,6 +148,7 @@ import {
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicComment } from '@/types/comment';
 import type { ScenicDetail } from '@/types/scenic';
+import { getStatusBarHeight } from '@/utils/systemInfo';
 
 const scenic = ref<ScenicDetail | null>(null);
 const favoriteLoading = ref(false);
@@ -159,11 +160,7 @@ const commentSubmitting = ref(false);
 const commentContent = ref('');
 
 /* Status bar height for floating back button positioning */
-const statusBarHeight = ref(0);
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch { /* fallback: keep 0 */ }
+const statusBarHeight = ref(getStatusBarHeight());
 
 const ratingLabel = computed(() => {
   const v = scenic.value?.averageRating ?? 0;

@@ -25,13 +25,10 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { getStatusBarHeight } from '@/utils/systemInfo';
 defineOptions({ name: 'VehiclesPage' });
 
-const statusBarHeight = ref(0);
-try {
-  const sysInfo = uni.getSystemInfoSync();
-  statusBarHeight.value = sysInfo?.statusBarHeight ?? 0;
-} catch { /* fallback */ }
+const statusBarHeight = ref(getStatusBarHeight());
 import BottomNav from '@/components/BottomNav.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import VehicleCard from '@/components/VehicleCard.vue';
