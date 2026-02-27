@@ -15,6 +15,17 @@ import { loadAndConvertEnv } from '../utils/env';
 import { getCommonConfig } from './common';
 import { resolve as nodeResolve } from 'node:path';
 
+const isWsl = Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+const shouldUsePolling =
+  process.env.CHOKIDAR_USEPOLLING != null
+    ? process.env.CHOKIDAR_USEPOLLING !== '0'
+    : process.platform === 'win32' || isWsl;
+const parsedPollingInterval = Number.parseInt(process.env.CHOKIDAR_INTERVAL ?? '300', 10);
+const pollingInterval =
+  Number.isFinite(parsedPollingInterval) && parsedPollingInterval > 0
+    ? parsedPollingInterval
+    : 300;
+
 function defineApplicationConfig(userConfigPromise?: DefineApplicationOptions) {
   return defineConfig(async (config) => {
     const options = await userConfigPromise?.(config);
@@ -95,6 +106,10 @@ function defineApplicationConfig(userConfigPromise?: DefineApplicationOptions) {
       server: {
         host: true,
         port,
+        watch: {
+          usePolling: shouldUsePolling,
+          interval: pollingInterval,
+        },
         warmup: {
           // 预热文件
           clientFiles: [

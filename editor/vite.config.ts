@@ -6,6 +6,13 @@ import replace from '@rollup/plugin-replace'
 
 const resolveDir = (relativePath: string) => fileURLToPath(new URL(relativePath, import.meta.url))
 const withTrailingSlash = (value: string) => (value.endsWith('/') || value.endsWith('\\') ? value : `${value}/`)
+const isWsl = Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP)
+const shouldUsePolling =
+  process.env.CHOKIDAR_USEPOLLING != null
+    ? process.env.CHOKIDAR_USEPOLLING !== '0'
+    : process.platform === 'win32' || isWsl
+const parsedPollingInterval = Number.parseInt(process.env.CHOKIDAR_INTERVAL ?? '300', 10)
+const pollingInterval = Number.isFinite(parsedPollingInterval) && parsedPollingInterval > 0 ? parsedPollingInterval : 300
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -71,6 +78,10 @@ export default defineConfig({
   },
   server: {
     port: 8088,
+    watch: {
+      usePolling: shouldUsePolling,
+      interval: pollingInterval,
+    },
     sourcemapIgnoreList: false,
   },
 })

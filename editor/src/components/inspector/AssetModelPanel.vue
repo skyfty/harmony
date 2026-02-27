@@ -122,15 +122,6 @@ const assetPreviewStyle = computed(() => {
   return undefined
 })
 
-const computedSubtitle = computed(() => {
-  const asset = currentAsset.value
-  if (!asset) {
-    return ''
-  }
-  const typeLabel = asset.type === 'model' ? 'Model asset' : asset.type === 'mesh' ? 'Mesh asset' : 'Asset'
-  const identifier = asset.id.slice(0, 8)
-  return `${typeLabel} · ${identifier}`
-})
 </script>
 
 <template>
@@ -150,7 +141,6 @@ const computedSubtitle = computed(() => {
           <div class="asset-thumbnail" :style="assetPreviewStyle" />
           <div class="asset-text">
             <div class="asset-name">{{ currentAsset.name }}</div>
-            <div class="asset-subtitle">{{ computedSubtitle }}</div>
           </div>
         </div>
         <div v-else class="asset-summary empty">
