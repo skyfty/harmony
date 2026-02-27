@@ -52,6 +52,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
 import { getProfile } from '@/api/mini';
+import { setAccessToken } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar, getTopSafeAreaMetrics } from '@/utils/safeArea';
@@ -67,6 +68,13 @@ const profile = ref<UserProfile>({
   gender: 'other',
   birthDate: '',
 });
+
+const defaultProfile: UserProfile = {
+  id: '',
+  displayName: '游客',
+  gender: 'other',
+  birthDate: '',
+};
 
 const settings = reactive(readStorageJson(KEY, { notify: true, autoDownload: false }));
 
@@ -111,7 +119,9 @@ function show(message: string) {
 }
 
 function logout() {
-  uni.showToast({ title: '已退出（mock）', icon: 'none' });
+  setAccessToken('');
+  profile.value = { ...defaultProfile };
+  uni.showToast({ title: '已退出登录', icon: 'none' });
 }
 
 function handleNavigate(key: NavKey) {

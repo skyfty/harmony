@@ -6,6 +6,7 @@ import {
   miniLoginWithPassword,
   miniRegisterWithPassword,
 } from '@/services/miniAuthService'
+import { exchangeMiniProgramCode } from '@/services/wechatMiniAuthService'
 import { recordLogin } from '@/services/loginAuditService'
 import { inferDeviceFromUserAgent, recordAnalyticsEvent } from '@/services/analyticsService'
 
@@ -109,16 +110,22 @@ export async function miniLogin(ctx: Context): Promise<void> {
 }
 
 export async function miniWechatLogin(ctx: Context): Promise<void> {
-  const { openId, displayName, avatarUrl } = ctx.request.body as {
-    openId?: string
+  const { code, displayName, avatarUrl } = ctx.request.body as {
+    code?: string
     displayName?: string
     avatarUrl?: string
   }
-  if (!openId) {
-    ctx.throw(400, 'openId is required')
+  if (!code) {
+    ctx.throw(400, 'code is required')
   }
   try {
-    const session = await miniLoginWithOpenId({ openId, displayName, avatarUrl })
+    const identity = await exchangeMiniProgramCode(code)
+    const session = await miniLoginWithOpenId({
+      openId: identity.openId,
+      unionId: identity.unionId,
+      displayName,
+      avatarUrl,
+    })
     const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
     await recordLogin({
       userId: session.user.id,
@@ -136,13 +143,13 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
       source: 'mini-auth-wechat',
       device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
       path: '/mini-auth/wechat-login',
-      metadata: { openId },
+      metadata: { openId: identity.openId },
     })
     ctx.body = session
   } catch {
     const userAgent = ctx.get?.('User-Agent') ?? ctx.request.headers['user-agent']
     await recordLogin({
-      username: openId,
+      username: code,
       action: 'login',
       success: false,
       ip: ctx.ip || ctx.request.ip,
@@ -155,7 +162,7 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
       source: 'mini-auth-wechat',
       device: inferDeviceFromUserAgent(typeof userAgent === 'string' ? userAgent : undefined),
       path: '/mini-auth/wechat-login',
-      metadata: { openId },
+      metadata: { code },
     })
     ctx.throw(400, 'Wechat login failed')
   }

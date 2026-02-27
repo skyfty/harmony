@@ -153,6 +153,21 @@ pnpm run mock:wechat-notify -- <orderNumber> fail
 	- 成功时 `orderStatus=paid` 且写入支付结果
 
 需要我把某一节（例如 Nginx 配置、`.env.production` 示例或回滚细节）恢复为原始详细版吗？
+
+## 微信小程序授权登录配置（2026-02）
+
+在 `server/.env.production` 配置以下变量后，`/api/mini-auth/wechat-login` 将支持前端传 `code` 自动登录/注册：
+
+- `WECHAT_MINI_APP_ID`：小程序 AppID
+- `WECHAT_MINI_APP_SECRET`：小程序 AppSecret
+- `WECHAT_API_BASE_URL`：默认 `https://api.weixin.qq.com`
+
+说明：
+
+- 服务端会调用 `sns/jscode2session` 交换 `openid/unionid`
+- 用户不存在时自动注册并签发 mini token
+- 同一 `openid` 会复用已有账号；`unionid`（如返回）会写入用户档案
+
 ## 14. 一次性部署最小命令集（速查）
 
 ```bash

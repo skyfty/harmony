@@ -6,6 +6,7 @@ const appUserSchema = new Schema<AppUserDocument>(
     username: { type: String, trim: true },
     password: { type: String },
     wxOpenId: { type: String, trim: true },
+    wxUnionId: { type: String, trim: true },
     displayName: { type: String },
     email: { type: String },
     avatarUrl: { type: String },
@@ -26,5 +27,6 @@ const appUserSchema = new Schema<AppUserDocument>(
 
 appUserSchema.index({ username: 1 }, { unique: true, sparse: true })
 appUserSchema.index({ wxOpenId: 1 }, { unique: true, sparse: true })
+appUserSchema.index({ wxUnionId: 1 }, { unique: true, sparse: true })
 
 export const AppUserModel = model<AppUserDocument>('AppUser', appUserSchema, 'users')

@@ -8,6 +8,7 @@ type AppUserLean = {
   username?: string
   password?: string
   wxOpenId?: string
+  wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
@@ -26,6 +27,7 @@ export interface MiniSessionUser {
   id: string
   username?: string
   wxOpenId?: string
+  wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
@@ -50,6 +52,7 @@ function buildMiniUser(user: AppUserLean): MiniSessionUser {
     id: user._id.toString(),
     username: user.username ?? undefined,
     wxOpenId: user.wxOpenId ?? undefined,
+    wxUnionId: user.wxUnionId ?? undefined,
     displayName: user.displayName ?? undefined,
     email: user.email ?? undefined,
     avatarUrl: user.avatarUrl ?? undefined,
@@ -130,6 +133,7 @@ export async function miniLoginWithPassword(username: string, password: string):
 
 export async function miniLoginWithOpenId(input: {
   openId: string
+  unionId?: string
   displayName?: string
   avatarUrl?: string
 }): Promise<MiniSessionResponse> {
@@ -142,10 +146,14 @@ export async function miniLoginWithOpenId(input: {
   if (!user) {
     user = await AppUserModel.create({
       wxOpenId: openId,
+      wxUnionId: input.unionId,
       displayName: input.displayName ?? appConfig.miniAuth.defaultDisplayName,
       avatarUrl: input.avatarUrl,
       status: 'active',
     })
+  } else if (!user.wxUnionId && input.unionId) {
+    user.wxUnionId = input.unionId
+    await user.save()
   }
 
   if (user.status !== 'active') {

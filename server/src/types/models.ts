@@ -100,6 +100,7 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   username?: string
   password?: string
   wxOpenId?: string
+  wxUnionId?: string
   displayName?: string
   email?: string
   avatarUrl?: string
