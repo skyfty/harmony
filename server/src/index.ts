@@ -68,6 +68,10 @@ async function bootstrap(): Promise<void> {
     text: false,
   })
   app.use(async (ctx, next) => {
+    if (ctx.path === '/wechat/pay/notify') {
+      await next()
+      return
+    }
     if (ctx.is('multipart')) {
       await next()
       return

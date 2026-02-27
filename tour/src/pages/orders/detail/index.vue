@@ -54,6 +54,30 @@
         </view>
         <view class="row">
           <text class="label">
+            支付状态
+          </text>
+          <text class="value">
+            {{ paymentStatusText(order.paymentStatus) }}
+          </text>
+        </view>
+        <view class="row" v-if="order.transactionId">
+          <text class="label">
+            支付流水号
+          </text>
+          <text class="value">
+            {{ order.transactionId }}
+          </text>
+        </view>
+        <view class="row" v-if="order.paidAt">
+          <text class="label">
+            支付时间
+          </text>
+          <text class="value">
+            {{ formatDateTime(order.paidAt) }}
+          </text>
+        </view>
+        <view class="row">
+          <text class="label">
             下单时间
           </text>
           <text class="value">
@@ -157,7 +181,7 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 import { getOrderDetail } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
-import type { OrderDetail, OrderItem, OrderStatus } from '@/types/order';
+import type { OrderDetail, OrderItem, OrderStatus, PaymentStatus } from '@/types/order';
 
 defineOptions({
   name: 'OrderDetailPage',
@@ -193,6 +217,15 @@ function statusText(status: OrderStatus) {
   if (status === 'paid') return '已支付';
   if (status === 'completed') return '已完成';
   return '已取消';
+}
+
+function paymentStatusText(status: PaymentStatus) {
+  if (status === 'unpaid') return '未支付';
+  if (status === 'processing') return '支付中';
+  if (status === 'succeeded') return '支付成功';
+  if (status === 'failed') return '支付失败';
+  if (status === 'refunded') return '已退款';
+  return '已关闭';
 }
 
 function formatDateTime(value: string) {

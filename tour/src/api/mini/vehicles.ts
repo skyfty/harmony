@@ -67,20 +67,52 @@ export async function listVehicles(): Promise<Vehicle[]> {
 type PurchaseVehicleResponse = {
   order?: {
     id: string
+    orderNumber?: string
+    paymentStatus?: string
+  }
+  payParams?: {
+    appId: string
+    timeStamp: string
+    nonceStr: string
+    package: string
+    signType: 'RSA'
+    paySign: string
   }
 }
 
 export async function purchaseVehicleByProduct(productId: string): Promise<PurchaseVehicleResponse> {
   await ensureMiniAuth()
-  return await miniRequest<PurchaseVehicleResponse>(`/products/${encodeURIComponent(productId)}/purchase`, {
+  const order = await miniRequest<{ id: string; orderNumber: string }>(`/orders`, {
     method: 'POST',
     body: {
       paymentMethod: 'wechat',
+      items: [
+        {
+          productId,
+          itemType: 'product',
+          quantity: 1,
+        },
+      ],
       metadata: {
         source: 'tour-vehicles',
       },
     },
   })
+  const payment = await miniRequest<{ payParams?: PurchaseVehicleResponse['payParams']; paymentStatus?: string }>(
+    `/orders/${encodeURIComponent(order.id)}/pay`,
+    {
+      method: 'POST',
+      body: {},
+    },
+  )
+  return {
+    order: {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      paymentStatus: payment.paymentStatus,
+    },
+    payParams: payment.payParams,
+  }
 }
 
 export async function selectCurrentVehicle(vehicleId: string): Promise<{ currentVehicleId: string }> {

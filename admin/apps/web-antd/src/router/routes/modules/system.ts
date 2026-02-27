@@ -196,6 +196,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.orders.title'),
         },
       },
+      {
+        name: 'OrderDetail',
+        path: ':id',
+        component: () => import('#/views/orders/detail.vue'),
+        meta: {
+          title: '订单详情',
+          hideInMenu: true,
+        },
+      },
     ],
   },
   {

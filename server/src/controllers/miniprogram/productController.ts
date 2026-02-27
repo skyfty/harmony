@@ -1,15 +1,13 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ProductModel } from '@/models/Product'
-import { VehicleModel } from '@/models/Vehicle'
 import { OrderModel } from '@/models/Order'
 import { UserProductModel } from '@/models/UserProduct'
-import { UserVehicleModel } from '@/models/UserVehicle'
+import { AppUserModel } from '@/models/AppUser'
 import { ensureUserId, getOptionalUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
-import { processProductPayment } from '@/services/paymentService'
-import { addProductToWarehouse } from '@/services/warehouseService'
+import { createOrderPayment } from '@/services/paymentService'
 
 function computeUserProductState(entry: {
   state?: UserProductState
@@ -167,69 +165,27 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     return
   }
 
-  const now = new Date()
-  const existing = await UserProductModel.findOne({ userId, productId: product._id }).exec()
-  if (existing) {
-    const expired = existing.expiresAt ? existing.expiresAt.getTime() <= now.getTime() : false
-    if (!expired) {
-      ctx.throw(400, 'Product already owned')
-    }
-  }
-
-  const paymentResult = await processProductPayment({
-    userId,
-    productId: product._id.toString(),
-    productName: product.name,
-    amount: product.price,
-    method: paymentMethod,
-    metadata,
-  })
-
-  if (paymentResult.status !== 'success') {
-    const message = paymentResult.message ?? '支付失败，请稍后重试'
-    ctx.throw(402, message)
-  }
-
-  const paymentInfo: Record<string, unknown> = {
-    provider: paymentResult.provider,
-    status: paymentResult.status,
-  }
-
-    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
-    if (boundVehicle?._id) {
-      await UserVehicleModel.updateOne(
-        { userId, vehicleId: boundVehicle._id },
-        {
-          $setOnInsert: {
-            userId: new Types.ObjectId(userId),
-            vehicleId: boundVehicle._id,
-            ownedAt: now,
-          },
-        },
-        { upsert: true },
-      ).exec()
-    }
-  if (paymentResult.transactionId) {
-    paymentInfo.transactionId = paymentResult.transactionId
-  }
-  if (paymentResult.raw) {
-    paymentInfo.raw = paymentResult.raw
+  const appUser = await AppUserModel.findById(userId).lean().exec()
+  if (!appUser?.wxOpenId) {
+    ctx.throw(400, 'Current user has no bound WeChat openId')
   }
 
   const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
-  orderMetadata.payment = paymentInfo
-
+  orderMetadata.source = 'legacy-product-purchase'
   const orderNumber = generateOrderNumber()
   const order = await OrderModel.create({
     userId,
     orderNumber,
-    status: 'paid',
+    status: 'pending',
+    orderStatus: 'pending',
+    paymentStatus: 'unpaid',
     totalAmount: product.price,
-    paymentMethod: paymentMethod ?? paymentResult.provider,
+    paymentMethod: paymentMethod ?? 'wechat',
     shippingAddress,
     items: [
       {
         productId: product._id,
+        itemType: 'product',
         name: product.name,
         price: product.price,
         quantity: 1,
@@ -238,43 +194,38 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     metadata: orderMetadata,
   })
 
-  const expiresAt = product.validityDays ? new Date(now.getTime() + product.validityDays * 86400000) : null
-  await UserProductModel.updateOne(
-    { userId, productId: product._id },
-    {
-      $setOnInsert: {
-        userId: new Types.ObjectId(userId),
-        productId: product._id,
-      },
-      $set: {
-        state: 'unused',
-        usedAt: null,
-        expiresAt,
-        orderId: order._id,
-        metadata: metadata ?? null,
-        acquiredAt: now,
-      },
-    },
-    { upsert: true },
-  ).exec()
+  const paymentResult = await createOrderPayment({
+    channel: 'wechat',
+    orderNumber,
+    description: product.name,
+    amount: product.price,
+    openId: appUser.wxOpenId,
+    attach: JSON.stringify({ orderId: order._id.toString(), userId, productId: product._id.toString() }),
+  })
 
-  await addProductToWarehouse({ userId, product: product.toObject() as any, orderId: order._id })
+  order.paymentProvider = paymentResult.provider
+  order.paymentStatus = paymentResult.status === 'pending' ? 'processing' : 'failed'
+  order.prepayId = paymentResult.prepayId
+  order.paymentResult = {
+    ...(order.paymentResult ?? {}),
+    prepay: paymentResult.raw ?? null,
+    requestedAt: new Date().toISOString(),
+  }
+  await order.save()
+
   ctx.status = 201
   ctx.body = {
     order: {
       id: order._id.toString(),
       orderNumber: order.orderNumber,
-      status: order.status,
+      status: order.orderStatus,
+      paymentStatus: order.paymentStatus,
       totalAmount: order.totalAmount,
       paymentMethod: order.paymentMethod ?? undefined,
       shippingAddress: order.shippingAddress ?? undefined,
       createdAt: order.createdAt.toISOString(),
     },
-    product: buildProductResponse(product.toObject() as ProductLean, {
-      acquiredAt: now,
-      state: 'unused',
-      expiresAt,
-      usedAt: null,
-    }),
+    payParams: paymentResult.payParams,
+    product: buildProductResponse(product.toObject() as ProductLean, null),
   }
 }

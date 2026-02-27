@@ -67,6 +67,8 @@ import {
 import {
   listOrders,
   getOrder,
+  createOrder,
+  payOrder,
 } from '@/controllers/miniprogram/orderController'
 import { listAchievements } from '@/controllers/miniprogram/achievementController'
 import {
@@ -170,6 +172,8 @@ miniRouter.post('/coupons/:id/claim', claimCoupon)
 // orders
 miniRouter.get('/orders', listOrders)
 miniRouter.get('/orders/:id', getOrder)
+miniRouter.post('/orders', createOrder)
+miniRouter.post('/orders/:id/pay', payOrder)
 
 // achievements
 miniRouter.get('/achievements', listAchievements)

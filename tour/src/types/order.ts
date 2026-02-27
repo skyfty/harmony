@@ -1,7 +1,9 @@
 export type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled';
+export type PaymentStatus = 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed';
 
 export interface OrderItem {
   productId: string;
+  itemType?: 'product' | 'prop' | 'equipment' | 'service' | 'other';
   name: string;
   price: number;
   quantity: number;
@@ -25,6 +27,12 @@ export interface OrderListItem {
   orderNumber: string;
   customerName: string;
   status: OrderStatus;
+  orderStatus: OrderStatus;
+  paymentStatus: PaymentStatus;
+  paymentProvider?: string;
+  transactionId?: string;
+  paidAt?: string;
+  paymentResult?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   totalAmount: number;

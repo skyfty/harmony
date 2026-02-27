@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { Button, Modal, Space, message } from 'ant-design-vue';
+import { useRouter } from 'vue-router';
 import { listOrdersApi, getOrderApi, createOrderApi, updateOrderApi, deleteOrderApi } from '#/api';
 import OrderForm from './OrderForm.vue';
 import { $t } from '#/locales';
@@ -11,6 +12,7 @@ const editingId = ref<string | null>(null);
 const editingModel = ref<any>(null);
 const submitting = ref(false);
 const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
+const router = useRouter();
 
 async function openCreate() {
   editingId.value = null;
@@ -61,10 +63,30 @@ function handleDelete(row: any) {
   });
 }
 
+function openDetail(row: any) {
+  router.push({ name: 'OrderDetail', params: { id: row.id } });
+}
+
 const [OrderGrid, orderGridApi] = useVbenVxeGrid({
   formOptions: {
     schema: [
       { component: 'Input', fieldName: 'keyword', label: t('page.orders.index.table.orderNumber'), componentProps: { allowClear: true, placeholder: t('page.orders.form.placeholders.searchProduct') } },
+      {
+        component: 'Select',
+        fieldName: 'paymentStatus',
+        label: '支付状态',
+        componentProps: {
+          allowClear: true,
+          options: [
+            { label: '未支付', value: 'unpaid' },
+            { label: '支付中', value: 'processing' },
+            { label: '支付成功', value: 'succeeded' },
+            { label: '支付失败', value: 'failed' },
+            { label: '已退款', value: 'refunded' },
+            { label: '已关闭', value: 'closed' },
+          ],
+        },
+      },
       {
         component: 'Select',
         fieldName: 'status',
@@ -86,6 +108,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
     columns: [
       { field: 'orderNumber', minWidth: 200, title: t('page.orders.index.table.orderNumber') },
       { field: 'status', minWidth: 120, title: t('page.orders.index.table.status') },
+      { field: 'paymentStatus', minWidth: 120, title: '支付状态' },
       { field: 'userInfo.displayName', minWidth: 160, title: t('page.orders.index.table.user') },
       { field: 'totalAmount', minWidth: 120, title: t('page.orders.index.table.totalAmount') },
       { field: 'items', minWidth: 120, formatter: (val: any) => (val || []).length, title: t('page.orders.index.table.items') },
@@ -100,6 +123,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
           const params = {
             keyword: formValues.keyword,
             status: formValues.status || undefined,
+            paymentStatus: formValues.paymentStatus || undefined,
             page: page.currentPage,
             pageSize: page.pageSize,
           };
@@ -121,6 +145,7 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
 
       <template #actions="{ row }">
         <Space>
+          <Button size="small" type="link" @click="openDetail(row)">详情</Button>
           <Button size="small" type="link" @click="openEditModal(row)">{{ t('page.orders.index.actions.edit') || 'Edit' }}</Button>
           <Button danger size="small" type="link" @click="handleDelete(row)">{{ t('page.orders.index.actions.delete') || 'Delete' }}</Button>
         </Space>

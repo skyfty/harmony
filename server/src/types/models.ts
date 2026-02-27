@@ -506,6 +506,8 @@ export interface SceneProductBindingDocument extends Document<Types.ObjectId> {
 export interface OrderItem {
   /** 中文：商品 ID */
   productId: Types.ObjectId
+  /** 中文：订单项类型（用于区分产品/道具/装备等） */
+  itemType: 'product' | 'prop' | 'equipment' | 'service' | 'other'
   /** 中文：商品名称（下单时快照） */
   name: string
   /** 中文：商品单价 */
@@ -519,12 +521,26 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   /** 中文：订单号（唯一标识） */
   orderNumber: string
-  /** 中文：订单状态（pending/paid/completed/cancelled） */
+  /** 中文：兼容字段，等同 orderStatus */
   status: 'pending' | 'paid' | 'completed' | 'cancelled'
+  /** 中文：订单状态（pending/paid/completed/cancelled） */
+  orderStatus: 'pending' | 'paid' | 'completed' | 'cancelled'
+  /** 中文：支付状态（unpaid/processing/succeeded/failed/refunded/closed） */
+  paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
   /** 中文：订单总金额 */
   totalAmount: number
   /** 中文：支付方式（可选） */
   paymentMethod?: string
+  /** 中文：支付通道（可选） */
+  paymentProvider?: string
+  /** 中文：预支付交易单号（可选） */
+  prepayId?: string
+  /** 中文：支付平台交易单号（可选） */
+  transactionId?: string
+  /** 中文：支付完成时间（可选） */
+  paidAt?: Date
+  /** 中文：支付结果信息（可选） */
+  paymentResult?: Record<string, unknown>
   /** 中文：收货地址（可选） */
   shippingAddress?: string
   /** 中文：订单项列表 */

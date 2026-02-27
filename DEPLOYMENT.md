@@ -107,6 +107,51 @@ pnpm run build:mp-weixin
 - secrets（`JWT_SECRET` 等）不得提交仓库
 - 使用 Nginx/反代 + HTTPS 暴露对外服务；限制直接外网端口访问
 
+## 微信支付配置（2026-02）
+
+在 `server/.env.production` 至少配置以下变量：
+
+- `WECHAT_PAY_ENABLED=true`
+- `WECHAT_PAY_APP_ID`：小程序 AppID
+- `WECHAT_PAY_MCH_ID`：微信商户号
+- `WECHAT_PAY_SERIAL_NO`：商户证书序列号
+- `WECHAT_PAY_PRIVATE_KEY`：商户 API 证书私钥（PEM 内容，换行使用 `\n`）
+- `WECHAT_PAY_API_V3_KEY`：APIv3 Key（32位）
+- `WECHAT_PAY_NOTIFY_URL`：例如 `https://v.touchmagic.cn/wechat/pay/notify`
+- `WECHAT_PAY_PLATFORM_PUBLIC_KEY`：微信支付平台公钥（PEM）
+
+可选项：
+
+- `WECHAT_PAY_BASE_URL`（默认 `https://api.mch.weixin.qq.com`）
+- `WECHAT_PAY_CALLBACK_SKIP_VERIFY_IN_DEV`（仅开发环境联调时可 `true`，生产必须 `false`）
+
+### 回调接口
+
+- 地址：`POST /wechat/pay/notify`
+- 用途：接收微信支付通知，更新订单 `orderStatus/paymentStatus`，并发放商品权益
+- 接口无需登录态，依赖微信签名校验保障安全
+
+### 本地联调（无需真实微信回调）
+
+1. 开发环境设置：
+	- `WECHAT_PAY_ENABLED=true`
+	- `WECHAT_PAY_API_V3_KEY` 填 32 位字符串
+	- 可临时开启 `WECHAT_PAY_CALLBACK_SKIP_VERIFY_IN_DEV=true`
+2. 启动服务：`cd server && pnpm run dev`
+3. 先通过 mini 接口创建订单并发起支付，拿到 `orderNumber`
+4. 发送模拟通知：
+
+```bash
+cd server
+pnpm run mock:wechat-notify -- <orderNumber> success
+# 或模拟失败
+pnpm run mock:wechat-notify -- <orderNumber> fail
+```
+
+5. 验证订单状态：
+	- `paymentStatus` 变为 `succeeded`/`failed`
+	- 成功时 `orderStatus=paid` 且写入支付结果
+
 需要我把某一节（例如 Nginx 配置、`.env.production` 示例或回滚细节）恢复为原始详细版吗？
 ## 14. 一次性部署最小命令集（速查）
 

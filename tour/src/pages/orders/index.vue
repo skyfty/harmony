@@ -8,7 +8,7 @@
       <view v-for="order in orders" :key="order.id" class="card" @tap="openDetail(order.id)">
         <view class="row">
           <text class="no">{{ order.orderNumber }}</text>
-          <text class="status">{{ statusText(order.status) }}</text>
+          <text class="status">{{ statusText(order.status) }} / {{ paymentStatusText(order.paymentStatus) }}</text>
         </view>
         <view class="meta">
           <text class="meta-text">下单时间 {{ formatDate(order.createdAt) }}</text>
@@ -32,6 +32,7 @@ import { ref } from 'vue';
 import { listOrders } from '@/api/mini';
 import PageHeader from '@/components/PageHeader.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';
+import type { PaymentStatus } from '@/types/order';
 
 const orders = ref<OrderListItem[]>([]);
 
@@ -60,6 +61,15 @@ function statusText(status: OrderStatus) {
   if (status === 'paid') return '已支付';
   if (status === 'completed') return '已完成';
   return '已取消';
+}
+
+function paymentStatusText(status: PaymentStatus) {
+  if (status === 'unpaid') return '未支付';
+  if (status === 'processing') return '支付中';
+  if (status === 'succeeded') return '支付成功';
+  if (status === 'failed') return '支付失败';
+  if (status === 'refunded') return '已退款';
+  return '已关闭';
 }
 
 function formatDate(value: string) {

@@ -16,11 +16,17 @@ export interface OrderItem {
   id: string;
   orderNumber: string;
   status: 'pending' | 'paid' | 'completed' | 'cancelled';
+  orderStatus?: 'pending' | 'paid' | 'completed' | 'cancelled';
+  paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed';
   totalAmount: number;
   paymentMethod?: string | null;
+  paymentProvider?: string | null;
+  transactionId?: string | null;
+  paidAt?: string | null;
+  paymentResult?: Record<string, unknown> | null;
   shippingAddress?: string | null;
   userInfo?: { id: string; username?: string; displayName?: string } | null;
-  items: Array<{ productId: string; name?: string; price?: number; quantity?: number; productInfo?: any | null }>;
+  items: Array<{ productId: string; itemType?: string; name?: string; price?: number; quantity?: number; productInfo?: any | null }>;
   metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;

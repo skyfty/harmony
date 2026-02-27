@@ -27,3 +27,46 @@ export async function getOrderDetail(id: string): Promise<OrderDetail | null> {
     method: 'GET',
   })
 }
+
+export interface CreateOrderPayload {
+  paymentMethod?: 'wechat'
+  shippingAddress?: string
+  metadata?: Record<string, unknown>
+  items: Array<{
+    productId: string
+    itemType?: 'product' | 'prop' | 'equipment' | 'service' | 'other'
+    quantity?: number
+  }>
+}
+
+export interface PayOrderResult {
+  orderId: string
+  orderNumber: string
+  status: OrderStatus
+  paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  payParams?: {
+    appId: string
+    timeStamp: string
+    nonceStr: string
+    package: string
+    signType: 'RSA'
+    paySign: string
+    prepayId: string
+  }
+}
+
+export async function createOrder(payload: CreateOrderPayload): Promise<OrderDetail> {
+  await ensureMiniAuth()
+  return await miniRequest<OrderDetail>('/orders', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export async function payOrder(orderId: string): Promise<PayOrderResult> {
+  await ensureMiniAuth()
+  return await miniRequest<PayOrderResult>(`/orders/${encodeURIComponent(orderId)}/pay`, {
+    method: 'POST',
+    body: {},
+  })
+}

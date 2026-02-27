@@ -1,15 +1,18 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { OrderModel } from '@/models/Order'
-import { UserModel } from '@/models/User'
+import { AppUserModel } from '@/models/AppUser'
 import { ProductModel } from '@/models/Product'
 
 const ORDER_STATUS = new Set(['pending', 'paid', 'completed', 'cancelled'])
+const PAYMENT_STATUS = new Set(['unpaid', 'processing', 'succeeded', 'failed', 'refunded', 'closed'])
 
 type OrderPayload = {
   orderNumber?: string
   userId?: string
   status?: 'pending' | 'paid' | 'completed' | 'cancelled'
+  orderStatus?: 'pending' | 'paid' | 'completed' | 'cancelled'
+  paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
   paymentMethod?: string
   shippingAddress?: string
   scenicId?: string | null
@@ -52,7 +55,7 @@ async function buildRelationMap(orders: any[]) {
     })
   })
   const [users, products] = await Promise.all([
-    userIds.size ? UserModel.find({ _id: { $in: Array.from(userIds) } }).lean().exec() : Promise.resolve([]),
+    userIds.size ? AppUserModel.find({ _id: { $in: Array.from(userIds) } }).lean().exec() : Promise.resolve([]),
     productIds.size ? ProductModel.find({ _id: { $in: Array.from(productIds) } }).lean().exec() : Promise.resolve([]),
   ])
   return {
@@ -67,9 +70,15 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
   return {
     id: order._id.toString(),
     orderNumber: order.orderNumber,
-    status: order.status,
+    status: order.orderStatus ?? order.status,
+    orderStatus: order.orderStatus ?? order.status,
+    paymentStatus: order.paymentStatus ?? ((order.orderStatus ?? order.status) === 'paid' ? 'succeeded' : 'unpaid'),
     totalAmount: order.totalAmount,
     paymentMethod: order.paymentMethod ?? null,
+    paymentProvider: order.paymentProvider ?? null,
+    transactionId: order.transactionId ?? null,
+    paidAt: order.paidAt ? new Date(order.paidAt).toISOString() : null,
+    paymentResult: order.paymentResult ?? null,
     shippingAddress: order.shippingAddress ?? null,
     userInfo: user
       ? {
@@ -102,7 +111,7 @@ function mapOrder(order: any, relationMap: { users: Map<string, any>; products: 
 }
 
 export async function listOrders(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, status } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, status, paymentStatus } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
@@ -111,7 +120,10 @@ export async function listOrders(ctx: Context): Promise<void> {
     filter.orderNumber = new RegExp(keyword.trim(), 'i')
   }
   if (status && ORDER_STATUS.has(status)) {
-    filter.status = status
+    filter.orderStatus = status
+  }
+  if (paymentStatus && PAYMENT_STATUS.has(paymentStatus)) {
+    filter.paymentStatus = paymentStatus
   }
   const [rows, total] = await Promise.all([
     OrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
@@ -149,6 +161,10 @@ export async function createOrder(ctx: Context): Promise<void> {
   if (!ORDER_STATUS.has(status)) {
     ctx.throw(400, 'Invalid order status')
   }
+  const paymentStatus = body.paymentStatus ?? (status === 'paid' ? 'succeeded' : 'unpaid')
+  if (!PAYMENT_STATUS.has(paymentStatus)) {
+    ctx.throw(400, 'Invalid payment status')
+  }
   if (!Array.isArray(body.items) || !body.items.length) {
     ctx.throw(400, 'Order items are required')
   }
@@ -177,6 +193,8 @@ export async function createOrder(ctx: Context): Promise<void> {
     userId: new Types.ObjectId(body.userId),
     orderNumber,
     status,
+    orderStatus: body.orderStatus ?? status,
+    paymentStatus,
     totalAmount,
     paymentMethod: toStringValue(body.paymentMethod) ?? undefined,
     shippingAddress: toStringValue(body.shippingAddress) ?? undefined,
@@ -203,6 +221,10 @@ export async function updateOrder(ctx: Context): Promise<void> {
   if (!ORDER_STATUS.has(nextStatus)) {
     ctx.throw(400, 'Invalid order status')
   }
+  const nextPaymentStatus = body.paymentStatus ?? current.paymentStatus ?? (nextStatus === 'paid' ? 'succeeded' : 'unpaid')
+  if (!PAYMENT_STATUS.has(nextPaymentStatus)) {
+    ctx.throw(400, 'Invalid payment status')
+  }
   const nextMetadata: Record<string, unknown> = {
     ...((current.metadata ?? {}) as Record<string, unknown>),
     ...(body.metadata ?? {}),
@@ -217,6 +239,8 @@ export async function updateOrder(ctx: Context): Promise<void> {
     id,
     {
       status: nextStatus,
+      orderStatus: body.orderStatus ?? nextStatus,
+      paymentStatus: nextPaymentStatus,
       paymentMethod: body.paymentMethod === undefined ? current.paymentMethod : toStringValue(body.paymentMethod),
       shippingAddress:
         body.shippingAddress === undefined ? current.shippingAddress : toStringValue(body.shippingAddress),

@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "seed": "tsx --env-file=.env.development src/scripts/seed.ts",
     "seed:prod": "node --env-file=.env.production dist/scripts/seed.js",
-    "migrate:coupon-types": "tsx --env-file=.env.development src/scripts/migrate-coupon-types.ts"
+    "migrate:coupon-types": "tsx --env-file=.env.development src/scripts/migrate-coupon-types.ts",
+    "mock:wechat-notify": "tsx --env-file=.env.development src/scripts/mock-wechat-notify.ts"
   },
   "engines": {
     "pnpm": ">=10.0.0"

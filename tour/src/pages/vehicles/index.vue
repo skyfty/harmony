@@ -137,9 +137,31 @@ async function select(id: string, status: VehicleStatus) {
     loading.value = true;
     void uni.showLoading({ title: '购买中...' });
     try {
-      await purchaseVehicle(productId);
+      const result = (await purchaseVehicle(productId)) as {
+        order?: { id: string };
+        payParams?: {
+          appId: string;
+          timeStamp: string;
+          nonceStr: string;
+          package: string;
+          signType: 'RSA';
+          paySign: string;
+        };
+      };
+      if (result.payParams) {
+        await new Promise<void>((resolve, reject) => {
+          uni.requestPayment({
+            ...result.payParams,
+            success: () => resolve(),
+            fail: (err) => reject(err),
+          });
+        });
+      }
       await reload();
       void uni.showToast({ title: '购买成功', icon: 'none' });
+      if (result.order?.id) {
+        uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` });
+      }
     } catch (error: unknown) {
       void uni.showToast({ title: toErrorMessage(error, '购买失败'), icon: 'none' });
     } finally {
