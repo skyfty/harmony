@@ -33,6 +33,9 @@ const loginOpen = ref(false)
 const newProjectOpen = ref(false)
 // OpenProjectDialog removed — opening projects is handled on the Project Manager page
 const deletingId = ref<string | null>(null)
+const confirmDeleteOpen = ref(false)
+const pendingDeleteProjectId = ref<string | null>(null)
+const pendingDeleteProjectName = ref('')
 
 const isLoggedIn = computed(() => !!authStore.user)
 const projects = computed(() => projectsStore.sortedMetadata)
@@ -100,6 +103,32 @@ async function handleDeleteProject(projectId: string) {
   }
 }
 
+function requestDeleteProject(projectId: string, projectName: string) {
+  if (deletingId.value) return
+  pendingDeleteProjectId.value = projectId
+  pendingDeleteProjectName.value = projectName
+  confirmDeleteOpen.value = true
+}
+
+function cancelDeleteProject() {
+  if (deletingId.value) return
+  confirmDeleteOpen.value = false
+  pendingDeleteProjectId.value = null
+  pendingDeleteProjectName.value = ''
+}
+
+async function confirmDeleteProject() {
+  if (!pendingDeleteProjectId.value || deletingId.value) return
+  const projectId = pendingDeleteProjectId.value
+  try {
+    await handleDeleteProject(projectId)
+  } finally {
+    confirmDeleteOpen.value = false
+    pendingDeleteProjectId.value = null
+    pendingDeleteProjectName.value = ''
+  }
+}
+
 async function handleSync() {
   await Promise.all([
     projectsStore.syncUserWorkspaceFromServer({ replace: true }),
@@ -158,7 +187,7 @@ async function handleSync() {
                 variant="text"
                 :loading="deletingId === p.id"
                 :disabled="deletingId !== null"
-                @click="handleDeleteProject(p.id)"
+                @click="requestDeleteProject(p.id, p.name)"
               >
                 Delete (cascade)
               </v-btn>
@@ -170,6 +199,28 @@ async function handleSync() {
 
     <LoginDialog v-model="loginOpen" />
     <NewProjectDialog v-model="newProjectOpen" @confirm="handleCreateProject" />
+    <v-dialog v-model="confirmDeleteOpen" max-width="420" :persistent="deletingId !== null">
+      <v-card>
+        <v-card-title>Delete project?</v-card-title>
+        <v-card-text>
+          Are you sure you want to delete "{{ pendingDeleteProjectName }}"?
+          This action cannot be undone.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" :disabled="deletingId !== null" @click="cancelDeleteProject">Cancel</v-btn>
+          <v-btn
+            color="error"
+            variant="flat"
+            :loading="deletingId === pendingDeleteProjectId"
+            :disabled="!pendingDeleteProjectId || deletingId !== null"
+            @click="confirmDeleteProject"
+          >
+            Delete
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <!-- OpenProjectDialog removed; project opening is done inline via the list -->
   </div>
 </template>

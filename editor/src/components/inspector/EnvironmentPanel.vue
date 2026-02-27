@@ -98,8 +98,8 @@ const HDRI_ASSET_TYPE = 'hdri' as const
 const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
 
 const skyCubeFormatOptions: Array<{ title: string; value: SkyCubeBackgroundFormat }> = [
+  { title: 'Sky Cube', value: 'zip' },
   { title: 'Six Images', value: 'faces' },
-  { title: '.skycube (zip)', value: 'zip' },
 ]
 
 const skyCubeFaceDescriptors: Array<{ key: SkyCubeFaceKey; label: string; description: string }> = [
@@ -235,7 +235,7 @@ const assetDialogTitle = computed(() => {
     return 'Select Background HDRI'
   }
   if (assetDialogTarget.value === 'skycubeZip') {
-    return 'Select SkyCube .skycube Zip'
+    return 'Select SkyCube'
   }
   if (assetDialogTarget.value) {
     const descriptor = skyCubeFaceDescriptors.find((entry) => entry.key === assetDialogTarget.value)
@@ -798,7 +798,7 @@ function isSkyCubeZipAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   return (ext ?? '').toLowerCase() === 'skycube'
 }
 
-const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'faces')
+const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'zip')
 
 const skyCubeZipAsset = computed(() => {
   const assetId = environmentSettings.value.background.skycubeZipAssetId
