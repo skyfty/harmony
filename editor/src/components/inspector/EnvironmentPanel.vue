@@ -98,7 +98,7 @@ const HDRI_ASSET_TYPE = 'hdri' as const
 const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
 
 const skyCubeFormatOptions: Array<{ title: string; value: SkyCubeBackgroundFormat }> = [
-  { title: 'Sky Cube', value: 'zip' },
+  { title: 'Sky Cube(.zip)', value: 'zip' },
   { title: 'Six Images', value: 'faces' },
 ]
 
@@ -302,6 +302,7 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: environmentSettings.value.background.hdriAssetId,
+      skycubeFormat: mode === 'skycube' ? 'zip' : environmentSettings.value.background.skycubeFormat,
     },
   })
 }

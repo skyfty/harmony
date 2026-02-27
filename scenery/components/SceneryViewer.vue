@@ -8736,7 +8736,19 @@ async function applyBackgroundSettings(
   if (background.mode === 'skycube') {
     disposeGradientBackgroundDome(gradientBackgroundDome);
     gradientBackgroundDome = null;
-    const skycubeFormat = background.skycubeFormat === 'zip' ? 'zip' : 'faces';
+    const faceAssetIds: Array<string | null> = [
+      background.positiveXAssetId ?? null,
+      background.negativeXAssetId ?? null,
+      background.positiveYAssetId ?? null,
+      background.negativeYAssetId ?? null,
+      background.positiveZAssetId ?? null,
+      background.negativeZAssetId ?? null,
+    ];
+    const hasAnyFace = faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0);
+    const skycubeFormat =
+      background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
+        ? background.skycubeFormat
+        : (hasAnyFace ? 'faces' : 'zip');
     if (skycubeFormat === 'zip') {
       const zipAssetId = background.skycubeZipAssetId ?? null;
       if (!zipAssetId) {
@@ -8814,15 +8826,6 @@ async function applyBackgroundSettings(
       return true;
     }
 
-    const faceAssetIds: Array<string | null> = [
-      background.positiveXAssetId ?? null,
-      background.negativeXAssetId ?? null,
-      background.positiveYAssetId ?? null,
-      background.negativeYAssetId ?? null,
-      background.positiveZAssetId ?? null,
-      background.negativeZAssetId ?? null,
-    ];
-    const hasAnyFace = faceAssetIds.some(Boolean);
     if (!hasAnyFace) {
       disposeBackgroundResources();
       scene.background = new THREE.Color(background.solidColor);

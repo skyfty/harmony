@@ -6897,7 +6897,25 @@ const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   const background = settings.background
 
-  const skycubeFormat = background.mode === 'skycube' && background.skycubeFormat === 'zip' ? 'zip' : 'faces'
+  const hasAnySkycubeFaceAsset =
+    background.mode === 'skycube' &&
+    [
+      background.positiveXAssetId,
+      background.negativeXAssetId,
+      background.positiveYAssetId,
+      background.negativeYAssetId,
+      background.positiveZAssetId,
+      background.negativeZAssetId,
+    ].some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
+
+  const skycubeFormat =
+    background.mode === 'skycube'
+      ? background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
+        ? background.skycubeFormat
+        : hasAnySkycubeFaceAsset
+          ? 'faces'
+          : 'zip'
+      : 'zip'
 
   const hdriBackgroundKey =
     background.mode === 'hdri' && background.hdriAssetId
@@ -7948,7 +7966,21 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
   if (background.mode === 'skycube') {
     disposeGradientBackgroundResources()
-    const skycubeFormat = background.skycubeFormat ?? 'faces'
+    const faceAssetIds: Array<string | null> = [
+      background.positiveXAssetId ?? null,
+      background.negativeXAssetId ?? null,
+      background.positiveYAssetId ?? null,
+      background.negativeYAssetId ?? null,
+      background.positiveZAssetId ?? null,
+      background.negativeZAssetId ?? null,
+    ]
+    const hasAnyFace = faceAssetIds.some((id) => typeof id === 'string' && id.trim().length > 0)
+    const skycubeFormat =
+      background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
+        ? background.skycubeFormat
+        : hasAnyFace
+          ? 'faces'
+          : 'zip'
 
     if (skycubeFormat === 'zip') {
       const zipAssetId = background.skycubeZipAssetId ?? null
@@ -8030,18 +8062,9 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     }
 
     const faceTags = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const
-    const faceAssetIds: Array<string | null> = [
-      background.positiveXAssetId ?? null,
-      background.negativeXAssetId ?? null,
-      background.positiveYAssetId ?? null,
-      background.negativeYAssetId ?? null,
-      background.positiveZAssetId ?? null,
-      background.negativeZAssetId ?? null,
-    ]
 
     const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
 
-    const hasAnyFace = faceAssetIds.some((id) => typeof id === 'string' && id.trim().length > 0)
     if (!hasAnyFace) {
       disposeBackgroundResources()
       scene.background = new THREE.Color(background.solidColor)

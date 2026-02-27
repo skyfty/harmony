@@ -25,7 +25,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
     gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
     hdriAssetId: null,
-    skycubeFormat: 'faces',
+    skycubeFormat: 'zip',
     skycubeZipAssetId: null,
     positiveXAssetId: null,
     negativeXAssetId: null,
@@ -88,6 +88,28 @@ function normalizeAssetId(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function hasAnySkycubeFaceAssetId(background: {
+  positiveXAssetId?: string | null
+  negativeXAssetId?: string | null
+  positiveYAssetId?: string | null
+  negativeYAssetId?: string | null
+  positiveZAssetId?: string | null
+  negativeZAssetId?: string | null
+} | null): boolean {
+  if (!background) {
+    return false
+  }
+  const faceAssetIds = [
+    background.positiveXAssetId,
+    background.negativeXAssetId,
+    background.positiveYAssetId,
+    background.negativeYAssetId,
+    background.positiveZAssetId,
+    background.negativeZAssetId,
+  ]
+  return faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
+}
+
 function normalizeEnvironmentOrientationPreset(value: unknown): EnvironmentSettings['environmentOrientationPreset'] {
   if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
     return value
@@ -95,8 +117,14 @@ function normalizeEnvironmentOrientationPreset(value: unknown): EnvironmentSetti
   return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
 }
 
-function normalizeSkycubeFormat(value: unknown): EnvironmentSettings['background']['skycubeFormat'] {
-  return value === 'zip' ? 'zip' : 'faces'
+function normalizeSkycubeFormat(
+  value: unknown,
+  hasFaceAssetIds: boolean,
+): EnvironmentSettings['background']['skycubeFormat'] {
+  if (value === 'zip' || value === 'faces') {
+    return value
+  }
+  return hasFaceAssetIds ? 'faces' : 'zip'
 }
 
 function resolvePresetRotationDegrees(preset: EnvironmentSettings['environmentOrientationPreset']): { x: number; y: number; z: number } {
@@ -131,6 +159,16 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
   const fogFar = clampNumber(source?.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
   const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
+  const skycubeFaceAssetIds = {
+    positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
+    negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
+    positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
+    negativeYAssetId: normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null),
+    positiveZAssetId: normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null),
+    negativeZAssetId: normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null),
+  }
+  const hasSkycubeFaceAssetIds = hasAnySkycubeFaceAssetId(skycubeFaceAssetIds)
+
   const preset = normalizeEnvironmentOrientationPreset((source as any)?.environmentOrientationPreset)
   const presetRotation = resolvePresetRotationDegrees(preset)
   const rotationSource = (source as any)?.environmentRotationDegrees ?? null
@@ -158,15 +196,15 @@ export function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> |
         DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
       ),
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-      skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat),
+      skycubeFormat: normalizeSkycubeFormat((backgroundSource as any)?.skycubeFormat, hasSkycubeFaceAssetIds),
       skycubeZipAssetId:
         backgroundMode === 'skycube' ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null) : null,
-      positiveXAssetId: normalizeAssetId((backgroundSource as any)?.positiveXAssetId ?? null),
-      negativeXAssetId: normalizeAssetId((backgroundSource as any)?.negativeXAssetId ?? null),
-      positiveYAssetId: normalizeAssetId((backgroundSource as any)?.positiveYAssetId ?? null),
-      negativeYAssetId: normalizeAssetId((backgroundSource as any)?.negativeYAssetId ?? null),
-      positiveZAssetId: normalizeAssetId((backgroundSource as any)?.positiveZAssetId ?? null),
-      negativeZAssetId: normalizeAssetId((backgroundSource as any)?.negativeZAssetId ?? null),
+      positiveXAssetId: skycubeFaceAssetIds.positiveXAssetId,
+      negativeXAssetId: skycubeFaceAssetIds.negativeXAssetId,
+      positiveYAssetId: skycubeFaceAssetIds.positiveYAssetId,
+      negativeYAssetId: skycubeFaceAssetIds.negativeYAssetId,
+      positiveZAssetId: skycubeFaceAssetIds.positiveZAssetId,
+      negativeZAssetId: skycubeFaceAssetIds.negativeZAssetId,
     },
     environmentOrientationPreset: preset,
     environmentRotationDegrees,

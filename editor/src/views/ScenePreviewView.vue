@@ -7452,7 +7452,21 @@ async function applyBackgroundSettings(
 	if (background.mode === 'skycube') {
 		disposeGradientBackgroundDome(gradientBackgroundDome)
 		gradientBackgroundDome = null
-		const skycubeFormat = (background as any).skycubeFormat === 'zip' ? 'zip' : 'faces'
+		const faceAssetIds: Array<string | null> = [
+			background.positiveXAssetId ?? null,
+			background.negativeXAssetId ?? null,
+			background.positiveYAssetId ?? null,
+			background.negativeYAssetId ?? null,
+			background.positiveZAssetId ?? null,
+			background.negativeZAssetId ?? null,
+		]
+		const hasAnyFace = faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
+		const skycubeFormat =
+			(background as any).skycubeFormat === 'zip' || (background as any).skycubeFormat === 'faces'
+				? (background as any).skycubeFormat
+				: hasAnyFace
+					? 'faces'
+					: 'zip'
 		if (skycubeFormat === 'zip') {
 			const zipAssetId = (background as any).skycubeZipAssetId as string | null
 			const normalizedZipAssetId = zipAssetId && typeof zipAssetId === 'string' ? zipAssetId.trim() : ''
@@ -7534,16 +7548,7 @@ async function applyBackgroundSettings(
 			return true
 		}
 
-		const faceAssetIds: Array<string | null> = [
-			background.positiveXAssetId ?? null,
-			background.negativeXAssetId ?? null,
-			background.positiveYAssetId ?? null,
-			background.negativeYAssetId ?? null,
-			background.positiveZAssetId ?? null,
-			background.negativeZAssetId ?? null,
-		]
 		const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
-		const hasAnyFace = faceAssetIds.some(Boolean)
 		if (!hasAnyFace) {
 			disposeBackgroundResources()
 			scene.background = new THREE.Color(background.solidColor)
@@ -7684,6 +7689,24 @@ const environmentAssetSignature = computed(() => {
 	}
 	const settings = resolveDocumentEnvironment(currentDocument)
 	const background = settings.background
+	const hasAnySkycubeFaceAsset =
+		background.mode === 'skycube' &&
+		[
+			background.positiveXAssetId,
+			background.negativeXAssetId,
+			background.positiveYAssetId,
+			background.negativeYAssetId,
+			background.positiveZAssetId,
+			background.negativeZAssetId,
+		].some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
+	const skycubeFormat =
+		background.mode === 'skycube'
+			? (background as any).skycubeFormat === 'zip' || (background as any).skycubeFormat === 'faces'
+				? (background as any).skycubeFormat
+				: hasAnySkycubeFaceAsset
+					? 'faces'
+					: 'zip'
+			: null
 	return JSON.stringify({
 		background: {
 			mode: background.mode,
@@ -7691,10 +7714,7 @@ const environmentAssetSignature = computed(() => {
 			gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
 			gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
 			gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
-			skycubeFormat:
-				background.mode === 'skycube'
-					? ((background as any).skycubeFormat === 'zip' ? 'zip' : 'faces')
-					: null,
+			skycubeFormat,
 			hdriKey:
 				background.mode === 'hdri' && background.hdriAssetId
 					? computeEnvironmentAssetReloadKey(background.hdriAssetId)
