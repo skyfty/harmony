@@ -15,4 +15,15 @@ wechatPayRouter.post(
   wechatPayNotify,
 )
 
+wechatPayRouter.post(
+  '/notify/:miniAppId',
+  koaBody({
+    json: true,
+    urlencoded: false,
+    text: false,
+    includeUnparsed: true,
+  }),
+  wechatPayNotify,
+)
+
 export default wechatPayRouter

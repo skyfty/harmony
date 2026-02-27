@@ -68,7 +68,7 @@ async function bootstrap(): Promise<void> {
     text: false,
   })
   app.use(async (ctx, next) => {
-    if (ctx.path === '/wechat/pay/notify') {
+    if (ctx.path.startsWith('/wechat/pay/notify')) {
       await next()
       return
     }

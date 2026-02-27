@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from '@/utils/password'
 
 type AppUserLean = {
   _id: { toString(): string }
+  miniAppId?: string
   username?: string
   password?: string
   wxOpenId?: string
@@ -25,6 +26,7 @@ type AppUserLean = {
 
 export interface MiniSessionUser {
   id: string
+  miniAppId?: string
   username?: string
   wxOpenId?: string
   wxUnionId?: string
@@ -50,6 +52,7 @@ export interface MiniSessionResponse {
 function buildMiniUser(user: AppUserLean): MiniSessionUser {
   return {
     id: user._id.toString(),
+    miniAppId: user.miniAppId ?? undefined,
     username: user.username ?? undefined,
     wxOpenId: user.wxOpenId ?? undefined,
     wxUnionId: user.wxUnionId ?? undefined,
@@ -72,6 +75,7 @@ function issueMiniToken(user: MiniSessionUser): string {
   return signMiniAuthToken({
     kind: 'user',
     sub: user.id,
+    miniAppId: user.miniAppId,
     username: user.username,
     wxOpenId: user.wxOpenId,
   })
@@ -132,19 +136,25 @@ export async function miniLoginWithPassword(username: string, password: string):
 }
 
 export async function miniLoginWithOpenId(input: {
+  miniAppId: string
   openId: string
   unionId?: string
   displayName?: string
   avatarUrl?: string
 }): Promise<MiniSessionResponse> {
+  const miniAppId = input.miniAppId.trim()
+  if (!miniAppId) {
+    throw new Error('miniAppId is required')
+  }
   const openId = input.openId.trim()
   if (!openId) {
     throw new Error('openId is required')
   }
 
-  let user = await AppUserModel.findOne({ wxOpenId: openId }).exec()
+  let user = await AppUserModel.findOne({ miniAppId, wxOpenId: openId }).exec()
   if (!user) {
     user = await AppUserModel.create({
+      miniAppId,
       wxOpenId: openId,
       wxUnionId: input.unionId,
       displayName: input.displayName ?? appConfig.miniAuth.defaultDisplayName,
@@ -178,6 +188,7 @@ export async function miniGetProfile(userId: string): Promise<MiniSessionRespons
 }
 
 export async function ensureMiniProgramTestUserV2(): Promise<void> {
+  const miniAppId = appConfig.miniAuth.defaultMiniAppId?.trim()
   const username = appConfig.miniProgramTestUser.username
   const password = appConfig.miniProgramTestUser.password
   const displayName = appConfig.miniProgramTestUser.displayName
@@ -186,9 +197,10 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
     return
   }
 
-  const existing = await AppUserModel.findOne({ username }).exec()
+  const existing = await AppUserModel.findOne({ username, miniAppId }).exec()
   if (!existing) {
     await AppUserModel.create({
+      miniAppId,
       username,
       password: await hashPassword(password),
       displayName: displayName || username,
@@ -225,12 +237,13 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
 }
 
 export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser | null> {
+  const miniAppId = appConfig.miniAuth.defaultMiniAppId?.trim()
   const username = appConfig.miniProgramTestUser.username.trim()
   if (!username) {
     return null
   }
 
-  const user = await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
+  const user = await AppUserModel.findOne({ username, miniAppId }).lean<AppUserLean>().exec()
   if (!user || user.status !== 'active') {
     return null
   }

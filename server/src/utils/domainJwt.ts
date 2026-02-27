@@ -12,6 +12,7 @@ export interface AdminAuthTokenPayload {
 export interface MiniAuthTokenPayload {
   kind: 'user'
   sub: string
+  miniAppId?: string
   username?: string
   wxOpenId?: string
 }

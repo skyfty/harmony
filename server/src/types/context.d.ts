@@ -17,6 +17,7 @@ declare module 'koa' {
     }
     miniAuthUser?: {
       id: string
+      miniAppId?: string
       username?: string
       wxOpenId?: string
     }

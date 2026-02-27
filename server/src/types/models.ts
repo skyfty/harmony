@@ -97,6 +97,7 @@ export interface AdminDocument extends Document<Types.ObjectId> {
 }
 
 export interface AppUserDocument extends Document<Types.ObjectId> {
+  miniAppId?: string
   username?: string
   password?: string
   wxOpenId?: string

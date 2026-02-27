@@ -10,6 +10,15 @@ type LoginResponse = {
 
 let pendingAuthPromise: Promise<string> | null = null
 
+function getMiniAppId(): string {
+  return String(import.meta.env.VITE_MINI_APP_ID ?? '').trim()
+}
+
+function shouldUseTestLogin(): boolean {
+  const raw = String(import.meta.env.VITE_MINI_USE_TEST_LOGIN ?? '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes'
+}
+
 export async function loginWithCredentials(username: string, password: string): Promise<string> {
   const data = await miniRequest<LoginResponse>('/mini-auth/login', {
     method: 'POST',
@@ -47,9 +56,14 @@ async function getWechatLoginCode(): Promise<string> {
 }
 
 export async function loginWithWechatCode(code: string): Promise<string> {
+  const miniAppId = getMiniAppId()
   const data = await miniRequest<LoginResponse>('/mini-auth/wechat-login', {
     method: 'POST',
-    body: { code },
+    headers: miniAppId ? { 'X-Mini-App-Id': miniAppId } : undefined,
+    body: {
+      code,
+      miniAppId: miniAppId || undefined,
+    },
   })
 
   const token = readTokenFromResponse(data)
@@ -65,28 +79,25 @@ export async function ensureMiniAuth(): Promise<string> {
   const token = getAccessToken()
   if (token) return token
 
-  const username = String(import.meta.env.VITE_MINI_TEST_USERNAME ?? 'test')
-  const password = String(import.meta.env.VITE_MINI_TEST_PASSWORD ?? 'test1234')
-
-  try {
-    return await loginWithCredentials(username, password)
-  } catch {
-    return ''
+  if (!pendingAuthPromise) {
+    pendingAuthPromise = (async () => {
+      try {
+        if (shouldUseTestLogin()) {
+          const username = String(import.meta.env.VITE_MINI_TEST_USERNAME ?? 'test')
+          const password = String(import.meta.env.VITE_MINI_TEST_PASSWORD ?? 'test1234')
+          return await loginWithCredentials(username, password)
+        }
+        const code = await getWechatLoginCode()
+        return await loginWithWechatCode(code)
+      } catch {
+        return ''
+      }
+    })().finally(() => {
+      pendingAuthPromise = null
+    })
   }
-  // if (!pendingAuthPromise) {
-  //   pendingAuthPromise = (async () => {
-  //     try {
-  //       const code = await getWechatLoginCode()
-  //       return await loginWithWechatCode(code)
-  //     } catch {
-  //       return ''
-  //     }
-  //   })().finally(() => {
-  //     pendingAuthPromise = null
-  //   })
-  // }
 
-  // return await pendingAuthPromise
+  return await pendingAuthPromise
 }
 
 export async function ensureDevLogin(): Promise<string> {

@@ -37,6 +37,7 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
       const payload = verifyMiniAuthToken(token)
       ctx.state.miniAuthUser = {
         id: payload.sub,
+        miniAppId: payload.miniAppId,
         username: payload.username,
         wxOpenId: payload.wxOpenId,
       }
@@ -59,6 +60,7 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     if (testUser) {
       ctx.state.miniAuthUser = {
         id: testUser.id,
+        miniAppId: testUser.miniAppId,
         username: testUser.username,
         wxOpenId: testUser.wxOpenId,
       }
@@ -92,6 +94,7 @@ export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> 
     const payload = verifyMiniAuthToken(token)
     ctx.state.miniAuthUser = {
       id: payload.sub,
+      miniAppId: payload.miniAppId,
       username: payload.username,
       wxOpenId: payload.wxOpenId,
     }

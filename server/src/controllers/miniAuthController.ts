@@ -110,8 +110,9 @@ export async function miniLogin(ctx: Context): Promise<void> {
 }
 
 export async function miniWechatLogin(ctx: Context): Promise<void> {
-  const { code, displayName, avatarUrl } = ctx.request.body as {
+  const { code, miniAppId, displayName, avatarUrl } = ctx.request.body as {
     code?: string
+    miniAppId?: string
     displayName?: string
     avatarUrl?: string
   }
@@ -119,8 +120,13 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
     ctx.throw(400, 'code is required')
   }
   try {
-    const identity = await exchangeMiniProgramCode(code)
+    const requestedMiniAppId =
+      (typeof miniAppId === 'string' && miniAppId.trim()) ||
+      (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
+      undefined
+    const identity = await exchangeMiniProgramCode(code, requestedMiniAppId)
     const session = await miniLoginWithOpenId({
+      miniAppId: identity.miniAppId,
       openId: identity.openId,
       unionId: identity.unionId,
       displayName,

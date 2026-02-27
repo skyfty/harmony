@@ -162,11 +162,52 @@ pnpm run mock:wechat-notify -- <orderNumber> fail
 - `WECHAT_MINI_APP_SECRET`：小程序 AppSecret
 - `WECHAT_API_BASE_URL`：默认 `https://api.weixin.qq.com`
 
+多小程序共享同一套 server 时，推荐额外配置：
+
+- `WECHAT_MINI_DEFAULT_APP_ID`：默认小程序标识（前端未传 `miniAppId` 时兜底）
+- `WECHAT_MINI_APPS_JSON`：多小程序登录配置，JSON 对象，key 为 `miniAppId`
+
+示例：
+
+```json
+{
+	"wx_app_a": { "appId": "wx_app_a", "appSecret": "secret_a" },
+	"wx_app_b": { "appId": "wx_app_b", "appSecret": "secret_b" }
+}
+```
+
 说明：
 
 - 服务端会调用 `sns/jscode2session` 交换 `openid/unionid`
-- 用户不存在时自动注册并签发 mini token
+- 用户不存在时自动注册并签发 mini token（按 `miniAppId + openid` 维度隔离）
 - 同一 `openid` 会复用已有账号；`unionid`（如返回）会写入用户档案
+
+## 微信支付多小程序共享配置（2026-02）
+
+当多个小程序共用同一后端支付服务时，可配置：
+
+- `WECHAT_PAY_DEFAULT_APP_ID`：默认支付小程序标识
+- `WECHAT_PAY_APPS_JSON`：多小程序支付配置，JSON 对象，key 为 `miniAppId`
+
+示例：
+
+```json
+{
+	"wx_app_a": {
+		"enabled": true,
+		"appId": "wx_app_a",
+		"mchId": "mch_a",
+		"serialNo": "serial_a",
+		"privateKey": "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----",
+		"apiV3Key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"notifyUrl": "https://v.touchmagic.cn/wechat/pay/notify/wx_app_a",
+		"baseUrl": "https://api.mch.weixin.qq.com",
+		"platformPublicKey": "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----",
+		"callbackSkipVerifyInDev": false,
+		"mockPlatformPrivateKey": ""
+	}
+}
+```
 
 ## 14. 一次性部署最小命令集（速查）
 

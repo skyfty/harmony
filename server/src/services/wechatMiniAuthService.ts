@@ -14,18 +14,25 @@ interface WechatCode2SessionError {
 type WechatCode2SessionResponse = WechatCode2SessionSuccess | WechatCode2SessionError
 
 export interface WechatMiniIdentity {
+  miniAppId: string
   openId: string
   unionId?: string
 }
 
-function getWechatMiniConfig() {
-  const { wechatMiniAppId, wechatMiniAppSecret, wechatApiBaseUrl } = appConfig.miniAuth
-  if (!wechatMiniAppId || !wechatMiniAppSecret) {
+function getWechatMiniConfig(miniAppId?: string) {
+  const { wechatApiBaseUrl, wechatMiniApps, defaultMiniAppId } = appConfig.miniAuth
+  const requestedMiniAppId = (miniAppId ?? '').trim() || defaultMiniAppId
+  if (!requestedMiniAppId) {
+    throw new Error('miniAppId is required')
+  }
+  const match = wechatMiniApps[requestedMiniAppId]
+  if (!match?.appId || !match?.appSecret) {
     throw new Error('WeChat mini program login is not configured')
   }
   return {
-    appId: wechatMiniAppId,
-    appSecret: wechatMiniAppSecret,
+    miniAppId: requestedMiniAppId,
+    appId: match.appId,
+    appSecret: match.appSecret,
     baseUrl: wechatApiBaseUrl,
   }
 }
@@ -44,13 +51,13 @@ function normalizeWechatError(response: WechatCode2SessionError): string {
   return response.errmsg ? `Wechat login failed: ${response.errmsg}` : 'Wechat login failed'
 }
 
-export async function exchangeMiniProgramCode(code: string): Promise<WechatMiniIdentity> {
+export async function exchangeMiniProgramCode(code: string, miniAppId?: string): Promise<WechatMiniIdentity> {
   const safeCode = code.trim()
   if (!safeCode) {
     throw new Error('code is required')
   }
 
-  const config = getWechatMiniConfig()
+  const config = getWechatMiniConfig(miniAppId)
   const params = new URLSearchParams({
     appid: config.appId,
     secret: config.appSecret,
@@ -95,6 +102,7 @@ export async function exchangeMiniProgramCode(code: string): Promise<WechatMiniI
   }
 
   return {
+    miniAppId: config.miniAppId,
     openId: parsed.openid,
     unionId: parsed.unionid,
   }

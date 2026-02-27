@@ -369,6 +369,7 @@ export async function payOrder(ctx: Context): Promise<void> {
   const description = (order.items[0]?.name || 'Harmony商品支付').slice(0, 120)
   const paymentResult = await createOrderPayment({
     channel: 'wechat',
+    miniAppId: appUser.miniAppId,
     orderNumber: order.orderNumber,
     description,
     amount: order.totalAmount,

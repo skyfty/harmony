@@ -196,6 +196,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
 
   const paymentResult = await createOrderPayment({
     channel: 'wechat',
+    miniAppId: appUser.miniAppId,
     orderNumber,
     description: product.name,
     amount: product.price,
