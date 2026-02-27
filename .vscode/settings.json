@@ -1,0 +1,28 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /mnt/d/harmony/editor && set -e && npm run build && echo DONE$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/d/harmony/editor && npx vue-tsc -b --pretty false$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/d/harmony/editor && npx vue-tsc -b --pretty false; echo EXIT:\\$\\?$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/d/harmony/editor && npx -y vue-tsc -b$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/d/harmony/schema && npm run -s build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/d/harmony && npm --prefix editor run build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
