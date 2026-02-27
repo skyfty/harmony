@@ -117,6 +117,30 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface MiniAppWechatPayConfig {
+  enabled: boolean
+  mchId?: string
+  serialNo?: string
+  privateKey?: string
+  apiV3Key?: string
+  notifyUrl?: string
+  baseUrl?: string
+  platformPublicKey?: string
+  callbackSkipVerifyInDev?: boolean
+  mockPlatformPrivateKey?: string
+}
+
+export interface MiniAppDocument extends Document<Types.ObjectId> {
+  miniAppId: string
+  name: string
+  appSecret: string
+  enabled: boolean
+  isDefault: boolean
+  wechatPay: MiniAppWechatPayConfig
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface LoginAuditDocument extends Document<Types.ObjectId> {
   /** 中文：关联用户 ID（可选） */
   userId?: Types.ObjectId

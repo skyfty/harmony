@@ -91,7 +91,7 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
   const rawBody = getRawBody(ctx)
   const headers = ctx.request.headers as Record<string, string | string[] | undefined>
 
-  const verified = verifyWechatCallbackSignature(rawBody, headers, miniAppId)
+  const verified = await verifyWechatCallbackSignature(rawBody, headers, miniAppId)
   if (!verified) {
     ctx.status = 401
     ctx.body = {
@@ -102,7 +102,7 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
   }
 
   const notifyBody = parseWechatNotifyBody(ctx.request.body)
-  const transaction = decryptWechatNotifyResource(notifyBody.resource, miniAppId)
+  const transaction = await decryptWechatNotifyResource(notifyBody.resource, miniAppId)
 
   const order = await OrderModel.findOne({ orderNumber: transaction.out_trade_no }).exec()
   if (!order) {

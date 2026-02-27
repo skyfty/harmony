@@ -1,4 +1,5 @@
 import { appConfig } from '@/config/env'
+import { resolveMiniAppConfig } from '@/services/miniAppService'
 
 interface WechatCode2SessionSuccess {
   openid: string
@@ -19,21 +20,13 @@ export interface WechatMiniIdentity {
   unionId?: string
 }
 
-function getWechatMiniConfig(miniAppId?: string) {
-  const { wechatApiBaseUrl, wechatMiniApps, defaultMiniAppId } = appConfig.miniAuth
-  const requestedMiniAppId = (miniAppId ?? '').trim() || defaultMiniAppId
-  if (!requestedMiniAppId) {
-    throw new Error('miniAppId is required')
-  }
-  const match = wechatMiniApps[requestedMiniAppId]
-  if (!match?.appId || !match?.appSecret) {
-    throw new Error('WeChat mini program login is not configured')
-  }
+async function getWechatMiniConfig(miniAppId?: string) {
+  const match = await resolveMiniAppConfig(miniAppId)
   return {
-    miniAppId: requestedMiniAppId,
-    appId: match.appId,
+    miniAppId: match.miniAppId,
+    appId: match.miniAppId,
     appSecret: match.appSecret,
-    baseUrl: wechatApiBaseUrl,
+    baseUrl: appConfig.miniAuth.wechatApiBaseUrl,
   }
 }
 
@@ -57,7 +50,7 @@ export async function exchangeMiniProgramCode(code: string, miniAppId?: string):
     throw new Error('code is required')
   }
 
-  const config = getWechatMiniConfig(miniAppId)
+  const config = await getWechatMiniConfig(miniAppId)
   const params = new URLSearchParams({
     appid: config.appId,
     secret: config.appSecret,

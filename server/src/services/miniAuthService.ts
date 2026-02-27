@@ -1,5 +1,6 @@
 import { appConfig } from '@/config/env'
 import { AppUserModel } from '@/models/AppUser'
+import { resolveMiniAppConfig } from '@/services/miniAppService'
 import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
 
@@ -188,7 +189,8 @@ export async function miniGetProfile(userId: string): Promise<MiniSessionRespons
 }
 
 export async function ensureMiniProgramTestUserV2(): Promise<void> {
-  const miniAppId = appConfig.miniAuth.defaultMiniAppId?.trim()
+  const miniApp = await resolveMiniAppConfig().catch(() => null)
+  const miniAppId = miniApp?.miniAppId
   const username = appConfig.miniProgramTestUser.username
   const password = appConfig.miniProgramTestUser.password
   const displayName = appConfig.miniProgramTestUser.displayName
@@ -237,7 +239,8 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
 }
 
 export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser | null> {
-  const miniAppId = appConfig.miniAuth.defaultMiniAppId?.trim()
+  const miniApp = await resolveMiniAppConfig().catch(() => null)
+  const miniAppId = miniApp?.miniAppId
   const username = appConfig.miniProgramTestUser.username.trim()
   if (!username) {
     return null

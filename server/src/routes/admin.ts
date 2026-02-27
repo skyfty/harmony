@@ -88,6 +88,13 @@ import {
   updateAdminAccountStatus,
 } from '@/controllers/admin/adminAccountController'
 import {
+  createMiniApp,
+  deleteMiniApp,
+  getMiniApp,
+  listMiniApps,
+  updateMiniApp,
+} from '@/controllers/admin/miniAppController'
+import {
   bulkMoveAssetsCategory,
   createAssetSeries,
   createAssetTag,
@@ -263,6 +270,12 @@ adminRouter.put('/admins/:id', requireAnyPermission(['admin:super']), updateAdmi
 adminRouter.patch('/admins/:id/status', requireAnyPermission(['admin:super']), updateAdminAccountStatus)
 adminRouter.put('/admins/:id/status', requireAnyPermission(['admin:super']), updateAdminAccountStatus)
 adminRouter.delete('/admins/:id', requireAnyPermission(['admin:super']), deleteAdminAccount)
+
+adminRouter.get('/mini-apps', requireAnyPermission(['admin:super']), listMiniApps)
+adminRouter.get('/mini-apps/:id', requireAnyPermission(['admin:super']), getMiniApp)
+adminRouter.post('/mini-apps', requireAnyPermission(['admin:super']), createMiniApp)
+adminRouter.put('/mini-apps/:id', requireAnyPermission(['admin:super']), updateMiniApp)
+adminRouter.delete('/mini-apps/:id', requireAnyPermission(['admin:super']), deleteMiniApp)
 
 adminRouter.get('/resources/assets', requireAnyPermission(['resource:read']), listAssets)
 adminRouter.get('/resources/assets/:id', requireAnyPermission(['resource:read']), getAsset)

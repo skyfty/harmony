@@ -325,6 +325,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
+      {
+        name: 'SystemMiniApps',
+        path: '/system/mini-apps',
+        component: () => import('#/views/system/mini-apps/index.vue'),
+        meta: {
+          icon: 'lucide:smartphone',
+          title: '小程序配置',
+        },
+      },
       
       {
         name: 'LoginLogs',
