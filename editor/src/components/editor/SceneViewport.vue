@@ -1544,7 +1544,6 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
-const vertexSnapMode = computed(() => sceneStore.viewportSettings.snapMode)
 const vertexSnapThresholdPx = computed(() => sceneStore.viewportSettings.snapThresholdPx)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
@@ -1593,6 +1592,8 @@ const buildToolCursorClass = computed(() => {
 const scatterEraseModeActive = ref(false)
 const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
+const vertexSnapShiftModifierActive = ref(false)
+const isVertexSnapActiveEffective = computed(() => vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
@@ -4589,7 +4590,7 @@ const {
       }
     },
     getVertexSnapDelta: ({ drag, event }) => {
-      const active = vertexSnapMode.value === 'vertex' || event.shiftKey
+      const active = isVertexSnapActiveEffective.value || event.shiftKey
       if (!active) {
         pendingVertexSnapResult = null
         clearVertexSnapMarkers()
@@ -9773,7 +9774,7 @@ function handlePointerMove(event: PointerEvent) {
           dragPreviewGroup.position.copy(aligned)
           dragPreviewGroup.visible = true
 
-          const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+          const placementSnapActive = isVertexSnapActiveEffective.value && props.activeTool === 'select'
           const result = snapController.updatePlacementSideSnap({
             event,
             previewObject: dragPreviewGroup,
@@ -10036,12 +10037,9 @@ async function handlePointerUp(event: PointerEvent) {
         const asset = sceneStore.getAsset(session.assetId)
         // 仅对 model/mesh/prefab 类型资产执行放置逻辑
         if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab')) {
-          // 如果当前启用了顶点吸附模式并且工具处于选择模式，则尝试消费一次放置侧吸附结果
+          // 如果当前临时顶点吸附生效并且工具处于选择模式，则尝试消费一次放置侧吸附结果
           // `consumePlacementSideSnapResult()` 会返回当前预览时计算好的吸附信息并将其内部状态标记为已消费
-          // Only enable post-spawn placement-side snap when user holds Shift AND
-          // vertex snap is enabled in the viewport toolbar (i.e. snap mode === 'vertex').
-          // This avoids interfering with normal placement workflows.
-          const placementSideSnap = (event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+          const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')
             ? snapController.consumePlacementSideSnapResult()
             : null
           // 清除提示标记，确保 UI 不再显示旧的吸附提示
@@ -11385,7 +11383,7 @@ function handleViewportDragOver(event: DragEvent) {
       const now = Date.now()
       if (now - lastDragHoverPreviewUpdate > 8) {
         lastDragHoverPreviewUpdate = now
-        const placementSnapActive = vertexSnapMode.value === 'vertex' && props.activeTool === 'select'
+        const placementSnapActive = isVertexSnapActiveEffective.value && props.activeTool === 'select'
         const result = snapController.updatePlacementSideSnap({
           event,
           previewObject: dragPreviewGroup,
@@ -11531,8 +11529,7 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  // Only apply placement-side snap on drop if Shift is held and vertex snap is enabled
-  const placementSideSnap = (event.shiftKey && vertexSnapMode.value === 'vertex' && props.activeTool === 'select')
+  const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')
     ? snapController.consumePlacementSideSnapResult()
     : null
 
@@ -13911,6 +13908,27 @@ function handleScatterEraseRestoreBlur() {
   scatterEraseRestoreModifierActive.value = false
 }
 
+function handleVertexSnapShiftKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Shift') {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  vertexSnapShiftModifierActive.value = true
+}
+
+function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Shift') {
+    return
+  }
+  vertexSnapShiftModifierActive.value = false
+}
+
+function handleVertexSnapShiftBlur() {
+  vertexSnapShiftModifierActive.value = false
+}
+
 onMounted(() => {
   initScene()
   updateToolMode(props.activeTool)
@@ -13920,6 +13938,9 @@ onMounted(() => {
     // Viewport shortcuts should trigger on keydown (avoid double-trigger on keyup,
     // and make framing/escape feel immediate).
     window.addEventListener('keydown', handleViewportShortcut, { capture: true })
+  window.addEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
+  window.addEventListener('keyup', handleVertexSnapShiftKeyUp, { capture: true })
+  window.addEventListener('blur', handleVertexSnapShiftBlur, { capture: true })
   window.addEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.addEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.addEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
@@ -13952,6 +13973,9 @@ onBeforeUnmount(() => {
   disposeScene()
   disposeCachedTextures()
   window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
+  window.removeEventListener('keydown', handleVertexSnapShiftKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleVertexSnapShiftKeyUp, { capture: true })
+  window.removeEventListener('blur', handleVertexSnapShiftBlur, { capture: true })
   window.removeEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.removeEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.removeEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
@@ -14231,7 +14255,7 @@ defineExpose<SceneViewportHandle>({
       <ViewportToolbar
         :show-grid="gridVisible"
         :show-axes="axesVisible"
-        :vertex-snap-enabled="vertexSnapMode === 'vertex'"
+        :vertex-snap-enabled="isVertexSnapActiveEffective"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
