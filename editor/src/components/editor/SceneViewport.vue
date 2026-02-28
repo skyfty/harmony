@@ -2327,6 +2327,65 @@ const updatePlacementSideSnapHintPulse = (nowMs: number) => {
   }
 }
 
+const GROUND_STREAMING_RADIUS_MIN_METERS = 200
+const GROUND_STREAMING_RADIUS_MAX_METERS = 1500
+const GROUND_STREAMING_HEIGHT_START_METERS = 80
+const GROUND_STREAMING_HEIGHT_END_METERS = 1200
+const GROUND_STREAMING_LOOK_DOWN_START = 0.2
+const GROUND_STREAMING_LOOK_DOWN_END = 0.85
+const dynamicGroundStreamingCameraWorldHelper = new THREE.Vector3()
+const dynamicGroundStreamingGroundWorldHelper = new THREE.Vector3()
+const dynamicGroundStreamingCameraDirectionHelper = new THREE.Vector3()
+
+function resolveDynamicGroundStreamingRadiusMeters(groundObject?: THREE.Object3D | null): number {
+  const activeCamera = camera
+  if (!activeCamera) {
+    return GROUND_STREAMING_RADIUS_MIN_METERS
+  }
+
+  activeCamera.getWorldPosition(dynamicGroundStreamingCameraWorldHelper)
+
+  let relativeHeight = dynamicGroundStreamingCameraWorldHelper.y
+  if (groundObject) {
+    groundObject.getWorldPosition(dynamicGroundStreamingGroundWorldHelper)
+    relativeHeight = dynamicGroundStreamingCameraWorldHelper.y - dynamicGroundStreamingGroundWorldHelper.y
+  }
+
+  const normalizedHeight = THREE.MathUtils.clamp(
+    (Math.max(0, relativeHeight) - GROUND_STREAMING_HEIGHT_START_METERS) /
+      Math.max(1e-6, GROUND_STREAMING_HEIGHT_END_METERS - GROUND_STREAMING_HEIGHT_START_METERS),
+    0,
+    1,
+  )
+
+  activeCamera.getWorldDirection(dynamicGroundStreamingCameraDirectionHelper)
+  const lookDownFactorRaw = THREE.MathUtils.clamp(-dynamicGroundStreamingCameraDirectionHelper.y, 0, 1)
+  const normalizedLookDown = THREE.MathUtils.clamp(
+    (lookDownFactorRaw - GROUND_STREAMING_LOOK_DOWN_START) /
+      Math.max(1e-6, GROUND_STREAMING_LOOK_DOWN_END - GROUND_STREAMING_LOOK_DOWN_START),
+    0,
+    1,
+  )
+
+  const normalizedStreamingFactor = Math.min(normalizedHeight, normalizedLookDown)
+
+  return THREE.MathUtils.lerp(
+    GROUND_STREAMING_RADIUS_MIN_METERS,
+    GROUND_STREAMING_RADIUS_MAX_METERS,
+    normalizedStreamingFactor,
+  )
+}
+
+function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
+  const node = findGroundNodeInTree(sceneStore.nodes)
+  if (!node || node.dynamicMesh?.type !== 'Ground') {
+    return resolveDynamicGroundStreamingRadiusMeters(null)
+  }
+  const container = objectMap.get(node.id)
+  const groundObject = (container?.userData?.groundMesh as THREE.Object3D | undefined) ?? null
+  return resolveDynamicGroundStreamingRadiusMeters(groundObject)
+}
+
 const groundEditor = createGroundEditor({
   sceneStore,
   getSceneNodes: () => props.sceneNodes,
@@ -2355,6 +2414,7 @@ const groundEditor = createGroundEditor({
   lockScatterLodToBaseAsset: true,
   scatterChunkStreaming: {
     enabled: true,
+    getDynamicRadiusMeters: resolveDynamicGroundAndScatterStreamingRadiusMeters,
   },
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
@@ -12710,7 +12770,9 @@ function updateGroundChunkStreaming() {
     return
   }
 
-  updateGroundChunks(groundObject, node.dynamicMesh, camera)
+  updateGroundChunks(groundObject, node.dynamicMesh, camera, {
+    radius: resolveDynamicGroundStreamingRadiusMeters(groundObject),
+  })
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
   // Refresh placement raycast targets when the chunk set changes; otherwise asset placement

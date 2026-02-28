@@ -115,6 +115,7 @@ export type GroundEditorOptions = {
 	scatterChunkStreaming?: {
 		enabled?: boolean
 		radiusMeters?: number
+		getDynamicRadiusMeters?: () => number | null | undefined
 		unloadPaddingMeters?: number
 		maxChunkChangesPerUpdate?: number
 		maxBindingChangesPerUpdate?: number
@@ -1115,6 +1116,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const scatterChunkStreamingEnabled = Boolean(options.scatterChunkStreaming?.enabled)
 	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
 	const scatterChunkStreamingRadiusOverride = clampFinite(options.scatterChunkStreaming?.radiusMeters, Number.NaN)
+	const scatterChunkStreamingDynamicRadiusResolver = options.scatterChunkStreaming?.getDynamicRadiusMeters
 	const scatterChunkStreamingPaddingOverride = clampFinite(options.scatterChunkStreaming?.unloadPaddingMeters, Number.NaN)
 	const scatterChunkStreamingMaxChunkChangesPerUpdate =
 		Number.isFinite(options.scatterChunkStreaming?.maxChunkChangesPerUpdate) && (options.scatterChunkStreaming?.maxChunkChangesPerUpdate as number) > 0
@@ -2487,9 +2489,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 		const chunkWorldSize = Math.max(1, Math.round(chunkCells)) * cellSize
-		const radius = Number.isFinite(scatterChunkStreamingRadiusOverride)
-			? Math.max(0, scatterChunkStreamingRadiusOverride)
-			: resolveScatterChunkStreamingRadiusMeters(definition)
+		let resolvedDynamicRadius = Number.NaN
+		if (typeof scatterChunkStreamingDynamicRadiusResolver === 'function') {
+			try {
+				resolvedDynamicRadius = clampFinite(scatterChunkStreamingDynamicRadiusResolver(), Number.NaN)
+			} catch (_error) {
+				resolvedDynamicRadius = Number.NaN
+			}
+		}
+		const radius = Number.isFinite(resolvedDynamicRadius)
+			? Math.max(0, resolvedDynamicRadius)
+			: Number.isFinite(scatterChunkStreamingRadiusOverride)
+				? Math.max(0, scatterChunkStreamingRadiusOverride)
+				: resolveScatterChunkStreamingRadiusMeters(definition)
 		const padding = Number.isFinite(scatterChunkStreamingPaddingOverride)
 			? Math.max(0, scatterChunkStreamingPaddingOverride)
 			: chunkWorldSize

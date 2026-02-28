@@ -78,6 +78,7 @@ export async function loginWithWechatCode(code: string): Promise<string> {
 export async function ensureMiniAuth(): Promise<string> {
   const token = getAccessToken()
   if (token) return token
+  console.log('No access token found, starting authentication process...')
 
   if (!pendingAuthPromise) {
     pendingAuthPromise = (async () => {
