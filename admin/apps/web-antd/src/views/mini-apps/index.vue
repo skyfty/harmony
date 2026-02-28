@@ -21,6 +21,8 @@ import {
   Space,
   Switch,
 } from 'ant-design-vue';
+import { Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface MiniAppFormModel {
   miniAppId: string;
@@ -225,8 +227,16 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'admin:super'" size="small" type="link" @click="openEdit(row)">编辑</Button>
-          <Button v-access:code="'admin:super'" :disabled="row.isDefault" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="编辑">
+            <Button v-access:code="'admin:super'" size="small" type="text" @click="openEdit(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button v-access:code="'admin:super'" :disabled="row.isDefault" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </Grid>

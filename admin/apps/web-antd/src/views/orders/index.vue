@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import { Button, Modal, Space, message } from 'ant-design-vue';
+import { Button, Modal, Space, message, Tooltip } from 'ant-design-vue';
+import { EyeOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { useRouter } from 'vue-router';
 import { listOrdersApi, getOrderApi, createOrderApi, updateOrderApi, deleteOrderApi } from '#/api';
 import OrderForm from './OrderForm.vue';
@@ -145,9 +146,21 @@ const [OrderGrid, orderGridApi] = useVbenVxeGrid({
 
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="openDetail(row)">详情</Button>
-          <Button size="small" type="link" @click="openEditModal(row)">{{ t('page.orders.index.actions.edit') || 'Edit' }}</Button>
-          <Button danger size="small" type="link" @click="handleDelete(row)">{{ t('page.orders.index.actions.delete') || 'Delete' }}</Button>
+          <Tooltip title="详情">
+            <Button size="small" type="text" @click="openDetail(row)">
+              <EyeOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.orders.index.actions.edit') || 'Edit'">
+            <Button size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.orders.index.actions.delete') || 'Delete'">
+            <Button danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </OrderGrid>

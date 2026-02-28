@@ -31,6 +31,8 @@ import {
   Tag,
   Upload,
 } from 'ant-design-vue';
+import { Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { createResourceAssetApi } from '#/api/core/resources';
 
 interface UserFormModel {
@@ -361,23 +363,27 @@ function handleAvatarBeforeUpload(file: UploadFile) {
 
       <template #actions="{ row }">
         <Space>
-          <Button
-            v-access:code="'user:write'"
-            size="small"
-            type="link"
-            @click="openEditModal(row)"
-          >
-            {{ t('page.systemUsers.index.actions.edit') }}
-          </Button>
-          <Button
-            v-access:code="'user:write'"
-            danger
-            size="small"
-            type="link"
-            @click="handleDelete(row)"
-          >
-            {{ t('page.systemUsers.index.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.systemUsers.index.actions.edit')">
+            <Button
+              v-access:code="'user:write'"
+              size="small"
+              type="text"
+              @click="openEditModal(row)"
+            >
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.systemUsers.index.actions.delete')">
+            <Button
+              v-access:code="'user:write'"
+              danger
+              size="small"
+              type="text"
+              @click="handleDelete(row)"
+            >
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </UserGrid>

@@ -16,7 +16,8 @@ import {
 } from '#/api';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload } from 'ant-design-vue';
+import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip } from 'ant-design-vue';
+import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
   sceneId: string;
@@ -455,18 +456,29 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="openDetail(row)">
-            {{ t('page.sceneSpots.index.actions.detail') }}
-          </Button>
-          <Button v-access:code="'comment:read'" size="small" type="link" @click="openComments(row)">
-            {{ t('page.sceneSpots.index.actions.comments') }}
-          </Button>
-          <Button v-access:code="'sceneSpot:write'" size="small" type="link" @click="openEditModal(row)">
-            {{ t('page.sceneSpots.index.actions.edit') }}
-          </Button>
-          <Button v-access:code="'sceneSpot:write'" danger size="small" type="link" @click="handleDelete(row)">
-            {{ t('page.sceneSpots.index.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.sceneSpots.index.actions.detail')">
+            <Button size="small" type="text" @click="openDetail(row)">
+              <EyeOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip :title="t('page.sceneSpots.index.actions.comments')">
+            <Button v-access:code="'comment:read'" size="small" type="text" @click="openComments(row)">
+              <CommentOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip :title="t('page.sceneSpots.index.actions.edit')">
+            <Button v-access:code="'sceneSpot:write'" size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip :title="t('page.sceneSpots.index.actions.delete')">
+            <Button v-access:code="'sceneSpot:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </SceneSpotGrid>

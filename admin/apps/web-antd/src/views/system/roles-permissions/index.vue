@@ -39,6 +39,8 @@ import {
   Tabs,
   Tag,
 } from 'ant-design-vue';
+import { Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface RoleFormModel {
   code: string;
@@ -461,23 +463,27 @@ onMounted(async () => {
 
           <template #role-actions="{ row }">
             <Space>
-              <Button
-                v-access:code="'role:write'"
-                size="small"
-                type="link"
-                @click="openEditRole(row)"
-              >
-                {{ t('page.rolesPermissions.index.role.actions.edit') }}
-              </Button>
-              <Button
-                v-access:code="'role:write'"
-                danger
-                size="small"
-                type="link"
-                @click="handleDeleteRole(row)"
-              >
-                {{ t('page.rolesPermissions.index.role.actions.delete') }}
-              </Button>
+              <Tooltip :title="t('page.rolesPermissions.index.role.actions.edit')">
+                <Button
+                  v-access:code="'role:write'"
+                  size="small"
+                  type="text"
+                  @click="openEditRole(row)"
+                >
+                  <EditOutlined />
+                </Button>
+              </Tooltip>
+              <Tooltip :title="t('page.rolesPermissions.index.role.actions.delete')">
+                <Button
+                  v-access:code="'role:write'"
+                  danger
+                  size="small"
+                  type="text"
+                  @click="handleDeleteRole(row)"
+                >
+                  <DeleteOutlined />
+                </Button>
+              </Tooltip>
             </Space>
           </template>
         </RoleGrid>
@@ -497,23 +503,27 @@ onMounted(async () => {
 
           <template #permission-actions="{ row }">
             <Space>
-              <Button
-                v-access:code="'permission:write'"
-                size="small"
-                type="link"
-                @click="openEditPermission(row)"
-              >
-                {{ t('page.rolesPermissions.index.permission.actions.edit') }}
-              </Button>
-              <Button
-                v-access:code="'permission:write'"
-                danger
-                size="small"
-                type="link"
-                @click="handleDeletePermission(row)"
-              >
-                {{ t('page.rolesPermissions.index.permission.actions.delete') }}
-              </Button>
+              <Tooltip :title="t('page.rolesPermissions.index.permission.actions.edit')">
+                <Button
+                  v-access:code="'permission:write'"
+                  size="small"
+                  type="text"
+                  @click="openEditPermission(row)"
+                >
+                  <EditOutlined />
+                </Button>
+              </Tooltip>
+              <Tooltip :title="t('page.rolesPermissions.index.permission.actions.delete')">
+                <Button
+                  v-access:code="'permission:write'"
+                  danger
+                  size="small"
+                  type="text"
+                  @click="handleDeletePermission(row)"
+                >
+                  <DeleteOutlined />
+                </Button>
+              </Tooltip>
             </Space>
           </template>
         </PermissionGrid>

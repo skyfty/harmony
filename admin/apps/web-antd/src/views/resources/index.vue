@@ -20,7 +20,8 @@ import {
   type ResourceTagItem,
 } from '#/api';
 
-import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Upload } from 'ant-design-vue';
+import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Upload, Tooltip } from 'ant-design-vue';
+import { DownloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface AssetFormModel {
   categoryId: string;
@@ -456,9 +457,21 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button type="link" size="small" @click="handleDownload(row.id)">下载</Button>
-          <Button v-access:code="'resource:write'" type="link" size="small" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'resource:write'" danger type="link" size="small" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="下载">
+            <Button type="text" size="small" @click="handleDownload(row.id)">
+              <DownloadOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </AssetGrid>

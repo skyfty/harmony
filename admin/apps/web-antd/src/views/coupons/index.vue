@@ -16,7 +16,8 @@ import {
   updateCouponApi,
 } from '#/api';
 
-import { Button, DatePicker, Form, Input, message, Modal, Select, Space } from 'ant-design-vue';
+import { Button, DatePicker, Form, Input, message, Modal, Select, Space, Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface CouponFormModel {
   typeId: string;
@@ -184,8 +185,16 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEditModal(row)">{{ t('page.coupons.index.actions.edit') }}</Button>
-          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.coupons.index.actions.delete') }}</Button>
+          <Tooltip :title="t('page.coupons.index.actions.edit')">
+            <Button v-access:code="'coupon:write'" size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.coupons.index.actions.delete')">
+            <Button v-access:code="'coupon:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </CouponGrid>

@@ -12,7 +12,8 @@ import {
   type ResourceTagItem,
 } from '#/api';
 
-import { Button, Form, Input, message, Modal, Space } from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Space, Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface TagFormModel {
   description: string;
@@ -160,8 +161,16 @@ const [TagGrid, tagGridApi] = useVbenVxeGrid<ResourceTagItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'resource:write'" type="link" size="small" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'resource:write'" danger type="link" size="small" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="编辑">
+            <Button v-access:code="'resource:write'" type="text" size="small" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button v-access:code="'resource:write'" danger type="text" size="small" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </TagGrid>

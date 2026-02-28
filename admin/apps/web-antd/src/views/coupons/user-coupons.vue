@@ -17,7 +17,8 @@ import {
   useUserCouponByAdminApi,
 } from '#/api';
 
-import { Button, DatePicker, Form, Input, message, Modal, Select, Space, Tag } from 'ant-design-vue';
+import { Button, DatePicker, Form, Input, message, Modal, Select, Space, Tag, Tooltip } from 'ant-design-vue';
+import { CheckOutlined } from '@ant-design/icons-vue';
 
 interface DistributeFormModel {
   couponId: string;
@@ -283,15 +284,17 @@ onMounted(async () => {
       </template>
 
       <template #actions="{ row }">
-        <Button
-          v-access:code="'coupon:write'"
-          type="link"
-          size="small"
-          :disabled="row.status !== 'unused'"
-          @click="handleUse(row)"
-        >
-          {{ t('page.coupons.userCoupons.actions.use') }}
-        </Button>
+        <Tooltip :title="t('page.coupons.userCoupons.actions.use')">
+          <Button
+            v-access:code="'coupon:write'"
+            type="text"
+            size="small"
+            :disabled="row.status !== 'unused'"
+            @click="handleUse(row)"
+          >
+            <CheckOutlined />
+          </Button>
+        </Tooltip>
       </template>
     </UserCouponGrid>
 

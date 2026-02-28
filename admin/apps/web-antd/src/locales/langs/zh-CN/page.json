@@ -41,7 +41,6 @@
       "table": {
         "title": "场景管理",
         "name": "名称",
-        "checkpointTotal": "打卡点总数",
         "fileUrl": "场景文件地址",
         "fileSize": "文件大小(B)",
         "updatedAt": "更新时间",
@@ -211,11 +210,6 @@
       "form": {
         "keyword": { "label": "关键字", "placeholder": "留言内容关键字" },
         "status": { "label": "状态", "placeholder": "请选择状态" }
-      },
-      "status": {
-        "pending": "待审核",
-        "approved": "已通过",
-        "rejected": "已驳回"
       },
       "table": {
         "sceneSpot": "景点",

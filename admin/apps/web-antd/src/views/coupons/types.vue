@@ -22,7 +22,9 @@ import {
   Modal,
   Space,
   Switch,
+  Tooltip,
 } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface CouponTypeFormModel {
   name: string;
@@ -193,8 +195,16 @@ const [Grid, gridApi] = useVbenVxeGrid<CouponTypeItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'coupon:write'" size="small" type="link" @click="openEdit(row)">{{ t('page.coupons.types.actions.edit') }}</Button>
-          <Button v-access:code="'coupon:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.coupons.types.actions.delete') }}</Button>
+          <Tooltip :title="t('page.coupons.types.actions.edit')">
+            <Button v-access:code="'coupon:write'" size="small" type="text" @click="openEdit(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.coupons.types.actions.delete')">
+            <Button v-access:code="'coupon:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </Grid>

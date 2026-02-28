@@ -17,7 +17,8 @@ import {
 } from '#/api';
 import { getUserApi } from '#/api/core/rbac';
 
-import { Button, Form, Input, message, Modal, Select, Space, Tag } from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Select, Space, Tag, Tooltip } from 'ant-design-vue';
+import { EyeOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface ProjectFormModel {
   categoryId?: string;
@@ -293,13 +294,21 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="openProjectDetail(row)">{{ t('page.userProjects.index.actions.detail') }}</Button>
-          <Button v-access:code="'project:write'" size="small" type="link" @click="openEditProjectModal(row)">
-            {{ t('page.userProjects.index.actions.edit') }}
-          </Button>
-          <Button v-access:code="'project:write'" danger size="small" type="link" @click="handleDeleteProject(row)">
-            {{ t('page.userProjects.index.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.userProjects.index.actions.detail')">
+            <Button size="small" type="text" @click="openProjectDetail(row)">
+              <EyeOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.userProjects.index.actions.edit')">
+            <Button v-access:code="'project:write'" size="small" type="text" @click="openEditProjectModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.userProjects.index.actions.delete')">
+            <Button v-access:code="'project:write'" danger size="small" type="text" @click="handleDeleteProject(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </ProjectGrid>

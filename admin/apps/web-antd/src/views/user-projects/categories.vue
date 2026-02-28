@@ -23,6 +23,8 @@ import {
   Space,
   Switch,
 } from 'ant-design-vue';
+import { Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface CategoryFormModel {
   description: string;
@@ -184,18 +186,22 @@ const [Grid, gridApi] = useVbenVxeGrid<UserProjectCategoryItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'projectCategory:write'" size="small" type="link" @click="openEdit(row)">
-            {{ t('page.userProjects.categories.actions.edit') }}
-          </Button>
-          <Button
-            v-access:code="'projectCategory:write'"
-            danger
-            size="small"
-            type="link"
-            @click="handleDelete(row)"
-          >
-            {{ t('page.userProjects.categories.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.userProjects.categories.actions.edit')">
+            <Button v-access:code="'projectCategory:write'" size="small" type="text" @click="openEdit(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.userProjects.categories.actions.delete')">
+            <Button
+              v-access:code="'projectCategory:write'"
+              danger
+              size="small"
+              type="text"
+              @click="handleDelete(row)"
+            >
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </Grid>

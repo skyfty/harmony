@@ -2,7 +2,8 @@
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useVbenVxeGrid } from '#/adapter/vxe-table'
-import { Button, Space, Modal, message } from 'ant-design-vue'
+import { Button, Space, Modal, message, Tooltip } from 'ant-design-vue'
+import { EyeOutlined, DeleteOutlined } from '@ant-design/icons-vue'
 import { deletePunchRecordApi, listPunchRecordsApi } from '#/api'
 
 const router = useRouter()
@@ -98,8 +99,16 @@ function handleDelete(row: any) {
       </template>
       <template #actions="{ row }">
         <Space>
-          <Button size="small" type="link" @click="() => openDetail(row)">{{ t('page.punchRecords.index.actions.detail') }}</Button>
-          <Button v-access:code="'punch:delete'" size="small" type="link" danger @click="() => handleDelete(row)">{{ t('page.punchRecords.index.actions.delete') }}</Button>
+          <Tooltip :title="t('page.punchRecords.index.actions.detail')">
+            <Button size="small" type="text" @click="() => openDetail(row)">
+              <EyeOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.punchRecords.index.actions.delete')">
+            <Button v-access:code="'punch:delete'" size="small" type="text" danger @click="() => handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </Grid>

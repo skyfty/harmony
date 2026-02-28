@@ -22,7 +22,9 @@ import {
   Modal,
   Space,
   Switch,
+  Tooltip,
 } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface CategoryFormModel {
   description: string;
@@ -193,17 +195,24 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'product:write'" size="small" type="link" @click="openEdit(row)">{{ t('page.products.categories.actions.edit') }}</Button>
-          <Button
-            v-access:code="'product:write'"
-            :disabled="row.isBuiltin"
-            danger
-            size="small"
-            type="link"
-            @click="handleDelete(row)"
-          >
-            {{ t('page.products.categories.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.products.categories.actions.edit')">
+            <Button v-access:code="'product:write'" size="small" type="text" @click="openEdit(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip :title="t('page.products.categories.actions.delete')">
+            <Button
+              v-access:code="'product:write'"
+              :disabled="row.isBuiltin"
+              danger
+              size="small"
+              type="text"
+              @click="handleDelete(row)"
+            >
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </Grid>

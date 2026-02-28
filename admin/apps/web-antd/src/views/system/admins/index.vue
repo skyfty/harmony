@@ -32,6 +32,8 @@ import {
   Switch,
   Tag,
 } from 'ant-design-vue';
+import { Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface AdminFormModel {
   displayName: string;
@@ -356,23 +358,27 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button
-            v-access:code="'admin:super'"
-            size="small"
-            type="link"
-            @click="openEditModal(row)"
-          >
-            {{ t('page.systemAdmins.index.actions.edit') }}
-          </Button>
-          <Button
-            v-access:code="'admin:super'"
-            danger
-            size="small"
-            type="link"
-            @click="handleDelete(row)"
-          >
-            {{ t('page.systemAdmins.index.actions.delete') }}
-          </Button>
+          <Tooltip :title="t('page.systemAdmins.index.actions.edit')">
+            <Button
+              v-access:code="'admin:super'"
+              size="small"
+              type="text"
+              @click="openEditModal(row)"
+            >
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.systemAdmins.index.actions.delete')">
+            <Button
+              v-access:code="'admin:super'"
+              danger
+              size="small"
+              type="text"
+              @click="handleDelete(row)"
+            >
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </AdminGrid>

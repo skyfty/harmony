@@ -14,7 +14,8 @@ import {
   updateProductApi,
 } from '#/api';
 
-import { Button, Form, Input, message, Modal, Space, Select, InputNumber, Upload } from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Space, Select, InputNumber, Upload, Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { createResourceAssetApi } from '#/api/core/resources';
 
 interface ProductFormModel {
@@ -247,8 +248,17 @@ onMounted(() => {
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'product:write'" size="small" type="link" @click="openEditModal(row)">{{ t('page.products.index.actions.edit') }}</Button>
-          <Button v-access:code="'product:write'" danger size="small" type="link" @click="handleDelete(row)">{{ t('page.products.index.actions.delete') }}</Button>
+          <Tooltip :title="t('page.products.index.actions.edit')">
+            <Button v-access:code="'product:write'" size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip :title="t('page.products.index.actions.delete')">
+            <Button v-access:code="'product:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </ProductGrid>

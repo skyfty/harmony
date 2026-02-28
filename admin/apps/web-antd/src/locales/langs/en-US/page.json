@@ -41,7 +41,6 @@
       "table": {
         "title": "Scene Management",
         "name": "Name",
-        "checkpointTotal": "Checkpoints",
         "fileUrl": "Scene File URL",
         "fileSize": "File Size (B)",
         "updatedAt": "Updated At",
@@ -211,12 +210,6 @@
       "form": {
         "keyword": { "label": "Keyword", "placeholder": "Comment keyword" },
         "status": { "label": "Status", "placeholder": "Please select status" }
-            },
-      "status": {
-        "pending": "Pending",
-        "approved": "Approved",
-        "rejected": "Rejected"
-
       },
       "table": {
         "sceneSpot": "Scene",

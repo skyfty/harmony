@@ -9,7 +9,7 @@ import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { createSceneApi, deleteSceneApi, listScenesApi, updateSceneApi } from '#/api';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, message, Modal, Space, Upload } from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Space, Upload, Tooltip } from 'ant-design-vue';
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface SceneFormModel {
@@ -221,25 +221,16 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button
-            v-access:code="'scene:write'"
-            size="small"
-            type="text"
-            @click="openEditSceneModal(row)"
-            :title="t('page.scenes.index.actions.edit')"
-          >
-            <EditOutlined />
-          </Button>
-          <Button
-            v-access:code="'scene:write'"
-            danger
-            size="small"
-            type="text"
-            @click="handleDeleteScene(row)"
-            :title="t('page.scenes.index.actions.delete')"
-          >
-            <DeleteOutlined />
-          </Button>
+          <Tooltip :title="t('page.scenes.index.actions.edit')">
+            <Button v-access:code="'scene:write'" size="small" type="text" @click="openEditSceneModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+          <Tooltip :title="t('page.scenes.index.actions.delete')">
+            <Button v-access:code="'scene:write'" danger size="small" type="text" @click="handleDeleteScene(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </SceneGrid>

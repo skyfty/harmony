@@ -22,7 +22,9 @@ import {
   Space,
   Switch,
   Upload,
+  Tooltip,
 } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { createResourceAssetApi } from '#/api/core/resources';
 
 interface VehicleFormModel {
@@ -223,8 +225,17 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'vehicle:write'" size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'vehicle:write'" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="编辑">
+            <Button v-access:code="'vehicle:write'" size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip title="删除">
+            <Button v-access:code="'vehicle:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </VehicleGrid>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useVbenVxeGrid } from '#/adapter/vxe-table'
-import { Button, Modal, message } from 'ant-design-vue'
+import { Button, Modal, message, Tooltip } from 'ant-design-vue'
+import { EyeOutlined, DeleteOutlined, DeleteTwoTone } from '@ant-design/icons-vue'
 import { listLoginLogsApi, deleteLoginLogApi, bulkDeleteLoginLogsApi, exportLoginLogsApi } from '#/api'
 
 const deleting = ref<string | null>(null)
@@ -127,8 +128,16 @@ async function handleExport() {
 
       <template #actions="{ row }">
         <a-space>
-          <a-button size="small" type="link" @click="() => message.info(`ID: ${row.id}`)">查看</a-button>
-          <a-button size="small" type="link" danger @click="() => handleDelete(row)">删除</a-button>
+          <Tooltip title="查看">
+            <a-button size="small" type="text" @click="() => message.info(`ID: ${row.id}`)">
+              <EyeOutlined />
+            </a-button>
+          </Tooltip>
+          <Tooltip title="删除">
+            <a-button size="small" type="text" danger @click="() => handleDelete(row)">
+              <DeleteOutlined />
+            </a-button>
+          </Tooltip>
         </a-space>
       </template>
     </Grid>

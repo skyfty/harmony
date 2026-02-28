@@ -14,7 +14,8 @@ import {
   type ResourceCategoryItem,
 } from '#/api';
 
-import { Button, Form, Input, message, Modal, Select, Space, Switch } from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Select, Space, Switch, Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface CategoryFlatItem {
   ancestorIds: string[];
@@ -592,10 +593,18 @@ onMounted(async () => {
           >
             拖拽
           </Button>
-          <Button v-access:code="'category:write'" type="link" size="small" @click="openEditModal(row)">编辑</Button>
+          <Tooltip title="编辑">
+            <Button v-access:code="'category:write'" type="text" size="small" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
           <Button v-access:code="'category:write'" type="link" size="small" @click="openMoveModal(row)">移动</Button>
           <Button v-access:code="'category:write'" type="link" size="small" @click="openMergeModal(row)">合并</Button>
-          <Button v-access:code="'category:write'" danger type="link" size="small" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="删除">
+            <Button v-access:code="'category:write'" danger type="text" size="small" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
       </CategoryGrid>

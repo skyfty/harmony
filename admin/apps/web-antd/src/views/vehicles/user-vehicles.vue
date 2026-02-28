@@ -15,7 +15,8 @@ import {
   updateUserVehicleApi,
 } from '#/api';
 
-import { Button, Form, message, Modal, Select, Space } from 'ant-design-vue';
+import { Button, Form, message, Modal, Select, Space, Tooltip } from 'ant-design-vue';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 
 interface UserVehicleFormModel {
   userId: string;
@@ -216,8 +217,17 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Button v-access:code="'vehicle:write'" size="small" type="link" @click="openEditModal(row)">编辑</Button>
-          <Button v-access:code="'vehicle:write'" danger size="small" type="link" @click="handleDelete(row)">删除</Button>
+          <Tooltip title="编辑">
+            <Button v-access:code="'vehicle:write'" size="small" type="text" @click="openEditModal(row)">
+              <EditOutlined />
+            </Button>
+          </Tooltip>
+
+          <Tooltip title="删除">
+            <Button v-access:code="'vehicle:write'" danger size="small" type="text" @click="handleDelete(row)">
+              <DeleteOutlined />
+            </Button>
+          </Tooltip>
         </Space>
       </template>
     </UserVehicleGrid>
