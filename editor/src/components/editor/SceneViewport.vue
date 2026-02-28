@@ -1577,6 +1577,7 @@ const {
 } = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
+const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'wall') {
@@ -2464,6 +2465,10 @@ watch(brushOperation, (operation) => {
 
 function handleScatterEraseMenuOpen(value: boolean) {
   scatterEraseMenuOpen.value = value
+}
+
+function handleCameraResetMenuOpen(value: boolean) {
+  cameraResetMenuOpen.value = Boolean(value)
 }
 
 function handleClearAllScatterInstances() {
@@ -7054,6 +7059,93 @@ function resetCameraView() {
 
 }
 
+type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
+
+function resolveFocusTargetFromNodeId(nodeId: string): { target: THREE.Vector3; radiusEstimate: number } | null {
+  const target = new THREE.Vector3()
+  let radiusEstimate = 1
+
+  const node = sceneStore.getNodeById(nodeId)
+  if (node?.light?.type === 'Directional' && node.light.target) {
+    target.set(node.light.target.x, node.light.target.y, node.light.target.z)
+    radiusEstimate = Math.max(lastCameraFocusRadius ?? 1, 10)
+    return { target, radiusEstimate }
+  }
+
+  const object = objectMap.get(nodeId)
+  if (object) {
+    object.updateWorldMatrix(true, true)
+    const box = setBoundingBoxFromObject(object, new THREE.Box3())
+    if (!box.isEmpty()) {
+      box.getCenter(target)
+      const sphere = new THREE.Sphere()
+      box.getBoundingSphere(sphere)
+      radiusEstimate = sphere.radius
+    } else {
+      object.getWorldPosition(target)
+    }
+    return { target, radiusEstimate }
+  }
+
+  const fallbackNode = findSceneNode(props.sceneNodes, nodeId)
+  if (!fallbackNode) {
+    return null
+  }
+  target.set(fallbackNode.position.x, fallbackNode.position.y, fallbackNode.position.z)
+  const scaleEstimate = Math.max(fallbackNode.scale?.x ?? 1, fallbackNode.scale?.y ?? 1, fallbackNode.scale?.z ?? 1, 1)
+  radiusEstimate = scaleEstimate * 0.5
+  return { target, radiusEstimate }
+}
+
+function resetCameraToSelectionDirection(direction: CameraResetDirection): boolean {
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const selectedId = sceneStore.selectedNodeId
+  if (!selectedId) {
+    console.warn('请先选择节点')
+    return false
+  }
+
+  const focus = resolveFocusTargetFromNodeId(selectedId)
+  if (!focus) {
+    console.warn('请先选择节点')
+    return false
+  }
+
+  const directionVector = (() => {
+    if (direction === 'pos-x') return new THREE.Vector3(1, 0, 0)
+    if (direction === 'neg-x') return new THREE.Vector3(-1, 0, 0)
+    if (direction === 'pos-y') return new THREE.Vector3(0, 1, 0)
+    if (direction === 'neg-y') return new THREE.Vector3(0, -1, 0)
+    if (direction === 'pos-z') return new THREE.Vector3(0, 0, 1)
+    return new THREE.Vector3(0, 0, -1)
+  })()
+
+  const currentDistance = camera.position.distanceTo(mapControls.target)
+  const fallbackDistance = Math.max(0.8, focus.radiusEstimate * 2)
+  const distance = Number.isFinite(currentDistance) && currentDistance > 1e-4 ? currentDistance : fallbackDistance
+  const clampedTargetY = Math.max(focus.target.y, MIN_TARGET_HEIGHT)
+  const focusTarget = new THREE.Vector3(focus.target.x, clampedTargetY, focus.target.z)
+  const nextCameraPosition = focusTarget.clone().addScaledVector(directionVector, distance)
+
+  isApplyingCameraState = true
+  camera.position.copy(nextCameraPosition)
+  mapControls.target.copy(focusTarget)
+  lastCameraFocusRadius = Math.max(0.25, focus.radiusEstimate)
+  syncControlsConstraintsAndSpeeds()
+  mapControls.update()
+  gizmoControls?.cameraUpdate()
+  isApplyingCameraState = false
+  return true
+}
+
+function handleResetCameraDirection(direction: CameraResetDirection) {
+  resetCameraToSelectionDirection(direction)
+  cameraResetMenuOpen.value = false
+}
+
 function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -7331,39 +7423,11 @@ function focusCameraOnSelection(nodeIds: string[]): boolean {
 
 
 function focusCameraOnNode(nodeId: string): boolean {
-  const target = new THREE.Vector3()
-  let radiusEstimate = 1
-
-  const node = sceneStore.getNodeById(nodeId)
-  if (node?.light?.type === 'Directional' && node.light.target) {
-    target.set(node.light.target.x, node.light.target.y, node.light.target.z)
-    radiusEstimate = Math.max(lastCameraFocusRadius ?? 1, 10)
-    return applyCameraFocus(target, radiusEstimate)
+  const focus = resolveFocusTargetFromNodeId(nodeId)
+  if (!focus) {
+    return false
   }
-
-  const object = objectMap.get(nodeId)
-  if (object) {
-    object.updateWorldMatrix(true, true)
-    const box = setBoundingBoxFromObject(object, new THREE.Box3())
-    if (!box.isEmpty()) {
-      box.getCenter(target)
-      const sphere = new THREE.Sphere()
-      box.getBoundingSphere(sphere)
-      radiusEstimate = sphere.radius
-    } else {
-      object.getWorldPosition(target)
-    }
-  } else {
-    const node = findSceneNode(props.sceneNodes, nodeId)
-    if (!node) {
-      return false
-    }
-    target.set(node.position.x, node.position.y, node.position.z)
-    const scaleEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
-    radiusEstimate = scaleEstimate * 0.5
-  }
-
-  return applyCameraFocus(target, radiusEstimate)
+  return applyCameraFocus(focus.target, focus.radiusEstimate)
 }
 
 function handleControlsChange() {
@@ -14206,6 +14270,7 @@ defineExpose<SceneViewportHandle>({
         :scatter-erase-repair-active="scatterRepairModifierActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
+        :camera-reset-menu-open="cameraResetMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
         :floor-build-shape="floorBuildShape"
@@ -14215,6 +14280,7 @@ defineExpose<SceneViewportHandle>({
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
+        @reset-camera-direction="handleResetCameraDirection"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
@@ -14226,6 +14292,7 @@ defineExpose<SceneViewportHandle>({
         @toggle-scatter-erase="toggleScatterEraseMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
+          @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
             @update:wall-shape-menu-open="handleWallShapeMenuOpen"

@@ -444,16 +444,37 @@
         @click="toggleCameraControlMode"
       />
 
-      <v-btn
-        icon="mdi-camera"
-        density="compact"
-        size="small"
-        color="undefined"
-        variant="text"
-        class="toolbar-button"
-        title="Reset to Default View"
-        @click="emit('reset-camera')"
-      />
+      <v-menu
+        :model-value="cameraResetMenuOpen"
+        location="bottom"
+        :offset="6"
+        :open-on-click="false"
+        :close-on-content-click="true"
+        @update:modelValue="handleCameraResetMenuModelUpdate"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-camera"
+            density="compact"
+            size="small"
+            color="undefined"
+            variant="text"
+            class="toolbar-button"
+            title="Reset to Default View"
+            @click="emit('reset-camera')"
+            @contextmenu.prevent.stop="handleCameraResetContextMenu"
+          />
+        </template>
+        <v-list density="compact" class="camera-reset-menu">
+          <v-list-item title="正面 (+X)" @click="handleCameraResetDirectionSelect('pos-x')" />
+          <v-list-item title="背面 (-X)" @click="handleCameraResetDirectionSelect('neg-x')" />
+          <v-list-item title="上面 (+Y)" @click="handleCameraResetDirectionSelect('pos-y')" />
+          <v-list-item title="下面 (-Y)" @click="handleCameraResetDirectionSelect('neg-y')" />
+          <v-list-item title="左面 (+Z)" @click="handleCameraResetDirectionSelect('pos-z')" />
+          <v-list-item title="右面 (-Z)" @click="handleCameraResetDirectionSelect('neg-z')" />
+        </v-list>
+      </v-menu>
     </v-card>
   </div>
 </template>
@@ -489,6 +510,7 @@ const props = withDefaults(
   scatterEraseRepairActive?: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
+  cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
   floorBuildShape: FloorBuildShape
@@ -517,6 +539,8 @@ const emit = defineEmits<{
   (event: 'toggle-scatter-erase'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
+  (event: 'reset-camera-direction', direction: CameraResetDirection): void
+  (event: 'update:camera-reset-menu-open', value: boolean): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
@@ -540,6 +564,7 @@ const {
   buildToolsDisabled,
   scatterEraseRadius,
   scatterEraseMenuOpen,
+  cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
   floorBuildShape,
@@ -577,6 +602,8 @@ const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ?
 type RotationAxis = 'x' | 'y'
 
 type MirrorMode = 'horizontal' | 'vertical'
+
+type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
 
 type RotationAction = {
   id: string
@@ -916,6 +943,21 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   emit('update:scatter-erase-menu-open', true)
 }
 
+function handleCameraResetContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  emit('update:camera-reset-menu-open', true)
+}
+
+function handleCameraResetMenuModelUpdate(value: boolean) {
+  emit('update:camera-reset-menu-open', Boolean(value))
+}
+
+function handleCameraResetDirectionSelect(direction: CameraResetDirection) {
+  emit('reset-camera-direction', direction)
+  emit('update:camera-reset-menu-open', false)
+}
+
 function toggleGridVisibility() {
   sceneStore.toggleViewportGridVisible()
 }
@@ -968,6 +1010,11 @@ function handleClearScatterMenuAction() {
 
 .align-menu {
   min-width: 280px;
+  padding: 6px;
+}
+
+.camera-reset-menu {
+  min-width: 170px;
   padding: 6px;
 }
 
