@@ -1,5 +1,9 @@
 <template>
   <view class="page">
+    <view class="floating-back" :style="{ top: `${backButtonTop}px` }" @tap="handleBack">
+      <text class="floating-back__icon">‹</text>
+    </view>
+
     <SceneryViewer :project-id="projectId" :package-url="packageUrl" @punch="handlePunch" />
 
   </view>
@@ -7,9 +11,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { onLoad, onUnload } from '@dcloudio/uni-app';
+import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import { completeTravelLeaveRecord, createPunchRecord, createTravelEnterRecord, trackAnalyticsEvent } from '@harmony/utils';
+import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -17,6 +22,12 @@ const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleId = ref<string>('');
+const backButtonTop = ref<number>(8);
+
+function syncBackButtonTop(): void {
+  const metrics = getTopSafeAreaMetrics();
+  backButtonTop.value = metrics.topInset + Math.max((metrics.navBarHeight - 32) / 2, 6);
+}
 
 type PunchEventPayload = {
   eventName: 'punch';
@@ -48,7 +59,17 @@ function handlePunch(payload: PunchEventPayload): void {
   });
 }
 
+function handleBack(): void {
+  uni.navigateBack({
+    fail: () => {
+      void uni.reLaunch({ url: '/pages/home/index' });
+    },
+  });
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
+  syncBackButtonTop();
+
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = typeof record.packageUrl === 'string' ? record.packageUrl : '';
@@ -84,6 +105,10 @@ onLoad((query: Record<string, unknown> | undefined) => {
       vehicleId: selectedVehicleId.value || undefined,
     },
   });
+});
+
+onShow(() => {
+  syncBackButtonTop();
 });
 
 onUnload(() => {
@@ -123,6 +148,26 @@ onUnload(() => {
 .page {
   width: 100%;
   height: 100vh;
+}
+
+.floating-back {
+  position: fixed;
+  left: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2200;
+}
+
+.floating-back__icon {
+  font-size: 24px;
+  color: #ffffff;
+  line-height: 1;
+  margin-top: -2px;
 }
 
 </style>

@@ -405,8 +405,6 @@
           </view>
         </view>
       </view>
-
-      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
