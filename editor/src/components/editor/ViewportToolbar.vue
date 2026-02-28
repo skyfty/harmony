@@ -402,7 +402,7 @@
         density="compact"
         size="small"
         class="toolbar-button"
-        title="Toggle Vertex Snap"
+        title="Vertex Snap (Hold Shift)"
         @click="toggleVertexSnap"
       />
 

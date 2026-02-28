@@ -5,7 +5,7 @@
   "scripts": {
     "prepare:shared": "node ./scripts/prepare-shared.mjs",
     "predev:mp-weixin": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
-    "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin",
+    "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
     "prebuild:mp-weixin": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
     "build:mp-weixin": "uni build -p mp-weixin",
     "predev:h5": "pnpm run prepare:shared && harmony-tools sync-scenery --mode subpackage-uni-modules",
@@ -15,7 +15,8 @@
     "type-check": "vue-tsc -b",
     "lint": "eslint --ext .ts,.js,.vue src || true",
     "lint:fix": "eslint --ext .ts,.js,.vue src --fix || true",
-    "check": "pnpm run type-check && pnpm run lint"
+    "check": "pnpm run type-check && pnpm run lint",
+    "generate:svg-icons": "harmony-tools process-svg-icons --project . --clean --verbose"
   },
   "engines": {
     "pnpm": ">=10.0.0"

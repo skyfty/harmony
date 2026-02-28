@@ -24,6 +24,17 @@ try {
   vueRuntimeAlias = 'vue';
 }
 
+const isWsl = Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+const shouldUsePolling =
+  process.env.CHOKIDAR_USEPOLLING != null
+    ? process.env.CHOKIDAR_USEPOLLING !== '0'
+    : process.platform === 'win32' || isWsl;
+const parsedPollingInterval = Number.parseInt(process.env.CHOKIDAR_INTERVAL ?? '300', 10);
+const pollingInterval =
+  Number.isFinite(parsedPollingInterval) && parsedPollingInterval > 0
+    ? parsedPollingInterval
+    : 300;
+
 export default {
     optimizeDeps: {
       exclude: ['@minisheep/three-platform-adapter'],
@@ -53,7 +64,12 @@ export default {
 
     server: {
       port: 8092,
-      open: true //启动后是否自动打开浏览器
+      open: true, //启动后是否自动打开浏览器
+      watch: {
+        usePolling: shouldUsePolling,
+        interval: pollingInterval,
+      },
+      hmr: true,
     },
     plugins: [
       // esm-only 的包
