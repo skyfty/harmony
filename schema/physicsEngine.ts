@@ -4,6 +4,7 @@ import type {
 	SceneNode,
 	SceneNodeComponentState,
 	GroundDynamicMesh,
+	FloorDynamicMesh,
 	WallDynamicMesh,
 } from './index'
 import type {
@@ -267,6 +268,15 @@ export type WallTrimeshCacheEntry = {
 
 export type WallTrimeshCache = Map<string, WallTrimeshCacheEntry>
 
+export type FloorShapeCacheEntry = {
+	signature: string
+	segments: Array<{
+		shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>
+	}>
+}
+
+export type FloorShapeCache = Map<string, FloorShapeCacheEntry>
+
 export type RigidbodyMaterialEntry = {
 	material: CANNON.Material
 	friction: number
@@ -353,6 +363,272 @@ function warn(loggerTag: LoggerTag, message: string, ...args: unknown[]): void {
 function isWallDynamicMesh(mesh: unknown): mesh is { type: 'Wall' } {
 	const typed = mesh as { type?: unknown } | null | undefined
 	return Boolean(typed && typed.type === 'Wall')
+}
+
+function isFloorDynamicMesh(mesh: unknown): mesh is FloorDynamicMesh {
+	const typed = mesh as { type?: unknown } | null | undefined
+	return Boolean(typed && typed.type === 'Floor')
+}
+
+const FLOOR_EPSILON = 1e-6
+
+function clampFloorSmooth(value: unknown): number {
+	const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0
+	if (raw <= 0) {
+		return 0
+	}
+	if (raw >= 1) {
+		return 1
+	}
+	return raw
+}
+
+function clampFloorThickness(value: unknown): number {
+	const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0
+	if (raw <= 0) {
+		return 0
+	}
+	return Math.min(10, raw)
+}
+
+function sanitizeFloorVertices(vertices: unknown): Array<[number, number]> {
+	if (!Array.isArray(vertices)) {
+		return []
+	}
+	const out: Array<[number, number]> = []
+	for (const entry of vertices) {
+		if (!Array.isArray(entry) || entry.length < 2) {
+			continue
+		}
+		const x = Number(entry[0])
+		const z = Number(entry[1])
+		if (!Number.isFinite(x) || !Number.isFinite(z)) {
+			continue
+		}
+		const prev = out[out.length - 1]
+		if (prev) {
+			const dx = x - prev[0]
+			const dz = z - prev[1]
+			if (dx * dx + dz * dz <= FLOOR_EPSILON) {
+				continue
+			}
+		}
+		out.push([x, z])
+	}
+	if (out.length >= 3) {
+		const first = out[0]!
+		const last = out[out.length - 1]!
+		const dx = first[0] - last[0]
+		const dz = first[1] - last[1]
+		if (dx * dx + dz * dz <= FLOOR_EPSILON) {
+			out.pop()
+		}
+	}
+	return out
+}
+
+function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): THREE.Shape {
+	const shape = new THREE.Shape()
+	if (!points.length) {
+		return shape
+	}
+
+	if (smooth <= Number.EPSILON) {
+		shape.moveTo(points[0]!.x, points[0]!.y)
+		for (let i = 1; i < points.length; i += 1) {
+			shape.lineTo(points[i]!.x, points[i]!.y)
+		}
+		shape.closePath()
+		return shape
+	}
+
+	type CornerInfo = {
+		vertex: THREE.Vector2
+		enter: THREE.Vector2
+		exit: THREE.Vector2
+	}
+
+	const cornerInfos: CornerInfo[] = points.map((vertex, index) => {
+		const prev = points[(index - 1 + points.length) % points.length]!
+		const next = points[(index + 1) % points.length]!
+		const directionToPrev = prev.clone().sub(vertex)
+		const directionToNext = next.clone().sub(vertex)
+		const lenPrev = directionToPrev.length()
+		const lenNext = directionToNext.length()
+
+		if (lenPrev <= FLOOR_EPSILON || lenNext <= FLOOR_EPSILON) {
+			return {
+				vertex: vertex.clone(),
+				enter: vertex.clone(),
+				exit: vertex.clone(),
+			}
+		}
+
+		const maxOffset = Math.min(lenPrev, lenNext) * 0.5
+		const radius = smooth * maxOffset
+		if (radius <= FLOOR_EPSILON) {
+			return {
+				vertex: vertex.clone(),
+				enter: vertex.clone(),
+				exit: vertex.clone(),
+			}
+		}
+
+		const enter = vertex.clone()
+			.add(directionToPrev.clone().normalize().multiplyScalar(radius))
+		const exit = vertex.clone()
+			.add(directionToNext.clone().normalize().multiplyScalar(radius))
+
+		return {
+			vertex: vertex.clone(),
+			enter,
+			exit,
+		}
+	})
+
+	shape.moveTo(cornerInfos[0]!.enter.x, cornerInfos[0]!.enter.y)
+	for (let i = 0; i < cornerInfos.length; i += 1) {
+		const current = cornerInfos[i]!
+		const next = cornerInfos[(i + 1) % cornerInfos.length]!
+		shape.quadraticCurveTo(current.vertex.x, current.vertex.y, current.exit.x, current.exit.y)
+		if (current.exit.distanceToSquared(next.enter) > FLOOR_EPSILON) {
+			shape.lineTo(next.enter.x, next.enter.y)
+		}
+	}
+	shape.closePath()
+	return shape
+}
+
+function buildFloorOutlinePoints(definition: FloorDynamicMesh): THREE.Vector2[] {
+	const vertices = sanitizeFloorVertices(definition.vertices)
+	if (vertices.length < 3) {
+		return []
+	}
+	const points = vertices.map(([x, z]) => new THREE.Vector2(x, -z))
+	const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
+	const extracted = shape.extractPoints(96)
+	const raw = Array.isArray(extracted?.shape) && extracted.shape.length ? extracted.shape : points
+	const outline: THREE.Vector2[] = []
+	for (const entry of raw) {
+		if (!entry) {
+			continue
+		}
+		const x = Number(entry.x)
+		const y = Number(entry.y)
+		if (!Number.isFinite(x) || !Number.isFinite(y)) {
+			continue
+		}
+		const nextPoint = new THREE.Vector2(x, y)
+		const prev = outline[outline.length - 1]
+		if (prev && prev.distanceToSquared(nextPoint) <= FLOOR_EPSILON) {
+			continue
+		}
+		outline.push(nextPoint)
+	}
+	if (outline.length >= 2) {
+		const first = outline[0]!
+		const last = outline[outline.length - 1]!
+		if (first.distanceToSquared(last) <= FLOOR_EPSILON) {
+			outline.pop()
+		}
+	}
+	return outline
+}
+
+function createFloorSignature(definition: FloorDynamicMesh, outline: THREE.Vector2[], thickness: number): string {
+	let hash = 2166136261
+	const quantize = 1000
+	const fnv = (value: number) => {
+		hash ^= value
+		hash = Math.imul(hash, 16777619) >>> 0
+	}
+	outline.forEach((point) => {
+		fnv(Math.round(point.x * quantize) | 0)
+		fnv(Math.round(point.y * quantize) | 0)
+	})
+	fnv(Math.round(clampFloorSmooth(definition.smooth) * quantize) | 0)
+	fnv(Math.round(thickness * quantize) | 0)
+	return `f:${outline.length}:${hash.toString(16)}`
+}
+
+function buildTrianglePrismShape(a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2, thickness: number): Extract<RigidbodyPhysicsShape, { kind: 'convex' }> | null {
+	const abx = b.x - a.x
+	const aby = b.y - a.y
+	const acx = c.x - a.x
+	const acy = c.y - a.y
+	const area2 = Math.abs(abx * acy - aby * acx)
+	if (!Number.isFinite(area2) || area2 <= FLOOR_EPSILON) {
+		return null
+	}
+	const vertices: [number, number, number][] = [
+		[a.x, 0, -a.y],
+		[b.x, 0, -b.y],
+		[c.x, 0, -c.y],
+		[a.x, thickness, -a.y],
+		[b.x, thickness, -b.y],
+		[c.x, thickness, -c.y],
+	]
+	const faces = [
+		[0, 2, 1],
+		[3, 4, 5],
+		[0, 1, 4, 3],
+		[1, 2, 5, 4],
+		[2, 0, 3, 5],
+	]
+	return {
+		kind: 'convex',
+		vertices,
+		faces,
+		offset: [0, 0, 0],
+		applyScale: false,
+	}
+}
+
+export function resolveFloorShape(
+	node: SceneNode,
+	definition: FloorDynamicMesh,
+	cache: FloorShapeCache,
+): FloorShapeCacheEntry | null {
+	const nodeId = node.id
+	const thickness = clampFloorThickness(definition.thickness)
+	if (thickness <= FLOOR_EPSILON) {
+		cache.delete(nodeId)
+		return null
+	}
+	const outline = buildFloorOutlinePoints(definition)
+	if (outline.length < 3) {
+		cache.delete(nodeId)
+		return null
+	}
+	const signature = createFloorSignature(definition, outline, thickness)
+	const cached = cache.get(nodeId)
+	if (cached && cached.signature === signature) {
+		return cached
+	}
+	const triangles = THREE.ShapeUtils.triangulateShape(outline, [])
+	const segments: FloorShapeCacheEntry['segments'] = []
+	triangles.forEach((triangle) => {
+		if (!Array.isArray(triangle) || triangle.length !== 3) {
+			return
+		}
+		const a = outline[triangle[0] ?? -1]
+		const b = outline[triangle[1] ?? -1]
+		const c = outline[triangle[2] ?? -1]
+		if (!a || !b || !c) {
+			return
+		}
+		const shape = buildTrianglePrismShape(a, b, c, thickness)
+		if (shape) {
+			segments.push({ shape })
+		}
+	})
+	if (!segments.length) {
+		cache.delete(nodeId)
+		return null
+	}
+	const entry: FloorShapeCacheEntry = { signature, segments }
+	cache.set(nodeId, entry)
+	return entry
 }
 
 // findWallRenderMesh removed (unused)
@@ -881,6 +1157,7 @@ type CreateRigidbodyBodyInput = {
 export type CreateRigidbodyBodyOptions = {
 	world: CANNON.World
 	groundHeightfieldCache: Map<string, GroundHeightfieldCacheEntry>
+	floorShapeCache?: FloorShapeCache
 	wallTrimeshCache?: WallTrimeshCache
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
@@ -896,6 +1173,7 @@ export function createRigidbodyBody(
 	const {
 		world,
 		groundHeightfieldCache,
+		floorShapeCache,
 		wallTrimeshCache,
 		rigidbodyMaterialCache,
 		rigidbodyContactMaterialKeys,
@@ -908,6 +1186,7 @@ export function createRigidbodyBody(
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
+	let floorSegments: FloorShapeCacheEntry['segments'] | null = null
 	let needsHeightfieldOrientation = false
 	if (isGroundDynamicMesh(node.dynamicMesh)) {
 		const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh, groundHeightfieldCache)
@@ -925,6 +1204,13 @@ export function createRigidbodyBody(
 			offsetTuple = null
 		}
 	}
+	if (!resolvedShape && !wallSegments && isFloorDynamicMesh(node.dynamicMesh) && floorShapeCache) {
+		const entry = resolveFloorShape(node, node.dynamicMesh, floorShapeCache)
+		if (entry) {
+			floorSegments = entry.segments
+			offsetTuple = null
+		}
+	}
 	if (!resolvedShape && shapeDefinition) {
 		resolvedShape = createCannonShape(shapeDefinition, loggerTag, shapeScale)
 		offsetTuple = shapeDefinition.offset ?? null
@@ -932,7 +1218,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && !wallSegments) {
+	if (!resolvedShape && !wallSegments && !floorSegments) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -958,6 +1244,7 @@ export function createRigidbodyBody(
 		)
 	}
 	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
+	let addedShapeCount = 0
 	if (wallSegments && wallSegments.length) {
 		for (const segment of wallSegments) {
 			const [ox, oy, oz] = segment.offset
@@ -966,9 +1253,31 @@ export function createRigidbodyBody(
 			wallOrientationQuatHelper.set(qx, qy, qz, qw)
 			// Clone to avoid accidental shared references if cannon-es stores by reference.
 			body.addShape(segment.shape, wallOffsetVec3Helper.clone(), wallOrientationQuatHelper.clone())
+			addedShapeCount += 1
+		}
+	} else if (floorSegments && floorSegments.length) {
+		for (const segment of floorSegments) {
+			const shape = createCannonShape(segment.shape, loggerTag, shapeScale)
+			if (!shape) {
+				continue
+			}
+			const [ox, oy, oz] = segment.shape.offset ?? [0, 0, 0]
+			body.addShape(
+				shape,
+				heightfieldShapeOffsetHelper.set(
+					(ox ?? 0) * shapeScale.x,
+					(oy ?? 0) * shapeScale.y,
+					(oz ?? 0) * shapeScale.z,
+				),
+			)
+			addedShapeCount += 1
 		}
 	} else if (resolvedShape) {
 		body.addShape(resolvedShape, shapeOffset)
+		addedShapeCount += 1
+	}
+	if (!addedShapeCount) {
+		return null
 	}
 	syncBodyFromObject(body, object, orientationAdjustment)
 	body.updateMassProperties()
