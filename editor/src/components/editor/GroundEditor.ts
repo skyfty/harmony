@@ -2506,11 +2506,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? Math.max(0, scatterChunkStreamingPaddingOverride)
 			: chunkWorldSize
 
-		const cameraPosition = (camera as any)?.position as THREE.Vector3 | undefined
-		if (!cameraPosition) {
+		if (typeof (camera as any)?.getWorldPosition !== 'function') {
 			return
 		}
-		scatterChunkStreamingWorldCameraHelper.copy(cameraPosition)
+		camera.getWorldPosition(scatterChunkStreamingWorldCameraHelper)
 		groundMesh.updateMatrixWorld(true)
 		scatterChunkStreamingMatrixHelper.copy(groundMesh.matrixWorld).invert()
 		scatterChunkStreamingLocalCameraHelper.copy(scatterChunkStreamingWorldCameraHelper).applyMatrix4(scatterChunkStreamingMatrixHelper)

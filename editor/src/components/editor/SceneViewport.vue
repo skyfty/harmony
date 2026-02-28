@@ -2328,19 +2328,37 @@ const updatePlacementSideSnapHintPulse = (nowMs: number) => {
 }
 
 const GROUND_STREAMING_RADIUS_MIN_METERS = 200
-const GROUND_STREAMING_RADIUS_MAX_METERS = 1500
+const GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600
+const GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS = 5000
+const GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58
+const GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60
 const GROUND_STREAMING_HEIGHT_START_METERS = 80
 const GROUND_STREAMING_HEIGHT_END_METERS = 1200
-const GROUND_STREAMING_LOOK_DOWN_START = 0.2
-const GROUND_STREAMING_LOOK_DOWN_END = 0.85
+const GROUND_STREAMING_BUDGET_CREATE_MIN = 8
+const GROUND_STREAMING_BUDGET_CREATE_MAX = 56
+const GROUND_STREAMING_BUDGET_DESTROY_MIN = 12
+const GROUND_STREAMING_BUDGET_DESTROY_MAX = 96
+const GROUND_STREAMING_BUDGET_MAX_MS_MIN = 3.5
+const GROUND_STREAMING_BUDGET_MAX_MS_MAX = 9
+const GROUND_STREAMING_INTERVAL_MS_NEAR = 120
+const GROUND_STREAMING_INTERVAL_MS_FAR = 45
+const GROUND_STREAMING_MOVE_THRESHOLD_NEAR = 22
+const GROUND_STREAMING_MOVE_THRESHOLD_FAR = 8
 const dynamicGroundStreamingCameraWorldHelper = new THREE.Vector3()
 const dynamicGroundStreamingGroundWorldHelper = new THREE.Vector3()
-const dynamicGroundStreamingCameraDirectionHelper = new THREE.Vector3()
 
-function resolveDynamicGroundStreamingRadiusMeters(groundObject?: THREE.Object3D | null): number {
+type GroundStreamingMetrics = {
+  normalizedHeight: number
+  radiusMeters: number
+}
+
+function resolveDynamicGroundStreamingMetrics(groundObject?: THREE.Object3D | null): GroundStreamingMetrics {
   const activeCamera = camera
   if (!activeCamera) {
-    return GROUND_STREAMING_RADIUS_MIN_METERS
+    return {
+      normalizedHeight: 0,
+      radiusMeters: GROUND_STREAMING_RADIUS_MIN_METERS,
+    }
   }
 
   activeCamera.getWorldPosition(dynamicGroundStreamingCameraWorldHelper)
@@ -2358,22 +2376,90 @@ function resolveDynamicGroundStreamingRadiusMeters(groundObject?: THREE.Object3D
     1,
   )
 
-  activeCamera.getWorldDirection(dynamicGroundStreamingCameraDirectionHelper)
-  const lookDownFactorRaw = THREE.MathUtils.clamp(-dynamicGroundStreamingCameraDirectionHelper.y, 0, 1)
-  const normalizedLookDown = THREE.MathUtils.clamp(
-    (lookDownFactorRaw - GROUND_STREAMING_LOOK_DOWN_START) /
-      Math.max(1e-6, GROUND_STREAMING_LOOK_DOWN_END - GROUND_STREAMING_LOOK_DOWN_START),
-    0,
-    1,
+  const cameraLike = activeCamera as THREE.PerspectiveCamera & { aspect?: number; fov?: number; far?: number }
+  const aspect = Number.isFinite(cameraLike.aspect) ? Math.max(0.2, Number(cameraLike.aspect)) : 16 / 9
+  const fovDeg = Number.isFinite(cameraLike.fov) ? Number(cameraLike.fov) : GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES
+  const halfFovRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(fovDeg, 25, 120) * 0.5)
+  const halfViewHeight = Math.max(0, relativeHeight) * Math.tan(halfFovRad)
+  const halfViewWidth = halfViewHeight * aspect
+  const viewFootprintRadius = Math.sqrt(halfViewHeight * halfViewHeight + halfViewWidth * halfViewWidth)
+
+  const fovBaseHalfRad = THREE.MathUtils.degToRad(GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES * 0.5)
+  const fovFactor = THREE.MathUtils.clamp(
+    Math.tan(halfFovRad) / Math.max(1e-6, Math.tan(fovBaseHalfRad)),
+    0.65,
+    2.2,
   )
 
-  const normalizedStreamingFactor = Math.min(normalizedHeight, normalizedLookDown)
-
-  return THREE.MathUtils.lerp(
+  const radiusByHeight = THREE.MathUtils.lerp(
     GROUND_STREAMING_RADIUS_MIN_METERS,
-    GROUND_STREAMING_RADIUS_MAX_METERS,
-    normalizedStreamingFactor,
+    GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS,
+    normalizedHeight,
+  ) * fovFactor
+
+  const desiredRadius = Math.max(radiusByHeight, viewFootprintRadius + 120)
+  const farDistance = Number.isFinite(cameraLike.far) ? Math.max(0, Number(cameraLike.far)) : GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS
+  const farClipCap = farDistance > 0 ? farDistance * GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR : GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS
+  const effectiveCap = Math.max(
+    GROUND_STREAMING_RADIUS_MIN_METERS,
+    Math.min(GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS, farClipCap),
   )
+
+  return {
+    normalizedHeight,
+    radiusMeters: THREE.MathUtils.clamp(
+      desiredRadius,
+      GROUND_STREAMING_RADIUS_MIN_METERS,
+      effectiveCap,
+    ),
+  }
+}
+
+function resolveDynamicGroundStreamingRadiusMeters(groundObject?: THREE.Object3D | null): number {
+  return resolveDynamicGroundStreamingMetrics(groundObject).radiusMeters
+}
+
+function resolveDynamicGroundStreamingBudget(groundObject?: THREE.Object3D | null): {
+  maxCreatePerUpdate: number
+  maxDestroyPerUpdate: number
+  maxMs: number
+  minIntervalMs: number
+  minCameraMoveMeters: number
+} {
+  const { normalizedHeight } = resolveDynamicGroundStreamingMetrics(groundObject)
+  return {
+    maxCreatePerUpdate: Math.round(
+      THREE.MathUtils.lerp(
+        GROUND_STREAMING_BUDGET_CREATE_MIN,
+        GROUND_STREAMING_BUDGET_CREATE_MAX,
+        normalizedHeight,
+      ),
+    ),
+    maxDestroyPerUpdate: Math.round(
+      THREE.MathUtils.lerp(
+        GROUND_STREAMING_BUDGET_DESTROY_MIN,
+        GROUND_STREAMING_BUDGET_DESTROY_MAX,
+        normalizedHeight,
+      ),
+    ),
+    maxMs: THREE.MathUtils.lerp(
+      GROUND_STREAMING_BUDGET_MAX_MS_MIN,
+      GROUND_STREAMING_BUDGET_MAX_MS_MAX,
+      normalizedHeight,
+    ),
+    minIntervalMs: Math.round(
+      THREE.MathUtils.lerp(
+        GROUND_STREAMING_INTERVAL_MS_NEAR,
+        GROUND_STREAMING_INTERVAL_MS_FAR,
+        normalizedHeight,
+      ),
+    ),
+    minCameraMoveMeters: THREE.MathUtils.lerp(
+      GROUND_STREAMING_MOVE_THRESHOLD_NEAR,
+      GROUND_STREAMING_MOVE_THRESHOLD_FAR,
+      normalizedHeight,
+    ),
+  }
 }
 
 function resolveDynamicGroundAndScatterStreamingRadiusMeters(): number {
@@ -12770,8 +12856,18 @@ function updateGroundChunkStreaming() {
     return
   }
 
+  const radius = resolveDynamicGroundStreamingRadiusMeters(groundObject)
+  const budget = resolveDynamicGroundStreamingBudget(groundObject)
+
   updateGroundChunks(groundObject, node.dynamicMesh, camera, {
-    radius: resolveDynamicGroundStreamingRadiusMeters(groundObject),
+    radius,
+    budget: {
+      maxCreatePerUpdate: budget.maxCreatePerUpdate,
+      maxDestroyPerUpdate: budget.maxDestroyPerUpdate,
+      maxMs: budget.maxMs,
+    },
+    minIntervalMs: budget.minIntervalMs,
+    minCameraMoveMeters: budget.minCameraMoveMeters,
   })
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
