@@ -43,6 +43,7 @@ export type WallBuildToolSession = WallPreviewSession & {
   bodyAssetId: string | null
   brushPresetAssetId: string | null
   brushPresetData: WallPresetData | null
+  committedNewSegmentCount: number
   branchFrom: {
     nodeId: string
     chainStartIndex: number
@@ -98,6 +99,7 @@ export function createWallBuildTool(options: {
       bodyAssetId: null,
       brushPresetAssetId: null,
       brushPresetData: null,
+      committedNewSegmentCount: 0,
       branchFrom: null,
       shapeDraft: null,
     }
@@ -147,6 +149,16 @@ export function createWallBuildTool(options: {
       return start.clone()
     }
     return constrainWallEndPointSoftSnap(start, target, rawTarget)
+  }
+
+  const constrainWallEndPointWithoutAngle = (start: THREE.Vector3, target: THREE.Vector3): THREE.Vector3 => {
+    const delta = target.clone().sub(start)
+    const stepX = Math.round(delta.x / GRID_MAJOR_SPACING)
+    const stepZ = Math.round(delta.z / GRID_MAJOR_SPACING)
+    if (stepX === 0 && stepZ === 0) {
+      return start.clone()
+    }
+    return target.clone()
   }
 
   const WALL_SAME_NODE_ENDPOINT_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.35
@@ -204,8 +216,25 @@ export function createWallBuildTool(options: {
     return best
   }
 
+  const shouldConstrainWallAngleForActiveSegment = (): boolean => {
+    if (!session) {
+      return true
+    }
+    if (session.branchFrom) {
+      return true
+    }
+    if (session.committedNewSegmentCount > 0) {
+      return true
+    }
+    const hasExistingGeometry = Boolean(session.nodeId) || session.segments.length > 0
+    return hasExistingGeometry
+  }
+
   const constrainWallEndPointForBuild = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
-    const base = constrainWallEndPoint(start, target, rawTarget)
+    const shouldConstrainAngle = shouldConstrainWallAngleForActiveSegment()
+    const base = shouldConstrainAngle
+      ? constrainWallEndPoint(start, target, rawTarget)
+      : constrainWallEndPointWithoutAngle(start, target)
     if (base.equals(start)) {
       return base
     }
@@ -313,6 +342,7 @@ export function createWallBuildTool(options: {
     current.dragStart = null
     current.dragEnd = null
     current.nodeId = null
+    current.committedNewSegmentCount = 0
     current.shapeDraft = {
       kind,
       pointerId: event.pointerId,
@@ -545,6 +575,7 @@ export function createWallBuildTool(options: {
 
     session.dragStart = end.clone()
     session.dragEnd = end.clone()
+    session.committedNewSegmentCount += 1
     if (startedFromBranch) {
       session.branchFrom = null
     }
@@ -775,6 +806,7 @@ export function createWallBuildTool(options: {
       current.segments = expandWallSegmentsToWorld(node)
       current.dragStart = worldPoint.clone()
       current.dragEnd = worldPoint.clone()
+      current.committedNewSegmentCount = 0
       current.shapeDraft = null
 
       // When branching from an existing wall, never apply brush presets.
