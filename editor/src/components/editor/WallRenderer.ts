@@ -234,6 +234,15 @@ type WallModelOrientation = NonNullable<WallComponentProps['bodyOrientation']>
 type WallModelPlacementMode = NonNullable<WallComponentProps['modelPlacementMode']>
 type WallForwardAxis = WallModelOrientation['forwardAxis']
 
+function resolveEditorWallPlacementMode(mode: WallModelPlacementMode): WallModelPlacementMode {
+  // In editor viewport, prefer geometry tiling to avoid visible UV stretching
+  // for materials that cannot be safely shader-patched.
+  if (mode === 'stretchTiledUv') {
+    return 'repeatInstances'
+  }
+  return mode
+}
+
 type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
 
 function wallForwardAxisInfo(forwardAxis: WallForwardAxis): WallForwardAxisInfo {
@@ -353,6 +362,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wallProps = wallComponent
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
+    const placementMode = wallProps ? resolveEditorWallPlacementMode(wallProps.modelPlacementMode) : 'repeatInstances'
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const headAssetId = wallComponent?.props?.headAssetId ?? null
@@ -376,7 +386,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -398,7 +408,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -420,7 +430,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1476,6 +1486,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wallProps = wallComponent
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
+    const placementMode = wallProps ? resolveEditorWallPlacementMode(wallProps.modelPlacementMode) : 'repeatInstances'
     const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
 
     // 各类实例化模型资源：
@@ -1687,7 +1698,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1720,7 +1731,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：通常用于墙顶装饰/压顶，沿墙段铺设。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1750,7 +1761,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, wallProps.modelPlacementMode, {
+          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })

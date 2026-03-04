@@ -7,6 +7,8 @@ import {
   Matrix4,
   Mesh,
   Object3D,
+  RepeatWrapping,
+  type Texture,
   Vector3,
   type Material,
 } from 'three'
@@ -113,6 +115,31 @@ const tempMatrix = new Matrix4()
 const tempInstanceMatrix = new Matrix4()
 const WALL_UV_SCALE_U_ATTRIBUTE = 'harmonyWallUvScale'
 const wallUvScaleShaderPatchedMaterials = new WeakSet<Material>()
+const WALL_REPEAT_U_TEXTURE_SLOTS = [
+  'map',
+  'alphaMap',
+  'lightMap',
+  'aoMap',
+  'bumpMap',
+  'normalMap',
+  'displacementMap',
+  'emissiveMap',
+  'metalnessMap',
+  'roughnessMap',
+  'clearcoatMap',
+  'clearcoatNormalMap',
+  'clearcoatRoughnessMap',
+  'iridescenceMap',
+  'iridescenceThicknessMap',
+  'sheenColorMap',
+  'sheenRoughnessMap',
+  'specularMap',
+  'specularColorMap',
+  'specularIntensityMap',
+  'transmissionMap',
+  'thicknessMap',
+  'anisotropyMap',
+] as const
 
 function sanitizeWallUvScaleU(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
@@ -139,15 +166,47 @@ function setInstanceWallUvScaleU(mesh: InstancedMesh, index: number, value: numb
   attribute.needsUpdate = true
 }
 
+function ensureWallMaterialRepeatWrapU(material: Material): void {
+  const candidate = material as Material & Record<string, unknown>
+  let changed = false
+  for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
+    const texture = candidate[slot] as Texture | null | undefined
+    if (!texture) {
+      continue
+    }
+    if (texture.wrapS !== RepeatWrapping) {
+      texture.wrapS = RepeatWrapping
+      texture.needsUpdate = true
+      changed = true
+    }
+  }
+  if (changed) {
+    candidate.needsUpdate = true
+  }
+}
+
 function installWallUvScaleShaderPatch(material: Material): void {
   const candidate = material as Material & {
     isMeshStandardMaterial?: boolean
     isMeshPhysicalMaterial?: boolean
+    isMeshBasicMaterial?: boolean
+    isMeshLambertMaterial?: boolean
+    isMeshPhongMaterial?: boolean
+    isMeshToonMaterial?: boolean
+    isMeshMatcapMaterial?: boolean
     onBeforeCompile?: (shader: any, renderer: any) => void
     customProgramCacheKey?: () => string
     needsUpdate?: boolean
   }
-  const isSupported = Boolean(candidate?.isMeshStandardMaterial || candidate?.isMeshPhysicalMaterial)
+  const isSupported = Boolean(
+    candidate?.isMeshStandardMaterial
+      || candidate?.isMeshPhysicalMaterial
+      || candidate?.isMeshBasicMaterial
+      || candidate?.isMeshLambertMaterial
+      || candidate?.isMeshPhongMaterial
+      || candidate?.isMeshToonMaterial
+      || candidate?.isMeshMatcapMaterial
+  )
   if (!isSupported || wallUvScaleShaderPatchedMaterials.has(material)) {
     return
   }
@@ -641,10 +700,12 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     if (Array.isArray(submesh.material)) {
       submesh.material.forEach((entry) => {
         if (entry) {
+          ensureWallMaterialRepeatWrapU(entry)
           installWallUvScaleShaderPatch(entry)
         }
       })
     } else if (submesh.material) {
+      ensureWallMaterialRepeatWrapU(submesh.material)
       installWallUvScaleShaderPatch(submesh.material)
     }
 

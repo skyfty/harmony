@@ -64,10 +64,13 @@ export type WallModelOrientation = {
   yawDeg: number
 }
 
+export type WallModelPlacementMode = 'stretchTiledUv' | 'repeatInstances'
+
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
+  modelPlacementMode?: WallModelPlacementMode
 
   /** Joint trim strategy used to avoid overlaps between body tiles and corner models. */
   jointTrimMode?: 'auto' | 'manual'
@@ -96,6 +99,13 @@ const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
+
+function normalizeWallModelPlacementMode(value: unknown): WallModelPlacementMode {
+  if (value === 'repeatInstances') {
+    return 'repeatInstances'
+  }
+  return 'stretchTiledUv'
+}
 
 /** Local alias so all helpers below use the same segment type. */
 type WallRenderSeg = WallRenderSegment
@@ -455,6 +465,121 @@ function buildStretchedWallMeshesForSegs(
     mesh.receiveShadow = true
     meshes.push(mesh)
   }
+  return meshes
+}
+
+function buildRepeatWallMeshesForSegs(
+  segs: WallRenderSeg[],
+  template: InstancedAssetTemplate,
+  mode: 'body' | 'head' | 'foot',
+  orientation: WallModelOrientation,
+): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = []
+
+  const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
+  const { tileLengthLocal, minAlongAxis, maxAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
+  const templateMinY = template.bounds.min.y
+  const info = wallForwardAxisInfo(orientation.forwardAxis)
+
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const dir = new THREE.Vector3()
+  const unitDir = new THREE.Vector3()
+  const quat = new THREE.Quaternion()
+  const yawQuat = new THREE.Quaternion()
+  const scale = new THREE.Vector3(1, 1, 1)
+  const offset = new THREE.Vector3()
+  const pos = new THREE.Vector3()
+  const localMatrix = new THREE.Matrix4()
+
+  const pushMesh = (stretchFactor: number): void => {
+    const mat = Array.isArray(template.material)
+      ? template.material.map((m) => cloneWallMaterialWithRepeat(m, stretchFactor))
+      : cloneWallMaterialWithRepeat(template.material, stretchFactor)
+
+    const mesh = new THREE.Mesh(template.geometry, mat)
+    mesh.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+    mesh.userData.dynamicMeshType = 'WallAsset'
+    mesh.matrixAutoUpdate = false
+    mesh.matrix.copy(localMatrix)
+    mesh.matrixWorldNeedsUpdate = true
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    meshes.push(mesh)
+  }
+
+  for (const seg of segs) {
+    start.set(seg.start.x, seg.start.y, seg.start.z)
+    end.set(seg.end.x, seg.end.y, seg.end.z)
+    dir.subVectors(end, start)
+    dir.y = 0
+    const length = dir.length()
+    if (length <= WALL_INSTANCING_DIR_EPSILON) continue
+
+    const bodyHeight = resolveWallBodyHeight(seg)
+    const scaleY = mode === 'body' ? bodyHeight / templateHeight : 1
+
+    unitDir.copy(dir).multiplyScalar(1 / length)
+    quat.setFromUnitVectors(localForward, unitDir)
+    if (orientation.yawDeg) {
+      yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
+      quat.multiply(yawQuat)
+    }
+
+    if (length < tileLengthLocal - WALL_INSTANCING_DIR_EPSILON) {
+      const stretchFactor = Math.max(length / Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, tileLengthLocal), 1e-6)
+      scale.set(
+        info.axis === 'x' ? stretchFactor : 1,
+        scaleY,
+        info.axis === 'z' ? stretchFactor : 1,
+      )
+
+      offset.copy(unitDir).multiplyScalar(minAlongAxis * stretchFactor)
+      pos.copy(start).sub(offset)
+      const baselineY = pos.y
+      if (mode === 'body') {
+        pos.y = baselineY - scaleY * templateMinY
+      } else if (mode === 'head') {
+        pos.y = baselineY + bodyHeight - templateMinY
+      } else {
+        pos.y = baselineY - templateMinY
+      }
+
+      localMatrix.compose(pos, quat, scale)
+      localMatrix.multiply(template.meshToRoot)
+      pushMesh(stretchFactor)
+      continue
+    }
+
+    const instanceCount = Math.max(1, Math.ceil(length / tileLengthLocal - 1e-9))
+    for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
+      if (instanceIndex === instanceCount - 1) {
+        offset.copy(unitDir).multiplyScalar(maxAlongAxis)
+        pos.copy(end).sub(offset)
+      } else {
+        const along = instanceIndex * tileLengthLocal
+        pos.copy(start).addScaledVector(unitDir, along)
+        offset.copy(unitDir).multiplyScalar(minAlongAxis)
+        pos.sub(offset)
+      }
+
+      const baselineY = pos.y
+      if (mode === 'body') {
+        pos.y = baselineY - scaleY * templateMinY
+      } else if (mode === 'head') {
+        pos.y = baselineY + bodyHeight - templateMinY
+      } else {
+        pos.y = baselineY - templateMinY
+      }
+
+      scale.set(1, scaleY, 1)
+      localMatrix.compose(pos, quat, scale)
+      localMatrix.multiply(template.meshToRoot)
+      pushMesh(1)
+    }
+  }
+
   return meshes
 }
 
@@ -1176,6 +1301,7 @@ function rebuildWallGroup(
   const totalHeight = bodyHeight + headHeightExtra
 
   const smoothing = normalizeWallSmoothing(options.smoothing)
+  const modelPlacementMode = normalizeWallModelPlacementMode(options.modelPlacementMode)
   const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
@@ -1259,7 +1385,9 @@ function rebuildWallGroup(
   if (bodyTemplate) {
     const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
     for (const chainDef of chainDefinitions) {
-      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation)
+      const meshes = modelPlacementMode === 'repeatInstances'
+        ? buildRepeatWallMeshesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation)
+        : buildStretchedWallMeshesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation)
       for (const m of meshes) {
         m.name = 'WallBodyMesh'
         group.add(m)
@@ -1270,7 +1398,9 @@ function rebuildWallGroup(
   if (bodyTemplate && headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
     for (const chainDef of chainDefinitions) {
-      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, headTemplate, 'head', headOrientation)
+      const meshes = modelPlacementMode === 'repeatInstances'
+        ? buildRepeatWallMeshesForSegs(chainDef.segs, headTemplate, 'head', headOrientation)
+        : buildStretchedWallMeshesForSegs(chainDef.segs, headTemplate, 'head', headOrientation)
       for (const m of meshes) {
         m.name = 'WallHeadMesh'
         group.add(m)
@@ -1281,7 +1411,9 @@ function rebuildWallGroup(
   if (bodyTemplate && footTemplate) {
     const footOrientation = requireWallOrientation(options.footOrientation, 'footOrientation')
     for (const chainDef of chainDefinitions) {
-      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation)
+      const meshes = modelPlacementMode === 'repeatInstances'
+        ? buildRepeatWallMeshesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation)
+        : buildStretchedWallMeshesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation)
       for (const m of meshes) {
         m.name = 'WallFootMesh'
         group.add(m)
