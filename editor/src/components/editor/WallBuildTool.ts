@@ -2,8 +2,9 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
-import type { SceneNodeComponentState, SceneNode } from '@schema'
+import type { SceneNodeComponentState, SceneNode, WallDynamicMesh } from '@schema'
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
+import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSegment } from './WallPreviewRenderer'
 import { GRID_MAJOR_SPACING } from './constants'
 import { findSceneNode } from './sceneUtils'
@@ -118,21 +119,22 @@ export function createWallBuildTool(options: {
       return []
     }
     const origin = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
-    return node.dynamicMesh.segments.map((segment) => ({
+    const compiled = compileWallSegmentsFromDefinition(node.dynamicMesh as WallDynamicMesh)
+    return compiled.map((segment) => ({
       start: new THREE.Vector3(segment.start.x + origin.x, segment.start.y + origin.y, segment.start.z + origin.z),
       end: new THREE.Vector3(segment.end.x + origin.x, segment.end.y + origin.y, segment.end.z + origin.z),
     }))
   }
 
   const getWallNodeDimensions = (node: SceneNode): { height: number; width: number; thickness: number } => {
-    if (node.dynamicMesh?.type !== 'Wall' || node.dynamicMesh.segments.length === 0) {
+    if (node.dynamicMesh?.type !== 'Wall') {
       return options.normalizeWallDimensionsForViewport({})
     }
-    const sample = node.dynamicMesh.segments[0]!
+    const dims = (node.dynamicMesh as WallDynamicMesh).dimensions
     return options.normalizeWallDimensionsForViewport({
-      height: sample.height,
-      width: sample.width,
-      thickness: sample.thickness,
+      height: dims?.height,
+      width: dims?.width,
+      thickness: dims?.thickness,
     })
   }
 

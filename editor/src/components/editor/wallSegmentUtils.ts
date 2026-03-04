@@ -647,3 +647,118 @@ export function applyEraseIntervalToSegments(
 
   return mergeAdjacentWallSegments(nextSegments)
 }
+// ---------------------------------------------------------------------------
+// New opening-based helpers (work directly with WallDynamicMesh chains)
+// ---------------------------------------------------------------------------
+import type { WallDynamicMesh, WallOpening } from '@schema'
+import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
+
+/**
+ * Given a local-space hit point on a wall object, compute the WallOpening that
+ * should be added for a manual erase of `halfLenM` metres either side.
+ *
+ * Uses the compiled render segments so the hit test works against the visual mesh,
+ * then converts arc-lengths back to the original chain coordinates.
+ *
+ * Returns null if no suitable hit is found.
+ */
+export function computeWallOpeningForLocalHit(
+  definition: WallDynamicMesh,
+  localPoint: THREE.Vector3,
+  halfLenM: number,
+): WallOpening | null {
+  const compiled = compileWallSegmentsFromDefinition(definition)
+  if (!compiled.length) return null
+
+  let bestIndex = -1
+  let bestDistSq = Number.POSITIVE_INFINITY
+  let bestT = 0
+
+  for (let i = 0; i < compiled.length; i += 1) {
+    const seg = compiled[i]!
+    const ax = Number(seg.start.x)
+    const az = Number(seg.start.z)
+    const bx = Number(seg.end.x)
+    const bz = Number(seg.end.z)
+    const res = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+    if (res.distSq < bestDistSq) {
+      bestDistSq = res.distSq
+      bestIndex = i
+      bestT = res.t
+    }
+  }
+
+  if (bestIndex < 0) return null
+  const hitSeg = compiled[bestIndex]!
+  const chainIndex = hitSeg.chainIndex ?? 0
+  const chainArcStart = hitSeg.chainArcStart ?? 0
+
+  const dx = Number(hitSeg.end.x) - Number(hitSeg.start.x)
+  const dz = Number(hitSeg.end.z) - Number(hitSeg.start.z)
+  const segLen = Math.sqrt(dx * dx + dz * dz)
+
+  const hitArcInChain = chainArcStart + bestT * segLen
+  return {
+    chainIndex,
+    start: Math.max(0, hitArcInChain - halfLenM),
+    end: hitArcInChain + halfLenM,
+  }
+}
+
+/**
+ * Find the index of a `WallOpening` that contains the projection of `localPoint`
+ * onto the nearest chain. Returns -1 if no opening is close.
+ */
+export function findContainingWallOpeningIndex(
+  definition: WallDynamicMesh,
+  localPoint: THREE.Vector3,
+): number {
+  const chains = Array.isArray(definition.chains) ? definition.chains : []
+  const openings = Array.isArray(definition.openings) ? definition.openings : []
+  if (!openings.length) return -1
+
+  // Find nearest point on any chain and its arc-length
+  let bestChainIndex = -1
+  let bestDistSq = Number.POSITIVE_INFINITY
+  let bestArc = 0
+
+  const eps = 1e-6
+
+  for (let ci = 0; ci < chains.length; ci += 1) {
+    const chain = chains[ci]!
+    const pts = Array.isArray(chain.points) ? chain.points : []
+    const loopCount = chain.closed ? pts.length : pts.length - 1
+    let arc = 0
+    for (let i = 0; i < loopCount; i += 1) {
+      const a = pts[i]!
+      const b = pts[(i + 1) % pts.length]!
+      const ax = Number(a.x)
+      const az = Number(a.z)
+      const bx = Number(b.x)
+      const bz = Number(b.z)
+      const dx = bx - ax
+      const dz = bz - az
+      const lenSq = dx * dx + dz * dz
+      const len = lenSq > eps ? Math.sqrt(lenSq) : 0
+
+      const res = projectPointToSegmentXZ(localPoint.x, localPoint.z, ax, az, bx, bz)
+      if (res.distSq < bestDistSq) {
+        bestDistSq = res.distSq
+        bestChainIndex = ci
+        bestArc = arc + Math.max(0, Math.min(1, res.t)) * len
+      }
+      arc += len
+    }
+  }
+
+  if (bestChainIndex < 0) return -1
+
+  // Find which opening contains bestArc on bestChainIndex
+  for (let oi = 0; oi < openings.length; oi += 1) {
+    const o = openings[oi]!
+    if (Number(o.chainIndex) === bestChainIndex && bestArc >= Number(o.start) - 0.01 && bestArc <= Number(o.end) + 0.01) {
+      return oi
+    }
+  }
+  return -1
+}

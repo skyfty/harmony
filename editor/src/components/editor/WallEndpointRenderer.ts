@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh } from '@schema'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
+import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { splitWallSegmentsIntoChains } from './wallSegmentUtils'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 
@@ -252,11 +253,11 @@ function disposeWallEndpointHandleGroup(group: THREE.Group) {
 }
 
 function computeWallEndpointHandleSignature(definition: WallDynamicMesh): string {
-  const segments = Array.isArray(definition.segments) ? definition.segments : []
+  const segments = compileWallSegmentsFromDefinition(definition)
   const serialized = stableSerialize(
     segments.map((s) => ({
-      start: { x: Number((s as any).start?.x) || 0, y: Number((s as any).start?.y) || 0, z: Number((s as any).start?.z) || 0 },
-      end: { x: Number((s as any).end?.x) || 0, y: Number((s as any).end?.y) || 0, z: Number((s as any).end?.z) || 0 },
+      start: { x: s.start.x, y: s.start.y, z: s.start.z },
+      end: { x: s.end.x, y: s.end.y, z: s.end.z },
     })),
   )
   return hashString(serialized)
@@ -392,15 +393,14 @@ export function createWallEndpointRenderer(): WallEndpointRenderer {
     group.userData.isWallEndpointHandles = true
     group.userData.editorOnly = true
 
-    const segments = Array.isArray(definition.segments) ? definition.segments : []
+    const segments = compileWallSegmentsFromDefinition(definition)
     if (!segments.length) {
       state = { nodeId: selectedNodeId, group, signature }
       runtimeObject.add(group)
       return
     }
 
-    const sample = segments[0] as any
-    const height = Number.isFinite(Number(sample?.height)) ? Math.max(0.1, Number(sample.height)) : 3
+    const height = Math.max(0.1, definition.dimensions?.height ?? 3)
     // Place the gizmo at the middle of the wall height for better intuition.
     const yOffset = height * 0.5
 

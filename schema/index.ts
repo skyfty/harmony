@@ -1137,21 +1137,41 @@ export interface GroundDynamicMesh {
   terrainPaint?: TerrainPaintSettings | null
 }
 
-export type WallSegment = {
-  start: Vector3Like
-  end: Vector3Like
-  height: number
-  width: number
-  thickness: number
+/**
+ * A single chain (polyline) of control points for a wall.
+ * Points are stored in local space relative to the wall node origin.
+ */
+export type WallChain = {
+  /** Control points in local space, ≥ 2 required. */
+  points: Vector3Like[]
+  /** When true the last point implicitly connects back to the first (closed loop). */
+  closed: boolean
+}
+
+/**
+ * An arc-length interval on a specific chain that should be left open (gap / hole).
+ */
+export type WallOpening = {
+  /** Zero-based index into WallDynamicMesh.chains. */
+  chainIndex: number
+  /** Arc-length start measured from the chain start (metres). */
+  start: number
+  /** Arc-length end measured from the chain start (metres). */
+  end: number
 }
 
 export interface WallDynamicMesh {
   type: 'Wall'
+  /** One or more polyline chains that together form this wall node. */
+  chains: WallChain[]
   /**
-   * Placeholder control points describing wall segments in row-major order.
-   * Each entry stores start and end positions in world space relative to the wall origin.
+   * Arc-length intervals on individual chains that should be left open.
+   * Openings are used for doorways, windows, etc.
+   * Sorted and non-overlapping per chain after every write.
    */
-  segments: WallSegment[]
+  openings: WallOpening[]
+  /** Shared dimensions applied to every chain segment. */
+  dimensions: { height: number; width: number; thickness: number }
 }
 
 export type RoadVertex2D = [number, number]

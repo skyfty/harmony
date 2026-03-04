@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh } from './index'
 import { MATERIAL_CONFIG_ID_KEY } from './material'
+import { compileWallSegmentsFromDefinition, resolveWallDimensionsFromDefinition, type WallRenderSegment } from './wallLayout'
 
 export type WallRenderAssetObjects = {
   /** Lower wall body model root (instanced along segments). */
@@ -86,7 +87,7 @@ const WALL_DEFAULT_COLOR = 0xcfd2d6
 const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_DEFAULT_HEIGHT = 3
-const WALL_DEFAULT_WIDTH = 0.2
+// (WALL_DEFAULT_WIDTH removed: unused after refactor)
 const WALL_EPSILON = 1e-6
 const WALL_MAX_ADAPTIVE_DEPTH = 10
 const WALL_MAX_SAMPLE_POINTS = 512
@@ -96,7 +97,8 @@ const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
 
-type WallSegment = WallDynamicMesh['segments'] extends Array<infer T> ? T : never
+/** Local alias so all helpers below use the same segment type. */
+type WallRenderSeg = WallRenderSegment
 
 type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
 
@@ -179,42 +181,51 @@ function wallDistanceSqXZ(a: { x: number; z: number }, b: { x: number; z: number
   return dx * dx + dz * dz
 }
 
-function wallSegmentLengthXZ(segment: WallSegment): number {
+function wallSegmentLengthXZ(segment: WallRenderSeg): number {
   const dx = Number((segment as any).end?.x) - Number((segment as any).start?.x)
   const dz = Number((segment as any).end?.z) - Number((segment as any).start?.z)
   const len = Math.sqrt(dx * dx + dz * dz)
   return Number.isFinite(len) ? len : 0
 }
 
-function buildWallChainDefinitions(definition: WallDynamicMesh): WallDynamicMesh[] {
-  const rawSegments = Array.isArray(definition.segments) ? (definition.segments as WallSegment[]) : []
-  if (!rawSegments.length) {
-    return []
-  }
+type WallVisualChain = {
+  segs: WallRenderSeg[]
+  closed: boolean
+}
 
-  // NOTE: Walls are allowed to be discontinuous. Split the polyline into open chains
-  // whenever the previous end does not connect to the next start.
-  const chains: WallSegment[][] = []
-  let current: WallSegment[] = []
-  for (const seg of rawSegments) {
+function buildWallChainDefinitions(definition: WallDynamicMesh): WallVisualChain[] {
+  const renderSegs = compileWallSegmentsFromDefinition(definition)
+  if (!renderSegs.length) return []
+
+  // Group into chains: consecutive segments whose endpoints connect (gap ≤ WALL_EPSILON).
+  const result: WallVisualChain[] = []
+  let current: WallRenderSeg[] = []
+
+  for (const seg of renderSegs) {
     const len = wallSegmentLengthXZ(seg)
-    if (len <= WALL_EPSILON) {
-      continue
-    }
+    if (len <= WALL_EPSILON) continue
+
     const prev = current[current.length - 1]
     if (prev && wallDistanceSqXZ(prev.end as any, seg.start as any) > WALL_EPSILON) {
       if (current.length) {
-        chains.push(current)
+        const first = current[0]!
+        const last = current[current.length - 1]!
+        const closedDist = wallDistanceSqXZ(first.start as any, last.end as any)
+        result.push({ segs: current, closed: closedDist <= WALL_EPSILON })
       }
       current = []
     }
     current.push(seg)
   }
+
   if (current.length) {
-    chains.push(current)
+    const first = current[0]!
+    const last = current[current.length - 1]!
+    const closedDist = wallDistanceSqXZ(first.start as any, last.end as any)
+    result.push({ segs: current, closed: closedDist <= WALL_EPSILON })
   }
 
-  return chains.map((segments) => ({ ...(definition as any), segments } as WallDynamicMesh))
+  return result
 }
 
 function disposeObject3D(object: THREE.Object3D) {
@@ -316,7 +327,7 @@ function extractInstancedAssetTemplate(root: THREE.Object3D): InstancedAssetTemp
   return { geometry, material, meshToRoot, bounds, baseSize }
 }
 
-function resolveWallBodyHeight(segment: (WallDynamicMesh['segments'] extends Array<infer T> ? T : never) | null | undefined): number {
+function resolveWallBodyHeight(segment: WallRenderSeg | null | undefined): number {
   const raw = (segment as any)?.height
   const value = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(value)) {
@@ -325,138 +336,126 @@ function resolveWallBodyHeight(segment: (WallDynamicMesh['segments'] extends Arr
   return Math.max(WALL_MIN_HEIGHT, value)
 }
 
-function computeWallAlongAxisInstanceMatrices(
-  definition: WallDynamicMesh,
+/**
+ * Clone a material and scale the repeat of all texture maps by `stretchFactor`
+ * along U (the wall-length direction).  This makes the texture tile proportionally
+ * when the model geometry is stretched.
+ */
+function cloneWallMaterialWithRepeat(original: THREE.Material, stretchFactor: number): THREE.Material {
+  const cloned = original.clone()
+  if (Math.abs(stretchFactor - 1) < 1e-6) return cloned
+  const mat = cloned as any
+  const slots = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'displacementMap']
+  for (const slot of slots) {
+    const tex = mat[slot] as THREE.Texture | undefined
+    if (!tex) continue
+    const t = tex.clone()
+    t.wrapS = THREE.RepeatWrapping
+    t.repeat.x = (t.repeat.x || 1) * stretchFactor
+    t.needsUpdate = true
+    mat[slot] = t
+  }
+  cloned.needsUpdate = true
+  return cloned
+}
+
+/**
+ * Build ONE stretched Mesh for each render segment in `segs`.
+ * Each segment gets a SINGLE mesh that spans its full length (no tiling geometry).
+ * Texture tiling is achieved by scaling the material's texture repeat along U.
+ */
+function buildStretchedWallMeshesForSegs(
+  segs: WallRenderSeg[],
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
-  trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
-): THREE.Matrix4[] {
-  const matrices: THREE.Matrix4[] = []
+): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = []
 
-  const localForward = new THREE.Vector3()
-  writeWallLocalForward(localForward, orientation.forwardAxis)
-  const { tileLengthLocal, minAlongAxis, maxAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
+  const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
+  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
+  const templateMinY = template.bounds.min.y
+  const info = wallForwardAxisInfo(orientation.forwardAxis)
 
   const start = new THREE.Vector3()
   const end = new THREE.Vector3()
   const dir = new THREE.Vector3()
   const unitDir = new THREE.Vector3()
-  const minPoint = new THREE.Vector3()
-  const offset = new THREE.Vector3()
-  const pos = new THREE.Vector3()
   const quat = new THREE.Quaternion()
   const yawQuat = new THREE.Quaternion()
   const scale = new THREE.Vector3(1, 1, 1)
+  const offset = new THREE.Vector3()
+  const pos = new THREE.Vector3()
   const localMatrix = new THREE.Matrix4()
 
-  const templateHeight = Math.max(WALL_EPSILON, Math.abs(template.baseSize.y))
-  const templateMinY = template.bounds.min.y
-
-  const segments = Array.isArray(definition.segments) ? definition.segments : []
-  const isClosedChain = (() => {
-    if (segments.length < 2) {
-      return false
-    }
-    const first = segments[0] as any
-    const last = segments[segments.length - 1] as any
-    if (!first?.start || !last?.end) {
-      return false
-    }
-    return wallDistanceSqXZ(first.start as any, last.end as any) <= WALL_EPSILON
-  })()
-
-  const manualTrimActive = trimOptions?.mode === 'manual'
-    && (trimOptions.manual.start > WALL_EPSILON || trimOptions.manual.end > WALL_EPSILON)
-
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-    const segment = segments[segmentIndex] as any
-    start.set(segment.start.x, segment.start.y, segment.start.z)
-    end.set(segment.end.x, segment.end.y, segment.end.z)
-
-    const bodyHeight = resolveWallBodyHeight(segment as any)
-    const baselineY = start.y
-    const scaleY = mode === 'body' ? bodyHeight / templateHeight : 1
-    let anchoredY = baselineY + bodyHeight - templateMinY
-    if (mode === 'body') {
-      anchoredY = baselineY - scaleY * templateMinY
-    } else if (mode === 'foot') {
-      anchoredY = baselineY - templateMinY
-    }
-    scale.set(1, scaleY, 1)
-
+  for (const seg of segs) {
+    start.set(seg.start.x, seg.start.y, seg.start.z)
+    end.set(seg.end.x, seg.end.y, seg.end.z)
     dir.subVectors(end, start)
     dir.y = 0
-    const lengthLocal = dir.length()
-    if (lengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
-      continue
-    }
+    const length = dir.length()
+    if (length <= WALL_INSTANCING_DIR_EPSILON) continue
 
-    if (tileLengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
-      continue
-    }
+    const bodyHeight = resolveWallBodyHeight(seg)
+    const scaleY = mode === 'body' ? bodyHeight / templateHeight : 1
+    // Stretch factor along the template's forward axis.
+    const stretchFactor = length / Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, tileLengthLocal)
 
-    unitDir.copy(dir).multiplyScalar(1 / lengthLocal)
-
-    // Optional manual trimming to create clearance at interior joints.
-    const hasIncomingJoint = manualTrimActive && (segmentIndex > 0 || isClosedChain)
-    const hasOutgoingJoint = manualTrimActive && (segmentIndex < segments.length - 1 || isClosedChain)
-    const trimStart = hasIncomingJoint ? Math.max(0, trimOptions!.manual.start) : 0
-    const trimEnd = hasOutgoingJoint ? Math.max(0, trimOptions!.manual.end) : 0
-
-    if (trimStart > WALL_EPSILON) {
-      start.addScaledVector(unitDir, trimStart)
-    }
-    if (trimEnd > WALL_EPSILON) {
-      end.addScaledVector(unitDir, -trimEnd)
-    }
-
-    const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
-    if (trimmedLengthLocal <= WALL_INSTANCING_DIR_EPSILON) {
-      continue
-    }
-
-    // Do not place tiles for segments shorter than a single tile (avoids overshoot).
-    if (trimmedLengthLocal < tileLengthLocal - WALL_INSTANCING_DIR_EPSILON) {
-      continue
-    }
-
-    // Strict endpoint coverage without scaling: last tile aligns its max-face to the segment end.
-    const instanceCount = Math.max(1, Math.ceil(trimmedLengthLocal / tileLengthLocal - 1e-9))
-
+    unitDir.copy(dir).multiplyScalar(1 / length)
     quat.setFromUnitVectors(localForward, unitDir)
     if (orientation.yawDeg) {
       yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
       quat.multiply(yawQuat)
     }
 
-    for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
-      if (instanceIndex === instanceCount - 1) {
-        // Last tile: align max face to segment end.
-        offset.copy(localForward).multiplyScalar(maxAlongAxis)
-        offset.applyQuaternion(quat)
-        pos.copy(end).sub(offset)
-      } else {
-        const along = instanceIndex * tileLengthLocal
-        minPoint.copy(start).addScaledVector(unitDir, along)
+    // Apply stretch + Y scale via mesh scale matrix.
+    // Scale is in model local space along the forward axis.
+    scale.set(
+      info.axis === 'x' ? stretchFactor : 1,
+      scaleY,
+      info.axis === 'z' ? stretchFactor : 1,
+    )
 
-        // Align the template's local min face (bounds.min.z) to the desired min point.
-        offset.copy(localForward).multiplyScalar(minAlongAxis)
-        offset.applyQuaternion(quat)
-        pos.copy(minPoint).sub(offset)
-      }
-
-      // Vertical split: lower body scales with wall height (minY anchored);
-      // upper head stays fixed height and sits on top of the scaled body.
-      pos.y = anchoredY
-
-      localMatrix.compose(pos, quat, scale)
-      localMatrix.multiply(template.meshToRoot)
-      matrices.push(new THREE.Matrix4().copy(localMatrix))
+    // Y anchor (same logic as the original instancing code).
+    let anchoredY: number
+    if (mode === 'body') {
+      anchoredY = start.y - scaleY * templateMinY
+    } else if (mode === 'head') {
+      anchoredY = start.y + bodyHeight - templateMinY
+    } else {
+      anchoredY = start.y - templateMinY
     }
-  }
 
-  return matrices
+    // Position: place mesh so its min-face in the forward axis aligns with `start`.
+    // After scale the stretched min-face local coord = minAlongAxis * stretchFactor.
+    // The world offset from origin to that face = quat.apply(localForward * minAlongAxis * stretchFactor)
+    // = unitDir * minAlongAxis * stretchFactor (because we rotated localForward → unitDir).
+    offset.copy(unitDir).multiplyScalar(minAlongAxis * stretchFactor)
+    pos.copy(start)
+    pos.y = anchoredY
+    pos.sub(offset)
+
+    localMatrix.compose(pos, quat, scale)
+    localMatrix.multiply(template.meshToRoot)
+
+    // Clone material with adjusted texture repeat for tiling.
+    const mat = Array.isArray(template.material)
+      ? template.material.map((m) => cloneWallMaterialWithRepeat(m, stretchFactor))
+      : cloneWallMaterialWithRepeat(template.material, stretchFactor)
+
+    const mesh = new THREE.Mesh(template.geometry, mat)
+    // Geometry is shared – do not dispose it when the wall group is rebuilt.
+    mesh.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
+    mesh.userData.dynamicMeshType = 'WallAsset'
+    mesh.matrixAutoUpdate = false
+    mesh.matrix.copy(localMatrix)
+    mesh.matrixWorldNeedsUpdate = true
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    meshes.push(mesh)
+  }
+  return meshes
 }
 
 function pickWallCornerRule(
@@ -534,13 +533,12 @@ function pickWallCornerRule(
 }
 
 function computeWallCornerInstanceMatricesByAsset(
-  definition: WallDynamicMesh,
+  segments: WallRenderSeg[],
   templatesByAssetId: Map<string, InstancedAssetTemplate>,
   rules: WallCornerModelRule[],
   mode: 'body' | 'head' | 'foot',
 ): Map<string, THREE.Matrix4[]> {
   const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
-  const segments = definition.segments ?? []
   if (segments.length < 2) {
     return matricesByAssetId
   }
@@ -584,8 +582,8 @@ function computeWallCornerInstanceMatricesByAsset(
   }
 
   const buildCorner = (
-    current: (typeof segments)[number],
-    next: (typeof segments)[number],
+    current: WallRenderSeg,
+    next: WallRenderSeg,
     cornerX: number,
     cornerY: number,
     cornerZ: number,
@@ -702,25 +700,19 @@ function computeWallCornerInstanceMatricesByAsset(
 }
 
 function computeWallEndCapInstanceMatrices(
-  definition: WallDynamicMesh,
+  segments: WallRenderSeg[],
+  closed: boolean,
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
 ): THREE.Matrix4[] {
   const matrices: THREE.Matrix4[] = []
-  const segments = definition.segments ?? []
-  if (!segments.length) {
+  if (!segments.length || closed) {
     return matrices
   }
 
   const firstSeg = segments[0]!
   const lastSeg = segments[segments.length - 1]!
-  const dx = firstSeg.start.x - lastSeg.end.x
-  const dz = firstSeg.start.z - lastSeg.end.z
-  const closed = dx * dx + dz * dz <= WALL_EPSILON
-  if (closed) {
-    return matrices
-  }
 
   const localForward = new THREE.Vector3()
   writeWallLocalForward(localForward, orientation.forwardAxis)
@@ -896,10 +888,9 @@ function normalizeWallPoint(value: unknown): THREE.Vector3 | null {
   return new THREE.Vector3(x, y, z)
 }
 
-function collectWallPath(definition: WallDynamicMesh): WallPath | null {
-  const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
+function collectWallPath(segments: WallRenderSeg[]): WallPath | null {
   const points: THREE.Vector3[] = []
-  for (const segment of rawSegments) {
+  for (const segment of segments) {
     const start = normalizeWallPoint(segment.start)
     const end = normalizeWallPoint(segment.end)
     if (!start || !end) {
@@ -1163,19 +1154,9 @@ function rebuildWallGroup(
     return
   }
 
-  const firstSegment = Array.isArray(definition.segments) ? definition.segments[0] : null
-  const width = Math.max(
-    WALL_MIN_WIDTH,
-    Number.isFinite(firstSegment?.width ?? Number.NaN)
-      ? firstSegment!.width ?? WALL_DEFAULT_WIDTH
-      : WALL_DEFAULT_WIDTH,
-  )
-  const bodyHeight = Math.max(
-    WALL_MIN_HEIGHT,
-    Number.isFinite(firstSegment?.height ?? Number.NaN)
-      ? firstSegment!.height ?? WALL_DEFAULT_HEIGHT
-      : WALL_DEFAULT_HEIGHT,
-  )
+  const { width: _dimWidth, height: _dimHeight } = resolveWallDimensionsFromDefinition(definition)
+  const width = Math.max(WALL_MIN_WIDTH, _dimWidth)
+  const bodyHeight = Math.max(WALL_MIN_HEIGHT, _dimHeight)
 
   const bodyTemplate = assets.bodyObject ? extractInstancedAssetTemplate(assets.bodyObject) : null
   const modelModeEnabled = !!bodyTemplate
@@ -1199,7 +1180,7 @@ function rebuildWallGroup(
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
     const chainDef = chainDefinitions[chainIndex]!
-    const path = collectWallPath(chainDef)
+    const path = collectWallPath(chainDef.segs)
     if (!path) {
       continue
     }
@@ -1277,73 +1258,40 @@ function rebuildWallGroup(
 
   if (bodyTemplate) {
     const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
-    const trimMode = options.jointTrimMode === 'manual' ? 'manual' : 'auto'
-    const manual = options.jointTrimManual ?? { start: 0, end: 0 }
-    const localMatrices = chainDefinitions.flatMap((entry) =>
-      computeWallAlongAxisInstanceMatrices(entry, bodyTemplate, 'body', bodyOrientation, { mode: trimMode, manual }),
-    )
-    if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(bodyTemplate.geometry, bodyTemplate.material, localMatrices.length)
-      instanced.name = 'WallBodyInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
+    for (const chainDef of chainDefinitions) {
+      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation)
+      for (const m of meshes) {
+        m.name = 'WallBodyMesh'
+        group.add(m)
       }
-      instanced.instanceMatrix.needsUpdate = true
-      group.add(instanced)
     }
   }
 
   if (bodyTemplate && headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
-    const trimMode = options.jointTrimMode === 'manual' ? 'manual' : 'auto'
-    const manual = options.jointTrimManual ?? { start: 0, end: 0 }
-    const localMatrices = chainDefinitions.flatMap((entry) =>
-      computeWallAlongAxisInstanceMatrices(entry, headTemplate, 'head', headOrientation, { mode: trimMode, manual }),
-    )
-    if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(headTemplate.geometry, headTemplate.material, localMatrices.length)
-      instanced.name = 'WallHeadInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
+    for (const chainDef of chainDefinitions) {
+      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, headTemplate, 'head', headOrientation)
+      for (const m of meshes) {
+        m.name = 'WallHeadMesh'
+        group.add(m)
       }
-      instanced.instanceMatrix.needsUpdate = true
-      group.add(instanced)
     }
   }
 
   if (bodyTemplate && footTemplate) {
     const footOrientation = requireWallOrientation(options.footOrientation, 'footOrientation')
-    const trimMode = options.jointTrimMode === 'manual' ? 'manual' : 'auto'
-    const manual = options.jointTrimManual ?? { start: 0, end: 0 }
-    const localMatrices = chainDefinitions.flatMap((entry) =>
-      computeWallAlongAxisInstanceMatrices(entry, footTemplate, 'foot', footOrientation, { mode: trimMode, manual }),
-    )
-    if (localMatrices.length > 0) {
-      const instanced = new THREE.InstancedMesh(footTemplate.geometry, footTemplate.material, localMatrices.length)
-      instanced.name = 'WallFootInstances'
-      instanced.userData.dynamicMeshType = 'WallAsset'
-      instanced.userData[WALL_SKIP_DISPOSE_USERDATA_KEY] = true
-      instanced.castShadow = true
-      instanced.receiveShadow = true
-      for (let i = 0; i < localMatrices.length; i += 1) {
-        instanced.setMatrixAt(i, localMatrices[i]!)
+    for (const chainDef of chainDefinitions) {
+      const meshes = buildStretchedWallMeshesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation)
+      for (const m of meshes) {
+        m.name = 'WallFootMesh'
+        group.add(m)
       }
-      instanced.instanceMatrix.needsUpdate = true
-      group.add(instanced)
     }
   }
 
   if (bodyTemplate && bodyEndCapTemplate) {
     const bodyEndCapOrientation = requireWallOrientation(options.bodyEndCapOrientation, 'bodyEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, bodyEndCapTemplate, 'body', bodyEndCapOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(bodyEndCapTemplate.geometry, bodyEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallBodyEndCapInstances'
@@ -1361,7 +1309,7 @@ function rebuildWallGroup(
 
   if (bodyTemplate && bodyEndCapTemplate && headEndCapTemplate) {
     const headEndCapOrientation = requireWallOrientation(options.headEndCapOrientation, 'headEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, headEndCapTemplate, 'head', headEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, headEndCapTemplate, 'head', headEndCapOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(headEndCapTemplate.geometry, headEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallHeadEndCapInstances'
@@ -1379,7 +1327,7 @@ function rebuildWallGroup(
 
   if (bodyTemplate && bodyEndCapTemplate && footEndCapTemplate) {
     const footEndCapOrientation = requireWallOrientation(options.footEndCapOrientation, 'footEndCapOrientation')
-    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry, footEndCapTemplate, 'foot', footEndCapOrientation))
+    const localMatrices = chainDefinitions.flatMap((entry) => computeWallEndCapInstanceMatrices(entry.segs, entry.closed, footEndCapTemplate, 'foot', footEndCapOrientation))
     if (localMatrices.length > 0) {
       const instanced = new THREE.InstancedMesh(footEndCapTemplate.geometry, footEndCapTemplate.material, localMatrices.length)
       instanced.name = 'WallFootEndCapInstances'
@@ -1399,7 +1347,7 @@ function rebuildWallGroup(
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && bodyCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef, bodyCornerTemplatesByAssetId, cornerRules, 'body')
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, bodyCornerTemplatesByAssetId, cornerRules, 'body')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {
@@ -1432,7 +1380,7 @@ function rebuildWallGroup(
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && headCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef, headCornerTemplatesByAssetId, cornerRules, 'head')
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, headCornerTemplatesByAssetId, cornerRules, 'head')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {
@@ -1465,7 +1413,7 @@ function rebuildWallGroup(
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && footCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef, footCornerTemplatesByAssetId, cornerRules, 'foot')
+      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, footCornerTemplatesByAssetId, cornerRules, 'foot')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {

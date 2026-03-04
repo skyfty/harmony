@@ -14,6 +14,7 @@ import {
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
 import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schema/wallMesh'
+import { compileWallSegmentsFromDefinition, type WallRenderSegment } from '@schema/wallLayout'
 import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
@@ -88,7 +89,9 @@ export function computeWallDynamicMeshSignature(
   options: { smoothing?: number } = {},
 ): string {
   const serialized = stableSerialize({
-    segments: definition.segments ?? [],
+    chains: definition.chains ?? [],
+    openings: definition.openings ?? [],
+    dimensions: definition.dimensions ?? { height: 3, width: 0.2, thickness: 0.1 },
     smoothing: Number.isFinite(options.smoothing) ? options.smoothing : 0,
   })
   return hashString(serialized)
@@ -139,29 +142,17 @@ function resolveWallEffectiveDefinition(
   definition: WallDynamicMesh,
   props: WallComponentProps | null,
 ): WallDynamicMesh {
-  if (!props || !Array.isArray(definition.segments) || definition.segments.length === 0) {
+  if (!props || !definition.chains?.length) {
     return definition
   }
 
-  const height = props.height
-  const width = props.width
-  const thickness = props.thickness
+  const { height, width, thickness } = props
+  const d = definition.dimensions
+  if (d.height === height && d.width === width && d.thickness === thickness) {
+    return definition
+  }
 
-  let changed = false
-  const nextSegments = definition.segments.map((segment) => {
-    const segAny = segment as any
-    if (segAny.height !== height || segAny.width !== width || segAny.thickness !== thickness) {
-      changed = true
-    }
-    return {
-      ...segment,
-      height,
-      width,
-      thickness,
-    } as any
-  })
-
-  return changed ? ({ ...(definition as any), type: 'Wall', segments: nextSegments } as WallDynamicMesh) : definition
+  return { ...definition, dimensions: { height, width, thickness } }
 }
 
 const wallSyncPosHelper = new THREE.Vector3()
@@ -212,9 +203,9 @@ function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   return dx * dx + dz * dz
 }
 
-function splitWallSegmentsIntoChains(segments: WallDynamicMesh['segments']): WallDynamicMesh['segments'][] {
-  const chains: WallDynamicMesh['segments'][] = []
-  let current: WallDynamicMesh['segments'] = []
+function splitWallSegmentsIntoChains(segments: WallRenderSegment[]): WallRenderSegment[][] {
+  const chains: WallRenderSegment[][] = []
+  let current: WallRenderSegment[] = []
 
   for (const seg of segments) {
     const prev = current[current.length - 1]
@@ -371,7 +362,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const hasHeadCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.headAssetId === 'string' && (entry as any).headAssetId.trim().length)
     const hasFootCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.footAssetId === 'string' && (entry as any).footAssetId.trim().length)
     const definition = node.dynamicMesh as WallDynamicMesh
-    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets || hasFootCornerAssets) && definition.segments.length >= 2
+    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets || hasFootCornerAssets) && (definition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
     const wantsInstancing = Boolean(bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
@@ -651,7 +642,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
   ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
-    if (!definition.segments.length) {
+    const segments = compileWallSegmentsFromDefinition(definition)
+    if (!segments.length) {
       return matrices
     }
 
@@ -662,7 +654,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const templateHeight = resolveWallModelHeight(bounds)
     const minY = bounds.min.y
 
-    const segments = Array.isArray(definition.segments) ? definition.segments : []
     const distanceSqXZRaw = (a: { x: number; z: number }, b: { x: number; z: number }): number => {
       const dx = Number(a.x) - Number(b.x)
       const dz = Number(a.z) - Number(b.z)
@@ -779,8 +770,8 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   type WallCornerModelRule = NonNullable<WallComponentProps['cornerModels']>[number]
 
-  function resolveWallBodyHeightForSegment(segment: WallDynamicMesh['segments'][number]): number {
-    const raw = typeof (segment as any)?.height === 'number' ? (segment as any).height : Number((segment as any)?.height)
+  function resolveWallBodyHeightForSegment(segment: WallRenderSegment): number {
+    const raw = segment.height
     if (!Number.isFinite(raw)) {
       return 1
     }
@@ -871,7 +862,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
     let primaryAssetId: string | null = null
 
-    if (definition.segments.length < 2) {
+    const _compiledSegs = compileWallSegmentsFromDefinition(definition)
+    if (_compiledSegs.length < 2) {
       return { matricesByAssetId, primaryAssetId, mode: options.mode }
     }
 
@@ -889,8 +881,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const buildCorner = (
-      current: WallDynamicMesh['segments'][number],
-      next: WallDynamicMesh['segments'][number],
+      current: WallRenderSegment,
+      next: WallRenderSegment,
       corner: THREE.Vector3,
     ) => {
       // 1) 计算当前段的入射向量（incoming）
@@ -1010,7 +1002,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       pushMatrix(assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 
-    const chains = splitWallSegmentsIntoChains(definition.segments)
+    const chains = splitWallSegmentsIntoChains(_compiledSegs)
     for (const chain of chains) {
       for (let i = 0; i < chain.length - 1; i += 1) {
         const current = chain[i]!
@@ -1044,11 +1036,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     orientation: WallModelOrientation,
   ): THREE.Matrix4[] {
     const matrices: THREE.Matrix4[] = []
-    if (!definition.segments.length) {
+    const _compiledSegsForCap = compileWallSegmentsFromDefinition(definition)
+    if (!_compiledSegsForCap.length) {
       return matrices
     }
 
-    const chains = splitWallSegmentsIntoChains(definition.segments)
+    const chains = splitWallSegmentsIntoChains(_compiledSegsForCap)
 
     const localForward = new THREE.Vector3()
     writeWallLocalForward(localForward, orientation.forwardAxis)
@@ -1056,7 +1049,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const templateHeight = resolveWallModelHeight(bounds)
     const minY = bounds.min.y
 
-    const findDirectionForSegment = (segment: WallDynamicMesh['segments'][number] | null, fallback: THREE.Vector3): THREE.Vector3 => {
+    const findDirectionForSegment = (segment: WallRenderSegment | null, fallback: THREE.Vector3): THREE.Vector3 => {
       if (!segment) {
         return fallback
       }
@@ -1333,7 +1326,7 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     // 拐角 joint 需要至少两段才可能存在。
     const canHaveCornerJoints =
-      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0) && definition.segments.length >= 2
+      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0) && (definition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
 
     // wantsInstancing：只要配置了任何一种实例化相关资源（body/head/caps/corners），
     // 就尝试走实例化渲染（资源未就绪时会回退到程序墙体）。

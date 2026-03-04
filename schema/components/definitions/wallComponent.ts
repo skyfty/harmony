@@ -307,7 +307,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
 }
 
 export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefined | null): WallComponentProps {
-  if (!mesh?.segments?.length) {
+  if (!mesh?.chains?.length) {
     return {
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
@@ -331,10 +331,10 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       cornerModels: [],
     }
   }
-  const base = mesh.segments[0]
+  const base = mesh.dimensions
   return clampWallProps({
     height: base?.height,
-    width: (base as { width?: number })?.width,
+    width: base?.width,
     thickness: base?.thickness,
     smoothing: WALL_DEFAULT_SMOOTHING,
     jointTrimMode: 'auto',

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { cloneGeometryForMirroredInstance } from '@schema/mirror'
+import { addWallOpeningToDefinition, removeWallOpeningFromDefinition, compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
@@ -175,9 +176,9 @@ import {
   computeWallEraseUnitIntervalAlignedForLocalPoint,
   computeWallRepairUnitSegmentForLocalPoint,
   getWallLocalPointAtChainDistance,
-  applyEraseIntervalToSegments,
-  insertWallRepairSegmentIntoSegments,
   segmentLengthXZ,
+  computeWallOpeningForLocalHit,
+  findContainingWallOpeningIndex,
 } from './wallSegmentUtils'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
@@ -1997,7 +1998,9 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
     return false
   }
 
-  const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
+  const segments = (node as any).dynamicMesh?.type === 'Wall'
+    ? compileWallSegmentsFromDefinition((node as any).dynamicMesh as WallDynamicMesh)
+    : []
   if (!segments.length) {
     clearWallEraseHoverHighlight()
     return false
@@ -3022,63 +3025,35 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
     return eraseContinuousInstance(nodeId, bindingId)
   }
 
-  // Wall dynamic mesh: erase or repair a 0.5m segment.
-  // - erase: remove a snapped 0.5m interval along the hit chain
-  // - repair (Shift): add back a 0.5m segment centered at the pointer position
+  // Wall dynamic mesh: erase (add opening) or repair (remove opening).
+  // - erase: add a WallOpening at the clicked position (default 0.5m radius)
+  // - repair (Shift): remove an existing WallOpening that covers the clicked position
   if ((node as any).dynamicMesh?.type === 'Wall' && hitPointWorld) {
     const object = objectMap.get(nodeId) ?? null
-    const segments = Array.isArray((node as any).dynamicMesh?.segments) ? ((node as any).dynamicMesh.segments as any[]) : []
-    if (object && segments.length) {
+    const wallMesh = (node as any).dynamicMesh as WallDynamicMesh
+    const hasChains = Array.isArray(wallMesh.chains) && wallMesh.chains.length > 0
+    if (object && hasChains) {
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
-      const unitLenM = wallEraseUnitLengthM.value
+      const halfLenM = wallEraseUnitLengthM.value * 0.5
 
       if (wallRepairModeActive.value) {
-        const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
-        if (!repair) {
+        // Repair = remove the opening that covers the clicked spot
+        const openingIdx = findContainingWallOpeningIndex(wallMesh, localPoint)
+        if (openingIdx < 0) {
           return false
         }
-
-        const wallComponent = (node as any).components?.[WALL_COMPONENT_TYPE] as
-          | SceneNodeComponentState<WallComponentProps>
-          | undefined
-        const fallbackProps = clampWallProps(wallComponent?.props ?? null)
-        const nearest = segments[repair.bestIndex] ?? null
-
-        const height = Number.isFinite(Number((nearest as any)?.height))
-          ? Number((nearest as any).height)
-          : fallbackProps.height
-        const width = Number.isFinite(Number((nearest as any)?.width))
-          ? Number((nearest as any).width)
-          : fallbackProps.width
-        const thickness = Number.isFinite(Number((nearest as any)?.thickness))
-          ? Number((nearest as any).thickness)
-          : fallbackProps.thickness
-
-        const base = nearest ? { ...(nearest as any) } : ({} as any)
-        const patchSeg = {
-          ...base,
-          start: repair.start,
-          end: repair.end,
-          height,
-          width,
-          thickness,
-        }
-
-        const patched = insertWallRepairSegmentIntoSegments(segments, patchSeg, { preferredIndex: repair.bestIndex })
-        const nextMesh = { ...(node as any).dynamicMesh, segments: patched }
-        sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+        const nextOpenings = removeWallOpeningFromDefinition(wallMesh, openingIdx)
+        sceneStore.updateNodeDynamicMesh(nodeId, { ...wallMesh, openings: nextOpenings })
       } else {
-        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
-        if (!interval) {
+        // Erase = add a new WallOpening
+        const newOpening = computeWallOpeningForLocalHit(wallMesh, localPoint, halfLenM)
+        if (!newOpening) {
           return false
         }
-
-        const { chain, rangeStart, rangeEnd } = interval
-        const merged = applyEraseIntervalToSegments(segments, chain, rangeStart, rangeEnd)
-        const nextMesh = { ...(node as any).dynamicMesh, segments: merged }
-        sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+        const nextOpenings = addWallOpeningToDefinition(wallMesh, newOpening)
+        sceneStore.updateNodeDynamicMesh(nodeId, { ...wallMesh, openings: nextOpenings })
       }
 
       clearRepairHoverHighlight(true)
@@ -3158,9 +3133,10 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     const wallObject = selectedWallId ? (objectMap.get(selectedWallId) ?? null) : null
     const wallNode = selectedWallId ? findSceneNode(sceneStore.nodes, selectedWallId) : null
-    const segments = wallNode && (wallNode as any).dynamicMesh?.type === 'Wall'
-      ? (Array.isArray((wallNode as any).dynamicMesh?.segments) ? ((wallNode as any).dynamicMesh.segments as any[]) : [])
-      : []
+    const wallMeshDef = wallNode && (wallNode as any).dynamicMesh?.type === 'Wall'
+      ? (wallNode as any).dynamicMesh as WallDynamicMesh
+      : null
+    const segments = wallMeshDef ? compileWallSegmentsFromDefinition(wallMeshDef) : []
 
     if (selectedWallId && wallObject && segments.length) {
       wallObject.updateWorldMatrix(true, true)

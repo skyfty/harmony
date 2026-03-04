@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode, WallDynamicMesh } from '@schema'
+import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
@@ -311,28 +312,20 @@ export function handlePointerDownTools(
             Number(node.position?.y) || 0,
             Number(node.position?.z) || 0,
           )
-          const segments = Array.isArray(node.dynamicMesh.segments) ? node.dynamicMesh.segments : []
+          const segments = compileWallSegmentsFromDefinition(node.dynamicMesh as WallDynamicMesh)
 
-          const baseSegmentsWorld = segments.map((seg) => {
-            const sx = Number((seg as any).start?.x) || 0
-            const sy = Number((seg as any).start?.y) || 0
-            const sz = Number((seg as any).start?.z) || 0
-            const ex = Number((seg as any).end?.x) || 0
-            const ey = Number((seg as any).end?.y) || 0
-            const ez = Number((seg as any).end?.z) || 0
-            return {
-              start: new THREE.Vector3(sx + origin.x, sy + origin.y, sz + origin.z),
-              end: new THREE.Vector3(ex + origin.x, ey + origin.y, ez + origin.z),
-            }
-          })
+          const baseSegmentsWorld = segments.map((seg) => ({
+            start: new THREE.Vector3(seg.start.x + origin.x, seg.start.y + origin.y, seg.start.z + origin.z),
+            end: new THREE.Vector3(seg.end.x + origin.x, seg.end.y + origin.y, seg.end.z + origin.z),
+          }))
 
           const workingSegmentsWorld = baseSegmentsWorld.map((s) => ({ start: s.start.clone(), end: s.end.clone() }))
 
-          const sample = segments[0] as any
+          const wallMeshDim = (node.dynamicMesh as WallDynamicMesh).dimensions
           const dimensions = {
-            height: Number.isFinite(Number(sample?.height)) ? Number(sample.height) : 3,
-            width: Number.isFinite(Number(sample?.width)) ? Number(sample.width) : 0.2,
-            thickness: Number.isFinite(Number(sample?.thickness)) ? Number(sample.thickness) : 0.1,
+            height: Number.isFinite(wallMeshDim?.height) ? wallMeshDim.height : 3,
+            width: Number.isFinite(wallMeshDim?.width) ? wallMeshDim.width : 0.2,
+            thickness: Number.isFinite(wallMeshDim?.thickness) ? wallMeshDim.thickness : 0.1,
           }
 
           const chainStartIndex = Math.max(0, Math.trunc(handleHit.chainStartIndex))

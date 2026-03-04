@@ -1211,19 +1211,23 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
       return cloneGroundDynamicMesh({ ...(mesh as GroundDynamicMesh), type })
     case 'Wall': {
       const wallMesh = mesh as WallDynamicMesh
-
       return {
         type: 'Wall',
-        segments: wallMesh.segments.map((segment) => ({
-          start: cloneDynamicMeshVector3(segment.start),
-          end: cloneDynamicMeshVector3(segment.end),
-          height: Number.isFinite(segment.height) ? segment.height : DEFAULT_WALL_HEIGHT,
-          width: Number.isFinite((segment as { width?: number }).width)
-            ? (segment as { width?: number }).width!
-            : DEFAULT_WALL_WIDTH,
-          thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
-        })),
-      }
+        chains: Array.isArray(wallMesh.chains)
+          ? wallMesh.chains.map((chain) => ({
+            points: Array.isArray(chain.points) ? chain.points.map(cloneDynamicMeshVector3) : [],
+            closed: Boolean(chain.closed),
+          }))
+          : [],
+        openings: Array.isArray(wallMesh.openings)
+          ? wallMesh.openings.map((o) => ({ chainIndex: o.chainIndex, start: o.start, end: o.end }))
+          : [],
+        dimensions: {
+          height: Number.isFinite(wallMesh.dimensions?.height) ? wallMesh.dimensions.height : DEFAULT_WALL_HEIGHT,
+          width: Number.isFinite(wallMesh.dimensions?.width) ? wallMesh.dimensions.width : DEFAULT_WALL_WIDTH,
+          thickness: Number.isFinite(wallMesh.dimensions?.thickness) ? wallMesh.dimensions.thickness : DEFAULT_WALL_THICKNESS,
+        },
+      } satisfies WallDynamicMesh
     }
     case 'Road': {
       const roadMesh = mesh as RoadDynamicMesh

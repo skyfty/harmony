@@ -7,6 +7,7 @@ import type {
 	FloorDynamicMesh,
 	WallDynamicMesh,
 } from './index'
+import { compileWallSegmentsFromDefinition } from './wallLayout'
 import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
@@ -645,7 +646,7 @@ function resolveWallShape(params: {
 		return null
 	}
 
-	const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
+	const rawSegments = compileWallSegmentsFromDefinition(definition)
 	if (!rawSegments.length) {
 		cache.delete(nodeId)
 		return null

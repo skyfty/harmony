@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@schema'
+import type { WallDynamicMesh, WallChain } from '@schema'
 
 export type WallWorldSegment = {
   start: THREE.Vector3
@@ -125,15 +125,57 @@ export function buildWallPreviewDynamicMeshFromWorldSegments(
 
   const center = new THREE.Vector3((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5)
 
+  // Convert world segments to local-space WallChain polylines.
+  // Split at discontinuities (gap between seg[i].end and seg[i+1].start).
+  const EPS_SQ = 1e-8
+  const chains: WallChain[] = []
+  let currentPoints: WallChain['points'] = []
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]!
+    if (currentPoints.length === 0) {
+      currentPoints.push({
+        x: seg.start.x - center.x,
+        y: seg.start.y - center.y,
+        z: seg.start.z - center.z,
+      })
+    }
+    currentPoints.push({
+      x: seg.end.x - center.x,
+      y: seg.end.y - center.y,
+      z: seg.end.z - center.z,
+    })
+
+    const next = segments[i + 1]
+    if (next) {
+      const dx = next.start.x - seg.end.x
+      const dz = next.start.z - seg.end.z
+      if (dx * dx + dz * dz > EPS_SQ) {
+        if (currentPoints.length >= 2) {
+          const fp = currentPoints[0]!; const lp = currentPoints[currentPoints.length - 1]!
+          const cx = fp.x - lp.x; const cz = fp.z - lp.z
+          chains.push({ points: currentPoints, closed: cx * cx + cz * cz <= EPS_SQ })
+        }
+        currentPoints = []
+      }
+    }
+  }
+
+  if (currentPoints.length >= 2) {
+    const fp = currentPoints[0]!; const lp = currentPoints[currentPoints.length - 1]!
+    const dx = fp.x - lp.x; const dz = fp.z - lp.z
+    chains.push({ points: currentPoints, closed: dx * dx + dz * dz <= EPS_SQ })
+  }
+
+  if (!chains.length) {
+    return null
+  }
+
   const definition: WallDynamicMesh = {
     type: 'Wall',
-    segments: segments.map(({ start, end }) => ({
-      start: { x: start.x - center.x, y: start.y - center.y, z: start.z - center.z },
-      end: { x: end.x - center.x, y: end.y - center.y, z: end.z - center.z },
-      height: dimensions.height,
-      width: dimensions.width,
-      thickness: dimensions.thickness,
-    })) as any,
+    chains,
+    openings: [],
+    dimensions: { height: dimensions.height, width: dimensions.width, thickness: dimensions.thickness },
   }
 
   return { center, definition }
