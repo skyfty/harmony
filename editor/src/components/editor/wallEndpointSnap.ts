@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { GRID_MAJOR_SPACING, WALL_AXIS_SNAP_THRESHOLD, WALL_DIAGONAL_SNAP_THRESHOLD } from './constants'
+import { GRID_MAJOR_SPACING } from './constants'
 
 /**
  * Constrains the dragged wall endpoint to the major grid, with *soft* angle snapping.
@@ -26,26 +26,46 @@ export function constrainWallEndPointSoftSnap(
   const absRawZ = Math.abs(rawDelta.z)
 
   if (absRawX > 1e-4 || absRawZ > 1e-4) {
-    const angle = Math.atan2(absRawZ, absRawX) // [0, pi/2]
-    if (!Number.isNaN(angle)) {
-      const diagonalAngle = Math.PI * 0.25
-      const axisAngle = 0
-      const zAxisAngle = Math.PI * 0.5
+    // Snap to a discrete set of allowed angles (every 10 degrees up to 180).
+    // We compute the raw full-angle (0..360), reduce to a 0..180 base to select
+    // the nearest allowed angle, then re-apply the original half-circle to
+    // preserve direction/quadrant.
+    const rawAngleFull = Math.atan2(rawDelta.z, rawDelta.x) // [-pi, pi]
+    if (!Number.isNaN(rawAngleFull)) {
+      const deg = (rawAngleFull * 180) / Math.PI
+      let degPos = deg
+      if (degPos < 0) degPos += 360
 
-      // Prefer diagonal snap.
-      if (Math.abs(angle - diagonalAngle) <= WALL_DIAGONAL_SNAP_THRESHOLD) {
-        const diagSteps = Math.max(Math.abs(stepX), Math.abs(stepZ), 1)
-        const signX = rawDelta.x >= 0 ? 1 : -1
-        const signZ = rawDelta.z >= 0 ? 1 : -1
-        stepX = diagSteps * signX
-        stepZ = diagSteps * signZ
-      } else if (Math.abs(angle - axisAngle) <= WALL_AXIS_SNAP_THRESHOLD) {
-        // Near X axis.
-        stepZ = 0
-      } else if (Math.abs(angle - zAxisAngle) <= WALL_AXIS_SNAP_THRESHOLD) {
-        // Near Z axis.
-        stepX = 0
+      // Map into 0..180 for undirected angle matching
+      const baseDeg = degPos <= 180 ? degPos : degPos - 180
+
+      // Allowed angles: 10,20,...,180 (degrees). Use 180 as a valid snap.
+      const allowed = [10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,180]
+
+      // Find nearest allowed base angle.
+      let best: number = allowed[0]!
+      let bestDiff = Math.abs(baseDeg - best)
+      for (let i = 1; i < allowed.length; i++) {
+        const cand = allowed[i]!
+        const diff = Math.abs(baseDeg - cand)
+        if (diff < bestDiff) {
+          best = cand
+          bestDiff = diff
+        }
       }
+
+      // Reconstruct final angle in full circle preserving original half (0..180 vs 180..360)
+      const finalBase = best // 10..180
+      const finalDeg = degPos <= 180 ? finalBase : (finalBase + 180) % 360
+      const finalRad = (finalDeg * Math.PI) / 180
+
+      // Determine a quantized step count along GRID_MAJOR_SPACING and place endpoint
+      const length = Math.hypot(delta.x, delta.z)
+      const steps = Math.max(1, Math.round(length / GRID_MAJOR_SPACING))
+      const worldX = Math.cos(finalRad) * steps * GRID_MAJOR_SPACING
+      const worldZ = Math.sin(finalRad) * steps * GRID_MAJOR_SPACING
+
+      return new THREE.Vector3(anchor.x + worldX, anchor.y, anchor.z + worldZ)
     }
   }
 
