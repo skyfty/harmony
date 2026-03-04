@@ -809,10 +809,19 @@ function computeWallCornerInstanceMatricesByAsset(
   for (let i = 0; i < segments.length - 1; i += 1) {
     const current = segments[i]!
     const next = segments[i + 1]!
+    // Skip pairs that straddle an opening gap (spatially disconnected).
+    const gapDx = next.start.x - current.end.x
+    const gapDz = next.start.z - current.end.z
+    if (gapDx * gapDx + gapDz * gapDz > WALL_EPSILON) {
+      continue
+    }
     buildCorner(current, next, current.end.x, current.end.y, current.end.z)
   }
 
   // Closed loop: add corner for last -> first.
+  // This also handles the seam of a closed chain that has been split into multiple
+  // visual sub-chains by openings: the caller is responsible for passing the correct
+  // first/last segments of the full original chain group.
   const first = segments[0]!
   const last = segments[segments.length - 1]!
   const dx = first.start.x - last.end.x
@@ -1476,10 +1485,30 @@ function rebuildWallGroup(
   }
 
   const cornerRules = options.cornerModels
+
+  // Pre-compute: merge all visual chain segments from the same original chain index into
+  // a single ordered array. This ensures that the closed-loop seam corner (at the original
+  // arc=0 vertex of a chain) is correctly detected even when an opening splits the chain
+  // into multiple spatially-disconnected sub-arcs. The gap-check inside
+  // computeWallCornerInstanceMatricesByAsset will skip building corners across those gaps.
+  const cornerSegsByChainIndex = new Map<number, WallRenderSeg[]>()
+  for (const chainDef of chainDefinitions) {
+    for (const seg of chainDef.segs) {
+      const ci = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+      let bucket = cornerSegsByChainIndex.get(ci)
+      if (!bucket) {
+        bucket = []
+        cornerSegsByChainIndex.set(ci, bucket)
+      }
+      bucket.push(seg)
+    }
+  }
+  const mergedSegsPerChain = Array.from(cornerSegsByChainIndex.values())
+
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && bodyCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
-    for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, bodyCornerTemplatesByAssetId, cornerRules, 'body')
+    for (const mergedSegs of mergedSegsPerChain) {
+      const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, bodyCornerTemplatesByAssetId, cornerRules, 'body')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {
@@ -1511,8 +1540,8 @@ function rebuildWallGroup(
 
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && headCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
-    for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, headCornerTemplatesByAssetId, cornerRules, 'head')
+    for (const mergedSegs of mergedSegsPerChain) {
+      const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, headCornerTemplatesByAssetId, cornerRules, 'head')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {
@@ -1544,8 +1573,8 @@ function rebuildWallGroup(
 
   if (bodyTemplate && Array.isArray(cornerRules) && cornerRules.length && footCornerTemplatesByAssetId.size) {
     const matricesByAssetId = new Map<string, THREE.Matrix4[]>()
-    for (const chainDef of chainDefinitions) {
-      const local = computeWallCornerInstanceMatricesByAsset(chainDef.segs, footCornerTemplatesByAssetId, cornerRules, 'foot')
+    for (const mergedSegs of mergedSegsPerChain) {
+      const local = computeWallCornerInstanceMatricesByAsset(mergedSegs, footCornerTemplatesByAssetId, cornerRules, 'foot')
       for (const [assetId, mats] of local.entries()) {
         const bucket = matricesByAssetId.get(assetId) ?? []
         if (!matricesByAssetId.has(assetId)) {

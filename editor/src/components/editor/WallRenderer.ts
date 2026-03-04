@@ -1207,27 +1207,54 @@ export function createWallRenderer(options: WallRendererOptions) {
       pushMatrix(assetId, new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
     }
 
-    const chains = splitWallSegmentsIntoChains(_compiledSegs)
-    for (const chain of chains) {
-      for (let i = 0; i < chain.length - 1; i += 1) {
-        const current = chain[i]!
-        const next = chain[i + 1]!
+    // Group all compiled segments by their chainIndex (preserving order).
+    // This ensures that a closed chain broken into multiple sub-arcs by openings
+    // is still treated as one closed ring when determining corner placement.
+    const segsByChainIndex = new Map<number, WallRenderSegment[]>()
+    for (const seg of _compiledSegs) {
+      const ci = Math.max(0, Math.trunc(Number(seg.chainIndex ?? 0)))
+      let bucket = segsByChainIndex.get(ci)
+      if (!bucket) {
+        bucket = []
+        segsByChainIndex.set(ci, bucket)
+      }
+      bucket.push(seg)
+    }
+
+    const sourceChainsArray = Array.isArray(definition.chains) ? definition.chains : []
+
+    for (const [chainIndex, segs] of segsByChainIndex) {
+      const originalChain = sourceChainsArray[chainIndex]
+      const originalClosed = Boolean(originalChain?.closed)
+
+      for (let i = 0; i < segs.length - 1; i += 1) {
+        const current = segs[i]!
+        const next = segs[i + 1]!
+
+        // Skip pairs that straddle an opening gap (spatially disconnected).
+        wallSyncStartHelper.set(current.end.x, current.end.y, current.end.z)
+        wallSyncEndHelper.set(next.start.x, next.start.y, next.start.z)
+        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > 1e-8) {
+          continue
+        }
 
         wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
         buildCorner(current, next, wallSyncPosHelper)
       }
 
-      // Closed loop (within this chain): add corner for last -> first.
-      const first = chain[0]
-      const last = chain[chain.length - 1]
-      if (!first || !last) {
-        continue
-      }
-      wallSyncStartHelper.set(first.start.x, first.start.y, first.start.z)
-      wallSyncEndHelper.set(last.end.x, last.end.y, last.end.z)
-      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
-        wallSyncPosHelper.copy(wallSyncEndHelper)
-        buildCorner(last, first, wallSyncPosHelper)
+      // For a closed original chain, verify whether the wrap-around seam corner
+      // still exists after openings. It exists when last.end ≈ first.start in world space.
+      // This correctly handles the case where a single opening splits a closed chain
+      // into two sub-arcs: the seam corner (arc=0 of the chain) must still be placed.
+      if (originalClosed && segs.length >= 1) {
+        const first = segs[0]!
+        const last = segs[segs.length - 1]!
+        wallSyncStartHelper.set(last.end.x, last.end.y, last.end.z)
+        wallSyncEndHelper.set(first.start.x, first.start.y, first.start.z)
+        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
+          wallSyncPosHelper.copy(wallSyncStartHelper)
+          buildCorner(last, first, wallSyncPosHelper)
+        }
       }
     }
 
