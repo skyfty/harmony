@@ -1981,6 +1981,22 @@ function clearWallEraseHoverHighlight() {
   wallEraseHoverGroup.visible = false
 }
 
+function resolveWallHitPointFromCurrentRay(wallObject: THREE.Object3D): THREE.Vector3 | null {
+  wallObject.updateWorldMatrix(true, true)
+  const wallHits = raycaster.intersectObject(wallObject, true)
+  wallHits.sort((a, b) => a.distance - b.distance)
+  const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
+  if (first?.point) {
+    return first.point as THREE.Vector3
+  }
+
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return planeHit
+  }
+  return null
+}
+
 const wallEraseHoverDirHelper = new THREE.Vector3()
 const wallEraseHoverMidHelper = new THREE.Vector3()
 const wallEraseHoverUpHelper = new THREE.Vector3()
@@ -2694,36 +2710,10 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       return false
     }
 
-    // 更新墙体对象的世界变换矩阵，确保射线检测的坐标系统一致
-    wallObject.updateWorldMatrix(true, true)
-    
-    // 使用射线检测与墙体对象进行碰撞检测，包括其所有子对象
-    const wallHits = raycaster.intersectObject(wallObject, true)
-    
-    // 按距离排序，最近的碰撞点在前
-    wallHits.sort((a, b) => a.distance - b.distance)
-    
-    // 查找第一个有有效碰撞点的结果
-    const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
-    
-    // 如果射线与墙体表面有交点
-    if (first?.point) {
-      // 使用交点更新墙体擦除悬停高亮显示
-      updateWallEraseHoverHighlight(selectedWallId, first.point as THREE.Vector3)
+    const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
+    if (hitPointWorld) {
+      updateWallEraseHoverHighlight(selectedWallId, hitPointWorld)
       return true
-    }
-
-    // 若处于墙体修复模式（按住Shift键），尝试使用地面平面作为备选方案
-    if (wallRepairModeActive.value) {
-      // 创建临时向量存储地面平面与射线的交点
-      const planeHit = new THREE.Vector3()
-      
-      // 计算射线与Y=0的地面平面的交点
-      if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-        // 使用地面交点更新墙体擦除悬停高亮显示
-        updateWallEraseHoverHighlight(selectedWallId, planeHit)
-        return true
-      }
     }
 
     // 若所有碰撞检测都失败，清除墙体擦除悬停高亮
@@ -3164,19 +3154,7 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     const segments = wallMeshDef ? compileWallSegmentsFromDefinition(wallMeshDef) : []
 
     if (selectedWallId && wallObject && segments.length) {
-      wallObject.updateWorldMatrix(true, true)
-      const wallHits = raycaster.intersectObject(wallObject, true)
-      wallHits.sort((a, b) => a.distance - b.distance)
-      const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
-
-      const hitPointWorld = first?.point
-        ? (first.point as THREE.Vector3)
-        : wallRepairModeActive.value
-          ? (() => {
-              const planeHit = new THREE.Vector3()
-              return raycaster.ray.intersectPlane(groundPlane, planeHit) ? planeHit : null
-            })()
-          : null
+      const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
 
       if (!hitPointWorld) {
         return { handled: false, erasedKey: null }
@@ -9629,11 +9607,9 @@ async function handlePointerDown(event: PointerEvent) {
     const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     const wallObject = selectedWallId ? (objectMap.get(selectedWallId) ?? null) : null
     if (selectedWallId && wallObject && normalizedPointerGuard.setRayFromEvent(event)) {
-      const wallHits = raycaster.intersectObject(wallObject, true)
-      wallHits.sort((a, b) => a.distance - b.distance)
-      const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
-      if (first?.point) {
-        const handled = eraseInstancedBinding(selectedWallId, selectedWallId, first.point as THREE.Vector3)
+      const hitPointWorld = resolveWallHitPointFromCurrentRay(wallObject)
+      if (hitPointWorld) {
+        const handled = eraseInstancedBinding(selectedWallId, selectedWallId, hitPointWorld)
         if (handled) {
           const dragState: InstancedEraseDragState = {
             pointerId: event.pointerId,
