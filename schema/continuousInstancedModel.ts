@@ -6,8 +6,10 @@ import {
   ensureInstancedMeshesRegistered,
   getModelInstanceBindingsForNode,
   releaseModelInstanceBinding,
+  updateModelInstanceBindingUvScaleU,
   updateModelInstanceBindingMatrix,
   updateModelInstanceMatrix,
+  updateModelInstanceUvScaleU,
 } from './modelObjectCache'
 
 export const CONTINUOUS_INSTANCED_MODEL_USERDATA_KEY = 'continuousInstancedModel'
@@ -212,10 +214,11 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
   assetId: string
   object: Object3D
   localMatrices: Matrix4[]
+  perInstanceUvScaleU?: number[]
   bindingIdPrefix: string
   useNodeIdForIndex0?: boolean
 }): void {
-  const { nodeId, assetId, object, localMatrices, bindingIdPrefix } = params
+  const { nodeId, assetId, object, localMatrices, perInstanceUvScaleU, bindingIdPrefix } = params
   if (!nodeId || !assetId) {
     return
   }
@@ -271,6 +274,9 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
       allocateModelInstance(assetId, nodeId)
       tempInstance.multiplyMatrices(tempBase, local)
       updateModelInstanceMatrix(nodeId, tempInstance)
+      if (Array.isArray(perInstanceUvScaleU) && i < perInstanceUvScaleU.length) {
+        updateModelInstanceUvScaleU(nodeId, perInstanceUvScaleU[i] ?? 1)
+      }
       continue
     }
 
@@ -278,6 +284,9 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
     allocateModelInstanceBinding(assetId, bindingId, nodeId)
     tempInstance.multiplyMatrices(tempBase, local)
     updateModelInstanceBindingMatrix(bindingId, tempInstance)
+    if (Array.isArray(perInstanceUvScaleU) && i < perInstanceUvScaleU.length) {
+      updateModelInstanceBindingUvScaleU(bindingId, perInstanceUvScaleU[i] ?? 1)
+    }
   }
 }
 

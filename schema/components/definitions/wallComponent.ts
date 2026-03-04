@@ -30,6 +30,8 @@ export type WallModelOrientation = {
   yawDeg: number
 }
 
+export type WallModelPlacementMode = 'stretchTiledUv' | 'repeatInstances'
+
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
   bodyAssetId: string | null
@@ -81,6 +83,8 @@ export interface WallComponentProps {
   isAirWall: boolean
   /** Lower wall body model asset id (required to enable model mode). */
   bodyAssetId: string | null
+  /** Placement mode for linear wall model assets (body/head/foot). */
+  modelPlacementMode: WallModelPlacementMode
   /** Orientation overrides for the body model. */
   bodyOrientation: WallModelOrientation
   /** Upper wall head model asset id (optional; only valid when bodyAssetId is set). */
@@ -164,6 +168,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
       forwardAxis: requiredForwardAxis(record.forwardAxis, `${label}.forwardAxis`),
       yawDeg: requiredYawDeg(record.yawDeg, `${label}.yawDeg`),
     }
+  }
+
+  const requiredModelPlacementMode = (value: unknown): WallModelPlacementMode => {
+    if (value === 'stretchTiledUv' || value === 'repeatInstances') {
+      return value
+    }
+    throw new Error('WallComponentProps missing/invalid modelPlacementMode')
   }
 
   const height = Math.max(WALL_MIN_HEIGHT, requiredNumber('height'))
@@ -268,6 +279,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const jointTrimManual = requiredJointTrimManual((props as any)?.jointTrimManual)
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
+  const modelPlacementMode = requiredModelPlacementMode((props as any)?.modelPlacementMode)
   const headAssetId = bodyAssetId ? requiredAssetIdOrNull('headAssetId') : null
   const footAssetId = bodyAssetId ? requiredAssetIdOrNull('footAssetId') : null
 
@@ -291,6 +303,7 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     jointTrimManual,
     isAirWall: normalizedIsAirWall,
     bodyAssetId,
+    modelPlacementMode,
     bodyOrientation,
     headAssetId,
     headOrientation,
@@ -317,6 +330,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       jointTrimManual: { start: 0, end: 0 },
       isAirWall: false,
       bodyAssetId: null,
+      modelPlacementMode: 'stretchTiledUv',
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headAssetId: null,
       headOrientation: { forwardAxis: '+z', yawDeg: 0 },
@@ -341,6 +355,7 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     jointTrimManual: { start: 0, end: 0 },
     isAirWall: false,
     bodyAssetId: null,
+    modelPlacementMode: 'stretchTiledUv',
     headAssetId: null,
     footAssetId: null,
     bodyEndCapAssetId: null,
@@ -369,6 +384,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     },
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
+    modelPlacementMode: props.modelPlacementMode,
     bodyOrientation: {
       forwardAxis: props.bodyOrientation.forwardAxis,
       yawDeg: props.bodyOrientation.yawDeg,
@@ -456,6 +472,15 @@ const wallComponentDefinition: ComponentDefinition<WallComponentProps> = {
       label: 'Rendering',
       fields: [
         { kind: 'boolean', key: 'isAirWall', label: 'Air Wall (invisible)' },
+        {
+          kind: 'select',
+          key: 'modelPlacementMode',
+          label: 'Model Placement',
+          options: [
+            { label: 'Stretch + Tile UV', value: 'stretchTiledUv' },
+            { label: 'Repeat Instances', value: 'repeatInstances' },
+          ],
+        },
       ],
     },
     {
@@ -496,6 +521,7 @@ export function createWallComponentState(
     jointTrimManual: (overrides as any)?.jointTrimManual ?? defaults.jointTrimManual,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    modelPlacementMode: (overrides as any)?.modelPlacementMode ?? defaults.modelPlacementMode,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
     headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
