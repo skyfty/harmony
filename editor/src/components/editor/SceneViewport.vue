@@ -173,9 +173,8 @@ import { useTerrainGridController } from './useTerrainGridController'
 import { createGuideRouteWaypointLabelsManager, loadLabelFont, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
 import { createWallBuildTool } from './WallBuildTool'
 import {
-  computeWallEraseUnitIntervalAlignedForLocalPoint,
   computeWallRepairUnitSegmentForLocalPoint,
-  getWallLocalPointAtChainDistance,
+  getWallLocalPointAtDefinitionChainDistance,
   segmentLengthXZ,
   computeWallOpeningForLocalHit,
   findContainingWallOpeningIndex,
@@ -1993,14 +1992,15 @@ const wallEraseHoverMatHelper = new THREE.Matrix4()
 function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.Vector3): boolean {
   const object = objectMap.get(hitNodeId) ?? null
   const node = findSceneNode(sceneStore.nodes, hitNodeId)
-  if (!object || !node || (node as any).dynamicMesh?.type !== 'Wall') {
+  const wallMesh = node && (node as any).dynamicMesh?.type === 'Wall'
+    ? (node as any).dynamicMesh as WallDynamicMesh
+    : null
+  if (!object || !node || !wallMesh) {
     clearWallEraseHoverHighlight()
     return false
   }
 
-  const segments = (node as any).dynamicMesh?.type === 'Wall'
-    ? compileWallSegmentsFromDefinition((node as any).dynamicMesh as WallDynamicMesh)
-    : []
+  const segments = compileWallSegmentsFromDefinition(wallMesh)
   if (!segments.length) {
     clearWallEraseHoverHighlight()
     return false
@@ -2016,6 +2016,7 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
   let previewWidth = 0
 
   const unitLenM = wallEraseUnitLengthM.value
+  const halfLenM = unitLenM * 0.5
 
   if (isRepair) {
     const repair = computeWallRepairUnitSegmentForLocalPoint(segments, localPoint, unitLenM)
@@ -2037,14 +2038,14 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
       previewWidth = Math.max(0, w)
     }
   } else {
-    const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
-    if (!interval) {
+    const opening = computeWallOpeningForLocalHit(wallMesh, localPoint, halfLenM)
+    if (!opening) {
       clearWallEraseHoverHighlight()
       return false
     }
 
-    const localA = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeStart)
-    const localB = getWallLocalPointAtChainDistance(segments, interval.chain, interval.rangeEnd)
+    const localA = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.start)
+    const localB = getWallLocalPointAtDefinitionChainDistance(wallMesh, opening.chainIndex, opening.end)
     if (!localA || !localB) {
       clearWallEraseHoverHighlight()
       return false
@@ -2054,20 +2055,20 @@ function updateWallEraseHoverHighlight(hitNodeId: string, hitPointWorld: THREE.V
     worldB = new THREE.Vector3(localB.x, localB.y, localB.z).applyMatrix4(object.matrixWorld)
 
     const eps = 1e-6
-    let cursor = 0
-    for (let i = interval.chain.startIndex; i <= interval.chain.endIndex; i += 1) {
-      const seg = segments[i]
+    for (const seg of segments) {
       if (!seg) {
         continue
       }
+      if (Number(seg.chainIndex ?? -1) !== Number(opening.chainIndex)) {
+        continue
+      }
+      const segStart = Number(seg.chainArcStart ?? 0)
       const segLen = segmentLengthXZ(seg)
-      const segStart = cursor
-      const segEnd = cursor + segLen
-      cursor = segEnd
+      const segEnd = segStart + segLen
       if (!Number.isFinite(segLen) || segLen <= eps) {
         continue
       }
-      if (segEnd <= interval.rangeStart + eps || segStart >= interval.rangeEnd - eps) {
+      if (segEnd <= opening.start + eps || segStart >= opening.end - eps) {
         continue
       }
       const h = Number((seg as any)?.height)
@@ -2670,39 +2671,62 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
 
   // When a wall node is selected, show an erase/repair preview on that wall.
   // Procedural walls are not necessarily part of instanced pick targets.
+  // 如果当前选择的节点是墙体，执行墙体擦除悬停突出显示逻辑
   if (selectedNodeIsWall.value) {
+    // 清除之前的修复悬停高亮（如果存在）
     if (repairHoverGroup.visible) {
       clearRepairHoverHighlight(true)
     }
+
+    // 获取当前选中的墙体节点ID
     const selectedWallId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (!selectedWallId) {
+      // 若找不到选中的墙体ID，清除墙体擦除悬停高亮并返回
       clearWallEraseHoverHighlight()
       return false
     }
 
+    // 从对象映射中获取对应的墙体Three.js对象
     const wallObject = objectMap.get(selectedWallId) ?? null
     if (!wallObject) {
+      // 若找不到墙体的Three.js对象，清除高亮并返回
       clearWallEraseHoverHighlight()
       return false
     }
 
+    // 更新墙体对象的世界变换矩阵，确保射线检测的坐标系统一致
     wallObject.updateWorldMatrix(true, true)
+    
+    // 使用射线检测与墙体对象进行碰撞检测，包括其所有子对象
     const wallHits = raycaster.intersectObject(wallObject, true)
+    
+    // 按距离排序，最近的碰撞点在前
     wallHits.sort((a, b) => a.distance - b.distance)
+    
+    // 查找第一个有有效碰撞点的结果
     const first = wallHits.find((hit) => Boolean(hit.point)) ?? null
+    
+    // 如果射线与墙体表面有交点
     if (first?.point) {
+      // 使用交点更新墙体擦除悬停高亮显示
       updateWallEraseHoverHighlight(selectedWallId, first.point as THREE.Vector3)
       return true
     }
 
+    // 若处于墙体修复模式（按住Shift键），尝试使用地面平面作为备选方案
     if (wallRepairModeActive.value) {
+      // 创建临时向量存储地面平面与射线的交点
       const planeHit = new THREE.Vector3()
+      
+      // 计算射线与Y=0的地面平面的交点
       if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+        // 使用地面交点更新墙体擦除悬停高亮显示
         updateWallEraseHoverHighlight(selectedWallId, planeHit)
         return true
       }
     }
 
+    // 若所有碰撞检测都失败，清除墙体擦除悬停高亮
     clearWallEraseHoverHighlight()
     return false
   }
@@ -3036,7 +3060,8 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
       const inv = new THREE.Matrix4().copy(object.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
 
-      const halfLenM = wallEraseUnitLengthM.value * 0.5
+      const unitLenM = wallEraseUnitLengthM.value
+      const halfLenM = unitLenM * 0.5
 
       if (wallRepairModeActive.value) {
         // Repair = remove the opening that covers the clicked spot
@@ -3047,7 +3072,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
         const nextOpenings = removeWallOpeningFromDefinition(wallMesh, openingIdx)
         sceneStore.updateNodeDynamicMesh(nodeId, { ...wallMesh, openings: nextOpenings })
       } else {
-        // Erase = add a new WallOpening
+        // Erase = add a new WallOpening (width equals current erase brush width in meters)
         const newOpening = computeWallOpeningForLocalHit(wallMesh, localPoint, halfLenM)
         if (!newOpening) {
           return false
@@ -3160,6 +3185,10 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
       const inv = new THREE.Matrix4().copy(wallObject.matrixWorld).invert()
       const localPoint = hitPointWorld.clone().applyMatrix4(inv)
       const unitLenM = wallEraseUnitLengthM.value
+      const halfLenM = unitLenM * 0.5
+      if (!wallMeshDef) {
+        return { handled: false, erasedKey: null }
+      }
 
       let key = `${selectedWallId}:wall:hit`
       if (wallRepairModeActive.value) {
@@ -3173,13 +3202,15 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
         const bz = Math.round(repair.center.z / q)
         key = `${selectedWallId}:wall:repair:${bx}:${bz}`
       } else {
-        const interval = computeWallEraseUnitIntervalAlignedForLocalPoint(segments, localPoint, unitLenM)
-        if (!interval) {
+        const opening = computeWallOpeningForLocalHit(wallMeshDef, localPoint, halfLenM)
+        if (!opening) {
           return { handled: false, erasedKey: null }
         }
-        // Bucket key aligned to chain-origin grid.
-        const bucket = Math.floor(interval.rangeStart / Math.max(1e-6, unitLenM))
-        key = `${selectedWallId}:wall:${interval.chain.startIndex}-${interval.chain.endIndex}:${bucket}`
+        // Quantize by opening center to avoid re-erasing the same area during drag.
+        const q = Math.max(1e-6, unitLenM * 0.5)
+        const center = (Number(opening.start) + Number(opening.end)) * 0.5
+        const bucket = Math.round(center / q)
+        key = `${selectedWallId}:wall:${opening.chainIndex}:${bucket}`
       }
       if (options?.skipKey && key === options.skipKey) {
         return { handled: false, erasedKey: null }

@@ -651,24 +651,23 @@ export function applyEraseIntervalToSegments(
 // New opening-based helpers (work directly with WallDynamicMesh chains)
 // ---------------------------------------------------------------------------
 import type { WallDynamicMesh, WallOpening } from '@schema'
-import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
+import { compileWallSegmentsFromDefinition, computeChainArcLength } from '@schema/wallLayout'
 
-/**
- * Given a local-space hit point on a wall object, compute the WallOpening that
- * should be added for a manual erase of `halfLenM` metres either side.
- *
- * Uses the compiled render segments so the hit test works against the visual mesh,
- * then converts arc-lengths back to the original chain coordinates.
- *
- * Returns null if no suitable hit is found.
- */
-export function computeWallOpeningForLocalHit(
+type WallLocalHitOnCompiled = {
+  chainIndex: number
+  hitArcInChain: number
+  erasableRangeStart: number
+  erasableRangeEnd: number
+}
+
+function resolveWallLocalHitOnCompiledSegments(
   definition: WallDynamicMesh,
   localPoint: THREE.Vector3,
-  halfLenM: number,
-): WallOpening | null {
+): WallLocalHitOnCompiled | null {
   const compiled = compileWallSegmentsFromDefinition(definition)
-  if (!compiled.length) return null
+  if (!compiled.length) {
+    return null
+  }
 
   let bestIndex = -1
   let bestDistSq = Number.POSITIVE_INFINITY
@@ -688,20 +687,206 @@ export function computeWallOpeningForLocalHit(
     }
   }
 
-  if (bestIndex < 0) return null
+  if (bestIndex < 0) {
+    return null
+  }
+
   const hitSeg = compiled[bestIndex]!
-  const chainIndex = hitSeg.chainIndex ?? 0
-  const chainArcStart = hitSeg.chainArcStart ?? 0
+  const chainIndex = Math.max(0, Math.trunc(Number(hitSeg.chainIndex ?? 0)))
+  const chainArcStart = Number(hitSeg.chainArcStart ?? 0)
 
   const dx = Number(hitSeg.end.x) - Number(hitSeg.start.x)
   const dz = Number(hitSeg.end.z) - Number(hitSeg.start.z)
   const segLen = Math.sqrt(dx * dx + dz * dz)
 
-  const hitArcInChain = chainArcStart + bestT * segLen
+  if (!Number.isFinite(segLen)) {
+    return null
+  }
+
+  const contiguousEps = 1e-4
+  let erasableRangeStart = chainArcStart
+  let erasableRangeEnd = chainArcStart + segLen
+
+  for (let i = bestIndex - 1; i >= 0; i -= 1) {
+    const prev = compiled[i]!
+    if (Math.max(0, Math.trunc(Number(prev.chainIndex ?? -1))) !== chainIndex) {
+      break
+    }
+    const prevStart = Number(prev.chainArcStart ?? NaN)
+    const prevLen = Math.sqrt(
+      (Number(prev.end.x) - Number(prev.start.x)) ** 2 +
+      (Number(prev.end.z) - Number(prev.start.z)) ** 2,
+    )
+    if (!Number.isFinite(prevStart) || !Number.isFinite(prevLen)) {
+      break
+    }
+    const prevEnd = prevStart + prevLen
+    if (Math.abs(prevEnd - erasableRangeStart) > contiguousEps) {
+      break
+    }
+    erasableRangeStart = prevStart
+  }
+
+  for (let i = bestIndex + 1; i < compiled.length; i += 1) {
+    const next = compiled[i]!
+    if (Math.max(0, Math.trunc(Number(next.chainIndex ?? -1))) !== chainIndex) {
+      break
+    }
+    const nextStart = Number(next.chainArcStart ?? NaN)
+    const nextLen = Math.sqrt(
+      (Number(next.end.x) - Number(next.start.x)) ** 2 +
+      (Number(next.end.z) - Number(next.start.z)) ** 2,
+    )
+    if (!Number.isFinite(nextStart) || !Number.isFinite(nextLen)) {
+      break
+    }
+    if (Math.abs(nextStart - erasableRangeEnd) > contiguousEps) {
+      break
+    }
+    erasableRangeEnd = nextStart + nextLen
+  }
+
+  const hitArcInChain = chainArcStart + Math.max(0, Math.min(1, bestT)) * segLen
   return {
     chainIndex,
-    start: Math.max(0, hitArcInChain - halfLenM),
-    end: hitArcInChain + halfLenM,
+    hitArcInChain,
+    erasableRangeStart,
+    erasableRangeEnd,
+  }
+}
+
+/**
+ * Given a local-space hit point on a wall object, compute the WallOpening that
+ * should be added for a manual erase of `halfLenM` metres either side.
+ *
+ * Uses the compiled render segments so the hit test works against the visual mesh,
+ * then converts arc-lengths back to the original chain coordinates.
+ *
+ * Returns null if no suitable hit is found.
+ */
+export function computeWallOpeningForLocalHit(
+  definition: WallDynamicMesh,
+  localPoint: THREE.Vector3,
+  halfLenM: number,
+): WallOpening | null {
+  const hit = resolveWallLocalHitOnCompiledSegments(definition, localPoint)
+  if (!hit) {
+    return null
+  }
+
+  const half = Math.max(0, Number(halfLenM))
+  const start = Math.max(hit.erasableRangeStart, hit.hitArcInChain - half)
+  const end = Math.min(hit.erasableRangeEnd, hit.hitArcInChain + half)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end - start <= 1e-6) {
+    return null
+  }
+
+  return {
+    chainIndex: hit.chainIndex,
+    start,
+    end,
+  }
+}
+
+/**
+ * Compute a fixed-width opening centered on the nearest wall hit, aligned to
+ * chain-origin buckets: [k*unit, (k+1)*unit].
+ */
+export function computeWallOpeningAlignedForLocalHit(
+  definition: WallDynamicMesh,
+  localPoint: THREE.Vector3,
+  unitLenM: number,
+): WallOpening | null {
+  const hit = resolveWallLocalHitOnCompiledSegments(definition, localPoint)
+  if (!hit) {
+    return null
+  }
+
+  const chain = definition.chains?.[hit.chainIndex]
+  if (!chain) {
+    return null
+  }
+
+  const chainTotalLen = computeChainArcLength(chain)
+  const unit = Math.max(1e-6, Math.abs(Number(unitLenM)))
+  const bucket = Math.floor(hit.hitArcInChain / unit)
+  const start = Math.max(0, Math.min(chainTotalLen, bucket * unit))
+  const end = Math.min(chainTotalLen, start + unit)
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end - start <= 1e-6) {
+    return null
+  }
+
+  return {
+    chainIndex: hit.chainIndex,
+    start,
+    end,
+  }
+}
+
+export function getWallLocalPointAtDefinitionChainDistance(
+  definition: WallDynamicMesh,
+  chainIndex: number,
+  distance: number,
+): { x: number; y: number; z: number } | null {
+  const chain = definition.chains?.[Math.max(0, Math.trunc(chainIndex))]
+  if (!chain) {
+    return null
+  }
+
+  const points = Array.isArray(chain.points) ? chain.points : []
+  if (points.length < 2) {
+    return null
+  }
+
+  const closed = Boolean(chain.closed)
+  const segmentCount = closed ? points.length : points.length - 1
+  const eps = 1e-6
+
+  let totalLen = 0
+  const lengths: number[] = []
+  for (let i = 0; i < segmentCount; i += 1) {
+    const start = points[i]!
+    const end = points[(i + 1) % points.length]!
+    const dx = Number(end.x) - Number(start.x)
+    const dz = Number(end.z) - Number(start.z)
+    const len = Math.sqrt(dx * dx + dz * dz)
+    const safeLen = Number.isFinite(len) && len > eps ? len : 0
+    lengths.push(safeLen)
+    totalLen += safeLen
+  }
+
+  if (totalLen <= eps) {
+    return null
+  }
+
+  const target = Math.max(0, Math.min(totalLen, Number(distance)))
+  let cursor = 0
+  for (let i = 0; i < segmentCount; i += 1) {
+    const len = lengths[i] ?? 0
+    if (len <= eps) {
+      continue
+    }
+    const startArc = cursor
+    const endArc = cursor + len
+    if (target <= endArc + eps) {
+      const start = points[i]!
+      const end = points[(i + 1) % points.length]!
+      const t = Math.max(0, Math.min(1, (target - startArc) / len))
+      return {
+        x: Number(start.x) + (Number(end.x) - Number(start.x)) * t,
+        y: Number(start.y) + (Number(end.y) - Number(start.y)) * t,
+        z: Number(start.z) + (Number(end.z) - Number(start.z)) * t,
+      }
+    }
+    cursor = endArc
+  }
+
+  const tail = points[points.length - 1]!
+  return {
+    x: Number(tail.x),
+    y: Number(tail.y),
+    z: Number(tail.z),
   }
 }
 
