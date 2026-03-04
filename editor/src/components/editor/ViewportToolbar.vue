@@ -30,6 +30,14 @@
           </template>
           <v-list density="compact" class="floor-shape-menu">
             <div class="floor-shape-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Floor Brush</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:floor-shape-menu-open', false)" />
+              </v-toolbar>
+
               <div class="floor-shape-grid">
                 <v-list-item
                   v-for="shape in floorShapeOptions"
@@ -91,6 +99,14 @@
           </template>
           <v-list density="compact" class="wall-shape-menu">
             <div class="wall-shape-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Wall Brush</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:wall-shape-menu-open', false)" />
+              </v-toolbar>
+
               <div class="floor-shape-grid">
                 <v-list-item
                   v-for="shape in wallShapeOptions"
@@ -226,61 +242,72 @@
           />
         </template>
         <v-list density="compact" class="align-menu">
-          <v-list-item
-            title="X Axis Alignment (World X)"
-            prepend-icon="mdi-axis-arrow"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand('axis-x')"
-          />
-          <v-list-item
-            title="Y Axis Alignment (World Y)"
-            prepend-icon="mdi-axis-arrow"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand('axis-y')"
-          />
-          <v-list-item
-            title="Z Axis Alignment (World Z)"
-            prepend-icon="mdi-axis-arrow"
-            :disabled="!canAlignSelection"
-            @click="handleAlignCommand('axis-z')"
-          />
+          <div class="popup-menu-card">
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Align / Distribute</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="alignMenuOpen = false" />
+            </v-toolbar>
+            <div class="popup-menu-card__content">
+              <v-list-item
+                title="X Axis Alignment (World X)"
+                prepend-icon="mdi-axis-arrow"
+                :disabled="!canAlignSelection"
+                @click="handleAlignCommand('axis-x')"
+              />
+              <v-list-item
+                title="Y Axis Alignment (World Y)"
+                prepend-icon="mdi-axis-arrow"
+                :disabled="!canAlignSelection"
+                @click="handleAlignCommand('axis-y')"
+              />
+              <v-list-item
+                title="Z Axis Alignment (World Z)"
+                prepend-icon="mdi-axis-arrow"
+                :disabled="!canAlignSelection"
+                @click="handleAlignCommand('axis-z')"
+              />
 
-          <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
-          <v-list-item
-            v-if="selectionCount >= 2"
-            title="Fix Primary Selection as Anchor"
-            :prepend-icon="fixedPrimaryAsAnchor ? 'mdi-check' : 'mdi-checkbox-blank-outline'"
-            @click="toggleFixedPrimaryAsAnchor"
-          />
+              <v-divider v-if="selectionCount >= 2" class="align-menu__divider" />
+              <v-list-item
+                v-if="selectionCount >= 2"
+                title="Fix Primary Selection as Anchor"
+                :prepend-icon="fixedPrimaryAsAnchor ? 'mdi-check' : 'mdi-checkbox-blank-outline'"
+                @click="toggleFixedPrimaryAsAnchor"
+              />
 
-          <template v-if="selectionCount >= 2">
-            <v-divider class="align-menu__divider" />
-            <v-list-item
-              title="Horizontal Arrange (Right / World X+)"
-              prepend-icon="mdi-format-horizontal-align-left"
-              :disabled="!canAlignSelection"
-              @click="handleAlignCommand({ type: 'arrange', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
-            />
-            <v-list-item
-              title="Vertical Arrange (Up / World Y+)"
-              prepend-icon="mdi-format-vertical-align-top"
-              :disabled="!canAlignSelection"
-              @click="handleAlignCommand({ type: 'arrange', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
-            />
-            <v-divider class="align-menu__divider" />
-            <v-list-item
-              title="Horizontal Distribute"
-              prepend-icon="mdi-format-horizontal-distribute"
-              :disabled="!canAlignSelection || selectionCount < 3"
-              @click="handleAlignCommand({ type: 'distribute', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
-            />
-            <v-list-item
-              title="Vertical Distribute (World Y)"
-              prepend-icon="mdi-format-vertical-distribute"
-              :disabled="!canAlignSelection || selectionCount < 3"
-              @click="handleAlignCommand({ type: 'distribute', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
-            />
-          </template>
+              <template v-if="selectionCount >= 2">
+                <v-divider class="align-menu__divider" />
+                <v-list-item
+                  title="Horizontal Arrange (Right / World X+)"
+                  prepend-icon="mdi-format-horizontal-align-left"
+                  :disabled="!canAlignSelection"
+                  @click="handleAlignCommand({ type: 'arrange', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+                />
+                <v-list-item
+                  title="Vertical Arrange (Up / World Y+)"
+                  prepend-icon="mdi-format-vertical-align-top"
+                  :disabled="!canAlignSelection"
+                  @click="handleAlignCommand({ type: 'arrange', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+                />
+                <v-divider class="align-menu__divider" />
+                <v-list-item
+                  title="Horizontal Distribute"
+                  prepend-icon="mdi-format-horizontal-distribute"
+                  :disabled="!canAlignSelection || selectionCount < 3"
+                  @click="handleAlignCommand({ type: 'distribute', direction: 'horizontal', options: { fixedPrimaryAsAnchor } })"
+                />
+                <v-list-item
+                  title="Vertical Distribute (World Y)"
+                  prepend-icon="mdi-format-vertical-distribute"
+                  :disabled="!canAlignSelection || selectionCount < 3"
+                  @click="handleAlignCommand({ type: 'distribute', direction: 'vertical', options: { fixedPrimaryAsAnchor } })"
+                />
+              </template>
+            </div>
+          </div>
         </v-list>
       </v-menu>
       <v-menu
@@ -308,7 +335,15 @@
         </template>
         <v-list density="compact" class="scatter-erase-menu">
           <div class="scatter-erase-menu__card">
-            <div class="scatter-erase-menu__slider">
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Scatter Erase</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:scatter-erase-menu-open', false)" />
+            </v-toolbar>
+
+            <div class="scatter-erase-menu__slider" style="padding: 10px">
               <div class="scatter-erase-menu__slider-labels">
                 <span>Erase Radius</span>
                 <span>{{ scatterEraseRadiusLabel }}</span>
@@ -339,7 +374,7 @@
           </div>
         </v-list>
       </v-menu>
-      <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
+      <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8" :close-on-content-click="false">
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
@@ -354,19 +389,30 @@
           />
         </template>
         <v-list density="compact" class="rotation-menu">
-          <template v-for="(section, index) in rotationSections" :key="section.id">
-            <v-list-item
-              v-for="action in section.actions"
-              :key="action.id"
-              :title="action.label"
-              @click="handleRotationAction(action)"
-            >
-            </v-list-item>
-            <v-divider v-if="index < rotationSections.length - 1" class="rotation-menu__divider" />
-          </template>
+          <div class="popup-menu-card">
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Rotate</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="rotationMenuOpen = false" />
+            </v-toolbar>
+            <div class="popup-menu-card__content">
+              <template v-for="(section, index) in rotationSections" :key="section.id">
+                <v-list-item
+                  v-for="action in section.actions"
+                  :key="action.id"
+                  :title="action.label"
+                  @click="handleRotationAction(action)"
+                >
+                </v-list-item>
+                <v-divider v-if="index < rotationSections.length - 1" class="rotation-menu__divider" />
+              </template>
+            </div>
+          </div>
         </v-list>
       </v-menu>
-        <v-menu v-model="mirrorMenuOpen" location="bottom" :offset="8">
+        <v-menu v-model="mirrorMenuOpen" location="bottom" :offset="8" :close-on-content-click="false">
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
@@ -380,19 +426,30 @@
               :disabled="!canMirrorSelection"
             />
           </template>
-          <v-list density="compact" class="rotation-menu">
-            <v-list-item :active="activeMirrorMode === 'horizontal'" @click="handleMirrorAction('horizontal')">
-              <template #prepend>
-                <v-icon>mdi-flip-horizontal</v-icon>
-              </template>
-              <v-list-item-title>Horizontal Mirror</v-list-item-title>
-            </v-list-item>
-            <v-list-item :active="activeMirrorMode === 'vertical'" @click="handleMirrorAction('vertical')">
-              <template #prepend>
-                <v-icon>mdi-flip-vertical</v-icon>
-              </template>
-              <v-list-item-title>Vertical Mirror</v-list-item-title>
-            </v-list-item>
+          <v-list density="compact" class="mirror-menu">
+            <div class="popup-menu-card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Mirror</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="mirrorMenuOpen = false" />
+              </v-toolbar>
+              <div class="popup-menu-card__content">
+                <v-list-item :active="activeMirrorMode === 'horizontal'" @click="handleMirrorAction('horizontal')">
+                  <template #prepend>
+                    <v-icon>mdi-flip-horizontal</v-icon>
+                  </template>
+                  <v-list-item-title>Horizontal Mirror</v-list-item-title>
+                </v-list-item>
+                <v-list-item :active="activeMirrorMode === 'vertical'" @click="handleMirrorAction('vertical')">
+                  <template #prepend>
+                    <v-icon>mdi-flip-vertical</v-icon>
+                  </template>
+                  <v-list-item-title>Vertical Mirror</v-list-item-title>
+                </v-list-item>
+              </div>
+            </div>
           </v-list>
         </v-menu>
       <v-btn
@@ -467,12 +524,23 @@
           />
         </template>
         <v-list density="compact" class="camera-reset-menu">
-          <v-list-item title="正面 (+X)" @click="handleCameraResetDirectionSelect('pos-x')" />
-          <v-list-item title="背面 (-X)" @click="handleCameraResetDirectionSelect('neg-x')" />
-          <v-list-item title="上面 (+Y)" @click="handleCameraResetDirectionSelect('pos-y')" />
-          <v-list-item title="下面 (-Y)" @click="handleCameraResetDirectionSelect('neg-y')" />
-          <v-list-item title="左面 (+Z)" @click="handleCameraResetDirectionSelect('pos-z')" />
-          <v-list-item title="右面 (-Z)" @click="handleCameraResetDirectionSelect('neg-z')" />
+          <div class="popup-menu-card">
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Camera View</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:camera-reset-menu-open', false)" />
+            </v-toolbar>
+            <div class="popup-menu-card__content">
+              <v-list-item title="正面 (+X)" @click="handleCameraResetDirectionSelect('pos-x')" />
+              <v-list-item title="背面 (-X)" @click="handleCameraResetDirectionSelect('neg-x')" />
+              <v-list-item title="上面 (+Y)" @click="handleCameraResetDirectionSelect('pos-y')" />
+              <v-list-item title="下面 (-Y)" @click="handleCameraResetDirectionSelect('neg-y')" />
+              <v-list-item title="左面 (+Z)" @click="handleCameraResetDirectionSelect('pos-z')" />
+              <v-list-item title="右面 (-Z)" @click="handleCameraResetDirectionSelect('neg-z')" />
+            </div>
+          </div>
         </v-list>
       </v-menu>
     </v-card>
@@ -683,15 +751,43 @@ watch(buildToolsDisabled, (disabled) => {
   }
 })
 
-watch(floorShapeMenuOpen, (open) => {
-  if (open && wallShapeMenuOpen.value) {
-    emit('update:wall-shape-menu-open', false)
+// Mutual exclusivity helpers
+function closeExternalMenus() {
+  emit('update:scatter-erase-menu-open', false)
+  emit('update:camera-reset-menu-open', false)
+  emit('update:floor-shape-menu-open', false)
+  emit('update:wall-shape-menu-open', false)
+}
+
+function closeAllMenus() {
+  alignMenuOpen.value = false
+  rotationMenuOpen.value = false
+  mirrorMenuOpen.value = false
+  closeExternalMenus()
+}
+
+// Close all other menus when a locally-controlled menu opens
+watch(alignMenuOpen, (open) => {
+  if (open) {
+    rotationMenuOpen.value = false
+    mirrorMenuOpen.value = false
+    closeExternalMenus()
   }
 })
 
-watch(wallShapeMenuOpen, (open) => {
-  if (open && floorShapeMenuOpen.value) {
-    emit('update:floor-shape-menu-open', false)
+watch(rotationMenuOpen, (open) => {
+  if (open) {
+    alignMenuOpen.value = false
+    mirrorMenuOpen.value = false
+    closeExternalMenus()
+  }
+})
+
+watch(mirrorMenuOpen, (open) => {
+  if (open) {
+    alignMenuOpen.value = false
+    rotationMenuOpen.value = false
+    closeExternalMenus()
   }
 })
 
@@ -871,14 +967,14 @@ function handleWallShapeContextMenu(event: MouseEvent) {
     return
   }
   // Right-click on wall tool only opens the shape menu; it does not auto-switch tools.
-  emit('update:floor-shape-menu-open', false)
+  closeAllMenus()
   emit('update:wall-shape-menu-open', true)
 }
 
 function handleWallShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
-    emit('update:floor-shape-menu-open', false)
+    closeAllMenus()
   }
   emit('update:wall-shape-menu-open', open)
 }
@@ -908,14 +1004,14 @@ function handleFloorShapeContextMenu(event: MouseEvent) {
     return
   }
   // Right-click on floor tool only opens the shape menu; it does not auto-switch tools.
-  emit('update:wall-shape-menu-open', false)
+  closeAllMenus()
   emit('update:floor-shape-menu-open', true)
 }
 
 function handleFloorShapeMenuModelUpdate(value: boolean) {
   const open = Boolean(value)
   if (open) {
-    emit('update:wall-shape-menu-open', false)
+    closeAllMenus()
   }
   emit('update:floor-shape-menu-open', open)
 }
@@ -940,12 +1036,14 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   if (!canEraseScatterEffective.value) {
     return
   }
+  closeAllMenus()
   emit('update:scatter-erase-menu-open', true)
 }
 
 function handleCameraResetContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
+  closeAllMenus()
   emit('update:camera-reset-menu-open', true)
 }
 
@@ -1005,22 +1103,27 @@ function handleClearScatterMenuAction() {
 
 .scatter-erase-menu {
   min-width: 220px;
-  padding: 6px;
+  padding: 0;
 }
 
 .align-menu {
   min-width: 280px;
-  padding: 6px;
+  padding: 0;
 }
 
 .camera-reset-menu {
   min-width: 170px;
-  padding: 6px;
+  padding: 0;
 }
 
 .rotation-menu {
   min-width: 260px;
-  padding: 6px;
+  padding: 0;
+}
+
+.mirror-menu {
+  min-width: 180px;
+  padding: 0;
 }
 
 .floor-shape-menu {
@@ -1131,14 +1234,62 @@ function handleClearScatterMenuAction() {
   display: block;
 }
 
-.floor-shape-menu__card {
+.popup-menu-card {
+  position: relative;
   border-radius: 12px;
-  padding: 8px;
+  padding: 0;
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.popup-menu-card__content {
+  padding: 4px 0;
+}
+
+.floor-shape-menu__card,
+.wall-shape-menu__card {
+  position: relative;
+  border-radius: 12px;
+  padding: 0;
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.menu-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+}
+
+.menu-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(233, 236, 241, 0.94);
+}
+
+.menu-close-btn {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .scatter-erase-menu__card {
-  border-radius: 14px;
-  padding: 10px;
+  position: relative;
+  border-radius: 12px;
+  padding: 0;
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
 }
 
 .scatter-erase-menu__slider {
