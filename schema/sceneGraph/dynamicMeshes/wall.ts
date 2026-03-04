@@ -100,7 +100,9 @@ export async function buildWallMesh(
     {
       smoothing: wallProps.smoothing,
       cornerModels,
-      modelPlacementMode: wallProps.modelPlacementMode,
+      // stretchTiledUv 会对纹理 repeat 进行拉伸缩放，在运行时（预览/viewer）会产生纹理单元间的空隙。
+      // 与编辑器视口的行为保持一致：始终使用 repeatInstances 进行几何体重复平铺。
+      modelPlacementMode: wallProps.modelPlacementMode === 'stretchTiledUv' ? 'repeatInstances' : wallProps.modelPlacementMode,
       bodyOrientation: wallProps.bodyOrientation,
       headOrientation: wallProps.headOrientation,
       footOrientation: wallProps.footOrientation,
