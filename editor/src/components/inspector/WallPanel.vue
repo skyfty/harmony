@@ -1578,7 +1578,10 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
                     @blur="() => updateCornerModel(index, {})"
                   />
+                </div>
+                <div class="wall-joint-trim-row">
                   <v-text-field
+                    class="slider-input"
                     density="compact"
                     variant="underlined"
                     type="number"
@@ -1592,6 +1595,7 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @blur="() => updateCornerModel(index, {})"
                   />
                   <v-text-field
+                    class="slider-input"
                     density="compact"
                     variant="underlined"
                     type="number"
@@ -1604,16 +1608,18 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @update:modelValue="(value) => updateCornerModel(index, { jointTrim: { ...((entry as any).jointTrim ?? { start: 0, end: 0 }), end: Math.max(0, Number(value) || 0) } } as any)"
                     @blur="() => updateCornerModel(index, {})"
                   />
-                </div>
-                <div class="wall-joint-trim-actions">
-                  <v-btn
-                    density="compact"
-                    variant="text"
-                    size="small"
-                    @click="recommendJointTrimForCorner(index)"
-                  >
-                    Recommend Trim
-                  </v-btn>
+                  <div class="wall-joint-trim-actions">
+                    <v-btn
+                      icon
+                      density="compact"
+                      variant="text"
+                      size="small"
+                      title="Recommend Trim"
+                      @click="recommendJointTrimForCorner(index)"
+                    >
+                      <v-icon size="18">mdi-lightning-bolt</v-icon>
+                    </v-btn>
+                  </div>
                 </div>
                 <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
               </div>
@@ -2260,7 +2266,7 @@ function applyAirWallUpdate(rawValue: unknown) {
 .wall-corner-angle-fields {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.65rem;
 }
 
 .wall-corner-angle-label {
@@ -2348,16 +2354,19 @@ function applyAirWallUpdate(rawValue: unknown) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.25rem;
+  flex-shrink: 0;
 }
 
 .wall-joint-trim-row {
   display: flex;
   gap: 0.5rem;
+  align-items: end;
+  flex-wrap: nowrap;
 }
 
 .wall-joint-trim-row .slider-input {
   flex: 1;
+  min-width: 0;
 }
 
 .wall-dimension-row {
