@@ -448,6 +448,8 @@ function installWallUvScaleShaderPatch(material: THREE.Material, uvAxis: WallRes
     if (shader.vertexShader.includes(WALL_UV_SCALE_U_ATTRIBUTE)) {
       return
     }
+    
+    console.log('Installing wall UV scale shader patch on material', material)
 
     shader.vertexShader = shader.vertexShader
       .replace(

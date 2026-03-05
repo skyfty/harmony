@@ -2028,6 +2028,15 @@ function applyAirWallUpdate(rawValue: unknown) {
 </template>
 
 <style scoped>
+.wall-asset-orientation-grid {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.wall-asset-orientation-grid .v-select,
+.wall-asset-orientation-grid .v-text-field {
+
+}
 .wall-field-grid {
   display: grid;
   gap: 0.2rem;
@@ -2056,7 +2065,7 @@ function applyAirWallUpdate(rawValue: unknown) {
 
 .wall-asset-orientation-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.4rem;
   align-items: center;
 }
