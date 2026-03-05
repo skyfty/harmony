@@ -393,7 +393,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     const hasHeadCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.headAssetId === 'string' && (entry as any).headAssetId.trim().length)
     const hasFootCornerAssets = cornerModels.some((entry) => typeof (entry as any)?.footAssetId === 'string' && (entry as any).footAssetId.trim().length)
     const definition = node.dynamicMesh as WallDynamicMesh
-    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets || hasFootCornerAssets) && (definition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
+    const effectiveDefinition = resolveWallEffectiveDefinition(definition, wallProps)
+    const canHaveCornerJoints = (hasBodyCornerAssets || hasHeadCornerAssets || hasFootCornerAssets) && (effectiveDefinition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
     const wantsInstancing = Boolean(bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints)
     if (!wantsInstancing) {
       return null
@@ -404,7 +405,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -426,7 +427,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -448,7 +449,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -471,17 +472,17 @@ export function createWallRenderer(options: WallRendererOptions) {
       return group?.boundingBox ?? null
     }
 
-    const bodyJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+    const bodyJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
       cornerModels,
       mode: 'body',
       getAssetBounds: getBoundsFromCache,
     })
-    const headJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+    const headJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
       cornerModels,
       mode: 'head',
       getAssetBounds: getBoundsFromCache,
     })
-    const footJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+    const footJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
       cornerModels,
       mode: 'foot',
       getAssetBounds: getBoundsFromCache,
@@ -511,7 +512,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -528,7 +529,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -545,7 +546,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footEndCapAssetId)
       if (group) {
         const localMatrices = wallProps
-          ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+          ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
           : []
         if (localMatrices.length > 0) {
           bindings.push({
@@ -1756,7 +1757,7 @@ export function createWallRenderer(options: WallRendererOptions) {
 
     // 拐角 joint 需要至少两段才可能存在。
     const canHaveCornerJoints =
-      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0) && (definition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
+      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0) && (effectiveDefinition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
 
     // wantsInstancing：只要配置了任何一种实例化相关资源（body/head/caps/corners），
     // 就尝试走实例化渲染（资源未就绪时会回退到程序墙体）。
@@ -1922,7 +1923,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1955,7 +1956,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：通常用于墙顶装饰/压顶，沿墙段铺设。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1985,7 +1986,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(definition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -2020,17 +2021,17 @@ export function createWallRenderer(options: WallRendererOptions) {
         return group?.boundingBox ?? null
       }
 
-      const bodyJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      const bodyJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
         cornerModels,
         mode: 'body',
         getAssetBounds: getBoundsFromCache,
       })
-      const headJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      const headJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
         cornerModels,
         mode: 'head',
         getAssetBounds: getBoundsFromCache,
       })
-      const footJointBuckets = computeWallJointLocalMatricesByAsset(definition, {
+      const footJointBuckets = computeWallJointLocalMatricesByAsset(effectiveDefinition, {
         cornerModels,
         mode: 'foot',
         getAssetBounds: getBoundsFromCache,
@@ -2076,7 +2077,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(bodyEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyEndCapOrientation)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
@@ -2101,7 +2102,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(headEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'head', wallProps.headEndCapOrientation)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
@@ -2125,7 +2126,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         const group = getCachedModelObject(footEndCapAssetId)
         if (group) {
           const localMatrices = wallProps
-            ? computeWallEndCapLocalMatrices(definition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
+            ? computeWallEndCapLocalMatrices(effectiveDefinition, group.boundingBox, 'foot', wallProps.footEndCapOrientation)
             : []
           if (localMatrices.length > 0) {
             for (const localMatrix of localMatrices) {
