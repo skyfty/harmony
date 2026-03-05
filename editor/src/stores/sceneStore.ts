@@ -11629,7 +11629,6 @@ export const useSceneStore = defineStore('scene', {
       const nextProps = clampWallProps({
         ...meshProps,
         ...(previousProps ?? {}),
-        modelPlacementMode: previousProps?.modelPlacementMode ?? meshProps.modelPlacementMode,
         bodyOrientation: previousProps?.bodyOrientation ?? meshProps.bodyOrientation,
         headOrientation: previousProps?.headOrientation ?? meshProps.headOrientation,
         footOrientation: previousProps?.footOrientation ?? meshProps.footOrientation,
@@ -11998,7 +11997,6 @@ export const useSceneStore = defineStore('scene', {
         const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
         const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
-        const hasModelPlacementMode = Object.prototype.hasOwnProperty.call(typedPatch, 'modelPlacementMode')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
         const hasJointTrimMode = Object.prototype.hasOwnProperty.call(typedPatch, 'jointTrimMode')
@@ -12124,9 +12122,6 @@ export const useSceneStore = defineStore('scene', {
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
-          modelPlacementMode: hasModelPlacementMode
-            ? (typedPatch.modelPlacementMode as any)
-            : currentProps.modelPlacementMode,
           jointTrimMode: hasJointTrimMode
             ? (typedPatch.jointTrimMode as any)
             : currentProps.jointTrimMode,
@@ -12182,7 +12177,6 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
-          (currentProps.modelPlacementMode ?? 'stretchTiledUv') === (merged.modelPlacementMode ?? 'stretchTiledUv') &&
           (currentProps.jointTrimMode ?? 'auto') === (merged.jointTrimMode ?? 'auto') &&
           Math.abs((currentProps.jointTrimManual?.start ?? 0) - (merged.jointTrimManual?.start ?? 0)) <= 1e-6 &&
           Math.abs((currentProps.jointTrimManual?.end ?? 0) - (merged.jointTrimManual?.end ?? 0)) <= 1e-6 &&
