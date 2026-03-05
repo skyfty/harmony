@@ -110,11 +110,10 @@ const bindingIdsByNodeId = new Map<string, Set<string>>()
 const nodeIdByBindingId = new Map<string, string>()
 const meshHandleLookup = new Map<string, InstancedMeshHandle>()
 const instancedMeshListeners = new Set<(mesh: InstancedMesh, assetId: string) => void>()
+const derivedAssetIdsBySource = new Map<string, Set<string>>()
 
 const tempMatrix = new Matrix4()
 const tempInstanceMatrix = new Matrix4()
-const WALL_UV_SCALE_U_ATTRIBUTE = 'harmonyWallUvScale'
-const wallUvScaleShaderPatchedMaterials = new WeakSet<Material>()
 const WALL_REPEAT_U_TEXTURE_SLOTS = [
   'map',
   'alphaMap',
@@ -145,27 +144,6 @@ function sanitizeWallUvScaleU(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
-function getWallUvScaleAttribute(mesh: InstancedMesh): InstancedBufferAttribute | null {
-  const attribute = mesh.geometry.getAttribute(WALL_UV_SCALE_U_ATTRIBUTE)
-  if (!attribute || !(attribute instanceof InstancedBufferAttribute)) {
-    return null
-  }
-  return attribute
-}
-
-function setInstanceWallUvScaleU(mesh: InstancedMesh, index: number, value: number): void {
-  const attribute = getWallUvScaleAttribute(mesh)
-  if (!attribute) {
-    return
-  }
-  const safeValue = sanitizeWallUvScaleU(value)
-  if (Math.abs(attribute.getX(index) - safeValue) <= 1e-6) {
-    return
-  }
-  attribute.setX(index, safeValue)
-  attribute.needsUpdate = true
-}
-
 function ensureWallMaterialRepeatWrapU(material: Material): void {
   const candidate = material as Material & Record<string, unknown>
   let changed = false
@@ -185,143 +163,72 @@ function ensureWallMaterialRepeatWrapU(material: Material): void {
   }
 }
 
-function installWallUvScaleShaderPatch(material: Material): void {
-  const candidate = material as Material & {
-    isMeshStandardMaterial?: boolean
-    isMeshPhysicalMaterial?: boolean
-    isMeshBasicMaterial?: boolean
-    isMeshLambertMaterial?: boolean
-    isMeshPhongMaterial?: boolean
-    isMeshToonMaterial?: boolean
-    isMeshMatcapMaterial?: boolean
-    onBeforeCompile?: (shader: any, renderer: any) => void
-    customProgramCacheKey?: () => string
-    needsUpdate?: boolean
+function applyMaterialRepeatScaleU(material: Material, repeatScaleU: number): void {
+  const candidate = material as Material & Record<string, unknown>
+  const safeScale = sanitizeWallUvScaleU(repeatScaleU)
+  let changed = false
+  for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
+    const texture = candidate[slot] as Texture | null | undefined
+    if (!texture) {
+      continue
+    }
+    const clonedTexture = texture.clone()
+    clonedTexture.wrapS = RepeatWrapping
+    clonedTexture.repeat.x *= safeScale
+    clonedTexture.needsUpdate = true
+    candidate[slot] = clonedTexture
+    changed = true
   }
-  const isSupported = Boolean(
-    candidate?.isMeshStandardMaterial
-      || candidate?.isMeshPhysicalMaterial
-      || candidate?.isMeshBasicMaterial
-      || candidate?.isMeshLambertMaterial
-      || candidate?.isMeshPhongMaterial
-      || candidate?.isMeshToonMaterial
-      || candidate?.isMeshMatcapMaterial
-  )
-  if (!isSupported || wallUvScaleShaderPatchedMaterials.has(material)) {
-    return
+  if (changed) {
+    candidate.needsUpdate = true
   }
+}
 
-  const previousOnBeforeCompile = candidate.onBeforeCompile?.bind(candidate)
-  const previousCacheKey = candidate.customProgramCacheKey?.bind(candidate)
-  candidate.customProgramCacheKey = () => {
-    const previous = previousCacheKey ? previousCacheKey() : ''
-    return `${previous}|harmony-wall-uvscale-v1`
-  }
-
-  candidate.onBeforeCompile = (shader, renderer) => {
-    previousOnBeforeCompile?.(shader, renderer)
-
-    if (typeof shader?.vertexShader !== 'string') {
+function cloneObjectForRepeatVariant(root: Object3D, repeatScaleU: number): Object3D {
+  const clonedRoot = root.clone(true)
+  clonedRoot.traverse((child) => {
+    const mesh = child as Mesh
+    if (!(mesh as any)?.isMesh || !mesh.material) {
       return
     }
-    if (shader.vertexShader.includes(WALL_UV_SCALE_U_ATTRIBUTE)) {
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material
+        .map((entry) => (entry?.clone ? entry.clone() : entry))
+        .filter((entry): entry is Material => Boolean(entry))
+      mesh.material.forEach((entry) => applyMaterialRepeatScaleU(entry, repeatScaleU))
       return
     }
+    mesh.material = mesh.material.clone()
+    applyMaterialRepeatScaleU(mesh.material, repeatScaleU)
+  })
+  return clonedRoot
+}
 
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <uv_pars_vertex>',
-        [
-          '#include <uv_pars_vertex>',
-          '#ifdef USE_INSTANCING',
-          `attribute float ${WALL_UV_SCALE_U_ATTRIBUTE};`,
-          '#endif',
-        ].join('\n'),
-      )
-      .replace(
-        '#include <uv_vertex>',
-        [
-          '#include <uv_vertex>',
-          '#ifdef USE_UV',
-          '#ifdef USE_INSTANCING',
-          `  float harmonyWallUvScaleU = max(${WALL_UV_SCALE_U_ATTRIBUTE}, 0.000001);`,
-          '#ifdef USE_MAP',
-          '  vMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_ALPHAMAP',
-          '  vAlphaMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_LIGHTMAP',
-          '  vLightMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_AOMAP',
-          '  vAoMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_BUMPMAP',
-          '  vBumpMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_NORMALMAP',
-          '  vNormalMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_DISPLACEMENTMAP',
-          '  vDisplacementMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_EMISSIVEMAP',
-          '  vEmissiveMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_METALNESSMAP',
-          '  vMetalnessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_ROUGHNESSMAP',
-          '  vRoughnessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_CLEARCOATMAP',
-          '  vClearcoatMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_CLEARCOAT_NORMALMAP',
-          '  vClearcoatNormalMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_CLEARCOAT_ROUGHNESSMAP',
-          '  vClearcoatRoughnessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_IRIDESCENCEMAP',
-          '  vIridescenceMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_IRIDESCENCE_THICKNESSMAP',
-          '  vIridescenceThicknessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_SHEEN_COLORMAP',
-          '  vSheenColorMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_SHEEN_ROUGHNESSMAP',
-          '  vSheenRoughnessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_SPECULARMAP',
-          '  vSpecularMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_SPECULAR_COLORMAP',
-          '  vSpecularColorMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_SPECULAR_INTENSITYMAP',
-          '  vSpecularIntensityMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_TRANSMISSIONMAP',
-          '  vTransmissionMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_THICKNESSMAP',
-          '  vThicknessMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#ifdef USE_ANISOTROPYMAP',
-          '  vAnisotropyMapUv.x *= harmonyWallUvScaleU;',
-          '#endif',
-          '#endif',
-          '#endif',
-        ].join('\n'),
-      )
+export function getOrCreateModelObjectRepeatVariant(
+  sourceAssetId: string,
+  variantAssetId: string,
+  repeatScaleU: number,
+): ModelInstanceGroup | null {
+  const existing = modelObjectCache.get(variantAssetId)
+  if (existing) {
+    return mapEntryToGroup(existing)
+  }
+  const source = modelObjectCache.get(sourceAssetId)
+  if (!source) {
+    return null
   }
 
-  wallUvScaleShaderPatchedMaterials.add(material)
-  candidate.needsUpdate = true
+  const clonedObject = cloneObjectForRepeatVariant(source.object, repeatScaleU)
+  const entry = buildModelAssetEntry(variantAssetId, clonedObject)
+  modelObjectCache.set(variantAssetId, entry)
+
+  const bucket = derivedAssetIdsBySource.get(sourceAssetId) ?? new Set<string>()
+  if (!derivedAssetIdsBySource.has(sourceAssetId)) {
+    derivedAssetIdsBySource.set(sourceAssetId, bucket)
+  }
+  bucket.add(variantAssetId)
+
+  return mapEntryToGroup(entry)
 }
 
 export function getCachedModelObject(assetId: string): ModelInstanceGroup | null {
@@ -414,7 +321,6 @@ export function allocateModelInstanceBinding(assetId: string, bindingId: string,
       handle.nextIndex += 1
     }
     handle.bindingByIndex.set(index, bindingId)
-    setInstanceWallUvScaleU(handle.mesh, index, 1)
     const previousCount = handle.mesh.count
     handle.mesh.count = Math.max(handle.mesh.count, index + 1)
     if (handle.mesh.count !== previousCount) {
@@ -492,11 +398,6 @@ export function releaseModelInstanceBinding(bindingId: string): void {
       if (movingBindingId) {
         handle.mesh.getMatrixAt(lastVisibleIndex, tempInstanceMatrix)
         handle.mesh.setMatrixAt(index, tempInstanceMatrix)
-        const uvScaleAttribute = getWallUvScaleAttribute(handle.mesh)
-        if (uvScaleAttribute) {
-          uvScaleAttribute.setX(index, uvScaleAttribute.getX(lastVisibleIndex))
-          uvScaleAttribute.needsUpdate = true
-        }
         handle.mesh.instanceMatrix.needsUpdate = true
         markInstancedBoundsDirty(handle.mesh)
 
@@ -551,23 +452,13 @@ export function updateModelInstanceBindingMatrix(bindingId: string, matrix: Matr
 }
 
 export function updateModelInstanceUvScaleU(nodeId: string, scaleU: number): void {
-  const binding = bindingsById.get(nodeId)
-  if (!binding) {
-    return
-  }
-  binding.slots.forEach(({ mesh, index }) => {
-    setInstanceWallUvScaleU(mesh, index, scaleU)
-  })
+  void nodeId
+  void scaleU
 }
 
 export function updateModelInstanceBindingUvScaleU(bindingId: string, scaleU: number): void {
-  const binding = bindingsById.get(bindingId)
-  if (!binding) {
-    return
-  }
-  binding.slots.forEach(({ mesh, index }) => {
-    setInstanceWallUvScaleU(mesh, index, scaleU)
-  })
+  void bindingId
+  void scaleU
 }
 
 export function getInstancedMeshes(): InstancedMesh[] {
@@ -632,11 +523,36 @@ export function invalidateModelObject(assetId: string): void {
   modelObjectCache.delete(assetId)
   pendingLoads.delete(assetId)
 
+  const derived = derivedAssetIdsBySource.get(assetId)
+  if (derived && derived.size) {
+    for (const derivedId of derived) {
+      const derivedEntry = modelObjectCache.get(derivedId)
+      if (!derivedEntry) {
+        continue
+      }
+      derivedEntry.handles.forEach((handle) => {
+        meshHandleLookup.delete(handle.id)
+        handle.mesh.dispose()
+      })
+      modelObjectCache.delete(derivedId)
+      pendingLoads.delete(derivedId)
+    }
+    derivedAssetIdsBySource.delete(assetId)
+  }
+
   Array.from(bindingsById.values())
     .filter((binding) => binding.assetId === assetId)
     .forEach((binding) => {
       releaseModelInstanceBinding(binding.bindingId)
     })
+
+  if (derived && derived.size) {
+    Array.from(bindingsById.values())
+      .filter((binding) => derived.has(binding.assetId))
+      .forEach((binding) => {
+        releaseModelInstanceBinding(binding.bindingId)
+      })
+  }
 }
 
 export function clearModelObjectCache(): void {
@@ -651,6 +567,7 @@ export function clearModelObjectCache(): void {
   bindingIdsByNodeId.clear()
   nodeIdByBindingId.clear()
   meshHandleLookup.clear()
+  derivedAssetIdsBySource.clear()
 }
 
 function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
@@ -675,11 +592,6 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     const mesh = new InstancedMesh(submesh.geometry, submesh.material, initialCapacity)
     mesh.name = `Instanced:${assetId}:${index}`
     mesh.instanceMatrix.setUsage(DynamicDrawUsage)
-    const wallUvScaleArray = new Float32Array(initialCapacity)
-    wallUvScaleArray.fill(1)
-    const wallUvScaleAttribute = new InstancedBufferAttribute(wallUvScaleArray, 1)
-    wallUvScaleAttribute.setUsage(DynamicDrawUsage)
-    mesh.geometry.setAttribute(WALL_UV_SCALE_U_ATTRIBUTE, wallUvScaleAttribute)
     mesh.count = 0
     mesh.castShadow = true
     mesh.receiveShadow = true
@@ -701,12 +613,10 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
       submesh.material.forEach((entry) => {
         if (entry) {
           ensureWallMaterialRepeatWrapU(entry)
-          installWallUvScaleShaderPatch(entry)
         }
       })
     } else if (submesh.material) {
       ensureWallMaterialRepeatWrapU(submesh.material)
-      installWallUvScaleShaderPatch(submesh.material)
     }
 
     instancedMeshListeners.forEach((listener) => listener(mesh, assetId))
@@ -780,19 +690,6 @@ function resizeInstancedMesh(mesh: InstancedMesh, capacity: number): void {
     mesh.instanceColor.needsUpdate = true
   }
 
-  const oldWallUvScaleAttr = getWallUvScaleAttribute(mesh)
-  if (oldWallUvScaleAttr) {
-    const oldWallUvScaleArray = oldWallUvScaleAttr.array as Float32Array
-    const newWallUvScaleArray = new Float32Array(capacity)
-    newWallUvScaleArray.fill(1)
-    newWallUvScaleArray.set(
-      oldWallUvScaleArray.subarray(0, Math.min(oldWallUvScaleArray.length, newWallUvScaleArray.length)),
-    )
-    const newWallUvScaleAttr = new InstancedBufferAttribute(newWallUvScaleArray, 1)
-    newWallUvScaleAttr.setUsage(oldWallUvScaleAttr.usage)
-    mesh.geometry.setAttribute(WALL_UV_SCALE_U_ATTRIBUTE, newWallUvScaleAttr)
-    newWallUvScaleAttr.needsUpdate = true
-  }
 }
 
 function extractSubmeshes(root: Object3D): ParsedSubmesh[] {

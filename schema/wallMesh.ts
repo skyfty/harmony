@@ -104,8 +104,7 @@ const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_DISPOSE_USERDATA_KEY = '__harmonySkipDispose'
-const WALL_UV_SCALE_U_ATTRIBUTE = 'harmonyWallUvScale'
-const wallUvScaleShaderPatchedMaterials = new WeakSet<THREE.Material>()
+const WALL_INSTANCING_REPEAT_BUCKETS_MAX = 6
 const WALL_REPEAT_U_TEXTURE_SLOTS = [
   'map',
   'alphaMap',
@@ -371,21 +370,21 @@ function resolveWallBodyHeight(segment: WallRenderSeg | null | undefined): numbe
   return Math.max(WALL_MIN_HEIGHT, value)
 }
 
-/**
- * Clone a material and scale the repeat of all texture maps by `stretchFactor`
- * along U (the wall-length direction).  This makes the texture tile proportionally
- * when the model geometry is stretched.
- */
-function sanitizeWallUvScaleU(value: number): number {
+function sanitizeWallRepeatScale(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
 /**
- * Clone wall material, clone texture slots used by UV-mapped channels, force RepeatWrapping
- * on U, and install shader patch for per-instance U scaling.
+ * Clone wall material and scale the selected UV axis repeat at material level.
+ * This avoids relying on shader patching for per-instance UV scaling.
  */
-function createWallInstancedMaterial(original: THREE.Material, uvAxis: WallResolvedUvAxis = 'u'): THREE.Material {
+function createWallInstancedMaterial(
+  original: THREE.Material,
+  uvAxis: WallResolvedUvAxis = 'u',
+  repeatScale = 1,
+): THREE.Material {
   const cloned = original.clone() as THREE.Material & Record<string, unknown>
+  const safeRepeatScale = sanitizeWallRepeatScale(repeatScale)
   let changed = false
   for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
     const texture = cloned[slot] as THREE.Texture | null | undefined
@@ -393,177 +392,38 @@ function createWallInstancedMaterial(original: THREE.Material, uvAxis: WallResol
       continue
     }
     const clonedTexture = texture.clone()
-    clonedTexture.wrapS = THREE.RepeatWrapping
+    if (uvAxis === 'v') {
+      clonedTexture.wrapT = THREE.RepeatWrapping
+      clonedTexture.repeat.y *= safeRepeatScale
+    } else {
+      clonedTexture.wrapS = THREE.RepeatWrapping
+      clonedTexture.repeat.x *= safeRepeatScale
+    }
     clonedTexture.needsUpdate = true
     cloned[slot] = clonedTexture
     changed = true
   }
-  installWallUvScaleShaderPatch(cloned, uvAxis)
   if (changed) {
     cloned.needsUpdate = true
   }
   return cloned
 }
-
-function installWallUvScaleShaderPatch(material: THREE.Material, uvAxis: WallResolvedUvAxis = 'u'): void {
-  const candidate = material as THREE.Material & {
-    isMeshStandardMaterial?: boolean
-    isMeshPhysicalMaterial?: boolean
-    isMeshBasicMaterial?: boolean
-    isMeshLambertMaterial?: boolean
-    isMeshPhongMaterial?: boolean
-    isMeshToonMaterial?: boolean
-    isMeshMatcapMaterial?: boolean
-    onBeforeCompile?: (shader: any, renderer: any) => void
-    customProgramCacheKey?: () => string
-    needsUpdate?: boolean
-  }
-  const isSupported = Boolean(
-    candidate?.isMeshStandardMaterial
-      || candidate?.isMeshPhysicalMaterial
-      || candidate?.isMeshBasicMaterial
-      || candidate?.isMeshLambertMaterial
-      || candidate?.isMeshPhongMaterial
-      || candidate?.isMeshToonMaterial
-      || candidate?.isMeshMatcapMaterial,
-  )
-  if (!isSupported || wallUvScaleShaderPatchedMaterials.has(material)) {
-    return
-  }
-
-  const previousOnBeforeCompile = candidate.onBeforeCompile?.bind(candidate)
-  const previousCacheKey = candidate.customProgramCacheKey?.bind(candidate)
-  const uvComponent = uvAxis === 'v' ? 'y' : 'x'
-  candidate.customProgramCacheKey = () => {
-    const previous = previousCacheKey ? previousCacheKey() : ''
-    return `${previous}|harmony-wall-uvscale-v2-${uvAxis}`
-  }
-
-  candidate.onBeforeCompile = (shader: { vertexShader?: string }, renderer: unknown) => {
-    previousOnBeforeCompile?.(shader as any, renderer as any)
-
-    if (typeof shader?.vertexShader !== 'string') {
-      return
-    }
-    if (shader.vertexShader.includes(WALL_UV_SCALE_U_ATTRIBUTE)) {
-      return
-    }
-    
-    console.log('Installing wall UV scale shader patch on material', material)
-
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <uv_pars_vertex>',
-        [
-          '#include <uv_pars_vertex>',
-          '#ifdef USE_INSTANCING',
-          `attribute float ${WALL_UV_SCALE_U_ATTRIBUTE};`,
-          '#endif',
-        ].join('\n'),
-      )
-      .replace(
-        '#include <uv_vertex>',
-        [
-          '#include <uv_vertex>',
-          '#ifdef USE_UV',
-          '#ifdef USE_INSTANCING',
-          `  float harmonyWallUvScaleU = max(${WALL_UV_SCALE_U_ATTRIBUTE}, 0.000001);`,
-          '#ifdef USE_MAP',
-          `  vMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_ALPHAMAP',
-          `  vAlphaMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_LIGHTMAP',
-          `  vLightMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_AOMAP',
-          `  vAoMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_BUMPMAP',
-          `  vBumpMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_NORMALMAP',
-          `  vNormalMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_DISPLACEMENTMAP',
-          `  vDisplacementMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_EMISSIVEMAP',
-          `  vEmissiveMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_METALNESSMAP',
-          `  vMetalnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_ROUGHNESSMAP',
-          `  vRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_CLEARCOATMAP',
-          `  vClearcoatMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_CLEARCOAT_NORMALMAP',
-          `  vClearcoatNormalMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_CLEARCOAT_ROUGHNESSMAP',
-          `  vClearcoatRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_IRIDESCENCEMAP',
-          `  vIridescenceMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_IRIDESCENCE_THICKNESSMAP',
-          `  vIridescenceThicknessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_SHEEN_COLORMAP',
-          `  vSheenColorMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_SHEEN_ROUGHNESSMAP',
-          `  vSheenRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_SPECULARMAP',
-          `  vSpecularMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_SPECULAR_COLORMAP',
-          `  vSpecularColorMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_SPECULAR_INTENSITYMAP',
-          `  vSpecularIntensityMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_TRANSMISSIONMAP',
-          `  vTransmissionMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_THICKNESSMAP',
-          `  vThicknessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#ifdef USE_ANISOTROPYMAP',
-          `  vAnisotropyMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
-          '#endif',
-          '#endif',
-          '#endif',
-        ].join('\n'),
-      )
-  }
-
-  wallUvScaleShaderPatchedMaterials.add(material)
-  candidate.needsUpdate = true
-}
-
-type StretchedWallInstances = {
-  matrices: THREE.Matrix4[]
-  uvScaleU: number[]
+type StretchedWallInstance = {
+  matrix: THREE.Matrix4
+  repeatScale: number
 }
 
 /**
  * Build stretched transforms for each render segment in `segs`.
- * UV tiling is provided by per-instance `harmonyWallUvScale`.
+ * UV tiling repeat scale is returned per instance and later bucketed into material-level repeats.
  */
 function buildStretchedWallInstancesForSegs(
   segs: WallRenderSeg[],
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
-): StretchedWallInstances {
-  const matrices: THREE.Matrix4[] = []
-  const uvScaleU: number[] = []
+): StretchedWallInstance[] {
+  const instances: StretchedWallInstance[] = []
 
   const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
   const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
@@ -632,32 +492,84 @@ function buildStretchedWallInstancesForSegs(
     localMatrix.compose(pos, quat, scale)
     localMatrix.multiply(template.meshToRoot)
 
-    matrices.push(new THREE.Matrix4().copy(localMatrix))
-    uvScaleU.push(sanitizeWallUvScaleU(stretchFactor))
+    instances.push({
+      matrix: new THREE.Matrix4().copy(localMatrix),
+      repeatScale: sanitizeWallRepeatScale(stretchFactor),
+    })
   }
-  return { matrices, uvScaleU }
+  return instances
+}
+
+type WallInstancedBucket = {
+  repeatScale: number
+  matrices: THREE.Matrix4[]
+}
+
+function bucketizeWallInstancesByRepeatScale(
+  instances: StretchedWallInstance[],
+  maxBuckets = WALL_INSTANCING_REPEAT_BUCKETS_MAX,
+): WallInstancedBucket[] {
+  if (!instances.length) {
+    return []
+  }
+  if (instances.length === 1 || maxBuckets <= 1) {
+    return [{ repeatScale: instances[0]!.repeatScale, matrices: instances.map((entry) => entry.matrix) }]
+  }
+
+  const safeBuckets = Math.max(1, Math.min(maxBuckets, instances.length))
+  const minScale = Math.max(WALL_EPSILON, Math.min(...instances.map((entry) => entry.repeatScale)))
+  const maxScale = Math.max(minScale, Math.max(...instances.map((entry) => entry.repeatScale)))
+  if (!Number.isFinite(minScale) || !Number.isFinite(maxScale) || maxScale - minScale <= WALL_EPSILON) {
+    const average = instances.reduce((sum, entry) => sum + entry.repeatScale, 0) / instances.length
+    return [{ repeatScale: sanitizeWallRepeatScale(average), matrices: instances.map((entry) => entry.matrix) }]
+  }
+
+  const minLog = Math.log(minScale)
+  const maxLog = Math.log(maxScale)
+  const bucketCount = Math.max(1, Math.min(safeBuckets, instances.length))
+  const buckets = Array.from({ length: bucketCount }, () => ({
+    sumScale: 0,
+    count: 0,
+    matrices: [] as THREE.Matrix4[],
+  }))
+
+  for (const instance of instances) {
+    const scale = sanitizeWallRepeatScale(instance.repeatScale)
+    let index = 0
+    if (maxLog - minLog > WALL_EPSILON) {
+      const normalized = (Math.log(scale) - minLog) / (maxLog - minLog)
+      index = Math.round(THREE.MathUtils.clamp(normalized, 0, 1) * (bucketCount - 1))
+    }
+    const bucket = buckets[index]!
+    bucket.sumScale += scale
+    bucket.count += 1
+    bucket.matrices.push(instance.matrix)
+  }
+
+  return buckets
+    .filter((bucket) => bucket.count > 0 && bucket.matrices.length > 0)
+    .map((bucket) => ({
+      repeatScale: sanitizeWallRepeatScale(bucket.sumScale / bucket.count),
+      matrices: bucket.matrices,
+    }))
 }
 
 function createWallInstancedMesh(
   name: string,
   template: InstancedAssetTemplate,
   matrices: THREE.Matrix4[],
-  uvScaleU: number[],
   uvAxis: WallResolvedUvAxis = 'u',
+  repeatScale = 1,
 ): THREE.InstancedMesh | null {
   if (!matrices.length) {
     return null
   }
 
   const geometry = template.geometry.clone()
-  geometry.setAttribute(
-    WALL_UV_SCALE_U_ATTRIBUTE,
-    new THREE.InstancedBufferAttribute(new Float32Array(uvScaleU), 1),
-  )
 
   const material = Array.isArray(template.material)
-    ? template.material.map((entry) => createWallInstancedMaterial(entry, uvAxis))
-    : createWallInstancedMaterial(template.material, uvAxis)
+    ? template.material.map((entry) => createWallInstancedMaterial(entry, uvAxis, repeatScale))
+    : createWallInstancedMaterial(template.material, uvAxis, repeatScale)
 
   const instanced = new THREE.InstancedMesh(geometry, material, matrices.length)
   instanced.name = name
@@ -1600,48 +1512,69 @@ function rebuildWallGroup(
   if (bodyTemplate) {
     const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
     const resolvedBodyUvAxis = resolveWallUvAxisForTemplate(bodyTemplate, bodyOrientation, bodyUvAxis)
-    const matrices: THREE.Matrix4[] = []
-    const uvScaleU: number[] = []
+    const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      const local = buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation)
-      matrices.push(...local.matrices)
-      uvScaleU.push(...local.uvScaleU)
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation))
     }
-    const instanced = createWallInstancedMesh('WallBodyInstances', bodyTemplate, matrices, uvScaleU, resolvedBodyUvAxis)
-    if (instanced) {
-      group.add(instanced)
+    const buckets = bucketizeWallInstancesByRepeatScale(instances)
+    for (let i = 0; i < buckets.length; i += 1) {
+      const bucket = buckets[i]!
+      const instanced = createWallInstancedMesh(
+        buckets.length > 1 ? `WallBodyInstances:${i}` : 'WallBodyInstances',
+        bodyTemplate,
+        bucket.matrices,
+        resolvedBodyUvAxis,
+        bucket.repeatScale,
+      )
+      if (instanced) {
+        group.add(instanced)
+      }
     }
   }
 
   if (bodyTemplate && headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
     const resolvedHeadUvAxis = resolveWallUvAxisForTemplate(headTemplate, headOrientation, headUvAxis)
-    const matrices: THREE.Matrix4[] = []
-    const uvScaleU: number[] = []
+    const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      const local = buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation)
-      matrices.push(...local.matrices)
-      uvScaleU.push(...local.uvScaleU)
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation))
     }
-    const instanced = createWallInstancedMesh('WallHeadInstances', headTemplate, matrices, uvScaleU, resolvedHeadUvAxis)
-    if (instanced) {
-      group.add(instanced)
+    const buckets = bucketizeWallInstancesByRepeatScale(instances)
+    for (let i = 0; i < buckets.length; i += 1) {
+      const bucket = buckets[i]!
+      const instanced = createWallInstancedMesh(
+        buckets.length > 1 ? `WallHeadInstances:${i}` : 'WallHeadInstances',
+        headTemplate,
+        bucket.matrices,
+        resolvedHeadUvAxis,
+        bucket.repeatScale,
+      )
+      if (instanced) {
+        group.add(instanced)
+      }
     }
   }
 
   if (bodyTemplate && footTemplate) {
     const footOrientation = requireWallOrientation(options.footOrientation, 'footOrientation')
     const resolvedFootUvAxis = resolveWallUvAxisForTemplate(footTemplate, footOrientation, footUvAxis)
-    const matrices: THREE.Matrix4[] = []
-    const uvScaleU: number[] = []
+    const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      const local = buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation)
-      matrices.push(...local.matrices)
-      uvScaleU.push(...local.uvScaleU)
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation))
     }
-    const instanced = createWallInstancedMesh('WallFootInstances', footTemplate, matrices, uvScaleU, resolvedFootUvAxis)
-    if (instanced) {
-      group.add(instanced)
+    const buckets = bucketizeWallInstancesByRepeatScale(instances)
+    for (let i = 0; i < buckets.length; i += 1) {
+      const bucket = buckets[i]!
+      const instanced = createWallInstancedMesh(
+        buckets.length > 1 ? `WallFootInstances:${i}` : 'WallFootInstances',
+        footTemplate,
+        bucket.matrices,
+        resolvedFootUvAxis,
+        bucket.repeatScale,
+      )
+      if (instanced) {
+        group.add(instanced)
+      }
     }
   }
 

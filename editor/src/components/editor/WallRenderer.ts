@@ -3,13 +3,12 @@ import type { SceneNode, SceneNodeComponentState, WallDynamicMesh } from '@schem
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   getCachedModelObject,
+  getOrCreateModelObjectRepeatVariant,
   getOrLoadModelObject,
   allocateModelInstance,
   allocateModelInstanceBinding,
   ensureInstancedMeshesRegistered,
-  updateModelInstanceBindingUvScaleU,
   updateModelInstanceBindingMatrix,
-  updateModelInstanceUvScaleU,
   updateModelInstanceMatrix,
   releaseModelInstancesForNode,
 } from '@schema/modelObjectCache'
@@ -215,6 +214,7 @@ const wallInstancedBoundsCorners = [
 
 const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
+const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
 
 function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
@@ -333,7 +333,6 @@ export function createWallRenderer(options: WallRendererOptions) {
   type WallDragBindingEntry = {
     assetId: string
     localMatrices: THREE.Matrix4[]
-    perInstanceUvScaleU?: number[]
     bindingIdPrefix: string
     useNodeIdForIndex0: boolean
   }
@@ -352,6 +351,76 @@ export function createWallRenderer(options: WallRendererOptions) {
   let wallResyncRafHandle: number | null = null
 
   const FALLBACK_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+
+  type WallPlacementRepeatBucket = {
+    repeatScaleU: number
+    placements: WallLocalPlacement[]
+  }
+
+  const sanitizeRepeatScaleU = (value: number): number => {
+    return Number.isFinite(value) && value > 0 ? value : 1
+  }
+
+  const bucketWallPlacementsByRepeatScale = (
+    placements: WallLocalPlacement[],
+    maxBuckets = WALL_SYNC_REPEAT_BUCKETS_MAX,
+  ): WallPlacementRepeatBucket[] => {
+    if (!placements.length) {
+      return []
+    }
+
+    if (placements.length === 1 || maxBuckets <= 1) {
+      return [{ repeatScaleU: sanitizeRepeatScaleU(placements[0]!.uvScaleU), placements: placements.slice() }]
+    }
+
+    const safeBucketCount = Math.max(1, Math.min(maxBuckets, placements.length))
+    const scales = placements.map((entry) => sanitizeRepeatScaleU(entry.uvScaleU))
+    const minScale = Math.max(WALL_SYNC_EPSILON, Math.min(...scales))
+    const maxScale = Math.max(minScale, Math.max(...scales))
+
+    if (!Number.isFinite(minScale) || !Number.isFinite(maxScale) || maxScale - minScale <= WALL_SYNC_EPSILON) {
+      const average = scales.reduce((sum, value) => sum + value, 0) / scales.length
+      return [{ repeatScaleU: sanitizeRepeatScaleU(average), placements: placements.slice() }]
+    }
+
+    const minLog = Math.log(minScale)
+    const maxLog = Math.log(maxScale)
+    const buckets = Array.from({ length: safeBucketCount }, () => ({
+      sumScale: 0,
+      count: 0,
+      placements: [] as WallLocalPlacement[],
+    }))
+
+    for (let i = 0; i < placements.length; i += 1) {
+      const placement = placements[i]!
+      const scale = scales[i]!
+      let bucketIndex = 0
+      if (maxLog - minLog > WALL_SYNC_EPSILON) {
+        const normalized = (Math.log(scale) - minLog) / (maxLog - minLog)
+        bucketIndex = Math.round(THREE.MathUtils.clamp(normalized, 0, 1) * (safeBucketCount - 1))
+      }
+      const bucket = buckets[bucketIndex]!
+      bucket.sumScale += scale
+      bucket.count += 1
+      bucket.placements.push(placement)
+    }
+
+    return buckets
+      .filter((bucket) => bucket.count > 0 && bucket.placements.length > 0)
+      .map((bucket) => ({
+        repeatScaleU: sanitizeRepeatScaleU(bucket.sumScale / bucket.count),
+        placements: bucket.placements,
+      }))
+  }
+
+  const buildWallRepeatVariantAssetId = (
+    baseAssetId: string,
+    role: 'body' | 'head' | 'foot',
+    repeatScaleU: number,
+  ): string => {
+    const rounded = sanitizeRepeatScaleU(repeatScaleU).toFixed(4)
+    return `${baseAssetId}#wall-repeat:${role}:u:${rounded}`
+  }
 
   function isWallDragActive(nodeId: string): boolean {
     return activeWallDragNodeId === nodeId && wallDragCacheByNodeId.has(nodeId)
@@ -399,14 +468,23 @@ export function createWallRenderer(options: WallRendererOptions) {
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        if (localMatrices.length > 0) {
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(bodyAssetId, 'body', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(bodyAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           bindings.push({
-            assetId: bodyAssetId,
+            assetId: variantAssetId,
             localMatrices,
-            perInstanceUvScaleU: placements.map((entry) => entry.uvScaleU),
-            bindingIdPrefix: `wall-body:${nodeId}:`,
-            useNodeIdForIndex0: true,
+            bindingIdPrefix: `wall-body:${nodeId}:${i}:`,
+            useNodeIdForIndex0: i === 0,
           })
         }
       }
@@ -421,13 +499,22 @@ export function createWallRenderer(options: WallRendererOptions) {
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        if (localMatrices.length > 0) {
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(headAssetId, 'head', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(headAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           bindings.push({
-            assetId: headAssetId,
+            assetId: variantAssetId,
             localMatrices,
-            perInstanceUvScaleU: placements.map((entry) => entry.uvScaleU),
-            bindingIdPrefix: `wall-head:${nodeId}:`,
+            bindingIdPrefix: `wall-head:${nodeId}:${i}:`,
             useNodeIdForIndex0: false,
           })
         }
@@ -443,13 +530,22 @@ export function createWallRenderer(options: WallRendererOptions) {
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        if (localMatrices.length > 0) {
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(footAssetId, 'foot', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(footAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           bindings.push({
-            assetId: footAssetId,
+            assetId: variantAssetId,
             localMatrices,
-            perInstanceUvScaleU: placements.map((entry) => entry.uvScaleU),
-            bindingIdPrefix: `wall-foot:${nodeId}:`,
+            bindingIdPrefix: `wall-foot:${nodeId}:${i}:`,
             useNodeIdForIndex0: false,
           })
         }
@@ -609,9 +705,6 @@ export function createWallRenderer(options: WallRendererOptions) {
           allocateModelInstance(binding.assetId, nodeId)
           wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
           updateModelInstanceMatrix(nodeId, wallDragInstanceHelper)
-          if (Array.isArray(binding.perInstanceUvScaleU) && i < binding.perInstanceUvScaleU.length) {
-            updateModelInstanceUvScaleU(nodeId, binding.perInstanceUvScaleU[i] ?? 1)
-          }
           continue
         }
 
@@ -619,9 +712,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         allocateModelInstanceBinding(binding.assetId, bindingId, nodeId)
         wallDragInstanceHelper.multiplyMatrices(baseMatrix, local)
         updateModelInstanceBindingMatrix(bindingId, wallDragInstanceHelper)
-        if (Array.isArray(binding.perInstanceUvScaleU) && i < binding.perInstanceUvScaleU.length) {
-          updateModelInstanceBindingUvScaleU(bindingId, binding.perInstanceUvScaleU[i] ?? 1)
-        }
       }
     }
 
