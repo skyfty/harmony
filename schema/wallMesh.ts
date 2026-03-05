@@ -1613,16 +1613,29 @@ export function createWallRenderGroup(
 ): THREE.Group {
   const group = new THREE.Group()
   group.name = 'WallGroup'
-  group.userData.dynamicMeshType = 'Wall'
+  const userData = group.userData ?? (group.userData = {})
+  userData.dynamicMeshType = 'Wall'
 
   // Store asset references so updateWallGroup can rebuild consistently.
-  group.userData.wallRenderAssets = assets
-  rebuildWallGroup(group, definition, assets, options)
+  userData.wallRenderAssets = assets
+  rebuildWallGroup(group, definition, getWallRenderAssets(group), options)
   return group
 }
 
 export function createWallGroup(definition: WallDynamicMesh, options: WallRenderOptions = {}) {
   return createWallRenderGroup(definition, {}, options)
+}
+
+function getWallRenderAssets(group: THREE.Group): WallRenderAssetObjects {
+  const userData = group.userData ?? (group.userData = {})
+  const current = userData.wallRenderAssets
+  if (current && typeof current === 'object') {
+    return current as WallRenderAssetObjects
+  }
+
+  const fallback: WallRenderAssetObjects = {}
+  userData.wallRenderAssets = fallback
+  return fallback
 }
 
 export function updateWallGroup(
@@ -1634,7 +1647,7 @@ export function updateWallGroup(
   if (!group || !group.isGroup) {
     return false
   }
-  const assets = (group.userData?.wallRenderAssets ?? {}) as WallRenderAssetObjects
+  const assets = getWallRenderAssets(group)
   rebuildWallGroup(group, definition, assets, options)
   return true
 }
