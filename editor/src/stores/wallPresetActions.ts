@@ -10,6 +10,7 @@ import {
   isWallPresetFilename,
   type StrictWallPresetWallProps,
   type WallForwardAxis,
+  type WallUvAxis,
   type WallPresetData,
   type WallPresetMaterialPatch,
 } from '@/utils/wallPreset'
@@ -150,6 +151,10 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     }
   }
 
+  const optionalUvAxis = (value: unknown, fallback: WallUvAxis = 'auto'): WallUvAxis => {
+    return value === 'u' || value === 'v' || value === 'auto' ? value : fallback
+  }
+
   const requiredOffsetLocal = (value: unknown, label: string): { x: number; y: number; z: number } => {
     if (!value || typeof value !== 'object') {
       throw new Error(`墙体预设 wallProps 缺少或无效字段: ${label}`)
@@ -237,10 +242,13 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
+    bodyUvAxis: optionalUvAxis(record.bodyUvAxis, 'auto'),
     headAssetId: requiredAssetIdOrNull('headAssetId'),
     headOrientation: requiredOrientation(record.headOrientation, 'headOrientation') as any,
+    headUvAxis: optionalUvAxis(record.headUvAxis, optionalUvAxis(record.bodyUvAxis, 'auto')),
     footAssetId: requiredAssetIdOrNull('footAssetId'),
     footOrientation: requiredOrientation(record.footOrientation, 'footOrientation') as any,
+    footUvAxis: optionalUvAxis(record.footUvAxis, optionalUvAxis(record.bodyUvAxis, 'auto')),
     bodyEndCapAssetId: requiredAssetIdOrNull('bodyEndCapAssetId'),
     bodyEndCapOrientation: requiredOrientation(record.bodyEndCapOrientation, 'bodyEndCapOrientation') as any,
     headEndCapAssetId: requiredAssetIdOrNull('headEndCapAssetId'),
@@ -681,10 +689,13 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         isAirWall: wallProps.isAirWall,
         bodyAssetId: wallProps.bodyAssetId ?? null,
         bodyOrientation: (wallProps as any).bodyOrientation,
+        bodyUvAxis: (wallProps as any).bodyUvAxis,
         headAssetId: wallProps.headAssetId ?? null,
         headOrientation: (wallProps as any).headOrientation,
+        headUvAxis: (wallProps as any).headUvAxis,
         footAssetId: wallProps.footAssetId ?? null,
         footOrientation: (wallProps as any).footOrientation,
+        footUvAxis: (wallProps as any).footUvAxis,
         bodyEndCapAssetId: wallProps.bodyEndCapAssetId ?? null,
         bodyEndCapOrientation: (wallProps as any).bodyEndCapOrientation,
         headEndCapAssetId: wallProps.headEndCapAssetId ?? null,

@@ -11974,8 +11974,11 @@ export const useSceneStore = defineStore('scene', {
         const hasHeadEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapAssetId')
         const hasFootEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapAssetId')
         const hasBodyOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyOrientation')
+        const hasBodyUvAxis = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyUvAxis')
         const hasHeadOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headOrientation')
+        const hasHeadUvAxis = Object.prototype.hasOwnProperty.call(typedPatch, 'headUvAxis')
         const hasFootOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footOrientation')
+        const hasFootUvAxis = Object.prototype.hasOwnProperty.call(typedPatch, 'footUvAxis')
         const hasBodyEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapOrientation')
         const hasHeadEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'headEndCapOrientation')
         const hasFootEndCapOrientation = Object.prototype.hasOwnProperty.call(typedPatch, 'footEndCapOrientation')
@@ -12135,12 +12138,21 @@ export const useSceneStore = defineStore('scene', {
           bodyOrientation: hasBodyOrientation
             ? (typedPatch.bodyOrientation as any)
             : currentProps.bodyOrientation,
+          bodyUvAxis: hasBodyUvAxis
+            ? (typedPatch.bodyUvAxis as any)
+            : currentProps.bodyUvAxis,
           headOrientation: hasHeadOrientation
             ? (typedPatch.headOrientation as any)
             : currentProps.headOrientation,
+          headUvAxis: hasHeadUvAxis
+            ? (typedPatch.headUvAxis as any)
+            : currentProps.headUvAxis,
           footOrientation: hasFootOrientation
             ? (typedPatch.footOrientation as any)
             : currentProps.footOrientation,
+          footUvAxis: hasFootUvAxis
+            ? (typedPatch.footUvAxis as any)
+            : currentProps.footUvAxis,
           bodyEndCapOrientation: hasBodyEndCapOrientation
             ? (typedPatch.bodyEndCapOrientation as any)
             : currentProps.bodyEndCapOrientation,
@@ -12171,8 +12183,11 @@ export const useSceneStore = defineStore('scene', {
           (currentProps.headEndCapAssetId ?? null) === (merged.headEndCapAssetId ?? null) &&
           (currentProps.footEndCapAssetId ?? null) === (merged.footEndCapAssetId ?? null) &&
           orientationsEqual(currentProps.bodyOrientation, merged.bodyOrientation) &&
+          (currentProps.bodyUvAxis ?? 'auto') === (merged.bodyUvAxis ?? 'auto') &&
           orientationsEqual(currentProps.headOrientation, merged.headOrientation) &&
+          (currentProps.headUvAxis ?? 'auto') === (merged.headUvAxis ?? 'auto') &&
           orientationsEqual(currentProps.footOrientation, merged.footOrientation) &&
+          (currentProps.footUvAxis ?? 'auto') === (merged.footUvAxis ?? 'auto') &&
           orientationsEqual(currentProps.bodyEndCapOrientation, merged.bodyEndCapOrientation) &&
           orientationsEqual(currentProps.headEndCapOrientation, merged.headEndCapOrientation) &&
           orientationsEqual(currentProps.footEndCapOrientation, merged.footEndCapOrientation) &&

@@ -100,6 +100,9 @@ export async function buildWallMesh(
     {
       smoothing: wallProps.smoothing,
       cornerModels,
+      bodyUvAxis: wallProps.bodyUvAxis,
+      headUvAxis: wallProps.headUvAxis,
+      footUvAxis: wallProps.footUvAxis,
       bodyOrientation: wallProps.bodyOrientation,
       headOrientation: wallProps.headOrientation,
       footOrientation: wallProps.footOrientation,

@@ -19,6 +19,7 @@ import {
   WALL_MIN_WIDTH,
   type WallForwardAxis,
   type WallModelOrientation,
+  type WallUvAxis,
   type WallComponentProps,
 } from '@schema/components'
 import { getCachedModelObject } from '@schema/modelObjectCache'
@@ -161,6 +162,12 @@ const FORWARD_AXIS_ITEMS: Array<{ title: string; value: WallForwardAxis }> = [
   { title: '-X', value: '-x' },
 ]
 
+const UV_AXIS_ITEMS: Array<{ title: string; value: WallUvAxis }> = [
+  { title: 'Auto', value: 'auto' },
+  { title: 'U', value: 'u' },
+  { title: 'V', value: 'v' },
+]
+
 const cornerModels = computed<WallCornerModelRow[]>(() => {
   const raw = wallComponent.value?.props?.cornerModels
   return Array.isArray(raw) ? (raw as WallCornerModelRow[]) : []
@@ -219,6 +226,19 @@ function updateWallOrientation(
   }
   const current = (component.props as any)?.[key] as WallModelOrientation | undefined
   const next = normalizeOrientation({ ...(current ?? {}), ...patch }, { forwardAxis: '+z', yawDeg: 0 })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: next } as any)
+}
+
+function updateWallUvAxis(
+  key: 'bodyUvAxis' | 'headUvAxis' | 'footUvAxis',
+  value: unknown,
+): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const next: WallUvAxis = value === 'u' || value === 'v' ? value : 'auto'
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: next } as any)
 }
 
@@ -1235,6 +1255,17 @@ function applyAirWallUpdate(rawValue: unknown) {
                         :model-value="(wallComponent.props as any).bodyOrientation.yawDeg"
                         @update:modelValue="(value) => updateWallOrientation('bodyOrientation', { yawDeg: Number(value) })"
                       />
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="UV Axis"
+                        :items="UV_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).bodyUvAxis ?? 'auto'"
+                        @update:modelValue="(value) => updateWallUvAxis('bodyUvAxis', value)"
+                      />
                     </div>
                   </div>
 
@@ -1287,6 +1318,17 @@ function applyAirWallUpdate(rawValue: unknown) {
                         :model-value="(wallComponent.props as any).headOrientation.yawDeg"
                         @update:modelValue="(value) => updateWallOrientation('headOrientation', { yawDeg: Number(value) })"
                       />
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="UV Axis"
+                        :items="UV_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).headUvAxis ?? 'auto'"
+                        @update:modelValue="(value) => updateWallUvAxis('headUvAxis', value)"
+                      />
                     </div>
                   </div>
 
@@ -1338,6 +1380,17 @@ function applyAirWallUpdate(rawValue: unknown) {
                         max="180"
                         :model-value="(wallComponent.props as any).footOrientation.yawDeg"
                         @update:modelValue="(value) => updateWallOrientation('footOrientation', { yawDeg: Number(value) })"
+                      />
+                      <v-select
+                        density="compact"
+                        variant="underlined"
+                        label="UV Axis"
+                        :items="UV_AXIS_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        hide-details
+                        :model-value="(wallComponent.props as any).footUvAxis ?? 'auto'"
+                        @update:modelValue="(value) => updateWallUvAxis('footUvAxis', value)"
                       />
                     </div>
                   </div>

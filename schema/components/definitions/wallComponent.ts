@@ -30,6 +30,8 @@ export type WallModelOrientation = {
   yawDeg: number
 }
 
+export type WallUvAxis = 'auto' | 'u' | 'v'
+
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
   bodyAssetId: string | null
@@ -83,14 +85,20 @@ export interface WallComponentProps {
   bodyAssetId: string | null
   /** Orientation overrides for the body model. */
   bodyOrientation: WallModelOrientation
+  /** UV repeat axis for the body model stretch-tiling. */
+  bodyUvAxis: WallUvAxis
   /** Upper wall head model asset id (optional; only valid when bodyAssetId is set). */
   headAssetId: string | null
   /** Orientation overrides for the head model. */
   headOrientation: WallModelOrientation
+  /** UV repeat axis for the head model stretch-tiling. */
+  headUvAxis: WallUvAxis
   /** Lower wall foot model asset id (optional; only valid when bodyAssetId is set). */
   footAssetId: string | null
   /** Orientation overrides for the foot model. */
   footOrientation: WallModelOrientation
+  /** UV repeat axis for the foot model stretch-tiling. */
+  footUvAxis: WallUvAxis
   /** Lower wall end-cap model asset id (optional; only valid when bodyAssetId is set; not used for closed loops). */
   bodyEndCapAssetId: string | null
   /** Orientation overrides for the body end-cap model. */
@@ -144,6 +152,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
       return value
     }
     throw new Error(`WallComponentProps missing/invalid forwardAxis: ${label}`)
+  }
+
+  const requiredUvAxis = (value: unknown, label: string): WallUvAxis => {
+    if (value === 'auto' || value === 'u' || value === 'v') {
+      return value
+    }
+    throw new Error(`WallComponentProps missing/invalid uvAxis: ${label}`)
   }
 
   const requiredYawDeg = (value: unknown, label: string): number => {
@@ -281,8 +296,11 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const footEndCapAssetId = bodyEndCapAssetId ? requiredAssetIdOrNull('footEndCapAssetId') : null
 
   const bodyOrientation = requiredOrientation((props as any).bodyOrientation, 'bodyOrientation')
+  const bodyUvAxis = requiredUvAxis((props as any).bodyUvAxis, 'bodyUvAxis')
   const headOrientation = requiredOrientation((props as any).headOrientation, 'headOrientation')
+  const headUvAxis = requiredUvAxis((props as any).headUvAxis, 'headUvAxis')
   const footOrientation = requiredOrientation((props as any).footOrientation, 'footOrientation')
+  const footUvAxis = requiredUvAxis((props as any).footUvAxis, 'footUvAxis')
   const bodyEndCapOrientation = requiredOrientation((props as any).bodyEndCapOrientation, 'bodyEndCapOrientation')
   const headEndCapOrientation = requiredOrientation((props as any).headEndCapOrientation, 'headEndCapOrientation')
   const footEndCapOrientation = requiredOrientation((props as any).footEndCapOrientation, 'footEndCapOrientation')
@@ -297,10 +315,13 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     isAirWall: normalizedIsAirWall,
     bodyAssetId,
     bodyOrientation,
+    bodyUvAxis,
     headAssetId,
     headOrientation,
+    headUvAxis,
     footAssetId,
     footOrientation,
+    footUvAxis,
     bodyEndCapAssetId,
     bodyEndCapOrientation,
     headEndCapAssetId,
@@ -323,10 +344,13 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       isAirWall: false,
       bodyAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
+      bodyUvAxis: 'auto',
       headAssetId: null,
       headOrientation: { forwardAxis: '+z', yawDeg: 0 },
+      headUvAxis: 'auto',
       footAssetId: null,
       footOrientation: { forwardAxis: '+z', yawDeg: 0 },
+      footUvAxis: 'auto',
       bodyEndCapAssetId: null,
       bodyEndCapOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headEndCapAssetId: null,
@@ -348,6 +372,9 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     bodyAssetId: null,
     headAssetId: null,
     footAssetId: null,
+    bodyUvAxis: 'auto',
+    headUvAxis: 'auto',
+    footUvAxis: 'auto',
     bodyEndCapAssetId: null,
     headEndCapAssetId: null,
     footEndCapAssetId: null,
@@ -378,16 +405,19 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       forwardAxis: props.bodyOrientation.forwardAxis,
       yawDeg: props.bodyOrientation.yawDeg,
     },
+    bodyUvAxis: props.bodyUvAxis === 'v' ? 'v' : props.bodyUvAxis === 'u' ? 'u' : 'auto',
     headAssetId: props.headAssetId ?? null,
     headOrientation: {
       forwardAxis: props.headOrientation.forwardAxis,
       yawDeg: props.headOrientation.yawDeg,
     },
+    headUvAxis: props.headUvAxis === 'v' ? 'v' : props.headUvAxis === 'u' ? 'u' : 'auto',
     footAssetId: props.footAssetId ?? null,
     footOrientation: {
       forwardAxis: props.footOrientation.forwardAxis,
       yawDeg: props.footOrientation.yawDeg,
     },
+    footUvAxis: props.footUvAxis === 'v' ? 'v' : props.footUvAxis === 'u' ? 'u' : 'auto',
     bodyEndCapAssetId: props.bodyEndCapAssetId ?? null,
     bodyEndCapOrientation: {
       forwardAxis: props.bodyEndCapOrientation.forwardAxis,
@@ -502,10 +532,13 @@ export function createWallComponentState(
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
+    bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
     headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
+    headUvAxis: (overrides as any)?.headUvAxis ?? defaults.headUvAxis,
     footAssetId: overrides?.footAssetId ?? defaults.footAssetId,
     footOrientation: (overrides as any)?.footOrientation ?? defaults.footOrientation,
+    footUvAxis: (overrides as any)?.footUvAxis ?? defaults.footUvAxis,
     bodyEndCapAssetId: overrides?.bodyEndCapAssetId ?? defaults.bodyEndCapAssetId,
     bodyEndCapOrientation: (overrides as any)?.bodyEndCapOrientation ?? defaults.bodyEndCapOrientation,
     headEndCapAssetId: overrides?.headEndCapAssetId ?? defaults.headEndCapAssetId,

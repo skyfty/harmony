@@ -1013,6 +1013,15 @@ export function applyMaterialOverrides(
       return;
     }
 
+    // WallAsset meshes use a custom instanced shader patch for UV repeat scaling.
+    // Global overrides would replace those materials and break tiled rendering.
+    if (mesh.userData?.dynamicMeshType === 'WallAsset') {
+      if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
+        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+      }
+      return;
+    }
+
     // Never apply material overrides to the invisible instanced pick proxy.
     // It is an editor interaction helper and should remain non-rendered.
     if (mesh.userData?.instancedPickProxy) {

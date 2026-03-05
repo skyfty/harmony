@@ -64,10 +64,18 @@ export type WallModelOrientation = {
   yawDeg: number
 }
 
+export type WallUvAxis = 'auto' | 'u' | 'v'
+type WallResolvedUvAxis = 'u' | 'v'
+
 export type WallRenderOptions = {
   smoothing?: number
   materialConfigId?: string | null
   cornerModels?: WallCornerModelRule[]
+
+  // Per-part UV repeat axis for stretched wall tiling.
+  bodyUvAxis?: WallUvAxis
+  headUvAxis?: WallUvAxis
+  footUvAxis?: WallUvAxis
 
   /** Joint trim strategy used to avoid overlaps between body tiles and corner models. */
   jointTrimMode?: 'auto' | 'manual'
@@ -376,7 +384,7 @@ function sanitizeWallUvScaleU(value: number): number {
  * Clone wall material, clone texture slots used by UV-mapped channels, force RepeatWrapping
  * on U, and install shader patch for per-instance U scaling.
  */
-function createWallInstancedMaterial(original: THREE.Material): THREE.Material {
+function createWallInstancedMaterial(original: THREE.Material, uvAxis: WallResolvedUvAxis = 'u'): THREE.Material {
   const cloned = original.clone() as THREE.Material & Record<string, unknown>
   let changed = false
   for (const slot of WALL_REPEAT_U_TEXTURE_SLOTS) {
@@ -390,14 +398,14 @@ function createWallInstancedMaterial(original: THREE.Material): THREE.Material {
     cloned[slot] = clonedTexture
     changed = true
   }
-  installWallUvScaleShaderPatch(cloned)
+  installWallUvScaleShaderPatch(cloned, uvAxis)
   if (changed) {
     cloned.needsUpdate = true
   }
   return cloned
 }
 
-function installWallUvScaleShaderPatch(material: THREE.Material): void {
+function installWallUvScaleShaderPatch(material: THREE.Material, uvAxis: WallResolvedUvAxis = 'u'): void {
   const candidate = material as THREE.Material & {
     isMeshStandardMaterial?: boolean
     isMeshPhysicalMaterial?: boolean
@@ -425,9 +433,10 @@ function installWallUvScaleShaderPatch(material: THREE.Material): void {
 
   const previousOnBeforeCompile = candidate.onBeforeCompile?.bind(candidate)
   const previousCacheKey = candidate.customProgramCacheKey?.bind(candidate)
+  const uvComponent = uvAxis === 'v' ? 'y' : 'x'
   candidate.customProgramCacheKey = () => {
     const previous = previousCacheKey ? previousCacheKey() : ''
-    return `${previous}|harmony-wall-uvscale-v1`
+    return `${previous}|harmony-wall-uvscale-v2-${uvAxis}`
   }
 
   candidate.onBeforeCompile = (shader: { vertexShader?: string }, renderer: unknown) => {
@@ -458,73 +467,73 @@ function installWallUvScaleShaderPatch(material: THREE.Material): void {
           '#ifdef USE_INSTANCING',
           `  float harmonyWallUvScaleU = max(${WALL_UV_SCALE_U_ATTRIBUTE}, 0.000001);`,
           '#ifdef USE_MAP',
-          '  vMapUv.x *= harmonyWallUvScaleU;',
+          `  vMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_ALPHAMAP',
-          '  vAlphaMapUv.x *= harmonyWallUvScaleU;',
+          `  vAlphaMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_LIGHTMAP',
-          '  vLightMapUv.x *= harmonyWallUvScaleU;',
+          `  vLightMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_AOMAP',
-          '  vAoMapUv.x *= harmonyWallUvScaleU;',
+          `  vAoMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_BUMPMAP',
-          '  vBumpMapUv.x *= harmonyWallUvScaleU;',
+          `  vBumpMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_NORMALMAP',
-          '  vNormalMapUv.x *= harmonyWallUvScaleU;',
+          `  vNormalMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_DISPLACEMENTMAP',
-          '  vDisplacementMapUv.x *= harmonyWallUvScaleU;',
+          `  vDisplacementMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_EMISSIVEMAP',
-          '  vEmissiveMapUv.x *= harmonyWallUvScaleU;',
+          `  vEmissiveMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_METALNESSMAP',
-          '  vMetalnessMapUv.x *= harmonyWallUvScaleU;',
+          `  vMetalnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_ROUGHNESSMAP',
-          '  vRoughnessMapUv.x *= harmonyWallUvScaleU;',
+          `  vRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_CLEARCOATMAP',
-          '  vClearcoatMapUv.x *= harmonyWallUvScaleU;',
+          `  vClearcoatMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_CLEARCOAT_NORMALMAP',
-          '  vClearcoatNormalMapUv.x *= harmonyWallUvScaleU;',
+          `  vClearcoatNormalMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_CLEARCOAT_ROUGHNESSMAP',
-          '  vClearcoatRoughnessMapUv.x *= harmonyWallUvScaleU;',
+          `  vClearcoatRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_IRIDESCENCEMAP',
-          '  vIridescenceMapUv.x *= harmonyWallUvScaleU;',
+          `  vIridescenceMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_IRIDESCENCE_THICKNESSMAP',
-          '  vIridescenceThicknessMapUv.x *= harmonyWallUvScaleU;',
+          `  vIridescenceThicknessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_SHEEN_COLORMAP',
-          '  vSheenColorMapUv.x *= harmonyWallUvScaleU;',
+          `  vSheenColorMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_SHEEN_ROUGHNESSMAP',
-          '  vSheenRoughnessMapUv.x *= harmonyWallUvScaleU;',
+          `  vSheenRoughnessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_SPECULARMAP',
-          '  vSpecularMapUv.x *= harmonyWallUvScaleU;',
+          `  vSpecularMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_SPECULAR_COLORMAP',
-          '  vSpecularColorMapUv.x *= harmonyWallUvScaleU;',
+          `  vSpecularColorMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_SPECULAR_INTENSITYMAP',
-          '  vSpecularIntensityMapUv.x *= harmonyWallUvScaleU;',
+          `  vSpecularIntensityMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_TRANSMISSIONMAP',
-          '  vTransmissionMapUv.x *= harmonyWallUvScaleU;',
+          `  vTransmissionMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_THICKNESSMAP',
-          '  vThicknessMapUv.x *= harmonyWallUvScaleU;',
+          `  vThicknessMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#ifdef USE_ANISOTROPYMAP',
-          '  vAnisotropyMapUv.x *= harmonyWallUvScaleU;',
+          `  vAnisotropyMapUv.${uvComponent} *= harmonyWallUvScaleU;`,
           '#endif',
           '#endif',
           '#endif',
@@ -632,6 +641,7 @@ function createWallInstancedMesh(
   template: InstancedAssetTemplate,
   matrices: THREE.Matrix4[],
   uvScaleU: number[],
+  uvAxis: WallResolvedUvAxis = 'u',
 ): THREE.InstancedMesh | null {
   if (!matrices.length) {
     return null
@@ -644,8 +654,8 @@ function createWallInstancedMesh(
   )
 
   const material = Array.isArray(template.material)
-    ? template.material.map((entry) => createWallInstancedMaterial(entry))
-    : createWallInstancedMaterial(template.material)
+    ? template.material.map((entry) => createWallInstancedMaterial(entry, uvAxis))
+    : createWallInstancedMaterial(template.material, uvAxis)
 
   const instanced = new THREE.InstancedMesh(geometry, material, matrices.length)
   instanced.name = name
@@ -1007,6 +1017,120 @@ function normalizeWallSmoothing(value?: number): number {
     return 0
   }
   return Math.max(0, Math.min(1, raw))
+}
+
+function normalizeWallUvAxis(value: unknown, fallback: WallUvAxis = 'auto'): WallUvAxis {
+  if (value === 'u' || value === 'v' || value === 'auto') {
+    return value
+  }
+  return fallback
+}
+
+const wallResolvedUvAxisByTemplate = new WeakMap<InstancedAssetTemplate, Map<WallForwardAxis, WallResolvedUvAxis>>()
+
+function resolveAutoWallUvAxis(template: InstancedAssetTemplate, forwardAxis: WallForwardAxis): WallResolvedUvAxis {
+  let byAxis = wallResolvedUvAxisByTemplate.get(template)
+  if (!byAxis) {
+    byAxis = new Map<WallForwardAxis, WallResolvedUvAxis>()
+    wallResolvedUvAxisByTemplate.set(template, byAxis)
+  }
+  const cached = byAxis.get(forwardAxis)
+  if (cached) {
+    return cached
+  }
+
+  const geometry = template.geometry
+  const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
+  if (!positionAttr || !uvAttr || positionAttr.count <= 0 || uvAttr.count < positionAttr.count) {
+    byAxis.set(forwardAxis, 'u')
+    return 'u'
+  }
+
+  const forwardInfo = wallForwardAxisInfo(forwardAxis)
+  const alongKey = forwardInfo.axis
+  const sideKey = alongKey === 'x' ? 'z' : 'x'
+  const position = new THREE.Vector3()
+
+  const vertexCount = positionAttr.count
+  const alongValues = new Float32Array(vertexCount)
+  const sideValues = new Float32Array(vertexCount)
+  const uValues = new Float32Array(vertexCount)
+  const vValues = new Float32Array(vertexCount)
+
+  for (let i = 0; i < vertexCount; i += 1) {
+    position.fromBufferAttribute(positionAttr, i)
+    position.applyMatrix4(template.meshToRoot)
+    const alongRaw = alongKey === 'x' ? position.x : position.z
+    const sideRaw = sideKey === 'x' ? position.x : position.z
+    alongValues[i] = (forwardInfo.sign === 1 ? alongRaw : -alongRaw)
+    sideValues[i] = sideRaw
+    uValues[i] = uvAttr.getX(i)
+    vValues[i] = uvAttr.getY(i)
+  }
+
+  let sumAlongUvsU = 0
+  let sumAlongUvsV = 0
+  let contributingEdges = 0
+
+  const accumulateEdge = (ia: number, ib: number) => {
+    if (ia < 0 || ib < 0 || ia >= vertexCount || ib >= vertexCount) {
+      return
+    }
+    const alongDelta = Math.abs(alongValues[ib]! - alongValues[ia]!)
+    const sideDelta = Math.abs(sideValues[ib]! - sideValues[ia]!)
+    if (!Number.isFinite(alongDelta) || alongDelta <= WALL_EPSILON) {
+      return
+    }
+    if (sideDelta > alongDelta * 2) {
+      return
+    }
+    const du = Math.abs(uValues[ib]! - uValues[ia]!)
+    const dv = Math.abs(vValues[ib]! - vValues[ia]!)
+    if (!Number.isFinite(du) || !Number.isFinite(dv)) {
+      return
+    }
+    sumAlongUvsU += du
+    sumAlongUvsV += dv
+    contributingEdges += 1
+  }
+
+  const indexAttr = geometry.getIndex()
+  if (indexAttr && indexAttr.count >= 3) {
+    for (let i = 0; i <= indexAttr.count - 3; i += 3) {
+      const a = indexAttr.getX(i)
+      const b = indexAttr.getX(i + 1)
+      const c = indexAttr.getX(i + 2)
+      accumulateEdge(a, b)
+      accumulateEdge(b, c)
+      accumulateEdge(c, a)
+    }
+  } else {
+    for (let i = 0; i <= vertexCount - 3; i += 3) {
+      const a = i
+      const b = i + 1
+      const c = i + 2
+      accumulateEdge(a, b)
+      accumulateEdge(b, c)
+      accumulateEdge(c, a)
+    }
+  }
+
+  // Prefer U by default; only switch to V when V is clearly dominant.
+  const resolved: WallResolvedUvAxis = contributingEdges > 0 && sumAlongUvsV > sumAlongUvsU * 1.1 ? 'v' : 'u'
+  byAxis.set(forwardAxis, resolved)
+  return resolved
+}
+
+function resolveWallUvAxisForTemplate(
+  template: InstancedAssetTemplate,
+  orientation: WallModelOrientation,
+  requested: WallUvAxis,
+): WallResolvedUvAxis {
+  if (requested === 'u' || requested === 'v') {
+    return requested
+  }
+  return resolveAutoWallUvAxis(template, orientation.forwardAxis)
 }
 
 type WallPath = {
@@ -1387,6 +1511,9 @@ function rebuildWallGroup(
   const totalHeight = bodyHeight + headHeightExtra
 
   const smoothing = normalizeWallSmoothing(options.smoothing)
+  const bodyUvAxis = normalizeWallUvAxis(options.bodyUvAxis, 'auto')
+  const headUvAxis = normalizeWallUvAxis(options.headUvAxis, bodyUvAxis)
+  const footUvAxis = normalizeWallUvAxis(options.footUvAxis, bodyUvAxis)
   const rawMaterialId = typeof options.materialConfigId === 'string' ? options.materialConfigId.trim() : ''
 
   for (let chainIndex = 0; chainIndex < chainDefinitions.length; chainIndex += 1) {
@@ -1470,6 +1597,7 @@ function rebuildWallGroup(
 
   if (bodyTemplate) {
     const bodyOrientation = requireWallOrientation(options.bodyOrientation, 'bodyOrientation')
+    const resolvedBodyUvAxis = resolveWallUvAxisForTemplate(bodyTemplate, bodyOrientation, bodyUvAxis)
     const matrices: THREE.Matrix4[] = []
     const uvScaleU: number[] = []
     for (const chainDef of chainDefinitions) {
@@ -1477,7 +1605,7 @@ function rebuildWallGroup(
       matrices.push(...local.matrices)
       uvScaleU.push(...local.uvScaleU)
     }
-    const instanced = createWallInstancedMesh('WallBodyInstances', bodyTemplate, matrices, uvScaleU)
+    const instanced = createWallInstancedMesh('WallBodyInstances', bodyTemplate, matrices, uvScaleU, resolvedBodyUvAxis)
     if (instanced) {
       group.add(instanced)
     }
@@ -1485,6 +1613,7 @@ function rebuildWallGroup(
 
   if (bodyTemplate && headTemplate) {
     const headOrientation = requireWallOrientation(options.headOrientation, 'headOrientation')
+    const resolvedHeadUvAxis = resolveWallUvAxisForTemplate(headTemplate, headOrientation, headUvAxis)
     const matrices: THREE.Matrix4[] = []
     const uvScaleU: number[] = []
     for (const chainDef of chainDefinitions) {
@@ -1492,7 +1621,7 @@ function rebuildWallGroup(
       matrices.push(...local.matrices)
       uvScaleU.push(...local.uvScaleU)
     }
-    const instanced = createWallInstancedMesh('WallHeadInstances', headTemplate, matrices, uvScaleU)
+    const instanced = createWallInstancedMesh('WallHeadInstances', headTemplate, matrices, uvScaleU, resolvedHeadUvAxis)
     if (instanced) {
       group.add(instanced)
     }
@@ -1500,6 +1629,7 @@ function rebuildWallGroup(
 
   if (bodyTemplate && footTemplate) {
     const footOrientation = requireWallOrientation(options.footOrientation, 'footOrientation')
+    const resolvedFootUvAxis = resolveWallUvAxisForTemplate(footTemplate, footOrientation, footUvAxis)
     const matrices: THREE.Matrix4[] = []
     const uvScaleU: number[] = []
     for (const chainDef of chainDefinitions) {
@@ -1507,7 +1637,7 @@ function rebuildWallGroup(
       matrices.push(...local.matrices)
       uvScaleU.push(...local.uvScaleU)
     }
-    const instanced = createWallInstancedMesh('WallFootInstances', footTemplate, matrices, uvScaleU)
+    const instanced = createWallInstancedMesh('WallFootInstances', footTemplate, matrices, uvScaleU, resolvedFootUvAxis)
     if (instanced) {
       group.add(instanced)
     }
