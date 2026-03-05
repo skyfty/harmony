@@ -1,4 +1,4 @@
-import type { Vector3Like } from '@schema'
+import type { AssetIndexEntry, SceneNode, Vector3Like } from '@schema'
 import type { NodePrefabData } from '@/types/node-prefab'
 
 export type ClipboardMode = 'copy' | 'cut'
@@ -20,9 +20,17 @@ export interface ClipboardMetaPayload {
 
 export interface ClipboardMeta {
   mode?: ClipboardMode
-  multiRoot?: boolean
-  rootChildIds?: string[]
   meta?: ClipboardMetaPayload
 }
 
-export type ClipboardEnvelope = NodePrefabData & { clipboard?: ClipboardMeta }
+export interface ClipboardEnvelope {
+  formatVersion: number
+  name: string
+  root?: SceneNode
+  roots?: SceneNode[]
+  assetIndex?: Record<string, AssetIndexEntry>
+  packageAssetMap?: Record<string, string>
+  clipboard?: ClipboardMeta
+}
+
+export type ClipboardPrefabEnvelope = NodePrefabData & { clipboard?: ClipboardMeta }

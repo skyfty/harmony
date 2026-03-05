@@ -477,25 +477,12 @@ export function bakePrefabSubtreeTransforms(deps: PrefabActionsDeps, root: Scene
   return root
 }
 
-function ensurePrefabGroupRoot(deps: PrefabActionsDeps, node: SceneNode): SceneNode {
-  if (node.nodeType === 'Group') {
-    const cloned = deps.cloneNode(node)
+function ensurePrefabRoot(deps: PrefabActionsDeps, node: SceneNode): SceneNode {
+  const cloned = deps.cloneNode(node)
+  if (cloned.nodeType === 'Group') {
     ;(cloned as any).groupExpanded = false
-    return cloned
   }
-  const wrapper: SceneNode = {
-    id: deps.generateUuid(),
-    name: node.name?.trim().length ? `${node.name} Group` : 'Group Root',
-    nodeType: 'Group',
-    position: deps.createVector(0, 0, 0),
-    rotation: deps.createVector(0, 0, 0),
-    scale: deps.createVector(1, 1, 1),
-    visible: node.visible ?? true,
-    locked: false,
-    groupExpanded: false,
-    children: [deps.cloneNode(node)],
-  }
-  return wrapper
+  return cloned
 }
 
 function createNodePrefabData(deps: PrefabActionsDeps, node: SceneNode, name: string): NodePrefabData {
@@ -586,7 +573,7 @@ export function buildSerializedPrefabPayload(
     sceneNodes: SceneNode[]
   },
 ): SerializedPrefabPayload {
-  const prefabRoot = ensurePrefabGroupRoot(deps, node)
+  const prefabRoot = ensurePrefabRoot(deps, node)
   const prefabData = createNodePrefabData(deps, prefabRoot, context.name ?? node.name ?? '')
   bakePrefabSubtreeTransforms(deps, prefabData.root, context.sceneNodes)
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)

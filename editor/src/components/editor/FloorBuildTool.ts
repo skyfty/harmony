@@ -38,6 +38,7 @@ export function createFloorBuildTool(options: {
   sceneStore: ReturnType<typeof useSceneStore>
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   isAltOverrideActive: () => boolean
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
@@ -46,6 +47,21 @@ export function createFloorBuildTool(options: {
   const previewRenderer = createFloorPreviewRenderer({ rootGroup: options.rootGroup })
 
   const groundPointerHelper = new THREE.Vector3()
+
+  const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
+    if (options.resolveBuildPlacementPoint) {
+      return options.resolveBuildPlacementPoint(event, result)
+    }
+    return options.raycastGroundPoint(event, result)
+  }
+
+  const alignPointYToSession = (point: THREE.Vector3, targetSession: FloorPreviewSession | null): THREE.Vector3 => {
+    const baseY = targetSession?.points?.[0]?.y
+    if (typeof baseY === 'number' && Number.isFinite(baseY)) {
+      point.y = baseY
+    }
+    return point
+  }
 
   let session: FloorPreviewSession | null = null
   let rightClickState: RightClickState | null = null
@@ -79,12 +95,11 @@ export function createFloorBuildTool(options: {
   }
 
   const startRectangleDraft = (event: PointerEvent): boolean => {
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
     const raw = groundPointerHelper.clone()
-    raw.y = 0
     const start = options.snapPoint(raw)
 
     const current = ensureSession()
@@ -97,12 +112,11 @@ export function createFloorBuildTool(options: {
   }
 
   const startCircleDraft = (event: PointerEvent): boolean => {
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
     const raw = groundPointerHelper.clone()
-    raw.y = 0
     const center = options.snapPoint(raw)
 
     const baseRadiusRaw = options.getDefaultCircleRadius()
@@ -127,15 +141,15 @@ export function createFloorBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return
     }
 
     const raw = groundPointerHelper.clone()
-    raw.y = 0
 
     // Circle radius endpoint should not be snapped to grid.
     const next = session.shape === 'circle' ? raw : options.snapPoint(raw)
+    alignPointYToSession(next, session)
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -153,15 +167,15 @@ export function createFloorBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return false
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
     const raw = groundPointerHelper.clone()
-    raw.y = 0
     const point = options.snapPoint(raw)
 
     const current = ensureSession()
+    alignPointYToSession(point, current)
     current.shape = 'polygon'
     if (current.points.length > 0) {
       const last = current.points[current.points.length - 1]!
@@ -192,7 +206,7 @@ export function createFloorBuildTool(options: {
     }
 
     const created = options.sceneStore.createFloorNode({
-      points: points.map((p) => ({ x: p.x, y: 0, z: p.z }) satisfies Vector3Like),
+      points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
     })
 
     if (created) {
@@ -218,8 +232,8 @@ export function createFloorBuildTool(options: {
   const finalizeFromVertices = (vertices: THREE.Vector3[]) => {
     const buildShape = session?.shape ?? 'polygon'
     const points = vertices
-      .map((p) => new THREE.Vector3(Number(p.x), 0, Number(p.z)))
-      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z))
+      .map((p) => new THREE.Vector3(Number(p.x), Number(p.y), Number(p.z)))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z))
 
     if (points.length < 3) {
       clearSession(true)
@@ -227,7 +241,7 @@ export function createFloorBuildTool(options: {
     }
 
     const created = options.sceneStore.createFloorNode({
-      points: points.map((p) => ({ x: p.x, y: 0, z: p.z }) satisfies Vector3Like),
+      points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
     })
 
     if (created) {
@@ -343,14 +357,14 @@ export function createFloorBuildTool(options: {
             return true
           }
 
-          if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+          if (!raycastPlacementPoint(event, groundPointerHelper)) {
             clearSession(true)
             return true
           }
 
           const raw = groundPointerHelper.clone()
-          raw.y = 0
           const end = options.snapPoint(raw)
+          end.y = session.points[0]?.y ?? end.y
           session.previewEnd = end.clone()
           previewRenderer.markDirty()
 
@@ -367,10 +381,10 @@ export function createFloorBuildTool(options: {
           }
 
           finalizeFromVertices([
-            new THREE.Vector3(minX, 0, minZ),
-            new THREE.Vector3(minX, 0, maxZ),
-            new THREE.Vector3(maxX, 0, maxZ),
-            new THREE.Vector3(maxX, 0, minZ),
+            new THREE.Vector3(minX, start.y, minZ),
+            new THREE.Vector3(minX, start.y, maxZ),
+            new THREE.Vector3(maxX, start.y, maxZ),
+            new THREE.Vector3(maxX, start.y, minZ),
           ])
           return true
         }
@@ -383,13 +397,13 @@ export function createFloorBuildTool(options: {
             return true
           }
 
-          if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+          if (!raycastPlacementPoint(event, groundPointerHelper)) {
             clearSession(true)
             return true
           }
 
           const raw = groundPointerHelper.clone()
-          raw.y = 0
+          raw.y = session.points[0]?.y ?? raw.y
           session.previewEnd = raw.clone()
           previewRenderer.markDirty()
 
@@ -405,7 +419,7 @@ export function createFloorBuildTool(options: {
           const circleVerts: THREE.Vector3[] = []
           for (let i = 0; i < segments; i += 1) {
             const t = (i / segments) * Math.PI * 2
-            circleVerts.push(new THREE.Vector3(center.x + Math.cos(t) * radius, 0, center.z + Math.sin(t) * radius))
+            circleVerts.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
           }
           finalizeFromVertices(circleVerts)
           return true
