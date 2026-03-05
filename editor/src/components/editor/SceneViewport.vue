@@ -7240,6 +7240,126 @@ function resetCameraView() {
 
 type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
 
+const cameraResetFitMatrixHelper = new THREE.Matrix4()
+const cameraResetFitTargetHelper = new THREE.Vector3()
+const cameraResetFitCornerHelper = new THREE.Vector3()
+const cameraResetFitOffsetHelper = new THREE.Vector3()
+const cameraResetFitRightHelper = new THREE.Vector3()
+const cameraResetFitUpHelper = new THREE.Vector3()
+const cameraResetFitUpReferenceHelper = new THREE.Vector3()
+const cameraResetFitRotationHelper = new THREE.Euler(0, 0, 0, 'XYZ')
+const cameraResetFitScaleHelper = new THREE.Vector3(1, 1, 1)
+
+function resolveGroundPanoramaFitDistanceForDirection(
+  directionVector: THREE.Vector3,
+): { target: THREE.Vector3; radiusEstimate: number; distance: number } | null {
+  if (!camera) {
+    return null
+  }
+
+  const groundNode = findGroundNodeInTree(sceneStore.nodes) ?? findGroundNodeInTree(props.sceneNodes)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh
+  const width = Math.abs(Number(definition.width))
+  const depth = Math.abs(Number(definition.depth))
+  if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 1e-6 || depth <= 1e-6) {
+    return null
+  }
+
+  const groundObject = objectMap.get(groundNode.id) ?? getRuntimeObject(groundNode.id)
+  if (groundObject) {
+    groundObject.updateWorldMatrix(true, true)
+    cameraResetFitMatrixHelper.copy(groundObject.matrixWorld)
+    groundObject.getWorldPosition(cameraResetFitTargetHelper)
+  } else {
+    cameraResetFitTargetHelper.set(
+      groundNode.position.x,
+      groundNode.position.y,
+      groundNode.position.z,
+    )
+    cameraResetFitRotationHelper.set(
+      groundNode.rotation.x,
+      groundNode.rotation.y,
+      groundNode.rotation.z,
+    )
+    cameraResetFitScaleHelper.set(
+      groundNode.scale?.x ?? 1,
+      groundNode.scale?.y ?? 1,
+      groundNode.scale?.z ?? 1,
+    )
+    cameraResetFitMatrixHelper.compose(
+      cameraResetFitTargetHelper,
+      new THREE.Quaternion().setFromEuler(cameraResetFitRotationHelper),
+      cameraResetFitScaleHelper,
+    )
+  }
+
+  cameraResetFitUpReferenceHelper.set(0, 1, 0)
+  if (Math.abs(directionVector.dot(cameraResetFitUpReferenceHelper)) >= 0.99) {
+    cameraResetFitUpReferenceHelper.set(0, 0, 1)
+  }
+
+  cameraResetFitRightHelper.copy(cameraResetFitUpReferenceHelper).cross(directionVector)
+  if (cameraResetFitRightHelper.lengthSq() <= 1e-10) {
+    return null
+  }
+  cameraResetFitRightHelper.normalize()
+  cameraResetFitUpHelper.copy(directionVector).cross(cameraResetFitRightHelper)
+  if (cameraResetFitUpHelper.lengthSq() <= 1e-10) {
+    return null
+  }
+  cameraResetFitUpHelper.normalize()
+
+  const halfWidth = width * 0.5
+  const halfDepth = depth * 0.5
+  const corners: Array<[number, number]> = [
+    [-halfWidth, -halfDepth],
+    [halfWidth, -halfDepth],
+    [-halfWidth, halfDepth],
+    [halfWidth, halfDepth],
+  ]
+
+  let maxHorizontal = 0
+  let maxVertical = 0
+  let radiusEstimate = 0
+
+  for (const [x, z] of corners) {
+    cameraResetFitCornerHelper.set(x, 0, z).applyMatrix4(cameraResetFitMatrixHelper)
+    cameraResetFitOffsetHelper.copy(cameraResetFitCornerHelper).sub(cameraResetFitTargetHelper)
+    maxHorizontal = Math.max(maxHorizontal, Math.abs(cameraResetFitOffsetHelper.dot(cameraResetFitRightHelper)))
+    maxVertical = Math.max(maxVertical, Math.abs(cameraResetFitOffsetHelper.dot(cameraResetFitUpHelper)))
+    radiusEstimate = Math.max(radiusEstimate, cameraResetFitOffsetHelper.length())
+  }
+
+  if (!Number.isFinite(maxHorizontal) || !Number.isFinite(maxVertical)) {
+    return null
+  }
+
+  let fitDistance = Math.max(0.8, radiusEstimate)
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const fovV = THREE.MathUtils.degToRad(camera.fov)
+    const aspect = Math.max(camera.aspect || 1, 1e-6)
+    const fovH = 2 * Math.atan(Math.tan(Math.max(fovV / 2, 1e-6)) * aspect)
+    const verticalDistance = maxVertical / Math.tan(Math.max(fovV / 2, 1e-6))
+    const horizontalDistance = maxHorizontal / Math.tan(Math.max(fovH / 2, 1e-6))
+    fitDistance = Math.max(verticalDistance, horizontalDistance, 0.8)
+  }
+
+  const mode = sceneStore.viewportSettings.cameraControlMode
+  const margin = mode === 'map' ? 1.08 : 1.03
+  const minScaleByRadius = mode === 'map' ? 1.18 : 1.05
+  const distance = Math.max(fitDistance * margin, radiusEstimate * minScaleByRadius, 0.8)
+
+  return {
+    target: cameraResetFitTargetHelper.clone(),
+    radiusEstimate: Math.max(radiusEstimate, 0.25),
+    distance,
+  }
+}
+
 function resolveFocusTargetFromNodeId(nodeId: string): { target: THREE.Vector3; radiusEstimate: number } | null {
   const target = new THREE.Vector3()
   let radiusEstimate = 1
@@ -7289,6 +7409,15 @@ function resolveFallbackFocusTargetForCameraReset(): { target: THREE.Vector3; ra
         radiusEstimate: Math.max(lastCameraFocusRadius ?? 1, 10),
       }
     }
+
+    return {
+      target: new THREE.Vector3(
+        groundNode.position.x,
+        groundNode.position.y,
+        groundNode.position.z,
+      ),
+      radiusEstimate: Math.max(lastCameraFocusRadius ?? 1, 10),
+    }
   }
 
   return {
@@ -7302,11 +7431,6 @@ function resetCameraToSelectionDirection(direction: CameraResetDirection): boole
     return false
   }
 
-  const selectedId = sceneStore.selectedNodeId
-  const focus = selectedId
-    ? (resolveFocusTargetFromNodeId(selectedId) ?? resolveFallbackFocusTargetForCameraReset())
-    : resolveFallbackFocusTargetForCameraReset()
-
   const directionVector = (() => {
     if (direction === 'pos-x') return new THREE.Vector3(1, 0, 0)
     if (direction === 'neg-x') return new THREE.Vector3(-1, 0, 0)
@@ -7316,15 +7440,36 @@ function resetCameraToSelectionDirection(direction: CameraResetDirection): boole
     return new THREE.Vector3(0, 0, -1)
   })()
 
+  const selectedId = sceneStore.selectedNodeId
+  let focus: { target: THREE.Vector3; radiusEstimate: number }
+  let forcedDistance: number | null = null
+
+  if (selectedId) {
+    focus = resolveFocusTargetFromNodeId(selectedId) ?? resolveFallbackFocusTargetForCameraReset()
+  } else {
+    const groundFit = resolveGroundPanoramaFitDistanceForDirection(directionVector)
+    if (groundFit) {
+      focus = { target: groundFit.target, radiusEstimate: groundFit.radiusEstimate }
+      forcedDistance = groundFit.distance
+    } else {
+      focus = resolveFallbackFocusTargetForCameraReset()
+    }
+  }
+
   const currentDistance = camera.position.distanceTo(mapControls.target)
   const fallbackDistance = Math.max(0.8, focus.radiusEstimate * 2)
-  const distance = Number.isFinite(currentDistance) && currentDistance > 1e-4 ? currentDistance : fallbackDistance
+  const distance = forcedDistance != null
+    ? forcedDistance
+    : (Number.isFinite(currentDistance) && currentDistance > 1e-4 ? currentDistance : fallbackDistance)
   const clampedTargetY = Math.max(focus.target.y, MIN_TARGET_HEIGHT)
   const focusTarget = new THREE.Vector3(focus.target.x, clampedTargetY, focus.target.z)
   const nextCameraPosition = focusTarget.clone().addScaledVector(directionVector, distance)
 
   isApplyingCameraState = true
   camera.position.copy(nextCameraPosition)
+  if (camera.position.y < MIN_CAMERA_HEIGHT) {
+    camera.position.y = MIN_CAMERA_HEIGHT
+  }
   mapControls.target.copy(focusTarget)
   lastCameraFocusRadius = Math.max(0.25, focus.radiusEstimate)
   syncControlsConstraintsAndSpeeds()
