@@ -62,6 +62,26 @@ async function preloadRuntimeConfig() {
 	const authStore = useAuthStore(pinia)
 	await authStore.initialize()
 
+
+	// Disable browser right-click context menu everywhere inside the editor
+	// but allow it on inputs, textareas, selects, contenteditable, or elements
+	// explicitly opt-in via `data-allow-contextmenu`.
+	document.addEventListener('contextmenu', (e: Event) => {
+		const ev = e as MouseEvent
+		const composedPath = (ev.composedPath && ev.composedPath()) || []
+		const nodes: any[] = composedPath.length ? composedPath : [ev.target]
+
+		for (const node of nodes) {
+			if (!(node instanceof Element)) continue
+			if (node.matches && node.matches('input, textarea, select')) return
+			const ce = node.getAttribute && node.getAttribute('contenteditable')
+			if (ce === '' || ce === 'true') return
+			if (node.closest && node.closest('[data-allow-contextmenu]')) return
+		}
+
+		e.preventDefault()
+	})
+
 	app.mount('#app')
 
 })()
