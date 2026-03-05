@@ -1595,6 +1595,7 @@ const scatterEraseModeActive = ref(false)
 const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
+const navigationSpeedBoostModifierActive = ref(false)
 const isVertexSnapActiveEffective = computed(() => vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
@@ -7275,22 +7276,36 @@ function resolveFocusTargetFromNodeId(nodeId: string): { target: THREE.Vector3; 
   return { target, radiusEstimate }
 }
 
+function resolveFallbackFocusTargetForCameraReset(): { target: THREE.Vector3; radiusEstimate: number } {
+  const groundNode = findGroundNodeInTree(sceneStore.nodes) ?? findGroundNodeInTree(props.sceneNodes)
+  if (groundNode) {
+    const groundObject = objectMap.get(groundNode.id)
+    if (groundObject) {
+      const target = new THREE.Vector3()
+      groundObject.updateWorldMatrix(true, true)
+      groundObject.getWorldPosition(target)
+      return {
+        target,
+        radiusEstimate: Math.max(lastCameraFocusRadius ?? 1, 10),
+      }
+    }
+  }
+
+  return {
+    target: new THREE.Vector3(0, 0, 0),
+    radiusEstimate: Math.max(lastCameraFocusRadius ?? 1, 10),
+  }
+}
+
 function resetCameraToSelectionDirection(direction: CameraResetDirection): boolean {
   if (!camera || !mapControls) {
     return false
   }
 
   const selectedId = sceneStore.selectedNodeId
-  if (!selectedId) {
-    console.warn('请先选择节点')
-    return false
-  }
-
-  const focus = resolveFocusTargetFromNodeId(selectedId)
-  if (!focus) {
-    console.warn('请先选择节点')
-    return false
-  }
+  const focus = selectedId
+    ? (resolveFocusTargetFromNodeId(selectedId) ?? resolveFallbackFocusTargetForCameraReset())
+    : resolveFallbackFocusTargetForCameraReset()
 
   const directionVector = (() => {
     if (direction === 'pos-x') return new THREE.Vector3(1, 0, 0)
@@ -7450,15 +7465,20 @@ function syncControlsConstraintsAndSpeeds() {
   mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
   mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
 
-  // Scale input sensitivity down as the camera gets far from the focused object.
+  // Keep local-detail edits precise while making far-away browsing much faster.
   const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
-  const speedScale = clampNumber(1 / Math.sqrt(Math.max(normalizedDistance, 1)), 0.15, 1)
+  const distanceScale = normalizedDistance >= 1
+    ? clampNumber(Math.pow(normalizedDistance, 0.22), 1, 1.5)
+    : clampNumber(0.9 + normalizedDistance * 0.1, 0.9, 1)
+  const boostScale = navigationSpeedBoostModifierActive.value ? 1.35 : 1
+  const speedScale = distanceScale * boostScale
 
-  mapControls.rotateSpeed = 0.6 * speedScale
-  mapControls.zoomSpeed = 0.9 * speedScale
-  mapControls.panSpeed = 1.0 * speedScale
+  // Slightly increased over original defaults but conservative to avoid oversensitivity
+  mapControls.rotateSpeed = 0.65 * speedScale
+  mapControls.zoomSpeed = 0.95 * speedScale
+  mapControls.panSpeed = 1.05 * speedScale
   // @ts-ignore
-  ;(mapControls as any).keyPanSpeed = 7.0 * speedScale
+  ;(mapControls as any).keyPanSpeed = 7.5 * speedScale
 
   // debug logs removed
 
@@ -7606,6 +7626,63 @@ function focusCameraOnNode(nodeId: string): boolean {
     return false
   }
   return applyCameraFocus(focus.target, focus.radiusEstimate)
+}
+
+function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): string[] {
+  const includeGround = Boolean(options?.includeGround)
+  const visibleIds: string[] = []
+  const seen = new Set<string>()
+
+  const visit = (nodes: SceneNode[]) => {
+    for (const node of nodes) {
+      const id = typeof node.id === 'string' ? node.id.trim() : ''
+      if (!id) {
+        continue
+      }
+      if (id === ENVIRONMENT_NODE_ID) {
+        if (node.children?.length) {
+          visit(node.children)
+        }
+        continue
+      }
+      if (!includeGround && id === GROUND_NODE_ID) {
+        if (node.children?.length) {
+          visit(node.children)
+        }
+        continue
+      }
+      if (sceneStore.isNodeVisible(id) && !seen.has(id)) {
+        const object = objectMap.get(id) ?? null
+        const pickable = object ? isObjectWorldVisible(object) : true
+        if (pickable) {
+          visibleIds.push(id)
+          seen.add(id)
+        }
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+
+  visit(sceneStore.nodes)
+  return visibleIds
+}
+
+function handleDirectionalCameraShortcut(code: string): boolean {
+  const directionByCode: Partial<Record<string, CameraResetDirection>> = {
+    Digit1: 'pos-x',
+    Digit2: 'neg-x',
+    Digit3: 'pos-y',
+    Digit4: 'neg-y',
+    Digit5: 'pos-z',
+    Digit6: 'neg-z',
+  }
+  const direction = directionByCode[code]
+  if (!direction) {
+    return false
+  }
+  return resetCameraToSelectionDirection(direction)
 }
 
 function handleControlsChange() {
@@ -14081,7 +14158,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
   let handled = false
 
-  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+  if (!event.ctrlKey && !event.metaKey && event.altKey && !event.shiftKey) {
+    handled = handleDirectionalCameraShortcut(event.code)
+  }
+
+  if (!handled && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
         if (cancelAssetPlacementInteraction()) {
@@ -14125,6 +14206,23 @@ function handleViewportShortcut(event: KeyboardEvent) {
     }
   }
 
+  if (!handled && !event.ctrlKey && !event.metaKey && event.shiftKey && !event.altKey) {
+    if (event.code === 'KeyF') {
+      const focusIds = collectVisibleFocusNodeIds()
+      if (focusIds.length > 0 && focusCameraOnSelection(focusIds)) {
+        handled = true
+      } else {
+        const fallbackFocusIds = collectVisibleFocusNodeIds({ includeGround: true })
+        if (fallbackFocusIds.length > 0 && focusCameraOnSelection(fallbackFocusIds)) {
+          handled = true
+        } else {
+          resetCameraView()
+          handled = true
+        }
+      }
+    }
+  }
+
   if (handled) {
     event.preventDefault()
     event.stopPropagation()
@@ -14158,6 +14256,10 @@ function handleVertexSnapShiftKeyDown(event: KeyboardEvent) {
     return
   }
   vertexSnapShiftModifierActive.value = true
+  if (!navigationSpeedBoostModifierActive.value) {
+    navigationSpeedBoostModifierActive.value = true
+    syncControlsConstraintsAndSpeeds()
+  }
 }
 
 function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
@@ -14165,10 +14267,18 @@ function handleVertexSnapShiftKeyUp(event: KeyboardEvent) {
     return
   }
   vertexSnapShiftModifierActive.value = false
+  if (navigationSpeedBoostModifierActive.value) {
+    navigationSpeedBoostModifierActive.value = false
+    syncControlsConstraintsAndSpeeds()
+  }
 }
 
 function handleVertexSnapShiftBlur() {
   vertexSnapShiftModifierActive.value = false
+  if (navigationSpeedBoostModifierActive.value) {
+    navigationSpeedBoostModifierActive.value = false
+    syncControlsConstraintsAndSpeeds()
+  }
 }
 
 onMounted(() => {

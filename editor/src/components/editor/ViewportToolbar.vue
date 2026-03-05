@@ -518,7 +518,7 @@
             color="undefined"
             variant="text"
             class="toolbar-button"
-            title="Reset to Default View"
+            title="Reset to Default View (Shift+F: focus visible; Alt+1..6: directional views)"
             @click="emit('reset-camera')"
             @contextmenu.prevent.stop="handleCameraResetContextMenu"
           />
@@ -533,12 +533,12 @@
               <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:camera-reset-menu-open', false)" />
             </v-toolbar>
             <div class="popup-menu-card__content">
-              <v-list-item title="正面 (+X)" @click="handleCameraResetDirectionSelect('pos-x')" />
-              <v-list-item title="背面 (-X)" @click="handleCameraResetDirectionSelect('neg-x')" />
-              <v-list-item title="上面 (+Y)" @click="handleCameraResetDirectionSelect('pos-y')" />
-              <v-list-item title="下面 (-Y)" @click="handleCameraResetDirectionSelect('neg-y')" />
-              <v-list-item title="左面 (+Z)" @click="handleCameraResetDirectionSelect('pos-z')" />
-              <v-list-item title="右面 (-Z)" @click="handleCameraResetDirectionSelect('neg-z')" />
+              <v-list-item title="正面 (+X) — Alt+1" @click="handleCameraResetDirectionSelect('pos-x')" />
+              <v-list-item title="背面 (-X) — Alt+2" @click="handleCameraResetDirectionSelect('neg-x')" />
+              <v-list-item title="上面 (+Y) — Alt+3" @click="handleCameraResetDirectionSelect('pos-y')" />
+              <v-list-item title="下面 (-Y) — Alt+4" @click="handleCameraResetDirectionSelect('neg-y')" />
+              <v-list-item title="左面 (+Z) — Alt+5" @click="handleCameraResetDirectionSelect('pos-z')" />
+              <v-list-item title="右面 (-Z) — Alt+6" @click="handleCameraResetDirectionSelect('neg-z')" />
             </div>
           </div>
         </v-list>
