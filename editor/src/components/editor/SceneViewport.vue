@@ -4172,6 +4172,7 @@ const wallBuildTool = createWallBuildTool({
   pointerInteraction,
   rootGroup,
   raycastGroundPoint,
+  resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point),
   isAltOverrideActive: () => isAltOverrideActive,
   normalizeWallDimensionsForViewport,
@@ -4312,6 +4313,7 @@ const floorBuildTool = createFloorBuildTool({
   sceneStore,
   rootGroup,
   raycastGroundPoint,
+  resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
   isAltOverrideActive: () => isAltOverrideActive,
   getFloorBrush: () => ({
@@ -9506,6 +9508,17 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
   return !!raycaster.ray.intersectPlane(groundPlane, result)
 }
 
+function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3): boolean {
+  if (!isAltOverrideActive) {
+    const hit = pickNodeAtPointer(event)
+    if (hit?.point) {
+      result.copy(hit.point)
+      return true
+    }
+  }
+  return raycastGroundPoint(event, result)
+}
+
 function raycastPlanePoint(event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3): boolean {
   if (!normalizedPointerGuard.setRayFromEvent(event)) {
     return false
@@ -9905,7 +9918,17 @@ function handlePointerMove(event: PointerEvent) {
 
     camera,
     floorBuildShape: floorBuildShape.value,
-    syncWallPreviewGroup: ({ previewGroup, definition, nodeId, previewKey }) =>
+    syncWallPreviewGroup: ({
+      previewGroup,
+      definition,
+      nodeId,
+      previewKey,
+    }: {
+      previewGroup: THREE.Group | null
+      definition: WallDynamicMesh
+      nodeId: string | null
+      previewKey: string
+    }) =>
       syncWallPreviewGroupForEditor({
         previewGroup,
         definition,

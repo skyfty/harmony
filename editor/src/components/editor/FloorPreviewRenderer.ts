@@ -39,10 +39,10 @@ function buildRectanglePreviewPoints(first: THREE.Vector3, second: THREE.Vector3
   }
 
   return [
-    new THREE.Vector3(minX, 0, minZ),
-    new THREE.Vector3(minX, 0, maxZ),
-    new THREE.Vector3(maxX, 0, maxZ),
-    new THREE.Vector3(maxX, 0, minZ),
+    new THREE.Vector3(minX, first.y, minZ),
+    new THREE.Vector3(minX, first.y, maxZ),
+    new THREE.Vector3(maxX, first.y, maxZ),
+    new THREE.Vector3(maxX, first.y, minZ),
   ]
 }
 
@@ -58,7 +58,7 @@ function buildCirclePreviewPoints(center: THREE.Vector3, previewEnd: THREE.Vecto
   const segments = Math.max(8, Math.floor(FLOOR_CIRCLE_PREVIEW_SEGMENTS))
   for (let i = 0; i < segments; i += 1) {
     const t = (i / segments) * Math.PI * 2
-    out.push(new THREE.Vector3(center.x + Math.cos(t) * radius, 0, center.z + Math.sin(t) * radius))
+    out.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
   }
   return out
 }
@@ -85,9 +85,11 @@ function buildTwoPointPreviewPoints(first: THREE.Vector3, previewEnd: THREE.Vect
   perp.multiplyScalar(0.1)
 
   const offsetPoint = previewEnd.clone().add(perp)
+  offsetPoint.y = first.y
   let triangle = [first.clone(), offsetPoint.clone(), previewEnd.clone()]
   if (computePolygonArea2D(triangle) < 0) {
     const flipped = previewEnd.clone().sub(perp)
+    flipped.y = first.y
     triangle = [first.clone(), flipped, previewEnd.clone()]
   }
   return triangle
@@ -165,7 +167,10 @@ function computePreviewCenter(points: THREE.Vector3[]): THREE.Vector3 | null {
     return null
   }
 
-  return new THREE.Vector3((minX + maxX) * 0.5, 0, (minZ + maxZ) * 0.5)
+  const firstPoint = points[0]
+  const baseY = firstPoint && Number.isFinite(firstPoint.y) ? firstPoint.y : 0
+
+  return new THREE.Vector3((minX + maxX) * 0.5, baseY, (minZ + maxZ) * 0.5)
 }
 
 function computeFloorPreviewSignature(vertices: THREE.Vector3[]): string {
@@ -174,7 +179,7 @@ function computeFloorPreviewSignature(vertices: THREE.Vector3[]): string {
   }
 
   return vertices
-    .map((p) => [encodePreviewNumber(p.x), encodePreviewNumber(p.z)].join(','))
+    .map((p) => [encodePreviewNumber(p.x), encodePreviewNumber(p.y), encodePreviewNumber(p.z)].join(','))
     .join(';')
 }
 

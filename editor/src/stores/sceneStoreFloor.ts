@@ -29,11 +29,12 @@ function buildFloorWorldPoints(points: Vector3Like[]): Vector3[] {
       return
     }
     const x = Number(p.x)
+    const y = Number(p.y)
     const z = Number(p.z)
     if (!Number.isFinite(x) || !Number.isFinite(z)) {
       return
     }
-    const vec = new Vector3(x, 0, z)
+    const vec = new Vector3(x, Number.isFinite(y) ? y : 0, z)
     const prev = out[out.length - 1]
     if (prev && prev.distanceToSquared(vec) <= 1e-10) {
       return
@@ -45,7 +46,7 @@ function buildFloorWorldPoints(points: Vector3Like[]): Vector3[] {
   if (out.length >= 3) {
     const first = out[0]!
     const last = out[out.length - 1]!
-    if (first.distanceToSquared(last) <= 1e-10) {
+    if (Math.abs(first.x - last.x) <= 1e-10 && Math.abs(first.z - last.z) <= 1e-10) {
       out.pop()
     }
   }
@@ -68,7 +69,9 @@ function computeFloorCenter(points: Vector3[]): Vector3 {
     return new Vector3(0, 0, 0)
   }
 
-  return new Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
+  const baseY = points[0] && Number.isFinite(points[0].y) ? points[0].y : 0
+
+  return new Vector3((min.x + max.x) * 0.5, baseY, (min.z + max.z) * 0.5)
 }
 
 export function createSceneStoreFloorHelpers(deps: SceneStoreFloorHelpersDeps) {

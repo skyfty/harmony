@@ -66,6 +66,7 @@ export function createWallBuildTool(options: {
   pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   isAltOverrideActive: () => boolean
   getWallBrush: () => { presetAssetId: string | null; presetData: WallPresetData | null }
@@ -88,6 +89,13 @@ export function createWallBuildTool(options: {
   })
 
   const groundPointerHelper = new THREE.Vector3()
+
+  const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
+    if (options.resolveBuildPlacementPoint) {
+      return options.resolveBuildPlacementPoint(event, result)
+    }
+    return options.raycastGroundPoint(event, result)
+  }
 
   let session: WallBuildToolSession | null = null
 
@@ -350,7 +358,7 @@ export function createWallBuildTool(options: {
     if (session?.shapeDraft) {
       return false
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
@@ -444,7 +452,7 @@ export function createWallBuildTool(options: {
     if (session.shapeDraft.pointerId !== event.pointerId) {
       return false
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
@@ -612,7 +620,7 @@ export function createWallBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return false
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
@@ -649,7 +657,7 @@ export function createWallBuildTool(options: {
     if (!session?.dragStart) {
       return
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return
     }
 
