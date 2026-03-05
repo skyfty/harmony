@@ -463,10 +463,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -494,10 +491,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -525,10 +519,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -767,7 +758,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
-    trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
+    cornerModels: WallCornerModelRule[] = [],
   ): WallLocalPlacement[] {
     const placements: WallLocalPlacement[] = []
     const segments = compileWallSegmentsFromDefinition(definition)
@@ -782,25 +773,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     const templateHeight = resolveWallModelHeight(bounds)
     const minY = bounds.min.y
 
-    const distanceSqXZRaw = (a: { x: number; z: number }, b: { x: number; z: number }): number => {
-      const dx = Number(a.x) - Number(b.x)
-      const dz = Number(a.z) - Number(b.z)
-      return dx * dx + dz * dz
-    }
-    const isClosedChain = (() => {
-      if (segments.length < 2) {
-        return false
-      }
-      const first = segments[0] as any
-      const last = segments[segments.length - 1] as any
-      if (!first?.start || !last?.end) {
-        return false
-      }
-      return distanceSqXZRaw(first.start as any, last.end as any) <= WALL_SYNC_EPSILON
-    })()
-
-    const manualTrimActive = trimOptions?.mode === 'manual'
-      && (trimOptions.manual.start > WALL_SYNC_EPSILON || trimOptions.manual.end > WALL_SYNC_EPSILON)
+    const trims = computeWallSegmentJointTrims(segments, cornerModels, mode)
 
     for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
       const segment = segments[segmentIndex] as any
@@ -815,25 +788,9 @@ export function createWallRenderer(options: WallRendererOptions) {
 
       wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
 
-      let trimStart = 0
-      let trimEnd = 0
-      if (manualTrimActive) {
-        const prev = segmentIndex > 0 ? (segments[segmentIndex - 1] as any) : null
-        const next = segmentIndex < segments.length - 1 ? (segments[segmentIndex + 1] as any) : null
-
-        const connectedPrev = prev && prev.end && segment.start
-          ? distanceSqXZRaw(prev.end as any, segment.start as any) <= WALL_SYNC_EPSILON
-          : false
-        const connectedNext = next && segment.end && next.start
-          ? distanceSqXZRaw(segment.end as any, next.start as any) <= WALL_SYNC_EPSILON
-          : false
-
-        const hasIncomingJoint = connectedPrev || (isClosedChain && segmentIndex === 0)
-        const hasOutgoingJoint = connectedNext || (isClosedChain && segmentIndex === segments.length - 1)
-
-        trimStart = hasIncomingJoint ? Math.max(0, trimOptions!.manual.start) : 0
-        trimEnd = hasOutgoingJoint ? Math.max(0, trimOptions!.manual.end) : 0
-      }
+      const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
+      const trimStart = Math.max(0, trim.start)
+      const trimEnd = Math.max(0, trim.end)
 
       if (trimStart > WALL_SYNC_EPSILON) {
         wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
@@ -894,9 +851,9 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
-    trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
+    cornerModels: WallCornerModelRule[] = [],
   ): WallLocalPlacement[] {
-    return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, trimOptions)
+    return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, cornerModels)
   }
 
   type WallCornerModelRule = NonNullable<WallComponentProps['cornerModels']>[number]
@@ -984,6 +941,90 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     return best ? best.rule : null
+  }
+
+  function computeWallSegmentJointTrims(
+    segments: WallRenderSegment[],
+    rules: WallCornerModelRule[],
+    mode: 'body' | 'head' | 'foot',
+  ): Array<{ start: number; end: number }> {
+    const trims = Array.from({ length: segments.length }, () => ({ start: 0, end: 0 }))
+    if (segments.length < 2 || !rules.length) {
+      return trims
+    }
+
+    const start = new THREE.Vector3()
+    const end = new THREE.Vector3()
+    const incoming = new THREE.Vector3()
+    const outgoing = new THREE.Vector3()
+
+    const applyTrimForPair = (aIndex: number, bIndex: number): void => {
+      const current = segments[aIndex]
+      const next = segments[bIndex]
+      if (!current || !next) {
+        return
+      }
+
+      start.set(current.end.x, current.end.y, current.end.z)
+      end.set(next.start.x, next.start.y, next.start.z)
+      if (distanceSqXZ(start, end) > WALL_SYNC_EPSILON) {
+        return
+      }
+
+      start.set(current.start.x, current.start.y, current.start.z)
+      end.set(current.end.x, current.end.y, current.end.z)
+      incoming.subVectors(end, start)
+      incoming.y = 0
+
+      start.set(next.start.x, next.start.y, next.start.z)
+      end.set(next.end.x, next.end.y, next.end.z)
+      outgoing.subVectors(end, start)
+      outgoing.y = 0
+
+      if (incoming.lengthSq() < WALL_SYNC_EPSILON || outgoing.lengthSq() < WALL_SYNC_EPSILON) {
+        return
+      }
+
+      incoming.normalize()
+      outgoing.normalize()
+
+      const dotInterior = THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1)
+      const angle = Math.acos(dotInterior)
+      if (!Number.isFinite(angle)) {
+        return
+      }
+
+      const rule = pickWallCornerRule(angle, rules, mode)
+      if (!rule) {
+        return
+      }
+
+      const rawStart = Number((rule as any)?.jointTrim?.start)
+      const rawEnd = Number((rule as any)?.jointTrim?.end)
+      const trimStart = Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0
+      const trimEnd = Number.isFinite(rawEnd) ? Math.max(0, rawEnd) : 0
+
+      if (trimEnd > 0) {
+        trims[aIndex]!.end = Math.max(trims[aIndex]!.end, trimEnd)
+      }
+      if (trimStart > 0) {
+        trims[bIndex]!.start = Math.max(trims[bIndex]!.start, trimStart)
+      }
+    }
+
+    for (let i = 0; i < segments.length - 1; i += 1) {
+      applyTrimForPair(i, i + 1)
+    }
+
+    const first = segments[0]!
+    const last = segments[segments.length - 1]!
+    start.set(last.end.x, last.end.y, last.end.z)
+    end.set(first.start.x, first.start.y, first.start.z)
+    if (distanceSqXZ(start, end) <= WALL_SYNC_EPSILON) {
+      applyTrimForPair(segments.length - 1, 0)
+    }
+
+    return trims
   }
 
   function computeWallJointLocalMatricesByAsset(
@@ -1350,8 +1391,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         width: source.width ?? baseProps.width,
         thickness: source.thickness ?? baseProps.thickness,
         smoothing: source.smoothing ?? baseProps.smoothing,
-        jointTrimMode: source.jointTrimMode ?? baseProps.jointTrimMode,
-        jointTrimManual: source.jointTrimManual ?? baseProps.jointTrimManual,
         isAirWall: source.isAirWall ?? baseProps.isAirWall,
         bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
         headAssetId: source.headAssetId ?? baseProps.headAssetId,
@@ -1416,8 +1455,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       ? {
         smoothing: normalizedProps.smoothing,
         cornerModels,
-        jointTrimMode: normalizedProps.jointTrimMode,
-        jointTrimManual: normalizedProps.jointTrimManual,
         bodyUvAxis: normalizedProps.bodyUvAxis,
         headUvAxis: normalizedProps.headUvAxis,
         footUvAxis: normalizedProps.footUvAxis,
@@ -1836,10 +1873,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -1875,10 +1909,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：沿墙段铺设，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {
@@ -1913,10 +1944,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, {
-            mode: wallProps.jointTrimMode,
-            manual: wallProps.jointTrimManual,
-          })
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, cornerModels)
           : []
         const buckets = bucketWallPlacementsByRepeatScale(placements)
         for (let i = 0; i < buckets.length; i += 1) {

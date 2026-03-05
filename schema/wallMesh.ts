@@ -40,6 +40,7 @@ export type WallCornerModelRule = {
   footAssetId: string | null
   angle: number
   tolerance: number
+  jointTrim: { start: number; end: number }
 
   /** Local positional offset (meters) applied to the body corner instance, in the model's local frame (Option A). */
   bodyOffsetLocal?: { x: number; y: number; z: number }
@@ -76,11 +77,6 @@ export type WallRenderOptions = {
   bodyUvAxis?: WallUvAxis
   headUvAxis?: WallUvAxis
   footUvAxis?: WallUvAxis
-
-  /** Joint trim strategy used to avoid overlaps between body tiles and corner models. */
-  jointTrimMode?: 'auto' | 'manual'
-  /** Manual trim distances (used when jointTrimMode === 'manual'). */
-  jointTrimManual?: { start: number; end: number }
 
   // Part orientations.
   bodyOrientation?: WallModelOrientation
@@ -422,8 +418,10 @@ function buildStretchedWallInstancesForSegs(
   template: InstancedAssetTemplate,
   mode: 'body' | 'head' | 'foot',
   orientation: WallModelOrientation,
+  rules: WallCornerModelRule[] = [],
 ): StretchedWallInstance[] {
   const instances: StretchedWallInstance[] = []
+  const trims = computeWallSegmentJointTrimForChain(segs, rules, mode)
 
   const localForward = writeWallLocalForward(new THREE.Vector3(), orientation.forwardAxis)
   const { tileLengthLocal, minAlongAxis } = resolveWallTemplateAlongAxis(template, orientation.forwardAxis)
@@ -442,7 +440,9 @@ function buildStretchedWallInstancesForSegs(
   const pos = new THREE.Vector3()
   const localMatrix = new THREE.Matrix4()
 
-  for (const seg of segs) {
+  for (let segmentIndex = 0; segmentIndex < segs.length; segmentIndex += 1) {
+    const seg = segs[segmentIndex]!
+    const trim = trims[segmentIndex] ?? { start: 0, end: 0 }
     start.set(seg.start.x, seg.start.y, seg.start.z)
     end.set(seg.end.x, seg.end.y, seg.end.z)
     dir.subVectors(end, start)
@@ -450,12 +450,20 @@ function buildStretchedWallInstancesForSegs(
     const length = dir.length()
     if (length <= WALL_INSTANCING_DIR_EPSILON) continue
 
+    const trimStart = Math.max(0, trim.start)
+    const trimEnd = Math.max(0, trim.end)
+    const trimmedLength = Math.max(0, length - trimStart - trimEnd)
+    if (trimmedLength <= WALL_INSTANCING_DIR_EPSILON) continue
+
     const bodyHeight = resolveWallBodyHeight(seg)
     const scaleY = mode === 'body' ? bodyHeight / templateHeight : 1
     // Stretch factor along the template's forward axis.
-    const stretchFactor = length / Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, tileLengthLocal)
+    const stretchFactor = trimmedLength / Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, tileLengthLocal)
 
     unitDir.copy(dir).multiplyScalar(1 / length)
+    if (trimStart > WALL_EPSILON) {
+      start.addScaledVector(unitDir, trimStart)
+    }
     quat.setFromUnitVectors(localForward, unitDir)
     if (orientation.yawDeg) {
       yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(orientation.yawDeg))
@@ -620,7 +628,11 @@ function pickWallCornerRule(
     | null = null
 
   for (const rule of rules) {
-    const rawAsset = mode === 'body' ? rule?.bodyAssetId : rule?.headAssetId
+    const rawAsset = mode === 'body'
+      ? rule?.bodyAssetId
+      : mode === 'head'
+        ? rule?.headAssetId
+        : rule?.footAssetId
     const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
     if (!assetId) {
       continue
@@ -656,6 +668,86 @@ function pickWallCornerRule(
   }
 
   return best ? best.rule : null
+}
+
+function computeWallSegmentJointTrimForChain(
+  segments: WallRenderSeg[],
+  rules: WallCornerModelRule[],
+  mode: 'body' | 'head' | 'foot',
+): Array<{ start: number; end: number }> {
+  const trims = Array.from({ length: segments.length }, () => ({ start: 0, end: 0 }))
+  if (segments.length < 2 || !rules.length) {
+    return trims
+  }
+
+  const start = new THREE.Vector3()
+  const end = new THREE.Vector3()
+  const incoming = new THREE.Vector3()
+  const outgoing = new THREE.Vector3()
+
+  const applyTrimForPair = (aIndex: number, bIndex: number) => {
+    const current = segments[aIndex]
+    const next = segments[bIndex]
+    if (!current || !next) {
+      return
+    }
+    const gapDx = next.start.x - current.end.x
+    const gapDz = next.start.z - current.end.z
+    if (gapDx * gapDx + gapDz * gapDz > WALL_EPSILON) {
+      return
+    }
+
+    start.set(current.start.x, current.start.y, current.start.z)
+    end.set(current.end.x, current.end.y, current.end.z)
+    incoming.subVectors(end, start)
+    incoming.y = 0
+
+    start.set(next.start.x, next.start.y, next.start.z)
+    end.set(next.end.x, next.end.y, next.end.z)
+    outgoing.subVectors(end, start)
+    outgoing.y = 0
+
+    if (incoming.lengthSq() < WALL_INSTANCING_DIR_EPSILON || outgoing.lengthSq() < WALL_INSTANCING_DIR_EPSILON) {
+      return
+    }
+    incoming.normalize()
+    outgoing.normalize()
+
+    const dotInterior = THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1)
+    const angle = Math.acos(dotInterior)
+    if (!Number.isFinite(angle)) {
+      return
+    }
+
+    const rule = pickWallCornerRule(angle, rules, mode)
+    if (!rule) {
+      return
+    }
+    const rawStart = Number((rule as any)?.jointTrim?.start)
+    const rawEnd = Number((rule as any)?.jointTrim?.end)
+    const trimStart = Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0
+    const trimEnd = Number.isFinite(rawEnd) ? Math.max(0, rawEnd) : 0
+    if (trimEnd > 0) {
+      trims[aIndex]!.end = Math.max(trims[aIndex]!.end, trimEnd)
+    }
+    if (trimStart > 0) {
+      trims[bIndex]!.start = Math.max(trims[bIndex]!.start, trimStart)
+    }
+  }
+
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    applyTrimForPair(i, i + 1)
+  }
+
+  const first = segments[0]!
+  const last = segments[segments.length - 1]!
+  const dx = first.start.x - last.end.x
+  const dz = first.start.z - last.end.z
+  if (dx * dx + dz * dz <= WALL_EPSILON) {
+    applyTrimForPair(segments.length - 1, 0)
+  }
+
+  return trims
 }
 
 function computeWallCornerInstanceMatricesByAsset(
@@ -1514,7 +1606,7 @@ function rebuildWallGroup(
     const resolvedBodyUvAxis = resolveWallUvAxisForTemplate(bodyTemplate, bodyOrientation, bodyUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation))
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, bodyTemplate, 'body', bodyOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
     const buckets = bucketizeWallInstancesByRepeatScale(instances)
     for (let i = 0; i < buckets.length; i += 1) {
@@ -1537,7 +1629,7 @@ function rebuildWallGroup(
     const resolvedHeadUvAxis = resolveWallUvAxisForTemplate(headTemplate, headOrientation, headUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation))
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, headTemplate, 'head', headOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
     const buckets = bucketizeWallInstancesByRepeatScale(instances)
     for (let i = 0; i < buckets.length; i += 1) {
@@ -1560,7 +1652,7 @@ function rebuildWallGroup(
     const resolvedFootUvAxis = resolveWallUvAxisForTemplate(footTemplate, footOrientation, footUvAxis)
     const instances: StretchedWallInstance[] = []
     for (const chainDef of chainDefinitions) {
-      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation))
+      instances.push(...buildStretchedWallInstancesForSegs(chainDef.segs, footTemplate, 'foot', footOrientation, Array.isArray(options.cornerModels) ? options.cornerModels : []))
     }
     const buckets = bucketizeWallInstancesByRepeatScale(instances)
     for (let i = 0; i < buckets.length; i += 1) {

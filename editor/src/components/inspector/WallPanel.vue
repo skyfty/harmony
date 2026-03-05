@@ -33,15 +33,7 @@ const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 const localSmoothing = ref<number>(WALL_DEFAULT_SMOOTHING)
 const localIsAirWall = ref<boolean>(false)
 
-const localJointTrimMode = ref<'auto' | 'manual'>('auto')
-const localJointTrimStart = ref<number>(0)
-const localJointTrimEnd = ref<number>(0)
 const jointTrimFeedbackMessage = ref<string | null>(null)
-
-const JOINT_TRIM_MODE_ITEMS: Array<{ title: string; value: 'auto' | 'manual' }> = [
-  { title: 'Auto', value: 'auto' },
-  { title: 'Manual', value: 'manual' },
-]
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -275,6 +267,13 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const bodyOffsetLocal = normalizeOffsetLocal((row as any)?.bodyOffsetLocal)
   const headOffsetLocal = normalizeOffsetLocal((row as any)?.headOffsetLocal)
   const footOffsetLocal = normalizeOffsetLocal((row as any)?.footOffsetLocal)
+  const rawJointTrim = (row as any)?.jointTrim
+  const trimStart = Number(rawJointTrim?.start)
+  const trimEnd = Number(rawJointTrim?.end)
+  const jointTrim = {
+    start: Number.isFinite(trimStart) ? Math.max(0, trimStart) : 0,
+    end: Number.isFinite(trimEnd) ? Math.max(0, trimEnd) : 0,
+  }
 
   return {
     bodyAssetId,
@@ -291,6 +290,7 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
     footYawDeg,
     angle,
     tolerance,
+    jointTrim,
   } as WallCornerModelRow
 }
 
@@ -320,6 +320,7 @@ function addCornerModel(): void {
     footYawDeg: 0,
     angle: 90,
     tolerance: 5,
+    jointTrim: { start: 0, end: 0 },
   } as any)]
   commitCornerModels(next)
 }
@@ -358,13 +359,6 @@ watch(
     localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
     localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
     localIsAirWall.value = Boolean((props as any).isAirWall)
-    localJointTrimMode.value = (props as any).jointTrimMode === 'manual' ? 'manual' : 'auto'
-    localJointTrimStart.value = Number.isFinite(Number((props as any).jointTrimManual?.start))
-      ? Math.max(0, Number((props as any).jointTrimManual.start))
-      : 0
-    localJointTrimEnd.value = Number.isFinite(Number((props as any).jointTrimManual?.end))
-      ? Math.max(0, Number((props as any).jointTrimManual.end))
-      : 0
     localSmoothing.value = Number.isFinite(props.smoothing)
       ? Math.min(1, Math.max(0, props.smoothing))
       : WALL_DEFAULT_SMOOTHING
@@ -374,37 +368,6 @@ watch(
   },
   { immediate: true, deep: true },
 )
-
-function applyJointTrimUpdate() {
-  const component = wallComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  if (isSyncingFromScene.value) {
-    return
-  }
-
-  const mode = localJointTrimMode.value === 'manual' ? 'manual' : 'auto'
-  const start = Math.max(0, Number(localJointTrimStart.value) || 0)
-  const end = Math.max(0, Number(localJointTrimEnd.value) || 0)
-
-  sceneStore.updateNodeComponentProps(nodeId, component.id, {
-    jointTrimMode: mode,
-    jointTrimManual: { start, end },
-  } as any)
-}
-
-// Apply updates immediately when user edits the Trim Start/End values.
-watch([
-  localJointTrimStart,
-  localJointTrimEnd,
-], ([start, end], [prevStart, prevEnd]) => {
-  if (isSyncingFromScene.value) return
-  // Avoid firing when values didn't change
-  if (Number(start) === Number(prevStart) && Number(end) === Number(prevEnd)) return
-  applyJointTrimUpdate()
-})
 
 function computeCachedAssetHorizontalRadius(assetId: string): number | null {
   const cached = getCachedModelObject(assetId)
@@ -429,31 +392,34 @@ function computeCachedAssetHorizontalRadius(assetId: string): number | null {
   return radius
 }
 
-function recommendJointTrim(): void {
+function recommendJointTrimForCorner(index: number): void {
   const component = wallComponent.value
   if (!component) {
     return
   }
   jointTrimFeedbackMessage.value = null
 
+  const target = cornerModels.value[index]
+  if (!target) {
+    return
+  }
+
   const cornerAssetIds = new Set<string>()
-  for (const rule of cornerModels.value) {
-    const bodyId = (rule as any)?.bodyAssetId
-    const headId = (rule as any)?.headAssetId
-    const footId = (rule as any)?.footAssetId
-    if (typeof bodyId === 'string' && bodyId.trim().length) {
-      cornerAssetIds.add(bodyId.trim())
-    }
-    if (typeof headId === 'string' && headId.trim().length) {
-      cornerAssetIds.add(headId.trim())
-    }
-    if (typeof footId === 'string' && footId.trim().length) {
-      cornerAssetIds.add(footId.trim())
-    }
+  const bodyId = (target as any)?.bodyAssetId
+  const headId = (target as any)?.headAssetId
+  const footId = (target as any)?.footAssetId
+  if (typeof bodyId === 'string' && bodyId.trim().length) {
+    cornerAssetIds.add(bodyId.trim())
+  }
+  if (typeof headId === 'string' && headId.trim().length) {
+    cornerAssetIds.add(headId.trim())
+  }
+  if (typeof footId === 'string' && footId.trim().length) {
+    cornerAssetIds.add(footId.trim())
   }
 
   if (cornerAssetIds.size === 0) {
-    jointTrimFeedbackMessage.value = 'No corner models configured; nothing to recommend.'
+    jointTrimFeedbackMessage.value = `Corner #${index + 1}: no model asset configured; nothing to recommend.`
     return
   }
 
@@ -481,14 +447,11 @@ function recommendJointTrim(): void {
   recommended = Math.max(0, Math.min(5, recommended))
   recommended = Math.round(recommended * 100) / 100
 
-  localJointTrimMode.value = 'manual'
-  localJointTrimStart.value = recommended
-  localJointTrimEnd.value = recommended
-  applyJointTrimUpdate()
+  updateCornerModel(index, { jointTrim: { start: recommended, end: recommended } } as any)
 
   jointTrimFeedbackMessage.value = cachedCount > 0
-    ? `Recommended from ${cachedCount} cached corner model(s).`
-    : 'Corner models not loaded yet; used a conservative fallback.'
+    ? `Corner #${index + 1}: recommended from ${cachedCount} cached model(s).`
+    : `Corner #${index + 1}: models not loaded; used a conservative fallback.`
 }
 
 watch(selectedNode, () => {
@@ -1558,64 +1521,6 @@ function applyAirWallUpdate(rawValue: unknown) {
           </div>
 
         <div class="corner-models-panel">
-          <div class="wall-corner-models">
-
-          <div class="wall-joint-trim-actions">
-            <v-select
-              density="compact"
-              variant="underlined"
-              label="Joint Trim"
-              :items="JOINT_TRIM_MODE_ITEMS"
-              item-title="title"
-              item-value="value"
-              hide-details
-              v-model="localJointTrimMode"
-              @update:modelValue="applyJointTrimUpdate"
-            />
-            <v-btn
-              v-if="wallComponent"
-              density="compact"
-              variant="text"
-              size="small"
-              @click="recommendJointTrim"
-            >
-              Recommend
-            </v-btn>
-          </div>
-                    <div class="wall-joint-trim-row">
-                      </div>
-          <div class="wall-joint-trim-row">
-            <v-text-field
-              v-model.number="localJointTrimStart"
-              label="Trim Start (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              class="slider-input"
-              step="0.01"
-              min="0"
-              :disabled="localJointTrimMode !== 'manual'"
-              @blur="applyJointTrimUpdate"
-              inputmode="decimal"
-              @keydown.enter.prevent="applyJointTrimUpdate"
-            />
-
-            <v-text-field
-              v-model.number="localJointTrimEnd"
-              label="Trim End (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              class="slider-input"
-              step="0.01"
-              min="0"
-              :disabled="localJointTrimMode !== 'manual'"
-              @blur="applyJointTrimUpdate"
-              inputmode="decimal"
-              @keydown.enter.prevent="applyJointTrimUpdate"
-            />
-          </div>
-          </div>
         <div class="wall-corner-models">
           <div class="wall-corner-header">
             <div class="wall-corner-title">Corner Models</div>
@@ -1673,7 +1578,44 @@ function applyAirWallUpdate(rawValue: unknown) {
                     @update:modelValue="(value) => updateCornerModel(index, { tolerance: Number(value) } as any)"
                     @blur="() => updateCornerModel(index, {})"
                   />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Trim Start (m)"
+                    :model-value="(entry as any).jointTrim?.start ?? 0"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { jointTrim: { ...((entry as any).jointTrim ?? { start: 0, end: 0 }), start: Math.max(0, Number(value) || 0) } } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
+                  <v-text-field
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    label="Trim End (m)"
+                    :model-value="(entry as any).jointTrim?.end ?? 0"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                    hide-details
+                    @update:modelValue="(value) => updateCornerModel(index, { jointTrim: { ...((entry as any).jointTrim ?? { start: 0, end: 0 }), end: Math.max(0, Number(value) || 0) } } as any)"
+                    @blur="() => updateCornerModel(index, {})"
+                  />
                 </div>
+                <div class="wall-joint-trim-actions">
+                  <v-btn
+                    density="compact"
+                    variant="text"
+                    size="small"
+                    @click="recommendJointTrimForCorner(index)"
+                  >
+                    Recommend Trim
+                  </v-btn>
+                </div>
+                <p v-if="jointTrimFeedbackMessage" class="asset-feedback">{{ jointTrimFeedbackMessage }}</p>
               </div>
             </div>
             <div class="wall-corner-model-row wall-corner-model-row--body">

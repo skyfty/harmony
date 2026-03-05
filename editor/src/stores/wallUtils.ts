@@ -260,8 +260,6 @@ export function applyWallComponentPropsToNode(
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
           deps.updateWallGroup(child, node.dynamicMesh, {
             smoothing: resolveWallSmoothing(node),
-            jointTrimMode: normalized.jointTrimMode,
-            jointTrimManual: normalized.jointTrimManual,
           } as any)
         }
         return

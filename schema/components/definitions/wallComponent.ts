@@ -14,9 +14,7 @@ export const WALL_DEFAULT_SMOOTHING = 0.05
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
-export type WallJointTrimMode = 'auto' | 'manual'
-
-export type WallJointTrimManual = {
+export type WallJointTrim = {
   /** Inset distance applied at the start side of an interior joint (meters). */
   start: number
   /** Inset distance applied at the end side of an interior joint (meters). */
@@ -65,6 +63,8 @@ export type WallCornerModelRule = {
   angle: number
   /** Tolerance range (degrees). Model is only selected if actual interior angle is within ±tolerance of target angle. */
   tolerance: number
+  /** Per-angle joint trim distances applied to segments connected by this corner rule. */
+  jointTrim: WallJointTrim
 }
 
 export interface WallComponentProps {
@@ -72,10 +72,6 @@ export interface WallComponentProps {
   width: number
   thickness: number
   smoothing: number
-  /** Joint trim strategy used to avoid overlaps between body tiles and corner models. */
-  jointTrimMode: WallJointTrimMode
-  /** Manual trim distances (used when jointTrimMode === 'manual'). */
-  jointTrimManual: WallJointTrimManual
   /**
    * When enabled, the wall is rendered as an invisible "air wall".
    * The mesh structure should still exist for rigidbody collision generation.
@@ -191,22 +187,15 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     throw new Error('WallComponentProps legacy modelPlacementMode "repeatInstances" is no longer supported')
   }
 
-  const requiredJointTrimMode = (value: unknown): WallJointTrimMode => {
-    if (value === 'auto' || value === 'manual') {
-      return value
-    }
-    throw new Error('WallComponentProps missing/invalid jointTrimMode')
-  }
-
-  const requiredJointTrimManual = (value: unknown): WallJointTrimManual => {
+  const requiredJointTrim = (value: unknown, label: string): WallJointTrim => {
     if (!value || typeof value !== 'object') {
-      throw new Error('WallComponentProps missing/invalid jointTrimManual')
+      throw new Error(`WallComponentProps missing/invalid ${label}`)
     }
     const record = value as Record<string, unknown>
     const rawStart = typeof record.start === 'number' ? record.start : Number(record.start)
     const rawEnd = typeof record.end === 'number' ? record.end : Number(record.end)
     if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) {
-      throw new Error('WallComponentProps missing/invalid jointTrimManual.start/end')
+      throw new Error(`WallComponentProps missing/invalid ${label}.start/end`)
     }
     return {
       start: Math.max(0, rawStart),
@@ -279,13 +268,11 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
       footYawDeg: requiredYawDeg(record.footYawDeg, `cornerModels[${index}].footYawDeg`),
       angle: normalizeAngle(record.angle),
       tolerance: normalizeTolerance(record.tolerance),
+      jointTrim: requiredJointTrim(record.jointTrim, `cornerModels[${index}].jointTrim`),
     } satisfies WallCornerModelRule
   })
 
   const normalizedIsAirWall = requiredBoolean('isAirWall')
-
-  const jointTrimMode = requiredJointTrimMode((props as any)?.jointTrimMode)
-  const jointTrimManual = requiredJointTrimManual((props as any)?.jointTrimManual)
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
   const headAssetId = bodyAssetId ? requiredAssetIdOrNull('headAssetId') : null
@@ -310,8 +297,6 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     width,
     thickness,
     smoothing,
-    jointTrimMode,
-    jointTrimManual,
     isAirWall: normalizedIsAirWall,
     bodyAssetId,
     bodyOrientation,
@@ -339,8 +324,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
       smoothing: WALL_DEFAULT_SMOOTHING,
-      jointTrimMode: 'auto',
-      jointTrimManual: { start: 0, end: 0 },
       isAirWall: false,
       bodyAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
@@ -366,8 +349,6 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     width: base?.width,
     thickness: base?.thickness,
     smoothing: WALL_DEFAULT_SMOOTHING,
-    jointTrimMode: 'auto',
-    jointTrimManual: { start: 0, end: 0 },
     isAirWall: false,
     bodyAssetId: null,
     headAssetId: null,
@@ -394,11 +375,6 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     width: props.width,
     thickness: props.thickness,
     smoothing: props.smoothing,
-    jointTrimMode: props.jointTrimMode,
-    jointTrimManual: {
-      start: props.jointTrimManual.start,
-      end: props.jointTrimManual.end,
-    },
     isAirWall: Boolean(props.isAirWall),
     bodyAssetId: props.bodyAssetId ?? null,
     bodyOrientation: {
@@ -461,6 +437,10 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
         footYawDeg: entry.footYawDeg,
         angle: typeof (entry as any)?.angle === 'number' ? (entry as any).angle : Number((entry as any)?.angle),
         tolerance: typeof (entry as any)?.tolerance === 'number' ? (entry as any).tolerance : Number((entry as any)?.tolerance),
+        jointTrim: {
+          start: Math.max(0, Number((entry as any)?.jointTrim?.start) || 0),
+          end: Math.max(0, Number((entry as any)?.jointTrim?.end) || 0),
+        },
       }))
       : [],
   }
@@ -527,8 +507,6 @@ export function createWallComponentState(
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
     smoothing: overrides?.smoothing ?? defaults.smoothing,
-    jointTrimMode: (overrides as any)?.jointTrimMode ?? defaults.jointTrimMode,
-    jointTrimManual: (overrides as any)?.jointTrimManual ?? defaults.jointTrimManual,
     isAirWall: overrides?.isAirWall ?? defaults.isAirWall,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,

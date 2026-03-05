@@ -11649,8 +11649,6 @@ export const useSceneStore = defineStore('scene', {
       if (runtime) {
         updateWallGroup(runtime, build.definition, {
           smoothing: resolveWallSmoothing(node),
-          jointTrimMode: nextProps.jointTrimMode,
-          jointTrimManual: nextProps.jointTrimManual,
         } as any)
       }
       return true
@@ -11985,8 +11983,6 @@ export const useSceneStore = defineStore('scene', {
         const hasSmoothing = Object.prototype.hasOwnProperty.call(typedPatch, 'smoothing')
         const hasIsAirWall = Object.prototype.hasOwnProperty.call(typedPatch, 'isAirWall')
         const hasCornerModels = Object.prototype.hasOwnProperty.call(typedPatch, 'cornerModels')
-        const hasJointTrimMode = Object.prototype.hasOwnProperty.call(typedPatch, 'jointTrimMode')
-        const hasJointTrimManual = Object.prototype.hasOwnProperty.call(typedPatch, 'jointTrimManual')
 
         const orientationsEqual = (a: any, b: any): boolean => {
           const axisA = typeof a?.forwardAxis === 'string' ? a.forwardAxis : null
@@ -12052,6 +12048,10 @@ export const useSceneStore = defineStore('scene', {
             const headOffsetB = readOffset(entryB, 'headOffsetLocal')
             const footOffsetA = readOffset(entryA, 'footOffsetLocal')
             const footOffsetB = readOffset(entryB, 'footOffsetLocal')
+            const trimStartA = typeof entryA?.jointTrim?.start === 'number' ? entryA.jointTrim.start : Number(entryA?.jointTrim?.start)
+            const trimStartB = typeof entryB?.jointTrim?.start === 'number' ? entryB.jointTrim.start : Number(entryB?.jointTrim?.start)
+            const trimEndA = typeof entryA?.jointTrim?.end === 'number' ? entryA.jointTrim.end : Number(entryA?.jointTrim?.end)
+            const trimEndB = typeof entryB?.jointTrim?.end === 'number' ? entryB.jointTrim.end : Number(entryB?.jointTrim?.end)
 
             if ((bodyAssetA ?? null) !== (bodyAssetB ?? null)) {
               return false
@@ -12097,6 +12097,12 @@ export const useSceneStore = defineStore('scene', {
             if (Math.abs(footOffsetA.x - footOffsetB.x) > 1e-6 || Math.abs(footOffsetA.y - footOffsetB.y) > 1e-6 || Math.abs(footOffsetA.z - footOffsetB.z) > 1e-6) {
               return false
             }
+            if (!Number.isFinite(trimStartA) || !Number.isFinite(trimStartB) || Math.abs(trimStartA - trimStartB) > 1e-6) {
+              return false
+            }
+            if (!Number.isFinite(trimEndA) || !Number.isFinite(trimEndB) || Math.abs(trimEndA - trimEndB) > 1e-6) {
+              return false
+            }
           }
           return true
         }
@@ -12108,12 +12114,6 @@ export const useSceneStore = defineStore('scene', {
           smoothing: hasSmoothing
             ? (typedPatch.smoothing as number | undefined)
             : currentProps.smoothing,
-          jointTrimMode: hasJointTrimMode
-            ? (typedPatch.jointTrimMode as any)
-            : currentProps.jointTrimMode,
-          jointTrimManual: hasJointTrimManual
-            ? (typedPatch.jointTrimManual as any)
-            : currentProps.jointTrimManual,
           isAirWall: hasIsAirWall
             ? (typedPatch.isAirWall as boolean | undefined)
             : currentProps.isAirWall,
@@ -12172,9 +12172,6 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.width - merged.width) <= 1e-4 &&
           Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
           Math.abs(currentProps.smoothing - merged.smoothing) <= 1e-6 &&
-          (currentProps.jointTrimMode ?? 'auto') === (merged.jointTrimMode ?? 'auto') &&
-          Math.abs((currentProps.jointTrimManual?.start ?? 0) - (merged.jointTrimManual?.start ?? 0)) <= 1e-6 &&
-          Math.abs((currentProps.jointTrimManual?.end ?? 0) - (merged.jointTrimManual?.end ?? 0)) <= 1e-6 &&
           currentProps.isAirWall === merged.isAirWall &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
