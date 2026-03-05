@@ -222,19 +222,23 @@ export function createWallPreviewRenderer(options: {
       return
     }
 
-    const segments: WallPreviewSegment[] = [...session.segments]
-    if (session.dragStart && session.dragEnd) {
-      segments.push({ start: session.dragStart.clone(), end: session.dragEnd.clone() })
-    }
-
     const hasCommittedNode = !!session.nodeId
     const hasActiveDrag = !!session.dragStart && !!session.dragEnd
+
     if (hasCommittedNode && !hasActiveDrag) {
       if (session.previewGroup) {
         clear(session)
       }
       signature = null
       return
+    }
+
+    // 编辑已有节点时，仅预览当前拖拽的新线段，不重复已提交的线段。
+    // 已提交线段由 syncWallContainer 负责渲染（程序化或预置配置的实例化模型），
+    // 若将 session.segments 也纳入预览，会与预置配置渲染出的模型网格产生重叠。
+    const segments: WallPreviewSegment[] = hasCommittedNode ? [] : [...session.segments]
+    if (session.dragStart && session.dragEnd) {
+      segments.push({ start: session.dragStart.clone(), end: session.dragEnd.clone() })
     }
 
     if (!segments.length) {

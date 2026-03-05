@@ -1340,6 +1340,7 @@ function rebuildWallGroup(
     mesh.userData[MATERIAL_CONFIG_ID_KEY] = rawMaterialId || null
     mesh.castShadow = true
     mesh.receiveShadow = true
+    mesh.visible = !modelModeEnabled
     group.add(mesh)
   }
 

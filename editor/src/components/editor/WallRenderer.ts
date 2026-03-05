@@ -231,7 +231,7 @@ function splitWallSegmentsIntoChains(segments: WallRenderSegment[]): WallRenderS
     if (prev) {
       wallSyncStartHelper.set(prev.end.x, prev.end.y, prev.end.z)
       wallSyncEndHelper.set(seg.start.x, seg.start.y, seg.start.z)
-      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > 1e-8) {
+      if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > WALL_SYNC_EPSILON) {
         if (current.length) {
           chains.push(current)
         }
@@ -1239,11 +1239,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       bucket.push(seg)
     }
 
-    const sourceChainsArray = Array.isArray(definition.chains) ? definition.chains : []
-
-    for (const [chainIndex, segs] of segsByChainIndex) {
-      const originalChain = sourceChainsArray[chainIndex]
-      const originalClosed = Boolean(originalChain?.closed)
+    for (const segs of segsByChainIndex.values()) {
 
       for (let i = 0; i < segs.length - 1; i += 1) {
         const current = segs[i]!
@@ -1252,7 +1248,7 @@ export function createWallRenderer(options: WallRendererOptions) {
         // Skip pairs that straddle an opening gap (spatially disconnected).
         wallSyncStartHelper.set(current.end.x, current.end.y, current.end.z)
         wallSyncEndHelper.set(next.start.x, next.start.y, next.start.z)
-        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > 1e-8) {
+        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) > WALL_SYNC_EPSILON) {
           continue
         }
 
@@ -1260,16 +1256,14 @@ export function createWallRenderer(options: WallRendererOptions) {
         buildCorner(current, next, wallSyncPosHelper)
       }
 
-      // For a closed original chain, verify whether the wrap-around seam corner
-      // still exists after openings. It exists when last.end ≈ first.start in world space.
-      // This correctly handles the case where a single opening splits a closed chain
-      // into two sub-arcs: the seam corner (arc=0 of the chain) must still be placed.
-      if (originalClosed && segs.length >= 1) {
+      // Geometric closed-loop seam: if last.end ≈ first.start in world space,
+      // place the wrap-around seam corner even when source chain metadata is stale.
+      if (segs.length >= 1) {
         const first = segs[0]!
         const last = segs[segs.length - 1]!
         wallSyncStartHelper.set(last.end.x, last.end.y, last.end.z)
         wallSyncEndHelper.set(first.start.x, first.start.y, first.start.z)
-        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8) {
+        if (distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= WALL_SYNC_EPSILON) {
           wallSyncPosHelper.copy(wallSyncStartHelper)
           buildCorner(last, first, wallSyncPosHelper)
         }
@@ -1320,7 +1314,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const lastSeg = chain[chain.length - 1]!
       wallSyncStartHelper.set(firstSeg.start.x, firstSeg.start.y, firstSeg.start.z)
       wallSyncEndHelper.set(lastSeg.end.x, lastSeg.end.y, lastSeg.end.z)
-      const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= 1e-8
+      const closed = distanceSqXZ(wallSyncStartHelper, wallSyncEndHelper) <= WALL_SYNC_EPSILON
       if (closed) {
         continue
       }
