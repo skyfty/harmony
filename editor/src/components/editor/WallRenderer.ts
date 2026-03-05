@@ -1818,6 +1818,9 @@ export function createWallRenderer(options: WallRendererOptions) {
     userData.instancedAssetId = primaryAssetId
     userData.dynamicMeshType = 'Wall'
 
+    // Rebuild committed wall instances from scratch so bucket/variant changes never leave stale bindings.
+    releaseModelInstancesForNode(node.id)
+
     // 计算实例化整体 bounds（用于编辑器拾取/框选等）。
     // 这里会将每个实例的局部包围盒（模型 boundingBox）通过 localMatrix 变换后并入大 bbox。
     wallInstancedBoundsBox.makeEmpty()
@@ -1831,30 +1834,36 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (bodyAssetId) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
-        // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
+        // body：沿每段墙铺 tile，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
           ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        const perInstanceUvScaleU = placements.map((entry) => entry.uvScaleU)
-        if (localMatrices.length > 0) {
-          // bounds 合并：将每个实例的变换 bbox 并入整体 bbox。
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(bodyAssetId, 'body', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(bodyAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           for (const localMatrix of localMatrices) {
             expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
             hasWallBounds = true
           }
-          // 将局部矩阵提交给 continuousInstancedModel（底层会生成/更新实例化绑定）。
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
-            assetId: bodyAssetId,
+            assetId: variantAssetId,
             object: container,
             localMatrices,
-            perInstanceUvScaleU,
-            bindingIdPrefix: `wall-body:${node.id}:`,
-            useNodeIdForIndex0: true,
+            bindingIdPrefix: `wall-body:${node.id}:${i}:`,
+            useNodeIdForIndex0: i === 0,
           })
           hasBindings = true
         }
@@ -1864,27 +1873,35 @@ export function createWallRenderer(options: WallRendererOptions) {
     if (headAssetId) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
-        // head：通常用于墙顶装饰/压顶，沿墙段铺设。
+        // head：沿墙段铺设，并按 repeat 比例分桶到派生资产。
         const placements = wallProps
           ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        const perInstanceUvScaleU = placements.map((entry) => entry.uvScaleU)
-        if (localMatrices.length > 0) {
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(headAssetId, 'head', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(headAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           for (const localMatrix of localMatrices) {
             expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
             hasWallBounds = true
           }
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
-            assetId: headAssetId,
+            assetId: variantAssetId,
             object: container,
             localMatrices,
-            perInstanceUvScaleU,
-            bindingIdPrefix: `wall-head:${node.id}:`,
+            bindingIdPrefix: `wall-head:${node.id}:${i}:`,
             useNodeIdForIndex0: false,
           })
           hasBindings = true
@@ -1901,20 +1918,28 @@ export function createWallRenderer(options: WallRendererOptions) {
             manual: wallProps.jointTrimManual,
           })
           : []
-        const localMatrices = placements.map((entry) => entry.matrix)
-        const perInstanceUvScaleU = placements.map((entry) => entry.uvScaleU)
-        if (localMatrices.length > 0) {
+        const buckets = bucketWallPlacementsByRepeatScale(placements)
+        for (let i = 0; i < buckets.length; i += 1) {
+          const bucket = buckets[i]!
+          const variantAssetId = buildWallRepeatVariantAssetId(footAssetId, 'foot', bucket.repeatScaleU)
+          const variant = getOrCreateModelObjectRepeatVariant(footAssetId, variantAssetId, bucket.repeatScaleU)
+          if (!variant) {
+            continue
+          }
+          const localMatrices = bucket.placements.map((entry) => entry.matrix)
+          if (!localMatrices.length) {
+            continue
+          }
           for (const localMatrix of localMatrices) {
             expandBoxByTransformedBoundingBox(wallInstancedBoundsBox, group.boundingBox, localMatrix)
             hasWallBounds = true
           }
           syncInstancedModelCommittedLocalMatrices({
             nodeId: node.id,
-            assetId: footAssetId,
+            assetId: variantAssetId,
             object: container,
             localMatrices,
-            perInstanceUvScaleU,
-            bindingIdPrefix: `wall-foot:${node.id}:`,
+            bindingIdPrefix: `wall-foot:${node.id}:${i}:`,
             useNodeIdForIndex0: false,
           })
           hasBindings = true
