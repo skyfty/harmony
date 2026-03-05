@@ -193,7 +193,7 @@ import {
   WALL_ENDPOINT_HANDLE_GROUP_NAME,
   WALL_ENDPOINT_HANDLE_Y_OFFSET,
 } from './WallEndpointRenderer'
-import { disposeWallPreviewGroup } from './wallPreviewGroupUtils'
+import { applyWallPreviewStyling, disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import {
   createFloorCircleHandleRenderer,
@@ -253,6 +253,7 @@ import { useSnapController, type VertexSnapResult, type PlacementSnapResult } fr
 import { createPickProxyManager } from './PickProxyManager'
 import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer,applyAirWallVisualToWallGroup } from './WallRenderer'
+import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
 import { createDirectionalLightTargetHandleManager } from './DirectionalLightTargetHandle'
 import { lockDirectionalLightTargetWorldPosition, syncLightFromNodeDuringDrag } from './realtimeLightSync'
 import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
@@ -1696,6 +1697,48 @@ const wallRenderer = createWallRenderer({
   ensureInstancedPickProxy,
   removeInstancedPickProxy,
 })
+
+function syncWallPreviewGroupForEditor(options: {
+  previewGroup: THREE.Group | null
+  definition: WallDynamicMesh
+  nodeId: string | null
+  previewKey: string
+  wallProps?: Partial<WallComponentProps> | WallComponentProps | null
+}): THREE.Group {
+  const nodeId = typeof options.nodeId === 'string' ? options.nodeId.trim() : ''
+  const node = nodeId ? findSceneNode(sceneStore.nodes, nodeId) : null
+  const wallComponent = node?.components?.[WALL_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WallComponentProps>
+    | undefined
+  const wallProps = options.wallProps ?? wallComponent?.props ?? null
+
+  const resolved = wallRenderer.resolveWallPreviewRenderData({
+    definition: options.definition,
+    wallProps,
+    nodeId: node?.id ?? null,
+    previewKey: options.previewKey,
+  })
+
+  const group = options.previewGroup
+    ? options.previewGroup
+    : createWallRenderGroup(options.definition, resolved.assets, resolved.renderOptions)
+
+  if (!options.previewGroup) {
+    group.userData.isWallPreview = true
+  } else {
+    group.userData.wallRenderAssets = resolved.assets
+    updateWallGroup(group, options.definition, resolved.renderOptions)
+  }
+
+  applyWallPreviewStyling(group)
+  applyAirWallVisualToWallGroup(group, resolved.isAirWall)
+
+  if (!rootGroup.children.includes(group)) {
+    rootGroup.add(group)
+  }
+
+  return group
+}
 
 // (gesture state moved into `pointerInteraction`)
 let instancedEraseDragState: InstancedEraseDragState | null = null
@@ -4136,6 +4179,7 @@ const wallBuildTool = createWallBuildTool({
     presetAssetId: wallBrushPresetAssetId.value,
     presetData: wallBrushPresetData.value,
   }),
+  resolveWallPreviewRenderData: (params) => wallRenderer.resolveWallPreviewRenderData(params),
 })
 
 type WallPresetData = import('@/utils/wallPreset').WallPresetData
@@ -9861,7 +9905,13 @@ function handlePointerMove(event: PointerEvent) {
 
     camera,
     floorBuildShape: floorBuildShape.value,
-    rootGroup,
+    syncWallPreviewGroup: ({ previewGroup, definition, nodeId, previewKey }) =>
+      syncWallPreviewGroupForEditor({
+        previewGroup,
+        definition,
+        nodeId,
+        previewKey,
+      }),
     resolveRoadRenderOptionsForNodeId,
     updateRoadGroup,
 

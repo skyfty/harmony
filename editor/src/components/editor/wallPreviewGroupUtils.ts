@@ -207,7 +207,7 @@ export function applyWallPreviewStyling(group: THREE.Group) {
     }
     const material = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean }
     if ('opacity' in material) {
-      material.opacity = 0.45
+      material.opacity = 0.9
       material.transparent = true
     }
     mesh.layers.enableAll()

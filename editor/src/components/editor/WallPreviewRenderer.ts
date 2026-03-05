@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import type { WallDynamicMesh, WallChain } from '@schema'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
+import type { WallComponentProps } from '@schema/components'
+import type { WallPreviewRenderData } from './WallRenderer'
+import { applyAirWallVisualToWallGroup } from './WallRenderer'
 
 export type WallPreviewSegment = {
   start: THREE.Vector3
@@ -14,6 +17,7 @@ export type WallPreviewSession = {
   previewGroup: THREE.Group | null
   nodeId: string | null
   dimensions: { height: number; width: number; thickness: number }
+  wallRenderProps: Partial<WallComponentProps> | WallComponentProps | null
 }
 
 export type WallPreviewRenderer = {
@@ -87,7 +91,7 @@ function applyWallPreviewStyling(group: THREE.Group) {
     }
     const material = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean }
     if ('opacity' in material) {
-      material.opacity = 0.45
+      material.opacity = 0.9
       material.transparent = true
     }
     mesh.layers.enableAll()
@@ -187,6 +191,12 @@ export function createWallPreviewRenderer(options: {
     width?: number
     thickness?: number
   }) => { height: number; width: number; thickness: number }
+  resolveWallPreviewRenderData?: (params: {
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    nodeId?: string | null
+    previewKey: string
+  }) => WallPreviewRenderData
 }): WallPreviewRenderer {
   let needsSync = false
   let signature: string | null = null
@@ -244,27 +254,66 @@ export function createWallPreviewRenderer(options: {
       return
     }
 
-    const nextSignature = computeWallPreviewSignature(segments, session.dimensions)
+    const resolvedRender = options.resolveWallPreviewRenderData
+      ? options.resolveWallPreviewRenderData({
+        definition: build.definition,
+        wallProps: session.wallRenderProps,
+        nodeId: session.nodeId,
+        previewKey: session.nodeId ?? 'wall-build-draft',
+      })
+      : null
+
+    const renderSignature = resolvedRender
+      ? JSON.stringify({
+        isAirWall: resolvedRender.isAirWall,
+        wantsInstancing: resolvedRender.wantsInstancing,
+        hasMissingAssets: resolvedRender.hasMissingAssets,
+        body: Boolean(resolvedRender.assets.bodyObject),
+        head: Boolean(resolvedRender.assets.headObject),
+        foot: Boolean(resolvedRender.assets.footObject),
+        bodyCap: Boolean(resolvedRender.assets.bodyEndCapObject),
+        headCap: Boolean(resolvedRender.assets.headEndCapObject),
+        footCap: Boolean(resolvedRender.assets.footEndCapObject),
+        bodyCorners: Object.keys(resolvedRender.assets.bodyCornerObjectsByAssetId ?? {}).sort(),
+        headCorners: Object.keys(resolvedRender.assets.headCornerObjectsByAssetId ?? {}).sort(),
+        footCorners: Object.keys(resolvedRender.assets.footCornerObjectsByAssetId ?? {}).sort(),
+        smoothing: resolvedRender.renderOptions.smoothing ?? 0,
+      })
+      : 'default'
+
+    const nextSignature = `${computeWallPreviewSignature(segments, session.dimensions)}|${renderSignature}`
     if (nextSignature === signature) {
+      if (resolvedRender?.hasMissingAssets) {
+        needsSync = true
+      }
       return
     }
     signature = nextSignature
 
     if (!session.previewGroup) {
-      const preview = createWallGroup(build.definition)
+      const preview = createWallRenderGroup(build.definition, resolvedRender?.assets ?? {}, resolvedRender?.renderOptions ?? {})
       applyWallPreviewStyling(preview)
+      applyAirWallVisualToWallGroup(preview, Boolean(resolvedRender?.isAirWall))
       preview.userData.isWallPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
-      updateWallGroup(session.previewGroup, build.definition)
+      if (resolvedRender) {
+        session.previewGroup.userData.wallRenderAssets = resolvedRender.assets
+      }
+      updateWallGroup(session.previewGroup, build.definition, resolvedRender?.renderOptions ?? {})
       applyWallPreviewStyling(session.previewGroup)
+      applyAirWallVisualToWallGroup(session.previewGroup, Boolean(resolvedRender?.isAirWall))
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)
       }
     }
 
     session.previewGroup!.position.copy(build.center)
+
+    if (resolvedRender?.hasMissingAssets) {
+      needsSync = true
+    }
   }
 
   return {

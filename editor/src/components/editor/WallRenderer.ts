@@ -15,9 +15,19 @@ import {
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
-import { createWallGroup, updateWallGroup, type WallRenderOptions } from '@schema/wallMesh'
+import {
+  createWallGroup,
+  updateWallGroup,
+  type WallRenderAssetObjects,
+  type WallRenderOptions,
+} from '@schema/wallMesh'
 import { compileWallSegmentsFromDefinition, type WallRenderSegment } from '@schema/wallLayout'
-import { WALL_COMPONENT_TYPE, clampWallProps, type WallComponentProps } from '@schema/components'
+import {
+  WALL_COMPONENT_TYPE,
+  clampWallProps,
+  resolveWallComponentPropsFromMesh,
+  type WallComponentProps,
+} from '@schema/components'
 import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
 const AIR_WALL_OPACITY = 0.35
@@ -109,6 +119,14 @@ type WallRendererOptions = {
   getObjectById: (nodeId: string) => THREE.Object3D | null
   ensureInstancedPickProxy: (container: THREE.Object3D, node: SceneNode) => void
   removeInstancedPickProxy: (container: THREE.Object3D) => void
+}
+
+export type WallPreviewRenderData = {
+  assets: WallRenderAssetObjects
+  renderOptions: WallRenderOptions
+  isAirWall: boolean
+  wantsInstancing: boolean
+  hasMissingAssets: boolean
 }
 
 function disposeWallGroupResources(group: THREE.Group): void {
@@ -1410,6 +1428,191 @@ export function createWallRenderer(options: WallRendererOptions) {
     wallModelRequestCache.set(assetId, promise)
   }
 
+  function resolveWallPreviewRenderData(params: {
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    nodeId?: string | null
+    previewKey: string
+  }): WallPreviewRenderData {
+    const normalizedProps = (() => {
+      if (!params.wallProps) {
+        return null
+      }
+
+      const baseProps = resolveWallComponentPropsFromMesh(params.definition)
+      const source = params.wallProps as Partial<WallComponentProps>
+      const sourceAny = source as Record<string, unknown>
+
+      return clampWallProps({
+        height: source.height ?? baseProps.height,
+        width: source.width ?? baseProps.width,
+        thickness: source.thickness ?? baseProps.thickness,
+        smoothing: source.smoothing ?? baseProps.smoothing,
+        modelPlacementMode: source.modelPlacementMode ?? baseProps.modelPlacementMode,
+        jointTrimMode: source.jointTrimMode ?? baseProps.jointTrimMode,
+        jointTrimManual: source.jointTrimManual ?? baseProps.jointTrimManual,
+        isAirWall: source.isAirWall ?? baseProps.isAirWall,
+        bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
+        headAssetId: source.headAssetId ?? baseProps.headAssetId,
+        footAssetId: source.footAssetId ?? baseProps.footAssetId,
+        bodyEndCapAssetId: source.bodyEndCapAssetId ?? baseProps.bodyEndCapAssetId,
+        headEndCapAssetId: source.headEndCapAssetId ?? baseProps.headEndCapAssetId,
+        footEndCapAssetId: source.footEndCapAssetId ?? baseProps.footEndCapAssetId,
+        bodyOrientation: source.bodyOrientation ?? baseProps.bodyOrientation,
+        headOrientation: source.headOrientation ?? baseProps.headOrientation,
+        footOrientation: source.footOrientation ?? baseProps.footOrientation,
+        bodyEndCapOrientation: source.bodyEndCapOrientation ?? baseProps.bodyEndCapOrientation,
+        headEndCapOrientation: source.headEndCapOrientation ?? baseProps.headEndCapOrientation,
+        footEndCapOrientation: source.footEndCapOrientation ?? baseProps.footEndCapOrientation,
+        cornerModels: Array.isArray(sourceAny.cornerModels) ? sourceAny.cornerModels as any[] : baseProps.cornerModels,
+      })
+    })()
+
+    const cornerModels = Array.isArray(normalizedProps?.cornerModels)
+      ? normalizedProps.cornerModels
+      : []
+    const bodyCornerAssetIds = Array.from(
+      new Set(
+        cornerModels
+          .map((entry) => (typeof (entry as any)?.bodyAssetId === 'string' ? (entry as any).bodyAssetId.trim() : ''))
+          .filter((id) => Boolean(id)),
+      ),
+    ).sort()
+    const headCornerAssetIds = Array.from(
+      new Set(
+        cornerModels
+          .map((entry) => (typeof (entry as any)?.headAssetId === 'string' ? (entry as any).headAssetId.trim() : ''))
+          .filter((id) => Boolean(id)),
+      ),
+    ).sort()
+    const footCornerAssetIds = Array.from(
+      new Set(
+        cornerModels
+          .map((entry) => (typeof (entry as any)?.footAssetId === 'string' ? (entry as any).footAssetId.trim() : ''))
+          .filter((id) => Boolean(id)),
+      ),
+    ).sort()
+
+    const canHaveCornerJoints =
+      (bodyCornerAssetIds.length > 0 || headCornerAssetIds.length > 0 || footCornerAssetIds.length > 0)
+      && (params.definition.chains?.some(c => (c.points?.length ?? 0) >= 3) ?? false)
+
+    const bodyAssetId = normalizedProps?.bodyAssetId ?? null
+    const headAssetId = normalizedProps?.headAssetId ?? null
+    const footAssetId = normalizedProps?.footAssetId ?? null
+    const bodyEndCapAssetId = normalizedProps?.bodyEndCapAssetId ?? null
+    const headEndCapAssetId = normalizedProps?.headEndCapAssetId ?? null
+    const footEndCapAssetId = normalizedProps?.footEndCapAssetId ?? null
+
+    const wantsInstancing = Boolean(
+      bodyAssetId || headAssetId || footAssetId || bodyEndCapAssetId || headEndCapAssetId || footEndCapAssetId || canHaveCornerJoints,
+    )
+
+    const renderOptions: WallRenderOptions = normalizedProps
+      ? {
+        smoothing: normalizedProps.smoothing,
+        cornerModels,
+        modelPlacementMode: resolveEditorWallPlacementMode(normalizedProps.modelPlacementMode),
+        jointTrimMode: normalizedProps.jointTrimMode,
+        jointTrimManual: normalizedProps.jointTrimManual,
+        bodyOrientation: normalizedProps.bodyOrientation,
+        headOrientation: normalizedProps.headOrientation,
+        footOrientation: normalizedProps.footOrientation,
+        bodyEndCapOrientation: normalizedProps.bodyEndCapOrientation,
+        headEndCapOrientation: normalizedProps.headEndCapOrientation,
+        footEndCapOrientation: normalizedProps.footEndCapOrientation,
+      }
+      : { smoothing: 0 }
+
+    const assets: WallRenderAssetObjects = {}
+    const syntheticNodeId = (() => {
+      const nodeId = typeof params.nodeId === 'string' ? params.nodeId.trim() : ''
+      if (nodeId) {
+        return nodeId
+      }
+      const key = typeof params.previewKey === 'string' ? params.previewKey.trim() : ''
+      return `__wall-preview__:${key || 'default'}`
+    })()
+
+    const previewSignatureKey = '__harmonyWallPreviewSignature'
+    let hasMissingAssets = false
+
+    const resolvePreviewAsset = (assetId: string | null | undefined): THREE.Object3D | null => {
+      const id = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!id) {
+        return null
+      }
+      const cached = getCachedModelObject(id)
+      if (cached) {
+        return cached.object
+      }
+      hasMissingAssets = true
+      scheduleWallAssetLoad(id, syntheticNodeId, previewSignatureKey)
+      return null
+    }
+
+    const bodyObject = resolvePreviewAsset(bodyAssetId)
+    if (bodyObject) {
+      assets.bodyObject = bodyObject
+    }
+    const headObject = resolvePreviewAsset(headAssetId)
+    if (headObject) {
+      assets.headObject = headObject
+    }
+    const footObject = resolvePreviewAsset(footAssetId)
+    if (footObject) {
+      assets.footObject = footObject
+    }
+
+    const bodyEndCapObject = resolvePreviewAsset(bodyEndCapAssetId)
+    if (bodyEndCapObject) {
+      assets.bodyEndCapObject = bodyEndCapObject
+    }
+    const headEndCapObject = resolvePreviewAsset(headEndCapAssetId)
+    if (headEndCapObject) {
+      assets.headEndCapObject = headEndCapObject
+    }
+    const footEndCapObject = resolvePreviewAsset(footEndCapAssetId)
+    if (footEndCapObject) {
+      assets.footEndCapObject = footEndCapObject
+    }
+
+    const resolveCornerAssetMap = (assetIds: string[]): Record<string, THREE.Object3D | null> | null => {
+      if (!assetIds.length) {
+        return null
+      }
+      const map: Record<string, THREE.Object3D | null> = {}
+      for (const assetId of assetIds) {
+        const resolved = resolvePreviewAsset(assetId)
+        if (resolved) {
+          map[assetId] = resolved
+        }
+      }
+      return Object.keys(map).length ? map : null
+    }
+
+    const bodyCornerObjectsByAssetId = resolveCornerAssetMap(bodyCornerAssetIds)
+    if (bodyCornerObjectsByAssetId) {
+      assets.bodyCornerObjectsByAssetId = bodyCornerObjectsByAssetId
+    }
+    const headCornerObjectsByAssetId = resolveCornerAssetMap(headCornerAssetIds)
+    if (headCornerObjectsByAssetId) {
+      assets.headCornerObjectsByAssetId = headCornerObjectsByAssetId
+    }
+    const footCornerObjectsByAssetId = resolveCornerAssetMap(footCornerAssetIds)
+    if (footCornerObjectsByAssetId) {
+      assets.footCornerObjectsByAssetId = footCornerObjectsByAssetId
+    }
+
+    return {
+      assets,
+      renderOptions,
+      isAirWall: Boolean(normalizedProps?.isAirWall),
+      wantsInstancing,
+      hasMissingAssets,
+    }
+  }
+
   function ensureWallGroup(
     container: THREE.Object3D,
     node: SceneNode,
@@ -2004,5 +2207,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     endWallDrag,
     syncWallDragInstancedMatrices,
     isWallDragActive,
+    resolveWallPreviewRenderData,
   }
 }

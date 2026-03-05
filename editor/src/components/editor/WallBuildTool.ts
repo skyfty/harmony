@@ -14,6 +14,7 @@ import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
+import type { WallPreviewRenderData } from './WallRenderer'
 
 type PointerInteractionApi = {
   get: () => PointerInteractionSession | null
@@ -73,10 +74,17 @@ export function createWallBuildTool(options: {
     width?: number
     thickness?: number
   }) => { height: number; width: number; thickness: number }
+  resolveWallPreviewRenderData?: (params: {
+    definition: WallDynamicMesh
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    nodeId?: string | null
+    previewKey: string
+  }) => WallPreviewRenderData
 }) : WallBuildToolHandle {
   const previewRenderer = createWallPreviewRenderer({
     rootGroup: options.rootGroup,
     normalizeWallDimensionsForViewport: options.normalizeWallDimensionsForViewport,
+    resolveWallPreviewRenderData: options.resolveWallPreviewRenderData,
   })
 
   const groundPointerHelper = new THREE.Vector3()
@@ -102,6 +110,7 @@ export function createWallBuildTool(options: {
       committedNewSegmentCount: 0,
       branchFrom: null,
       shapeDraft: null,
+      wallRenderProps: null,
     }
     return session
   }
@@ -138,6 +147,13 @@ export function createWallBuildTool(options: {
       width: dims?.width,
       thickness: dims?.thickness,
     })
+  }
+
+  const getWallNodeRenderProps = (node: SceneNode): Partial<WallComponentProps> | null => {
+    const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined
+    return wallComponent?.props ?? null
   }
 
   const constrainWallEndPoint = (start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 => {
@@ -255,6 +271,7 @@ export function createWallBuildTool(options: {
         target.brushPresetData = brush?.presetData ?? null
 
         const wallProps = brush?.presetData?.wallProps ?? null
+        target.wallRenderProps = wallProps
         if (wallProps) {
           target.dimensions = options.normalizeWallDimensionsForViewport({
             height: wallProps.height,
@@ -265,6 +282,7 @@ export function createWallBuildTool(options: {
         }
       } else {
         const selectedId = options.sceneStore.selectedNodeId
+        target.wallRenderProps = null
         if (selectedId) {
           const selectedNode = findSceneNode(options.sceneStore.nodes, selectedId)
           if (selectedNode?.dynamicMesh?.type === 'Wall') {
@@ -273,6 +291,7 @@ export function createWallBuildTool(options: {
               | SceneNodeComponentState<WallComponentProps>
               | undefined
             target.bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
+            target.wallRenderProps = wallComponent?.props ?? null
           }
         }
 
@@ -292,6 +311,7 @@ export function createWallBuildTool(options: {
           target.nodeId = selectedNode.id
           target.dimensions = getWallNodeDimensions(selectedNode)
           target.segments = expandWallSegmentsToWorld(selectedNode)
+          target.wallRenderProps = getWallNodeRenderProps(selectedNode)
         }
       }
     } else {
@@ -299,6 +319,7 @@ export function createWallBuildTool(options: {
       if (node?.dynamicMesh?.type === 'Wall') {
         target.dimensions = getWallNodeDimensions(node)
         target.segments = expandWallSegmentsToWorld(node)
+        target.wallRenderProps = getWallNodeRenderProps(node)
       }
     }
 
@@ -804,6 +825,7 @@ export function createWallBuildTool(options: {
       current.nodeId = nodeId
       current.dimensions = getWallNodeDimensions(node)
       current.segments = expandWallSegmentsToWorld(node)
+      current.wallRenderProps = getWallNodeRenderProps(node)
       current.dragStart = worldPoint.clone()
       current.dragEnd = worldPoint.clone()
       current.committedNewSegmentCount = 0

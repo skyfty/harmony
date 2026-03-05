@@ -5,13 +5,12 @@ import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVert
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import type { WallDynamicMesh } from '@schema'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
 import { GRID_MAJOR_SPACING } from '../constants'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
 import { FLOOR_MAX_THICKNESS, FLOOR_MIN_THICKNESS } from '@schema/components'
 import {
-  applyWallPreviewStyling,
   buildWallPreviewDynamicMeshFromWorldSegments,
   computeWallPreviewSignature,
   mergeWallPreviewSegmentChainsByEndpoint,
@@ -516,7 +515,12 @@ export function handlePointerMoveDrag(
 
     floorBuildShape?: FloorBuildShape
 
-    rootGroup: THREE.Group
+    syncWallPreviewGroup: (params: {
+      previewGroup: THREE.Group | null
+      definition: WallDynamicMesh
+      nodeId: string | null
+      previewKey: string
+    }) => THREE.Group
 
     resolveRoadRenderOptionsForNodeId: (nodeId: string) => unknown | null
     updateRoadGroup: (roadGroup: THREE.Object3D, definition: RoadDynamicMesh, options?: any) => any
@@ -751,20 +755,13 @@ export function handlePointerMoveDrag(
       state.previewSignature = nextSignature
       const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
       if (build) {
-        if (!state.previewGroup) {
-          const preview = createWallGroup(build.definition)
-          applyWallPreviewStyling(preview)
-          preview.userData.isWallEndpointDragPreview = true
-          state.previewGroup = preview
-          ctx.rootGroup.add(preview)
-        } else {
-          updateWallGroup(state.previewGroup, build.definition)
-          applyWallPreviewStyling(state.previewGroup)
-          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
-            ctx.rootGroup.add(state.previewGroup)
-          }
-        }
-        state.previewGroup!.position.copy(build.center)
+        state.previewGroup = ctx.syncWallPreviewGroup({
+          previewGroup: state.previewGroup,
+          definition: build.definition,
+          nodeId: state.nodeId,
+          previewKey: `wall-height-drag:${state.nodeId}`,
+        })
+        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -908,20 +905,13 @@ export function handlePointerMoveDrag(
       state.previewSignature = nextSignature
       const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
       if (build) {
-        if (!state.previewGroup) {
-          const preview = createWallGroup(build.definition)
-          applyWallPreviewStyling(preview)
-          preview.userData.isWallEndpointDragPreview = true
-          state.previewGroup = preview
-          ctx.rootGroup.add(preview)
-        } else {
-          updateWallGroup(state.previewGroup, build.definition)
-          applyWallPreviewStyling(state.previewGroup)
-          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
-            ctx.rootGroup.add(state.previewGroup)
-          }
-        }
-        state.previewGroup!.position.copy(build.center)
+        state.previewGroup = ctx.syncWallPreviewGroup({
+          previewGroup: state.previewGroup,
+          definition: build.definition,
+          nodeId: state.nodeId,
+          previewKey: `wall-endpoint-drag:${state.nodeId}`,
+        })
+        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1015,20 +1005,13 @@ export function handlePointerMoveDrag(
       state.previewSignature = nextSignature
       const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
       if (build) {
-        if (!state.previewGroup) {
-          const preview = createWallGroup(build.definition)
-          applyWallPreviewStyling(preview)
-          preview.userData.isWallEndpointDragPreview = true
-          state.previewGroup = preview
-          ctx.rootGroup.add(preview)
-        } else {
-          updateWallGroup(state.previewGroup, build.definition)
-          applyWallPreviewStyling(state.previewGroup)
-          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
-            ctx.rootGroup.add(state.previewGroup)
-          }
-        }
-        state.previewGroup!.position.copy(build.center)
+        state.previewGroup = ctx.syncWallPreviewGroup({
+          previewGroup: state.previewGroup,
+          definition: build.definition,
+          nodeId: state.nodeId,
+          previewKey: `wall-circle-center-drag:${state.nodeId}`,
+        })
+        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1101,20 +1084,13 @@ export function handlePointerMoveDrag(
       state.previewSignature = nextSignature
       const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
       if (build) {
-        if (!state.previewGroup) {
-          const preview = createWallGroup(build.definition)
-          applyWallPreviewStyling(preview)
-          preview.userData.isWallEndpointDragPreview = true
-          state.previewGroup = preview
-          ctx.rootGroup.add(preview)
-        } else {
-          updateWallGroup(state.previewGroup, build.definition)
-          applyWallPreviewStyling(state.previewGroup)
-          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
-            ctx.rootGroup.add(state.previewGroup)
-          }
-        }
-        state.previewGroup!.position.copy(build.center)
+        state.previewGroup = ctx.syncWallPreviewGroup({
+          previewGroup: state.previewGroup,
+          definition: build.definition,
+          nodeId: state.nodeId,
+          previewKey: `wall-circle-radius-drag:${state.nodeId}`,
+        })
+        state.previewGroup.position.copy(build.center)
       }
     }
 
@@ -1260,20 +1236,13 @@ export function handlePointerMoveDrag(
       state.previewSignature = nextSignature
       const build = buildWallPreviewDynamicMeshFromWorldSegments(mergedForPreview, state.dimensions)
       if (build) {
-        if (!state.previewGroup) {
-          const preview = createWallGroup(build.definition)
-          applyWallPreviewStyling(preview)
-          preview.userData.isWallJointDragPreview = true
-          state.previewGroup = preview
-          ctx.rootGroup.add(preview)
-        } else {
-          updateWallGroup(state.previewGroup, build.definition)
-          applyWallPreviewStyling(state.previewGroup)
-          if (!ctx.rootGroup.children.includes(state.previewGroup)) {
-            ctx.rootGroup.add(state.previewGroup)
-          }
-        }
-        state.previewGroup!.position.copy(build.center)
+        state.previewGroup = ctx.syncWallPreviewGroup({
+          previewGroup: state.previewGroup,
+          definition: build.definition,
+          nodeId: state.nodeId,
+          previewKey: `wall-joint-drag:${state.nodeId}`,
+        })
+        state.previewGroup.position.copy(build.center)
       }
     }
 
