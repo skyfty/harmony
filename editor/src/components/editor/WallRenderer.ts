@@ -249,17 +249,7 @@ function splitWallSegmentsIntoChains(segments: WallRenderSegment[]): WallRenderS
 }
 
 type WallModelOrientation = NonNullable<WallComponentProps['bodyOrientation']>
-type WallModelPlacementMode = NonNullable<WallComponentProps['modelPlacementMode']>
 type WallForwardAxis = WallModelOrientation['forwardAxis']
-
-function resolveEditorWallPlacementMode(mode: WallModelPlacementMode): WallModelPlacementMode {
-  // In editor viewport, prefer geometry tiling to avoid visible UV stretching
-  // for materials that cannot be safely shader-patched.
-  if (mode === 'stretchTiledUv') {
-    return 'repeatInstances'
-  }
-  return mode
-}
 
 type WallForwardAxisInfo = { axis: 'x' | 'z'; sign: 1 | -1 }
 
@@ -380,7 +370,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wallProps = wallComponent
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
-    const placementMode = wallProps ? resolveEditorWallPlacementMode(wallProps.modelPlacementMode) : 'repeatInstances'
 
     const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
     const headAssetId = wallComponent?.props?.headAssetId ?? null
@@ -405,7 +394,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -427,7 +416,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(headAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -449,7 +438,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -683,174 +672,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     uvScaleU: number
   }
 
-  function computeWallBodyLocalPlacementsRepeatInstances(
-    definition: WallDynamicMesh,
-    bounds: THREE.Box3,
-    mode: 'body' | 'head' | 'foot',
-    orientation: WallModelOrientation,
-    trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
-  ): WallLocalPlacement[] {
-    const placements: WallLocalPlacement[] = []
-    const segments = compileWallSegmentsFromDefinition(definition)
-    if (!segments.length) {
-      return placements
-    }
-
-    const localForward = new THREE.Vector3()
-    writeWallLocalForward(localForward, orientation.forwardAxis)
-    const { tileLengthLocal, minAlongAxis, maxAlongAxis } = resolveWallBoundsAlongAxis(bounds, orientation.forwardAxis)
-
-    const templateHeight = resolveWallModelHeight(bounds)
-    const minY = bounds.min.y
-
-    const distanceSqXZRaw = (a: { x: number; z: number }, b: { x: number; z: number }): number => {
-      const dx = Number(a.x) - Number(b.x)
-      const dz = Number(a.z) - Number(b.z)
-      return dx * dx + dz * dz
-    }
-    const isClosedChain = (() => {
-      if (segments.length < 2) {
-        return false
-      }
-      const first = segments[0] as any
-      const last = segments[segments.length - 1] as any
-      if (!first?.start || !last?.end) {
-        return false
-      }
-      return distanceSqXZRaw(first.start as any, last.end as any) <= WALL_SYNC_EPSILON
-    })()
-
-    const manualTrimActive = trimOptions?.mode === 'manual'
-      && (trimOptions.manual.start > WALL_SYNC_EPSILON || trimOptions.manual.end > WALL_SYNC_EPSILON)
-
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-      const segment = segments[segmentIndex] as any
-      wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
-      wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
-      wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
-      wallSyncLocalDirHelper.y = 0
-      const lengthLocal = wallSyncLocalDirHelper.length()
-      if (lengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
-
-      // Optional manual trimming to create clearance at interior joints.
-      let trimStart = 0
-      let trimEnd = 0
-      if (manualTrimActive) {
-        const prev = segmentIndex > 0 ? (segments[segmentIndex - 1] as any) : null
-        const next = segmentIndex < segments.length - 1 ? (segments[segmentIndex + 1] as any) : null
-
-        const connectedPrev = prev && prev.end && segment.start
-          ? distanceSqXZRaw(prev.end as any, segment.start as any) <= WALL_SYNC_EPSILON
-          : false
-        const connectedNext = next && segment.end && next.start
-          ? distanceSqXZRaw(segment.end as any, next.start as any) <= WALL_SYNC_EPSILON
-          : false
-
-        const hasIncomingJoint = connectedPrev || (isClosedChain && segmentIndex === 0)
-        const hasOutgoingJoint = connectedNext || (isClosedChain && segmentIndex === segments.length - 1)
-
-        trimStart = hasIncomingJoint ? Math.max(0, trimOptions!.manual.start) : 0
-        trimEnd = hasOutgoingJoint ? Math.max(0, trimOptions!.manual.end) : 0
-      }
-
-      if (trimStart > WALL_SYNC_EPSILON) {
-        wallSyncLocalStartHelper.addScaledVector(wallSyncLocalUnitDirHelper, trimStart)
-      }
-      if (trimEnd > WALL_SYNC_EPSILON) {
-        wallSyncLocalEndHelper.addScaledVector(wallSyncLocalUnitDirHelper, -trimEnd)
-      }
-
-      const trimmedLengthLocal = Math.max(0, lengthLocal - trimStart - trimEnd)
-      if (trimmedLengthLocal <= WALL_SYNC_EPSILON) {
-        continue
-      }
-
-      const quatLocal = new THREE.Quaternion().setFromUnitVectors(localForward, wallSyncLocalUnitDirHelper)
-      if (orientation.yawDeg) {
-        wallSyncYawQuatHelper.setFromAxisAngle(wallSyncYawAxis, THREE.MathUtils.degToRad(orientation.yawDeg))
-        quatLocal.multiply(wallSyncYawQuatHelper)
-      }
-
-      const bodyHeight = resolveWallBodyHeightForSegment(segment)
-      const scaleY = mode === 'body' ? (bodyHeight / templateHeight) : 1
-
-      // For spans shorter than one tile, place a single stretched instance so the segment
-      // remains visible and editable after openings split the chain.
-      if (trimmedLengthLocal < tileLengthLocal - WALL_SYNC_EPSILON) {
-        const scaleAlong = Math.max(trimmedLengthLocal / tileLengthLocal, 1e-6)
-
-        wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis * scaleAlong)
-        wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-        wallSyncPosHelper.copy(wallSyncLocalStartHelper).sub(wallSyncLocalOffsetHelper)
-
-        const baselineY = wallSyncPosHelper.y
-        const posY = mode === 'body'
-          ? (baselineY - scaleY * minY)
-          : mode === 'head'
-            ? (baselineY + bodyHeight - minY)
-            : (baselineY - minY)
-        wallSyncPosHelper.y = posY
-
-        switch (orientation.forwardAxis) {
-          case '+x':
-          case '-x':
-            wallSyncScaleHelper.set(scaleAlong, scaleY, 1)
-            break
-          case '+z':
-          case '-z':
-            wallSyncScaleHelper.set(1, scaleY, scaleAlong)
-            break
-        }
-
-        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
-        placements.push({
-          matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
-          uvScaleU: scaleAlong,
-        })
-        continue
-      }
-
-      const instanceCount = Math.max(1, Math.ceil(trimmedLengthLocal / tileLengthLocal - 1e-9))
-      for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
-        if (instanceIndex === instanceCount - 1) {
-          // Last tile: align max face to segment end.
-          wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(maxAlongAxis)
-          wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-          wallSyncPosHelper.copy(wallSyncLocalEndHelper).sub(wallSyncLocalOffsetHelper)
-        } else {
-          const along = instanceIndex * tileLengthLocal
-          wallSyncPosHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
-
-          // Place the model so that its local min face along the length axis matches the desired min point.
-          wallSyncLocalOffsetHelper.copy(localForward).multiplyScalar(minAlongAxis)
-          wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-          wallSyncPosHelper.sub(wallSyncLocalOffsetHelper)
-        }
-
-        const baselineY = wallSyncPosHelper.y
-        const posY = mode === 'body'
-          ? (baselineY - scaleY * minY)
-          : mode === 'head'
-            ? (baselineY + bodyHeight - minY)
-            : (baselineY - minY)
-        wallSyncPosHelper.y = posY
-
-        wallSyncScaleHelper.set(1, scaleY, 1)
-        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
-        placements.push({
-          matrix: new THREE.Matrix4().copy(wallSyncLocalMatrixHelper),
-          uvScaleU: 1,
-        })
-      }
-    }
-
-    return placements
-  }
-
   function computeWallBodyLocalPlacementsStretchTiledUv(
     definition: WallDynamicMesh,
     bounds: THREE.Box3,
@@ -983,12 +804,8 @@ export function createWallRenderer(options: WallRendererOptions) {
     bounds: THREE.Box3,
     mode: 'body' | 'head' | 'foot',
     orientation: WallModelOrientation,
-    placementMode: WallModelPlacementMode,
     trimOptions?: { mode: 'auto' | 'manual'; manual: { start: number; end: number } },
   ): WallLocalPlacement[] {
-    if (placementMode === 'repeatInstances') {
-      return computeWallBodyLocalPlacementsRepeatInstances(definition, bounds, mode, orientation, trimOptions)
-    }
     return computeWallBodyLocalPlacementsStretchTiledUv(definition, bounds, mode, orientation, trimOptions)
   }
 
@@ -1443,7 +1260,6 @@ export function createWallRenderer(options: WallRendererOptions) {
         width: source.width ?? baseProps.width,
         thickness: source.thickness ?? baseProps.thickness,
         smoothing: source.smoothing ?? baseProps.smoothing,
-        modelPlacementMode: source.modelPlacementMode ?? baseProps.modelPlacementMode,
         jointTrimMode: source.jointTrimMode ?? baseProps.jointTrimMode,
         jointTrimManual: source.jointTrimManual ?? baseProps.jointTrimManual,
         isAirWall: source.isAirWall ?? baseProps.isAirWall,
@@ -1507,7 +1323,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       ? {
         smoothing: normalizedProps.smoothing,
         cornerModels,
-        modelPlacementMode: resolveEditorWallPlacementMode(normalizedProps.modelPlacementMode),
         jointTrimMode: normalizedProps.jointTrimMode,
         jointTrimManual: normalizedProps.jointTrimManual,
         bodyOrientation: normalizedProps.bodyOrientation,
@@ -1711,7 +1526,6 @@ export function createWallRenderer(options: WallRendererOptions) {
     const wallProps = wallComponent
       ? clampWallProps(wallComponent.props as Partial<WallComponentProps> | null | undefined)
       : null
-    const placementMode = wallProps ? resolveEditorWallPlacementMode(wallProps.modelPlacementMode) : 'repeatInstances'
     const smoothing = wallProps?.smoothing ?? resolveWallSmoothingFromNode(node)
 
     // 各类实例化模型资源：
@@ -1923,7 +1737,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // body：沿每段墙铺 tile；localMatrices 为每个 tile 的局部变换矩阵。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'body', wallProps.bodyOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1956,7 +1770,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       if (group) {
         // head：通常用于墙顶装饰/压顶，沿墙段铺设。
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'head', wallProps.headOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
@@ -1986,7 +1800,7 @@ export function createWallRenderer(options: WallRendererOptions) {
       const group = getCachedModelObject(footAssetId)
       if (group) {
         const placements = wallProps
-          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, placementMode, {
+          ? computeWallBodyLocalPlacements(effectiveDefinition, group.boundingBox, 'foot', wallProps.footOrientation, {
             mode: wallProps.jointTrimMode,
             manual: wallProps.jointTrimManual,
           })
