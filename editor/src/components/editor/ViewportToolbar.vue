@@ -1435,10 +1435,10 @@ function handleGroundButtonClick(kind: GroundMenuKind) {
   }
 
   const tab = resolveGroundTargetTab(kind, 'button')
+  emit('change-build-tool', 'ground')
   if (tab) {
     emit('activate-ground-tab', tab)
   }
-  emit('change-build-tool', 'ground')
 }
 
 function setGroundMenuOpen(kind: GroundMenuKind, open: boolean) {

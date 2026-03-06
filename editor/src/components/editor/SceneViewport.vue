@@ -12279,7 +12279,6 @@ function handleBuildToolChange(tool: BuildTool | null) {
   if (tool === 'ground') {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
-    terrainStore.setGroundPanelTab('terrain')
   }
   const accepted = buildToolsStore.setActiveBuildTool(tool)
   if (!accepted) {
