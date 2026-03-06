@@ -2,12 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 
-type BlockedBuildTool = 'wall' | 'road' | 'floor'
+type BlockedBuildTool = 'wall' | 'road' | 'floor' | 'water'
 
 function isBlockedBuildTool(tool: BuildTool | null): tool is BlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor'
+  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water'
 }
 
 export const useBuildToolsStore = defineStore('buildTools', () => {
@@ -16,6 +17,7 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   const floorBrushPresetAssetId = ref<string | null>(null)
   const wallBuildShape = ref<WallBuildShape>('polygon')
   const floorBuildShape = ref<FloorBuildShape>('polygon')
+  const waterBuildShape = ref<WaterBuildShape>('rectangle')
 
   // This is a UI gate (e.g. ground sculpt config mode). It should block *activating* build tools,
   // but should not forcibly clear the active tool by itself (SceneViewport is responsible for
@@ -72,12 +74,21 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     return true
   }
 
+  function setWaterBuildShape(shape: WaterBuildShape, options: { activate?: boolean } = {}): boolean {
+    waterBuildShape.value = shape
+    if (options.activate) {
+      return setActiveBuildTool('water')
+    }
+    return true
+  }
+
   return {
     activeBuildTool,
     wallBrushPresetAssetId,
     floorBrushPresetAssetId,
     wallBuildShape,
     floorBuildShape,
+    waterBuildShape,
     buildToolsDisabled,
     setBuildToolsDisabled,
     setActiveBuildTool,
@@ -85,5 +96,6 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
     setFloorBrushPresetAssetId,
     setFloorBuildShape,
     setWallBuildShape,
+    setWaterBuildShape,
   }
 })

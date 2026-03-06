@@ -140,6 +140,61 @@
             </div>
           </v-list>
         </v-menu>
+        <v-menu
+          v-else-if="tool.id === 'water'"
+          :model-value="waterShapeMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleWaterShapeMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="activeBuildTool === tool.id ? 'primary' : undefined"
+              :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled"
+              @click="handleBuildToolToggle(tool.id)"
+              @contextmenu.prevent.stop="handleWaterShapeContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="water-shape-menu">
+            <div class="wall-shape-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Water Brush</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:water-shape-menu-open', false)" />
+              </v-toolbar>
+
+              <div class="floor-shape-grid">
+                <v-list-item
+                  v-for="shape in waterShapeOptions"
+                  :key="shape.id"
+                  class="floor-shape-item"
+                  @click="() => handleWaterShapeSelect(shape.id)"
+                >
+                  <v-btn
+                    density="compact"
+                    size="small"
+                    variant="text"
+                    :title="shape.label"
+                    :class="['floor-shape-btn', shape.id === waterBuildShape ? 'floor-shape-selected' : '']"
+                  >
+                    <span v-html="shape.svg" />
+                  </v-btn>
+                </v-list-item>
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
 
         <v-btn
           v-else
@@ -557,9 +612,12 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { FLOOR_BUILD_SHAPE_LABELS } from '@/types/floor-build-shape'
+import type { WaterBuildShape } from '@/types/water-build-shape'
+import { WATER_BUILD_SHAPE_LABELS } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { WALL_BUILD_SHAPE_LABELS } from '@/types/wall-build-shape'
 import { SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
+import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 
 const props = withDefaults(
   defineProps<{
@@ -581,8 +639,10 @@ const props = withDefaults(
   cameraResetMenuOpen: boolean
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
+  waterShapeMenuOpen: boolean
   floorBuildShape: FloorBuildShape
   wallBuildShape: WallBuildShape
+  waterBuildShape: WaterBuildShape
   floorBrushPresetAssetId?: string
   wallBrushPresetAssetId?: string
   }>(),
@@ -612,8 +672,10 @@ const emit = defineEmits<{
   (event: 'update:scatter-erase-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
+  (event: 'update:water-shape-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'select-wall-build-shape', shape: WallBuildShape): void
+  (event: 'select-water-build-shape', shape: WaterBuildShape): void
 }>()
 
 const {
@@ -635,8 +697,10 @@ const {
   cameraResetMenuOpen,
   floorShapeMenuOpen,
   wallShapeMenuOpen,
+  waterShapeMenuOpen,
   floorBuildShape,
   wallBuildShape,
+  waterBuildShape,
   floorBrushPresetAssetId,
   wallBrushPresetAssetId,
 } = toRefs(props)
@@ -749,6 +813,9 @@ watch(buildToolsDisabled, (disabled) => {
   if (disabled && wallShapeMenuOpen.value) {
     emit('update:wall-shape-menu-open', false)
   }
+  if (disabled && waterShapeMenuOpen.value) {
+    emit('update:water-shape-menu-open', false)
+  }
 })
 
 // Mutual exclusivity helpers
@@ -757,6 +824,7 @@ function closeExternalMenus() {
   emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:wall-shape-menu-open', false)
+  emit('update:water-shape-menu-open', false)
 }
 
 function closeAllMenus() {
@@ -888,6 +956,7 @@ const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
+  { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
@@ -904,6 +973,17 @@ const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildSh
 const wallShapeOptions = (Object.keys(WALL_BUILD_SHAPE_LABELS) as WallBuildShape[]).map((id) => ({
   id,
   label: WALL_BUILD_SHAPE_LABELS[id],
+  svg:
+    id === 'polygon'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
+      : id === 'rectangle'
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="16" height="12" fill="currentColor" rx="1" ry="1"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>',
+}))
+
+const waterShapeOptions = (Object.keys(WATER_BUILD_SHAPE_LABELS) as WaterBuildShape[]).map((id) => ({
+  id,
+  label: WATER_BUILD_SHAPE_LABELS[id],
   svg:
     id === 'polygon'
       ? '<svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon fill="currentColor" points="12,3 2,21 22,21"/></svg>'
@@ -934,7 +1014,9 @@ function handleBuildToolToggle(tool: BuildTool) {
 
   const expectedDynamicMeshType = tool === 'wall' ? 'Wall' : tool === 'floor' ? 'Floor' : tool === 'road' ? 'Road' : null
   const primaryDynamicMeshType = primaryNode?.dynamicMesh?.type as string | undefined
-  const toolMatchesPrimarySelection = Boolean(expectedDynamicMeshType && primaryDynamicMeshType === expectedDynamicMeshType)
+  const toolMatchesPrimarySelection = tool === 'water'
+    ? isWaterSurfaceNode(primaryNode)
+    : Boolean(expectedDynamicMeshType && primaryDynamicMeshType === expectedDynamicMeshType)
 
   const selectionLocked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const nodeLocked = Boolean(primaryNode?.locked)
@@ -1022,6 +1104,32 @@ function handleFloorShapeSelect(shape: FloorBuildShape) {
     return
   }
   emit('select-floor-build-shape', shape)
+}
+
+function handleWaterShapeContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value) {
+    return
+  }
+  closeAllMenus()
+  emit('update:water-shape-menu-open', true)
+}
+
+function handleWaterShapeMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+  }
+  emit('update:water-shape-menu-open', open)
+}
+
+function handleWaterShapeSelect(shape: WaterBuildShape) {
+  if (buildToolsDisabled.value) {
+    emit('update:water-shape-menu-open', false)
+    return
+  }
+  emit('select-water-build-shape', shape)
 }
 
 function handleScatterEraseButtonClick() {

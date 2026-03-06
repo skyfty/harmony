@@ -6,6 +6,7 @@ export function handlePointerUpTools(
     maybeCancelBuildToolOnRightDoubleClick: (event: PointerEvent) => boolean
 
     handleGroundEditorPointerUp: (event: PointerEvent) => boolean
+    waterBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     wallBuildToolHandlePointerUp: (event: PointerEvent) => boolean
     roadBuildToolHandlePointerUp: (event: PointerEvent) => boolean
 
@@ -19,6 +20,15 @@ export function handlePointerUpTools(
 
   if (ctx.handleGroundEditorPointerUp(event)) {
     return { handled: true }
+  }
+
+  if (ctx.waterBuildToolHandlePointerUp(event)) {
+    return {
+      handled: true,
+      preventDefault: true,
+      stopPropagation: true,
+      stopImmediatePropagation: true,
+    }
   }
 
   if (ctx.wallBuildToolHandlePointerUp(event)) {

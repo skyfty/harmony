@@ -8,6 +8,7 @@ import { CameraControlsTrackball } from '@/utils/CameraControlsTrackball'
 import { CameraControlsOrbit } from '@/utils/CameraControlsOrbit'
 import { CameraControlsMap } from '@/utils/CameraControlsMap'
 import { readFloorBuildShapeFromNode, readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
+import { isWaterSurfaceNode, readWaterBuildShapeFromNode, resolveWaterRectangleBounds } from '@/utils/waterBuildShapeUserData'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
 import { useProtagonistPreview } from './useProtagonistPreview'
@@ -154,6 +155,7 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
@@ -181,6 +183,7 @@ import {
 } from './wallSegmentUtils'
 import { createRoadBuildTool } from './RoadBuildTool'
 import { createFloorBuildTool } from './FloorBuildTool'
+import { createWaterBuildTool } from './WaterBuildTool'
 import { createCameraResetDirectionController, type CameraResetDirection } from './cameraResetDirection'
 import {
   createRoadVertexRenderer,
@@ -196,6 +199,7 @@ import {
 } from './WallEndpointRenderer'
 import { applyWallPreviewStyling, disposeWallPreviewGroup } from './wallPreviewGroupUtils'
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
+import { createWaterRectangleHandleRenderer, type WaterRectangleHandlePickResult } from './WaterRectangleHandleRenderer'
 import {
   createFloorCircleHandleRenderer,
   type FloorCircleHandlePickResult,
@@ -1572,12 +1576,14 @@ const buildToolsStore = useBuildToolsStore()
 const {
   activeBuildTool,
   floorBuildShape,
+  waterBuildShape,
   wallBuildShape,
   wallBrushPresetAssetId,
   floorBrushPresetAssetId,
 } = storeToRefs(buildToolsStore)
 const floorShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
+const waterShapeMenuOpen = ref(false)
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
@@ -1590,6 +1596,9 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'floor') {
     return 'cursor-floor'
   }
+  if (activeBuildTool.value === 'water') {
+    return 'cursor-water'
+  }
   return null
 })
 const scatterEraseModeActive = ref(false)
@@ -1601,6 +1610,7 @@ const isVertexSnapActiveEffective = computed(() => vertexSnapShiftModifierActive
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
+const selectedNodeIsWater = computed(() => isWaterSurfaceNode(sceneStore.selectedNode))
 // Shift modifier in scatter-erase mode means "repair/restore".
 // - Walls: repair a segment (hammer)
 // - InstanceLayout: restore erased instances
@@ -1633,6 +1643,14 @@ watch(
       const restored = readWallBuildShapeFromNode(node)
       if (restored && restored !== wallBuildShape.value) {
         buildToolsStore.setWallBuildShape(restored)
+      }
+      return
+    }
+
+    if (activeBuildTool.value === 'water' && selectedNodeIsWater.value) {
+      const restored = readWaterBuildShapeFromNode(node)
+      if (restored && restored !== waterBuildShape.value) {
+        buildToolsStore.setWaterBuildShape(restored)
       }
     }
   },
@@ -3781,10 +3799,33 @@ type FloorEdgeDragState = {
 
 let floorEdgeDragState: FloorEdgeDragState | null = null
 
+type WaterRectangleDragState = {
+  pointerId: number
+  nodeId: string
+  cornerIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  runtimeObject: THREE.Object3D
+  startPosition: THREE.Vector3
+  startScale: THREE.Vector3
+  startBounds: {
+    minX: number
+    maxX: number
+    minZ: number
+    maxZ: number
+    y: number
+  }
+  draggedSide: { x: 'min' | 'max'; z: 'min' | 'max' }
+}
+
+let waterRectangleDragState: WaterRectangleDragState | null = null
+
 const roadVertexRenderer = createRoadVertexRenderer()
 const wallEndpointRenderer = createWallEndpointRenderer()
 const floorVertexRenderer = createFloorVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
+const waterRectangleHandleRenderer = createWaterRectangleHandleRenderer()
 
 function isSelectedFloorCircleEditMode(): boolean {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -3796,6 +3837,15 @@ function isSelectedFloorCircleEditMode(): boolean {
     return false
   }
   return readFloorBuildShapeFromNode(node) === 'circle'
+}
+
+function isSelectedWaterRectangleEditMode(): boolean {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  return isWaterSurfaceNode(node) && readWaterBuildShapeFromNode(node) === 'rectangle'
 }
 
 function ensureRoadVertexHandlesForSelectedNode(options?: { force?: boolean }) {
@@ -3864,6 +3914,108 @@ function pickWallEndpointHandleAtPointer(event: PointerEvent): WallEndpointHandl
 
 function setActiveWallEndpointHandle(active: any | null) {
   wallEndpointRenderer.setActiveHandle(active)
+}
+
+function ensureWaterRectangleHandlesForSelectedNode(options?: { force?: boolean }) {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const active = activeBuildTool.value === 'water' && isSelectedWaterRectangleEditMode()
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveWaterRectangleNode: (nodeId: string) => isWaterSurfaceNode(findSceneNode(sceneStore.nodes, nodeId)),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    waterRectangleHandleRenderer.forceRebuild(common)
+  } else {
+    waterRectangleHandleRenderer.ensure(common)
+  }
+}
+
+function pickWaterRectangleHandleAtPointer(event: PointerEvent): WaterRectangleHandlePickResult | null {
+  return waterRectangleHandleRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function setActiveWaterRectangleHandle(active: { nodeId: string; cornerIndex: number; gizmoPart: any } | null) {
+  waterRectangleHandleRenderer.setActiveHandle(active as any)
+}
+
+function applyWaterRectanglePreviewTransform(
+  runtimeObject: THREE.Object3D,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number; y: number },
+) {
+  const width = Math.max(1e-3, bounds.maxX - bounds.minX)
+  const depth = Math.max(1e-3, bounds.maxZ - bounds.minZ)
+  runtimeObject.position.set((bounds.minX + bounds.maxX) * 0.5, bounds.y, (bounds.minZ + bounds.maxZ) * 0.5)
+  runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
+  runtimeObject.scale.set(width, depth, 1)
+  runtimeObject.updateMatrixWorld(true)
+}
+
+function restoreWaterRectanglePreviewTransform(state: WaterRectangleDragState) {
+  state.runtimeObject.position.copy(state.startPosition)
+  state.runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
+  state.runtimeObject.scale.copy(state.startScale)
+  state.runtimeObject.updateMatrixWorld(true)
+}
+
+function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
+  if (waterRectangleDragState) {
+    return false
+  }
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const runtime = objectMap.get(selectedId) ?? null
+  const bounds = resolveWaterRectangleBounds(node)
+  if (!runtime || !bounds) {
+    return false
+  }
+  const hit = pickWaterRectangleHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+
+  const draggedSide =
+    hit.cornerIndex === 0
+      ? { x: 'min' as const, z: 'min' as const }
+      : hit.cornerIndex === 1
+      ? { x: 'min' as const, z: 'max' as const }
+      : hit.cornerIndex === 2
+      ? { x: 'max' as const, z: 'max' as const }
+      : { x: 'max' as const, z: 'min' as const }
+
+  waterRectangleDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    cornerIndex: hit.cornerIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    runtimeObject: runtime,
+    startPosition: runtime.position.clone(),
+    startScale: runtime.scale.clone(),
+    startBounds: {
+      minX: bounds.minX,
+      maxX: bounds.maxX,
+      minZ: bounds.minZ,
+      maxZ: bounds.maxZ,
+      y: bounds.y,
+    },
+    draggedSide,
+  }
+  setActiveWaterRectangleHandle({ nodeId: selectedId, cornerIndex: hit.cornerIndex, gizmoPart: hit.gizmoPart })
+  pointerInteraction.capture(event.pointerId)
+  return true
 }
 
 function ensureFloorVertexHandlesForSelectedNode(options?: { force?: boolean }) {
@@ -4094,12 +4246,12 @@ type BuildToolRightClickCandidate = {
 
 let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
 
-type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor'
+type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
 ): tool is GroundSculptBlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor'
+  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water'
 }
 
 function nowMs(): number {
@@ -4325,12 +4477,28 @@ const floorBuildTool = createFloorBuildTool({
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
+const waterBuildTool = createWaterBuildTool({
+  activeBuildTool,
+  waterBuildShape,
+  sceneStore,
+  rootGroup,
+  raycastGroundPoint,
+  resolveBuildPlacementPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  isAltOverrideActive: () => isAltOverrideActive,
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+})
+
 function handleFloorShapeMenuOpen(value: boolean) {
   floorShapeMenuOpen.value = Boolean(value)
 }
 
 function handleWallShapeMenuOpen(value: boolean) {
   wallShapeMenuOpen.value = Boolean(value)
+}
+
+function handleWaterShapeMenuOpen(value: boolean) {
+  waterShapeMenuOpen.value = Boolean(value)
 }
 
 function handleSelectFloorBuildShape(shape: FloorBuildShape) {
@@ -4349,6 +4517,12 @@ function handleSelectWallBuildShape(shape: WallBuildShape) {
   buildToolsStore.setWallBuildShape(shape, { activate: true })
 
   // Match toolbar behavior: entering a build tool clears selection.
+  sceneStore.setSelection([])
+}
+
+function handleSelectWaterBuildShape(shape: WaterBuildShape) {
+  waterBuildTool.cancel()
+  buildToolsStore.setWaterBuildShape(shape, { activate: true })
   sceneStore.setSelection([])
 }
 
@@ -7215,6 +7389,8 @@ watch(
     ensureRoadVertexHandlesForSelectedNode()
     ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
+    ensureFloorCircleHandlesForSelectedNode()
+    ensureWaterRectangleHandlesForSelectedNode()
   },
   { deep: false, immediate: true },
 )
@@ -8622,6 +8798,7 @@ function animate() {
   wallBuildTool.flushPreviewIfNeeded(scene)
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
+  waterBuildTool.flushPreviewIfNeeded(scene)
   // Endpoint gizmos: keep a large, click-friendly on-screen size.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 30 })
   wallEndpointRenderer.updateScreenSize({
@@ -8637,6 +8814,7 @@ function animate() {
     diameterPx: 36,
     freezeCircleFacing: !!floorCircleCenterDragState || !!floorCircleRadiusDragState,
   })
+  waterRectangleHandleRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 32 })
   // Directional light target handles: keep readable in very large scenes.
   directionalLightTargetHandleManager.updateScreenSize({ camera, canvas: canvasRef.value })
   updateVertexSnapHintPulse(performance.now())
@@ -8856,6 +9034,8 @@ function disposeScene() {
   resetEffectRuntimeTickers()
   wallBuildTool.dispose()
   roadBuildTool.dispose()
+  floorBuildTool.dispose()
+  waterBuildTool.dispose()
   pendingSceneGraphSync = false
 }
 
@@ -9732,6 +9912,32 @@ async function handlePointerDown(event: PointerEvent) {
     wallShapeMenuOpen.value = false
   }
 
+  if (event.button === 0 && activeBuildTool.value === 'water' && waterShapeMenuOpen.value) {
+    waterShapeMenuOpen.value = false
+  }
+
+  if (activeBuildTool.value === 'water') {
+    if (event.button === 0 && !isAltOverrideActive) {
+      if (tryBeginWaterRectangleDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      waterBuildTool.handlePointerDown(event)
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    if (event.button === 2) {
+      pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
+      return
+    }
+  }
+
   const tools = handlePointerDownTools(event, {
     activeBuildTool: activeBuildTool.value,
     wallBuildShape: wallBuildShape.value,
@@ -9881,6 +10087,7 @@ function handlePointerMove(event: PointerEvent) {
     event.pointerType === 'mouse' &&
     !roadVertexDragState &&
     !floorVertexDragState &&
+    !waterRectangleDragState &&
     !floorThicknessDragState &&
     !floorCircleCenterDragState &&
     !floorCircleRadiusDragState &&
@@ -9896,16 +10103,19 @@ function handlePointerMove(event: PointerEvent) {
     ensureWallEndpointHandlesForSelectedNode()
     ensureFloorVertexHandlesForSelectedNode()
     ensureFloorCircleHandlesForSelectedNode()
+    ensureWaterRectangleHandlesForSelectedNode()
 
     roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    waterRectangleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
   } else {
     roadVertexRenderer.clearHover()
     wallEndpointRenderer.clearHover()
     floorVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
+    waterRectangleHandleRenderer.clearHover()
   }
 
   const _moveDragCtx: any = {
@@ -9967,6 +10177,42 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (waterRectangleDragState && event.pointerId === waterRectangleDragState.pointerId) {
+    const state = waterRectangleDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    const isLeftDown = (event.buttons & 1) !== 0
+    if (!isLeftDown) {
+      return
+    }
+    if (!raycastGroundPoint(event, groundPointerHelper)) {
+      return
+    }
+
+    const localBounds = { ...state.startBounds }
+    const x = groundPointerHelper.x
+    const z = groundPointerHelper.z
+    const eps = 1e-3
+    if (state.draggedSide.x === 'min') {
+      localBounds.minX = Math.min(x, localBounds.maxX - eps)
+    } else {
+      localBounds.maxX = Math.max(x, localBounds.minX + eps)
+    }
+    if (state.draggedSide.z === 'min') {
+      localBounds.minZ = Math.min(z, localBounds.maxZ - eps)
+    } else {
+      localBounds.maxZ = Math.max(z, localBounds.minZ + eps)
+    }
+
+    applyWaterRectanglePreviewTransform(state.runtimeObject, localBounds)
+    return
+  }
+
   const scatter = handlePointerMoveScatter(event, {
     scatterEraseModeActive: scatterEraseModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
@@ -10004,6 +10250,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   const buildTools = handlePointerMoveBuildTools(event, {
+    waterBuildToolHandlePointerMove: (e) => waterBuildTool.handlePointerMove(e),
     floorBuildToolHandlePointerMove: (e) => floorBuildTool.handlePointerMove(e),
     wallBuildToolHandlePointerMove: (e) => wallBuildTool.handlePointerMove(e),
     roadBuildToolHandlePointerMove: (e) => roadBuildTool.handlePointerMove(e),
@@ -10149,6 +10396,7 @@ async function handlePointerUp(event: PointerEvent) {
         pointerTrackingState?.pointerId === event.pointerId ||
         roadVertexDragState?.pointerId === event.pointerId ||
         floorVertexDragState?.pointerId === event.pointerId ||
+        waterRectangleDragState?.pointerId === event.pointerId ||
         floorThicknessDragState?.pointerId === event.pointerId ||
         wallCircleCenterDragState?.pointerId === event.pointerId ||
         wallCircleRadiusDragState?.pointerId === event.pointerId ||
@@ -10174,6 +10422,44 @@ async function handlePointerUp(event: PointerEvent) {
     // which may use middle-button can handle the event first. If no handler
     // processed the pointerup, we'll cancel active tools below.
     if (isPointerUpOnCanvas) {
+      if (waterRectangleDragState && event.pointerId === waterRectangleDragState.pointerId && event.button === 0) {
+        const state = waterRectangleDragState
+        waterRectangleDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        setActiveWaterRectangleHandle(null)
+
+        if (state.moved) {
+          const runtimeBounds = {
+            minX: state.runtimeObject.position.x - Math.abs(state.runtimeObject.scale.x) * 0.5,
+            maxX: state.runtimeObject.position.x + Math.abs(state.runtimeObject.scale.x) * 0.5,
+            minZ: state.runtimeObject.position.z - Math.abs(state.runtimeObject.scale.y) * 0.5,
+            maxZ: state.runtimeObject.position.z + Math.abs(state.runtimeObject.scale.y) * 0.5,
+            y: state.runtimeObject.position.y,
+          }
+          sceneStore.updateWaterNodeRectangle({
+            nodeId: state.nodeId,
+            center: {
+              x: (runtimeBounds.minX + runtimeBounds.maxX) * 0.5,
+              y: runtimeBounds.y,
+              z: (runtimeBounds.minZ + runtimeBounds.maxZ) * 0.5,
+            },
+            width: runtimeBounds.maxX - runtimeBounds.minX,
+            depth: runtimeBounds.maxZ - runtimeBounds.minZ,
+          })
+          ensureWaterRectangleHandlesForSelectedNode({ force: true })
+          void nextTick(() => {
+            ensureWaterRectangleHandlesForSelectedNode({ force: true })
+          })
+        } else {
+          restoreWaterRectanglePreviewTransform(state)
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
       const drag = handlePointerUpDrag(event, {
         roadDefaultWidth: ROAD_DEFAULT_WIDTH,
         roadVertexDragState,
@@ -10232,6 +10518,7 @@ async function handlePointerUp(event: PointerEvent) {
       const tools = handlePointerUpTools(event, {
         maybeCancelBuildToolOnRightDoubleClick,
         handleGroundEditorPointerUp,
+        waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
         activeBuildTool: activeBuildTool.value,
@@ -10713,6 +11000,27 @@ function handlePointerCancel(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'water') {
+    if (waterBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
+  if (waterRectangleDragState && event.pointerId === waterRectangleDragState.pointerId) {
+    const state = waterRectangleDragState
+    waterRectangleDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    setActiveWaterRectangleHandle(null)
+    restoreWaterRectanglePreviewTransform(state)
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (floorEdgeDragState && event.pointerId === floorEdgeDragState.pointerId) {
     const state = floorEdgeDragState
     floorEdgeDragState = null
@@ -10779,7 +11087,9 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   const hitNode: any = sceneStore.getNodeById(hitNodeId)
   const hitDynamicMeshType = hitNode?.dynamicMesh?.type as string | undefined
   const toolForNode: BuildTool | null =
-    hitDynamicMeshType === 'Wall'
+    isWaterSurfaceNode(hitNode)
+      ? 'water'
+      : hitDynamicMeshType === 'Wall'
       ? 'wall'
       : hitDynamicMeshType === 'Floor'
       ? 'floor'
@@ -10904,6 +11214,11 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handleBuildToolChange(null)
       handled = true
       break
+    case 'water':
+      waterBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
     default:
       return false
   }
@@ -10927,6 +11242,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'floor' && tool !== 'floor') {
     floorBuildTool.cancel()
+  }
+  if (activeBuildTool.value === 'water' && tool !== 'water') {
+    waterBuildTool.cancel()
   }
   if (tool === 'ground') {
     exitScatterEraseMode()
@@ -14454,6 +14772,15 @@ watch(activeBuildTool, (tool, previous) => {
   if (tool !== 'floor') {
     floorBuildTool.cancel()
   }
+  if (tool !== 'water') {
+    waterBuildTool.cancel()
+    if (waterRectangleDragState) {
+      pointerInteraction.releaseIfCaptured(waterRectangleDragState.pointerId)
+      restoreWaterRectanglePreviewTransform(waterRectangleDragState)
+      waterRectangleDragState = null
+      setActiveWaterRectangleHandle(null)
+    }
+  }
 
   const desiredContext = tool ? `build-tool:${tool}` : null
   if (desiredContext) {
@@ -14552,8 +14879,10 @@ defineExpose<SceneViewportHandle>({
         :camera-reset-menu-open="cameraResetMenuOpen"
         :floor-shape-menu-open="floorShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
+        :water-shape-menu-open="waterShapeMenuOpen"
         :floor-build-shape="floorBuildShape"
         :wall-build-shape="wallBuildShape"
+        :water-build-shape="waterBuildShape"
         :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
         :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
         :build-tools-disabled="buildToolsDisabled"
@@ -14574,9 +14903,11 @@ defineExpose<SceneViewportHandle>({
           @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
-            @update:wall-shape-menu-open="handleWallShapeMenuOpen"
+          @update:wall-shape-menu-open="handleWallShapeMenuOpen"
+          @update:water-shape-menu-open="handleWaterShapeMenuOpen"
           @select-floor-build-shape="handleSelectFloorBuildShape"
-            @select-wall-build-shape="handleSelectWallBuildShape"
+          @select-wall-build-shape="handleSelectWallBuildShape"
+          @select-water-build-shape="handleSelectWaterBuildShape"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>
@@ -14819,6 +15150,11 @@ defineExpose<SceneViewportHandle>({
 .viewport-canvas.cursor-floor,
 .viewport-canvas.cursor-floor:active {
   cursor: copy !important;
+}
+
+.viewport-canvas.cursor-water,
+.viewport-canvas.cursor-water:active {
+  cursor: alias !important;
 }
 
 .viewport-canvas.cursor-scatter-erase,

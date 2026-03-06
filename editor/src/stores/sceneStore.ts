@@ -24,6 +24,7 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  createPrimitiveMesh,
 } from '@schema'
 import type {
   AssetIndexEntry,
@@ -163,6 +164,7 @@ import { type FloorPresetData } from '@/utils/floorPreset'
 import { createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
+import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import {
   createNodePrefabHelpers,
   createPrefabActions,
@@ -11182,6 +11184,39 @@ export const useSceneStore = defineStore('scene', {
       const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
+
+    generateWaterNodeName() {
+      const prefix = 'Water '
+      const pattern = /^Water\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -11527,6 +11562,80 @@ export const useSceneStore = defineStore('scene', {
       } finally {
         this.endHistoryCaptureSuppression()
       }
+    },
+
+    createWaterNode(payload: {
+      nodeId?: string
+      center: Vector3Like
+      width: number
+      depth: number
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const width = Math.max(1e-3, Math.abs(Number(payload.width)))
+      const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
+      if (!Number.isFinite(width) || !Number.isFinite(depth)) {
+        return null
+      }
+
+      const runtime = createPrimitiveMesh('Plane', { doubleSided: true })
+      const nodeName = payload.name ?? this.generateWaterNodeName()
+      const userData = mergeUserDataWithWaterBuildShape(undefined, 'rectangle')
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeId: payload.nodeId,
+          nodeType: 'Plane',
+          object: runtime,
+          name: nodeName,
+          position: createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0),
+          rotation: createVector(-Math.PI / 2, 0, 0),
+          scale: createVector(width, depth, 1),
+          editorFlags: payload.editorFlags,
+          userData,
+        })
+
+        if (!node) {
+          return null
+        }
+
+        this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
+        const updated = findNodeById(this.nodes, node.id)
+        return updated ?? node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    updateWaterNodeRectangle(payload: {
+      nodeId: string
+      center: Vector3Like
+      width: number
+      depth: number
+    }): SceneNode | null {
+      const width = Math.max(1e-3, Math.abs(Number(payload.width)))
+      const depth = Math.max(1e-3, Math.abs(Number(payload.depth)))
+      if (!Number.isFinite(width) || !Number.isFinite(depth)) {
+        return null
+      }
+
+      const target = findNodeById(this.nodes, payload.nodeId)
+      if (!isWaterSurfaceNode(target)) {
+        return null
+      }
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, payload.nodeId, (node) => {
+        node.position = createVector(Number(payload.center.x) || 0, Number(payload.center.y) || 0, Number(payload.center.z) || 0)
+        node.rotation = createVector(-Math.PI / 2, 0, 0)
+        node.scale = createVector(width, depth, 1)
+        node.userData = mergeUserDataWithWaterBuildShape(node.userData, 'rectangle')
+      })
+      this.queueSceneNodePatch(payload.nodeId, ['transform', 'userData'])
+      commitSceneSnapshot(this)
+      return findNodeById(this.nodes, payload.nodeId)
     },
 
     createGuideRouteNode(payload: {
