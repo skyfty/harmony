@@ -849,6 +849,7 @@ export interface SceneJsonExportDocument {
   outlineMeshMap?: SceneOutlineMeshMap;
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
+  assetUrlOverrides?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
   lazyLoadMeshes?: boolean;
   assetPreload?: SceneAssetPreloadInfo;

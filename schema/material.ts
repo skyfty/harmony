@@ -605,11 +605,17 @@ export class SceneMaterialFactory {
 
   private async loadTextureFromEntry(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     try {
+      const downloadUrl = !asset.downloadUrl || asset.downloadUrl?.startsWith("builtin") ? asset.blobUrl : asset.downloadUrl;
+      if (!downloadUrl) {
+        console.warn('纹理资源下载链接缺失', asset.assetId);
+        return null;
+      }
+
       if (options?.hdr && this.hdrLoader) {
         const hdrLoader = this.hdrLoader;
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
-            asset.downloadUrl ?? asset.blobUrl ?? '',
+            downloadUrl,
             (loaded: unknown) => resolve(loaded as THREE.Texture),
             undefined,
             (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
@@ -619,7 +625,7 @@ export class SceneMaterialFactory {
       }
       const texture = await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
-            asset.downloadUrl ?? asset.blobUrl ?? '',
+          downloadUrl,
           (loaded: THREE.Texture) => resolve(loaded),
           undefined,
           (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),

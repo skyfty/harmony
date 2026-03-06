@@ -1,5 +1,6 @@
 import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
+import { collectBuiltinAssetLookupIds } from './builtinAssetMapping';
 import type { SceneGraphBuildOptions } from './sceneGraph';
 import type { SceneJsonExportDocument } from './index';
 
@@ -49,7 +50,10 @@ export default class ResourceCache {
   }
 
   setContext(document: SceneJsonExportDocument, options: SceneGraphBuildOptions): void {
-    const overridesChanged = this.options?.assetOverrides !== options.assetOverrides;
+    const overridesChanged =
+      this.options?.assetOverrides !== options.assetOverrides ||
+      this.options?.builtinAssetPathMap !== options.builtinAssetPathMap ||
+      this.options?.resolveBuiltinAssetPath !== options.resolveBuiltinAssetPath;
     this.document = document;
     this.options = options;
     this.packageEntries.clear();
@@ -152,13 +156,27 @@ export default class ResourceCache {
       return null;
     }
 
+    const lookupAssetIds = this.collectAssetLookupIds(assetId);
+
     if (assetId.startsWith('data:')) {
       return { kind: 'data-url', dataUrl: assetId };
     }
 
-    const override = this.resolveOverride(assetId);
-    if (override) {
-      return override;
+    for (const lookupAssetId of lookupAssetIds) {
+      const override = this.resolveOverride(lookupAssetId);
+      if (override) {
+        return override;
+      }
+    }
+
+    const documentOverride = this.resolveDocumentAssetUrlOverride(lookupAssetIds);
+    if (documentOverride) {
+      return documentOverride;
+    }
+
+    const builtinMappedPath = await this.resolveBuiltinMappedPath(lookupAssetIds);
+    if (builtinMappedPath) {
+      return builtinMappedPath;
     }
 
     // Remote URL should be resolved only after overrides, so embedded packages can override URL-like IDs.
@@ -166,41 +184,131 @@ export default class ResourceCache {
       return { kind: 'remote-url', url: assetId };
     }
 
-    const embedded = this.resolveEmbedded(assetId);
-    if (embedded) {
-      return embedded;
-    }
-
-    const packageEntry = this.getPackageEntry(assetId);
-    if (packageEntry) {
-      const resolved = await this.resolvePackageEntry(assetId, packageEntry.provider, packageEntry.value);
-      if (resolved) {
-        return resolved;
+    for (const lookupAssetId of lookupAssetIds) {
+      const embedded = this.resolveEmbedded(lookupAssetId);
+      if (embedded) {
+        return embedded;
       }
     }
 
-    const indexSource = await this.resolveAssetIndexSource(assetId);
-    if (indexSource) {
-      return indexSource;
+    for (const lookupAssetId of lookupAssetIds) {
+      const packageEntry = this.getPackageEntry(lookupAssetId);
+      if (packageEntry) {
+        const resolved = await this.resolvePackageEntry(lookupAssetId, packageEntry.provider, packageEntry.value);
+        if (resolved) {
+          return resolved;
+        }
+      }
     }
 
-    const summaryUrl = this.getResourceSummaryDownloadUrl(assetId);
-    if (summaryUrl) {
-      return { kind: 'remote-url', url: summaryUrl };
+    for (const lookupAssetId of lookupAssetIds) {
+      const indexSource = await this.resolveAssetIndexSource(lookupAssetId);
+      if (indexSource) {
+        return indexSource;
+      }
+    }
+
+    for (const lookupAssetId of lookupAssetIds) {
+      const summaryUrl = this.getResourceSummaryDownloadUrl(lookupAssetId);
+      if (summaryUrl) {
+        return { kind: 'remote-url', url: summaryUrl };
+      }
     }
 
     if (typeof this.options.resolveAssetUrl === 'function') {
-      const external = await this.options.resolveAssetUrl(assetId);
-      if (external) {
-        if (external.startsWith('data:')) {
-          return { kind: 'data-url', dataUrl: external };
+      for (const lookupAssetId of lookupAssetIds) {
+        const external = await this.options.resolveAssetUrl(lookupAssetId);
+        if (external) {
+          if (external.startsWith('data:')) {
+            return { kind: 'data-url', dataUrl: external };
+          }
+          return { kind: 'remote-url', url: external };
         }
-        return { kind: 'remote-url', url: external };
       }
     }
 
     this.warn(`未找到资源 ${assetId}`);
     return null;
+  }
+
+  private collectAssetLookupIds(assetId: string): string[] {
+    const ids = new Set<string>();
+    const primary = typeof assetId === 'string' ? assetId.trim() : '';
+    if (primary.length) {
+      ids.add(primary);
+    }
+    const builtinLookups = collectBuiltinAssetLookupIds(primary);
+    for (const item of builtinLookups) {
+      const normalized = typeof item === 'string' ? item.trim() : '';
+      if (normalized.length) {
+        ids.add(normalized);
+      }
+    }
+    return Array.from(ids);
+  }
+
+  private resolveDocumentAssetUrlOverride(assetIds: string[]): AssetSource | null {
+    const overrides = this.document.assetUrlOverrides;
+    if (!overrides || typeof overrides !== 'object') {
+      return null;
+    }
+
+    for (const assetId of assetIds) {
+      const candidate = overrides[assetId];
+      if (typeof candidate !== 'string') {
+        continue;
+      }
+      const value = candidate.trim();
+      if (!value.length) {
+        continue;
+      }
+      if (value.startsWith('data:')) {
+        return { kind: 'data-url', dataUrl: value };
+      }
+      return { kind: 'remote-url', url: value };
+    }
+
+    return null;
+  }
+
+  private async resolveBuiltinMappedPath(assetIds: string[]): Promise<AssetSource | null> {
+    const map = this.options.builtinAssetPathMap;
+    if (map && typeof map === 'object') {
+      for (const assetId of assetIds) {
+        const candidate = map[assetId];
+        const resolved = this.resolveMappedPathSource(candidate);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+
+    const resolver = this.options.resolveBuiltinAssetPath;
+    if (typeof resolver === 'function') {
+      for (const assetId of assetIds) {
+        const candidate = await resolver(assetId);
+        const resolved = this.resolveMappedPathSource(candidate);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private resolveMappedPathSource(candidate: string | null | undefined): AssetSource | null {
+    if (typeof candidate !== 'string') {
+      return null;
+    }
+    const value = candidate.trim();
+    if (!value.length) {
+      return null;
+    }
+    if (value.startsWith('data:')) {
+      return { kind: 'data-url', dataUrl: value };
+    }
+    return { kind: 'remote-url', url: value };
   }
 
   private getResourceSummaryDownloadUrl(assetId: string): string | null {

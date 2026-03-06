@@ -81,6 +81,8 @@ export interface SceneGraphBuildOptions {
   enableGround?: boolean;
   presetAssetBaseUrl?: string;
   resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null | undefined;
+  builtinAssetPathMap?: Record<string, string>;
+  resolveBuiltinAssetPath?: (assetId: string) => string | Promise<string | null> | null | undefined;
   assetOverrides?: Record<
     string,
     string | ArrayBuffer | { bytes: ArrayBuffer | Uint8Array; mimeType?: string | null; filename?: string | null }
