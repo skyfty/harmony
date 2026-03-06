@@ -35,6 +35,17 @@ const groundCastShadow = computed({
     sceneStore.updateNodeDynamicMesh(node.id, { castShadow: value })
   },
 })
+
+const groundChunkStreamingEnabled = computed({
+  get: () => groundDefinition.value?.chunkStreamingEnabled !== false,
+  set: (value: boolean) => {
+    const node = selectedGroundNode.value
+    if (!node || node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    sceneStore.updateNodeDynamicMesh(node.id, { chunkStreamingEnabled: value })
+  },
+})
 </script>
 
 <template>
@@ -78,6 +89,14 @@ const groundCastShadow = computed({
         hide-details
         color="primary"
         label="Cast Ground Shadows"
+      />
+
+      <v-switch
+        v-model="groundChunkStreamingEnabled"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Enable Terrain Chunk Streaming"
       />
     </v-expansion-panel-text>
   </v-expansion-panel>

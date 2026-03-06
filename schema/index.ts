@@ -1132,6 +1132,8 @@ export interface GroundDynamicMesh {
   rows: number
   columns: number
   cellSize: number
+  /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
+  chunkStreamingEnabled?: boolean
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
   heightComposition: {

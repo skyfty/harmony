@@ -1151,6 +1151,7 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     rows: definition.rows,
     columns: definition.columns,
     cellSize: definition.cellSize,
+    chunkStreamingEnabled: definition.chunkStreamingEnabled,
     manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
     planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) },

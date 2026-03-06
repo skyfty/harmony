@@ -471,7 +471,12 @@ import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh, buildGroundHeightfieldData } from '@harmony/schema/groundHeightfield';
-import { updateGroundChunks } from '@harmony/schema/groundMesh';
+import {
+  areAllGroundChunksLoaded,
+  ensureAllGroundChunks,
+  isGroundChunkStreamingEnabled,
+  updateGroundChunks,
+} from '@harmony/schema/groundMesh';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 import {
   createDefaultTerrainPaintLoaders,
@@ -2696,6 +2701,13 @@ type LazyPlaceholderState = {
 const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>();
 const deferredInstancingNodeIds = new Set<string>();
 let lazyLoadMeshesEnabled = true;
+type HarmonyGroundChunkStreamingGlobal = typeof globalThis & {
+  __HARMONY_GROUND_CHUNK_STREAMING_ENABLED__?: boolean;
+};
+const harmonyGroundChunkStreamingGlobal = globalThis as HarmonyGroundChunkStreamingGlobal;
+if (typeof harmonyGroundChunkStreamingGlobal.__HARMONY_GROUND_CHUNK_STREAMING_ENABLED__ !== 'boolean') {
+  harmonyGroundChunkStreamingGlobal.__HARMONY_GROUND_CHUNK_STREAMING_ENABLED__ = true;
+}
 let activeLazyLoadCount = 0;
 const tempOutlineSphere = new THREE.Sphere();
 const tempOutlineScale = new THREE.Vector3();
@@ -3759,6 +3771,11 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   } else {
     dynamicGroundCache = null;
   }
+}
+
+function isGroundChunkStreamingActive(definition: GroundDynamicMesh | null | undefined): boolean {
+  return harmonyGroundChunkStreamingGlobal.__HARMONY_GROUND_CHUNK_STREAMING_ENABLED__ !== false
+    && isGroundChunkStreamingEnabled(definition);
 }
 
 function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
@@ -10072,7 +10089,11 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+            if (isGroundChunkStreamingActive(cachedGround.dynamicMesh)) {
+              updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+            } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
+              ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
+            }
             syncTerrainPaintPreviewForGround(groundObject, cachedGround.dynamicMesh);
             if (debugEnabled.value) {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);

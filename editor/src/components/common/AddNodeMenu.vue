@@ -1875,6 +1875,7 @@ async function handleConfirmGround() {
     rows,
     columns,
     cellSize,
+    chunkStreamingEnabled: true,
     manualHeightMap: {},
     planningHeightMap: {},
     heightComposition: { mode: 'planning_plus_manual' },

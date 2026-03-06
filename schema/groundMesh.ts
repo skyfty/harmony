@@ -168,6 +168,25 @@ export function resolveGroundChunkRadiusMeters(definition: GroundDynamicMesh): n
   return resolveGroundChunkRadius(definition)
 }
 
+export function isGroundChunkStreamingEnabled(definition: GroundDynamicMesh | null | undefined): boolean {
+  return definition?.chunkStreamingEnabled !== false
+}
+
+export function areAllGroundChunksLoaded(target: THREE.Object3D, definition: GroundDynamicMesh): boolean {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return false
+  }
+  const state = ensureGroundRuntimeState(root, definition)
+  const chunkCells = state.chunkCells
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
+  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+  const totalChunkCount = (maxChunkRowIndex + 1) * (maxChunkColumnIndex + 1)
+  return state.chunks.size >= totalChunkCount
+}
+
 function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
   // Default to a moderate radius; keep streaming window smaller by default.
   const width = Number.isFinite(definition.width) ? definition.width : 0

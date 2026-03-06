@@ -162,6 +162,9 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
+  areAllGroundChunksLoaded,
+  ensureAllGroundChunks,
+  isGroundChunkStreamingEnabled,
   updateGroundChunks,
   updateGroundMesh,
   releaseGroundMeshCache,
@@ -14342,16 +14345,20 @@ function updateGroundChunkStreaming() {
   const radius = resolveDynamicGroundStreamingRadiusMeters(groundObject)
   const budget = resolveDynamicGroundStreamingBudget(groundObject)
 
-  updateGroundChunks(groundObject, node.dynamicMesh, camera, {
-    radius,
-    budget: {
-      maxCreatePerUpdate: budget.maxCreatePerUpdate,
-      maxDestroyPerUpdate: budget.maxDestroyPerUpdate,
-      maxMs: budget.maxMs,
-    },
-    minIntervalMs: budget.minIntervalMs,
-    minCameraMoveMeters: budget.minCameraMoveMeters,
-  })
+  if (isGroundChunkStreamingEnabled(node.dynamicMesh)) {
+    updateGroundChunks(groundObject, node.dynamicMesh, camera, {
+      radius,
+      budget: {
+        maxCreatePerUpdate: budget.maxCreatePerUpdate,
+        maxDestroyPerUpdate: budget.maxDestroyPerUpdate,
+        maxMs: budget.maxMs,
+      },
+      minIntervalMs: budget.minIntervalMs,
+      minCameraMoveMeters: budget.minCameraMoveMeters,
+    })
+  } else if (!areAllGroundChunksLoaded(groundObject, node.dynamicMesh)) {
+    ensureAllGroundChunks(groundObject, node.dynamicMesh)
+  }
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
   // Refresh placement raycast targets when the chunk set changes; otherwise asset placement
