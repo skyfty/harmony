@@ -29,7 +29,13 @@
             />
           </template>
           <v-list density="compact" class="ground-terrain-menu">
-            <div class="ground-tool-menu__card">
+            <div
+              class="ground-tool-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Terrain Tools</div>
@@ -78,7 +84,13 @@
             />
           </template>
           <v-list density="compact" class="ground-paint-menu">
-            <div class="ground-tool-menu__card">
+            <div
+              class="ground-tool-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Terrain Paint</div>
@@ -122,7 +134,13 @@
             />
           </template>
           <v-list density="compact" class="ground-scatter-menu">
-            <div class="ground-tool-menu__card">
+            <div
+              class="ground-tool-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Terrain Scatter</div>
@@ -207,7 +225,13 @@
             />
           </template>
           <v-list density="compact" class="floor-shape-menu">
-            <div class="floor-shape-menu__card">
+            <div
+              class="floor-shape-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Floor Brush</div>
@@ -276,7 +300,13 @@
             />
           </template>
           <v-list density="compact" class="wall-shape-menu">
-            <div class="wall-shape-menu__card">
+            <div
+              class="wall-shape-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Wall Brush</div>
@@ -343,7 +373,13 @@
             />
           </template>
           <v-list density="compact" class="water-shape-menu">
-            <div class="wall-shape-menu__card">
+            <div
+              class="wall-shape-menu__card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Water Brush</div>
@@ -475,7 +511,13 @@
           />
         </template>
         <v-list density="compact" class="align-menu">
-          <div class="popup-menu-card">
+          <div
+            class="popup-menu-card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
             <v-toolbar density="compact" class="menu-toolbar" height="36px">
               <div class="toolbar-text">
                 <div class="menu-title">Align / Distribute</div>
@@ -567,7 +609,13 @@
           />
         </template>
         <v-list density="compact" class="scatter-erase-menu">
-          <div class="scatter-erase-menu__card">
+          <div
+            class="scatter-erase-menu__card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
             <v-toolbar density="compact" class="menu-toolbar" height="36px">
               <div class="toolbar-text">
                 <div class="menu-title">Scatter Erase</div>
@@ -622,7 +670,13 @@
           />
         </template>
         <v-list density="compact" class="rotation-menu">
-          <div class="popup-menu-card">
+          <div
+            class="popup-menu-card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
             <v-toolbar density="compact" class="menu-toolbar" height="36px">
               <div class="toolbar-text">
                 <div class="menu-title">Rotate</div>
@@ -660,7 +714,13 @@
             />
           </template>
           <v-list density="compact" class="mirror-menu">
-            <div class="popup-menu-card">
+            <div
+              class="popup-menu-card"
+              @pointerdown.stop
+              @pointerup.stop
+              @mousedown.stop
+              @mouseup.stop
+            >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
                   <div class="menu-title">Mirror</div>
@@ -757,7 +817,13 @@
           />
         </template>
         <v-list density="compact" class="camera-reset-menu">
-          <div class="popup-menu-card">
+          <div
+            class="popup-menu-card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
             <v-toolbar density="compact" class="menu-toolbar" height="36px">
               <div class="toolbar-text">
                 <div class="menu-title">Camera View</div>

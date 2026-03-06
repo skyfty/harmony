@@ -3313,6 +3313,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function scatterModeEnabled(): boolean {
+		if (options.activeBuildTool.value !== 'scatter') {
+			return false
+		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
@@ -3327,6 +3330,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function paintModeEnabled(): boolean {
+		if (options.activeBuildTool.value !== 'paint') {
+			return false
+		}
 		if (options.scatterEraseModeActive.value) {
 			return false
 		}
@@ -4753,15 +4759,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerMove(event: PointerEvent): boolean {
-		const showBrush = Boolean(getGroundDynamicMeshDefinition()) &&
-			(options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint' || options.scatterEraseModeActive.value || scatterModeEnabled())
+		const activeTool = options.activeBuildTool.value
+		const showBrush = Boolean(getGroundDynamicMeshDefinition()) && (
+			options.scatterEraseModeActive.value
+			|| activeTool === 'terrain'
+			|| activeTool === 'paint'
+			|| activeTool === 'scatter'
+		)
 		if (showBrush) {
 			updateBrush(event)
 			updateScatterHoverPreview(event)
-			if (options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
+			if (activeTool === 'paint' && options.groundPanelTab.value === 'paint' && isPainting.value && paintStrokePointerId === event.pointerId) {
 				performPaint(event)
 			}
-			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
+			if (activeTool === 'terrain' && options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
@@ -4977,6 +4988,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
+			brushMesh.visible = false
+			scatterPreviewGroup.visible = false
 			if (sculptSessionState) {
 				commitSculptSession(getGroundNodeFromScene())
 			}

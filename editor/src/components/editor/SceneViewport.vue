@@ -11210,6 +11210,29 @@ async function handlePointerUp(event: PointerEvent) {
   // surface snap pointer updates removed (alignment hint disabled)
   try {
     const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
+    const isPointerEventFromOverlayUi = isEventFromViewportOverlayUi(event)
+    const hasViewportSession =
+      pointerCaptureGuard.hasCaptured(event.pointerId) ||
+      pointerTrackingState?.pointerId === event.pointerId ||
+      roadVertexDragState?.pointerId === event.pointerId ||
+      floorVertexDragState?.pointerId === event.pointerId ||
+      waterContourVertexDragState?.pointerId === event.pointerId ||
+      waterRectangleDragState?.pointerId === event.pointerId ||
+      waterCircleCenterDragState?.pointerId === event.pointerId ||
+      waterCircleRadiusDragState?.pointerId === event.pointerId ||
+      waterEdgeDragState?.pointerId === event.pointerId ||
+      floorThicknessDragState?.pointerId === event.pointerId ||
+      wallCircleCenterDragState?.pointerId === event.pointerId ||
+      wallCircleRadiusDragState?.pointerId === event.pointerId ||
+      wallEndpointDragState?.pointerId === event.pointerId ||
+      wallJointDragState?.pointerId === event.pointerId ||
+      wallHeightDragState?.pointerId === event.pointerId ||
+      floorEdgeDragState?.pointerId === event.pointerId ||
+      instancedEraseDragState?.pointerId === event.pointerId ||
+      pointerInteraction.get()?.pointerId === event.pointerId ||
+      middleClickSessionState?.pointerId === event.pointerId ||
+      leftEmptyClickSessionState?.pointerId === event.pointerId ||
+      assetPlacementClickSessionState?.pointerId === event.pointerId
 
     const applyPointerUpResult = (result: PointerUpResult) => {
       if (result.clearPointerTrackingState) {
@@ -11274,30 +11297,11 @@ async function handlePointerUp(event: PointerEvent) {
     //
     // We intentionally do NOT rely on `event.target === canvas` because pointer-capture can
     // retarget the event to the captured element even if the pointer is released elsewhere.
-    if (!isPointerUpOnCanvas) {
-      const hasViewportSession =
-        pointerCaptureGuard.hasCaptured(event.pointerId) ||
-        pointerTrackingState?.pointerId === event.pointerId ||
-        roadVertexDragState?.pointerId === event.pointerId ||
-        floorVertexDragState?.pointerId === event.pointerId ||
-        waterContourVertexDragState?.pointerId === event.pointerId ||
-        waterRectangleDragState?.pointerId === event.pointerId ||
-        waterCircleCenterDragState?.pointerId === event.pointerId ||
-        waterCircleRadiusDragState?.pointerId === event.pointerId ||
-        waterEdgeDragState?.pointerId === event.pointerId ||
-        floorThicknessDragState?.pointerId === event.pointerId ||
-        wallCircleCenterDragState?.pointerId === event.pointerId ||
-        wallCircleRadiusDragState?.pointerId === event.pointerId ||
-        wallEndpointDragState?.pointerId === event.pointerId ||
-        wallJointDragState?.pointerId === event.pointerId ||
-        wallHeightDragState?.pointerId === event.pointerId ||
-        floorEdgeDragState?.pointerId === event.pointerId ||
-        instancedEraseDragState?.pointerId === event.pointerId ||
-        pointerInteraction.get()?.pointerId === event.pointerId ||
-        middleClickSessionState?.pointerId === event.pointerId ||
-        leftEmptyClickSessionState?.pointerId === event.pointerId ||
-        assetPlacementClickSessionState?.pointerId === event.pointerId
+    if (isPointerEventFromOverlayUi && !hasViewportSession) {
+      return
+    }
 
+    if (!isPointerUpOnCanvas) {
       // If the interaction started in the viewport, treat releasing outside as a cancellation.
       // This avoids accidental commits and also prevents a "drop" onto UI panels.
       if (hasViewportSession) {
@@ -11650,8 +11654,8 @@ async function handlePointerUp(event: PointerEvent) {
     // If middle mouse was released and no other handler processed the event,
     // cancel active tools and restore select, but only if this was a click (no drag).
     // Middle drag is reserved for camera panning.
-    if (event.button === 1) {
-      const wasDrag = Boolean(middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState?.moved)
+    if (event.button === 1 && middleClickSessionState?.pointerId === event.pointerId) {
+      const wasDrag = Boolean(middleClickSessionState.moved)
       if (wasDrag) {
         return
       }
@@ -15493,9 +15497,37 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
+function isOverlayUiElement(element: Element | null): boolean {
+  if (!element) {
+    return false
+  }
+  return Boolean(
+    element.closest('.v-overlay') ||
+    element.closest('.v-overlay__content') ||
+    element.closest('.viewport-toolbar') ||
+    element.closest('.popup-menu-card') ||
+    element.closest('.ground-tool-menu__card') ||
+    element.closest('.floor-shape-menu__card') ||
+    element.closest('.wall-shape-menu__card') ||
+    element.closest('.scatter-erase-menu__card')
+  )
+}
+
+function isEventFromViewportOverlayUi(event: Event): boolean {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+  for (const node of path) {
+    if (node instanceof Element && isOverlayUiElement(node)) {
+      return true
+    }
+  }
+  const targetElement = event.target instanceof Element ? event.target : null
+  return isOverlayUiElement(targetElement)
+}
+
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
+  if (isEventFromViewportOverlayUi(event)) return false
   if (props.previewActive) return false
   return true
 }
