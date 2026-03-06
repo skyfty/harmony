@@ -5,12 +5,6 @@ import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 
-type BlockedBuildTool = 'wall' | 'road' | 'floor' | 'water'
-
-function isBlockedBuildTool(tool: BuildTool | null): tool is BlockedBuildTool {
-  return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water'
-}
-
 export const useBuildToolsStore = defineStore('buildTools', () => {
   const activeBuildTool = ref<BuildTool | null>(null)
   const wallBrushPresetAssetId = ref<string | null>(null)
@@ -29,9 +23,6 @@ export const useBuildToolsStore = defineStore('buildTools', () => {
   }
 
   function setActiveBuildTool(tool: BuildTool | null): boolean {
-    if (tool && buildToolsDisabled.value && isBlockedBuildTool(tool)) {
-      return false
-    }
     activeBuildTool.value = tool
     return true
   }

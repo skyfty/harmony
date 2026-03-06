@@ -1755,8 +1755,7 @@ watch(
   { immediate: true },
 )
 
-const isGroundSculptConfigMode = computed(() => hasGroundNode.value && brushOperation.value != null)
-const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
+const buildToolsDisabled = computed(() => false)
 
 watch(
   buildToolsDisabled,
@@ -5109,6 +5108,16 @@ function handleActivateGroundTab(tab: GroundPanelTab) {
   terrainStore.setGroundPanelTab(tab)
 }
 
+function activateGroundBuildToolFromPanel(tool: GroundBuildTool) {
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  if (activeBuildTool.value === tool) {
+    return
+  }
+  handleBuildToolChange(tool)
+}
+
 function handleGroundBrushRadiusUpdate(value: number) {
   const next = Number(value)
   terrainStore.brushRadius = Number.isFinite(next) ? Math.min(50, Math.max(0.1, next)) : terrainStore.brushRadius
@@ -5124,6 +5133,9 @@ function handleGroundBrushShapeUpdate(value: 'circle' | 'square' | 'star') {
 }
 
 function handleGroundBrushOperationUpdate(value: GroundSculptOperation | null) {
+  if (value) {
+    activateGroundBuildToolFromPanel('terrain')
+  }
   terrainStore.setBrushOperation(value)
 }
 
@@ -5140,6 +5152,9 @@ function handleGroundPaintSmoothnessUpdate(value: number) {
 }
 
 function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
+  if (value) {
+    activateGroundBuildToolFromPanel('paint')
+  }
   terrainStore.setPaintSelection(value)
 }
 
@@ -5156,6 +5171,7 @@ function handleGroundScatterDensityPercentUpdate(value: number) {
 }
 
 function handleGroundScatterAssetSelect(payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }) {
+  activateGroundBuildToolFromPanel('scatter')
   terrainStore.setScatterCategory(payload.category)
   terrainStore.setScatterSelection({ asset: payload.asset, providerAssetId: payload.providerAssetId })
 }
@@ -12300,9 +12316,6 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
-  if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool) && isGroundSculptConfigMode.value) {
-    return
-  }
   if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool)) {
     // Preserve the last selected transform tool so we can restore it when exiting build via right double click.
     if (props.activeTool !== 'select') {
@@ -12327,6 +12340,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
     uiStore.setActiveSelectionContext(`build-tool:${tool}`)
   } else if (uiStore.activeSelectionContext?.startsWith('build-tool')) {
     uiStore.setActiveSelectionContext(null)
+  }
+  if (tool !== 'terrain' && (terrainStore.brushOperation ?? null)) {
+    terrainStore.setBrushOperation(null)
   }
 }
 
@@ -15879,19 +15895,6 @@ watch(activeBuildTool, (tool, previous) => {
     uiStore.setActiveSelectionContext(null)
   }
 })
-
-watch(
-  isGroundSculptConfigMode,
-  (enabled, previous) => {
-    if (!enabled || previous) {
-      return
-    }
-    const tool = activeBuildTool.value
-    if (isBuildToolBlockedDuringGroundSculptConfig(tool)) {
-      cancelActiveBuildOperation()
-    }
-  },
-)
 
 watch(
   () => props.focusRequestId,

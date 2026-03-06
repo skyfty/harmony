@@ -4540,6 +4540,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
+		if (options.activeBuildTool.value !== 'terrain') {
+			return false
+		}
 		if (options.groundPanelTab.value !== 'terrain') {
 			return false
 		}
