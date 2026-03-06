@@ -3879,6 +3879,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
+		if (!scatterModeEnabled()) {
+			cancelScatterPlacement()
+			scatterPreviewGroup.visible = false
+			return false
+		}
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4984,6 +4989,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
+		if (tool !== 'scatter') {
+			cancelScatterPlacement()
+			scatterPreviewGroup.visible = false
+		}
 		if (tool !== 'terrain' && tool !== 'paint' && tool !== 'scatter') {
 			groundSelectionDragState = null
 			clearGroundSelection()

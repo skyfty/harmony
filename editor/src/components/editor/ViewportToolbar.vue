@@ -424,6 +424,76 @@
           @contextmenu.prevent.stop="handleBuildToolContextMenu(tool.id, $event)"
         />
       </template>
+         <v-menu
+        :model-value="scatterEraseMenuOpen"
+        location="bottom"
+        :offset="6"
+        :open-on-click="false"
+        :close-on-content-click="false"
+        @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            :icon="scatterEraseButtonIcon"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            :color="scatterEraseModeActive ? 'primary' : undefined"
+            :variant="scatterEraseModeActive ? 'flat' : 'text'"
+            :disabled="!canEraseScatterEffective"
+            :title="scatterEraseButtonTitle"
+            @click="handleScatterEraseButtonClick"
+            @contextmenu.prevent.stop="handleScatterEraseContextMenu"
+          />
+        </template>
+        <v-list density="compact" class="scatter-erase-menu">
+          <div
+            class="scatter-erase-menu__card"
+            @pointerdown.stop
+            @pointerup.stop
+            @mousedown.stop
+            @mouseup.stop
+          >
+            <v-toolbar density="compact" class="menu-toolbar" height="36px">
+              <div class="toolbar-text">
+                <div class="menu-title">Scatter Erase</div>
+              </div>
+              <v-spacer />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:scatter-erase-menu-open', false)" />
+            </v-toolbar>
+
+            <div class="scatter-erase-menu__slider" style="padding: 10px">
+              <div class="scatter-erase-menu__slider-labels">
+                <span>Erase Radius</span>
+                <span>{{ scatterEraseRadiusLabel }}</span>
+              </div>
+              <v-slider
+                v-model="scatterEraseRadiusModel"
+                :min="0.5"
+                :max="SCATTER_BRUSH_RADIUS_MAX"
+                :step="0.5"
+                density="compact"
+                track-color="rgba(255,255,255,0.25)"
+                color="primary"
+              />
+            </div>
+            <v-divider class="scatter-erase-menu__divider" />
+            <v-list-item class="scatter-erase-menu__action">
+              <v-btn
+                density="compact"
+                variant="text"
+                color="primary"
+                class="scatter-erase-menu__clear"
+                :disabled="!canClearAllScatterInstances"
+                @click="handleClearScatterMenuAction"
+              >
+                Clear All Scatter Instances
+              </v-btn>
+            </v-list-item>
+          </div>
+        </v-list>
+      </v-menu>
       <v-divider vertical />
       <v-btn
         icon="mdi-camera-outline"
@@ -585,76 +655,7 @@
           </div>
         </v-list>
       </v-menu>
-      <v-menu
-        :model-value="scatterEraseMenuOpen"
-        location="bottom"
-        :offset="6"
-        :open-on-click="false"
-        :close-on-content-click="false"
-        @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
-      >
-        <template #activator="{ props: menuProps }">
-          <v-btn
-            v-bind="menuProps"
-            :icon="scatterEraseButtonIcon"
-            density="compact"
-            size="small"
-            class="toolbar-button"
-            :color="scatterEraseModeActive ? 'primary' : undefined"
-            :variant="scatterEraseModeActive ? 'flat' : 'text'"
-            :disabled="!canEraseScatterEffective"
-            :title="scatterEraseButtonTitle"
-            @click="handleScatterEraseButtonClick"
-            @contextmenu.prevent.stop="handleScatterEraseContextMenu"
-          />
-        </template>
-        <v-list density="compact" class="scatter-erase-menu">
-          <div
-            class="scatter-erase-menu__card"
-            @pointerdown.stop
-            @pointerup.stop
-            @mousedown.stop
-            @mouseup.stop
-          >
-            <v-toolbar density="compact" class="menu-toolbar" height="36px">
-              <div class="toolbar-text">
-                <div class="menu-title">Scatter Erase</div>
-              </div>
-              <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:scatter-erase-menu-open', false)" />
-            </v-toolbar>
-
-            <div class="scatter-erase-menu__slider" style="padding: 10px">
-              <div class="scatter-erase-menu__slider-labels">
-                <span>Erase Radius</span>
-                <span>{{ scatterEraseRadiusLabel }}</span>
-              </div>
-              <v-slider
-                v-model="scatterEraseRadiusModel"
-                :min="0.5"
-                :max="SCATTER_BRUSH_RADIUS_MAX"
-                :step="0.5"
-                density="compact"
-                track-color="rgba(255,255,255,0.25)"
-                color="primary"
-              />
-            </div>
-            <v-divider class="scatter-erase-menu__divider" />
-            <v-list-item class="scatter-erase-menu__action">
-              <v-btn
-                density="compact"
-                variant="text"
-                color="primary"
-                class="scatter-erase-menu__clear"
-                :disabled="!canClearAllScatterInstances"
-                @click="handleClearScatterMenuAction"
-              >
-                Clear All Scatter Instances
-              </v-btn>
-            </v-list-item>
-          </div>
-        </v-list>
-      </v-menu>
+   
       <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8" :close-on-content-click="false">
         <template #activator="{ props: menuProps }">
           <v-btn
