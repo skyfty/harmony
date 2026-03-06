@@ -102,6 +102,12 @@ import {
   getTerrainScatterStore,
   type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
+import builtinWaterNormalUrl from '@schema/waternormal.jpg'
+import {
+  BUILTIN_WATER_NORMAL_ASSET_ID,
+  BUILTIN_WATER_NORMAL_FILENAME,
+  isBuiltinWaterNormalAsset,
+} from '@/constants/builtinAssets'
 
 export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
@@ -367,6 +373,19 @@ let pendingSuppressedScenePatchRequiresFullSync = false
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
+let builtinWaterNormalBlobPromise: Promise<Blob> | null = null
+
+function loadBuiltinWaterNormalBlob(): Promise<Blob> {
+  if (!builtinWaterNormalBlobPromise) {
+    builtinWaterNormalBlobPromise = fetch(builtinWaterNormalUrl, { method: 'GET', cache: 'force-cache' }).then((response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to load built-in water normal map (${response.status})`)
+      }
+      return response.blob()
+    })
+  }
+  return builtinWaterNormalBlobPromise
+}
 
 function isPrefabDependencyPlaceholderAsset(asset: ProjectAsset): boolean {
   if (!asset) {
@@ -444,7 +463,7 @@ function buildVisibleAssetCatalog(
   }
   const next: Record<string, ProjectAsset[]> = {}
   Object.entries(catalog).forEach(([categoryId, list]) => {
-    next[categoryId] = (list ?? []).filter((asset) => !assetIndex[asset.id]?.internal)
+    next[categoryId] = (list ?? []).filter((asset) => !assetIndex[asset.id]?.internal || isBuiltinWaterNormalAsset(asset.id))
   })
   return next
 }
@@ -9033,6 +9052,59 @@ export const useSceneStore = defineStore('scene', {
       matrix.decompose(position, quaternion, scale)
       return position
     },
+    async ensureBuiltinWaterNormalAsset(): Promise<ProjectAsset | null> {
+      const assetId = BUILTIN_WATER_NORMAL_ASSET_ID
+      const assetCache = useAssetCacheStore()
+
+      let cached = assetCache.getEntry(assetId)
+      if (cached.status !== 'cached' || !cached.blob) {
+        await assetCache.loadFromIndexedDb(assetId)
+        cached = assetCache.getEntry(assetId)
+      }
+
+      if (cached.status !== 'cached' || !cached.blob) {
+        const blob = await loadBuiltinWaterNormalBlob()
+        await assetCache.storeAssetBlob(assetId, {
+          blob,
+          mimeType: blob.type || 'image/jpeg',
+          filename: BUILTIN_WATER_NORMAL_FILENAME,
+          downloadUrl: builtinWaterNormalUrl,
+        })
+      }
+      assetCache.touch(assetId)
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: 'Water Normal',
+        type: 'texture',
+        downloadUrl: builtinWaterNormalUrl,
+        previewColor: '#ffffff',
+        thumbnail: null,
+        description: BUILTIN_WATER_NORMAL_FILENAME,
+        gleaned: true,
+        extension: 'jpg',
+      }
+
+      return this.registerAsset(projectAsset, {
+        categoryId: determineAssetCategoryId(projectAsset),
+        source: { type: 'local' },
+        internal: true,
+        commitOptions: { updateNodes: false },
+      })
+    },
+    applyWaterNodeDefaultNormalMap(nodeId: string): void {
+      if (!nodeId) {
+        return
+      }
+      this.setNodePrimaryTexture(nodeId, {
+        assetId: BUILTIN_WATER_NORMAL_ASSET_ID,
+        name: BUILTIN_WATER_NORMAL_FILENAME,
+      }, 'normal')
+
+      void this.ensureBuiltinWaterNormalAsset().catch((error) => {
+        console.error('Failed to ensure built-in water normal asset', error)
+      })
+    },
     async ensureLocalAssetFromFile(
       file: File,
       metadata: {
@@ -9167,13 +9239,19 @@ export const useSceneStore = defineStore('scene', {
 
       const document = buildSceneDocumentFromState(this)
       const usedAssetIds = collectSceneAssetReferences(document)
+      const retainedAssetIds = new Set<string>(usedAssetIds)
+      Object.entries(this.assetIndex).forEach(([assetId, entry]) => {
+        if (entry?.internal) {
+          retainedAssetIds.add(assetId)
+        }
+      })
       const removedAssetIds: string[] = []
       const nextCatalog: Record<string, ProjectAsset[]> = {}
       let catalogChanged = false
 
       Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
         const filtered = list.filter((asset) => {
-          const keep = usedAssetIds.has(asset.id)
+          const keep = retainedAssetIds.has(asset.id)
           if (!keep) {
             removedAssetIds.push(asset.id)
           }
@@ -9185,16 +9263,16 @@ export const useSceneStore = defineStore('scene', {
         nextCatalog[categoryId] = filtered
       })
 
-      const assetIndexChanged = Object.keys(this.assetIndex).some((assetId) => !usedAssetIds.has(assetId))
+      const assetIndexChanged = Object.keys(this.assetIndex).some((assetId) => !retainedAssetIds.has(assetId))
       const nextAssetIndex = assetIndexChanged
-        ? filterAssetIndexByUsage(this.assetIndex, usedAssetIds)
+        ? filterAssetIndexByUsage(this.assetIndex, retainedAssetIds)
         : this.assetIndex
 
-      const nextPackageAssetMap = filterPackageAssetMapByUsage(this.packageAssetMap, usedAssetIds)
+      const nextPackageAssetMap = filterPackageAssetMapByUsage(this.packageAssetMap, retainedAssetIds)
       const packageMapChanged = Object.keys(this.packageAssetMap).length !== Object.keys(nextPackageAssetMap).length
         || Object.entries(this.packageAssetMap).some(([key, value]) => nextPackageAssetMap[key] !== value)
 
-      const shouldResetSelection = this.selectedAssetId ? !usedAssetIds.has(this.selectedAssetId) : false
+      const shouldResetSelection = this.selectedAssetId ? !retainedAssetIds.has(this.selectedAssetId) : false
 
       if (!catalogChanged && !assetIndexChanged && !packageMapChanged) {
         return { removedAssetIds: [] }
@@ -9537,7 +9615,7 @@ export const useSceneStore = defineStore('scene', {
 
       const catalogAssets = this.collectCatalogAssetMap()
 
-      const deletableIds = uniqueIds.filter((id) => catalogAssets.has(id))
+      const deletableIds = uniqueIds.filter((id) => catalogAssets.has(id) && !this.assetIndex[id]?.internal)
       if (!deletableIds.length) {
         return []
       }
@@ -11710,6 +11788,7 @@ export const useSceneStore = defineStore('scene', {
         }
 
         this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
+        this.applyWaterNodeDefaultNormalMap(node.id)
         const updated = findNodeById(this.nodes, node.id)
         return updated ?? node
       } finally {
@@ -11755,6 +11834,7 @@ export const useSceneStore = defineStore('scene', {
         }
 
         this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
+        this.applyWaterNodeDefaultNormalMap(node.id)
         const updated = findNodeById(this.nodes, node.id)
         return updated ?? node
       } finally {

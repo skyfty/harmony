@@ -2,7 +2,6 @@ import type { Camera, Material, Mesh, Object3D, Texture } from 'three'
 import {
   BufferGeometry,
   Color,
-  DataTexture,
   Matrix4,
   LinearFilter,
   Mesh as ThreeMesh,
@@ -13,7 +12,6 @@ import {
   UniformsUtils,
   
   RepeatWrapping,
-  NoColorSpace,
   ShaderMaterial,
   Vector4,
   WebGLRenderTarget,
@@ -68,7 +66,6 @@ export interface WaterComponentProps {
 }
 
 const DEFAULT_FLOW_DIRECTION: FlowDirection = { x: 0.7071, y: 0.7071 }
-const DEFAULT_NORMAL_MAP = createDefaultNormalTexture()
 const WATER_DEFAULT_ALPHA = 1
 const WATER_DEFAULT_COLOR = 0x001e0f
 const DEFAULT_WATER_COLOR = new Color(WATER_DEFAULT_COLOR)
@@ -86,49 +83,6 @@ const WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ = 0.05 * 0.05
 // Removed unused computePositionBounds helper
 
 // Removed unused planar UV / flat normal helpers: ensurePlanarUVs, ensureFlatNormals
-
-function createDefaultNormalTexture(): Texture {
-  // Use a small procedural, tileable normal map so the water surface doesn't look flat
-  // when no normalMap is provided by the host mesh material.
-  const size = 64
-  const data = new Uint8Array(size * size * 4)
-  const amp = 2.0
-  const freq = (Math.PI * 2 * 4) / size
-
-  const sampleHeight = (x: number, y: number): number => {
-    const nx = (x + size) % size
-    const ny = (y + size) % size
-    return Math.sin(nx * freq) + Math.cos(ny * freq)
-  }
-
-  const normal = new Vector3()
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const hL = sampleHeight(x - 1, y)
-      const hR = sampleHeight(x + 1, y)
-      const hD = sampleHeight(x, y - 1)
-      const hU = sampleHeight(x, y + 1)
-
-      const dhdx = (hR - hL) * 0.5
-      const dhdz = (hU - hD) * 0.5
-
-      normal.set(-dhdx * amp, 1, -dhdz * amp).normalize()
-
-      const offset = (y * size + x) * 4
-      data[offset] = Math.round((normal.x * 0.5 + 0.5) * 255)
-      data[offset + 1] = Math.round((normal.y * 0.5 + 0.5) * 255)
-      data[offset + 2] = Math.round((normal.z * 0.5 + 0.5) * 255)
-      data[offset + 3] = 255
-    }
-  }
-  const texture = new DataTexture(data, size, size)
-  texture.wrapS = RepeatWrapping
-  texture.wrapT = RepeatWrapping
-  // Normal maps are non-color data.
-  texture.colorSpace = NoColorSpace
-  texture.needsUpdate = true
-  return texture
-}
 
 function normalizeFlowDirection(candidate?: FlowDirection | null): FlowDirection {
   const rawX = typeof candidate?.x === 'number' ? candidate.x : 1
@@ -413,10 +367,14 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private createDynamicWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
+    const sourceNormalMap = this.resolveMaterialNormalMap(material)
+    if (!sourceNormalMap) {
+      return
+    }
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
     this.waterGeometry = resolvedGeometry
-    const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
+    const normalTexture = this.prepareNormalTexture(sourceNormalMap)
     this.normalTexture = normalTexture
 
     const water = new Water(resolvedGeometry, {
@@ -612,11 +570,15 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   private createStaticWater(mesh: Mesh, props: WaterComponentProps, material: Material | null): void {
+    const sourceNormalMap = this.resolveMaterialNormalMap(material)
+    if (!sourceNormalMap) {
+      return
+    }
     const baseGeometry = mesh.geometry?.clone?.() as BufferGeometry | undefined
     const resolvedGeometry = baseGeometry ?? new BufferGeometry()
     this.waterGeometry = resolvedGeometry
 
-    const normalTexture = this.prepareNormalTexture(this.resolveMaterialNormalMap(material))
+    const normalTexture = this.prepareNormalTexture(sourceNormalMap)
     this.normalTexture = normalTexture
 
     const staticMaterial = this.createStaticWaterShaderMaterial(props, material, normalTexture)
@@ -690,9 +652,8 @@ class WaterComponent extends Component<WaterComponentProps> {
     target.updateMatrixWorld(true)
   }
 
-  private prepareNormalTexture(source: Texture | null): Texture {
-    const base = source ?? DEFAULT_NORMAL_MAP
-    const clone = base.clone()
+  private prepareNormalTexture(source: Texture): Texture {
+    const clone = source.clone()
     // Mirrored repeat hides many visible tile seams better than repeat.
     clone.wrapS = RepeatWrapping
     clone.wrapT = RepeatWrapping

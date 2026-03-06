@@ -9,6 +9,10 @@ import {
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { collectPunchPointsFromNodes } from './sceneExport'
+import {
+  BUILTIN_WATER_NORMAL_FILENAME,
+  isBuiltinWaterNormalAsset,
+} from '@/constants/builtinAssets'
 
 export type ScenePackageExportScene = {
   id: string
@@ -279,9 +283,13 @@ export async function exportScenePackageZip(payload: {
       const bytes = new Uint8Array(await blob.arrayBuffer())
       const mimeType = entry.mimeType ?? blob.type ?? 'application/octet-stream'
       const ext = inferExtFromFilename(entry.filename) ?? inferExtFromMimeType(mimeType) ?? 'bin'
+      const hash = await sha256Hex(assetId)
+      const safeName = hash.length > 16 ? hash.slice(0, 16) : hash
 
       // Place resources under the corresponding scene directory
-      const resourcePath = `scenes/${encodeURIComponent(scene.id)}/resources/${assetId}.${ext}`
+      const resourcePath = isBuiltinWaterNormalAsset(assetId)
+        ? `scenes/${encodeURIComponent(scene.id)}/resources/${BUILTIN_WATER_NORMAL_FILENAME}`
+        : `scenes/${encodeURIComponent(scene.id)}/resources/${safeName}.${ext}`
 
       files[resourcePath] = bytes
       resources.push({
@@ -291,6 +299,7 @@ export async function exportScenePackageZip(payload: {
         ext,
         mimeType,
         size: blob.size,
+        hash,
       })
 
       // update scene document mapping to point to the packaged path

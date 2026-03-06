@@ -397,6 +397,9 @@ function isAssetDownloading(asset: ProjectAsset) {
 }
 
 function canDeleteAsset(asset: ProjectAsset) {
+  if (sceneStore.assetIndex?.[asset.id]?.internal) {
+    return false
+  }
   if (asset.type === 'material') {
     return asset.gleaned !== false
   }
