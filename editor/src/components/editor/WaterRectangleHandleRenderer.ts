@@ -6,6 +6,8 @@ import { WATER_SURFACE_HANDLE_ELEVATION } from './waterSurfaceEditUtils'
 export type WaterRectangleHandlePickResult = {
   nodeId: string
   cornerIndex: number
+  xSide: 'min' | 'max'
+  zSide: 'min' | 'max'
   gizmoPart: EndpointGizmoPart
   gizmoKind: 'center' | 'axis'
   gizmoAxis?: THREE.Vector3
@@ -56,11 +58,11 @@ const WATER_RECT_HANDLE_GROUP_NAME = '__WaterRectangleHandles'
 const WATER_RECT_HANDLE_SCREEN_DIAMETER_PX = 32
 const WATER_RECT_HANDLE_COLOR = 0xff4081
 
-const RECT_CORNERS: Array<{ x: number; y: number }> = [
-  { x: -0.5, y: -0.5 },
-  { x: -0.5, y: 0.5 },
-  { x: 0.5, y: 0.5 },
-  { x: 0.5, y: -0.5 },
+const RECT_CORNERS: Array<{ x: number; y: number; xSide: 'min' | 'max'; zSide: 'min' | 'max' }> = [
+  { x: -0.5, y: -0.5, xSide: 'min', zSide: 'max' },
+  { x: -0.5, y: 0.5, xSide: 'min', zSide: 'min' },
+  { x: 0.5, y: 0.5, xSide: 'max', zSide: 'min' },
+  { x: 0.5, y: -0.5, xSide: 'max', zSide: 'max' },
 ]
 
 type HandleState = {
@@ -195,6 +197,8 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
       handle.userData.isWaterRectangleHandle = true
       handle.userData.nodeId = selectedNodeId
       handle.userData.waterCornerIndex = index
+      handle.userData.waterCornerXSide = corner.xSide
+      handle.userData.waterCornerZSide = corner.zSide
       handle.userData.baseDiameter = gizmo.baseDiameter
       handle.userData.endpointGizmo = gizmo
       handle.userData.handleKey = `${selectedNodeId}:${index}`
@@ -208,6 +212,8 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
         mesh.userData.isWaterRectangleHandle = true
         mesh.userData.nodeId = selectedNodeId
         mesh.userData.waterCornerIndex = index
+        mesh.userData.waterCornerXSide = corner.xSide
+        mesh.userData.waterCornerZSide = corner.zSide
       })
 
       group.add(handle)
@@ -254,15 +260,19 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
     const cornerIndex = typeof cornerIndexRaw === 'number' && Number.isFinite(cornerIndexRaw)
       ? Math.max(0, Math.floor(cornerIndexRaw))
       : -1
+    const xSide = target.userData?.waterCornerXSide === 'max' ? 'max' : target.userData?.waterCornerXSide === 'min' ? 'min' : null
+    const zSide = target.userData?.waterCornerZSide === 'max' ? 'max' : target.userData?.waterCornerZSide === 'min' ? 'min' : null
     const gizmoPart = (target.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
     const partInfo = getEndpointGizmoPartInfoFromObject(target)
-    if (!nodeId || cornerIndex < 0 || !gizmoPart || !partInfo) {
+    if (!nodeId || cornerIndex < 0 || !xSide || !zSide || !gizmoPart || !partInfo) {
       return null
     }
 
     return {
       nodeId,
       cornerIndex,
+      xSide,
+      zSide,
       gizmoPart,
       gizmoKind: partInfo.kind,
       gizmoAxis: partInfo.kind === 'axis' ? partInfo.axis.clone() : undefined,

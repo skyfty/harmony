@@ -3827,6 +3827,7 @@ type WaterRectangleDragState = {
     maxZ: number
     y: number
   }
+  dragPlane: THREE.Plane
   draggedSide: { x: 'min' | 'max'; z: 'min' | 'max' }
 }
 
@@ -3898,6 +3899,7 @@ type WaterEdgeDragState =
         maxZ: number
         y: number
       }
+      dragPlane: THREE.Plane
     }
   | {
       kind: 'contour'
@@ -3929,6 +3931,7 @@ const waterVertexRenderer = createWaterVertexRenderer()
 const waterCircleHandleRenderer = createWaterCircleHandleRenderer()
 const waterDragIntersectionHelper = new THREE.Vector3()
 const waterDragWorldHelper = new THREE.Vector3()
+const waterPlanePointerHelper = new THREE.Vector3()
 
 function isSelectedFloorCircleEditMode(): boolean {
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -4187,12 +4190,17 @@ const WATER_EDGE_PICK_DISTANCE = 0.3
 
 function pickWaterRectangleEdgeAtPointer(event: PointerEvent, node: SceneNode): WaterEdgeHit | null {
   const bounds = resolveWaterRectangleBounds(node)
-  if (!bounds || !raycastGroundPoint(event, groundPointerHelper)) {
+  if (!bounds) {
+    return null
+  }
+
+  const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
+  if (!raycastPlanePoint(event, dragPlane, waterPlanePointerHelper)) {
     return null
   }
 
   return pickNearestPlanarEdge({
-    pointer: new THREE.Vector2(groundPointerHelper.x, groundPointerHelper.z),
+    pointer: new THREE.Vector2(waterPlanePointerHelper.x, waterPlanePointerHelper.z),
     vertices: buildRectanglePlanarPoints({
       minX: bounds.minX,
       maxX: bounds.maxX,
@@ -4239,14 +4247,11 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
     return false
   }
 
-  const draggedSide =
-    hit.cornerIndex === 0
-      ? { x: 'min' as const, z: 'min' as const }
-      : hit.cornerIndex === 1
-      ? { x: 'min' as const, z: 'max' as const }
-      : hit.cornerIndex === 2
-      ? { x: 'max' as const, z: 'max' as const }
-      : { x: 'max' as const, z: 'min' as const }
+  const draggedSide = {
+    x: hit.xSide,
+    z: hit.zSide,
+  }
+  const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
 
   waterRectangleDragState = {
     pointerId: event.pointerId,
@@ -4265,6 +4270,7 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
       maxZ: bounds.maxZ,
       y: bounds.y,
     },
+    dragPlane,
     draggedSide,
   }
   setActiveWaterRectangleHandle({ nodeId: selectedId, cornerIndex: hit.cornerIndex, gizmoPart: hit.gizmoPart })
@@ -4431,6 +4437,7 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
     if (!hit || !bounds) {
       return false
     }
+    const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
     waterEdgeDragState = {
       kind: 'rectangle',
       pointerId: event.pointerId,
@@ -4447,6 +4454,7 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
         maxZ: bounds.maxZ,
         y: bounds.y,
       },
+      dragPlane,
     }
     pointerInteraction.capture(event.pointerId)
     return true
@@ -10355,6 +10363,10 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (activeBuildTool.value === 'water') {
     if (event.button === 0 && !isAltOverrideActive) {
+      ensureWaterCircleHandlesForSelectedNode()
+      ensureWaterVertexHandlesForSelectedNode()
+      ensureWaterRectangleHandlesForSelectedNode()
+
       if (tryBeginWaterCircleDrag(event)) {
         event.preventDefault()
         event.stopPropagation()
@@ -10770,13 +10782,13 @@ function handlePointerMove(event: PointerEvent) {
     if (!isLeftDown) {
       return
     }
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
       return
     }
 
     const localBounds = { ...state.startBounds }
-    const x = groundPointerHelper.x
-    const z = groundPointerHelper.z
+    const x = waterDragIntersectionHelper.x
+    const z = waterDragIntersectionHelper.z
     const eps = 1e-3
     if (state.draggedSide.x === 'min') {
       localBounds.minX = Math.min(x, localBounds.maxX - eps)
@@ -10807,12 +10819,12 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     if (state.kind === 'rectangle') {
-      if (!raycastGroundPoint(event, groundPointerHelper)) {
+      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
       const nextBounds = { ...state.startBounds }
-      const x = groundPointerHelper.x
-      const z = groundPointerHelper.z
+      const x = waterDragIntersectionHelper.x
+      const z = waterDragIntersectionHelper.z
       const eps = 1e-3
       if (state.edgeIndex === 0) {
         nextBounds.minX = Math.min(x, nextBounds.maxX - eps)
