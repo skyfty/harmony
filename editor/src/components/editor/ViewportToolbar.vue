@@ -5,7 +5,7 @@
 
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
-          v-if="tool.id === 'ground-terrain'"
+          v-if="tool.id === 'terrain'"
           :model-value="groundTerrainMenuOpen"
           location="bottom"
           :offset="6"
@@ -54,7 +54,7 @@
           </v-list>
         </v-menu>
         <v-menu
-          v-else-if="tool.id === 'ground-paint'"
+          v-else-if="tool.id === 'paint'"
           :model-value="groundPaintMenuOpen"
           location="bottom"
           :offset="6"
@@ -98,7 +98,7 @@
           </v-list>
         </v-menu>
         <v-menu
-          v-else-if="tool.id === 'ground-scatter'"
+          v-else-if="tool.id === 'scatter'"
           :model-value="groundScatterMenuOpen"
           location="bottom"
           :offset="6"
@@ -1303,14 +1303,14 @@ function handleRecenterGroupOrigin() {
 }
 
 const buildToolButtons = [
-  { id: 'ground-terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tool (Left Mouse / Right Click Settings)' },
-  { id: 'ground-paint', icon: 'mdi-brush-variant', label: 'Terrain Paint (Left Mouse / Right Click Settings)' },
-  { id: 'ground-scatter', icon: 'mdi-sprout', label: 'Terrain Scatter (Left Mouse / Right Click Settings)' },
+  { id: 'terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tool (Left Mouse / Right Click Settings)' },
+  { id: 'paint', icon: 'mdi-brush-variant', label: 'Terrain Paint (Left Mouse / Right Click Settings)' },
+  { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter (Left Mouse / Right Click Settings)' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
-] satisfies Array<{ id: BuildTool | 'ground-terrain' | 'ground-paint' | 'ground-scatter'; icon: string; label: string }>
+] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
   id,
@@ -1398,16 +1398,7 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
 type GroundMenuKind = 'terrain' | 'paint' | 'scatter'
 
 function isGroundButtonActive(kind: GroundMenuKind) {
-  if (activeBuildTool.value !== 'ground') {
-    return false
-  }
-  if (kind === 'terrain') {
-    return groundPanelTab.value === 'terrain'
-  }
-  if (kind === 'paint') {
-    return groundPanelTab.value === 'paint'
-  }
-  return groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint'
+  return activeBuildTool.value === kind
 }
 
 function resolveGroundTargetTab(kind: GroundMenuKind, source: 'button' | 'menu'): GroundPanelTab | null {
@@ -1435,7 +1426,7 @@ function handleGroundButtonClick(kind: GroundMenuKind) {
   }
 
   const tab = resolveGroundTargetTab(kind, 'button')
-  emit('change-build-tool', 'ground')
+  emit('change-build-tool', kind)
   if (tab) {
     emit('activate-ground-tab', tab)
   }

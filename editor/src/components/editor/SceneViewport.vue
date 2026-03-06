@@ -1773,7 +1773,17 @@ const uiStore = useUiStore()
 watch(
   () => uiStore.activeSelectionContext,
   (ctx) => {
-    if (!ctx || !ctx.startsWith('build-tool')) {
+    const keepBuildToolContext = Boolean(
+      ctx
+      && (
+        ctx.startsWith('build-tool')
+        || ctx === 'terrain-sculpt'
+        || ctx === 'terrain-paint'
+        || ctx === 'scatter'
+        || ctx === 'scatter-erase'
+      ),
+    )
+    if (!keepBuildToolContext) {
       if (activeBuildTool.value) {
         // Cancel any active build operation which will also clear activeBuildTool
         cancelActiveBuildOperation()
@@ -4801,11 +4811,38 @@ type BuildToolRightClickCandidate = {
 let buildToolRightClickCandidate: BuildToolRightClickCandidate | null = null
 
 type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'water'
+type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
 ): tool is GroundSculptBlockedBuildTool {
   return tool === 'wall' || tool === 'road' || tool === 'floor' || tool === 'water'
+}
+
+function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
+  return tool === 'terrain' || tool === 'paint' || tool === 'scatter'
+}
+
+function resolveGroundToolFromTab(tab: GroundPanelTab): GroundBuildTool {
+  if (tab === 'terrain') {
+    return 'terrain'
+  }
+  if (tab === 'paint') {
+    return 'paint'
+  }
+  return 'scatter'
+}
+
+function resolveGroundTabFromTool(tool: GroundBuildTool): GroundPanelTab {
+  if (tool === 'terrain') {
+    return 'terrain'
+  }
+  if (tool === 'paint') {
+    return 'paint'
+  }
+  return groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint'
+    ? groundPanelTab.value
+    : scatterCategory.value
 }
 
 function nowMs(): number {
@@ -12216,7 +12253,9 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
 
   let handled = false
   switch (tool) {
-    case 'ground':
+    case 'terrain':
+    case 'paint':
+    case 'scatter':
       if (groundEditorHasActiveSelection()) {
         cancelGroundSelection()
       } else {
@@ -12276,7 +12315,7 @@ function handleBuildToolChange(tool: BuildTool | null) {
   if (activeBuildTool.value === 'water' && tool !== 'water') {
     waterBuildTool.cancel()
   }
-  if (tool === 'ground') {
+  if (isGroundBuildTool(tool)) {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
   }
@@ -15764,13 +15803,17 @@ watch(hasGroundNode, (isGroundPresent) => {
 watch(
   () => groundPanelTab.value,
   (tab) => {
-    if (tab !== 'terrain') {
-      exitScatterEraseMode()
-      cancelGroundEditorScatterPlacement()
-      handleBuildToolChange(null)
+    exitScatterEraseMode()
+    cancelGroundEditorScatterPlacement()
+
+    if (!hasGroundNode.value || !isGroundBuildTool(activeBuildTool.value)) {
       return
     }
-    cancelGroundEditorScatterPlacement()
+
+    const targetTool = resolveGroundToolFromTab(tab)
+    if (activeBuildTool.value !== targetTool) {
+      handleBuildToolChange(targetTool)
+    }
   },
 )
 
@@ -15788,10 +15831,13 @@ watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
 
   // Keep viewport side effects consistent even when the tool is activated via store (e.g. AssetPanel).
-  if (tool === 'ground') {
+  if (isGroundBuildTool(tool)) {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
-    terrainStore.setGroundPanelTab('terrain')
+    const targetTab = resolveGroundTabFromTool(tool)
+    if (groundPanelTab.value !== targetTab) {
+      terrainStore.setGroundPanelTab(targetTab)
+    }
   }
 
   if (tool && isBuildToolBlockedDuringGroundSculptConfig(tool) && tool !== previous) {

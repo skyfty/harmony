@@ -4641,7 +4641,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleGroundToolPointerDown(event: PointerEvent): boolean {
-		if (options.activeBuildTool.value !== 'ground') {
+		if (
+			options.activeBuildTool.value !== 'terrain'
+			&& options.activeBuildTool.value !== 'paint'
+			&& options.activeBuildTool.value !== 'scatter'
+		) {
 			return false
 		}
 
@@ -4966,7 +4970,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handleActiveBuildToolChange(tool: BuildTool | null) {
-		if (tool !== 'ground') {
+		if (tool !== 'terrain' && tool !== 'paint' && tool !== 'scatter') {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
