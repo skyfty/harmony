@@ -350,6 +350,7 @@
         <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
         <text class="viewer-debug-line">Viewport: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}</text>
         <text class="viewer-debug-line">Draw calls: {{ rendererDebug.calls }}, Tris: {{ rendererDebug.triangles }}</text>
+        <text class="viewer-debug-line">Visible meshes/tris: {{ visibleRenderDebug.meshes }} / {{ visibleRenderDebug.triangles }}</text>
         <text class="viewer-debug-line">GPU mem (geo/tex): {{ rendererDebug.geometries }} / {{ rendererDebug.textures }}</text>
         <text class="viewer-debug-line">InstancedMeshes: {{ instancingDebug.instancedMeshAssets }}</text>
         <text class="viewer-debug-line">Instanced active/total: {{ instancingDebug.instancedMeshActive }} / {{ instancingDebug.instancedMeshAssets }}</text>
@@ -836,6 +837,11 @@ const rendererDebug = reactive({
   pixelRatio: 1,
 });
 
+const visibleRenderDebug = reactive({
+  meshes: 0,
+  triangles: 0,
+});
+
 type InstancedTransformCacheEntry = {
   assetId: string | null;
   visible: boolean;
@@ -898,8 +904,76 @@ let debugFpsLastSyncAt = 0;
 
 let debugInstancingLastSyncAt = 0;
 let debugGroundChunksLastSyncAt = 0;
+let debugVisibleRenderLastSyncAt = 0;
 let debugGroundUnloadedTotal = 0;
 let debugLastGroundChunkKeys: Set<string> | null = null;
+const visibleRenderProjView = new THREE.Matrix4();
+const visibleRenderFrustum = new THREE.Frustum();
+const visibleRenderSphere = new THREE.Sphere();
+
+function hasVisibleMaterial(material: THREE.Material | THREE.Material[] | null | undefined): boolean {
+  if (!material) {
+    return false;
+  }
+  if (Array.isArray(material)) {
+    return material.some((entry) => entry?.visible !== false);
+  }
+  return material.visible !== false;
+}
+
+function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry | null | undefined): number {
+  if (!geometry) {
+    return 0;
+  }
+  const indexCount = geometry.index?.count ?? 0;
+  const positionCount = geometry.attributes.position?.count ?? 0;
+  const baseCount = indexCount > 0 ? indexCount : positionCount;
+  if (!Number.isFinite(baseCount) || baseCount <= 0) {
+    return 0;
+  }
+
+  const drawRangeCount = geometry.drawRange?.count;
+  const effectiveCount = Number.isFinite(drawRangeCount) && typeof drawRangeCount === 'number' && drawRangeCount >= 0
+    ? Math.min(baseCount, drawRangeCount)
+    : baseCount;
+  return Math.max(0, Math.floor(effectiveCount / 3));
+}
+
+function shouldExcludeFromVisibleRenderDebug(object: THREE.Object3D): boolean {
+  if (object.userData?.editorOnly === true || object.userData?.hidden === true) {
+    return true;
+  }
+  const lazyData = object.userData?.lazyAsset as { placeholder?: boolean } | undefined;
+  if (lazyData?.placeholder === true) {
+    return true;
+  }
+  if (sky && object === sky) {
+    return true;
+  }
+  if (gradientBackgroundDome && object === gradientBackgroundDome.mesh) {
+    return true;
+  }
+  return false;
+}
+
+function isVisibleRenderMeshInCameraFrustum(mesh: THREE.Mesh, frustum: THREE.Frustum): boolean {
+  if (mesh.frustumCulled === false) {
+    return true;
+  }
+  const geometry = mesh.geometry;
+  if (!geometry) {
+    return false;
+  }
+  if (!geometry.boundingSphere) {
+    geometry.computeBoundingSphere();
+  }
+  if (!geometry.boundingSphere) {
+    return false;
+  }
+  mesh.updateWorldMatrix(true, false);
+  visibleRenderSphere.copy(geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+  return frustum.intersectsSphere(visibleRenderSphere);
+}
 
 function clampInclusive(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -1041,6 +1115,57 @@ function syncRendererDebug(renderer: THREE.WebGLRenderer): void {
   // In mini-programs the canvas size is the most reliable viewport indicator.
   rendererDebug.width = (canvasResult?.canvas?.width || canvasResult?.canvas?.clientWidth || 0) as number;
   rendererDebug.height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 0) as number;
+}
+
+function syncVisibleRenderDebug(scene: THREE.Scene, camera: THREE.Camera): void {
+  if (!debugEnabled.value) {
+    return;
+  }
+  const now = Date.now();
+  if (now - debugVisibleRenderLastSyncAt < 250) {
+    return;
+  }
+  debugVisibleRenderLastSyncAt = now;
+
+  camera.updateMatrixWorld(true);
+  scene.updateMatrixWorld(true);
+  visibleRenderProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  visibleRenderFrustum.setFromProjectionMatrix(visibleRenderProjView);
+
+  let visibleMeshCount = 0;
+  let visibleTriangleCount = 0;
+  scene.traverseVisible((object: THREE.Object3D) => {
+    if (!(object instanceof THREE.Mesh)) {
+      return;
+    }
+    if (shouldExcludeFromVisibleRenderDebug(object) || !hasVisibleMaterial(object.material)) {
+      return;
+    }
+
+    const baseTriangles = resolveGeometryTriangleCount(object.geometry);
+    if (baseTriangles <= 0) {
+      return;
+    }
+
+    if (object instanceof THREE.InstancedMesh) {
+      const instanceCount = Number.isFinite(object.count) ? Math.max(0, Math.trunc(object.count)) : 0;
+      if (instanceCount <= 0) {
+        return;
+      }
+      visibleMeshCount += 1;
+      visibleTriangleCount += baseTriangles * instanceCount;
+      return;
+    }
+
+    if (!isVisibleRenderMeshInCameraFrustum(object, visibleRenderFrustum)) {
+      return;
+    }
+    visibleMeshCount += 1;
+    visibleTriangleCount += baseTriangles;
+  });
+
+  visibleRenderDebug.meshes = visibleMeshCount;
+  visibleRenderDebug.triangles = visibleTriangleCount;
 }
 
 function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): void {
@@ -9968,6 +10093,9 @@ function startRenderLoop(
         tickInstancedBounds(deltaSeconds);
         if (gradientBackgroundDome) {
           gradientBackgroundDome.mesh.position.copy(camera.position);
+        }
+        if (debugEnabled.value) {
+          syncVisibleRenderDebug(scene, camera);
         }
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
