@@ -161,14 +161,21 @@
                       <span>Brush Radius</span>
                       <span>{{ groundScatterBrushRadiusDisplay }}</span>
                     </div>
-                    <v-slider
-                      v-model="groundScatterBrushRadiusModel"
-                      :min="0.1"
+                    <v-text-field
+                      v-model="groundScatterBrushRadiusInput"
+                      type="number"
+                      suffix="m"
+                      :min="SCATTER_BRUSH_RADIUS_MIN"
                       :max="SCATTER_BRUSH_RADIUS_MAX"
-                      :step="0.1"
+                      :step="SCATTER_RADIUS_STEP"
+                      variant="outlined"
                       density="compact"
-                      track-color="rgba(77, 208, 225, 0.4)"
-                      color="primary"
+                      hide-details
+                      inputmode="decimal"
+                      class="scatter-spacing-input"
+                      :disabled="buildToolsDisabled || !hasGroundNode"
+                      @blur="commitGroundScatterBrushRadiusInput"
+                      @keydown.enter.prevent="commitGroundScatterBrushRadiusInput"
                     />
                   </div>
 
@@ -177,14 +184,21 @@
                       <span>Density</span>
                       <span>{{ groundScatterDensityDisplay }}</span>
                     </div>
-                    <v-slider
-                      v-model="groundScatterDensityPercentModel"
-                      :min="0"
-                      :max="100"
-                      :step="1"
+                    <v-text-field
+                      v-model="groundScatterDensityInput"
+                      type="number"
+                      suffix="%"
+                      :min="SCATTER_DENSITY_MIN"
+                      :max="SCATTER_DENSITY_MAX"
+                      :step="SCATTER_DENSITY_STEP"
+                      variant="outlined"
                       density="compact"
-                      track-color="rgba(77, 208, 225, 0.4)"
-                      color="primary"
+                      hide-details
+                      inputmode="numeric"
+                      class="scatter-spacing-input"
+                      :disabled="buildToolsDisabled || !hasGroundNode"
+                      @blur="commitGroundScatterDensityInput"
+                      @keydown.enter.prevent="commitGroundScatterDensityInput"
                     />
                   </div>
                 </div>
@@ -468,14 +482,21 @@
                 <span>Erase Radius</span>
                 <span>{{ scatterEraseRadiusLabel }}</span>
               </div>
-              <v-slider
-                v-model="scatterEraseRadiusModel"
-                :min="0.5"
+              <v-text-field
+                v-model="scatterEraseRadiusInput"
+                type="number"
+                suffix="m"
+                :min="SCATTER_ERASE_RADIUS_MIN"
                 :max="SCATTER_BRUSH_RADIUS_MAX"
-                :step="0.5"
+                :step="SCATTER_RADIUS_STEP"
+                variant="outlined"
                 density="compact"
-                track-color="rgba(255,255,255,0.25)"
-                color="primary"
+                hide-details
+                inputmode="decimal"
+                class="scatter-erase-input"
+                :disabled="!canEraseScatterEffective"
+                @blur="commitScatterEraseRadiusInput"
+                @keydown.enter.prevent="commitScatterEraseRadiusInput"
               />
             </div>
             <v-divider class="scatter-erase-menu__divider" />
@@ -1023,9 +1044,91 @@ const mirrorMenuOpen = ref(false)
 const alignMenuOpen = ref(false)
 const fixedPrimaryAsAnchor = ref(true)
 
-const scatterEraseRadiusModel = computed({
-  get: () => scatterEraseRadius.value,
-  set: (value: number) => emit('update-scatter-erase-radius', Number(value)),
+const SCATTER_BRUSH_RADIUS_MIN = 0.1
+const SCATTER_ERASE_RADIUS_MIN = 0.1
+const SCATTER_RADIUS_STEP = 0.1
+const SCATTER_DENSITY_MIN = 0
+const SCATTER_DENSITY_MAX = 100
+const SCATTER_DENSITY_STEP = 1
+
+const groundScatterBrushRadiusInput = ref(groundScatterBrushRadius.value.toFixed(2))
+const groundScatterDensityInput = ref(Math.round(groundScatterDensityPercent.value).toString())
+const scatterEraseRadiusInput = ref(scatterEraseRadius.value.toFixed(2))
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function snapToStep(value: number, step: number): number {
+  const steps = Math.round(value / step)
+  return steps * step
+}
+
+function parseAndNormalize(
+  raw: string,
+  fallback: number,
+  min: number,
+  max: number,
+  step: number,
+  precision: number,
+): number {
+  const parsed = Number.parseFloat(raw)
+  const base = Number.isFinite(parsed) ? parsed : fallback
+  const clamped = clampValue(base, min, max)
+  const stepped = snapToStep(clamped, step)
+  const normalized = Number(stepped.toFixed(precision))
+  return clampValue(normalized, min, max)
+}
+
+function commitGroundScatterBrushRadiusInput() {
+  const normalized = parseAndNormalize(
+    groundScatterBrushRadiusInput.value,
+    groundScatterBrushRadius.value,
+    SCATTER_BRUSH_RADIUS_MIN,
+    SCATTER_BRUSH_RADIUS_MAX,
+    SCATTER_RADIUS_STEP,
+    2,
+  )
+  emit('update:ground-scatter-brush-radius', normalized)
+  groundScatterBrushRadiusInput.value = normalized.toFixed(2)
+}
+
+function commitGroundScatterDensityInput() {
+  const normalized = parseAndNormalize(
+    groundScatterDensityInput.value,
+    groundScatterDensityPercent.value,
+    SCATTER_DENSITY_MIN,
+    SCATTER_DENSITY_MAX,
+    SCATTER_DENSITY_STEP,
+    0,
+  )
+  emit('update:ground-scatter-density-percent', normalized)
+  groundScatterDensityInput.value = Math.round(normalized).toString()
+}
+
+function commitScatterEraseRadiusInput() {
+  const normalized = parseAndNormalize(
+    scatterEraseRadiusInput.value,
+    scatterEraseRadius.value,
+    SCATTER_ERASE_RADIUS_MIN,
+    SCATTER_BRUSH_RADIUS_MAX,
+    SCATTER_RADIUS_STEP,
+    2,
+  )
+  emit('update-scatter-erase-radius', normalized)
+  scatterEraseRadiusInput.value = normalized.toFixed(2)
+}
+
+watch(groundScatterBrushRadius, (value) => {
+  groundScatterBrushRadiusInput.value = value.toFixed(2)
+})
+
+watch(groundScatterDensityPercent, (value) => {
+  groundScatterDensityInput.value = Math.round(value).toString()
+})
+
+watch(scatterEraseRadius, (value) => {
+  scatterEraseRadiusInput.value = value.toFixed(2)
 })
 
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
@@ -1096,16 +1199,6 @@ const groundScatterCategoryModel = computed<TerrainScatterCategory>({
     emit('update:ground-scatter-category', value)
     emit('activate-ground-tab', value)
   },
-})
-
-const groundScatterBrushRadiusModel = computed({
-  get: () => groundScatterBrushRadius.value,
-  set: (value: number) => emit('update:ground-scatter-brush-radius', Number(value)),
-})
-
-const groundScatterDensityPercentModel = computed({
-  get: () => groundScatterDensityPercent.value,
-  set: (value: number) => emit('update:ground-scatter-density-percent', Number(value)),
 })
 
 const groundScatterBrushRadiusDisplay = computed(() => `${groundScatterBrushRadius.value.toFixed(2)} m`)
@@ -1942,6 +2035,10 @@ function handleClearScatterMenuAction() {
   min-width: 0;
 }
 
+.scatter-spacing-input {
+  max-width: 140px;
+}
+
 .scatter-spacing-labels {
   display: flex;
   justify-content: space-between;
@@ -1984,6 +2081,10 @@ function handleClearScatterMenuAction() {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.scatter-erase-input {
+  max-width: 140px;
 }
 
 .scatter-erase-menu__slider-labels {

@@ -1,6 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
+
+const BRUSH_RADIUS_MIN = 0.1
+const BRUSH_RADIUS_MAX = 50
+const BRUSH_RADIUS_STEP = 0.1
+
+const BRUSH_STRENGTH_MIN = 0.1
+const BRUSH_STRENGTH_MAX = 10
+const BRUSH_STRENGTH_STEP = 0.1
+
+const NOISE_STRENGTH_MIN = 0
+const NOISE_STRENGTH_MAX = 5
+const NOISE_STRENGTH_STEP = 0.1
+const VALUE_PRECISION = 1
 
 type TerrainOperationOption = { value: GroundSculptOperation; label: string; icon: string }
 type NoiseModeOption = { value: GroundGenerationMode; label: string; icon: string }
@@ -56,8 +69,87 @@ const noiseModeModel = computed({
   set: (value: GroundGenerationMode) => emit('update:noiseMode', value),
 })
 
-function formatSliderValue(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(1) : '0.0'
+const brushRadiusInput = ref(formatNumericValue(props.brushRadius))
+const brushStrengthInput = ref(formatNumericValue(props.brushStrength))
+const noiseStrengthInput = ref(formatNumericValue(props.noiseStrength))
+
+watch(
+  () => props.brushRadius,
+  (value) => {
+    brushRadiusInput.value = formatNumericValue(value)
+  },
+)
+
+watch(
+  () => props.brushStrength,
+  (value) => {
+    brushStrengthInput.value = formatNumericValue(value)
+  },
+)
+
+watch(
+  () => props.noiseStrength,
+  (value) => {
+    noiseStrengthInput.value = formatNumericValue(value)
+  },
+)
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function snapToStep(value: number, min: number, step: number): number {
+  const steps = Math.round((value - min) / step)
+  return min + steps * step
+}
+
+function formatNumericValue(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(VALUE_PRECISION) : (0).toFixed(VALUE_PRECISION)
+}
+
+function parseAndNormalize(raw: string, fallback: number, min: number, max: number, step: number): number {
+  const parsed = Number.parseFloat(raw)
+  const base = Number.isFinite(parsed) ? parsed : fallback
+  const clamped = clampValue(base, min, max)
+  const stepped = snapToStep(clamped, min, step)
+  const normalized = Number(stepped.toFixed(VALUE_PRECISION))
+  return clampValue(normalized, min, max)
+}
+
+function commitBrushRadiusInput() {
+  const normalized = parseAndNormalize(
+    brushRadiusInput.value,
+    props.brushRadius,
+    BRUSH_RADIUS_MIN,
+    BRUSH_RADIUS_MAX,
+    BRUSH_RADIUS_STEP,
+  )
+  brushRadiusModel.value = normalized
+  brushRadiusInput.value = formatNumericValue(normalized)
+}
+
+function commitBrushStrengthInput() {
+  const normalized = parseAndNormalize(
+    brushStrengthInput.value,
+    props.brushStrength,
+    BRUSH_STRENGTH_MIN,
+    BRUSH_STRENGTH_MAX,
+    BRUSH_STRENGTH_STEP,
+  )
+  brushStrengthModel.value = normalized
+  brushStrengthInput.value = formatNumericValue(normalized)
+}
+
+function commitNoiseStrengthInput() {
+  const normalized = parseAndNormalize(
+    noiseStrengthInput.value,
+    props.noiseStrength,
+    NOISE_STRENGTH_MIN,
+    NOISE_STRENGTH_MAX,
+    NOISE_STRENGTH_STEP,
+  )
+  noiseStrengthModel.value = normalized
+  noiseStrengthInput.value = formatNumericValue(normalized)
 }
 </script>
 
@@ -96,30 +188,46 @@ function formatSliderValue(value: number): string {
       </v-btn-toggle>
     </div>
 
-    <div class="control-group">
-      <div class="text-caption">Brush Radius: {{ formatSliderValue(brushRadiusModel) }}</div>
-      <v-slider
-        v-model="brushRadiusModel"
-        :min="0.1"
-        :max="50"
-        :step="0.1"
-        color="primary"
-        density="compact"
-        hide-details
-      />
-    </div>
+    <div class="control-row">
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Brush Radius: {{ brushRadiusInput }}</div>
+        <v-text-field
+          v-model="brushRadiusInput"
+          type="number"
+          suffix="m"
+          :min="BRUSH_RADIUS_MIN"
+          :max="BRUSH_RADIUS_MAX"
+          :step="BRUSH_RADIUS_STEP"
+          variant="outlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitBrushRadiusInput"
+          @keydown.enter.prevent="commitBrushRadiusInput"
+        />
+      </div>
 
-    <div class="control-group">
-      <div class="text-caption">Brush Strength: {{ formatSliderValue(brushStrengthModel) }}</div>
-      <v-slider
-        v-model="brushStrengthModel"
-        :min="0.1"
-        :max="10"
-        :step="0.1"
-        color="primary"
-        density="compact"
-        hide-details
-      />
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Brush Strength: {{ brushStrengthInput }}</div>
+        <v-text-field
+          v-model="brushStrengthInput"
+          type="number"
+          suffix="x"
+          :min="BRUSH_STRENGTH_MIN"
+          :max="BRUSH_STRENGTH_MAX"
+          :step="BRUSH_STRENGTH_STEP"
+          variant="outlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitBrushStrengthInput"
+          @keydown.enter.prevent="commitBrushStrengthInput"
+        />
+      </div>
     </div>
 
     <v-divider class="ground-panel-divider" />
@@ -140,15 +248,22 @@ function formatSliderValue(value: number): string {
     </div>
 
     <div class="control-group">
-      <div class="text-caption">Noise Strength: {{ formatSliderValue(noiseStrengthModel) }}</div>
-      <v-slider
-        v-model="noiseStrengthModel"
-        :min="0"
-        :max="5"
-        :step="0.1"
-        color="primary"
+      <div class="text-caption">Noise Strength: {{ noiseStrengthInput }}</div>
+      <v-text-field
+        v-model="noiseStrengthInput"
+        type="number"
+        suffix="x"
+        :min="NOISE_STRENGTH_MIN"
+        :max="NOISE_STRENGTH_MAX"
+        :step="NOISE_STRENGTH_STEP"
+        variant="outlined"
         density="compact"
+        hide-details
+        inputmode="decimal"
         :disabled="!props.hasGround"
+        class="numeric-input"
+        @blur="commitNoiseStrengthInput"
+        @keydown.enter.prevent="commitNoiseStrengthInput"
       />
     </div>
   </div>
@@ -165,6 +280,21 @@ function formatSliderValue(value: number): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.control-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.control-group--compact {
+  flex: 1;
+  min-width: 0;
+}
+
+.numeric-input {
+  max-width: 100%;
 }
 
 .icon-toggle-group :deep(.v-btn) {
