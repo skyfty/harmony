@@ -209,8 +209,9 @@ import {
 import {
   buildWaterCircleLocalPoints,
   buildWaterSurfaceMetadataFromLocalPoints,
+  computeWaterContourSignature,
   computeWaterCircleLocalFromPoints,
-  convertWaterContourLocalPointsToWorldPoints,
+  getWaterSurfaceMeshMetadata,
   getWaterContourLocalPoints,
   updateWaterSurfaceRuntimeMesh,
 } from './waterSurfaceEditUtils'
@@ -3818,17 +3819,18 @@ type WaterRectangleDragState = {
   startY: number
   moved: boolean
   runtimeObject: THREE.Object3D
+  parentObject: THREE.Object3D
   startPosition: THREE.Vector3
   startScale: THREE.Vector3
   startBounds: {
     minX: number
     maxX: number
-    minZ: number
-    maxZ: number
+    minY: number
+    maxY: number
     y: number
   }
   dragPlane: THREE.Plane
-  draggedSide: { x: 'min' | 'max'; z: 'min' | 'max' }
+  draggedSide: { x: 'min' | 'max'; y: 'min' | 'max' }
 }
 
 let waterRectangleDragState: WaterRectangleDragState | null = null
@@ -3892,11 +3894,12 @@ type WaterEdgeDragState =
       startY: number
       moved: boolean
       runtimeObject: THREE.Object3D
+      parentObject: THREE.Object3D
       startBounds: {
         minX: number
         maxX: number
-        minZ: number
-        maxZ: number
+        minY: number
+        maxY: number
         y: number
       }
       dragPlane: THREE.Plane
@@ -4141,11 +4144,11 @@ function setActiveWaterCircleHandle(active: { nodeId: string; circleKind: 'cente
 
 function applyWaterRectanglePreviewTransform(
   runtimeObject: THREE.Object3D,
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number; y: number },
+  bounds: { minX: number; maxX: number; minY: number; maxY: number; y: number },
 ) {
   const width = Math.max(1e-3, bounds.maxX - bounds.minX)
-  const depth = Math.max(1e-3, bounds.maxZ - bounds.minZ)
-  runtimeObject.position.set((bounds.minX + bounds.maxX) * 0.5, bounds.y, (bounds.minZ + bounds.maxZ) * 0.5)
+  const depth = Math.max(1e-3, bounds.maxY - bounds.minY)
+  runtimeObject.position.set((bounds.minX + bounds.maxX) * 0.5, bounds.y, (bounds.minY + bounds.maxY) * 0.5)
   runtimeObject.rotation.set(-Math.PI / 2, 0, 0)
   runtimeObject.scale.set(width, depth, 1)
   runtimeObject.updateMatrixWorld(true)
@@ -4170,11 +4173,10 @@ function buildWaterPreviewFromLocalPoints(runtimeObject: THREE.Object3D, points:
   return updateWaterSurfaceRuntimeMesh(runtimeObject, metadata)
 }
 
-function commitWaterContourNode(nodeId: string, runtimeObject: THREE.Object3D, points: Array<[number, number]>, buildShape: 'polygon' | 'circle'): boolean {
-  const worldPoints = convertWaterContourLocalPointsToWorldPoints(runtimeObject, points)
+function commitWaterContourNode(nodeId: string, points: Array<[number, number]>, buildShape: 'polygon' | 'circle'): boolean {
   const updated = sceneStore.updateWaterSurfaceMeshNode({
     nodeId,
-    points: worldPoints,
+    localPoints: points,
     buildShape,
   })
   return Boolean(updated)
@@ -4189,24 +4191,43 @@ type WaterEdgeHit = {
 
 const WATER_EDGE_PICK_DISTANCE = 0.3
 
-function pickWaterRectangleEdgeAtPointer(event: PointerEvent, node: SceneNode): WaterEdgeHit | null {
+const waterPlaneNormalHelper = new THREE.Vector3()
+const waterPlaneOriginHelper = new THREE.Vector3()
+const waterPlaneLocalPointerHelper = new THREE.Vector3()
+const waterPlaneQuaternionHelper = new THREE.Quaternion()
+
+function createWaterDragPlane(runtimeObject: THREE.Object3D): THREE.Plane {
+  runtimeObject.updateMatrixWorld(true)
+  const normal = waterPlaneNormalHelper.set(0, 0, 1)
+  normal.applyQuaternion(runtimeObject.getWorldQuaternion(waterPlaneQuaternionHelper)).normalize()
+  const origin = runtimeObject.getWorldPosition(waterPlaneOriginHelper)
+  return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
+}
+
+function pickWaterRectangleEdgeAtPointer(event: PointerEvent, node: SceneNode, runtimeObject: THREE.Object3D): WaterEdgeHit | null {
   const bounds = resolveWaterRectangleBounds(node)
   if (!bounds) {
     return null
   }
 
-  const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
+  const dragPlane = createWaterDragPlane(runtimeObject)
   if (!raycastPlanePoint(event, dragPlane, waterPlanePointerHelper)) {
     return null
   }
 
+  const parentObject = runtimeObject.parent
+  if (!parentObject) {
+    return null
+  }
+  const localPointer = parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterPlanePointerHelper.clone()))
+
   return pickNearestPlanarEdge({
-    pointer: new THREE.Vector2(waterPlanePointerHelper.x, waterPlanePointerHelper.z),
+    pointer: new THREE.Vector2(localPointer.x, localPointer.z),
     vertices: buildRectanglePlanarPoints({
       minX: bounds.minX,
       maxX: bounds.maxX,
-      minY: bounds.minZ,
-      maxY: bounds.maxZ,
+      minY: bounds.minY,
+      maxY: bounds.maxY,
     }).map(([x, y]) => ({ x, y })),
     maxDistance: WATER_EDGE_PICK_DISTANCE,
   })
@@ -4240,7 +4261,8 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
   const node = findSceneNode(sceneStore.nodes, selectedId)
   const runtime = objectMap.get(selectedId) ?? null
   const bounds = resolveWaterRectangleBounds(node)
-  if (!runtime || !bounds) {
+  const parentObject = runtime?.parent ?? null
+  if (!runtime || !bounds || !parentObject) {
     return false
   }
   const hit = pickWaterRectangleHandleAtPointer(event)
@@ -4250,9 +4272,9 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
 
   const draggedSide = {
     x: hit.xSide,
-    z: hit.zSide,
+    y: hit.zSide,
   }
-  const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
+  const dragPlane = createWaterDragPlane(runtime)
 
   waterRectangleDragState = {
     pointerId: event.pointerId,
@@ -4262,13 +4284,14 @@ function tryBeginWaterRectangleDrag(event: PointerEvent): boolean {
     startY: event.clientY,
     moved: false,
     runtimeObject: runtime,
+    parentObject,
     startPosition: runtime.position.clone(),
     startScale: runtime.scale.clone(),
     startBounds: {
       minX: bounds.minX,
       maxX: bounds.maxX,
-      minZ: bounds.minZ,
-      maxZ: bounds.maxZ,
+      minY: bounds.minY,
+      maxY: bounds.maxY,
       y: bounds.y,
     },
     dragPlane,
@@ -4433,12 +4456,13 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
   }
 
   if (isSelectedWaterRectangleEditMode()) {
-    const hit = pickWaterRectangleEdgeAtPointer(event, node)
+    const hit = pickWaterRectangleEdgeAtPointer(event, node, runtime)
     const bounds = resolveWaterRectangleBounds(node)
-    if (!hit || !bounds) {
+    const parentObject = runtime.parent
+    if (!hit || !bounds || !parentObject) {
       return false
     }
-    const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bounds.y)
+    const dragPlane = createWaterDragPlane(runtime)
     waterEdgeDragState = {
       kind: 'rectangle',
       pointerId: event.pointerId,
@@ -4448,11 +4472,12 @@ function tryBeginWaterEdgeDrag(event: PointerEvent): boolean {
       startY: event.clientY,
       moved: false,
       runtimeObject: runtime,
+      parentObject,
       startBounds: {
         minX: bounds.minX,
         maxX: bounds.maxX,
-        minZ: bounds.minZ,
-        maxZ: bounds.maxZ,
+        minY: bounds.minY,
+        maxY: bounds.maxY,
         y: bounds.y,
       },
       dragPlane,
@@ -10787,19 +10812,20 @@ function handlePointerMove(event: PointerEvent) {
       return
     }
 
+    const pointerLocal = state.parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
     const localBounds = { ...state.startBounds }
-    const x = waterDragIntersectionHelper.x
-    const z = waterDragIntersectionHelper.z
+    const x = pointerLocal.x
+    const y = pointerLocal.z
     const eps = 1e-3
     if (state.draggedSide.x === 'min') {
       localBounds.minX = Math.min(x, localBounds.maxX - eps)
     } else {
       localBounds.maxX = Math.max(x, localBounds.minX + eps)
     }
-    if (state.draggedSide.z === 'min') {
-      localBounds.minZ = Math.min(z, localBounds.maxZ - eps)
+    if (state.draggedSide.y === 'min') {
+      localBounds.minY = Math.min(y, localBounds.maxY - eps)
     } else {
-      localBounds.maxZ = Math.max(z, localBounds.minZ + eps)
+      localBounds.maxY = Math.max(y, localBounds.minY + eps)
     }
 
     applyWaterRectanglePreviewTransform(state.runtimeObject, localBounds)
@@ -10823,18 +10849,19 @@ function handlePointerMove(event: PointerEvent) {
       if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
+      const pointerLocal = state.parentObject.worldToLocal(waterPlaneLocalPointerHelper.copy(waterDragIntersectionHelper.clone()))
       const nextBounds = { ...state.startBounds }
-      const x = waterDragIntersectionHelper.x
-      const z = waterDragIntersectionHelper.z
+      const x = pointerLocal.x
+      const y = pointerLocal.z
       const eps = 1e-3
       if (state.edgeIndex === 0) {
         nextBounds.minX = Math.min(x, nextBounds.maxX - eps)
       } else if (state.edgeIndex === 1) {
-        nextBounds.maxZ = Math.max(z, nextBounds.minZ + eps)
+        nextBounds.maxY = Math.max(y, nextBounds.minY + eps)
       } else if (state.edgeIndex === 2) {
         nextBounds.maxX = Math.max(x, nextBounds.minX + eps)
       } else {
-        nextBounds.minZ = Math.min(z, nextBounds.maxZ - eps)
+        nextBounds.minY = Math.min(y, nextBounds.maxY - eps)
       }
       applyWaterRectanglePreviewTransform(state.runtimeObject, nextBounds)
       return
@@ -11084,7 +11111,7 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveWaterVertexHandle(null)
 
         if (state.moved) {
-          commitWaterContourNode(state.nodeId, state.runtimeObject, state.workingPoints, 'polygon')
+          commitWaterContourNode(state.nodeId, state.workingPoints, 'polygon')
           ensureWaterVertexHandlesForSelectedNode({ force: true })
           void nextTick(() => {
             ensureWaterVertexHandlesForSelectedNode({ force: true })
@@ -11107,7 +11134,7 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveWaterCircleHandle(null)
 
         if (state.moved) {
-          commitWaterContourNode(state.nodeId, state.runtimeObject, state.workingPoints, 'circle')
+          commitWaterContourNode(state.nodeId, state.workingPoints, 'circle')
           ensureWaterCircleHandlesForSelectedNode({ force: true })
           void nextTick(() => {
             ensureWaterCircleHandlesForSelectedNode({ force: true })
@@ -11130,7 +11157,7 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveWaterCircleHandle(null)
 
         if (state.moved) {
-          commitWaterContourNode(state.nodeId, state.runtimeObject, state.workingPoints, 'circle')
+          commitWaterContourNode(state.nodeId, state.workingPoints, 'circle')
           ensureWaterCircleHandlesForSelectedNode({ force: true })
           void nextTick(() => {
             ensureWaterCircleHandlesForSelectedNode({ force: true })
@@ -11178,7 +11205,7 @@ async function handlePointerUp(event: PointerEvent) {
             applyWaterRectanglePreviewTransform(state.runtimeObject, state.startBounds)
           }
         } else if (state.moved) {
-          commitWaterContourNode(state.nodeId, state.runtimeObject, state.workingPoints, 'polygon')
+          commitWaterContourNode(state.nodeId, state.workingPoints, 'polygon')
           ensureWaterVertexHandlesForSelectedNode({ force: true })
           void nextTick(() => {
             ensureWaterVertexHandlesForSelectedNode({ force: true })
@@ -13875,6 +13902,19 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 
   const hasChildNodes = Array.isArray(node.children) && node.children.length > 0
   syncInstancedTransform(object, hasChildNodes)
+
+  if (node.nodeType === 'Mesh' && isWaterSurfaceNode(node)) {
+    const waterMetadata = getWaterSurfaceMeshMetadata(node)
+    if (waterMetadata) {
+      const waterContourSignature = computeWaterContourSignature(waterMetadata)
+      if (userData.waterSurfaceContourSignature !== waterContourSignature) {
+        updateWaterSurfaceRuntimeMesh(object, waterMetadata)
+        userData.waterSurfaceContourSignature = waterContourSignature
+      }
+    } else {
+      delete userData.waterSurfaceContourSignature
+    }
+  }
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundObject = userData.groundMesh as THREE.Object3D | undefined

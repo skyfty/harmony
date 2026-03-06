@@ -2388,6 +2388,24 @@ function buildWaterSurfaceMeshFromWorldPoints(points: Vector3Like[]): {
   }
 }
 
+function buildWaterSurfaceMeshFromLocalPoints(points: Array<[number, number]>): ReturnType<typeof normalizeWaterSurfaceMeshInput> | null {
+  const sanitized = points
+    .map(([x, y]) => [Number(x), Number(y)] as [number, number])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+
+  if (sanitized.length < 3) {
+    return null
+  }
+
+  try {
+    return normalizeWaterSurfaceMeshInput({
+      contour: sanitized.flatMap(([x, y]) => [x, y]),
+    })
+  } catch {
+    return null
+  }
+}
+
 function resolveGroundNodeForHeightSampling(nodes: SceneNode[]): SceneNode | null {
   const byId = findNodeById(nodes, GROUND_NODE_ID)
   if (byId?.dynamicMesh?.type === 'Ground') {
@@ -11746,7 +11764,7 @@ export const useSceneStore = defineStore('scene', {
 
     updateWaterSurfaceMeshNode(payload: {
       nodeId: string
-      points: Vector3Like[]
+      localPoints: Array<[number, number]>
       buildShape: Exclude<WaterBuildShape, 'rectangle'>
     }): SceneNode | null {
       const target = findNodeById(this.nodes, payload.nodeId)
@@ -11754,22 +11772,19 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const build = buildWaterSurfaceMeshFromWorldPoints(payload.points)
-      if (!build) {
+      const metadata = buildWaterSurfaceMeshFromLocalPoints(payload.localPoints)
+      if (!metadata) {
         return null
       }
 
       this.captureHistorySnapshot()
       visitNode(this.nodes, payload.nodeId, (node) => {
-        node.position = createVector(build.center.x, build.center.y, build.center.z)
-        node.rotation = createVector(-Math.PI / 2, 0, 0)
-        node.scale = createVector(1, 1, 1)
         node.userData = mergeUserDataWithWaterBuildShape({
           ...(node.userData ?? {}),
-          [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(build.metadata),
+          [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(metadata),
         }, payload.buildShape)
       })
-      this.queueSceneNodePatch(payload.nodeId, ['transform', 'userData'])
+      this.queueSceneNodePatch(payload.nodeId, ['userData'])
       commitSceneSnapshot(this)
       return findNodeById(this.nodes, payload.nodeId)
     },

@@ -54,8 +54,8 @@ export function isWaterSurfaceNode(node: SceneNode | null | undefined): boolean 
 export function resolveWaterRectangleBounds(node: SceneNode | null | undefined): {
   minX: number
   maxX: number
-  minZ: number
-  maxZ: number
+  minY: number
+  maxY: number
   y: number
   width: number
   depth: number
@@ -79,8 +79,8 @@ export function resolveWaterRectangleBounds(node: SceneNode | null | undefined):
   return {
     minX: centerX - width * 0.5,
     maxX: centerX + width * 0.5,
-    minZ: centerZ - depth * 0.5,
-    maxZ: centerZ + depth * 0.5,
+    minY: centerZ - depth * 0.5,
+    maxY: centerZ + depth * 0.5,
     y,
     width,
     depth,
