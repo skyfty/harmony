@@ -198,7 +198,7 @@ function commitNoiseStrengthInput() {
           :min="BRUSH_RADIUS_MIN"
           :max="BRUSH_RADIUS_MAX"
           :step="BRUSH_RADIUS_STEP"
-          variant="outlined"
+          variant="underlined"
           density="compact"
           hide-details
           inputmode="decimal"
@@ -218,7 +218,7 @@ function commitNoiseStrengthInput() {
           :min="BRUSH_STRENGTH_MIN"
           :max="BRUSH_STRENGTH_MAX"
           :step="BRUSH_STRENGTH_STEP"
-          variant="outlined"
+          variant="underlined"
           density="compact"
           hide-details
           inputmode="decimal"
@@ -256,7 +256,7 @@ function commitNoiseStrengthInput() {
         :min="NOISE_STRENGTH_MIN"
         :max="NOISE_STRENGTH_MAX"
         :step="NOISE_STRENGTH_STEP"
-        variant="outlined"
+        variant="underlined"
         density="compact"
         hide-details
         inputmode="decimal"

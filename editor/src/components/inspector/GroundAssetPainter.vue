@@ -231,6 +231,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-top: 10px;
 }
 
 .asset-toolbar {

@@ -155,8 +155,8 @@
                   </v-tab>
                 </v-tabs>
 
-                <div class="ground-scatter-settings">
-                  <div class="scatter-spacing-item">
+                <div class="scatter-control-row">
+                  <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
                       <span>Brush Radius</span>
                       <span>{{ groundScatterBrushRadiusDisplay }}</span>
@@ -168,7 +168,7 @@
                       :min="SCATTER_BRUSH_RADIUS_MIN"
                       :max="SCATTER_BRUSH_RADIUS_MAX"
                       :step="SCATTER_RADIUS_STEP"
-                      variant="outlined"
+                      variant="underlined"
                       density="compact"
                       hide-details
                       inputmode="decimal"
@@ -179,7 +179,7 @@
                     />
                   </div>
 
-                  <div class="scatter-spacing-item">
+                  <div class="scatter-spacing-item scatter-spacing--compact">
                     <div class="scatter-spacing-labels">
                       <span>Density</span>
                       <span>{{ groundScatterDensityDisplay }}</span>
@@ -191,7 +191,7 @@
                       :min="SCATTER_DENSITY_MIN"
                       :max="SCATTER_DENSITY_MAX"
                       :step="SCATTER_DENSITY_STEP"
-                      variant="outlined"
+                      variant="underlined"
                       density="compact"
                       hide-details
                       inputmode="numeric"
@@ -485,11 +485,10 @@
               <v-text-field
                 v-model="scatterEraseRadiusInput"
                 type="number"
-                suffix="m"
                 :min="SCATTER_ERASE_RADIUS_MIN"
                 :max="SCATTER_BRUSH_RADIUS_MAX"
                 :step="SCATTER_RADIUS_STEP"
-                variant="outlined"
+                variant="underlined"
                 density="compact"
                 hide-details
                 inputmode="decimal"
@@ -2035,6 +2034,16 @@ function handleClearScatterMenuAction() {
   min-width: 0;
 }
 
+.scatter-control-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scatter-spacing--compact {
+  flex: 1;
+}
+
 .scatter-spacing-input {
   max-width: 140px;
 }
@@ -2083,9 +2092,6 @@ function handleClearScatterMenuAction() {
   gap: 6px;
 }
 
-.scatter-erase-input {
-  max-width: 140px;
-}
 
 .scatter-erase-menu__slider-labels {
   display: flex;

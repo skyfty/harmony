@@ -115,44 +115,46 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
 
 <template>
   <div class="terrain-paint-panel">
-    <div class="control-group">
-      <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
-      <v-text-field
-        v-model="brushRadiusInput"
-        type="number"
-        suffix="m"
-        :min="BRUSH_RADIUS_MIN"
-        :max="BRUSH_RADIUS_MAX"
-        :step="BRUSH_RADIUS_STEP"
-        variant="outlined"
-        density="compact"
-        hide-details
-        inputmode="decimal"
-        :disabled="!props.hasGround"
-        class="numeric-input"
-        @blur="commitBrushRadiusInput"
-        @keydown.enter.prevent="commitBrushRadiusInput"
-      />
-    </div>
+    <div class="control-row">
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Brush Radius: {{ brushRadiusInput }} m</div>
+        <v-text-field
+          v-model="brushRadiusInput"
+          type="number"
+          suffix="m"
+          :min="BRUSH_RADIUS_MIN"
+          :max="BRUSH_RADIUS_MAX"
+          :step="BRUSH_RADIUS_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitBrushRadiusInput"
+          @keydown.enter.prevent="commitBrushRadiusInput"
+        />
+      </div>
 
-    <div class="control-group">
-      <div class="text-caption">Edge Smoothing: {{ smoothnessPercent }}</div>
-      <v-text-field
-        v-model="smoothnessInput"
-        type="number"
-        suffix="x"
-        :min="SMOOTHNESS_MIN"
-        :max="SMOOTHNESS_MAX"
-        :step="SMOOTHNESS_STEP"
-        variant="outlined"
-        density="compact"
-        hide-details
-        inputmode="decimal"
-        :disabled="!props.hasGround"
-        class="numeric-input"
-        @blur="commitSmoothnessInput"
-        @keydown.enter.prevent="commitSmoothnessInput"
-      />
+      <div class="control-group control-group--compact">
+        <div class="text-caption">Edge Smoothing: {{ smoothnessPercent }}</div>
+        <v-text-field
+          v-model="smoothnessInput"
+          type="number"
+          suffix="x"
+          :min="SMOOTHNESS_MIN"
+          :max="SMOOTHNESS_MAX"
+          :step="SMOOTHNESS_STEP"
+          variant="underlined"
+          density="compact"
+          hide-details
+          inputmode="decimal"
+          :disabled="!props.hasGround"
+          class="numeric-input"
+          @blur="commitSmoothnessInput"
+          @keydown.enter.prevent="commitSmoothnessInput"
+        />
+      </div>
     </div>
     <div class="control-group">
       <div class="text-caption mb-1">Terrain Texture</div>
@@ -181,6 +183,17 @@ const smoothnessPercent = computed(() => `${Math.round((smoothnessModel.value ??
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.control-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.control-group--compact {
+  flex: 1;
+  min-width: 0;
 }
 
 .numeric-input {
