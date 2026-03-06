@@ -4,6 +4,7 @@ import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type End
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
 import {
   WATER_SURFACE_HANDLE_ELEVATION,
+  buildWaterSurfaceMetadataFromLocalPoints,
   computeWaterContourSignature,
   getWaterSurfaceMeshMetadata,
   getWaterContourLocalPointsFromMetadata,
@@ -35,6 +36,7 @@ export type WaterVertexRenderer = {
     isSelectionLocked: (nodeId: string) => boolean
     resolveWaterNode: (nodeId: string) => SceneNode | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    previewPoints?: Array<[number, number]>
   }): void
   forceRebuild(options: {
     active: boolean
@@ -42,6 +44,7 @@ export type WaterVertexRenderer = {
     isSelectionLocked: (nodeId: string) => boolean
     resolveWaterNode: (nodeId: string) => SceneNode | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    previewPoints?: Array<[number, number]>
   }): void
   pick(options: {
     camera: THREE.Camera | null
@@ -141,6 +144,7 @@ export function createWaterVertexRenderer(): WaterVertexRenderer {
     isSelectionLocked: (nodeId: string) => boolean
     resolveWaterNode: (nodeId: string) => SceneNode | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
+    previewPoints?: Array<[number, number]>
     force?: boolean
   }) {
     const selectedNodeId = options.selectedNodeId
@@ -153,14 +157,28 @@ export function createWaterVertexRenderer(): WaterVertexRenderer {
       return
     }
     const node = options.resolveWaterNode(selectedNodeId)
-    const metadata = getWaterSurfaceMeshMetadata(node)
     const runtimeObject = options.resolveRuntimeObject(selectedNodeId)
-    if (!metadata || !runtimeObject) {
+    if (!runtimeObject) {
       clear()
       return
     }
 
-    const signature = computeWaterContourSignature(metadata)
+    const previewPoints = Array.isArray(options.previewPoints)
+      ? options.previewPoints
+          .map(([x, y]) => [Number(x), Number(y)] as [number, number])
+          .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+      : null
+    const usePreviewPoints = !!previewPoints && previewPoints.length > 0
+
+    const metadata = usePreviewPoints ? null : getWaterSurfaceMeshMetadata(node)
+    if (!usePreviewPoints && !metadata) {
+      clear()
+      return
+    }
+
+    const signature = usePreviewPoints
+      ? computeWaterContourSignature(buildWaterSurfaceMetadataFromLocalPoints(previewPoints ?? []))
+      : computeWaterContourSignature(metadata)
     if (!options.force && state && state.nodeId === selectedNodeId && state.signature === signature) {
       if (!runtimeObject.children.includes(state.group)) {
         runtimeObject.add(state.group)
@@ -174,7 +192,7 @@ export function createWaterVertexRenderer(): WaterVertexRenderer {
     group.name = WATER_VERTEX_HANDLE_GROUP_NAME
     group.userData.isWaterVertexHandles = true
 
-    const points = getWaterContourLocalPointsFromMetadata(metadata)
+    const points = usePreviewPoints ? (previewPoints ?? []) : getWaterContourLocalPointsFromMetadata(metadata)
     points.forEach(([x, y], index) => {
       const gizmo = createEndpointGizmoObject({
         axes: { x: true, y: true, z: false },

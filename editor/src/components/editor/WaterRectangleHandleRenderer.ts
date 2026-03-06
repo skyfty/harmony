@@ -362,9 +362,11 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
       } else {
         tmpParentWorldScale.set(1, 1, 1)
       }
-      const parentScale = Math.max(1e-6, Math.max(tmpParentWorldScale.x, tmpParentWorldScale.y, tmpParentWorldScale.z))
-      const scale = THREE.MathUtils.clamp(desiredWorldDiameter / (baseDiameter * parentScale), 1e-4, 1e6)
-      handle.scale.setScalar(scale)
+      const scale = THREE.MathUtils.clamp(desiredWorldDiameter / baseDiameter, 1e-4, 1e6)
+      const safeX = Math.max(1e-6, Math.abs(tmpParentWorldScale.x))
+      const safeY = Math.max(1e-6, Math.abs(tmpParentWorldScale.y))
+      const safeZ = Math.max(1e-6, Math.abs(tmpParentWorldScale.z))
+      handle.scale.set(scale / safeX, scale / safeY, scale / safeZ)
     }
   }
 

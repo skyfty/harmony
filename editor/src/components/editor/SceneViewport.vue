@@ -4071,7 +4071,7 @@ function setActiveWaterRectangleHandle(active: { nodeId: string; cornerIndex: nu
   waterRectangleHandleRenderer.setActiveHandle(active as any)
 }
 
-function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean }) {
+function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Array<[number, number]> }) {
   if (isSelectedWaterCircleEditMode() || isSelectedWaterRectangleEditMode()) {
     waterVertexRenderer.clear()
     return
@@ -4084,6 +4084,7 @@ function ensureWaterVertexHandlesForSelectedNode(options?: { force?: boolean }) 
     isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
     resolveWaterNode: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+    previewPoints: options?.previewPoints,
   }
   if (options?.force) {
     waterVertexRenderer.forceRebuild(common)
@@ -10698,7 +10699,7 @@ function handlePointerMove(event: PointerEvent) {
     nextPoints[state.vertexIndex] = [local.x, local.y]
     state.workingPoints = nextPoints
     if (buildWaterPreviewFromLocalPoints(state.runtimeObject, nextPoints)) {
-      ensureWaterVertexHandlesForSelectedNode({ force: true })
+      ensureWaterVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     }
     return
   }
@@ -10858,7 +10859,7 @@ function handlePointerMove(event: PointerEvent) {
     })
     state.workingPoints = nextPoints
     if (buildWaterPreviewFromLocalPoints(state.runtimeObject, nextPoints)) {
-      ensureWaterVertexHandlesForSelectedNode({ force: true })
+      ensureWaterVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     }
     return
   }
