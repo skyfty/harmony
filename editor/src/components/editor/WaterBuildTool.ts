@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { useSceneStore } from '@/stores/sceneStore'
+import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
 
 export type WaterBuildToolHandle = {
   flushPreviewIfNeeded: (scene: THREE.Scene | null) => void
@@ -16,8 +17,9 @@ export type WaterBuildToolHandle = {
 
 type Session = {
   shape: WaterBuildShape
-  start: THREE.Vector3
-  end: THREE.Vector3
+  points: THREE.Vector3[]
+  previewEnd: THREE.Vector3 | null
+  previewGroup: THREE.Group | null
 }
 
 type RightClickState = {
@@ -29,86 +31,11 @@ type RightClickState = {
 
 type LeftDragState = {
   pointerId: number
+  kind: Exclude<WaterBuildShape, 'polygon'>
 }
 
-const PREVIEW_GROUP_NAME = '__WaterBuildPreview'
 const WATER_MIN_SIZE = 1e-3
-
-function disposeGroup(group: THREE.Group | null) {
-  if (!group) {
-    return
-  }
-  group.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      mesh.geometry?.dispose?.()
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((material) => material?.dispose?.())
-      } else {
-        mesh.material?.dispose?.()
-      }
-    }
-    const line = child as THREE.LineSegments
-    if (line?.isLineSegments) {
-      line.geometry?.dispose?.()
-      if (Array.isArray(line.material)) {
-        line.material.forEach((material) => material?.dispose?.())
-      } else {
-        line.material?.dispose?.()
-      }
-    }
-  })
-  group.removeFromParent()
-}
-
-function buildPreviewGroup(): THREE.Group {
-  const group = new THREE.Group()
-  group.name = PREVIEW_GROUP_NAME
-
-  const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1, 1, 1),
-    new THREE.MeshBasicMaterial({
-      color: 0x03a9f4,
-      transparent: true,
-      opacity: 0.22,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  )
-  plane.rotation.x = -Math.PI / 2
-  plane.renderOrder = 100
-  plane.name = 'WaterBuildPreviewPlane'
-
-  const outline = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1, 1, 1)),
-    new THREE.LineBasicMaterial({
-      color: 0x81d4fa,
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
-    }),
-  )
-  outline.rotation.x = -Math.PI / 2
-  outline.renderOrder = 101
-  outline.name = 'WaterBuildPreviewOutline'
-
-  group.add(plane)
-  group.add(outline)
-  return group
-}
-
-function updatePreviewGroup(group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3) {
-  const minX = Math.min(start.x, end.x)
-  const maxX = Math.max(start.x, end.x)
-  const minZ = Math.min(start.z, end.z)
-  const maxZ = Math.max(start.z, end.z)
-  const width = Math.max(WATER_MIN_SIZE, maxX - minX)
-  const depth = Math.max(WATER_MIN_SIZE, maxZ - minZ)
-  const centerX = (minX + maxX) * 0.5
-  const centerZ = (minZ + maxZ) * 0.5
-  group.position.set(centerX, start.y + 0.02, centerZ)
-  group.scale.set(width, depth, 1)
-}
+const WATER_CIRCLE_SEGMENTS = 32
 
 export function createWaterBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
@@ -121,6 +48,7 @@ export function createWaterBuildTool(options: {
   isAltOverrideActive: () => boolean
   clickDragThresholdPx: number
 }): WaterBuildToolHandle {
+  const previewRenderer = createWaterPreviewRenderer({ rootGroup: options.rootGroup })
   const groundPointerHelper = new THREE.Vector3()
   const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
     if (options.resolveBuildPlacementPoint) {
@@ -130,52 +58,181 @@ export function createWaterBuildTool(options: {
   }
 
   let session: Session | null = null
-  let previewGroup: THREE.Group | null = null
-  let previewDirty = false
   let rightClickState: RightClickState | null = null
   let leftDragState: LeftDragState | null = null
 
   const getShape = (): WaterBuildShape => options.waterBuildShape.value ?? 'rectangle'
 
-  const clearSession = (disposePreview = true) => {
-    if (disposePreview) {
-      disposeGroup(previewGroup)
-      previewGroup = null
+  const ensureSession = (): WaterPreviewSession => {
+    if (session) {
+      return session
     }
-    session = null
-    previewDirty = false
-    rightClickState = null
-    leftDragState = null
+    session = {
+      shape: getShape(),
+      points: [],
+      previewEnd: null,
+      previewGroup: null,
+    }
+    return session
   }
 
-  const ensurePreview = () => {
-    if (!previewGroup) {
-      previewGroup = buildPreviewGroup()
-      previewDirty = true
+  const clearSession = (disposePreview = true) => {
+    if (disposePreview) {
+      previewRenderer.clear(session)
+    } else if (session?.previewGroup) {
+      session.previewGroup.removeFromParent()
     }
-    return previewGroup
+    session = null
+    rightClickState = null
+    leftDragState = null
+    previewRenderer.reset()
+  }
+
+  const alignPointYToSession = (point: THREE.Vector3, targetSession: WaterPreviewSession | null): THREE.Vector3 => {
+    const baseY = targetSession?.points?.[0]?.y
+    if (typeof baseY === 'number' && Number.isFinite(baseY)) {
+      point.y = baseY
+    }
+    return point
   }
 
   const markPreviewDirty = () => {
-    previewDirty = true
+    previewRenderer.markDirty()
+  }
+
+  const startRectangleDraft = (event: PointerEvent): boolean => {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return false
+    }
+    const start = options.snapPoint(groundPointerHelper.clone())
+    const current = ensureSession()
+    current.shape = 'rectangle'
+    current.points = [start.clone()]
+    current.previewEnd = start.clone()
+    leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
+    markPreviewDirty()
+    return true
+  }
+
+  const startCircleDraft = (event: PointerEvent): boolean => {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return false
+    }
+    const center = options.snapPoint(groundPointerHelper.clone())
+    const initialEnd = center.clone()
+    initialEnd.x += 1
+
+    const current = ensureSession()
+    current.shape = 'circle'
+    current.points = [center.clone()]
+    current.previewEnd = initialEnd
+    leftDragState = { pointerId: event.pointerId, kind: 'circle' }
+    markPreviewDirty()
+    return true
+  }
+
+  const updateCursorPreview = (event: PointerEvent) => {
+    if (!session || session.points.length === 0 || options.isAltOverrideActive()) {
+      return
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return
+    }
+
+    const raw = groundPointerHelper.clone()
+    const next = session.shape === 'circle' ? raw : options.snapPoint(raw)
+    alignPointYToSession(next, session)
+
+    const previous = session.previewEnd
+    if (previous && previous.equals(next)) {
+      return
+    }
+
+    session.previewEnd = next.clone()
+    markPreviewDirty()
+  }
+
+  const handlePlacementClick = (event: PointerEvent): boolean => {
+    if (options.activeBuildTool.value !== 'water' || options.isAltOverrideActive()) {
+      return false
+    }
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return false
+    }
+
+    const point = options.snapPoint(groundPointerHelper.clone())
+    const current = ensureSession()
+    alignPointYToSession(point, current)
+    current.shape = 'polygon'
+
+    if (current.points.length > 0) {
+      const last = current.points[current.points.length - 1]!
+      if (last.distanceToSquared(point) <= 1e-6) {
+        current.previewEnd = point.clone()
+        markPreviewDirty()
+        return true
+      }
+    }
+
+    current.points.push(point.clone())
+    current.previewEnd = point.clone()
+    markPreviewDirty()
+    return true
+  }
+
+  const finalizePolygon = () => {
+    if (!session) {
+      return
+    }
+    const points = session.points
+      .map((point) => point.clone())
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z))
+    if (points.length < 3) {
+      clearSession(true)
+      return
+    }
+
+    options.sceneStore.createWaterSurfaceMeshNode({
+      buildShape: 'polygon',
+      points: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    })
+    clearSession(true)
+  }
+
+  const finalizeCircle = () => {
+    if (!session || session.points.length < 1 || !session.previewEnd) {
+      clearSession(true)
+      return
+    }
+
+    const center = session.points[0]!
+    const end = session.previewEnd
+    const radius = Math.hypot(end.x - center.x, end.z - center.z)
+    if (!Number.isFinite(radius) || radius <= WATER_MIN_SIZE) {
+      clearSession(true)
+      return
+    }
+
+    const points: THREE.Vector3[] = []
+    for (let index = 0; index < WATER_CIRCLE_SEGMENTS; index += 1) {
+      const t = (index / WATER_CIRCLE_SEGMENTS) * Math.PI * 2
+      points.push(new THREE.Vector3(
+        center.x + Math.cos(t) * radius,
+        center.y,
+        center.z + Math.sin(t) * radius,
+      ))
+    }
+
+    options.sceneStore.createWaterSurfaceMeshNode({
+      buildShape: 'circle',
+      points: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    })
+    clearSession(true)
   }
 
   return {
     flushPreviewIfNeeded: (scene) => {
-      if (!scene || !session) {
-        if (previewGroup && previewGroup.parent === scene) {
-          previewGroup.removeFromParent()
-        }
-        return
-      }
-      const group = ensurePreview()
-      if (previewDirty) {
-        updatePreviewGroup(group, session.start, session.end)
-        previewDirty = false
-      }
-      if (group.parent !== options.rootGroup) {
-        options.rootGroup.add(group)
-      }
+      previewRenderer.flushIfNeeded(scene, session)
     },
 
     handlePointerDown: (event) => {
@@ -185,19 +242,16 @@ export function createWaterBuildTool(options: {
 
       const shape = getShape()
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        clearSession(true)
-        if (!raycastPlacementPoint(event, groundPointerHelper)) {
+        if (shape === 'rectangle') {
+          clearSession(true)
+          startRectangleDraft(event)
           return false
         }
-        const start = options.snapPoint(groundPointerHelper.clone())
-        session = {
-          shape,
-          start: start.clone(),
-          end: start.clone(),
+        if (shape === 'circle') {
+          clearSession(true)
+          startCircleDraft(event)
+          return false
         }
-        leftDragState = { pointerId: event.pointerId }
-        markPreviewDirty()
-        return false
       }
 
       if (event.button === 2 && session) {
@@ -224,26 +278,27 @@ export function createWaterBuildTool(options: {
       if (options.activeBuildTool.value !== 'water') {
         return false
       }
-      if (!session) {
-        return false
-      }
 
-      if (leftDragState && event.pointerId === leftDragState.pointerId) {
+      if (leftDragState && session && event.pointerId === leftDragState.pointerId) {
         const isLeftButtonDown = (event.buttons & 1) !== 0
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (isLeftButtonDown && !isCameraNavActive) {
-          if (!raycastPlacementPoint(event, groundPointerHelper)) {
-            return true
-          }
-          const next = options.snapPoint(groundPointerHelper.clone())
-          next.y = session.start.y
-          session.end.copy(next)
-          markPreviewDirty()
+          updateCursorPreview(event)
           return true
         }
       }
 
-      return Boolean(session)
+      if (session && session.points.length > 0) {
+        const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
+        if (!isCameraNavActive) {
+          if (session.shape === 'polygon') {
+            updateCursorPreview(event)
+          }
+          return true
+        }
+      }
+
+      return false
     },
 
     handlePointerUp: (event) => {
@@ -252,51 +307,78 @@ export function createWaterBuildTool(options: {
       }
 
       const shape = getShape()
-      if (event.button === 0 && leftDragState?.pointerId === event.pointerId) {
-        leftDragState = null
+      if (event.button === 0 && !options.isAltOverrideActive()) {
+        if (shape === 'rectangle' && leftDragState?.kind === 'rectangle' && leftDragState.pointerId === event.pointerId) {
+          leftDragState = null
 
-        if (!session) {
+          if (!session || session.shape !== 'rectangle' || session.points.length < 1) {
+            clearSession(true)
+            return true
+          }
+
+          if (!raycastPlacementPoint(event, groundPointerHelper)) {
+            clearSession(true)
+            return true
+          }
+
+          const end = options.snapPoint(groundPointerHelper.clone())
+          end.y = session.points[0]?.y ?? end.y
+          session.previewEnd = end.clone()
+          markPreviewDirty()
+
+          const start = session.points[0]!
+          const minX = Math.min(start.x, end.x)
+          const maxX = Math.max(start.x, end.x)
+          const minZ = Math.min(start.z, end.z)
+          const maxZ = Math.max(start.z, end.z)
+          const width = maxX - minX
+          const depth = maxZ - minZ
+          if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= WATER_MIN_SIZE || depth <= WATER_MIN_SIZE) {
+            clearSession(true)
+            return true
+          }
+
+          options.sceneStore.createWaterNode({
+            center: {
+              x: (minX + maxX) * 0.5,
+              y: start.y,
+              z: (minZ + maxZ) * 0.5,
+            },
+            width,
+            depth,
+          })
           clearSession(true)
           return true
         }
 
-        if (!raycastPlacementPoint(event, groundPointerHelper)) {
-          clearSession(true)
+        if (shape === 'circle' && leftDragState?.kind === 'circle' && leftDragState.pointerId === event.pointerId) {
+          leftDragState = null
+          if (!session || session.shape !== 'circle') {
+            clearSession(true)
+            return true
+          }
+          if (!raycastPlacementPoint(event, groundPointerHelper)) {
+            clearSession(true)
+            return true
+          }
+
+          const end = groundPointerHelper.clone()
+          end.y = session.points[0]?.y ?? end.y
+          session.previewEnd = end.clone()
+          markPreviewDirty()
+          finalizeCircle()
           return true
         }
 
-        const end = options.snapPoint(groundPointerHelper.clone())
-        end.y = session.start.y
-        session.end.copy(end)
-        markPreviewDirty()
-
-        if (shape !== 'rectangle') {
-          clearSession(true)
-          return true
+        if (shape === 'polygon') {
+          const handled = handlePlacementClick(event)
+          if (handled) {
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
+          }
+          return handled
         }
-
-        const minX = Math.min(session.start.x, session.end.x)
-        const maxX = Math.max(session.start.x, session.end.x)
-        const minZ = Math.min(session.start.z, session.end.z)
-        const maxZ = Math.max(session.start.z, session.end.z)
-        const width = maxX - minX
-        const depth = maxZ - minZ
-        if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= WATER_MIN_SIZE || depth <= WATER_MIN_SIZE) {
-          clearSession(true)
-          return true
-        }
-
-        options.sceneStore.createWaterNode({
-          center: {
-            x: (minX + maxX) * 0.5,
-            y: session.start.y,
-            z: (minZ + maxZ) * 0.5,
-          },
-          width,
-          depth,
-        })
-        clearSession(true)
-        return true
       }
 
       if (event.button === 2) {
@@ -307,6 +389,10 @@ export function createWaterBuildTool(options: {
           const clickWasDrag = rightClickState.moved
           rightClickState = null
           if (!clickWasDrag && session) {
+            if (session.shape === 'polygon') {
+              finalizePolygon()
+              return true
+            }
             clearSession(true)
             return true
           }
@@ -333,8 +419,7 @@ export function createWaterBuildTool(options: {
     },
 
     dispose: () => {
-      disposeGroup(previewGroup)
-      previewGroup = null
+      previewRenderer.dispose(session)
       clearSession(false)
     },
   }

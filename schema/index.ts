@@ -140,6 +140,17 @@ export * from './assetTypeConversion'
 
 export * from './mirror'
 
+export {
+  WATER_SURFACE_MESH_USERDATA_KEY,
+  WATER_SURFACE_MESH_VERSION,
+  normalizeWaterSurfaceMeshInput,
+  cloneWaterSurfaceMeshMetadata,
+  extractWaterSurfaceMeshMetadataFromUserData,
+  createWaterSurfaceBufferGeometryFromMetadata,
+  createWaterSurfaceRuntimeMesh,
+} from './waterSurfaceMesh'
+export type { WaterSurfaceMeshInput, WaterSurfaceMeshMetadata } from './waterSurfaceMesh'
+
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 

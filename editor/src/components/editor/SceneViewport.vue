@@ -9933,6 +9933,7 @@ async function handlePointerDown(event: PointerEvent) {
     }
 
     if (event.button === 2) {
+      waterBuildTool.handlePointerDown(event)
       pointerInteraction.beginBuildToolRightClick(event, { roadCancelEligible: false })
       return
     }

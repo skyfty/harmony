@@ -23,6 +23,8 @@ import type {
 } from './index';
 import {
   createPrimitiveGeometry,
+  createWaterSurfaceRuntimeMesh,
+  extractWaterSurfaceMeshMetadataFromUserData,
 } from './index';
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
@@ -1009,6 +1011,24 @@ class SceneGraphBuilder {
     }
     if (meshInfo?.type === 'GuideRoute') {
       return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
+    }
+
+    const waterSurfaceMesh = extractWaterSurfaceMeshMetadataFromUserData(node.userData);
+    if (waterSurfaceMesh) {
+      const [material] = await this.resolveNodeMaterials(node);
+      const mesh = createWaterSurfaceRuntimeMesh(waterSurfaceMesh, {
+        material,
+        name: node.name ?? 'Water Surface',
+      });
+      this.applyTransform(mesh, node);
+      this.applyVisibility(mesh, node);
+
+      if (Array.isArray(node.children) && node.children.length) {
+        await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+      }
+
+      this.recordMeshStatistics(mesh);
+      return mesh;
     }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);

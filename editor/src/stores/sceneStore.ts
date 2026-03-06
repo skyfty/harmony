@@ -25,6 +25,11 @@ import {
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
   createPrimitiveMesh,
+  WATER_SURFACE_MESH_USERDATA_KEY,
+  cloneWaterSurfaceMeshMetadata,
+  createWaterSurfaceRuntimeMesh,
+  extractWaterSurfaceMeshMetadataFromUserData,
+  normalizeWaterSurfaceMeshInput,
 } from '@schema'
 import type {
   AssetIndexEntry,
@@ -165,6 +170,7 @@ import { createWallPresetActions } from './wallPresetActions'
 import { createFloorPresetActions } from './floorPresetActions'
 import { createSceneStoreFloorHelpers } from './sceneStoreFloor'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
+import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
   createNodePrefabHelpers,
   createPrefabActions,
@@ -2275,6 +2281,14 @@ function createRuntimeMeshFromMetadata(nodeName: string | undefined, metadata: A
   return mesh
 }
 
+function createRuntimeWaterSurfaceMesh(nodeName: string | undefined, metadata: ReturnType<typeof normalizeWaterSurfaceMeshInput>): THREE.Mesh {
+  const mesh = createWaterSurfaceRuntimeMesh(metadata, {
+    name: nodeName && nodeName.trim().length ? nodeName : 'Water Surface',
+  })
+  prepareRuntimeObjectForNode(mesh)
+  return mesh
+}
+
 function ensureAiModelMeshRuntime(node: SceneNode): boolean {
   const metadata = extractAiModelMeshMetadataFromUserData(node.userData)
   if (!metadata) {
@@ -2297,6 +2311,79 @@ function ensureAiModelMeshRuntime(node: SceneNode): boolean {
   } catch (error) {
     console.warn('Failed to rebuild AI generated mesh runtime', node.id, error)
     return false
+  }
+}
+
+function ensureWaterSurfaceMeshRuntime(node: SceneNode): boolean {
+  const metadata = extractWaterSurfaceMeshMetadataFromUserData(node.userData)
+  if (!metadata || !node.components?.[WATER_COMPONENT_TYPE]) {
+    return false
+  }
+  if (getRuntimeObject(node.id)) {
+    return false
+  }
+  try {
+    const runtime = createRuntimeWaterSurfaceMesh(node.name, metadata)
+    runtime.userData = {
+      ...(runtime.userData ?? {}),
+      [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(metadata),
+    }
+    tagObjectWithNodeId(runtime, node.id)
+    registerRuntimeObject(node.id, runtime)
+    componentManager.attachRuntime(node, runtime)
+    componentManager.syncNode(node)
+    return true
+  } catch (error) {
+    console.warn('Failed to rebuild water surface mesh runtime', node.id, error)
+    return false
+  }
+}
+
+function buildWaterSurfaceMeshFromWorldPoints(points: Vector3Like[]): {
+  center: Vector3Like
+  metadata: ReturnType<typeof normalizeWaterSurfaceMeshInput>
+} | null {
+  const sanitized = points
+    .map((point) => ({
+      x: Number(point.x),
+      y: Number(point.y),
+      z: Number(point.z),
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z))
+
+  if (sanitized.length < 3) {
+    return null
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+
+  sanitized.forEach((point) => {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minZ = Math.min(minZ, point.z)
+    maxZ = Math.max(maxZ, point.z)
+  })
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+
+  const center = {
+    x: (minX + maxX) * 0.5,
+    y: sanitized[0]!.y,
+    z: (minZ + maxZ) * 0.5,
+  }
+
+  try {
+    const metadata = normalizeWaterSurfaceMeshInput({
+      contour: sanitized.flatMap((point) => [point.x - center.x, point.z - center.z]),
+    })
+    return { center, metadata }
+  } catch {
+    return null
   }
 }
 
@@ -11039,7 +11126,9 @@ export const useSceneStore = defineStore('scene', {
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const visitNodes = (list: SceneNode[]) => {
         list.forEach((node) => {
-          const ensured = ensureDynamicMeshRuntime(node, groundNode) || ensureAiModelMeshRuntime(node)
+          const ensured = ensureDynamicMeshRuntime(node, groundNode)
+            || ensureAiModelMeshRuntime(node)
+            || ensureWaterSurfaceMeshRuntime(node)
           if (ensured) {
             created += 1
           }
@@ -11609,6 +11698,51 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
+    createWaterSurfaceMeshNode(payload: {
+      nodeId?: string
+      points: Vector3Like[]
+      buildShape: Exclude<WaterBuildShape, 'rectangle'>
+      name?: string
+      editorFlags?: SceneNodeEditorFlags
+    }): SceneNode | null {
+      const build = buildWaterSurfaceMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+
+      const runtime = createRuntimeWaterSurfaceMesh(payload.name, build.metadata)
+      const nodeName = payload.name ?? this.generateWaterNodeName()
+      const userData = mergeUserDataWithWaterBuildShape({
+        [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(build.metadata),
+      }, payload.buildShape)
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeId: payload.nodeId,
+          nodeType: 'Mesh',
+          object: runtime,
+          name: nodeName,
+          position: createVector(build.center.x, build.center.y, build.center.z),
+          rotation: createVector(-Math.PI / 2, 0, 0),
+          scale: createVector(1, 1, 1),
+          editorFlags: payload.editorFlags,
+          userData,
+        })
+
+        if (!node) {
+          return null
+        }
+
+        this.addNodeComponent<typeof WATER_COMPONENT_TYPE>(node.id, WATER_COMPONENT_TYPE)
+        const updated = findNodeById(this.nodes, node.id)
+        return updated ?? node
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
     updateWaterNodeRectangle(payload: {
       nodeId: string
       center: Vector3Like
@@ -11622,7 +11756,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const target = findNodeById(this.nodes, payload.nodeId)
-      if (!isWaterSurfaceNode(target)) {
+      if (!target || target.nodeType !== 'Plane' || !isWaterSurfaceNode(target)) {
         return null
       }
 

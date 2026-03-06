@@ -1,4 +1,5 @@
 import type { SceneNode } from '@schema'
+import { extractWaterSurfaceMeshMetadataFromUserData } from '@schema'
 import { WATER_COMPONENT_TYPE } from '@schema/components'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 
@@ -39,10 +40,15 @@ export function readWaterBuildShapeFromNode(node: SceneNode | null | undefined):
 }
 
 export function isWaterSurfaceNode(node: SceneNode | null | undefined): boolean {
-  if (!node || node.nodeType !== 'Plane') {
+  if (!node || !node.components?.[WATER_COMPONENT_TYPE]) {
     return false
   }
-  return Boolean(node.components?.[WATER_COMPONENT_TYPE])
+
+  if (node.nodeType === 'Plane') {
+    return true
+  }
+
+  return node.nodeType === 'Mesh' && Boolean(extractWaterSurfaceMeshMetadataFromUserData(node.userData))
 }
 
 export function resolveWaterRectangleBounds(node: SceneNode | null | undefined): {
@@ -54,11 +60,11 @@ export function resolveWaterRectangleBounds(node: SceneNode | null | undefined):
   width: number
   depth: number
 } | null {
-  if (!isWaterSurfaceNode(node)) {
+  if (!node || node.nodeType !== 'Plane' || readWaterBuildShapeFromNode(node) !== 'rectangle' || !isWaterSurfaceNode(node)) {
     return null
   }
 
-  const target = node as SceneNode
+  const target = node
 
   const width = Math.abs(Number(target.scale?.x ?? 1))
   const depth = Math.abs(Number(target.scale?.y ?? 1))
