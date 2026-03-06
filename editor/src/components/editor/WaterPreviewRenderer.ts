@@ -129,12 +129,20 @@ function getPreviewVertices(
     }
   }
 
+  if (points.length === 2 && previewEnd) {
+    const first = points[0]
+    const second = points[1]
+    if (first && second && previewEnd.equals(second)) {
+      const rectangle = buildRectanglePreviewPoints(first, second)
+      if (rectangle.length) {
+        return rectangle
+      }
+    }
+  }
+
   const combined = points.map((point) => point.clone())
   if (previewEnd) {
-    const last = combined[combined.length - 1] ?? null
-    if (!last || last.distanceToSquared(previewEnd) > 1e-10) {
-      combined.push(previewEnd.clone())
-    }
+    combined.push(previewEnd.clone())
   }
   return combined
 }
@@ -184,7 +192,8 @@ function buildPreviewGeometry(vertices: THREE.Vector3[], center: THREE.Vector3):
 
   try {
     const metadata = normalizeWaterSurfaceMeshInput({
-      contour: vertices.flatMap((point) => [point.x - center.x, point.z - center.z]),
+      // Water runtime keeps a -PI/2 X rotation, so local contour Y must be the negated world Z offset.
+      contour: vertices.flatMap((point) => [point.x - center.x, center.z - point.z]),
     })
     return createWaterSurfaceBufferGeometryFromMetadata(metadata)
   } catch {

@@ -2379,7 +2379,8 @@ function buildWaterSurfaceMeshFromWorldPoints(points: Vector3Like[]): {
 
   try {
     const metadata = normalizeWaterSurfaceMeshInput({
-      contour: sanitized.flatMap((point) => [point.x - center.x, point.z - center.z]),
+      // Water surface mesh runtime remains rotated around X, so local contour Y stores negated world Z offset.
+      contour: sanitized.flatMap((point) => [point.x - center.x, center.z - point.z]),
     })
     return { center, metadata }
   } catch {
