@@ -78,6 +78,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     rows: definition.rows,
     columns: definition.columns,
     cellSize: definition.cellSize,
+    chunkStreamingEnabled: definition.chunkStreamingEnabled,
     manualHeightMap: { ...(definition.manualHeightMap ?? {}) },
     planningHeightMap: { ...(definition.planningHeightMap ?? {}) },
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
@@ -153,6 +154,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     rows: derivedRows,
     columns: derivedColumns,
     cellSize,
+    chunkStreamingEnabled: overrides.chunkStreamingEnabled !== false,
     manualHeightMap: { ...(manualHeightMapOverrides ?? {}) },
     planningHeightMap: { ...(planningHeightMapOverrides ?? {}) },
     heightComposition: {

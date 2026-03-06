@@ -15,6 +15,9 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
+	areAllGroundChunksLoaded,
+	ensureAllGroundChunks,
+	isGroundChunkStreamingEnabled,
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
@@ -138,6 +141,21 @@ const brushResultVertexHelper = new THREE.Vector3()
 const groundSelectionCenterHelper = new THREE.Vector3()
 const groundSelectionScreenHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
+
+function syncGroundChunkLoadingMode(
+	groundObject: THREE.Object3D,
+	definition: GroundDynamicMesh,
+	camera: THREE.Camera | null,
+	options: Parameters<typeof updateGroundChunks>[3] = {},
+): void {
+	if (isGroundChunkStreamingEnabled(definition)) {
+		updateGroundChunks(groundObject, definition, camera, options)
+		return
+	}
+	if (!areAllGroundChunksLoaded(groundObject, definition)) {
+		ensureAllGroundChunks(groundObject, definition)
+	}
+}
 const scatterPointerHelper = new THREE.Vector3()
 const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
@@ -1994,7 +2012,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundMesh || !definition || store.layers.size === 0) {
 			return
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera())
+		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera())
 
 		if (scatterChunkStreamingEnabled) {
 			// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
@@ -3636,7 +3654,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
+		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4019,7 +4037,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
+		syncGroundChunkLoadingMode(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
@@ -4303,7 +4321,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
+		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera(), { force: true })
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)
@@ -4338,7 +4356,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundObject = getGroundObject()
 		if (!groundObject) return
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera())
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -4453,7 +4471,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundObject) {
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		syncGroundChunkLoadingMode(groundObject, definition, options.getCamera())
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
@@ -4521,7 +4539,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const mesh = getGroundObject()
 		if (mesh) {
-			updateGroundChunks(mesh, definition, options.getCamera())
+			syncGroundChunkLoadingMode(mesh, definition, options.getCamera())
 			updateGroundMesh(mesh, definition)
 		}
 	}

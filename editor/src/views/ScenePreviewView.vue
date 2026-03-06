@@ -70,7 +70,12 @@ import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
-import { updateGroundChunks } from '@schema/groundMesh'
+import {
+	areAllGroundChunksLoaded,
+	ensureAllGroundChunks,
+	isGroundChunkStreamingEnabled,
+	updateGroundChunks,
+} from '@schema/groundMesh'
 import { autoFitDirectionalLightShadowToGround } from '@schema/shadowFit'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
@@ -6948,7 +6953,11 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
+			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
+				updateGroundChunks(groundObject, cachedGroundDynamicMesh, activeCamera)
+			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
+				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh)
+			}
 			syncTerrainPaintPreviewForGround(groundObject, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
