@@ -24,7 +24,7 @@
               :variant="groundTerrainButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleGroundToolButtonClick('terrain')"
+              @click="handleGroundButtonClick('terrain')"
               @contextmenu.prevent.stop="handleGroundTerrainContextMenu"
             />
           </template>
@@ -73,7 +73,7 @@
               :variant="groundPaintButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleGroundToolButtonClick('paint')"
+              @click="handleGroundButtonClick('paint')"
               @contextmenu.prevent.stop="handleGroundPaintContextMenu"
             />
           </template>
@@ -117,7 +117,7 @@
               :variant="groundScatterButtonActive ? 'flat' : 'text'"
               :title="tool.label"
               :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleGroundToolButtonClick(groundScatterCategoryModel)"
+              @click="handleGroundButtonClick('scatter')"
               @contextmenu.prevent.stop="handleGroundScatterContextMenu"
             />
           </template>
@@ -966,9 +966,9 @@ const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFix
 const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
 const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Shift)' : 'Scatter Erase'))
 
-const groundTerrainButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value === 'terrain')
-const groundPaintButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value === 'paint')
-const groundScatterButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint')
+const groundTerrainButtonActive = computed(() => isGroundButtonActive('terrain'))
+const groundPaintButtonActive = computed(() => isGroundButtonActive('paint'))
+const groundScatterButtonActive = computed(() => isGroundButtonActive('scatter'))
 
 const groundScatterTabs = computed(() =>
   (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
@@ -1395,76 +1395,113 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
   return
 }
 
-function handleGroundToolButtonClick(tab: GroundPanelTab) {
+type GroundMenuKind = 'terrain' | 'paint' | 'scatter'
+
+function isGroundButtonActive(kind: GroundMenuKind) {
+  if (activeBuildTool.value !== 'ground') {
+    return false
+  }
+  if (kind === 'terrain') {
+    return groundPanelTab.value === 'terrain'
+  }
+  if (kind === 'paint') {
+    return groundPanelTab.value === 'paint'
+  }
+  return groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint'
+}
+
+function resolveGroundTargetTab(kind: GroundMenuKind, source: 'button' | 'menu'): GroundPanelTab | null {
+  if (kind === 'terrain') {
+    return 'terrain'
+  }
+  if (kind === 'paint') {
+    return 'paint'
+  }
+  if (source === 'menu' && groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint') {
+    return null
+  }
+  return groundScatterCategoryModel.value
+}
+
+function handleGroundButtonClick(kind: GroundMenuKind) {
   if (buildToolsDisabled.value || !hasGroundNode.value) {
     return
   }
-  emit('activate-ground-tab', tab)
+
+  if (isGroundButtonActive(kind)) {
+    emit('change-build-tool', null)
+    setGroundMenuOpen(kind, false)
+    return
+  }
+
+  const tab = resolveGroundTargetTab(kind, 'button')
+  if (tab) {
+    emit('activate-ground-tab', tab)
+  }
   emit('change-build-tool', 'ground')
 }
 
-function handleGroundTerrainContextMenu(event: MouseEvent) {
+function setGroundMenuOpen(kind: GroundMenuKind, open: boolean) {
+  if (kind === 'terrain') {
+    emit('update:ground-terrain-menu-open', open)
+    return
+  }
+  if (kind === 'paint') {
+    emit('update:ground-paint-menu-open', open)
+    return
+  }
+  emit('update:ground-scatter-menu-open', open)
+}
+
+function activateGroundTabForMenu(kind: GroundMenuKind) {
+  const tab = resolveGroundTargetTab(kind, 'menu')
+  if (tab) {
+    emit('activate-ground-tab', tab)
+  }
+}
+
+function handleGroundMenuContextMenu(kind: GroundMenuKind, event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
   if (buildToolsDisabled.value || !hasGroundNode.value) {
     return
   }
-  emit('activate-ground-tab', 'terrain')
+  activateGroundTabForMenu(kind)
   closeAllMenus()
-  emit('update:ground-terrain-menu-open', true)
+  setGroundMenuOpen(kind, true)
+}
+
+function handleGroundMenuModelUpdate(kind: GroundMenuKind, value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+    activateGroundTabForMenu(kind)
+  }
+  setGroundMenuOpen(kind, open)
+}
+
+function handleGroundTerrainContextMenu(event: MouseEvent) {
+  handleGroundMenuContextMenu('terrain', event)
 }
 
 function handleGroundTerrainMenuModelUpdate(value: boolean) {
-  const open = Boolean(value)
-  if (open) {
-    closeAllMenus()
-    emit('activate-ground-tab', 'terrain')
-  }
-  emit('update:ground-terrain-menu-open', open)
+  handleGroundMenuModelUpdate('terrain', value)
 }
 
 function handleGroundPaintContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value || !hasGroundNode.value) {
-    return
-  }
-  emit('activate-ground-tab', 'paint')
-  closeAllMenus()
-  emit('update:ground-paint-menu-open', true)
+  handleGroundMenuContextMenu('paint', event)
 }
 
 function handleGroundPaintMenuModelUpdate(value: boolean) {
-  const open = Boolean(value)
-  if (open) {
-    closeAllMenus()
-    emit('activate-ground-tab', 'paint')
-  }
-  emit('update:ground-paint-menu-open', open)
+  handleGroundMenuModelUpdate('paint', value)
 }
 
 function handleGroundScatterContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  if (buildToolsDisabled.value || !hasGroundNode.value) {
-    return
-  }
-  if (groundPanelTab.value === 'terrain' || groundPanelTab.value === 'paint') {
-    emit('activate-ground-tab', groundScatterCategoryModel.value)
-  }
-  closeAllMenus()
-  emit('update:ground-scatter-menu-open', true)
+  handleGroundMenuContextMenu('scatter', event)
 }
 
 function handleGroundScatterMenuModelUpdate(value: boolean) {
-  const open = Boolean(value)
-  if (open) {
-    closeAllMenus()
-    if (groundPanelTab.value === 'terrain' || groundPanelTab.value === 'paint') {
-      emit('activate-ground-tab', groundScatterCategoryModel.value)
-    }
-  }
-  emit('update:ground-scatter-menu-open', open)
+  handleGroundMenuModelUpdate('scatter', value)
 }
 
 function handleGroundScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
