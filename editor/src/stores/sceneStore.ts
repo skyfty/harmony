@@ -11743,6 +11743,36 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
+    updateWaterSurfaceMeshNode(payload: {
+      nodeId: string
+      points: Vector3Like[]
+      buildShape: Exclude<WaterBuildShape, 'rectangle'>
+    }): SceneNode | null {
+      const target = findNodeById(this.nodes, payload.nodeId)
+      if (!target || target.nodeType !== 'Mesh' || !isWaterSurfaceNode(target)) {
+        return null
+      }
+
+      const build = buildWaterSurfaceMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, payload.nodeId, (node) => {
+        node.position = createVector(build.center.x, build.center.y, build.center.z)
+        node.rotation = createVector(-Math.PI / 2, 0, 0)
+        node.scale = createVector(1, 1, 1)
+        node.userData = mergeUserDataWithWaterBuildShape({
+          ...(node.userData ?? {}),
+          [WATER_SURFACE_MESH_USERDATA_KEY]: cloneWaterSurfaceMeshMetadata(build.metadata),
+        }, payload.buildShape)
+      })
+      this.queueSceneNodePatch(payload.nodeId, ['transform', 'userData'])
+      commitSceneSnapshot(this)
+      return findNodeById(this.nodes, payload.nodeId)
+    },
+
     updateWaterNodeRectangle(payload: {
       nodeId: string
       center: Vector3Like

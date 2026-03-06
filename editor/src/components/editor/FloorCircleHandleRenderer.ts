@@ -6,6 +6,8 @@ import {
   getEndpointGizmoPartInfoFromObject,
   type EndpointGizmoPart,
 } from './EndpointGizmo'
+import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from './planarEditMath'
+import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
 
 export type FloorCircleHandleState = {
   nodeId: string
@@ -88,66 +90,17 @@ function disposeFloorCircleHandleGroup(group: THREE.Group) {
   }
 }
 
-function computeWorldUnitsPerPixel(options: {
-  camera: THREE.Camera
-  distance: number
-  viewportHeightPx: number
-}): number {
-  const { camera, distance, viewportHeightPx } = options
-  const safeHeight = Math.max(1, viewportHeightPx)
-
-  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-    const perspective = camera as THREE.PerspectiveCamera
-    const vFovRad = THREE.MathUtils.degToRad(perspective.fov)
-    const worldHeight = 2 * Math.max(1e-6, distance) * Math.tan(vFovRad / 2)
-    return worldHeight / safeHeight
-  }
-
-  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
-    const ortho = camera as THREE.OrthographicCamera
-    const worldHeight = Math.abs((ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom))
-    return worldHeight / safeHeight
-  }
-
-  return Math.max(1e-6, distance) / safeHeight
-}
-
 function computeCircleFromVertices(vertices: any[]): { centerX: number; centerZ: number; radius: number; segments: number } | null {
-  const points: Array<{ x: number; z: number }> = []
-  for (const entry of vertices) {
-    if (!Array.isArray(entry) || entry.length < 2) continue
-    const x = Number(entry[0])
-    const z = Number(entry[1])
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
-    points.push({ x, z })
-  }
-
-  if (points.length < 3) {
+  const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(vertices))
+  if (!circle) {
     return null
   }
-
-  let sumX = 0
-  let sumZ = 0
-  for (const p of points) {
-    sumX += p.x
-    sumZ += p.z
+  return {
+    centerX: circle.centerX,
+    centerZ: circle.centerY,
+    radius: circle.radius,
+    segments: circle.segments,
   }
-
-  const inv = 1 / Math.max(1, points.length)
-  const centerX = sumX * inv
-  const centerZ = sumZ * inv
-
-  let meanRadius = 0
-  for (const p of points) {
-    meanRadius += Math.hypot(p.x - centerX, p.z - centerZ)
-  }
-  meanRadius /= Math.max(1, points.length)
-
-  if (!Number.isFinite(centerX + centerZ + meanRadius) || meanRadius <= 1e-4) {
-    return null
-  }
-
-  return { centerX, centerZ, radius: meanRadius, segments: points.length }
 }
 
 export function createFloorCircleHandleRenderer(): FloorCircleHandleRenderer {

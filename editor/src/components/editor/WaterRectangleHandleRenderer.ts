@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
+import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
+import { WATER_SURFACE_HANDLE_ELEVATION } from './waterSurfaceEditUtils'
 
 export type WaterRectangleHandlePickResult = {
   nodeId: string
@@ -52,8 +54,7 @@ export type WaterRectangleHandleRenderer = {
 const WATER_RECT_HANDLE_RENDER_ORDER = 1001
 const WATER_RECT_HANDLE_GROUP_NAME = '__WaterRectangleHandles'
 const WATER_RECT_HANDLE_SCREEN_DIAMETER_PX = 32
-const WATER_RECT_HANDLE_COLOR = 0x03a9f4
-const WATER_RECT_HANDLE_ELEVATION = 0.03
+const WATER_RECT_HANDLE_COLOR = 0xff4081
 
 const RECT_CORNERS: Array<{ x: number; y: number }> = [
   { x: -0.5, y: -0.5 },
@@ -67,30 +68,6 @@ type HandleState = {
   group: THREE.Group
 }
 
-function computeWorldUnitsPerPixel(options: {
-  camera: THREE.Camera
-  distance: number
-  viewportHeightPx: number
-}): number {
-  const { camera, distance, viewportHeightPx } = options
-  const safeHeight = Math.max(1, viewportHeightPx)
-
-  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-    const perspective = camera as THREE.PerspectiveCamera
-    const vFovRad = THREE.MathUtils.degToRad(perspective.fov)
-    const worldHeight = 2 * Math.max(1e-6, distance) * Math.tan(vFovRad / 2)
-    return worldHeight / safeHeight
-  }
-
-  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
-    const ortho = camera as THREE.OrthographicCamera
-    const worldHeight = Math.abs((ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom))
-    return worldHeight / safeHeight
-  }
-
-  return Math.max(1e-6, distance) / safeHeight
-}
-
 function disposeGroup(group: THREE.Group) {
   for (const child of group.children) {
     const gizmo = child?.userData?.endpointGizmo as { dispose?: () => void } | undefined
@@ -98,7 +75,7 @@ function disposeGroup(group: THREE.Group) {
   }
 }
 
-export { WATER_RECT_HANDLE_GROUP_NAME, WATER_RECT_HANDLE_ELEVATION }
+export { WATER_RECT_HANDLE_GROUP_NAME, WATER_SURFACE_HANDLE_ELEVATION as WATER_RECT_HANDLE_ELEVATION }
 
 export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRenderer {
   let state: HandleState | null = null
@@ -213,7 +190,7 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
       })
       const handle = gizmo.root
       handle.name = `WaterRectangleHandle_${index + 1}`
-      handle.position.set(corner.x, corner.y, WATER_RECT_HANDLE_ELEVATION)
+      handle.position.set(corner.x, corner.y, WATER_SURFACE_HANDLE_ELEVATION)
       handle.layers.enableAll()
       handle.userData.isWaterRectangleHandle = true
       handle.userData.nodeId = selectedNodeId
@@ -221,6 +198,7 @@ export function createWaterRectangleHandleRenderer(): WaterRectangleHandleRender
       handle.userData.baseDiameter = gizmo.baseDiameter
       handle.userData.endpointGizmo = gizmo
       handle.userData.handleKey = `${selectedNodeId}:${index}`
+      handle.userData.zOffset = WATER_SURFACE_HANDLE_ELEVATION
 
       handle.traverse((child) => {
         const mesh = child as THREE.Mesh

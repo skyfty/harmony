@@ -3,6 +3,7 @@ import type { SceneNode, WallDynamicMesh } from '@schema'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import type { FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
+import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from '../planarEditMath'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import type {
@@ -167,34 +168,11 @@ function computeChainCenterAndRadiusWorld(options: {
 }
 
 function computeFloorCircleLocalFromVertices(vertices: any[]): { centerX: number; centerZ: number; radius: number; segments: number } | null {
-  const points: Array<{ x: number; z: number }> = []
-  for (const entry of vertices) {
-    if (!Array.isArray(entry) || entry.length < 2) continue
-    const x = Number(entry[0])
-    const z = Number(entry[1])
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
-    points.push({ x, z })
+  const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(vertices))
+  if (!circle) {
+    return null
   }
-  if (points.length < 3) return null
-
-  let sumX = 0
-  let sumZ = 0
-  for (const p of points) {
-    sumX += p.x
-    sumZ += p.z
-  }
-  const inv = 1 / Math.max(1, points.length)
-  const centerX = sumX * inv
-  const centerZ = sumZ * inv
-
-  let meanRadius = 0
-  for (const p of points) {
-    meanRadius += Math.hypot(p.x - centerX, p.z - centerZ)
-  }
-  meanRadius /= Math.max(1, points.length)
-  if (!Number.isFinite(centerX + centerZ + meanRadius) || meanRadius <= 1e-4) return null
-
-  return { centerX, centerZ, radius: meanRadius, segments: points.length }
+  return { centerX: circle.centerX, centerZ: circle.centerY, radius: circle.radius, segments: circle.segments }
 }
 
 export function handlePointerDownTools(

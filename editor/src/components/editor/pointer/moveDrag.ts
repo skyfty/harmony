@@ -9,6 +9,14 @@ import type { WallDynamicMesh } from '@schema'
 import { constrainWallEndPointSoftSnap } from '../wallEndpointSnap'
 import { GRID_MAJOR_SPACING } from '../constants'
 import { distanceSqXZ, splitWallSegmentsIntoChains } from '../wallSegmentUtils'
+import {
+  buildCirclePlanarPoints,
+  buildRectanglePlanarPoints,
+  computeApproxCircleFromPlanarPoints,
+  computePlanarBounds,
+  computePlanarMeanCenter,
+  sanitizePlanarPoints,
+} from '../planarEditMath'
 import { FLOOR_MAX_THICKNESS, FLOOR_MIN_THICKNESS } from '@schema/components'
 import {
   buildWallPreviewDynamicMeshFromWorldSegments,
@@ -228,34 +236,11 @@ function applySameNodeEndpointMagnet(options: {
 }
 
 function computeCircleFromVertices(vertices: any[]): { centerX: number; centerZ: number; radius: number } | null {
-  const points: Array<{ x: number; z: number }> = []
-  for (const entry of vertices) {
-    if (!Array.isArray(entry) || entry.length < 2) continue
-    const x = Number(entry[0])
-    const z = Number(entry[1])
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
-    points.push({ x, z })
+  const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(vertices))
+  if (!circle) {
+    return null
   }
-  if (points.length < 3) return null
-
-  let sumX = 0
-  let sumZ = 0
-  for (const p of points) {
-    sumX += p.x
-    sumZ += p.z
-  }
-  const inv = 1 / Math.max(1, points.length)
-  const centerX = sumX * inv
-  const centerZ = sumZ * inv
-
-  let meanRadius = 0
-  for (const p of points) {
-    meanRadius += Math.hypot(p.x - centerX, p.z - centerZ)
-  }
-  meanRadius /= Math.max(1, points.length)
-  if (!Number.isFinite(centerX + centerZ + meanRadius) || meanRadius <= 1e-4) return null
-
-  return { centerX, centerZ, radius: meanRadius }
+  return { centerX: circle.centerX, centerZ: circle.centerY, radius: circle.radius }
 }
 
 function syncFloorCircleHandlesFromDefinition(options: {
@@ -408,88 +393,35 @@ type FloorEdgeDragStateLike = {
   initialProjection: number
 }
 
-function sanitizeFloorVertices(vertices: unknown): Array<[number, number]> {
-  if (!Array.isArray(vertices)) {
-    return []
-  }
-
-  return vertices
-    .map((entry) => {
-      if (!Array.isArray(entry) || entry.length < 2) {
-        return null
-      }
-      const x = Number(entry[0])
-      const z = Number(entry[1])
-      if (!Number.isFinite(x) || !Number.isFinite(z)) {
-        return null
-      }
-      return [x, z] as [number, number]
-    })
-    .filter((v): v is [number, number] => Array.isArray(v))
-}
+const sanitizeFloorVertices = sanitizePlanarPoints
 
 function computeBoundsXZ(vertices: Array<[number, number]>): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
-  if (!vertices.length) {
+  const bounds = computePlanarBounds(vertices)
+  if (!bounds) {
     return null
   }
-
-  let minX = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let minZ = Number.POSITIVE_INFINITY
-  let maxZ = Number.NEGATIVE_INFINITY
-
-  for (const [x, z] of vertices) {
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
-    minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
-    minZ = Math.min(minZ, z)
-    maxZ = Math.max(maxZ, z)
-  }
-
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    return null
-  }
-
-  return { minX, maxX, minZ, maxZ }
+  return { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minY, maxZ: bounds.maxY }
 }
 
 function buildRectangleVertices(bounds: { minX: number; maxX: number; minZ: number; maxZ: number }): Array<[number, number]> {
-  return [
-    [bounds.minX, bounds.minZ],
-    [bounds.minX, bounds.maxZ],
-    [bounds.maxX, bounds.maxZ],
-    [bounds.maxX, bounds.minZ],
-  ]
+  return buildRectanglePlanarPoints({ minX: bounds.minX, maxX: bounds.maxX, minY: bounds.minZ, maxY: bounds.maxZ })
 }
 
 function computeMeanCenter(vertices: Array<[number, number]>): { x: number; z: number } | null {
-  if (!vertices.length) {
+  const center = computePlanarMeanCenter(vertices)
+  if (!center) {
     return null
   }
-  let sumX = 0
-  let sumZ = 0
-  let count = 0
-  for (const [x, z] of vertices) {
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue
-    sumX += x
-    sumZ += z
-    count += 1
-  }
-  if (count <= 0) {
-    return null
-  }
-  return { x: sumX / count, z: sumZ / count }
+  return { x: center.x, z: center.y }
 }
 
 function buildCircleVertices(options: { centerX: number; centerZ: number; radius: number; segments: number }): Array<[number, number]> {
-  const segments = Math.max(8, Math.min(256, Math.floor(options.segments)))
-  const radius = Math.max(1e-4, options.radius)
-  const out: Array<[number, number]> = []
-  for (let i = 0; i < segments; i += 1) {
-    const t = (i / segments) * Math.PI * 2
-    out.push([options.centerX + Math.cos(t) * radius, options.centerZ + Math.sin(t) * radius])
-  }
-  return out
+  return buildCirclePlanarPoints({
+    centerX: options.centerX,
+    centerY: options.centerZ,
+    radius: options.radius,
+    segments: options.segments,
+  })
 }
 export function handlePointerMoveDrag(
   event: PointerEvent,

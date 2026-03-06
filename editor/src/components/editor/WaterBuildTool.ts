@@ -40,6 +40,7 @@ const WATER_CIRCLE_SEGMENTS = 32
 export function createWaterBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   waterBuildShape: Ref<WaterBuildShape>
+  getDefaultCircleRadius?: () => number
   sceneStore: ReturnType<typeof useSceneStore>
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
@@ -119,8 +120,10 @@ export function createWaterBuildTool(options: {
       return false
     }
     const center = options.snapPoint(groundPointerHelper.clone())
+    const baseRadiusRaw = options.getDefaultCircleRadius?.()
+    const baseRadius = typeof baseRadiusRaw === 'number' && Number.isFinite(baseRadiusRaw) ? Math.max(1e-3, baseRadiusRaw) : 1
     const initialEnd = center.clone()
-    initialEnd.x += 1
+    initialEnd.x += baseRadius
 
     const current = ensureSession()
     current.shape = 'circle'
