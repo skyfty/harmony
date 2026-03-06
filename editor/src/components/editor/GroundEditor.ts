@@ -4669,17 +4669,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (hasSelection) {
 				const canceled = cancelGroundSelection()
 				if (canceled) {
+					// If we actually canceled a ground selection, consume the event so
+					// it doesn't trigger other handlers.
 					event.preventDefault()
 					event.stopPropagation()
 					event.stopImmediatePropagation()
+					return true
 				}
-			} else {
-				options.activeBuildTool.value = null
 			}
-			event.preventDefault()
-			event.stopPropagation()
-			event.stopImmediatePropagation()
-			return true
+			// No selection to cancel — do not prevent or stop propagation so camera
+			// controls bound to right-click can still operate. Keep the active build
+			// tool unchanged (do not clear `options.activeBuildTool`).
+			return false
 		}
 
 		if (event.button !== 0) {
