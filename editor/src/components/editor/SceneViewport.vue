@@ -61,6 +61,9 @@ import type {
   SceneSkyboxSettings,
   GradientBackgroundDome,
   GroundDynamicMesh,
+  GroundGenerationMode,
+  GroundGenerationSettings,
+  GroundSculptOperation,
   RoadDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
@@ -167,7 +170,8 @@ import {
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
-import { useTerrainStore } from '@/stores/terrainStore'
+import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
@@ -380,6 +384,7 @@ const {
   paintSmoothness,
   scatterCategory,
   scatterSelectedAsset,
+  scatterProviderAssetId,
   scatterBrushRadius,
   scatterEraseRadius,
   scatterDensityPercent,
@@ -389,6 +394,84 @@ const {
 const hasGroundNode = computed(() => {
   const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
   return Boolean(ground && ground.dynamicMesh?.type === 'Ground')
+})
+
+const groundDefinition = computed(() => {
+  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  if (!ground || ground.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  return ground.dynamicMesh as GroundDynamicMesh
+})
+
+const groundNoiseStrength = ref(1)
+const groundNoiseMode = ref<GroundGenerationMode>('perlin')
+let syncingGroundGeneration = false
+
+function clampGroundNoiseStrength(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1
+  }
+  return Math.min(5, Math.max(0, Number(value)))
+}
+
+function buildGroundGenerationPayload(definition?: GroundDynamicMesh | null): GroundGenerationSettings {
+  const fallback: GroundGenerationSettings = {
+    mode: 'perlin',
+    noiseScale: Math.max(10, definition?.width ?? 80),
+    noiseAmplitude: 6,
+    noiseStrength: 1,
+  }
+  if (!definition?.generation) {
+    return fallback
+  }
+  return {
+    ...fallback,
+    ...definition.generation,
+  }
+}
+
+function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
+  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  if (!ground || ground.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const definition = ground.dynamicMesh as GroundDynamicMesh
+  const nextGeneration: GroundGenerationSettings = {
+    ...buildGroundGenerationPayload(definition),
+    ...patch,
+  }
+  nextGeneration.worldWidth = definition.width
+  nextGeneration.worldDepth = definition.depth
+  sceneStore.updateNodeDynamicMesh(ground.id, { generation: nextGeneration })
+}
+
+watch(
+  groundDefinition,
+  (definition) => {
+    syncingGroundGeneration = true
+    const generation = definition?.generation
+    groundNoiseStrength.value = clampGroundNoiseStrength(generation?.noiseStrength ?? 1)
+    groundNoiseMode.value = generation?.mode ?? 'perlin'
+    nextTick(() => {
+      syncingGroundGeneration = false
+    })
+  },
+  { immediate: true },
+)
+
+watch(groundNoiseStrength, (value) => {
+  if (syncingGroundGeneration || !hasGroundNode.value) {
+    return
+  }
+  applyGroundGenerationPatch({ noiseStrength: clampGroundNoiseStrength(value) })
+})
+
+watch(groundNoiseMode, (mode) => {
+  if (syncingGroundGeneration || !hasGroundNode.value) {
+    return
+  }
+  applyGroundGenerationPatch({ mode })
 })
 
 watch(hasGroundNode, (hasGround, prevHasGround) => {
@@ -1596,6 +1679,9 @@ const {
 const floorShapeMenuOpen = ref(false)
 const wallShapeMenuOpen = ref(false)
 const waterShapeMenuOpen = ref(false)
+const groundTerrainMenuOpen = ref(false)
+const groundPaintMenuOpen = ref(false)
+const groundScatterMenuOpen = ref(false)
 const cameraResetMenuOpen = ref(false)
 let transformToolBeforeBuild: EditorTool | null = null
 const buildToolCursorClass = computed(() => {
@@ -1669,7 +1755,7 @@ watch(
   { immediate: true },
 )
 
-const isGroundSculptConfigMode = computed(() => selectedNodeIsGround.value && brushOperation.value != null)
+const isGroundSculptConfigMode = computed(() => hasGroundNode.value && brushOperation.value != null)
 const buildToolsDisabled = computed(() => isGroundSculptConfigMode.value)
 
 watch(
@@ -1720,7 +1806,7 @@ const hasInstancedMeshes = computed(() => {
   return instancedMeshes.some((mesh) => mesh.visible && mesh.count > 0)
 })
 
-const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || selectedNodeIsWall.value || hasInstancedMeshes.value)
+const canUseScatterEraseTool = computed(() => hasGroundNode.value || selectedNodeIsWall.value || hasInstancedMeshes.value)
 
 const wallRenderer = createWallRenderer({
   assetCacheStore,
@@ -2714,7 +2800,7 @@ function handleCameraResetMenuOpen(value: boolean) {
 }
 
 function handleClearAllScatterInstances() {
-  if (!selectedNodeIsGround.value) {
+  if (!hasGroundNode.value) {
     return
   }
   cancelGroundEditorScatterPlacement()
@@ -4968,6 +5054,73 @@ function handleWallShapeMenuOpen(value: boolean) {
 
 function handleWaterShapeMenuOpen(value: boolean) {
   waterShapeMenuOpen.value = Boolean(value)
+}
+
+function handleGroundTerrainMenuOpen(value: boolean) {
+  groundTerrainMenuOpen.value = Boolean(value)
+}
+
+function handleGroundPaintMenuOpen(value: boolean) {
+  groundPaintMenuOpen.value = Boolean(value)
+}
+
+function handleGroundScatterMenuOpen(value: boolean) {
+  groundScatterMenuOpen.value = Boolean(value)
+}
+
+function handleActivateGroundTab(tab: GroundPanelTab) {
+  terrainStore.setGroundPanelTab(tab)
+}
+
+function handleGroundBrushRadiusUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushRadius = Number.isFinite(next) ? Math.min(50, Math.max(0.1, next)) : terrainStore.brushRadius
+}
+
+function handleGroundBrushStrengthUpdate(value: number) {
+  const next = Number(value)
+  terrainStore.brushStrength = Number.isFinite(next) ? Math.min(10, Math.max(0.1, next)) : terrainStore.brushStrength
+}
+
+function handleGroundBrushShapeUpdate(value: 'circle' | 'square' | 'star') {
+  terrainStore.brushShape = value
+}
+
+function handleGroundBrushOperationUpdate(value: GroundSculptOperation | null) {
+  terrainStore.setBrushOperation(value)
+}
+
+function handleGroundNoiseStrengthUpdate(value: number) {
+  groundNoiseStrength.value = clampGroundNoiseStrength(Number(value))
+}
+
+function handleGroundNoiseModeUpdate(value: GroundGenerationMode) {
+  groundNoiseMode.value = value
+}
+
+function handleGroundPaintSmoothnessUpdate(value: number) {
+  terrainStore.setPaintSmoothness(Number(value))
+}
+
+function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
+  terrainStore.setPaintSelection(value)
+}
+
+function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
+  terrainStore.setScatterCategory(value)
+}
+
+function handleGroundScatterBrushRadiusUpdate(value: number) {
+  terrainStore.setScatterBrushRadius(Number(value))
+}
+
+function handleGroundScatterDensityPercentUpdate(value: number) {
+  terrainStore.setScatterDensityPercent(Number(value))
+}
+
+function handleGroundScatterAssetSelect(payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }) {
+  terrainStore.setScatterCategory(payload.category)
+  terrainStore.setScatterSelection({ asset: payload.asset, providerAssetId: payload.providerAssetId })
 }
 
 function handleSelectFloorBuildShape(shape: FloorBuildShape) {
@@ -15603,8 +15756,8 @@ watch(
   }
 )
 
-watch(selectedNodeIsGround, (isGround) => {
-  if (!isGround) {
+watch(hasGroundNode, (isGroundPresent) => {
+  if (!isGroundPresent) {
     exitScatterEraseMode()
   }
 })
@@ -15761,7 +15914,8 @@ defineExpose<SceneViewportHandle>({
         :can-rotate-selection="canRotateSelection"
         :can-mirror-selection="canRotateSelection"
         :can-erase-scatter="canUseScatterEraseTool"
-        :canClearAllScatterInstances="selectedNodeIsGround"
+        :canClearAllScatterInstances="hasGroundNode"
+        :has-ground-node="hasGroundNode"
         :scatter-erase-mode-active="scatterEraseModeActive"
         :scatter-erase-repair-active="scatterRepairModifierActive"
           :scatter-erase-radius="scatterEraseRadius"
@@ -15770,11 +15924,27 @@ defineExpose<SceneViewportHandle>({
         :floor-shape-menu-open="floorShapeMenuOpen"
         :wall-shape-menu-open="wallShapeMenuOpen"
         :water-shape-menu-open="waterShapeMenuOpen"
+        :ground-terrain-menu-open="groundTerrainMenuOpen"
+        :ground-paint-menu-open="groundPaintMenuOpen"
+        :ground-scatter-menu-open="groundScatterMenuOpen"
         :floor-build-shape="floorBuildShape"
         :wall-build-shape="wallBuildShape"
         :water-build-shape="waterBuildShape"
         :floor-brush-preset-asset-id="floorBrushPresetAssetId ?? ''"
         :wall-brush-preset-asset-id="wallBrushPresetAssetId ?? ''"
+        :ground-panel-tab="groundPanelTab"
+        :ground-brush-radius="brushRadius"
+        :ground-brush-strength="brushStrength"
+        :ground-brush-shape="brushShape"
+        :ground-brush-operation="brushOperation"
+        :ground-noise-strength="groundNoiseStrength"
+        :ground-noise-mode="groundNoiseMode"
+        :ground-paint-smoothness="paintSmoothness"
+        :ground-paint-asset="paintSelectedAsset"
+        :ground-scatter-category="scatterCategory"
+        :ground-scatter-brush-radius="scatterBrushRadius"
+        :ground-scatter-density-percent="scatterDensityPercent"
+        :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
         :build-tools-disabled="buildToolsDisabled"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
@@ -15792,9 +15962,25 @@ defineExpose<SceneViewportHandle>({
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:camera-reset-menu-open="handleCameraResetMenuOpen"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
+          @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
+          @update:ground-paint-menu-open="handleGroundPaintMenuOpen"
+          @update:ground-scatter-menu-open="handleGroundScatterMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
           @update:wall-shape-menu-open="handleWallShapeMenuOpen"
           @update:water-shape-menu-open="handleWaterShapeMenuOpen"
+          @activate-ground-tab="handleActivateGroundTab"
+          @update:ground-brush-radius="handleGroundBrushRadiusUpdate"
+          @update:ground-brush-strength="handleGroundBrushStrengthUpdate"
+          @update:ground-brush-shape="handleGroundBrushShapeUpdate"
+          @update:ground-brush-operation="handleGroundBrushOperationUpdate"
+          @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
+          @update:ground-noise-mode="handleGroundNoiseModeUpdate"
+          @update:ground-paint-smoothness="handleGroundPaintSmoothnessUpdate"
+          @update:ground-paint-asset="handleGroundPaintAssetUpdate"
+          @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
+          @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
+          @update:ground-scatter-density-percent="handleGroundScatterDensityPercentUpdate"
+          @ground-scatter-asset-select="handleGroundScatterAssetSelect"
           @select-floor-build-shape="handleSelectFloorBuildShape"
           @select-wall-build-shape="handleSelectWallBuildShape"
           @select-water-build-shape="handleSelectWaterBuildShape"

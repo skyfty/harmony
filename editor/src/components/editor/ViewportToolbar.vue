@@ -5,7 +5,185 @@
 
       <template v-for="tool in buildToolButtons" :key="tool.id">
         <v-menu
-          v-if="tool.id === 'floor'"
+          v-if="tool.id === 'ground-terrain'"
+          :model-value="groundTerrainMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleGroundTerrainMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="groundTerrainButtonActive ? 'primary' : undefined"
+              :variant="groundTerrainButtonActive ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled || !hasGroundNode"
+              @click="handleGroundToolButtonClick('terrain')"
+              @contextmenu.prevent.stop="handleGroundTerrainContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="ground-terrain-menu">
+            <div class="ground-tool-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Terrain Tools</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:ground-terrain-menu-open', false)" />
+              </v-toolbar>
+              <div class="ground-tool-menu__content">
+                <TerrainSculptPanel
+                  v-model:brush-radius="groundBrushRadiusModel"
+                  v-model:brush-strength="groundBrushStrengthModel"
+                  v-model:brush-shape="groundBrushShapeModel"
+                  v-model:brush-operation="groundBrushOperationModel"
+                  v-model:noise-strength="groundNoiseStrengthModel"
+                  v-model:noise-mode="groundNoiseModeModel"
+                  :has-ground="hasGroundNode"
+                  :terrain-operations="terrainOperations"
+                  :noise-mode-options="noiseModeOptions"
+                />
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
+          v-else-if="tool.id === 'ground-paint'"
+          :model-value="groundPaintMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleGroundPaintMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="groundPaintButtonActive ? 'primary' : undefined"
+              :variant="groundPaintButtonActive ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled || !hasGroundNode"
+              @click="handleGroundToolButtonClick('paint')"
+              @contextmenu.prevent.stop="handleGroundPaintContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="ground-paint-menu">
+            <div class="ground-tool-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Terrain Paint</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:ground-paint-menu-open', false)" />
+              </v-toolbar>
+              <div class="ground-tool-menu__content">
+                <TerrainPaintPanel
+                  v-model:brush-radius="groundBrushRadiusModel"
+                  v-model:smoothness="groundPaintSmoothnessModel"
+                  v-model:asset="groundPaintAssetModel"
+                  :has-ground="hasGroundNode"
+                />
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
+          v-else-if="tool.id === 'ground-scatter'"
+          :model-value="groundScatterMenuOpen"
+          location="bottom"
+          :offset="6"
+          :open-on-click="false"
+          :close-on-content-click="false"
+          @update:modelValue="handleGroundScatterMenuModelUpdate"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              :icon="tool.icon"
+              density="compact"
+              size="small"
+              class="toolbar-button"
+              :color="groundScatterButtonActive ? 'primary' : undefined"
+              :variant="groundScatterButtonActive ? 'flat' : 'text'"
+              :title="tool.label"
+              :disabled="buildToolsDisabled || !hasGroundNode"
+              @click="handleGroundToolButtonClick(groundScatterCategoryModel)"
+              @contextmenu.prevent.stop="handleGroundScatterContextMenu"
+            />
+          </template>
+          <v-list density="compact" class="ground-scatter-menu">
+            <div class="ground-tool-menu__card">
+              <v-toolbar density="compact" class="menu-toolbar" height="36px">
+                <div class="toolbar-text">
+                  <div class="menu-title">Terrain Scatter</div>
+                </div>
+                <v-spacer />
+                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:ground-scatter-menu-open', false)" />
+              </v-toolbar>
+              <div class="ground-tool-menu__content">
+                <v-tabs v-model="groundScatterCategoryModel" density="compact" :transition="false" class="ground-scatter-tabs">
+                  <v-tab v-for="tab in groundScatterTabs" :key="tab.key" :value="tab.key" :title="tab.label">
+                    <v-icon :icon="tab.icon" size="16" />
+                  </v-tab>
+                </v-tabs>
+
+                <div class="ground-scatter-settings">
+                  <div class="scatter-spacing-item">
+                    <div class="scatter-spacing-labels">
+                      <span>Brush Radius</span>
+                      <span>{{ groundScatterBrushRadiusDisplay }}</span>
+                    </div>
+                    <v-slider
+                      v-model="groundScatterBrushRadiusModel"
+                      :min="0.1"
+                      :max="SCATTER_BRUSH_RADIUS_MAX"
+                      :step="0.1"
+                      density="compact"
+                      track-color="rgba(77, 208, 225, 0.4)"
+                      color="primary"
+                    />
+                  </div>
+
+                  <div class="scatter-spacing-item">
+                    <div class="scatter-spacing-labels">
+                      <span>Density</span>
+                      <span>{{ groundScatterDensityDisplay }}</span>
+                    </div>
+                    <v-slider
+                      v-model="groundScatterDensityPercentModel"
+                      :min="0"
+                      :max="100"
+                      :step="1"
+                      density="compact"
+                      track-color="rgba(77, 208, 225, 0.4)"
+                      color="primary"
+                    />
+                  </div>
+                </div>
+
+                <GroundAssetPainter
+                  :key="groundScatterCategoryModel"
+                  :category="groundScatterCategoryModel"
+                  :selected-provider-asset-id="groundScatterProviderAssetId ?? null"
+                  :thumbnail-size="52"
+                  @asset-select="handleGroundScatterAssetSelect"
+                />
+              </div>
+            </div>
+          </v-list>
+        </v-menu>
+        <v-menu
+          v-else-if="tool.id === 'floor'"
           :model-value="floorShapeMenuOpen"
           location="bottom"
           :offset="6"
@@ -605,7 +783,11 @@
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
+import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
+import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
+import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import type { CameraControlMode } from '@schema'
+import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -616,8 +798,11 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import { WATER_BUILD_SHAPE_LABELS } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { WALL_BUILD_SHAPE_LABELS } from '@/types/wall-build-shape'
-import { SCATTER_BRUSH_RADIUS_MAX } from '@/stores/terrainStore'
+import type { ProjectAsset } from '@/types/project-asset'
+import { SCATTER_BRUSH_RADIUS_MAX, type GroundPanelTab } from '@/stores/terrainStore'
 import { isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
+import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const props = withDefaults(
   defineProps<{
@@ -630,6 +815,7 @@ const props = withDefaults(
   canMirrorSelection: boolean
   canEraseScatter: boolean
   canClearAllScatterInstances: boolean
+  hasGroundNode: boolean
   activeBuildTool: BuildTool | null
   buildToolsDisabled?: boolean
   scatterEraseModeActive: boolean
@@ -640,11 +826,27 @@ const props = withDefaults(
   floorShapeMenuOpen: boolean
   wallShapeMenuOpen: boolean
   waterShapeMenuOpen: boolean
+  groundTerrainMenuOpen: boolean
+  groundPaintMenuOpen: boolean
+  groundScatterMenuOpen: boolean
   floorBuildShape: FloorBuildShape
   wallBuildShape: WallBuildShape
   waterBuildShape: WaterBuildShape
   floorBrushPresetAssetId?: string
   wallBrushPresetAssetId?: string
+  groundPanelTab: GroundPanelTab
+  groundBrushRadius: number
+  groundBrushStrength: number
+  groundBrushShape: 'circle' | 'square' | 'star'
+  groundBrushOperation: GroundSculptOperation | null
+  groundNoiseStrength: number
+  groundNoiseMode: GroundGenerationMode
+  groundPaintSmoothness: number
+  groundPaintAsset: ProjectAsset | null
+  groundScatterCategory: TerrainScatterCategory
+  groundScatterBrushRadius: number
+  groundScatterDensityPercent: number
+  groundScatterProviderAssetId?: string | null
   }>(),
   {
     buildToolsDisabled: false,
@@ -673,9 +875,25 @@ const emit = defineEmits<{
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:wall-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
+  (event: 'update:ground-terrain-menu-open', value: boolean): void
+  (event: 'update:ground-paint-menu-open', value: boolean): void
+  (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'select-wall-build-shape', shape: WallBuildShape): void
   (event: 'select-water-build-shape', shape: WaterBuildShape): void
+  (event: 'activate-ground-tab', tab: GroundPanelTab): void
+  (event: 'update:ground-brush-radius', value: number): void
+  (event: 'update:ground-brush-strength', value: number): void
+  (event: 'update:ground-brush-shape', value: 'circle' | 'square' | 'star'): void
+  (event: 'update:ground-brush-operation', value: GroundSculptOperation | null): void
+  (event: 'update:ground-noise-strength', value: number): void
+  (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
+  (event: 'update:ground-paint-smoothness', value: number): void
+  (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
+  (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
+  (event: 'update:ground-scatter-brush-radius', value: number): void
+  (event: 'update:ground-scatter-density-percent', value: number): void
+  (event: 'ground-scatter-asset-select', payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }): void
 }>()
 
 const {
@@ -688,6 +906,7 @@ const {
   canMirrorSelection,
   canEraseScatter,
   canClearAllScatterInstances,
+  hasGroundNode,
   scatterEraseModeActive,
   scatterEraseRepairActive,
   activeBuildTool,
@@ -698,11 +917,27 @@ const {
   floorShapeMenuOpen,
   wallShapeMenuOpen,
   waterShapeMenuOpen,
+  groundTerrainMenuOpen,
+  groundPaintMenuOpen,
+  groundScatterMenuOpen,
   floorBuildShape,
   wallBuildShape,
   waterBuildShape,
   floorBrushPresetAssetId,
   wallBrushPresetAssetId,
+  groundPanelTab,
+  groundBrushRadius,
+  groundBrushStrength,
+  groundBrushShape,
+  groundBrushOperation,
+  groundNoiseStrength,
+  groundNoiseMode,
+  groundPaintSmoothness,
+  groundPaintAsset,
+  groundScatterCategory,
+  groundScatterBrushRadius,
+  groundScatterDensityPercent,
+  groundScatterProviderAssetId,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -730,6 +965,100 @@ const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFix
 
 const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
 const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Shift)' : 'Scatter Erase'))
+
+const groundTerrainButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value === 'terrain')
+const groundPaintButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value === 'paint')
+const groundScatterButtonActive = computed(() => activeBuildTool.value === 'ground' && groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint')
+
+const groundScatterTabs = computed(() =>
+  (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
+    key,
+    label: terrainScatterPresets[key].label,
+    icon: terrainScatterPresets[key].icon,
+  })),
+)
+
+const groundBrushRadiusModel = computed({
+  get: () => groundBrushRadius.value,
+  set: (value: number) => emit('update:ground-brush-radius', Number(value)),
+})
+
+const groundBrushStrengthModel = computed({
+  get: () => groundBrushStrength.value,
+  set: (value: number) => emit('update:ground-brush-strength', Number(value)),
+})
+
+const groundBrushShapeModel = computed({
+  get: () => groundBrushShape.value,
+  set: (value: 'circle' | 'square' | 'star') => emit('update:ground-brush-shape', value),
+})
+
+const groundBrushOperationModel = computed({
+  get: () => groundBrushOperation.value,
+  set: (value: GroundSculptOperation | null) => emit('update:ground-brush-operation', value),
+})
+
+const groundNoiseStrengthModel = computed({
+  get: () => groundNoiseStrength.value,
+  set: (value: number) => emit('update:ground-noise-strength', Number(value)),
+})
+
+const groundNoiseModeModel = computed({
+  get: () => groundNoiseMode.value,
+  set: (value: GroundGenerationMode) => emit('update:ground-noise-mode', value),
+})
+
+const groundPaintSmoothnessModel = computed({
+  get: () => groundPaintSmoothness.value,
+  set: (value: number) => emit('update:ground-paint-smoothness', Number(value)),
+})
+
+const groundPaintAssetModel = computed<ProjectAsset | null>({
+  get: () => groundPaintAsset.value,
+  set: (value) => emit('update:ground-paint-asset', value),
+})
+
+const groundScatterCategoryModel = computed<TerrainScatterCategory>({
+  get: () => {
+    if (groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint') {
+      return groundPanelTab.value
+    }
+    return groundScatterCategory.value
+  },
+  set: (value) => {
+    emit('update:ground-scatter-category', value)
+    emit('activate-ground-tab', value)
+  },
+})
+
+const groundScatterBrushRadiusModel = computed({
+  get: () => groundScatterBrushRadius.value,
+  set: (value: number) => emit('update:ground-scatter-brush-radius', Number(value)),
+})
+
+const groundScatterDensityPercentModel = computed({
+  get: () => groundScatterDensityPercent.value,
+  set: (value: number) => emit('update:ground-scatter-density-percent', Number(value)),
+})
+
+const groundScatterBrushRadiusDisplay = computed(() => `${groundScatterBrushRadius.value.toFixed(2)} m`)
+const groundScatterDensityDisplay = computed(() => `${Math.round(groundScatterDensityPercent.value)}%`)
+
+const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
+  { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
+  { value: 'smooth', label: 'Smooth', icon: 'mdi-water-percent' },
+  { value: 'flatten', label: 'Flatten', icon: 'mdi-ruler' },
+  { value: 'flatten-zero', label: 'Flatten to Zero', icon: 'mdi-border-bottom-variant' },
+  { value: 'raise', label: 'Raise', icon: 'mdi-tray-arrow-up' },
+]
+
+const noiseModeOptions: Array<{ value: GroundGenerationMode; label: string; icon: string }> = [
+  { value: 'simple', label: 'Simple Noise', icon: 'mdi-wave-sine' },
+  { value: 'perlin', label: 'Perlin Noise', icon: 'mdi-grain' },
+  { value: 'ridge', label: 'Ridge Noise', icon: 'mdi-mountain' },
+  { value: 'voronoi', label: 'Voronoi Noise', icon: 'mdi-shape-polygon-plus' },
+  { value: 'flat', label: 'Flat', icon: 'mdi-border-horizontal' },
+]
 
 type RotationAxis = 'x' | 'y'
 
@@ -807,6 +1136,15 @@ watch(canEraseScatterEffective, (enabled) => {
 })
 
 watch(buildToolsDisabled, (disabled) => {
+  if (disabled && groundTerrainMenuOpen.value) {
+    emit('update:ground-terrain-menu-open', false)
+  }
+  if (disabled && groundPaintMenuOpen.value) {
+    emit('update:ground-paint-menu-open', false)
+  }
+  if (disabled && groundScatterMenuOpen.value) {
+    emit('update:ground-scatter-menu-open', false)
+  }
   if (disabled && floorShapeMenuOpen.value) {
     emit('update:floor-shape-menu-open', false)
   }
@@ -818,8 +1156,20 @@ watch(buildToolsDisabled, (disabled) => {
   }
 })
 
+watch(hasGroundNode, (available) => {
+  if (available) {
+    return
+  }
+  emit('update:ground-terrain-menu-open', false)
+  emit('update:ground-paint-menu-open', false)
+  emit('update:ground-scatter-menu-open', false)
+})
+
 // Mutual exclusivity helpers
 function closeExternalMenus() {
+  emit('update:ground-terrain-menu-open', false)
+  emit('update:ground-paint-menu-open', false)
+  emit('update:ground-scatter-menu-open', false)
   emit('update:scatter-erase-menu-open', false)
   emit('update:camera-reset-menu-open', false)
   emit('update:floor-shape-menu-open', false)
@@ -953,11 +1303,14 @@ function handleRecenterGroupOrigin() {
 }
 
 const buildToolButtons = [
+  { id: 'ground-terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tool (Left Mouse / Right Click Settings)' },
+  { id: 'ground-paint', icon: 'mdi-brush-variant', label: 'Terrain Paint (Left Mouse / Right Click Settings)' },
+  { id: 'ground-scatter', icon: 'mdi-sprout', label: 'Terrain Scatter (Left Mouse / Right Click Settings)' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Left Mouse)' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },
   { id: 'water', icon: 'mdi-waves', label: 'Water Tool (Left Mouse)' },
-] satisfies Array<{ id: BuildTool; icon: string; label: string }>
+] satisfies Array<{ id: BuildTool | 'ground-terrain' | 'ground-paint' | 'ground-scatter'; icon: string; label: string }>
 
 const floorShapeOptions = (Object.keys(FLOOR_BUILD_SHAPE_LABELS) as FloorBuildShape[]).map((id) => ({
   id,
@@ -1040,6 +1393,87 @@ function handleBuildToolContextMenu(tool: BuildTool, event: MouseEvent) {
   }
   // default: do nothing here; wall uses its own contextmenu handler to open the embedded menu
   return
+}
+
+function handleGroundToolButtonClick(tab: GroundPanelTab) {
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  emit('activate-ground-tab', tab)
+  emit('change-build-tool', 'ground')
+}
+
+function handleGroundTerrainContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  emit('activate-ground-tab', 'terrain')
+  closeAllMenus()
+  emit('update:ground-terrain-menu-open', true)
+}
+
+function handleGroundTerrainMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+    emit('activate-ground-tab', 'terrain')
+  }
+  emit('update:ground-terrain-menu-open', open)
+}
+
+function handleGroundPaintContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  emit('activate-ground-tab', 'paint')
+  closeAllMenus()
+  emit('update:ground-paint-menu-open', true)
+}
+
+function handleGroundPaintMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+    emit('activate-ground-tab', 'paint')
+  }
+  emit('update:ground-paint-menu-open', open)
+}
+
+function handleGroundScatterContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (buildToolsDisabled.value || !hasGroundNode.value) {
+    return
+  }
+  if (groundPanelTab.value === 'terrain' || groundPanelTab.value === 'paint') {
+    emit('activate-ground-tab', groundScatterCategoryModel.value)
+  }
+  closeAllMenus()
+  emit('update:ground-scatter-menu-open', true)
+}
+
+function handleGroundScatterMenuModelUpdate(value: boolean) {
+  const open = Boolean(value)
+  if (open) {
+    closeAllMenus()
+    if (groundPanelTab.value === 'terrain' || groundPanelTab.value === 'paint') {
+      emit('activate-ground-tab', groundScatterCategoryModel.value)
+    }
+  }
+  emit('update:ground-scatter-menu-open', open)
+}
+
+function handleGroundScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
+  const category = groundScatterCategoryModel.value
+  emit('ground-scatter-asset-select', {
+    category,
+    asset: payload.asset,
+    providerAssetId: payload.providerAssetId,
+  })
 }
 
 function handleWallShapeContextMenu(event: MouseEvent) {
@@ -1214,6 +1648,14 @@ function handleClearScatterMenuAction() {
   padding: 0;
 }
 
+.ground-terrain-menu,
+.ground-paint-menu,
+.ground-scatter-menu {
+  width: 360px;
+  max-width: min(360px, 90vw);
+  padding: 4px;
+}
+
 .align-menu {
   min-width: 280px;
   padding: 0;
@@ -1367,6 +1809,49 @@ function handleClearScatterMenuAction() {
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+}
+
+.ground-tool-menu__card {
+  position: relative;
+  border-radius: 12px;
+  padding: 0;
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.ground-tool-menu__content {
+  padding: 8px;
+}
+
+.ground-scatter-tabs :deep(.v-tab) {
+  min-height: 26px;
+  min-width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+
+.ground-scatter-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 6px;
+}
+
+.scatter-spacing-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scatter-spacing-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .menu-toolbar {
