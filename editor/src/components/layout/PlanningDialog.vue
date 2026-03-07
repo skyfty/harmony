@@ -5413,8 +5413,8 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
-  // To avoid accidental operations: only allow dragging planning layers when the 'pan' tool is selected.
-  if (tool !== 'select') {
+  // Allow dragging planning layers when tool is 'select' or 'pan'.
+  if (tool !== 'select' && tool !== 'pan') {
     return
   }
 
