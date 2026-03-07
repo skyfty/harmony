@@ -52,6 +52,9 @@ export function unzipScenePackage(zip: ArrayBuffer | Uint8Array): ScenePackageUn
 export function buildAssetOverridesFromScenePackage(pkg: ScenePackageUnzipped): Record<string, AssetOverrideValue> {
   const overrides: Record<string, AssetOverrideValue> = {};
   for (const entry of pkg.manifest.resources) {
+    if (entry.resourceType === 'planningImage') {
+      continue;
+    }
     const bytes = pkg.files[entry.path];
     if (!bytes) {
       throw new Error(`Missing resource file in scene package: ${entry.path}`);

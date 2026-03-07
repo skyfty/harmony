@@ -6,25 +6,23 @@ import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
-import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import PlanningRulers from '@/components/layout/PlanningRulers.vue'
-import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { generateFpsScatterPointsInPolygon, buildRandom, hashSeedFromString, getPointsBounds, polygonCentroid } from '@/utils/scatterSampling'
-import { normalizeLayerPolylines } from '@/utils/normalizeLayerPolylines'
-import { WALL_DEFAULT_SMOOTHING, WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { isWallPresetFilename } from '@/utils/wallPreset'
-import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 
 import type {
+  PlanningGuideData,
+  PlanningPolygonData,
+  PlanningPolylineData,
+  PlanningSceneData,
   PlanningTerrainData,
   PlanningTerrainBudget,
   PlanningTerrainControlPoint,
@@ -32,6 +30,13 @@ import type {
   PlanningTerrainNoiseMode,
   PlanningTerrainRidgeValleyLine,
 } from '@/types/planning-scene-data'
+import {
+  createPlanningImageUrlFromHash,
+  deletePlanningImageFromIndexedDB as deletePlanningImageFromStorage,
+  loadPlanningImagesFromIndexedDB as loadPlanningImagesFromStorage,
+  persistPlanningImageLayersToIndexedDB,
+  savePlanningImageToIndexedDB as savePlanningImageToStorage,
+} from '@/utils/planningImageStorage'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -88,20 +93,15 @@ async function ensureModelBoundsCachedForAsset(asset: ProjectAsset): Promise<voi
 }
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
-type LayerKind = 'terrain' | 'building' | 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water'
+type LayerKind = 'terrain' | 'guide-route' | 'green'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
-  building: 'Building',
-  road: 'Road',
   'guide-route': 'Guide Route',
-  floor: 'Floor',
   green: 'Green',
-  wall: 'Wall',
-  water: 'Water',
 }
 
-const addableLayerKinds: LayerKind[] = ['terrain', 'road', 'guide-route', 'floor', 'water', 'green', 'wall', 'building']
+const addableLayerKinds: LayerKind[] = ['terrain', 'guide-route', 'green']
 
 interface PlanningLayer {
   id: string
@@ -110,24 +110,6 @@ interface PlanningLayer {
   visible: boolean
   color: string
   locked: boolean
-  /** Road layer width in meters (only used when kind === 'road'). */
-  roadWidthMeters?: number
-  /** Whether to show lane lines for road layer (only used when kind === 'road'). */
-  roadLaneLines?: boolean
-  /** Road layer smoothing (0-1) controlling the roundedness of junctions. */
-  roadSmoothing?: number
-  /** Water layer smoothing (0-1) controlling the edge rounding. */
-  waterSmoothing?: number
-  /** Floor layer smoothness (0-1) controlling the corner rounding. */
-  floorSmooth?: number
-  /** Wall layer height in meters (only used when kind === 'wall'). */
-  wallHeightMeters?: number
-  /** Wall layer thickness in meters (only used when kind === 'wall'). */
-  wallThicknessMeters?: number
-  /** Wall preset prefab asset id (.wall). Only used when kind === 'wall'. */
-  wallPresetAssetId?: string | null
-  /** Floor preset prefab asset id (.floor). Only used when kind === 'floor'. */
-  floorPresetAssetId?: string | null
 }
 
 interface PlanningPoint {
@@ -159,14 +141,6 @@ interface PlanningScatterAssignment {
   footprintMaxSizeM: number
 }
 
-interface PlacedModel {
-  id?: string
-  assetId: string
-  position: PlanningPoint
-  rotation?: number
-  scale?: number
-}
-
 interface PlanningPolygon {
   id: string
   name: string
@@ -179,12 +153,6 @@ interface PlanningPolygon {
   scatter?: PlanningScatterAssignment
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
-  /** Wall preset prefab asset id (.wall). When set, overrides the layer default. */
-  wallPresetAssetId?: string | null
-  /** Floor preset prefab asset id (.floor). When set, overrides the layer default. */
-  floorPresetAssetId?: string | null
-  /** Placed building models (only meaningful for building layer) */
-  placedModels?: PlacedModel[]
 }
 
 interface PlanningPolyline {
@@ -195,12 +163,8 @@ interface PlanningPolyline {
   /** Guide-route waypoint metadata aligned with points (only meaningful when layer kind is 'guide-route'). */
   waypoints?: Array<{ name?: string; dock?: boolean }>
   scatter?: PlanningScatterAssignment
-  /** 0-1. Only meaningful when layer kind is 'wall'. */
-  cornerSmoothness?: number
   /** When true, conversion will create/mark an air wall for this feature (layer-dependent). */
   airWallEnabled?: boolean
-  /** Wall preset prefab asset id (.wall). When set, overrides the layer default. */
-  wallPresetAssetId?: string | null
 }
 
 type ScatterTarget =
@@ -213,6 +177,8 @@ interface PlanningImage {
   url: string
   /** Content hash (SHA-256 hex) used to reference blob in IndexedDB */
   imageHash?: string
+  filename?: string | null
+  mimeType?: string | null
   sizeLabel: string
   width: number
   height: number
@@ -232,6 +198,31 @@ interface PlanningGuide {
   axis: PlanningGuideAxis
   /** World coordinate in meters. Can be negative. */
   value: number
+}
+
+type PlanningTerrainGridInput = Partial<{ cellSize: unknown }>
+type PlanningTerrainNoiseInput = Partial<Record<'enabled' | 'seed' | 'mode' | 'noiseScale' | 'noiseAmplitude' | 'noiseStrength' | 'detailScale' | 'detailAmplitude' | 'edgeFalloff', unknown>>
+type PlanningTerrainControlPointInput = Partial<Record<'id' | 'name' | 'x' | 'y' | 'radius' | 'height' | 'falloff', unknown>>
+type PlanningTerrainRidgeValleyLineInput = Partial<Record<'id' | 'name' | 'kind' | 'width' | 'strength' | 'points' | 'profile', unknown>>
+type PlanningTerrainOverridesInput = Partial<{ version: unknown; cells: unknown }>
+
+function roundTerrainHeight(value: unknown): number | undefined {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return undefined
+  return Math.round(num * 100) / 100
+}
+
+function roundTerrainBlend(value: unknown): number | undefined {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return undefined
+  return Math.round(Math.min(20, Math.max(0, num)) * 100) / 100
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === 'AbortError'
+  }
+  return typeof error === 'object' && error !== null && 'name' in error && (error as { name?: unknown }).name === 'AbortError'
 }
 
 type SelectedFeature =
@@ -294,13 +285,8 @@ interface LineDraft {
 
 const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#6D4C41', locked: false },
-  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadLaneLines: false, roadSmoothing: 0.09 },
   { id: 'guide-route-layer', name: 'Guide Route', kind: 'guide-route', visible: true, color: '#039BE5', locked: false },
-  { id: 'floor-layer', name: 'Floor', kind: 'floor', visible: true, color: '#1E88E5', locked: false, floorSmooth: 0.1 },
-  { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#8D6E63', locked: false },
-  { id: 'water-layer', name: 'Water', kind: 'water', visible: true, color: '#039BE5', locked: false, waterSmoothing: 0.1 },
-  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 8, wallThicknessMeters: 0.15, wallPresetAssetId: null },
+  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -475,12 +461,6 @@ function clampDensityPercent(value: unknown): number {
   return Math.round(clampNumber(num, 0, 100))
 }
 
-function clampWallCornerSmoothness(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) return WALL_DEFAULT_SMOOTHING
-  return Math.min(1, Math.max(0, num))
-}
-
 function defaultFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory): number {
   void category
   if (assetId) {
@@ -561,7 +541,7 @@ function buildRectCornerKeyByIndex(points: PlanningPoint[]): Record<number, Rect
   if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 1e-9 || bounds.height <= 1e-9) return null
 
   const used = new Set<RectCornerKey>()
-  const map: Record<number, RectCornerKey> = {} as any
+  const map: Partial<Record<number, RectCornerKey>> = {}
   for (let i = 0; i < 4; i += 1) {
     const p = points[i]
     if (!p) return null
@@ -572,7 +552,7 @@ function buildRectCornerKeyByIndex(points: PlanningPoint[]): Record<number, Rect
     map[i] = key
   }
   if (used.size !== 4) return null
-  return map
+  return map as Record<number, RectCornerKey>
 }
 
 function oppositeRectCornerKey(key: RectCornerKey): RectCornerKey {
@@ -1099,9 +1079,6 @@ const PLANNING_RULER_THICKNESS_PX = 34
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
 // When creating endpoints, merge very-close endpoints to avoid duplicates.
 const ENDPOINT_MERGE_RADIUS_PX = 5
-const ROAD_ENDPOINT_WELD_PX = 6
-const ROAD_INTERSECTION_MERGE_PX = 8
-const ROAD_SHORT_SEGMENT_CLEAN_PX = 10
 const VERTEX_HANDLE_DIAMETER_PX = 10
 const VERTEX_HANDLE_RADIUS_PX = VERTEX_HANDLE_DIAMETER_PX / 2
 const VERTEX_HIT_RADIUS_PX = 14
@@ -1142,62 +1119,8 @@ function pxToWorld(px: number): number {
   return Number(px) / Math.max(1e-6, renderScale.value)
 }
 
-function getRoadNormalizeEpsWorld() {
-  return {
-    endpoints: pxToWorld(ROAD_ENDPOINT_WELD_PX),
-    intersection: pxToWorld(ROAD_INTERSECTION_MERGE_PX),
-    shortSegment: pxToWorld(ROAD_SHORT_SEGMENT_CLEAN_PX),
-  }
-}
-
 function normalizeRoadLayerIfNeeded(layerId: string | null | undefined) {
-  if (!layerId) return
-  if (getLayerKind(layerId) !== 'road') return
-
-  const eps = getRoadNormalizeEpsWorld()
-  const result = normalizeLayerPolylines({
-    layerId,
-    layerName: getLayerName(layerId),
-    polylines: polylines.value as any,
-    eps,
-    createVertexId: () => createId('v'),
-    quantize: (n: number) => Number(Number(n).toFixed(2)),
-  })
-
-  if (!result.changed) {
-    return
-  }
-
-  polylines.value = result.nextPolylines as any
-
-  // Remap selection when line ids are merged.
-  if (selectedFeature.value?.type === 'polyline') {
-    const mapped = result.lineIdMap[selectedFeature.value.id]
-    if (mapped) {
-      selectedFeature.value = { type: 'polyline', id: mapped }
-    } else {
-      const selectedId = selectedFeature.value.id
-      if (!polylines.value.find((l) => l.id === selectedId)) {
-      selectedFeature.value = null
-      selectedVertex.value = null
-      }
-    }
-  } else if (selectedFeature.value?.type === 'segment') {
-    const mapped = result.lineIdMap[selectedFeature.value.lineId]
-    if (mapped) {
-      selectedFeature.value = { type: 'polyline', id: mapped }
-    } else {
-      selectedFeature.value = null
-      selectedVertex.value = null
-    }
-  }
-
-  if (selectedVertex.value?.feature === 'polyline') {
-    const mapped = result.lineIdMap[selectedVertex.value.targetId]
-    if (mapped) {
-      selectedVertex.value = null
-    }
-  }
+  void layerId
 }
 
 const vertexHandleRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
@@ -1403,10 +1326,10 @@ function handleRulerGuideDrag(event: RulerGuideDragEvent) {
 
 
 
-function buildPlanningSnapshot() {
+function buildPlanningSnapshot(): PlanningSceneData {
   return {
     version: 1 as const,
-    activeLayerId: activeLayerId.value,
+    activeLayerId: activeLayerId.value ?? undefined,
     layers: layers.value.map((layer) => ({
       id: layer.id,
       name: layer.name,
@@ -1414,37 +1337,25 @@ function buildPlanningSnapshot() {
       color: layer.color,
       visible: layer.visible,
       locked: layer.locked,
-        roadWidthMeters: layer.roadWidthMeters,
-        roadLaneLines: layer.roadLaneLines,
-        roadSmoothing: layer.roadSmoothing,
-      waterSmoothing: layer.waterSmoothing,
-      floorSmooth: layer.floorSmooth,
-            wallHeightMeters: layer.wallHeightMeters,
-      wallThicknessMeters: layer.wallThicknessMeters,
-      // layer-level wall presets are no longer persisted
     })),
     viewTransform: {
       scale: viewTransform.scale,
       offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
     },
     guides: planningGuides.value.map((g) => ({ id: g.id, axis: g.axis, value: g.value })),
-    terrain: buildTerrainSnapshot(),
+    terrain: buildTerrainSnapshot() ?? undefined,
     polygons: polygons.value.map((poly) => ({
       id: poly.id,
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
       terrainHeightMeters: getLayerKind(poly.layerId) === 'terrain'
-        ? (Number.isFinite(Number((poly as any).terrainHeightMeters)) ? Math.round(Number((poly as any).terrainHeightMeters) * 100) / 100 : undefined)
+        ? roundTerrainHeight(poly.terrainHeightMeters)
         : undefined,
       terrainBlendMeters: getLayerKind(poly.layerId) === 'terrain'
-        ? (Number.isFinite(Number((poly as any).terrainBlendMeters))
-          ? Math.round(Math.min(20, Math.max(0, Number((poly as any).terrainBlendMeters))) * 100) / 100
-          : undefined)
+        ? roundTerrainBlend(poly.terrainBlendMeters)
         : undefined,
       airWallEnabled: poly.airWallEnabled ? true : undefined,
-      wallPresetAssetId: poly.wallPresetAssetId ?? null,
-      floorPresetAssetId: poly.floorPresetAssetId ?? null,
       scatter: poly.scatter
         ? (() => {
           const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.assetId, poly.scatter.category, poly.scatter.footprintAreaM2)
@@ -1472,7 +1383,6 @@ function buildPlanningSnapshot() {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
-      wallPresetAssetId: line.wallPresetAssetId ?? null,
       waypoints: getLayerKind(line.layerId) === 'guide-route'
         ? (Array.isArray(line.waypoints)
           ? line.waypoints.map((w) => ({
@@ -1480,9 +1390,6 @@ function buildPlanningSnapshot() {
             dock: w?.dock === true ? true : undefined,
           }))
           : undefined)
-        : undefined,
-      cornerSmoothness: getLayerKind(line.layerId) === 'wall'
-        ? clampWallCornerSmoothness(line.cornerSmoothness)
         : undefined,
       airWallEnabled: line.airWallEnabled ? true : undefined,
       scatter: line.scatter
@@ -1510,7 +1417,10 @@ function buildPlanningSnapshot() {
     images: planningImages.value.map((img) => ({
       id: img.id,
       name: img.name,
-      url: img.url,
+      url: img.imageHash ? '' : img.url,
+      imageHash: img.imageHash,
+      filename: img.filename ?? null,
+      mimeType: img.mimeType ?? null,
       sizeLabel: img.sizeLabel,
       width: img.width,
       height: img.height,
@@ -1593,7 +1503,7 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
     return
   }
 
-  sceneStore.planningData = nextData as any
+  sceneStore.planningData = nextData
   sceneStore.hasUnsavedChanges = true
   planningDirty = false
 }
@@ -1638,10 +1548,10 @@ async function handleConvertTo3DScene() {
         closable: false,
         autoClose: false,
       })
-      await clearPlanningGeneratedContent(sceneStore as any)
+      await clearPlanningGeneratedContent(sceneStore)
     } else {
       await convertPlanningTo3DScene({
-        sceneStore: sceneStore as any,
+        sceneStore,
         planningData,
         overwriteExisting,
         signal: abortController.signal,
@@ -1668,11 +1578,11 @@ async function handleConvertTo3DScene() {
       autoCloseDelay: 1200,
     })
   } catch (error) {
-    const isAbort = (error as any)?.name === 'AbortError'
+    const isAbort = isAbortError(error)
     if (isAbort) {
       // Best-effort cleanup of partial conversion output.
       try {
-        await clearPlanningGeneratedContent(sceneStore as any)
+        await clearPlanningGeneratedContent(sceneStore)
       } catch {
         // ignore
       }
@@ -1737,34 +1647,6 @@ function normalizeGuide(raw: unknown): PlanningGuide | null {
   return { id, axis, value }
 }
 
-function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | undefined {
-  if (!raw || typeof raw !== 'object') {
-    return undefined
-  }
-  const payload = raw as Record<string, unknown>
-  const providerAssetId = typeof payload.providerAssetId === 'string' ? payload.providerAssetId : null
-  const assetId = typeof payload.assetId === 'string' ? payload.assetId : null
-  const category = typeof payload.category === 'string' ? (payload.category as TerrainScatterCategory) : null
-  if (!providerAssetId || !assetId || !category || !(category in terrainScatterPresets)) {
-    return undefined
-  }
-  const name = typeof payload.name === 'string' ? payload.name : 'Scatter Preset'
-  const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
-  const densityPercent = clampDensityPercent(payload.densityPercent)
-  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, payload.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(assetId, category, payload.footprintMaxSizeM, footprintAreaM2)
-  return {
-    providerAssetId,
-    assetId,
-    category,
-    name,
-    thumbnail: thumb,
-    densityPercent,
-    footprintAreaM2,
-    footprintMaxSizeM,
-  }
-}
-
 function normalizeTerrainFalloff(raw: unknown): PlanningTerrainFalloff {
   return raw === 'linear' || raw === 'smoothstep' || raw === 'cosine' ? (raw as PlanningTerrainFalloff) : 'cosine'
 }
@@ -1782,13 +1664,13 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
   }
   const payload = raw as Record<string, unknown>
 
-  const grid = payload.grid && typeof payload.grid === 'object' ? (payload.grid as any) : null
+  const grid = payload.grid && typeof payload.grid === 'object' ? payload.grid as PlanningTerrainGridInput : null
   const cellSize = Number(grid?.cellSize)
   if (Number.isFinite(cellSize) && cellSize >= 0.1 && cellSize <= 20) {
     next.grid = { cellSize }
   }
 
-  const noise = payload.noise && typeof payload.noise === 'object' ? (payload.noise as any) : null
+  const noise = payload.noise && typeof payload.noise === 'object' ? payload.noise as PlanningTerrainNoiseInput : null
   if (noise) {
     next.noise = {
       enabled: Boolean(noise.enabled),
@@ -1805,25 +1687,26 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
 
   if (Array.isArray(payload.controlPoints)) {
     next.controlPoints = payload.controlPoints
-      .map((cp: any) => {
-        const x = Number(cp?.x)
-        const y = Number(cp?.y)
-        const radius = Number(cp?.radius)
-        const height = Number(cp?.height)
+      .map((cp) => {
+        const controlPoint = (cp && typeof cp === 'object' ? cp : null) as PlanningTerrainControlPointInput | null
+        const x = Number(controlPoint?.x)
+        const y = Number(controlPoint?.y)
+        const radius = Number(controlPoint?.radius)
+        const height = Number(controlPoint?.height)
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0 || !Number.isFinite(height)) {
           return null
         }
-        const id = typeof cp?.id === 'string' ? cp.id : createId('terrain-cp')
+        const id = typeof controlPoint?.id === 'string' ? controlPoint.id : createId('terrain-cp')
         const nextCp: PlanningTerrainControlPoint = {
           id,
           x,
           y,
           radius,
           height,
-          falloff: normalizeTerrainFalloff(cp?.falloff),
+          falloff: normalizeTerrainFalloff(controlPoint?.falloff),
         }
-        if (typeof cp?.name === 'string') {
-          nextCp.name = cp.name
+        if (typeof controlPoint?.name === 'string') {
+          nextCp.name = controlPoint.name
         }
         return nextCp
       })
@@ -1832,34 +1715,36 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
 
   if (Array.isArray(payload.ridgeValleyLines)) {
     next.ridgeValleyLines = payload.ridgeValleyLines
-      .map((line: any) => {
-        const kind = line?.kind === 'ridge' || line?.kind === 'valley' ? line.kind : null
-        const width = Number(line?.width)
-        const strength = Number(line?.strength)
-        const points = Array.isArray(line?.points) ? line.points : null
+      .map((line) => {
+        const ridgeValleyLine = (line && typeof line === 'object' ? line : null) as PlanningTerrainRidgeValleyLineInput | null
+        const kind = ridgeValleyLine?.kind === 'ridge' || ridgeValleyLine?.kind === 'valley' ? ridgeValleyLine.kind : null
+        const width = Number(ridgeValleyLine?.width)
+        const strength = Number(ridgeValleyLine?.strength)
+        const points = Array.isArray(ridgeValleyLine?.points) ? ridgeValleyLine.points : null
         if (!kind || !Number.isFinite(width) || width <= 0 || !Number.isFinite(strength) || !points || points.length < 2) {
           return null
         }
         const normPoints = points
-          .map((p: any) => {
-            const x = Number(p?.x)
-            const y = Number(p?.y)
+          .map((p) => {
+            const point = p && typeof p === 'object' ? p as Partial<PlanningPoint> : null
+            const x = Number(point?.x)
+            const y = Number(point?.y)
             if (!Number.isFinite(x) || !Number.isFinite(y)) return null
             return { x, y }
           })
-          .filter((p: any) => !!p)
+          .filter((p): p is PlanningPoint => !!p)
         if (normPoints.length < 2) return null
-        const id = typeof line?.id === 'string' ? line.id : createId('terrain-line')
+        const id = typeof ridgeValleyLine?.id === 'string' ? ridgeValleyLine.id : createId('terrain-line')
         const nextLine: PlanningTerrainRidgeValleyLine = {
           id,
           kind,
           width,
           strength,
           points: normPoints,
-          profile: normalizeTerrainFalloff(line?.profile),
+          profile: normalizeTerrainFalloff(ridgeValleyLine?.profile),
         }
-        if (typeof line?.name === 'string') {
-          nextLine.name = line.name
+        if (typeof ridgeValleyLine?.name === 'string') {
+          nextLine.name = ridgeValleyLine.name
         }
         return nextLine
       })
@@ -1867,7 +1752,7 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
   }
 
   // Overrides are reserved for future A brush. Keep, but do not attempt deep normalization.
-  const overrides = payload.overrides && typeof payload.overrides === 'object' ? (payload.overrides as any) : null
+  const overrides = payload.overrides && typeof payload.overrides === 'object' ? payload.overrides as PlanningTerrainOverridesInput : null
   if (overrides && overrides.version === 1 && overrides.cells && typeof overrides.cells === 'object') {
     next.overrides = { version: 1, cells: overrides.cells as Record<string, number> }
   }
@@ -1879,7 +1764,7 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
 void normalizePlanningTerrain
 
 function loadPlanningFromScene() {
-  const data = sceneStore.planningData
+  const data = sceneStore.planningData as PlanningSceneData | null | undefined
   resetPlanningState()
   if (!data) {
     // When there's no saved planning data (or no saved transform), default to fitting the whole canvas.
@@ -1890,83 +1775,24 @@ function loadPlanningFromScene() {
 
   const usedFeatureIds = new Set<string>()
 
-  if (Array.isArray((data as any).guides)) {
-    planningGuides.value = ((data as any).guides as unknown[]).map(normalizeGuide).filter((g): g is PlanningGuide => !!g)
+  if (Array.isArray(data.guides)) {
+    planningGuides.value = data.guides.map((guide: PlanningGuideData) => normalizeGuide(guide)).filter((g): g is PlanningGuide => !!g)
   }
 
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
   }
-  if (Array.isArray(data.layers)) {
-    const hasDefinitions = data.layers.some((item) => {
-      const anyItem = item as Record<string, unknown>
-      return typeof anyItem.name === 'string' || typeof anyItem.kind === 'string' || typeof anyItem.color === 'string'
-    })
+  layers.value = data.layers.map((layer) => ({
+    id: layer.id,
+    name: layer.name,
+    kind: layer.kind,
+    visible: layer.visible,
+    color: layer.color,
+    locked: layer.locked,
+  }))
 
-    if (hasDefinitions) {
-      layers.value = data.layers
-        .filter((item) => item && typeof (item as any).id === 'string')
-        .map((raw) => {
-          const id = String((raw as any).id)
-          const kindRaw = (raw as any).kind
-          const kind = (typeof kindRaw === 'string' ? kindRaw : null) as LayerKind | null
-          const preset = kind ? layerPresets.find((l) => l.kind === kind) : undefined
-          return {
-            id,
-            name: typeof (raw as any).name === 'string' ? String((raw as any).name) : preset?.name ?? 'Layer',
-            kind: (kind ?? preset?.kind ?? 'green') as LayerKind,
-            visible: typeof (raw as any).visible === 'boolean' ? Boolean((raw as any).visible) : true,
-            color: typeof (raw as any).color === 'string' ? String((raw as any).color) : preset?.color ?? '#ffffff',
-            locked: typeof (raw as any).locked === 'boolean' ? Boolean((raw as any).locked) : false,
-            roadWidthMeters:
-              typeof (raw as any).roadWidthMeters === 'number'
-                ? Number((raw as any).roadWidthMeters)
-                : ((kind ?? preset?.kind) === 'road' ? 2 : undefined),
-            roadLaneLines:
-              typeof (raw as any).roadLaneLines === 'boolean'
-                ? Boolean((raw as any).roadLaneLines)
-                : ((kind ?? preset?.kind) === 'road' ? false : undefined),
-            roadSmoothing:
-              typeof (raw as any).roadSmoothing === 'number'
-                ? Number((raw as any).roadSmoothing)
-                : ((kind ?? preset?.kind) === 'road' ? 0.09 : undefined),
-            waterSmoothing:
-              typeof (raw as any).waterSmoothing === 'number'
-                ? Number((raw as any).waterSmoothing)
-                : ((kind ?? preset?.kind) === 'water' ? 0.1 : undefined),
-            wallHeightMeters:
-              typeof (raw as any).wallHeightMeters === 'number'
-                ? Number((raw as any).wallHeightMeters)
-                : ((kind ?? preset?.kind) === 'wall' ? 8 : undefined),
-            wallThicknessMeters:
-              typeof (raw as any).wallThicknessMeters === 'number'
-                ? Number((raw as any).wallThicknessMeters)
-                : ((kind ?? preset?.kind) === 'wall' ? 0.15 : undefined),
-            floorSmooth:
-              typeof (raw as any).floorSmooth === 'number'
-                ? Number((raw as any).floorSmooth)
-                : ((kind ?? preset?.kind) === 'floor' ? 0.1 : undefined),
-          } as PlanningLayer
-        })
-        .filter((layer): layer is PlanningLayer => !!layer)
-    } else {
-      const layerMap = new Map(data.layers.map((item) => [item.id, item]))
-      layers.value.forEach((layer) => {
-        const raw = layerMap.get(layer.id) as { visible?: boolean; locked?: boolean } | undefined
-        if (raw) {
-          if (typeof raw.visible === 'boolean') {
-            layer.visible = raw.visible
-          }
-          if (typeof raw.locked === 'boolean') {
-            layer.locked = raw.locked
-          }
-        }
-      })
-    }
-
-    if (!layers.value.find((l) => l.id === activeLayerId.value)) {
-      activeLayerId.value = layers.value[0]?.id ?? activeLayerId.value
-    }
+  if (!layers.value.find((l) => l.id === activeLayerId.value)) {
+    activeLayerId.value = layers.value[0]?.id ?? activeLayerId.value
   }
   if (data.viewTransform) {
     const s = Number(data.viewTransform.scale)
@@ -1982,52 +1808,40 @@ function loadPlanningFromScene() {
       viewTransform.offset.y = oy
     }
   } else {
-    // Legacy/empty snapshots might not have a transform; ensure the full canvas is visible.
+    // No saved viewport yet; ensure the full canvas is visible.
     void nextTick(() => fitViewToCanvas({ markDirty: false }))
   }
 
   polygons.value = Array.isArray(data.polygons)
-    ? data.polygons.map((poly) => ({
-      id: normalizePlanningFeatureId((poly as any).id, usedFeatureIds),
-      name: (poly as any).name,
-      layerId: (poly as any).layerId,
-      points: Array.isArray((poly as any).points) ? (poly as any).points.map((p: any) => ({ x: p.x, y: p.y })) : [],
+    ? data.polygons.map((poly: PlanningPolygonData) => ({
+      id: normalizePlanningFeatureId(poly.id, usedFeatureIds),
+      name: poly.name,
+      layerId: poly.layerId,
+      points: Array.isArray(poly.points) ? poly.points.map((p) => ({ x: p.x, y: p.y })) : [],
       terrainHeightMeters: (() => {
-        const raw = Number((poly as any).terrainHeightMeters)
+        const raw = Number(poly.terrainHeightMeters)
         if (!Number.isFinite(raw)) return 0
         return Math.min(1000, Math.max(-1000, Math.round(raw * 100) / 100))
       })(),
       terrainBlendMeters: (() => {
-        const raw = Number((poly as any).terrainBlendMeters)
+        const raw = Number(poly.terrainBlendMeters)
         if (!Number.isFinite(raw)) return 2
         return Math.min(20, Math.max(0, Math.round(raw * 100) / 100))
       })(),
-      airWallEnabled: Boolean((poly as any).airWallEnabled),
-      wallPresetAssetId:
-        typeof (poly as any).wallPresetAssetId === 'string'
-          ? (String((poly as any).wallPresetAssetId).trim() || null)
-          : null,
-      floorPresetAssetId:
-        typeof (poly as any).floorPresetAssetId === 'string'
-          ? (String((poly as any).floorPresetAssetId).trim() || null)
-          : null,
-      scatter: normalizeScatterAssignment((poly as Record<string, unknown>).scatter),
+      airWallEnabled: Boolean(poly.airWallEnabled),
+      scatter: undefined,
     }))
     : []
-
-  // Drop polygons belonging to removed layers.
-  const allowedLayerIds = new Set(layers.value.map((layer) => layer.id))
-  polygons.value = polygons.value.filter((poly) => allowedLayerIds.has(poly.layerId))
 
   const polylinePointPool = new Map<string, PlanningPoint>()
 
   polylines.value = Array.isArray(data.polylines)
-    ? data.polylines.map((line) => {
+    ? data.polylines.map((line: PlanningPolylineData) => {
       const points = Array.isArray(line.points)
         ? line.points.map((raw) => {
-          const x = Number((raw as any).x)
-          const y = Number((raw as any).y)
-          const id = typeof (raw as any).id === 'string' ? String((raw as any).id) : createId('v')
+          const x = Number(raw.x)
+          const y = Number(raw.y)
+          const id = typeof raw.id === 'string' ? String(raw.id) : createId('v')
           const pooled = polylinePointPool.get(id)
           if (pooled) {
             if (Number.isFinite(x)) pooled.x = x
@@ -2045,7 +1859,7 @@ function loadPlanningFromScene() {
         : []
 
       const layerKind = getLayerKind(line.layerId)
-      const rawWaypoints = Array.isArray((line as any).waypoints) ? ((line as any).waypoints as any[]) : null
+      const rawWaypoints = Array.isArray(line.waypoints) ? line.waypoints : null
       const waypoints = layerKind === 'guide-route'
         ? points.map((_point, index) => {
           const rawName = rawWaypoints?.[index]?.name
@@ -2056,32 +1870,25 @@ function loadPlanningFromScene() {
         : undefined
 
       return {
-        id: normalizePlanningFeatureId((line as any).id, usedFeatureIds),
-        name: (line as any).name,
-        layerId: (line as any).layerId,
+        id: normalizePlanningFeatureId(line.id, usedFeatureIds),
+        name: line.name,
+        layerId: line.layerId,
         points,
         waypoints,
-        wallPresetAssetId:
-          typeof (line as any).wallPresetAssetId === 'string'
-            ? (String((line as any).wallPresetAssetId).trim() || null)
-            : null,
-        cornerSmoothness: getLayerKind(line.layerId) === 'wall'
-          ? clampWallCornerSmoothness((line as any).cornerSmoothness)
-          : undefined,
-        airWallEnabled: Boolean((line as any).airWallEnabled),
-        scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
+        airWallEnabled: Boolean(line.airWallEnabled),
+        scatter: undefined,
       }
     })
     : []
-
-  // Drop polylines belonging to removed layers.
-  polylines.value = polylines.value.filter((line) => allowedLayerIds.has(line.layerId))
 
   planningImages.value = Array.isArray(data.images)
     ? data.images.map((img) => ({
       id: img.id,
       name: img.name,
       url: img.url,
+      imageHash: img.imageHash,
+      filename: img.filename ?? null,
+      mimeType: img.mimeType ?? null,
       sizeLabel: img.sizeLabel,
       width: img.width,
       height: img.height,
@@ -2244,12 +2051,12 @@ function tryBeginRightPan(event: PointerEvent) {
 }
 const canUseLineTool = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind === 'road' || kind === 'wall' || kind === 'guide-route'
+  return kind === 'guide-route'
 })
 
 const canUseAreaTools = computed(() => {
   const kind = activeLayer.value?.kind
-  return kind !== 'road' && kind !== 'wall' && kind !== 'guide-route'
+  return kind === 'terrain' || kind === 'green'
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
@@ -2389,14 +2196,14 @@ const terrainContourHeightModel = computed<number>({
   get: () => {
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return 0
-    const raw = Number((poly as any).terrainHeightMeters)
+    const raw = Number(poly.terrainHeightMeters)
     return Number.isFinite(raw) ? raw : 0
   },
   set: (value: number) => {
     if (propertyPanelDisabled.value) return
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
-    ;(poly as any).terrainHeightMeters = Math.round(clampNumberInput(value, 0, -1000, 1000) * 100) / 100
+    poly.terrainHeightMeters = Math.round(clampNumberInput(value, 0, -1000, 1000) * 100) / 100
     markPlanningDirty()
   },
 })
@@ -2405,14 +2212,14 @@ const terrainContourBlendModel = computed<number>({
   get: () => {
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return 2
-    const raw = Number((poly as any).terrainBlendMeters)
+    const raw = Number(poly.terrainBlendMeters)
     return Number.isFinite(raw) ? Math.min(20, Math.max(0, Math.round(raw * 100) / 100)) : 2
   },
   set: (value: number) => {
     if (propertyPanelDisabled.value) return
     const poly = selectedTerrainContourPolygon.value
     if (!poly) return
-    ;(poly as any).terrainBlendMeters = Math.round(clampNumberInput(value, 2, 0, 20) * 100) / 100
+    poly.terrainBlendMeters = Math.round(clampNumberInput(value, 2, 0, 20) * 100) / 100
     markPlanningDirty()
   },
 })
@@ -2610,287 +2417,22 @@ const airWallEnabledModel = computed<boolean>({
   get: () => {
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || (kind !== 'wall' && kind !== 'water' && kind !== 'green')) {
+    if (!target || kind !== 'green') {
       return false
     }
-    return Boolean((target.shape as any).airWallEnabled)
+    return Boolean(target.shape.airWallEnabled)
   },
   set: (value: boolean) => {
     if (propertyPanelDisabled.value) return
     const target = selectedScatterTarget.value
     const kind = target?.layer?.kind
-    if (!target || (kind !== 'wall' && kind !== 'water' && kind !== 'green')) {
+    if (!target || kind !== 'green') {
       return
     }
-    ;(target.shape as any).airWallEnabled = Boolean(value)
+    target.shape.airWallEnabled = Boolean(value)
     markPlanningDirty()
   },
 })
-
-const roadWidthMetersModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return 2
-    const raw = Number(layer.roadWidthMeters ?? 2)
-    return Number.isFinite(raw) && raw >= 0.1 ? raw : 2
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.roadWidthMeters = Math.min(10, Math.max(0.1, next))
-    markPlanningDirty()
-  },
-})
-
-const roadLaneLinesModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return false
-    return Boolean(layer.roadLaneLines)
-  },
-  set: (value: boolean) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return
-    layer.roadLaneLines = Boolean(value)
-    markPlanningDirty()
-  },
-})
-
-const roadSmoothingModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return 0.09
-    const raw = Number(layer.roadSmoothing ?? 0.09)
-    if (!Number.isFinite(raw)) return 0.09
-    return Math.min(1, Math.max(0, raw))
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'road') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.roadSmoothing = Math.min(1, Math.max(0, next))
-    markPlanningDirty()
-  },
-})
-
-const waterSmoothingModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'water') return 0.1
-    const raw = Number(layer.waterSmoothing ?? 0.1)
-    if (!Number.isFinite(raw)) return 0.1
-    return Math.min(1, Math.max(0, raw))
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'water') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.waterSmoothing = Math.min(1, Math.max(0, next))
-    markPlanningDirty()
-  },
-})
-
-const waterPresetOptions = computed(() =>
-  WATER_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
-)
-
-const selectedWaterPreset = ref<WaterPresetId | null>(null)
-
-watch(
-  () => selectedScatterTarget.value,
-  (target) => {
-    if (!target || target.layer?.kind !== 'water') {
-      selectedWaterPreset.value = null
-      return
-    }
-    const raw = (target.shape as any)?.waterPresetId
-    selectedWaterPreset.value = raw ?? null
-  },
-  { immediate: true },
-)
-
-function handleWaterPresetChange(value: WaterPresetId | null) {
-  if (propertyPanelDisabled.value) return
-  if (!selectedScatterTarget.value) return
-  selectedWaterPreset.value = value
-  const shape = selectedScatterTarget.value.shape as any
-  if (!value) {
-    delete shape.waterPresetId
-    markPlanningDirty()
-    return
-  }
-  const preset = WATER_PRESETS.find((p) => p.id === value)
-  if (!preset) return
-  // Store selected preset id on the element so it can be read during conversion
-  shape.waterPresetId = value
-
-  markPlanningDirty()
-}
-
-const floorSmoothModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'floor') return 0.1
-    const raw = Number(layer.floorSmooth ?? 0.1)
-    if (!Number.isFinite(raw)) return 0.1
-    return Math.min(1, Math.max(0, raw))
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'floor') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.floorSmooth = Math.min(1, Math.max(0, next))
-    markPlanningDirty()
-  },
-})
-
-// (removed layer-scoped floor preset model — layer-level floor presets are not used)
-
-const floorFeaturePresetAssetIdEffective = computed<string>(() => {
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'floor') return ''
-  const override = (target.shape as any)?.floorPresetAssetId
-  if (typeof override === 'string' && override.trim().length) return override.trim()
-  const layer = target.layer
-  return typeof layer.floorPresetAssetId === 'string' ? layer.floorPresetAssetId.trim() : ''
-})
-
-function handleFloorFeaturePresetAssetChange(asset: ProjectAsset | null) {
-  if (propertyPanelDisabled.value) return
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'floor') return
-
-  const shape = target.shape as any
-  if (!asset) {
-    delete shape.floorPresetAssetId
-    markPlanningDirty()
-    return
-  }
-
-  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
-  if (!id) {
-    delete shape.floorPresetAssetId
-    markPlanningDirty()
-    return
-  }
-
-  const filename = asset.description ?? asset.name ?? null
-  if (!isFloorPresetFilename(filename)) {
-    return
-  }
-
-  shape.floorPresetAssetId = id
-  markPlanningDirty()
-}
-
-const wallHeightMetersModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'wall') return 8
-    const raw = Number(layer.wallHeightMeters ?? 8)
-    return Number.isFinite(raw) && raw > 0 ? raw : 8
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'wall') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.wallHeightMeters = Math.min(100, Math.max(0.1, next))
-    markPlanningDirty()
-  },
-})
-
-const wallThicknessMetersModel = computed({
-  get: () => {
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'wall') return 0.15
-    const raw = Number(layer.wallThicknessMeters ?? 0.15)
-    return Number.isFinite(raw) && raw > 0 ? raw : 0.15
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const layer = selectedScatterTarget.value?.layer
-    if (!layer || layer.kind !== 'wall') return
-    const next = Number(value)
-    if (!Number.isFinite(next)) return
-    layer.wallThicknessMeters = Math.min(10, Math.max(0.01, next))
-    markPlanningDirty()
-  },
-})
-
-// (layer-scoped wall preset removed)
-
-// (removed layer-scoped wall preset model — layer-level wall presets are not used)
-
-const wallFeaturePresetAssetIdEffective = computed<string>(() => {
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'wall') return ''
-  const override = (target.shape as any)?.wallPresetAssetId
-  if (typeof override === 'string' && override.trim().length) return override.trim()
-  return ''
-})
-
-function handleWallFeaturePresetAssetChange(asset: ProjectAsset | null) {
-  if (propertyPanelDisabled.value) return
-  const target = selectedScatterTarget.value
-  if (!target || target.layer?.kind !== 'wall') return
-
-  const shape = target.shape as any
-  if (!asset) {
-    delete shape.wallPresetAssetId
-    markPlanningDirty()
-    return
-  }
-
-  const id = typeof asset.id === 'string' ? asset.id.trim() : ''
-  if (!id) {
-    delete shape.wallPresetAssetId
-    markPlanningDirty()
-    return
-  }
-
-  const filename = asset.description ?? asset.name ?? null
-  if (!isWallPresetFilename(filename)) {
-    return
-  }
-
-  shape.wallPresetAssetId = id
-  markPlanningDirty()
-}
-
-// (removed layer-scoped wall preset handler — layer-level wall presets are not used)
-
-const wallCornerSmoothnessModel = computed({
-  get: () => {
-    const target = selectedScatterTarget.value
-    if (!target || target.type !== 'polyline' || target.layer?.kind !== 'wall') {
-      return WALL_DEFAULT_SMOOTHING
-    }
-    return clampWallCornerSmoothness((target.shape as PlanningPolyline).cornerSmoothness)
-  },
-  set: (value: number) => {
-    if (propertyPanelDisabled.value) return
-    const target = selectedScatterTarget.value
-    if (!target || target.type !== 'polyline' || target.layer?.kind !== 'wall') {
-      return
-    }
-    ;(target.shape as PlanningPolyline).cornerSmoothness = clampWallCornerSmoothness(value)
-    markPlanningDirty()
-  },
-})
-
-const wallCornerSmoothnessDisplay = computed(() => `${Math.round(wallCornerSmoothnessModel.value * 100)}%`)
 
 const editorBackgroundStyle = computed(() => {
   return {
@@ -2988,7 +2530,7 @@ watch(selectedFeature, (feature) => {
 
 function commitSelectedName(value: string) {
   if (!selectedScatterTarget.value) return
-  const shape = selectedScatterTarget.value.shape as any
+  const shape = selectedScatterTarget.value.shape
   shape.name = value
   selectedName.value = value
   markPlanningDirty()
@@ -3031,6 +2573,7 @@ watch(
       persistPlanningToSceneIfDirty({ force: true })
     }
     loadPlanningFromScene()
+    void hydratePlanningImageUrls()
   },
   { immediate: true },
 )
@@ -3062,51 +2605,18 @@ function getLayerKind(layerId: string): LayerKind | null {
 }
 
 function getPolylineStrokeDasharray(layerId: string) {
-  const kind = getLayerKind(layerId as string)
-  // Roads: dashed (easier to distinguish from walls); Walls: solid.
-  if (kind === 'road') {
-    return '10 7'
-  }
+  void layerId
   return undefined
 }
 
 function getPolylineStroke(layerId: string) {
-  const kind = getLayerKind(layerId as string)
-  // Increase opacity for better visibility
-  const alpha = kind === 'road' ? 0.95 : 1
-  return getLayerColor(layerId, alpha)
+  return getLayerColor(layerId, 1)
 }
 
 function getPolylineStrokeWidth(layerId: string, isSelected = false) {
-  const kind = getLayerKind(layerId as string)
   const selectedScale = 1.52
   const MIN_STROKE_WORLD = 0.1 // minimum stroke width in world units (meters)
-  if (kind === 'road') {
-    const layer = layers.value.find((item) => item.id === layerId)
-    const width = Number(layer?.roadWidthMeters ?? 2)
-    if (!Number.isFinite(width) || width <= 0) {
-      return isSelected ? 2 * selectedScale : 2
-    }
-    const clamped = Math.min(10, Math.max(0.1, width))
-    // Roads scale with zoom (world units). Enforce minimum world stroke width.
-    const result = isSelected ? clamped * selectedScale : clamped
-    return Math.max(result, MIN_STROKE_WORLD)
-  }
-  if (kind === 'wall') {
-    const base = 3.2
-    // Walls use non-scaling stroke (screen px). Ensure that the stroke, when
-    // converted to world units, is at least MIN_STROKE_WORLD. Calculate required
-    // minimum in px based on current render scale.
-    const vectorEffect = getPolylineVectorEffect(layerId)
-    const desired = isSelected ? base * selectedScale : base
-    if (vectorEffect === 'non-scaling-stroke') {
-      const minPx = MIN_STROKE_WORLD * Math.max(1e-6, renderScale.value)
-      return Math.max(desired, minPx)
-    }
-    return Math.max(desired, MIN_STROKE_WORLD)
-  }
   const base = 1.05
-  // Default kinds use non-scaling stroke; apply same minimum logic as for walls.
   const vectorEffect = getPolylineVectorEffect(layerId)
   const desired = isSelected ? base * selectedScale : base
   if (vectorEffect === 'non-scaling-stroke') {
@@ -3118,19 +2628,14 @@ function getPolylineStrokeWidth(layerId: string, isSelected = false) {
 
 function getPolylineHitRadiusWorld(line: PlanningPolyline, isSelected = false): number {
   const strokeWidthWorld = getPolylineVisibleStrokeWidthWorld(line.layerId, isSelected)
-  const kind = getLayerKind(line.layerId)
-  const extraPx = kind === 'wall' ? 8 : 5
+  const extraPx = 5
   const extraWorld = pxToWorld(extraPx)
   return Math.max(0.0001, strokeWidthWorld / 2 + extraWorld)
 }
 
 function getPolylineStrokeLinejoin(line: PlanningPolyline): 'round' | 'inherit' | 'miter' | 'bevel' | undefined {
-  const kind = getLayerKind(line.layerId)
-  if (kind !== 'wall') {
-    return undefined
-  }
-  const smoothing = clampWallCornerSmoothness(line.cornerSmoothness)
-  return smoothing > 0 ? 'round' : 'miter'
+  void line
+  return undefined
 }
 
 function getPolylineVisibleStrokeWidthWorld(layerId: string, isSelected = false) {
@@ -3162,18 +2667,13 @@ function isClickOnVisiblePolylineSegment(
 }
 
 function getPolylineVectorEffect(layerId: string) {
-  // Road width should represent world meters, so it should scale with zoom.
-  // Walls/others keep constant screen width for readability.
-  const kind = getLayerKind(layerId as string)
-  return kind === 'road' ? undefined : 'non-scaling-stroke'
+  void layerId
+  return 'non-scaling-stroke'
 }
 
 function canEditPolylineGeometry(layerId: string): boolean {
   const kind = getLayerKind(layerId as string)
-  if (kind !== 'road' && kind !== 'wall') {
-    return true
-  }
-  return currentTool.value === 'line'
+  return kind !== 'guide-route' || currentTool.value === 'line'
 }
 
 const activeVertexHighlight = computed(() => {
@@ -3379,13 +2879,6 @@ function addPlanningLayer(kind: LayerKind) {
     visible: true,
     color: getDefaultLayerColor(kind),
     locked: false,
-    roadWidthMeters: kind === 'road' ? 2 : undefined,
-    roadLaneLines: kind === 'road' ? false : undefined,
-    roadSmoothing: kind === 'road' ? 0.09 : undefined,
-    waterSmoothing: kind === 'water' ? 0.5 : undefined,
-    wallHeightMeters: kind === 'wall' ? 3 : undefined,
-    wallThicknessMeters: kind === 'wall' ? 0.15 : undefined,
-    floorSmooth: kind === 'floor' ? 0.5 : undefined,
   }
 
   // Newly created layers are placed on top (earlier in list)
@@ -3425,9 +2918,11 @@ function setRenameFieldRef(layerId: string, el: unknown) {
     renameFieldElByLayerId.set(layerId, el)
     return
   }
-  const anyEl = el as any
-  if (anyEl?.$el instanceof HTMLElement) {
-    renameFieldElByLayerId.set(layerId, anyEl.$el)
+  if (typeof el === 'object' && el !== null && '$el' in el) {
+    const componentRoot = (el as { $el?: unknown }).$el
+    if (componentRoot instanceof HTMLElement) {
+      renameFieldElByLayerId.set(layerId, componentRoot)
+    }
   }
 }
 
@@ -3869,57 +3364,6 @@ function clientToWorld(clientX: number, clientY: number): PlanningPoint {
   return { x, y }
 }
 
-function extractAssetPayloadFromDrag(event: DragEvent): { assetId: string } | null {
-  if (!event.dataTransfer) return null
-  const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw)
-      if (parsed?.assetId && typeof parsed.assetId === 'string') {
-        return { assetId: parsed.assetId }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  // Fallback to scene store dragging id if present
-  const dragging = (sceneStore as any).draggingAssetId
-  if (dragging && typeof dragging === 'string') return { assetId: dragging }
-  return null
-}
-
-function isAssetDrag(event: DragEvent): boolean {
-  if (!event.dataTransfer) return false
-  return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
-}
-
-function handleCanvasDragOver(event: DragEvent) {
-  if (isAssetDrag(event)) {
-    event.preventDefault()
-  }
-}
-
-function handleCanvasDrop(event: DragEvent) {
-  const payload = extractAssetPayloadFromDrag(event)
-  if (!payload) return
-  const world = clientToWorld(event.clientX, event.clientY)
-  const polygon = hitTestPolygon(world)
-  if (!polygon) return
-  const kind = getLayerKind(polygon.layerId)
-  if (kind !== 'building') return
-  const model: PlacedModel = { id: createId('placed'), assetId: payload.assetId, position: world }
-  polygon.placedModels = Array.isArray(polygon.placedModels) ? [...polygon.placedModels, model] : [model]
-  markPlanningDirty()
-}
-
-function handlePlacedModelPointerDown(polygonId: string, modelId: string | undefined, event: PointerEvent) {
-  // keep parameters referenced to avoid unused-variable TS errors
-  void polygonId
-  void modelId
-  event.stopPropagation()
-  event.preventDefault()
-}
-
 function hitTestImage(point: PlanningPoint) {
   for (let i = planningImages.value.length - 1; i >= 0; i -= 1) {
     const image = planningImages.value[i]
@@ -4127,9 +3571,6 @@ function startLineDraft(point: PlanningPoint) {
           name: `${getLayerName(sourceLine.layerId)} Segment ${lineCounter.value++}`,
           layerId: sourceLine.layerId,
           points: [sourcePoint, newPoint],
-          cornerSmoothness: sourceKind === 'wall'
-            ? clampWallCornerSmoothness((sourceLine as PlanningPolyline).cornerSmoothness)
-            : undefined,
         }
         polylines.value = [...polylines.value, newLine]
         activeLayerId.value = sourceLine.layerId
@@ -4161,7 +3602,6 @@ function startLineDraft(point: PlanningPoint) {
       layerId: targetLayerId,
       points: [nextPoint],
       waypoints: targetKind === 'guide-route' ? [{ name: 'Point 1', dock: false }] : undefined,
-      cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
     }
     polylines.value = [...polylines.value, newLine]
     lineDraft.value = { lineId: newLine.id, layerId: targetLayerId }
@@ -4217,7 +3657,6 @@ function beginLineDraftFromPoint(point: PlanningPoint, layerId: string) {
     layerId,
     points: [point],
     waypoints: targetKind === 'guide-route' ? [{ name: 'Point 1', dock: false }] : undefined,
-    cornerSmoothness: targetKind === 'wall' ? WALL_DEFAULT_SMOOTHING : undefined,
   }
   polylines.value = [...polylines.value, newLine]
   lineDraft.value = { lineId: newLine.id, layerId }
@@ -5338,7 +4777,7 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
 
   // In line tool, first click selects the polyline; only when already selected do we insert a vertex and start drawing from it.
   const layerKind = getLayerKind(line.layerId)
-  if (currentTool.value === 'line' && (layerKind === 'road' || layerKind === 'wall')) {
+  if (currentTool.value === 'line' && layerKind === 'guide-route') {
     event.stopPropagation()
     event.preventDefault()
     selectFeature({ type: 'polyline', id: line.id })
@@ -5513,6 +4952,8 @@ function loadPlanningImage(file: File) {
       id: createId('img'),
       name: file.name,
       url,
+      filename: file.name,
+      mimeType: file.type || null,
       sizeLabel: `${image.naturalWidth} x ${image.naturalHeight}`,
       width: image.naturalWidth,
       height: image.naturalHeight,
@@ -5529,13 +4970,9 @@ function loadPlanningImage(file: File) {
     activeImageId.value = newImage.id
 
     // persist the uploaded image to IndexedDB so it survives page reloads
-    try {
-      savePlanningImageToIndexedDB(newImage, file)
-    } catch (err) {
-      // non-fatal: keep running even if persistence fails
-      // eslint-disable-next-line no-console
+    void savePlanningImageToIndexedDB(newImage, file).catch((err) => {
       console.warn('Failed to persist planning image to IndexedDB', err)
-    }
+    })
 
     markPlanningDirty()
   }
@@ -5546,231 +4983,14 @@ function loadPlanningImage(file: File) {
   image.src = url
 }
 
-// IndexedDB helpers: images stored by content hash; layer metadata stored separately and reference image hash.
-function hexFromBuffer(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer)
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-async function computeSha256Hex(buffer: ArrayBuffer) {
-  const hash = await crypto.subtle.digest('SHA-256', buffer)
-  return hexFromBuffer(hash)
-}
-
-function openPlanningImageDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    try {
-      const req = indexedDB.open('harmony-planning-images', 2)
-      req.onupgradeneeded = () => {
-        const db = req.result
-          if (!db.objectStoreNames.contains('images')) {
-            db.createObjectStore('images', { keyPath: 'hash' })
-          }
-          if (!db.objectStoreNames.contains('layers')) {
-            const layersStore = db.createObjectStore('layers', { keyPath: 'id' })
-            layersStore.createIndex('by_scene', 'sceneId', { unique: false })
-          }
-      }
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    } catch (e) {
-      reject(e)
-    }
-  })
-}
-
-function getImageByHash(db: IDBDatabase, hash: string) {
-  return new Promise<any>((resolve, reject) => {
-    const tx = db.transaction('images', 'readonly')
-    const req = tx.objectStore('images').get(hash)
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
-}
-
-function putImageBlob(db: IDBDatabase, hash: string, blob: Blob) {
-  return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction('images', 'readwrite')
-    const store = tx.objectStore('images')
-    const keyPath = store.keyPath
-    const value = keyPath ? (typeof keyPath === 'string' ? { [keyPath]: hash, blob } : { hash, blob }) : { hash, blob }
-    try {
-      if (keyPath) {
-        store.put(value)
-      } else {
-        store.put(value, hash)
-      }
-    } catch (err) {
-      tx.abort()
-      reject(err)
-      return
-    }
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-function putLayerRecord(db: IDBDatabase, record: any) {
-  return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction('layers', 'readwrite')
-    tx.objectStore('layers').put(record)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-function getAllLayerRecords(db: IDBDatabase, sceneId?: string | null) {
-  return new Promise<any[]>((resolve, reject) => {
-    const tx = db.transaction('layers', 'readonly')
-    const store = tx.objectStore('layers')
-    if (sceneId) {
-      const idx = store.index('by_scene')
-      const req = idx.getAll(sceneId)
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    } else {
-      const req = store.getAll()
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    }
-  })
-}
-
 async function savePlanningImageToIndexedDB(image: PlanningImage, file: File) {
-  const db = await openPlanningImageDB()
-  const buffer = await file.arrayBuffer()
-  const hash = await computeSha256Hex(buffer)
-  // store blob only if not already present
-  const existing = await getImageByHash(db, hash)
-  if (!existing) {
-    const blob = new Blob([buffer], { type: file.type })
-    await putImageBlob(db, hash, blob)
-  }
-  // remember hash on in-memory object for later metadata updates
-  try { (image as any).imageHash = hash } catch {}
-  // store layer metadata referencing hash
-  const layerRecord = {
-    id: image.id,
-    sceneId: currentSceneId.value ?? null,
-    name: image.name,
-    imageHash: hash,
-    sizeLabel: image.sizeLabel,
-    width: image.width,
-    height: image.height,
-    visible: image.visible,
-    locked: image.locked,
-    opacity: image.opacity,
-    position: image.position,
-    scale: image.scale,
-    alignMarker: image.alignMarker ?? null,
-  }
-  await putLayerRecord(db, layerRecord)
-  db.close()
+  await savePlanningImageToStorage(image, file, currentSceneId.value ?? null)
+  image.filename = file.name || image.filename || null
+  image.mimeType = file.type || image.mimeType || null
 }
 
 async function persistLayersToIndexedDB() {
-  try {
-    const db = await openPlanningImageDB()
-    const tx = db.transaction('layers', 'readwrite')
-    const store = tx.objectStore('layers')
-    for (const img of planningImages.value) {
-      // only persist if we have an imageHash (uploaded or previously loaded)
-      // otherwise skip (no blob stored)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const record: any = {
-        id: img.id,
-        sceneId: currentSceneId.value ?? null,
-        name: img.name,
-        imageHash: (img as any).imageHash ?? null,
-        sizeLabel: img.sizeLabel,
-        width: img.width,
-        height: img.height,
-        visible: img.visible,
-        locked: img.locked,
-        opacity: img.opacity,
-        // Deep clone position to avoid Proxy/Ref issues
-        position: img.position ? { x: img.position.x, y: img.position.y } : { x: 0, y: 0 },
-        // Scale is a number, but ensure primitive
-        scale: typeof img.scale === 'number' ? img.scale : 1,
-        alignMarker: img.alignMarker ? { ...img.alignMarker } : null,
-      }
-      store.put(record)
-    }
-    tx.oncomplete = () => db.close()
-    tx.onerror = () => db.close()
-  } catch (e) {
-    // non-fatal
-    // eslint-disable-next-line no-console
-    console.warn('Failed to persist layer metadata to IndexedDB', e)
-  }
-}
-
-async function loadPlanningImagesFromIndexedDB(sceneId?: string | null) {
-  const db = await openPlanningImageDB()
-  const layers = await getAllLayerRecords(db, sceneId)
-  const results: PlanningImage[] = []
-  for (const rec of layers) {
-    try {
-      const imgRec = await getImageByHash(db, rec.imageHash)
-      if (!imgRec || !imgRec.blob) continue
-      const url = URL.createObjectURL(imgRec.blob)
-      // ensure image decodes
-      await new Promise<void>((res, rej) => {
-        const img = new Image()
-        img.onload = () => res()
-        img.onerror = () => rej(new Error('Image decode error'))
-        img.src = url
-      })
-      const item: PlanningImage = {
-        id: rec.id,
-        name: rec.name,
-        url,
-        imageHash: rec.imageHash ?? undefined,
-        sizeLabel: rec.sizeLabel ?? `${rec.width} x ${rec.height}`,
-        width: rec.width,
-        height: rec.height,
-        visible: rec.visible ?? true,
-        locked: rec.locked ?? false,
-        opacity: typeof rec.opacity === 'number' ? rec.opacity : 1,
-        position: rec.position ?? { x: 0, y: 0 },
-        scale: typeof rec.scale === 'number' ? rec.scale : 1,
-        alignMarker: rec.alignMarker ?? undefined,
-      }
-      results.push(item)
-    } catch (e) {
-      // skip corrupted record
-      // eslint-disable-next-line no-console
-      console.warn('Skipping corrupted planning image record', rec?.id, e)
-    }
-  }
-  db.close()
-  return results
-}
-
-async function deletePlanningImageFromIndexedDB(id: string) {
-  const db = await openPlanningImageDB()
-  // find layer record to get hash
-  const tx = db.transaction(['layers', 'images'], 'readwrite')
-  const layersStore = tx.objectStore('layers')
-  const imagesStore = tx.objectStore('images')
-  const getReq = layersStore.get(id)
-  await new Promise((res, rej) => { getReq.onsuccess = () => res(null); getReq.onerror = () => rej(getReq.error) })
-  const rec = getReq.result
-  if (rec) {
-    const hash = rec.imageHash
-    layersStore.delete(id)
-    // check if any other layer references this hash
-    const allLayersReq = layersStore.getAll()
-    const otherLayers = await new Promise<any[]>((res, rej) => { allLayersReq.onsuccess = () => res(allLayersReq.result); allLayersReq.onerror = () => rej(allLayersReq.error) })
-    const stillUsed = otherLayers.some((l) => l.imageHash === hash)
-    if (!stillUsed) {
-      imagesStore.delete(hash)
-    }
-  }
-  return new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => { db.close(); resolve() }
-    tx.onerror = () => { db.close(); reject(tx.error) }
-  })
+  await persistPlanningImageLayersToIndexedDB(currentSceneId.value ?? null, planningImages.value)
 }
 
 function handleResetView() {
@@ -5812,7 +5032,7 @@ async function handleImageLayerDelete(imageId: string) {
     activeImageId.value = planningImages.value[0]?.id ?? null
   }
   try {
-    await deletePlanningImageFromIndexedDB(imageId)
+    await deletePlanningImageFromStorage(imageId)
   } catch (e) {
     // non-fatal
     // eslint-disable-next-line no-console
@@ -5970,8 +5190,8 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
-  // To avoid accidental operations: only allow dragging planning layers when the 'pan' tool is selected.
-  if (tool !== 'select') {
+  // Allow dragging planning layers when tool is 'select' or 'pan'.
+  if (tool !== 'select' && tool !== 'pan') {
     return
   }
 
@@ -6113,27 +5333,8 @@ function pointAlongEdge(edge: { start: PlanningPoint; end: PlanningPoint; length
 }
 
 function getLayerSmoothingValue(layerId?: string | null) {
-  if (!layerId) {
-    return 0
-  }
-  const layer = layers.value.find((item) => item.id === layerId)
-  if (!layer) {
-    return 0
-  }
-  if (layer.kind === 'floor') {
-    return normalizeLayerSmoothingValue(layer.floorSmooth)
-  }
-  if (layer.kind === 'water') {
-    return normalizeLayerSmoothingValue(layer.waterSmoothing)
-  }
+  void layerId
   return 0
-}
-
-function normalizeLayerSmoothingValue(value: number | undefined) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.min(1, Math.max(0, value))
-  }
-  return 0.1
 }
 
 function getLineSegments(line: PlanningPolyline) {
@@ -6273,7 +5474,7 @@ void updateTerrainLine
 void removeTerrainLine
 void addTerrainLineFromSelected
 
-const imagesLoaded = ref(false)
+const imageHydrationToken = ref(0)
 
 onMounted(() => {
   // Do NOT load persisted images here; defer until the dialog is opened to avoid slowing scene load.
@@ -6284,24 +5485,52 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
-// Load persisted images the first time the Planning Dialog is opened.
+async function hydratePlanningImageUrls() {
+  const token = imageHydrationToken.value + 1
+  imageHydrationToken.value = token
+  const snapshot = [...planningImages.value]
+
+  if (!snapshot.length) {
+    try {
+      const persisted = await loadPlanningImagesFromStorage(currentSceneId.value ?? null)
+      if (imageHydrationToken.value !== token || !persisted.length) {
+        return
+      }
+      planningImages.value = persisted as PlanningImage[]
+      activeImageId.value = planningImages.value[0]?.id ?? null
+    } catch (error) {
+      console.warn('Failed to load planning images from IndexedDB', error)
+    }
+    return
+  }
+
+  await Promise.all(snapshot.map(async (image) => {
+    const hash = typeof image.imageHash === 'string' ? image.imageHash.trim() : ''
+    if (!hash) {
+      return
+    }
+    try {
+      const nextUrl = await createPlanningImageUrlFromHash(hash)
+      if (!nextUrl || imageHydrationToken.value !== token) {
+        return
+      }
+      if (image.url && image.url !== nextUrl) {
+        try { URL.revokeObjectURL(image.url) } catch {}
+      }
+      image.url = nextUrl
+    } catch (error) {
+      console.warn('Failed to hydrate planning image from IndexedDB', hash, error)
+    }
+  }))
+}
+
 watch(
   () => dialogOpen.value,
   async (open) => {
-    if (!open || imagesLoaded.value) return
-    imagesLoaded.value = true
-    try {
-      const sceneId = currentSceneId.value ?? null
-      const persisted = await loadPlanningImagesFromIndexedDB(sceneId)
-      if (persisted && persisted.length) {
-        planningImages.value = persisted
-        activeImageId.value = planningImages.value[0]?.id ?? null
-      }
-    } catch (e) {
-      // ignore DB errors (non-fatal)
-      // eslint-disable-next-line no-console
-      console.warn('Failed to load planning images from IndexedDB', e)
+    if (!open) {
+      return
     }
+    await hydratePlanningImageUrls()
   },
 )
 
@@ -6642,8 +5871,6 @@ onBeforeUnmount(() => {
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
             @contextmenu.prevent="handleEditorContextMenu"
-            @dragover.prevent="handleCanvasDragOver"
-            @drop.prevent="handleCanvasDrop"
           >
             <PlanningRulers
               :viewport-width="editorRect?.width ?? 0"
@@ -6730,21 +5957,6 @@ onBeforeUnmount(() => {
                       :height="polygonScatterThumbPlacements[poly.id]!.size"
                       preserveAspectRatio="xMidYMid meet"
                     />
-                    <!-- Placed building models (simple placeholder markers) -->
-                    <g v-if="poly.placedModels?.length" class="placed-models" :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }">
-                      <g v-for="(m, idx) in poly.placedModels" :key="m.id ?? `${poly.id}-placed-${idx}`">
-                        <circle
-                          :cx="m.position.x"
-                          :cy="m.position.y"
-                          :r="Math.max(0.25, vertexHandleRadiusWorld)"
-                          fill="orange"
-                          stroke="rgba(255,255,255,0.9)"
-                          :stroke-width="vertexHandleStrokeWidthWorld"
-                          pointer-events="visibleFill"
-                          @pointerdown="(e) => handlePlacedModelPointerDown(poly.id, m.id, e as PointerEvent)"
-                        />
-                      </g>
-                    </g>
                   </g>
 
                   
@@ -7262,209 +6474,8 @@ onBeforeUnmount(() => {
               </v-window>
             </template>
 
-            <template v-else-if="propertyPanelLayerKind === 'road'">
-              <div class="property-panel__density">
-                <div class="property-panel__density-title">Road width</div>
-                <div class="property-panel__density-row">
-                  <v-text-field
-                    v-model.number="roadWidthMetersModel"
-                    type="number"
-                    min="0.1"
-                    max="10"
-                    step="0.1"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    suffix="m"
-                  />
-                </div>
-                <div class="property-panel__spacing-title">Junction smoothing</div>
-                <div class="property-panel__density-row">
-                  <v-slider
-                    v-model="roadSmoothingModel"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    density="compact"
-                    hide-details
-                  />
-                  <div class="property-panel__density-value">
-                    {{ Math.round(roadSmoothingModel * 100) }}%
-                  </div>
-                </div>
-              </div>
-
-              <div class="property-panel__block">
-                <div class="property-panel__density-title">Lane Lines</div>
-                <div class="property-panel__density-row">
-                  <v-switch
-                    v-model="roadLaneLinesModel"
-                    density="compact"
-                    hide-details
-                    label="Show Lane Lines"
-                  />
-                </div>
-              </div>
-            
-            </template>
-
-            <template v-else-if="propertyPanelLayerKind === 'water'">
-
-              <div class="property-panel__block">
-                <div class="property-panel__density-row">
-                  <v-switch
-                    v-model="airWallEnabledModel"
-                    density="compact"
-                    hide-details
-                    label="Air Wall"
-                  />
-                </div>
-              </div>
-              <div class="property-panel__block">
-                <v-select
-                  label="Water Preset"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  :items="waterPresetOptions"
-                  item-title="label"
-                  item-value="value"
-                  :model-value="selectedWaterPreset"
-                  :disabled="propertyPanelDisabled"
-                  @update:model-value="handleWaterPresetChange"
-                />
-              </div>
-
-              <div class="property-panel__block">
-                <div class="property-panel__density-title">Water smoothing</div>
-                <div class="property-panel__density-row">
-                  <v-slider
-                    v-model="waterSmoothingModel"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    density="compact"
-                    hide-details
-                  />
-                  <div class="property-panel__density-value">
-                    {{ Math.round(waterSmoothingModel * 100) }}%
-                  </div>
-                </div>
-              </div>
-            </template>
-
-            <template v-else-if="propertyPanelLayerKind === 'floor'">
-
-              <div class="property-panel__density">
-                <div class="property-panel__density-title">Floor smoothing</div>
-                <div class="property-panel__density-row">
-                  <v-slider
-                    v-model="floorSmoothModel"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    density="compact"
-                    hide-details
-                  />
-                  <div class="property-panel__density-value">
-                    {{ Math.round(floorSmoothModel * 100) }}%
-                  </div>
-                </div>
-              </div>
-              <div class="property-panel__block">
-                <div class="property-panel__spacing-title">Floor preset</div>
-                <div
-                  class="property-panel__floor-preset"
-                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
-                >
-                  <AssetPickerList
-                    :active="dialogOpen && propertyPanelLayerKind === 'floor'"
-                    :asset-id="floorFeaturePresetAssetIdEffective"
-                    asset-type="prefab"
-                    :extensions="['floor']"
-                    @update:asset="handleFloorFeaturePresetAssetChange"
-                  />
-                </div>
-              </div>
-
-              <!-- layer-level floor preset removed: only per-feature presets are supported -->
-
-            </template>
-
-            <template v-else-if="propertyPanelLayerKind === 'wall'">
-              <div class="property-panel__density">
-                <div class="property-panel__density-row">
-                  <v-switch
-                    v-model="airWallEnabledModel"
-                    density="compact"
-                    hide-details
-                    label="Air Wall"
-                  />
-                </div>
-
-                <div class="property-panel__density-title">Wall height</div>
-                <div class="property-panel__density-row">
-                  <v-text-field
-                    v-model.number="wallHeightMetersModel"
-                    type="number"
-                    min="0.1"
-                    max="100"
-                    step="0.1"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    suffix="m"
-                  />
-                </div>
-
-                <div class="property-panel__spacing-title">Wall thickness</div>
-                <div class="property-panel__density-row">
-                  <v-text-field
-                    v-model.number="wallThicknessMetersModel"
-                    type="number"
-                    min="0.01"
-                    max="10"
-                    step="0.01"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    suffix="m"
-                  />
-                </div>
-
-                <template v-if="selectedScatterTarget && selectedScatterTarget.type === 'polyline'">
-                  <div class="property-panel__spacing-title">Corner Smoothness</div>
-                  <div class="property-panel__density-row">
-                    <v-slider
-                      v-model="wallCornerSmoothnessModel"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      density="compact"
-                      hide-details
-                    />
-                    <div class="property-panel__density-value">{{ wallCornerSmoothnessDisplay }}</div>
-                  </div>
-                </template>
-
-                <div class="property-panel__spacing-title">Wall preset</div>
-                <div
-                  class="property-panel__wall-preset"
-                  :style="propertyPanelDisabled ? { pointerEvents: 'none', opacity: 0.6 } : undefined"
-                >
-                  <AssetPickerList
-                    :active="dialogOpen && propertyPanelLayerKind === 'wall'"
-                    :asset-id="wallFeaturePresetAssetIdEffective"
-                    asset-type="prefab"
-                    :extensions="['wall']"
-                    @update:asset="handleWallFeaturePresetAssetChange"
-                  />
-                </div>
-              </div>
-            </template>
-
             <template v-else>
-              <!-- terrain/building/wall: empty for now -->
+              <!-- terrain / guide-route: no extra property controls -->
             </template>
           </template>
           </div>
