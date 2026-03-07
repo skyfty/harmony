@@ -1,10 +1,7 @@
 import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 
-const NODE_PREFAB_FORMAT_VERSION = 1
-
 type PrefabFilePayload = {
-  formatVersion?: unknown
   name?: unknown
   root?: unknown
   assetIndex?: unknown
@@ -98,15 +95,6 @@ export function normalizePrefabSceneDocument(raw: unknown): SceneJsonExportDocum
     throw new Error('Prefab 资源文件格式不正确')
   }
   const payload = raw as PrefabFilePayload
-  if ('formatVersion' in payload && payload.formatVersion !== undefined) {
-    const version = Number(payload.formatVersion)
-    if (!Number.isFinite(version)) {
-      throw new Error('Prefab 版本号无效')
-    }
-    if (version !== NODE_PREFAB_FORMAT_VERSION) {
-      throw new Error(`暂不支持的 Prefab 版本: ${version}`)
-    }
-  }
   const rootCandidate = payload.root
   if (!isPlainObject(rootCandidate)) {
     throw new Error('Prefab 数据缺少有效的根节点')
