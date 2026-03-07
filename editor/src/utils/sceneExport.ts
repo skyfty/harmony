@@ -449,6 +449,8 @@ function sanitizeNodesForJsonExport(
   return result
 }
 
+import { isPlanningImageConversionNode } from '@/utils/planningToScene'
+
 function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOptions): boolean {
   if (!options.includeHiddenNodes && node.visible === false) {
     return true
@@ -457,6 +459,9 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
     return true
   }
   if (node.nodeType === 'Environment') {
+    return true
+  }
+  if (isPlanningImageConversionNode(node)) {
     return true
   }
   return false

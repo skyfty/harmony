@@ -1,3 +1,5 @@
+import { isPlanningImageConversionNode } from '@/utils/planningToScene'
+
 import { watch, type WatchStopHandle } from 'vue'
 import * as THREE from 'three'
 import { defineStore } from 'pinia'
@@ -4095,6 +4097,9 @@ export async function calculateSceneResourceSummary(
       if (!node) {
         continue
       }
+      if (isPlanningImageConversionNode(node)) {
+        continue
+      }
       nodeNameById.set(node.id, node.name ?? undefined)
       if (Array.isArray(node.materials) && node.materials.length) {
         node.materials.forEach((nodeMaterial) => {
@@ -4564,6 +4569,9 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
     }
     nodes.forEach((node) => {
       if (!node) {
+        return
+      }
+      if (isPlanningImageConversionNode(node)) {
         return
       }
       collectNodeAssetDependencies(node, bucket)

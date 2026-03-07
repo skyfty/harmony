@@ -580,19 +580,6 @@ function normalizePlanningPoints(points: PlanningPoint[] | undefined, unitsToMet
   })
 }
 
-function normalizePlanningImages(images: PlanningImageData[] | undefined, unitsToMeters: number): PlanningImageData[] {
-  const scaleFactor = Number.isFinite(unitsToMeters) && unitsToMeters > 0 ? unitsToMeters : 1
-  if (!Array.isArray(images) || images.length === 0) return []
-  return images.map((image) => ({
-    ...image,
-    position: {
-      x: Number.isFinite(Number(image.position?.x)) ? Number(image.position.x) * scaleFactor : 0,
-      y: Number.isFinite(Number(image.position?.y)) ? Number(image.position.y) * scaleFactor : 0,
-    },
-    scale: Number.isFinite(Number(image.scale)) ? Number(image.scale) * scaleFactor : scaleFactor,
-  }))
-}
-
 function clamp01(value: number, fallback = 1): number {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) {
@@ -1426,7 +1413,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     waypoints: Array.isArray(line.waypoints) ? line.waypoints : undefined,
   }))
 
-  const images = normalizePlanningImages(planningData.images, planningUnitsToMeters)
+  // Planning image layers in PlanningDialog already use the dialog's world-space
+  // coordinates/sizes (`position`, `width * scale`, `height * scale`).
+  // Convert them directly so the 3D helper planes exactly match the editor overlay.
+  const images = Array.isArray(planningData.images) ? planningData.images : []
 
   const referencedScatterAssetIds = new Set<string>()
   for (const poly of polygons) {
