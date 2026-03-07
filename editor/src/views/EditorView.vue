@@ -1132,7 +1132,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     },
     scenes: embeddedScenes,
     embedAssets: options.embedAssets ?? false,
-    includePlanningData: true,
+    includePlanningData: false,
     updateProgress,
   })
 }

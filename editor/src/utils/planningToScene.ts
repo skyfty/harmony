@@ -654,6 +654,7 @@ async function ensurePlanningImageAsset(
     description: `Planning reference image: ${displayName}`,
     previewColor: '#ffffff',
     gleaned: true,
+    isEditorOnly: true,
     commitOptions: { updateNodes: false },
   })
 

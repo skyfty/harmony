@@ -17,6 +17,22 @@ import {
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
 
+function extractAssetIdFromPackageMapKey(key: string): string | null {
+  const normalized = typeof key === 'string' ? key.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  if (normalized.startsWith('local::')) {
+    const assetId = normalized.slice('local::'.length).trim()
+    return assetId || null
+  }
+  if (normalized.startsWith('url::')) {
+    const assetId = normalized.slice('url::'.length).trim()
+    return assetId || null
+  }
+  return null
+}
+
 export type ScenePackageExportScene = {
   id: string
   document: SceneJsonExportDocument
@@ -68,6 +84,56 @@ type ResolvedEmbedAsset = {
   downloadUrl: string | null
   mimeTypeHint?: string | null
   filenameHint?: string | null
+}
+
+function stripEditorOnlySceneFields(
+  document: SceneJsonExportDocument & {
+    assetUrlOverrides?: Record<string, string>
+    resourceSummary?: unknown
+    planningData?: unknown
+  },
+): void {
+  if ('assetUrlOverrides' in document) {
+    delete document.assetUrlOverrides
+  }
+  if ('resourceSummary' in document) {
+    delete document.resourceSummary
+  }
+  if ('planningData' in document) {
+    delete document.planningData
+  }
+
+  if (document.assetIndex && typeof document.assetIndex === 'object') {
+    const nextAssetIndex: NonNullable<SceneJsonExportDocument['assetIndex']> = {}
+    Object.entries(document.assetIndex).forEach(([assetId, entry]) => {
+      if (!entry || entry.isEditorOnly) {
+        return
+      }
+      nextAssetIndex[assetId] = {
+        categoryId: entry.categoryId,
+        source: entry.source ? { ...entry.source } : undefined,
+        internal: entry.internal,
+      }
+    })
+    document.assetIndex = nextAssetIndex
+  }
+
+  if (document.packageAssetMap && typeof document.packageAssetMap === 'object') {
+    const retainedAssetIds = new Set(Object.keys(document.assetIndex ?? {}))
+    const nextPackageAssetMap: Record<string, string> = {}
+    Object.entries(document.packageAssetMap).forEach(([key, value]) => {
+      const normalizedValue = typeof value === 'string' ? value.trim() : ''
+      const derivedAssetId = extractAssetIdFromPackageMapKey(key)
+      if (normalizedValue && retainedAssetIds.has(normalizedValue)) {
+        nextPackageAssetMap[key] = value
+        return
+      }
+      if (derivedAssetId && retainedAssetIds.has(derivedAssetId)) {
+        nextPackageAssetMap[key] = value
+      }
+    })
+    document.packageAssetMap = nextPackageAssetMap
+  }
 }
 
 function collectEmbedAssetsFromScenes(scenes: ScenePackageExportScene[]): Map<string, ResolvedEmbedAsset> {
@@ -350,7 +416,10 @@ export async function exportScenePackageZip(payload: {
     let planningPath: string | undefined
 
     // Collect local asset IDs from the scene's assetIndex (scene-scoped)
-    const indexMap = (scene.document as SceneJsonExportDocument).assetIndex ?? {}
+    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneJsonExportDocument & { assetUrlOverrides?: Record<string, string> }
+    stripEditorOnlySceneFields(docClone)
+
+    const indexMap = docClone.assetIndex ?? {}
     const localAssetIds: string[] = Object.keys(indexMap).filter((assetId) => {
       try {
         return indexMap[assetId]?.source?.type === 'local'
@@ -359,21 +428,10 @@ export async function exportScenePackageZip(payload: {
       }
     })
 
-    // Prepare a clone of the scene document and ensure assetUrlOverrides exists
-    const docClone = JSON.parse(JSON.stringify(scene.document)) as SceneJsonExportDocument & { assetUrlOverrides?: Record<string, string> }
-    docClone.assetUrlOverrides = docClone.assetUrlOverrides ?? {}
     if (!Array.isArray(docClone.punchPoints) || docClone.punchPoints.length === 0) {
       const computedPunchPoints = collectPunchPointsFromNodes(docClone.nodes)
       if (computedPunchPoints.length) {
         docClone.punchPoints = computedPunchPoints
-      }
-    }
-
-    // Apply shared embedded asset overrides (paths within ZIP). These are informational today,
-    // but also allow runtimes to redirect by key if they consult this field.
-    if (sharedAssetPathById.size > 0) {
-      for (const [assetId, resourcePath] of sharedAssetPathById.entries()) {
-        docClone.assetUrlOverrides[assetId] = resourcePath
       }
     }
 
@@ -413,9 +471,6 @@ export async function exportScenePackageZip(payload: {
         size: blob.size,
         hash,
       })
-
-      // update scene document mapping to point to the packaged path
-      ;(docClone as any).assetUrlOverrides[assetId] = resourcePath
     }
 
     // Add the (possibly modified) scene JSON to files and manifest
