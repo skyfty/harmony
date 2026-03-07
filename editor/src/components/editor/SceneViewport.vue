@@ -152,7 +152,6 @@ import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/scene-viewport-align-command'
 import { Sky } from 'three/addons/objects/Sky.js'
-import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
@@ -179,7 +178,7 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
-import { createGuideRouteWaypointLabelsManager, loadLabelFont, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
+import { createGuideRouteWaypointLabelsManager, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
 import { createWallBuildTool } from './WallBuildTool'
 import {
   computeWallRepairUnitSegmentForLocalPoint,
@@ -1089,80 +1088,6 @@ const buildingLabelMeshes = new Map<string, THREE.Mesh>()
 // Guide route waypoint labels are managed by a small helper module.
 const createOrUpdateGuideRouteWaypointLabels = createGuideRouteWaypointLabelsManager(sceneStore, objectMap)
 const guideRouteWaypointLabelMeshes = getGuideRouteWaypointLabelMeshes()
-
-async function createOrUpdateLabel(node: SceneNode, container: THREE.Object3D) {
-  try {
-    if (!node || !container) return
-
-    const tokenSnapshot = sceneStore.sceneSwitchToken
-
-    const nodeId = node.id
-    const existing = buildingLabelMeshes.get(nodeId)
-    const labelText = (node.name && String(node.name).trim()) || 'Building'
-
-    const font = await loadLabelFont()
-
-    // Scene switched / viewport remounted while awaiting resources.
-    if (tokenSnapshot !== sceneStore.sceneSwitchToken || !sceneStore.isSceneReady) {
-      return
-    }
-
-    // Node container replaced while awaiting resources (nodeId can be reused).
-    if ((objectMap.get(nodeId) ?? null) !== container) {
-      return
-    }
-
-    // If existing label and text unchanged, just update position later
-    if (existing && existing.userData?.labelText === labelText) {
-      return
-    }
-
-    // Remove old
-    if (existing) {
-      existing.geometry.dispose()
-      ;(existing.material as THREE.Material).dispose?.()
-      existing.removeFromParent()
-      buildingLabelMeshes.delete(nodeId)
-    }
-
-    const size = 1.0
-    const depth = 0.08
-    const geom = new TextGeometry(labelText, { font, size, depth, curveSegments: 6, bevelEnabled: false })
-    geom.computeBoundingBox()
-    const bbox = geom.boundingBox
-    if (bbox) {
-      const center = new THREE.Vector3()
-      bbox.getCenter(center)
-      geom.translate(-center.x, -center.y, -center.z)
-    }
-
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff })
-    mat.depthTest = false
-    mat.toneMapped = false
-    const mesh = new THREE.Mesh(geom, mat)
-    mesh.name = `${node.name ?? 'Building'} (label)`
-    mesh.userData = { nodeId, editorOnly: true, labelText }
-    mesh.renderOrder = 9999
-
-    // compute center of container in local space
-    const box = new THREE.Box3().setFromObject(container)
-    const worldCenter = new THREE.Vector3()
-    box.getCenter(worldCenter)
-    // convert to container local
-    const localCenter = worldCenter.clone()
-    container.worldToLocal(localCenter)
-    mesh.position.copy(localCenter)
-    // float a bit above
-    mesh.position.y = (box.max.y - box.min.y) * 0.5 + 0.2
-
-    // attach to the same container so it moves with the node
-    container.add(mesh)
-    buildingLabelMeshes.set(nodeId, mesh)
-  } catch (err) {
-    // ignore font/load errors silently
-    console.warn('Failed to create building label', err)
-  }
-}
 
 // Guide route waypoint labels are handled by the external manager: `createOrUpdateGuideRouteWaypointLabels`.
 
@@ -15192,11 +15117,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       floorGroup.removeFromParent()
       floorGroup.userData.nodeId = node.id
       floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
-
-      const nd = (node as any).userData
-      if (nd && nd.kind === 'building') {
-        void createOrUpdateLabel(node, floorGroup)
-      }
       container.add(floorGroup)
       containerData.floorGroup = floorGroup
     } else if (node.dynamicMesh?.type === 'GuideRoute') {

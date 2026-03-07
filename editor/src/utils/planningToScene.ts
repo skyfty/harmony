@@ -1,12 +1,8 @@
 import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
-  RoadDynamicMesh,
   SceneNode,
-  SceneNodeMaterial,
-  SceneNodeEditorFlags,
 } from '@schema'
-import type {ProjectAsset} from '@/types/project-asset'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -18,6 +14,7 @@ import {
   type TerrainScatterCategory,
   type TerrainScatterInstance,
   type TerrainScatterStore,
+  type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
@@ -31,22 +28,16 @@ import {
 } from '@/utils/scatterSampling'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
-import type { PlanningSceneData } from '@/types/planning-scene-data'
+import type { PlanningPolygonData, PlanningPolylineData, PlanningSceneData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { useSceneStore } from '@/stores/sceneStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import {
-  FLOOR_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
-  ROAD_COMPONENT_TYPE,
-  ROAD_DEFAULT_JUNCTION_SMOOTHING,
   RIGIDBODY_COMPONENT_TYPE,
-  WATER_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
-  WALL_DEFAULT_SMOOTHING,
 } from '@schema/components'
-import { createRoadNodeMaterials, ROAD_SURFACE_DEFAULT_COLOR } from '@/utils/roadNodeMaterials'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 
@@ -57,84 +48,7 @@ export type PlanningConversionProgress = {
 }
 
 export type ConvertPlanningToSceneOptions = {
-  sceneStore: {
-    nodes: SceneNode[]
-    groundSettings: { width: number; depth: number }
-    captureHistorySnapshot: (options?: { resetRedo?: boolean }) => void
-    withHistorySuppressed: <T>(fn: () => Promise<T> | T) => Promise<T>
-    withScenePatchesSuppressed: <T>(fn: () => Promise<T> | T) => Promise<T>
-    setGroundDimensions: (payload: { width?: number; depth?: number }) => boolean
-    addSceneNode: (payload: {
-      nodeId?: string
-      nodeType: any
-      object: THREE.Object3D
-      name?: string
-      position?: { x: number; y: number; z: number }
-      rotation?: { x: number; y: number; z: number }
-      scale?: { x: number; y: number; z: number }
-      canPrefab?: boolean
-      parentId?: string | null
-      userData?: Record<string, unknown>
-      editorFlags?: SceneNodeEditorFlags
-    }) => SceneNode
-    createWallNode: (payload: {
-      nodeId?: string
-      segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
-      dimensions?: { height?: number; width?: number; thickness?: number }
-      name?: string
-      editorFlags?: SceneNodeEditorFlags
-    }) => SceneNode | null
-    createRoadNode: (payload: {
-      nodeId?: string
-      points: Array<{ x: number; y: number; z: number }>
-      width?: number
-      name?: string
-      editorFlags?: SceneNodeEditorFlags
-    }) => SceneNode | null
-    createFloorNode: (payload: {
-      nodeId?: string
-      points: Array<{ x: number; y: number; z: number }>
-      name?: string
-      editorFlags?: SceneNodeEditorFlags
-    }) => SceneNode | null
-    createGuideRouteNode: (payload: {
-      nodeId?: string
-      points: Array<{ x: number; y: number; z: number }>
-      waypoints?: Array<{ name?: string; dock?: boolean }>
-      name?: string
-      editorFlags?: SceneNodeEditorFlags
-    }) => SceneNode | null
-    addNodeComponent: <T extends string = string>(
-      nodeId: string,
-      type: T,
-    ) => { component: { id: string; props?: unknown }; created: boolean } | null
-    updateNodeComponentProps: (nodeId: string, componentId: string, patch: Record<string, unknown>) => boolean
-    moveNode: (payload: {
-      nodeId: string
-      targetId: string | null
-      position: 'before' | 'after' | 'inside'
-      recenterSkipGroupIds?: string[]
-    }) => boolean
-    removeSceneNodes: (ids: string[]) => void
-    updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
-    setNodeLocked: (nodeId: string, locked: boolean) => void
-    updateNodeUserData: (nodeId: string, userData: Record<string, unknown> | null) => void
-    setNodeMaterials: (nodeId: string, materials: SceneNodeMaterial[]) => boolean
-    refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; }) => Promise<void>
-    registerAsset: (asset: ProjectAsset) => Promise<void>
-    loadWallPreset?: (assetId: string) => Promise<import('@/utils/wallPreset').WallPresetData>
-    applyWallPresetToNode?: (
-      nodeId: string,
-      assetId: string,
-      presetData?: import('@/utils/wallPreset').WallPresetData
-    ) => Promise<Record<string, unknown>>
-    loadFloorPreset?: (assetId: string) => Promise<import('@/utils/floorPreset').FloorPresetData>
-    applyFloorPresetToNode?: (
-      nodeId: string,
-      assetId: string,
-      presetData?: import('@/utils/floorPreset').FloorPresetData | null
-    ) => Promise<Record<string, unknown>>
-  }
+  sceneStore: ReturnType<typeof useSceneStore>
   planningData: PlanningSceneData
   overwriteExisting: boolean
   onProgress?: (payload: PlanningConversionProgress) => void
@@ -187,7 +101,7 @@ async function stableUuidV5(name: string, namespaceUuid = PLANNING_UUID_NAMESPAC
   input.set(ns, 0)
   input.set(nameBytes, ns.length)
 
-  const cryptoRef = (globalThis as any)?.crypto
+  const cryptoRef = typeof crypto !== 'undefined' ? crypto : undefined
   const subtle = cryptoRef?.subtle
   if (!subtle || typeof subtle.digest !== 'function') {
     // No deterministic digest available; fall back to random.
@@ -208,7 +122,41 @@ const AIR_WALL_HEIGHT_M = 3
 const AIR_WALL_THICKNESS_M = 0.02
 const AIR_WALL_WIDTH_M = 0.25
 
-function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdatedAt: unknown): number {
+type SnapshotWithUpdatedAt = {
+  metadata?: {
+    updatedAt?: number | null
+  } | null
+}
+
+type RawScatterPayload = {
+  providerAssetId?: string
+  assetId?: string
+  category?: TerrainScatterCategory
+  name?: string
+  thumbnail?: string | null
+  densityPercent?: number
+  footprintAreaM2?: number
+  footprintMaxSizeM?: number
+}
+
+type NodeComponentWithId = {
+  id?: string
+}
+
+type PlanningPolygonAny = PlanningPolygonData & {
+  scatter?: RawScatterPayload
+}
+
+type PlanningPolylineAny = PlanningPolylineData & {
+  scatter?: RawScatterPayload
+}
+
+function getNodeComponent(node: SceneNode, componentType: string): NodeComponentWithId | undefined {
+  const components = node.components as Record<string, NodeComponentWithId | undefined> | undefined
+  return components?.[componentType]
+}
+
+function monotonicUpdatedAt(previousSnapshot: SnapshotWithUpdatedAt | null | undefined, nextUpdatedAt: number | null | undefined): number {
   const prev = Number(previousSnapshot?.metadata?.updatedAt)
   const next = Number(nextUpdatedAt)
   if (!Number.isFinite(prev)) {
@@ -224,209 +172,12 @@ function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdate
 // NOTE: This should be high enough so densityPercent behaves proportionally for common use-cases.
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 20000
 
-type LayerKind = 'terrain' | 'road' | 'guide-route' | 'green' | 'wall' | 'floor' | 'water' | 'building'
+type LayerKind = 'terrain' | 'guide-route' | 'green'
 
 type PlanningPoint = { id?: string; x: number; y: number }
 
-type PlanningPolygonAny = {
-  id: string
-  name?: string
-  layerId: string
-  points: PlanningPoint[]
-  terrainBlendMeters?: unknown
-  scatter?: unknown
-  airWallEnabled?: unknown
-}
-
-type PlanningPolylineAny = {
-  id: string
-  name?: string
-  layerId: string
-  points: PlanningPoint[]
-  waypoints?: Array<{ name?: string; dock?: boolean }>
-  scatter?: unknown
-  cornerSmoothness?: unknown
-  airWallEnabled?: unknown
-}
-
-type RoadGraphSegment = { a: number; b: number; featureIds: Set<string> }
-
-function quantizedCoordKey(value: number, step: number): number {
-  if (!Number.isFinite(value) || step <= 0) return 0
-  return Math.round(value / step)
-}
-
-function buildRoadGraphFromPlanningLayer(options: {
-  layerId: string
-  polylines: PlanningPolylineAny[]
-  groundWidth: number
-  groundDepth: number
-  roadWidth: number
-}) {
-  const { polylines, groundWidth, groundDepth, roadWidth } = options
-
-  // Use a conservative weld step so points inserted via intersections align even if ids differ.
-  const weldStepMeters = 1e-3
-  const verticesWorld: Array<{ x: number; z: number }> = []
-  const idToVertex = new Map<string, number>()
-  const posToVertex = new Map<string, number>()
-  const segmentMap = new Map<string, RoadGraphSegment>()
-
-  const getVertexIndex = (point: PlanningPoint): number | null => {
-    if (!point) return null
-    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-    const x = Number(world.x)
-    const z = Number(world.z)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) return null
-
-    const id = typeof point.id === 'string' && point.id.trim() ? point.id.trim() : null
-    if (id && idToVertex.has(id)) {
-      return idToVertex.get(id)!
-    }
-
-    const qx = quantizedCoordKey(x, weldStepMeters)
-    const qz = quantizedCoordKey(z, weldStepMeters)
-    const posKey = `${qx},${qz}`
-
-    const existing = posToVertex.get(posKey)
-    if (existing != null) {
-      if (id) idToVertex.set(id, existing)
-      return existing
-    }
-
-    const nextIndex = verticesWorld.length
-    verticesWorld.push({ x, z })
-    posToVertex.set(posKey, nextIndex)
-    if (id) idToVertex.set(id, nextIndex)
-    return nextIndex
-  }
-
-  const addSegment = (a: number, b: number, featureId: string) => {
-    if (a === b) return
-    const low = Math.min(a, b)
-    const high = Math.max(a, b)
-    const key = `${low}-${high}`
-    const existing = segmentMap.get(key)
-    if (existing) {
-      existing.featureIds.add(featureId)
-      return
-    }
-    segmentMap.set(key, { a: low, b: high, featureIds: new Set([featureId]) })
-  }
-
-  for (const line of polylines) {
-    const featureId = typeof line?.id === 'string' ? line.id : ''
-    let prev: number | null = null
-    for (const point of line.points ?? []) {
-      const idx = getVertexIndex(point)
-      if (idx == null) continue
-      if (prev != null && prev !== idx) {
-        addSegment(prev, idx, featureId)
-      }
-      prev = idx
-    }
-  }
-
-  const segments = Array.from(segmentMap.values())
-  const adjacency = new Map<number, Set<number>>()
-  const ensureAdj = (v: number) => {
-    const existing = adjacency.get(v)
-    if (existing) return existing
-    const created = new Set<number>()
-    adjacency.set(v, created)
-    return created
-  }
-  for (const seg of segments) {
-    ensureAdj(seg.a).add(seg.b)
-    ensureAdj(seg.b).add(seg.a)
-  }
-
-  const visited = new Array(verticesWorld.length).fill(false)
-  const components: Array<{
-    center: { x: number; z: number }
-    dynamicMesh: RoadDynamicMesh
-    featureIds: string[]
-  }> = []
-
-  for (let start = 0; start < verticesWorld.length; start += 1) {
-    if (visited[start]) continue
-    const neighbors = adjacency.get(start)
-    if (!neighbors || neighbors.size === 0) {
-      visited[start] = true
-      continue
-    }
-
-    const queue: number[] = [start]
-    visited[start] = true
-    const componentSet = new Set<number>()
-    componentSet.add(start)
-
-    while (queue.length) {
-      const v = queue.shift()!
-      const adj = adjacency.get(v)
-      if (!adj) continue
-      for (const n of adj) {
-        if (visited[n]) continue
-        visited[n] = true
-        componentSet.add(n)
-        queue.push(n)
-      }
-    }
-
-    const vertexIndices = Array.from(componentSet).sort((a, b) => a - b)
-    const componentSegments = segments.filter((seg) => componentSet.has(seg.a) && componentSet.has(seg.b))
-    if (vertexIndices.length < 2 || componentSegments.length === 0) {
-      continue
-    }
-
-    let minX = Number.POSITIVE_INFINITY
-    let maxX = Number.NEGATIVE_INFINITY
-    let minZ = Number.POSITIVE_INFINITY
-    let maxZ = Number.NEGATIVE_INFINITY
-    for (const idx of vertexIndices) {
-      const v = verticesWorld[idx]!
-      minX = Math.min(minX, v.x)
-      maxX = Math.max(maxX, v.x)
-      minZ = Math.min(minZ, v.z)
-      maxZ = Math.max(maxZ, v.z)
-    }
-    const centerX = Number.isFinite(minX) && Number.isFinite(maxX) ? (minX + maxX) * 0.5 : 0
-    const centerZ = Number.isFinite(minZ) && Number.isFinite(maxZ) ? (minZ + maxZ) * 0.5 : 0
-
-    const remap = new Map<number, number>()
-    vertexIndices.forEach((oldIndex, nextIndex) => remap.set(oldIndex, nextIndex))
-
-    const vertices = vertexIndices.map((oldIndex) => {
-      const v = verticesWorld[oldIndex]!
-      return [v.x - centerX, v.z - centerZ] as [number, number]
-    })
-
-    const meshSegments = componentSegments
-      .map((seg) => ({ a: remap.get(seg.a)!, b: remap.get(seg.b)! }))
-      .filter((seg) => seg.a !== seg.b)
-
-    const featureIdSet = new Set<string>()
-    componentSegments.forEach((seg) => seg.featureIds.forEach((id) => id && featureIdSet.add(id)))
-
-    const dynamicMesh: RoadDynamicMesh = {
-      type: 'Road',
-      width: roadWidth,
-      vertices,
-      segments: meshSegments,
-    }
-
-    components.push({
-      center: { x: centerX, z: centerZ },
-      dynamicMesh,
-      featureIds: Array.from(featureIdSet.values()),
-    })
-  }
-
-  return components
-}
-
 function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
-  const component = (node.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
+  const component = getNodeComponent(node, WALL_COMPONENT_TYPE)
   if (component?.id) {
     sceneStore.updateNodeComponentProps(node.id, component.id, { isAirWall: true })
   }
@@ -439,7 +190,7 @@ async function createAirWallFromSegments(options: {
   name: string
   planningLayerId: string
   ownerFeatureId: string
-  ownerFeatureKind: 'water' | 'green'
+  ownerFeatureKind: 'green'
   segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
 }) {
   const { sceneStore, rootNodeId, name, planningLayerId, ownerFeatureId, ownerFeatureKind, segments } = options
@@ -472,16 +223,8 @@ async function createAirWallFromSegments(options: {
   return wall
 }
 
-function clampWallCornerSmoothness(value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) {
-    return WALL_DEFAULT_SMOOTHING
-  }
-  return Math.min(1, Math.max(0, num))
-}
-
 function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
-  const existing = (node.components as any)?.[RIGIDBODY_COMPONENT_TYPE] as { id?: string } | undefined
+  const existing = getNodeComponent(node, RIGIDBODY_COMPONENT_TYPE)
   if (existing?.id) {
     sceneStore.updateNodeComponentProps(node.id, existing.id, { bodyType: 'STATIC', mass: 0 })
     return
@@ -556,8 +299,8 @@ function defaultFootprintAreaM2(assetId: string | null, category: TerrainScatter
   return 1
 }
 
-function clampFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory, value: unknown): number {
-  const num = typeof value === 'number' ? value : Number(value)
+function clampFootprintAreaM2(assetId: string | null, category: TerrainScatterCategory, value: number | null | undefined): number {
+  const num = typeof value === 'number' ? value : Number.NaN
   if (!Number.isFinite(num) || num <= 0) {
     return defaultFootprintAreaM2(assetId, category)
   }
@@ -575,8 +318,8 @@ function defaultFootprintMaxSizeM(assetId: string | null, category: TerrainScatt
   return 1
 }
 
-function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory, value: unknown, fallbackAreaM2?: number): number {
-  const num = typeof value === 'number' ? value : Number(value)
+function clampFootprintMaxSizeM(assetId: string | null, category: TerrainScatterCategory, value: number | null | undefined, fallbackAreaM2?: number): number {
+  const num = typeof value === 'number' ? value : Number.NaN
   if (!Number.isFinite(num) || num <= 0) {
     if (Number.isFinite(fallbackAreaM2) && (fallbackAreaM2 as number) > 0) {
       return Math.max(0.05, Math.sqrt(fallbackAreaM2 as number))
@@ -604,7 +347,7 @@ async function yieldToMainThread(signal?: AbortSignal): Promise<void> {
 
 function nowMs(): number {
   // performance.now is monotonic and high-resolution in browsers.
-  const p = (globalThis as any)?.performance
+  const p = typeof performance !== 'undefined' ? performance : undefined
   return typeof p?.now === 'function' ? p.now() : Date.now()
 }
 
@@ -631,7 +374,7 @@ export function findPlanningConversionRootIds(nodes: SceneNode[]): string[] {
   const ids: string[] = []
   const visit = (list: SceneNode[]) => {
     for (const node of list) {
-      const userData = (node.userData ?? {}) as Record<string, unknown>
+      const userData = node.userData ?? {}
       if (userData[PLANNING_CONVERSION_ROOT_TAG] === true) {
         ids.push(node.id)
       }
@@ -653,7 +396,7 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
   const visit = (list: SceneNode[]) => {
     for (const node of list) {
       if (!node) continue
-      const userData = (node.userData ?? {}) as Record<string, unknown>
+      const userData = node.userData ?? {}
       if (userData[PLANNING_CONVERSION_ROOT_TAG] === true || userData.source === PLANNING_CONVERSION_SOURCE) {
         idsToRemove.push(node.id)
         // No need to descend; removeSceneNodes handles subtrees.
@@ -671,19 +414,19 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
 
   const groundNode = findGroundNode(sceneStore.nodes)
   if (groundNode?.dynamicMesh?.type === 'Ground') {
-    let nextGroundDynamicMesh = groundNode.dynamicMesh as GroundDynamicMesh
+    let nextGroundDynamicMesh: GroundDynamicMesh = groundNode.dynamicMesh
     const resetContours = resetGroundPlanningContours(nextGroundDynamicMesh)
     if (resetContours.changed) {
       nextGroundDynamicMesh = resetContours.definition
     }
 
-    const prevSnapshot = (nextGroundDynamicMesh as any)?.terrainScatter ?? null
+    const prevSnapshot = nextGroundDynamicMesh.terrainScatter ?? null
     const storeLocal = ensureScatterStore(groundNode.id, prevSnapshot)
     removePlanningScatterLayers(storeLocal)
     const snapshot = serializeTerrainScatterStore(storeLocal)
     snapshot.metadata.updatedAt = monotonicUpdatedAt(prevSnapshot, snapshot.metadata.updatedAt)
     const next = {
-      ...(nextGroundDynamicMesh as any),
+      ...nextGroundDynamicMesh,
       terrainScatter: snapshot,
     }
     sceneStore.updateNodeDynamicMesh(groundNode.id, next)
@@ -713,183 +456,23 @@ function resetGroundPlanningContours(definition: GroundDynamicMesh): { definitio
   }
 }
 
-function layerKindFromId(layerId: string): LayerKind | null {
-  switch (layerId) {
-    case 'terrain-layer':
-      return 'terrain'
-    case 'road-layer':
-      return 'road'
-    case 'guide-route-layer':
-      return 'guide-route'
-    case 'floor-layer':
-      return 'floor'
-    case 'green-layer':
-      return 'green'
-    case 'water-layer':
-      return 'water'
-    case 'wall-layer':
-      return 'wall'
-    case 'building-layer':
-      return 'building'
-    default:
-      break
-  }
-
-  // Support dynamic layer ids like "road-layer-1a2b3c4d".
-  const match = /^(terrain|road|guide-route|floor|green|water|wall|building)-layer\b/i.exec(layerId)
-  if (match && match[1]) {
-    return match[1].toLowerCase() as LayerKind
-  }
-  return null
-}
-
 function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): string[] {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw) && raw.length) {
-    const ids = raw
-      .map((item: any) => (item && typeof item.id === 'string' ? item.id : null))
-      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0)
-    if (ids.length) {
-      return ids
-    }
-  }
-  return ['terrain-layer', 'road-layer', 'guide-route-layer', 'floor-layer', 'building-layer', 'water-layer', 'green-layer', 'wall-layer']
+  return planningData.layers.map((layer) => layer.id)
 }
 
 function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const kind = found?.kind
-    if (typeof kind === 'string') {
-      const normalized = kind.toLowerCase()
-      if (
-        normalized === 'terrain' ||
-        normalized === 'road' ||
-        normalized === 'guide-route' ||
-        normalized === 'floor' ||
-        normalized === 'building' ||
-        normalized === 'water' ||
-        normalized === 'green' ||
-        normalized === 'wall'
-      ) {
-        return normalized as LayerKind
-      }
-    }
-  }
-  return layerKindFromId(layerId)
+  return planningData.layers.find((layer) => layer.id === layerId)?.kind ?? null
 }
 
 function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const name = found?.name
-    if (typeof name === 'string' && name.trim()) {
-      return name.trim()
-    }
+  const name = planningData.layers.find((layer) => layer.id === layerId)?.name
+  if (typeof name === 'string' && name.trim()) {
+    return name.trim()
   }
   return null
 }
 
 // resolveLayerColorFromPlanningData removed (unused)
-
-function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const widthRaw = found?.roadWidthMeters
-    const width = typeof widthRaw === 'number' ? widthRaw : Number(widthRaw)
-    if (Number.isFinite(width)) {
-      return Math.min(10, Math.max(0.2, width))
-    }
-  }
-  return 2
-}
-
-function resolveRoadJunctionSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const smoothingRaw = found?.roadSmoothing
-    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
-    if (Number.isFinite(smoothing)) {
-      return Math.min(1, Math.max(0, smoothing))
-    }
-  }
-  return ROAD_DEFAULT_JUNCTION_SMOOTHING
-}
-
-function resolveRoadLaneLinesFromPlanningData(planningData: PlanningSceneData, layerId: string): boolean {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const val = found?.roadLaneLines
-    if (typeof val === 'boolean') {
-      return Boolean(val)
-    }
-    // allow string-like truthy values
-    if (typeof val === 'string') {
-      const s = val.trim().toLowerCase()
-      return s === 'true' || s === '1' || s === 'yes'
-    }
-  }
-  return false
-}
-
-function resolveFloorSmoothFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const smoothRaw = found?.floorSmooth
-    const smooth = typeof smoothRaw === 'number' ? smoothRaw : Number(smoothRaw)
-    if (Number.isFinite(smooth)) {
-      return Math.min(1, Math.max(0, smooth))
-    }
-  }
-  return 0.1
-}
-
-// (removed helper: no layer-scoped preset lookup required)
-
-function resolveWaterSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const smoothingRaw = found?.waterSmoothing
-    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
-    if (Number.isFinite(smoothing)) {
-      return Math.min(1, Math.max(0, smoothing))
-    }
-  }
-  return 0.1
-}
-
-function resolveWallHeightFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const heightRaw = found?.wallHeightMeters
-    const height = typeof heightRaw === 'number' ? heightRaw : Number(heightRaw)
-    if (Number.isFinite(height)) {
-      return Math.min(100, Math.max(0.1, height))
-    }
-  }
-  return 8
-}
-
-function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
-  const raw = (planningData as any)?.layers
-  if (Array.isArray(raw)) {
-    const found = raw.find((item: any) => item && item.id === layerId)
-    const thicknessRaw = found?.wallThicknessMeters
-    const thickness = typeof thicknessRaw === 'number' ? thicknessRaw : Number(thicknessRaw)
-    if (Number.isFinite(thickness)) {
-      return Math.min(10, Math.max(0.01, thickness))
-    }
-  }
-  return 0.15
-}
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   const visit = (list: SceneNode[]): SceneNode | null => {
@@ -927,15 +510,8 @@ function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWid
     }
   }
 
-  const rawPolygons = (planningData as any)?.polygons
-  if (Array.isArray(rawPolygons)) {
-    rawPolygons.forEach((poly) => scanPoints((poly as PlanningPolygonAny)?.points))
-  }
-
-  const rawPolylines = (planningData as any)?.polylines
-  if (Array.isArray(rawPolylines)) {
-    rawPolylines.forEach((line) => scanPoints((line as PlanningPolylineAny)?.points))
-  }
+  planningData.polygons.forEach((poly) => scanPoints(poly.points))
+  planningData.polylines.forEach((line) => scanPoints(line.points))
 
   if (maxCoordinate <= 0 || !Number.isFinite(referenceSize) || referenceSize <= 0) {
     return 1
@@ -991,70 +567,23 @@ function polygonEdges(points: PlanningPoint[]): Array<{ start: PlanningPoint; en
   return edges
 }
 
-function buildFloorWorldPointsFromPlanning(
-  points: PlanningPoint[],
-  groundWidth: number,
-  groundDepth: number,
-): Array<{ x: number; z: number }> {
-  const worldPoints: Array<{ x: number; z: number }> = []
-  const duplicateEpsilon = 1e-10
-  points.forEach((point) => {
-    if (!point) {
-      return
-    }
-    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
-    const x = world.x
-    const z = world.z
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-      return
-    }
-    const previous = worldPoints[worldPoints.length - 1]
-    if (previous) {
-      const dx = x - previous.x
-      const dz = z - previous.z
-      if (dx * dx + dz * dz <= duplicateEpsilon) {
-        return
-      }
-    }
-    worldPoints.push({ x, z })
-  })
-
-  if (worldPoints.length >= 3) {
-    const first = worldPoints[0]!
-    const last = worldPoints[worldPoints.length - 1]!
-    const dx = first.x - last.x
-    const dz = first.z - last.z
-    if (dx * dx + dz * dz <= 1e-10) {
-      worldPoints.pop()
-    }
-  }
-
-  return worldPoints
-}
-
-function normalizeScatter(raw: unknown): ScatterAssignment | null {
-  if (!raw || typeof raw !== 'object') return null
-  const payload = raw as Record<string, unknown>
-  const assetId = typeof payload.assetId === 'string' ? payload.assetId.trim() : ''
-  const category = typeof payload.category === 'string' ? (payload.category as TerrainScatterCategory) : null
+function normalizeScatter(raw: RawScatterPayload | null | undefined): ScatterAssignment | null {
+  if (!raw) return null
+  const assetId = typeof raw.assetId === 'string' ? raw.assetId.trim() : ''
+  const category = raw.category ?? null
   if (!assetId || !category) return null
-  const name = typeof payload.name === 'string' ? payload.name : undefined
-  const densityRaw = payload.densityPercent
-  const densityPercent = typeof densityRaw === 'number' ? densityRaw : Number(densityRaw)
+  const name = typeof raw.name === 'string' ? raw.name : undefined
+  const densityPercent = typeof raw.densityPercent === 'number' ? raw.densityPercent : Number.NaN
   const normalizedDensity = Number.isFinite(densityPercent)
     ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
     : 50
-  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, payload.footprintAreaM2)
-  const footprintMaxSizeM = clampFootprintMaxSizeM(assetId, category, payload.footprintMaxSizeM, footprintAreaM2)
+  const footprintAreaM2 = clampFootprintAreaM2(assetId, category, raw.footprintAreaM2)
+  const footprintMaxSizeM = clampFootprintMaxSizeM(assetId, category, raw.footprintMaxSizeM, footprintAreaM2)
   return { assetId, category, name, densityPercent: normalizedDensity, footprintAreaM2, footprintMaxSizeM }
 }
 
-function extractScatterAssetId(raw: unknown): string | null {
-  if (!raw || typeof raw !== 'object') {
-    return null
-  }
-  const payload = raw as Record<string, unknown>
-  const assetId = typeof payload.assetId === 'string' ? payload.assetId.trim() : ''
+function extractScatterAssetId(raw: RawScatterPayload | null | undefined): string | null {
+  const assetId = typeof raw?.assetId === 'string' ? raw.assetId.trim() : ''
   return assetId.length ? assetId : null
 }
 
@@ -1076,19 +605,19 @@ const PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES = 3
 const PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS = 2
 type GroundContourBounds = { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
 
-function clampFiniteNumber(raw: unknown, fallback: number, min: number, max: number): number {
-  const num = typeof raw === 'number' ? raw : Number(raw)
+function clampFiniteNumber(raw: number | null | undefined, fallback: number, min: number, max: number): number {
+  const num = typeof raw === 'number' ? raw : Number.NaN
   if (!Number.isFinite(num)) return fallback
   return Math.min(max, Math.max(min, num))
 }
 
-function normalizeContourHeightMeters(raw: unknown): number {
+function normalizeContourHeightMeters(raw: number | null | undefined): number {
   const clamped = clampFiniteNumber(raw, 0, -PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT, PLANNING_TERRAIN_CONTOUR_MAX_ABS_HEIGHT)
   const rounded = Math.round(clamped * 100) / 100
   return Object.is(rounded, -0) ? 0 : rounded
 }
 
-function normalizeContourBlendMeters(raw: unknown, fallback = PLANNING_TERRAIN_CONTOUR_BLEND_METERS): number {
+function normalizeContourBlendMeters(raw: number | null | undefined, fallback = PLANNING_TERRAIN_CONTOUR_BLEND_METERS): number {
   const normalizedFallback = clampFiniteNumber(fallback, PLANNING_TERRAIN_CONTOUR_BLEND_METERS, 0, PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX)
   const clamped = clampFiniteNumber(raw, normalizedFallback, 0, PLANNING_TERRAIN_CONTOUR_BLEND_METERS_MAX)
   const rounded = Math.round(clamped * 100) / 100
@@ -1436,8 +965,8 @@ async function applyPlanningTerrainContoursToGround(options: {
     .map((poly) => ({
       poly,
       points: sanitizePlanningContourPoints(poly?.points ?? []),
-      blendMeters: normalizeContourBlendMeters((poly as any)?.terrainBlendMeters, defaultBlendMeters),
-      height: normalizeContourHeightMeters((poly as any)?.terrainHeightMeters),
+      blendMeters: normalizeContourBlendMeters(poly.terrainBlendMeters, defaultBlendMeters),
+      height: normalizeContourHeightMeters(poly.terrainHeightMeters),
       area: 0,
     }))
     .filter((item) => item.points.length >= 3)
@@ -1615,11 +1144,11 @@ async function applyPlanningTerrainContoursToGround(options: {
   return next
 }
 
-function ensureScatterStore(groundNodeId: string, snapshot: any | null | undefined): TerrainScatterStore {
+function ensureScatterStore(groundNodeId: string, snapshot: TerrainScatterStoreSnapshot | null | undefined): TerrainScatterStore {
   let store = getTerrainScatterStore(groundNodeId) ?? ensureTerrainScatterStore(groundNodeId)
-  if (snapshot && typeof snapshot === 'object') {
-    const snapshotUpdatedAt = Number((snapshot as any)?.metadata?.updatedAt)
-    const storeUpdatedAt = Number((store as any)?.metadata?.updatedAt)
+  if (snapshot) {
+    const snapshotUpdatedAt = Number(snapshot.metadata?.updatedAt)
+    const storeUpdatedAt = Number(store.metadata?.updatedAt)
     const hasSnapshotUpdatedAt = Number.isFinite(snapshotUpdatedAt)
     const hasStoreUpdatedAt = Number.isFinite(storeUpdatedAt)
     const shouldHydrate = hasSnapshotUpdatedAt
@@ -1656,7 +1185,7 @@ void ensureScatterStore
 function removePlanningScatterLayers(store: TerrainScatterStore) {
   const layersToRemove: string[] = []
   store.layers.forEach((layer) => {
-    const payload = layer.params?.payload as Record<string, unknown> | null | undefined
+    const payload = layer.params?.payload
     if (payload?.source === PLANNING_CONVERSION_SOURCE) {
       layersToRemove.push(layer.id)
       // Release runtime bindings immediately so instancing cache count updates now.
@@ -1750,8 +1279,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   await yieldController.maybeYield(true)
 
   // Collect features
-  const rawPolygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
-  const rawPolylines = (Array.isArray((planningData as any).polylines) ? (planningData as any).polylines : []) as PlanningPolylineAny[]
+  const rawPolygons = planningData.polygons as PlanningPolygonAny[]
+  const rawPolylines = planningData.polylines as PlanningPolylineAny[]
 
   const polygons = rawPolygons.map((poly) => ({
     ...poly,
@@ -1761,7 +1290,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const polylines = rawPolylines.map((line) => ({
     ...line,
     points: normalizePlanningPoints(line?.points, planningUnitsToMeters),
-    waypoints: Array.isArray((line as any)?.waypoints) ? (line as any).waypoints : undefined,
+    waypoints: Array.isArray(line.waypoints) ? line.waypoints : undefined,
   }))
 
   const referencedScatterAssetIds = new Set<string>()
@@ -1799,7 +1328,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   // Terrain scatter preparation
   let store: TerrainScatterStore = ensureTerrainScatterStore(findGroundNode(sceneStore.nodes)?.id ?? 'ground')
-  let previousSnapshot: any = null
+  let previousSnapshot: TerrainScatterStoreSnapshot | null = null
   const groundNode = findGroundNode(sceneStore.nodes)
   const groundDynamicMesh = groundNode?.dynamicMesh
   let groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
@@ -1868,97 +1397,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
     const group = featuresByLayer.get(layerId)!
 
-    if (kind === 'road') {
-      const roadWidth = resolveRoadWidthFromPlanningData(planningData, layerId)
-      const junctionSmoothing = resolveRoadJunctionSmoothingFromPlanningData(planningData, layerId)
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-
-      for (const line of group.polylines) {
-        await updateProgressForUnit(`Preparing roads: ${line.name?.trim() || line.id}`)
-      }
-
-      // Yield once so the UI can paint the progress message before heavy graph build.
-      emitUnitProgress('Building road network…', 0)
-      await yieldController.maybeYield(true)
-
-      const components = buildRoadGraphFromPlanningLayer({
-        layerId,
-        polylines: group.polylines,
-        groundWidth,
-        groundDepth,
-        roadWidth,
-      })
-
-      await yieldController.maybeYield(true)
-
-      const baseName = layerName ? `${layerName} Road` : 'Planning Road'
-      const roadMaterials = createRoadNodeMaterials(ROAD_SURFACE_DEFAULT_COLOR, layerName)
-
-      for (let index = 0; index < components.length; index += 1) {
-        const component = components[index]!
-        const nodeName = components.length > 1 ? `${baseName} ${index + 1}` : baseName
-
-        const featureIds = (component.featureIds ?? []).filter((id) => typeof id === 'string' && id.trim().length)
-        const nodeId = featureIds.length === 1
-          ? featureIds[0]!
-          : await stableUuidV5(`planning:road:${layerId}:${featureIds.slice().sort().join(',')}`)
-
-        // Create a placeholder road node whose computed center matches the component center.
-        // We'll overwrite its dynamic mesh with a branching road graph afterwards.
-        const cx = component.center.x
-        const cz = component.center.z
-        const placeholder = [
-          { x: cx - 0.5, y: 0, z: cz },
-          { x: cx + 0.5, y: 0, z: cz },
-        ]
-
-        const roadNode = sceneStore.createRoadNode({
-          nodeId,
-          points: placeholder,
-          width: roadWidth,
-          name: nodeName,
-        })
-
-        if (!roadNode) {
-          continue
-        }
-
-        sceneStore.updateNodeDynamicMesh(roadNode.id, component.dynamicMesh)
-        sceneStore.moveNode({
-          nodeId: roadNode.id,
-          targetId: root.id,
-          position: 'inside',
-          recenterSkipGroupIds: [root.id],
-        })
-
-
-        if (roadMaterials.length) {
-          sceneStore.setNodeMaterials(roadNode.id, roadMaterials)
-        }
-
-        const userData: Record<string, unknown> = {
-          source: PLANNING_CONVERSION_SOURCE,
-          planningLayerId: layerId,
-          kind: 'road',
-          planningFeatureIds: featureIds,
-        }
-        if (featureIds.length === 1) {
-          userData.planningFeatureId = featureIds[0]
-        }
-        sceneStore.updateNodeUserData(roadNode.id, userData)
-
-        // Default: roads participate in physics collision.
-        ensureStaticRigidbody(sceneStore, roadNode)
-
-        const roadComponent = roadNode.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
-        if (roadComponent?.id) {
-          const laneLines = resolveRoadLaneLinesFromPlanningData(planningData, layerId)
-          sceneStore.updateNodeComponentProps(roadNode.id, roadComponent.id, { junctionSmoothing, laneLines })
-        }
-
-        sceneStore.setNodeLocked(roadNode.id, true)
-      }
-    } else if (kind === 'guide-route') {
+    if (kind === 'guide-route') {
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
 
       for (const line of group.polylines) {
@@ -2038,243 +1477,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           await updateProgressForUnit(label)
         }
       }
-    } else if (kind === 'floor') {
-      const floorSmooth = resolveFloorSmoothFromPlanningData(planningData, layerId)
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      // No layer-scoped floor presets: only per-feature floorPresetAssetId is used.
-      const layerFloorPresetId: string | null = null
-      const floorPresetCache = new Map<string, import('@/utils/floorPreset').FloorPresetData>()
-      for (const poly of group.polygons) {
-        const label = `Converting floor: ${poly.name?.trim() || poly.id}`
-        emitUnitProgress(label, 0)
-        try {
-          throwIfAborted(options.signal)
-          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-          if (worldXZ.length < 3) {
-            continue
-          }
-
-        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
-        const nodeName = poly.name?.trim()
-          ? poly.name.trim()
-          : (layerName ? `${layerName} Floor` : 'Planning Floor')
-
-        const floorNode = sceneStore.createFloorNode({
-          nodeId: poly.id,
-          points: worldPoints,
-          name: nodeName,
-        })
-
-        if (!floorNode) {
-          continue
-        }
-
-        sceneStore.moveNode({
-          nodeId: floorNode.id,
-          targetId: root.id,
-          position: 'inside',
-          recenterSkipGroupIds: [root.id],
-        })
-
-        const featurePresetRaw = (poly as any)?.floorPresetAssetId
-        const featureFloorPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
-          ? featurePresetRaw.trim()
-          : null
-        const effectiveFloorPresetId = featureFloorPresetId ?? layerFloorPresetId
-
-        if (effectiveFloorPresetId && sceneStore.applyFloorPresetToNode) {
-          try {
-            let presetData = floorPresetCache.get(effectiveFloorPresetId)
-            if (!presetData) {
-              const loader = sceneStore.loadFloorPreset ?? (sceneStore as any).loadFloorPreset
-              if (typeof loader !== 'function') {
-                throw new Error('loadFloorPreset is not available on sceneStore')
-              }
-              const loaded: import('@/utils/floorPreset').FloorPresetData = await loader(effectiveFloorPresetId)
-              presetData = loaded
-              floorPresetCache.set(effectiveFloorPresetId, loaded)
-            }
-            await sceneStore.applyFloorPresetToNode(floorNode.id, effectiveFloorPresetId, presetData)
-          } catch (err) {
-            console.warn('Failed to apply floor preset during planning conversion', floorNode.id, effectiveFloorPresetId, err)
-          }
-        }
-
-        const floorComponent = floorNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
-        if (floorComponent?.id) {
-          sceneStore.updateNodeComponentProps(floorNode.id, floorComponent.id, { smooth: floorSmooth })
-        }
-
-        sceneStore.updateNodeUserData(floorNode.id, {
-          source: PLANNING_CONVERSION_SOURCE,
-          planningLayerId: layerId,
-          kind: 'floor',
-          planningFeatureId: poly.id,
-        })
-        sceneStore.setNodeLocked(floorNode.id, true)
-        } finally {
-          await updateProgressForUnit(label)
-        }
-      }
-    } else if (kind === 'building') {
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      for (const poly of group.polygons) {
-        const label = `Converting building: ${poly.name?.trim() || poly.id}`
-        emitUnitProgress(label, 0)
-        try {
-          throwIfAborted(options.signal)
-          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-          if (worldXZ.length < 3) {
-            continue
-          }
-
-        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
-        const nodeName = poly.name?.trim()
-          ? poly.name.trim()
-          : (layerName ? `${layerName} Building` : 'Planning Building')
-
-        const floorNode = sceneStore.createFloorNode({
-          nodeId: poly.id,
-          points: worldPoints,
-          name: nodeName,
-          editorFlags: {editorOnly: true},
-        })
-
-        if (!floorNode) {
-          continue
-        }
-
-        sceneStore.moveNode({
-          nodeId: floorNode.id,
-          targetId: root.id,
-          position: 'inside',
-          recenterSkipGroupIds: [root.id],
-        })
-
-        // 设置building图层为wireframe模式，方便查看边界
-        sceneStore.setNodeMaterials(floorNode.id, [
-          {
-            id: generateUuid(),
-            materialId: null,
-            type: 'MeshStandardMaterial',
-            name: 'Building Wireframe',
-            color: '#cccccc',
-            transparent: false,
-            opacity: 1,
-            side: 'front',
-            wireframe: true,
-            metalness: 0.2,
-            roughness: 0.7,
-            emissive: '#000000',
-            emissiveIntensity: 0,
-            aoStrength: 1,
-            envMapIntensity: 1,
-            textures: {
-              albedo: null,
-              normal: null,
-              metalness: null,
-              roughness: null,
-              ao: null,
-              emissive: null,
-              displacement: null,
-            },
-          },
-        ])
-
-        // setting the node's userData and then attempting a conservative editor flag
-        // mutation to keep the node out of runtime exports.
-        sceneStore.updateNodeUserData(floorNode.id, {
-          source: PLANNING_CONVERSION_SOURCE,
-          planningLayerId: layerId,
-          planningFeatureId: poly.id,
-          kind: 'building',
-        })
-        sceneStore.setNodeLocked(floorNode.id, true)
-        } finally {
-          await updateProgressForUnit(label)
-        }
-      }
-    } else if (kind === 'water') {
-      const waterSmooth = resolveWaterSmoothingFromPlanningData(planningData, layerId)
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      for (const poly of group.polygons) {
-        const label = `Converting water: ${poly.name?.trim() || poly.id}`
-        emitUnitProgress(label, 0)
-        try {
-          throwIfAborted(options.signal)
-          const worldXZ = buildFloorWorldPointsFromPlanning(poly.points, groundWidth, groundDepth)
-          if (worldXZ.length < 3) {
-            continue
-          }
-
-        const worldPoints = worldXZ.map((pt) => ({ x: pt.x, y: 0, z: pt.z }))
-        const nodeName = poly.name?.trim()
-          ? poly.name.trim()
-          : (layerName ? `${layerName} Water` : 'Planning Water')
-
-        const waterNode = sceneStore.createFloorNode({
-          nodeId: poly.id,
-          points: worldPoints,
-          name: nodeName,
-        })
-
-        if (!waterNode) {
-          continue
-        }
-
-        sceneStore.moveNode({
-          nodeId: waterNode.id,
-          targetId: root.id,
-          position: 'inside',
-          recenterSkipGroupIds: [root.id],
-        })
-
-        const floorComponent = waterNode.components?.[FLOOR_COMPONENT_TYPE] as { id: string } | undefined
-        if (floorComponent?.id) {
-          sceneStore.updateNodeComponentProps(waterNode.id, floorComponent.id, { smooth: waterSmooth })
-        }
-
-        sceneStore.addNodeComponent<typeof WATER_COMPONENT_TYPE>(waterNode.id, WATER_COMPONENT_TYPE)
-
-        // Build userData including any preset info persisted on the planning polygon
-        const userData: Record<string, unknown> = {
-          source: PLANNING_CONVERSION_SOURCE,
-          planningLayerId: layerId,
-          kind: 'water',
-        }
-
-        sceneStore.updateNodeUserData(waterNode.id, userData)
-        sceneStore.setNodeLocked(waterNode.id, true)
-        
-        // If preset params provided, apply them to the water component props so runtime matches
-        const waterComponent = waterNode.components?.[WATER_COMPONENT_TYPE] as { id: string } | undefined
-        if (waterComponent?.id) {
-            const presetId = (poly as any).waterPresetId
-            sceneStore.updateNodeComponentProps(waterNode.id, waterComponent.id, presetId ? { presetId } : {})
-        }
-
-        if (Boolean((poly as any).airWallEnabled)) {
-          const segments = polygonEdges(poly.points).map((edge) => {
-            const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
-            const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
-            start.y = groundHeightAt(start.x, start.z)
-            end.y = groundHeightAt(end.x, end.z)
-            return { start, end }
-          })
-          await createAirWallFromSegments({
-            sceneStore,
-            rootNodeId: root.id,
-            name: `${nodeName} (Air Wall)`,
-            planningLayerId: layerId,
-            ownerFeatureId: poly.id,
-            ownerFeatureKind: 'water',
-            segments,
-          })
-        }
-        } finally {
-          await updateProgressForUnit(label)
-        }
-      }
     } else if (kind === 'green') {
       const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
       for (const poly of group.polygons) { 
@@ -2283,7 +1485,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         emitUnitProgress(unitLabel, 0)
         await yieldController.maybeYield()
 
-        if (Boolean((poly as any).airWallEnabled)) {
+        if (Boolean(poly.airWallEnabled)) {
           const baseName = poly.name?.trim()
             ? poly.name.trim()
             : (layerName ? `${layerName} Green` : 'Planning Green')
@@ -2375,13 +1577,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             // Still remove previously generated instances for this feature to stay idempotent.
             const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
             const removed = existingRaw.filter((instance) => {
-              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              const meta = instance.metadata
               if (!meta) return false
               return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
             })
             removed.forEach((instance) => releaseScatterInstance(instance))
             const existing = existingRaw.filter((instance) => {
-              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              const meta = instance.metadata
               if (!meta) return true
               return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
             })
@@ -2411,13 +1613,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
             // Keep conversion idempotent per feature even when overwriteExisting=false.
             const removed = existingRaw.filter((instance) => {
-              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              const meta = instance.metadata
               if (!meta) return false
               return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
             })
             removed.forEach((instance) => releaseScatterInstance(instance))
             const existing = existingRaw.filter((instance) => {
-              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              const meta = instance.metadata
               if (!meta) return true
               return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
             })
@@ -2530,7 +1732,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                   continue
                 }
 
-                const samplePoint: PlanningPoint = { x: (sample as any).x, y: (sample as any).y }
+                const samplePoint: PlanningPoint = { x: sample.x, y: sample.y }
                 if (!isFarEnough(samplePoint)) {
                   continue
                 }
@@ -2574,163 +1776,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
         await updateProgressForUnit(unitLabel)
       }
-    } else if (kind === 'wall') {
-      const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
-      const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
-      // No layer-scoped wall presets: only per-feature wallPresetAssetId is used.
-      const layerWallPresetId: string | null = null
-      const wallPresetCache = new Map<string, import('@/utils/wallPreset').WallPresetData>()
-
-      for (const line of group.polylines) {
-        throwIfAborted(options.signal)
-        emitUnitProgress(`Converting wall: ${line.name?.trim() || line.id}`, 0)
-        const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
-        for (let i = 0; i < line.points.length - 1; i += 1) {
-          if ((i & 63) === 0) {
-            await yieldController.maybeYield()
-          }
-          const start = toWorldPoint(line.points[i]!, groundWidth, groundDepth, 0)
-          const end = toWorldPoint(line.points[i + 1]!, groundWidth, groundDepth, 0)
-          start.y = groundHeightAt(start.x, start.z)
-          end.y = groundHeightAt(end.x, end.z)
-          segments.push({ start, end })
-        }
-        if (segments.length) {
-          const smoothing = clampWallCornerSmoothness((line as PlanningPolylineAny).cornerSmoothness)
-          const wall = sceneStore.createWallNode({
-            nodeId: line.id,
-            segments,
-            dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
-            name: line.name?.trim() || 'Wall',
-          })
-          if (wall) {
-            sceneStore.moveNode({
-              nodeId: wall.id,
-              targetId: root.id,
-              position: 'inside',
-              recenterSkipGroupIds: [root.id],
-            })
-            sceneStore.setNodeLocked(wall.id, true)
-            ensureStaticRigidbody(sceneStore, wall)
-
-            const featurePresetRaw = (line as any)?.wallPresetAssetId
-            const featureWallPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
-              ? featurePresetRaw.trim()
-              : null
-            const effectiveWallPresetId = featureWallPresetId ?? layerWallPresetId
-
-            if (effectiveWallPresetId && sceneStore.applyWallPresetToNode) {
-              try {
-                let presetData = wallPresetCache.get(effectiveWallPresetId)
-                if (!presetData) {
-                  const loader = sceneStore.loadWallPreset ?? (sceneStore as any).loadWallPreset
-                  if (typeof loader !== 'function') {
-                    throw new Error('loadWallPreset is not available on sceneStore')
-                  }
-                  const loaded: import('@/utils/wallPreset').WallPresetData = await loader(effectiveWallPresetId)
-                  presetData = loaded
-                  wallPresetCache.set(effectiveWallPresetId, loaded)
-                }
-                await sceneStore.applyWallPresetToNode(
-                  wall.id,
-                  effectiveWallPresetId,
-                  presetData,
-                )
-              } catch (err) {
-                console.warn('Failed to apply wall preset during planning conversion', wall.id, effectiveWallPresetId, err)
-              }
-            }
-
-            const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
-            if (component?.id) {
-              sceneStore.updateNodeComponentProps(wall.id, component.id, {
-                // Planning layer dimensions override preset values.
-                height: wallHeight,
-                thickness: wallThickness,
-                // Per-feature smoothing overrides preset.
-                smoothing,
-                // Planning decides air wall state.
-                isAirWall: Boolean((line as any).airWallEnabled),
-              })
-            }
-          }
-        }
-        await updateProgressForUnit(`Converting wall: ${line.name?.trim() || line.id}`)
-      }
-
-      for (const poly of group.polygons) {
-        throwIfAborted(options.signal)
-        emitUnitProgress(`Converting wall: ${poly.name?.trim() || poly.id}`, 0)
-        const segments = polygonEdges(poly.points).map((edge) => {
-          const start = toWorldPoint(edge.start, groundWidth, groundDepth, 0)
-          const end = toWorldPoint(edge.end, groundWidth, groundDepth, 0)
-          start.y = groundHeightAt(start.x, start.z)
-          end.y = groundHeightAt(end.x, end.z)
-          return { start, end }
-        })
-        if (segments.length) {
-          const wall = sceneStore.createWallNode({
-            nodeId: poly.id,
-            segments,
-            dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
-            name: poly.name?.trim() || 'Wall',
-          })
-          if (wall) {
-            sceneStore.moveNode({
-              nodeId: wall.id,
-              targetId: root.id,
-              position: 'inside',
-              recenterSkipGroupIds: [root.id],
-            })
-            sceneStore.setNodeLocked(wall.id, true)
-            ensureStaticRigidbody(sceneStore, wall)
-
-            const featurePresetRaw = (poly as any)?.wallPresetAssetId
-            const featureWallPresetId = typeof featurePresetRaw === 'string' && featurePresetRaw.trim().length
-              ? featurePresetRaw.trim()
-              : null
-            const effectiveWallPresetId = featureWallPresetId ?? layerWallPresetId
-
-            if (effectiveWallPresetId && sceneStore.applyWallPresetToNode) {
-              try {
-                let presetData = wallPresetCache.get(effectiveWallPresetId)
-                if (!presetData) {
-                  const loader = sceneStore.loadWallPreset ?? (sceneStore as any).loadWallPreset
-                  if (typeof loader !== 'function') {
-                    throw new Error('loadWallPreset is not available on sceneStore')
-                  }
-                  const loaded: import('@/utils/wallPreset').WallPresetData = await loader(effectiveWallPresetId)
-                  presetData = loaded
-                  wallPresetCache.set(effectiveWallPresetId, loaded)
-                }
-                await sceneStore.applyWallPresetToNode(
-                  wall.id,
-                  effectiveWallPresetId,
-                  presetData,
-                )
-              } catch (err) {
-                console.warn('Failed to apply wall preset during planning conversion', wall.id, effectiveWallPresetId, err)
-              }
-            }
-
-            const component = (wall.components as any)?.[WALL_COMPONENT_TYPE] as { id?: string } | undefined
-            if (component?.id) {
-              sceneStore.updateNodeComponentProps(wall.id, component.id, {
-                // Planning layer dimensions override preset values.
-                height: wallHeight,
-                thickness: wallThickness,
-                // Planning decides air wall state.
-                isAirWall: Boolean((poly as any).airWallEnabled),
-              })
-            }
-
-            if (Boolean((poly as any).airWallEnabled)) {
-              ensureAirWall(sceneStore, wall)
-            }
-          }
-        }
-        await updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)
-      }
     }
   }
 
@@ -2742,7 +1787,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const snapshot = serializeTerrainScatterStore(store)
       snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
       const next = {
-        ...(finalGround.dynamicMesh as any),
+        ...finalGround.dynamicMesh,
         terrainScatter: snapshot,
       }
       sceneStore.updateNodeDynamicMesh(finalGround.id, next)
