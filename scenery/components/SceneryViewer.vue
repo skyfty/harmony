@@ -9720,7 +9720,7 @@ async function buildSceneGraphWithProgress(
 
         const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
         const stillLoadingByBytes =
-          resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
+         resourcePreload.total > 0 && resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
         resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
       },
     };
@@ -10227,7 +10227,6 @@ function applyInput(params: {
   packageUrl?: string;
   physinterp?: string;
 }): void {
-  // debug: removed console logging
   bootstrapRuntimeIfNeeded();
 
   const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
@@ -10291,7 +10290,6 @@ function hasAnyPropInput(): boolean {
 }
 
 onMounted(() => {
-  // log overlay removed
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
@@ -10321,7 +10319,6 @@ watch(
 );
 
 function cleanupRuntime(): void {
-  // log overlay removed
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {
