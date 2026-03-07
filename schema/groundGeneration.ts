@@ -165,6 +165,15 @@ type GenerationRuntime = {
   simplePhase: number
 }
 
+export type GroundBaseHeightRegion = {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  stride: number
+  values: Float32Array
+}
+
 const generationRuntimeCache = new Map<string, GenerationRuntime>()
 
 function buildGenerationSignature(settings: GroundGenerationSettings): string {
@@ -233,47 +242,91 @@ function sampleBaseValue(runtime: GenerationRuntime, x: number, z: number): numb
   }
 }
 
-export function computeGroundBaseHeightAtVertex(
+function clampRegionIndex(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+  if (value < min) {
+    return min
+  }
+  if (value > max) {
+    return max
+  }
+  return Math.floor(value)
+}
+
+export function computeGroundBaseHeightRegion(
   mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
-  row: number,
-  column: number,
-): number {
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+): GroundBaseHeightRegion {
+  const columns = Math.max(1, Math.trunc(mesh.columns))
+  const rows = Math.max(1, Math.trunc(mesh.rows))
+  const minRow = clampRegionIndex(minRowInput, 0, rows)
+  const maxRow = clampRegionIndex(maxRowInput, 0, rows)
+  const minColumn = clampRegionIndex(minColumnInput, 0, columns)
+  const maxColumn = clampRegionIndex(maxColumnInput, 0, columns)
+  const stride = Math.max(0, maxColumn - minColumn + 1)
+  const heightCount = Math.max(0, maxRow - minRow + 1) * stride
+  const values = new Float32Array(heightCount)
+
+  if (stride <= 0 || maxRow < minRow) {
+    return { minRow, maxRow, minColumn, maxColumn, stride, values }
+  }
+
   const generation = mesh.generation
   if (!generation) {
-    return 0
+    return { minRow, maxRow, minColumn, maxColumn, stride, values }
   }
+
   const normalized = normalizeGroundGenerationSettings(generation)
   const strength = normalized.noiseStrength ?? 1
   if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
-    return 0
+    return { minRow, maxRow, minColumn, maxColumn, stride, values }
   }
 
   const runtime = getGenerationRuntime(normalized)
-
-  const columns = Math.max(1, Math.trunc(mesh.columns))
-  const rows = Math.max(1, Math.trunc(mesh.rows))
   const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
   const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
   const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
   const halfWidth = width * 0.5
   const halfDepth = depth * 0.5
 
-  const x = -halfWidth + column * cellSize
-  const z = -halfDepth + row * cellSize
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const localRow = row - minRow
+    const baseOffset = localRow * stride
+    const z = -halfDepth + row * cellSize
+    const edgeRowFactor = normalized.edgeFalloff && normalized.edgeFalloff > 0
+      ? Math.pow(1 - Math.min(1, Math.abs((row / rows) * 2 - 1)), normalized.edgeFalloff)
+      : 1
 
-  let height = sampleBaseValue(runtime, x, z) * (normalized.noiseAmplitude ?? 0)
-  if (runtime.useDetail && runtime.detailNoise) {
-    height += runtime.detailNoise(x / runtime.detailScale, z / runtime.detailScale, 0.5) * runtime.detailAmplitude
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const x = -halfWidth + column * cellSize
+      let height = sampleBaseValue(runtime, x, z) * (normalized.noiseAmplitude ?? 0)
+      if (runtime.useDetail && runtime.detailNoise) {
+        height += runtime.detailNoise(x / runtime.detailScale, z / runtime.detailScale, 0.5) * runtime.detailAmplitude
+      }
+      height *= runtime.strength
+
+      if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
+        const edgeColumnFactor = Math.pow(1 - Math.min(1, Math.abs((column / columns) * 2 - 1)), normalized.edgeFalloff)
+        height *= Math.min(edgeRowFactor, edgeColumnFactor)
+      }
+
+      values[baseOffset + (column - minColumn)] = height
+    }
   }
-  height *= runtime.strength
 
-  if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
-    const nx = (column / columns) * 2 - 1
-    const nz = (row / rows) * 2 - 1
-    const edge = Math.max(Math.abs(nx), Math.abs(nz))
-    const falloff = Math.pow(1 - Math.min(1, edge), normalized.edgeFalloff)
-    height *= falloff
-  }
+  return { minRow, maxRow, minColumn, maxColumn, stride, values }
+}
 
-  return height
+export function computeGroundBaseHeightAtVertex(
+  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+  row: number,
+  column: number,
+): number {
+  const region = computeGroundBaseHeightRegion(mesh, row, row, column, column)
+  return region.values[0] ?? 0
 }

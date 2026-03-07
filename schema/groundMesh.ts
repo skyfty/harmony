@@ -2,7 +2,12 @@ import * as THREE from 'three'
 import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from './index'
 
 import { ensureTerrainPaintPreviewInstalled } from './terrainPaintPreview'
-import { computeGroundBaseHeightAtVertex, normalizeGroundGenerationSettings } from './groundGeneration'
+import {
+  computeGroundBaseHeightAtVertex,
+  computeGroundBaseHeightRegion,
+  type GroundBaseHeightRegion,
+  normalizeGroundGenerationSettings,
+} from './groundGeneration'
 
 const textureLoader = new THREE.TextureLoader()
 
@@ -259,6 +264,61 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   const planning = getPlanningVertexHeight(definition, row, column)
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
+}
+
+export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
+  heightMin: number
+  heightMax: number
+}
+
+export function sampleGroundEffectiveHeightRegion(
+  definition: GroundDynamicMesh,
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+): GroundEffectiveHeightRegion {
+  const baseRegion = computeGroundBaseHeightRegion(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
+  const total = baseValues.length
+  const values = new Float32Array(total)
+  const manualHeightMap = definition.manualHeightMap
+  const planningHeightMap = definition.planningHeightMap
+  let heightMin = 0
+  let heightMax = 0
+
+  if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
+    return { ...baseRegion, values, heightMin, heightMax }
+  }
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const rowPrefix = `${row}:`
+    const baseOffset = (row - minRow) * stride
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const offset = baseOffset + (column - minColumn)
+      const base = baseValues[offset] ?? 0
+      const key = `${rowPrefix}${column}`
+      const manualRaw = manualHeightMap[key]
+      const planningRaw = planningHeightMap[key]
+      const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+      const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+      const effective = planning + (manual - base)
+      values[offset] = effective
+      heightMin = Math.min(heightMin, effective)
+      heightMax = Math.max(heightMax, effective)
+    }
+  }
+
+  return {
+    minRow,
+    maxRow,
+    minColumn,
+    maxColumn,
+    stride,
+    values,
+    heightMin,
+    heightMax,
+  }
 }
 
 /**

@@ -20,7 +20,9 @@ type Options = {
 
 const TERRAIN_GRID_BLOCK_CELLS = 64
 const TERRAIN_GRID_BLOCK_PADDING = 1
-const TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS = 320
+const TERRAIN_GRID_CAMERA_SETTLE_DELAY_MS = 180
+const TERRAIN_GRID_CAMERA_MIN_REFRESH_INTERVAL_MS = 120
+const TERRAIN_GRID_CAMERA_MAX_MOVING_REFRESH_INTERVAL_MS = 1200
 
 function clampInclusive(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
@@ -51,6 +53,7 @@ export function useTerrainGridController(options: Options): TerrainGridControlle
   let baseDefinition: GroundDynamicMesh | null = null
   let cameraDirty = false
   let lastCameraRefresh = 0
+  let lastCameraDirtyAt = 0
 
   const computeVisibleRange = (definition: GroundDynamicMesh, currentCamera: THREE.Camera): TerrainGridVisibleRange | null => {
     const columns = Math.max(1, Math.floor(definition.columns))
@@ -177,6 +180,7 @@ export function useTerrainGridController(options: Options): TerrainGridControlle
   }
 
   const markCameraDirty = () => {
+    lastCameraDirtyAt = options.nowMs()
     cameraDirty = true
   }
 
@@ -185,12 +189,20 @@ export function useTerrainGridController(options: Options): TerrainGridControlle
       return
     }
     const now = Number.isFinite(nowMs) ? nowMs : options.nowMs()
-    if (now - lastCameraRefresh < TERRAIN_GRID_CAMERA_REFRESH_INTERVAL_MS) {
+    const sinceLastRefresh = now - lastCameraRefresh
+    const sinceLastDirty = now - lastCameraDirtyAt
+    const settled = sinceLastDirty >= TERRAIN_GRID_CAMERA_SETTLE_DELAY_MS
+    const maxMovingIntervalReached = sinceLastRefresh >= TERRAIN_GRID_CAMERA_MAX_MOVING_REFRESH_INTERVAL_MS
+
+    if (sinceLastRefresh < TERRAIN_GRID_CAMERA_MIN_REFRESH_INTERVAL_MS) {
+      return
+    }
+    if (!settled && !maxMovingIntervalReached) {
       return
     }
 
     lastCameraRefresh = now
-    cameraDirty = false
+    cameraDirty = !settled
     refreshWithCamera()
   }
 
@@ -199,6 +211,7 @@ export function useTerrainGridController(options: Options): TerrainGridControlle
     baseSignature = null
     cameraDirty = false
     lastCameraRefresh = 0
+    lastCameraDirtyAt = 0
     terrainGridHelper.update(null, null)
   }
 

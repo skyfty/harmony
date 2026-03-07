@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@schema'
-import { resolveGroundEffectiveHeightAtVertex } from '@schema/groundMesh'
+import { sampleGroundEffectiveHeightRegion, type GroundEffectiveHeightRegion } from '@schema/groundMesh'
+import { toRaw } from 'vue'
 import { GRID_MAJOR_SPACING,GRID_MINOR_SPACING } from './constants'
 
 // 网格线的主要配色和宽度配置，确保与地形有足够对比度。
@@ -13,6 +14,7 @@ const LINE_OFFSET = 0.002
 // 当前仍使用 Three.js 基础线材质，线宽在不同平台上的实际表现可能受驱动限制。
 const MINOR_LINE_WIDTH = 1.2
 const MAJOR_LINE_WIDTH = 1.5
+const TERRAIN_GRID_HEIGHT_CACHE_BLOCK_CELLS = 64
 
 // 判断世界坐标是否靠近某个网格间隔，从而决定是否绘制该线。
 function isAligned(coord: number, spacing: number): boolean {
@@ -80,7 +82,11 @@ function normalizeTerrainGridRange(
 }
 
 // 根据地形定义构建细线和粗线的顶点数组，用于后续 BufferGeometry。
-function buildGridSegments(definition: GroundDynamicMesh, visibleRange?: TerrainGridVisibleRange | null): SegmentBuffers {
+function buildGridSegments(
+  definition: GroundDynamicMesh,
+  visibleRange?: TerrainGridVisibleRange | null,
+  sampledHeights?: GroundEffectiveHeightRegion | null,
+): SegmentBuffers {
   // 对输入参数做兜底，避免异常数据导致除零、负尺寸或数组长度非法。
   const columns = Math.max(1, Math.floor(definition.columns))
   const rows = Math.max(1, Math.floor(definition.rows))
@@ -125,18 +131,18 @@ function buildGridSegments(definition: GroundDynamicMesh, visibleRange?: Terrain
 
   // 构建紧凑的一维高度数组（使用合成后的有效高度）。
   // 这里使用一维数组而不是二维数组，既减少对象分配，也更便于 Worker 传输。
-  const stride = sampledColumnCount
-  const heightGrid = new Float32Array(sampledRowCount * stride)
-  for (let rowIndex = sampleMinRow; rowIndex <= sampleMaxRow; rowIndex += 1) {
-    const localRow = rowIndex - sampleMinRow
-    const base = localRow * stride
-    for (let columnIndex = sampleMinColumn; columnIndex <= sampleMaxColumn; columnIndex += 1) {
-      heightGrid[base + (columnIndex - sampleMinColumn)] = resolveGroundEffectiveHeightAtVertex(definition, rowIndex, columnIndex)
-    }
-  }
+  const heightRegion = sampledHeights ?? sampleGroundEffectiveHeightRegion(
+    definition,
+    sampleMinRow,
+    sampleMaxRow,
+    sampleMinColumn,
+    sampleMaxColumn,
+  )
+  const stride = heightRegion.stride
+  const heightGrid = heightRegion.values
   const getHeight = (rowIndex: number, columnIndex: number) => {
-    const localRow = rowIndex - sampleMinRow
-    const localColumn = columnIndex - sampleMinColumn
+    const localRow = rowIndex - heightRegion.minRow
+    const localColumn = columnIndex - heightRegion.minColumn
     return heightGrid[localRow * stride + localColumn]!
   }
 
@@ -310,6 +316,38 @@ type TerrainGridBuildResponse = {
   error?: string
 }
 
+type TerrainGridHeightTransfer = GroundEffectiveHeightRegion
+
+type CachedTerrainHeightBlock = GroundEffectiveHeightRegion
+
+function extractTerrainGridBaseSignature(cacheKey: string | null): string | null {
+  if (!cacheKey) {
+    return null
+  }
+  const viewMarker = cacheKey.indexOf('|view:')
+  return viewMarker >= 0 ? cacheKey.slice(0, viewMarker) : cacheKey
+}
+
+function makeTerrainHeightBlockKey(baseSignature: string, blockRow: number, blockColumn: number): string {
+  return `${baseSignature}|h:${blockRow}:${blockColumn}`
+}
+
+function createGroundDefinitionSnapshot(definition: GroundDynamicMesh): GroundDynamicMesh {
+  const rawDefinition = toRaw(definition) as GroundDynamicMesh
+  return {
+    ...rawDefinition,
+    manualHeightMap: (toRaw(rawDefinition.manualHeightMap) ?? rawDefinition.manualHeightMap) as GroundDynamicMesh['manualHeightMap'],
+    planningHeightMap: (toRaw(rawDefinition.planningHeightMap) ?? rawDefinition.planningHeightMap) as GroundDynamicMesh['planningHeightMap'],
+    heightComposition: (toRaw(rawDefinition.heightComposition) ?? rawDefinition.heightComposition) as GroundDynamicMesh['heightComposition'],
+    planningMetadata: rawDefinition.planningMetadata
+      ? (toRaw(rawDefinition.planningMetadata) as GroundDynamicMesh['planningMetadata'])
+      : null,
+    generation: rawDefinition.generation ? (toRaw(rawDefinition.generation) as GroundDynamicMesh['generation']) : null,
+    terrainScatter: rawDefinition.terrainScatter ? (toRaw(rawDefinition.terrainScatter) as GroundDynamicMesh['terrainScatter']) : null,
+    terrainPaint: rawDefinition.terrainPaint ? (toRaw(rawDefinition.terrainPaint) as GroundDynamicMesh['terrainPaint']) : null,
+  }
+}
+
 export class TerrainGridHelper extends THREE.Object3D {
   // 细网格与粗网格拆成两套对象，便于分别设置材质、显隐和后续扩展。
   private minorLines: THREE.LineSegments | null = null
@@ -321,6 +359,8 @@ export class TerrainGridHelper extends THREE.Object3D {
   private pendingSignature: string | null = null
   // 以签名缓存已生成的顶点数据，避免在相同地形状态下重复计算。
   private segmentCache = new Map<string, SegmentBuffers>()
+  private heightBlockCache = new Map<string, CachedTerrainHeightBlock>()
+  private heightBlockCacheBaseSignature: string | null = null
 
   // 高度范围会被外部逻辑复用，例如设置相机裁剪、辅助显示或包围盒信息。
   private hasHeightRange = false
@@ -412,30 +452,82 @@ export class TerrainGridHelper extends THREE.Object3D {
   private createHeightTransfer(
     definition: GroundDynamicMesh,
     range: NormalizedTerrainGridRange,
-  ) {
+    baseSignature: string | null,
+  ): TerrainGridHeightTransfer {
     const sampleRowCount = range.sampleMaxRow - range.sampleMinRow + 1
     const sampleColumnCount = range.sampleMaxColumn - range.sampleMinColumn + 1
     const total = sampleRowCount * sampleColumnCount
     const heightValues = new Float32Array(total)
-    // 默认从 0 起步，符合未编辑高度点通常代表平地的语义。
-    let minY = 0
-    let maxY = 0
-    for (let rowIndex = range.sampleMinRow; rowIndex <= range.sampleMaxRow; rowIndex += 1) {
-      const localRow = rowIndex - range.sampleMinRow
-      const base = localRow * sampleColumnCount
-      for (let columnIndex = range.sampleMinColumn; columnIndex <= range.sampleMaxColumn; columnIndex += 1) {
-        const value = resolveGroundEffectiveHeightAtVertex(definition, rowIndex, columnIndex)
-        heightValues[base + (columnIndex - range.sampleMinColumn)] = value
-        minY = Math.min(minY, value)
-        maxY = Math.max(maxY, value)
+
+    if (baseSignature && this.heightBlockCacheBaseSignature !== baseSignature) {
+      this.heightBlockCache.clear()
+      this.heightBlockCacheBaseSignature = baseSignature
+    } else if (!baseSignature && this.heightBlockCache.size > 0) {
+      this.heightBlockCache.clear()
+      this.heightBlockCacheBaseSignature = null
+    }
+
+    const rows = Math.max(1, Math.floor(definition.rows))
+    const columns = Math.max(1, Math.floor(definition.columns))
+    const blockSize = TERRAIN_GRID_HEIGHT_CACHE_BLOCK_CELLS
+    const firstBlockRow = Math.floor(range.sampleMinRow / blockSize)
+    const lastBlockRow = Math.floor(range.sampleMaxRow / blockSize)
+    const firstBlockColumn = Math.floor(range.sampleMinColumn / blockSize)
+    const lastBlockColumn = Math.floor(range.sampleMaxColumn / blockSize)
+
+    for (let blockRow = firstBlockRow; blockRow <= lastBlockRow; blockRow += 1) {
+      for (let blockColumn = firstBlockColumn; blockColumn <= lastBlockColumn; blockColumn += 1) {
+        const blockStartRow = blockRow * blockSize
+        const blockStartColumn = blockColumn * blockSize
+        const blockEndRow = Math.min(rows, blockStartRow + blockSize)
+        const blockEndColumn = Math.min(columns, blockStartColumn + blockSize)
+        const cacheEntry = baseSignature
+          ? this.heightBlockCache.get(makeTerrainHeightBlockKey(baseSignature, blockRow, blockColumn)) ?? null
+          : null
+        const block = cacheEntry ?? sampleGroundEffectiveHeightRegion(
+          definition,
+          blockStartRow,
+          blockEndRow,
+          blockStartColumn,
+          blockEndColumn,
+        )
+
+        if (baseSignature && !cacheEntry) {
+          this.heightBlockCache.set(makeTerrainHeightBlockKey(baseSignature, blockRow, blockColumn), block)
+        }
+
+        const copyMinRow = Math.max(range.sampleMinRow, block.minRow)
+        const copyMaxRow = Math.min(range.sampleMaxRow, block.maxRow)
+        const copyMinColumn = Math.max(range.sampleMinColumn, block.minColumn)
+        const copyMaxColumn = Math.min(range.sampleMaxColumn, block.maxColumn)
+        if (copyMaxRow < copyMinRow || copyMaxColumn < copyMinColumn) {
+          continue
+        }
+
+        const copyWidth = copyMaxColumn - copyMinColumn + 1
+        for (let rowIndex = copyMinRow; rowIndex <= copyMaxRow; rowIndex += 1) {
+          const targetOffset = (rowIndex - range.sampleMinRow) * sampleColumnCount + (copyMinColumn - range.sampleMinColumn)
+          const sourceOffset = (rowIndex - block.minRow) * block.stride + (copyMinColumn - block.minColumn)
+          heightValues.set(block.values.subarray(sourceOffset, sourceOffset + copyWidth), targetOffset)
+        }
       }
     }
+
+    let minY = 0
+    let maxY = 0
+    for (let index = 0; index < heightValues.length; index += 1) {
+      const value = heightValues[index]!
+      minY = Math.min(minY, value)
+      maxY = Math.max(maxY, value)
+    }
+
     return {
-      sampleMinRow: range.sampleMinRow,
-      sampleMaxRow: range.sampleMaxRow,
-      sampleMinColumn: range.sampleMinColumn,
-      sampleMaxColumn: range.sampleMaxColumn,
-      heightValues,
+      minRow: range.sampleMinRow,
+      maxRow: range.sampleMaxRow,
+      minColumn: range.sampleMinColumn,
+      maxColumn: range.sampleMaxColumn,
+      stride: sampleColumnCount,
+      values: heightValues,
       heightMin: minY,
       heightMax: maxY,
     }
@@ -446,34 +538,15 @@ export class TerrainGridHelper extends THREE.Object3D {
     cacheKey: string | null,
     visibleRange?: TerrainGridVisibleRange | null,
   ) {
+    const definitionSnapshot = createGroundDefinitionSnapshot(definition)
+    const baseSignature = extractTerrainGridBaseSignature(cacheKey)
     // 每次开始一个新任务时都让旧任务失效（避免 worker 排队导致 CPU 被占满）。
     const jobToken = (this.gridJobToken += 1)
     this.resetGridWorker('replaced-by-new-request')
     const worker = this.getGridWorker()
-    if (!worker) {
-      // Worker 不可用，回退到主线程（仍然可能很慢，但保证功能可用）。
-      const buffers = buildGridSegments(definition, visibleRange)
-      if (cacheKey) {
-        this.segmentCache.set(cacheKey, buffers)
-      }
-      if (jobToken !== this.gridJobToken || this.pendingSignature !== cacheKey) {
-        // 在同步/异步构建期间如果已有更新请求到来，则丢弃这次结果。
-        return
-      }
-      this.signature = cacheKey
-      this.pendingSignature = null
-      this.replaceLines(buffers.minor, this.minorLines, this.minorMaterial, (instance) => {
-        this.minorLines = instance
-      })
-      this.replaceLines(buffers.major, this.majorLines, this.majorMaterial, (instance) => {
-        this.majorLines = instance
-      })
-      this.setVisible(true)
-      return
-    }
 
-    const columns = Math.max(1, Math.floor(definition.columns))
-    const rows = Math.max(1, Math.floor(definition.rows))
+    const columns = Math.max(1, Math.floor(definitionSnapshot.columns))
+    const rows = Math.max(1, Math.floor(definitionSnapshot.rows))
     const range = normalizeTerrainGridRange(rows, columns, visibleRange)
     if (!range) {
       const empty = { minor: new Float32Array(0), major: new Float32Array(0) }
@@ -495,20 +568,41 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
     // 先在主线程打包高度数据，Worker 只负责纯计算，避免跨线程共享复杂对象。
-    const transfer = this.createHeightTransfer(definition, range)
+    const transfer = this.createHeightTransfer(definitionSnapshot, range, baseSignature)
     // 即便 worker 还没返回，也可以先缓存一份高度范围（heightMap 未编辑的点隐含为 0）。
     this.hasHeightRange = true
     this.heightMin = transfer.heightMin
     this.heightMax = transfer.heightMax
+
+    if (!worker) {
+      const buffers = buildGridSegments(definitionSnapshot, visibleRange, transfer)
+      if (cacheKey) {
+        this.segmentCache.set(cacheKey, buffers)
+      }
+      if (jobToken !== this.gridJobToken || this.pendingSignature !== cacheKey) {
+        return
+      }
+      this.signature = cacheKey
+      this.pendingSignature = null
+      this.replaceLines(buffers.minor, this.minorLines, this.minorMaterial, (instance) => {
+        this.minorLines = instance
+      })
+      this.replaceLines(buffers.major, this.majorLines, this.majorMaterial, (instance) => {
+        this.majorLines = instance
+      })
+      this.setVisible(true)
+      return
+    }
+
     const requestId = (this.gridRequestId += 1)
     const request: TerrainGridBuildRequest = {
       kind: 'build-terrain-grid',
       requestId,
-      columns: definition.columns,
-      rows: definition.rows,
-      cellSize: definition.cellSize,
-      width: definition.width,
-      depth: definition.depth,
+      columns: definitionSnapshot.columns,
+      rows: definitionSnapshot.rows,
+      cellSize: definitionSnapshot.cellSize,
+      width: definitionSnapshot.width,
+      depth: definitionSnapshot.depth,
       majorSpacing: GRID_MAJOR_SPACING,
       minorSpacing: GRID_MINOR_SPACING,
       lineOffset: LINE_OFFSET,
@@ -516,11 +610,11 @@ export class TerrainGridHelper extends THREE.Object3D {
       maxRow: range.maxRow,
       minColumn: range.minColumn,
       maxColumn: range.maxColumn,
-      sampleMinRow: transfer.sampleMinRow,
-      sampleMaxRow: transfer.sampleMaxRow,
-      sampleMinColumn: transfer.sampleMinColumn,
-      sampleMaxColumn: transfer.sampleMaxColumn,
-      heightValues: transfer.heightValues.buffer as ArrayBuffer,
+      sampleMinRow: transfer.minRow,
+      sampleMaxRow: transfer.maxRow,
+      sampleMinColumn: transfer.minColumn,
+      sampleMaxColumn: transfer.maxColumn,
+      heightValues: transfer.values.buffer as ArrayBuffer,
     }
 
     const responsePromise = new Promise<TerrainGridBuildResponse>((resolve, reject) => {
@@ -572,6 +666,8 @@ export class TerrainGridHelper extends THREE.Object3D {
       // 没有地形定义时直接隐藏当前网格，但保留对象实例供后续继续复用。
       this.signature = null
       this.pendingSignature = null
+      this.heightBlockCache.clear()
+      this.heightBlockCacheBaseSignature = null
       this.setVisible(false)
       return
     }
@@ -625,6 +721,8 @@ export class TerrainGridHelper extends THREE.Object3D {
     this.minorMaterial.dispose()
     this.majorMaterial.dispose()
     this.segmentCache.clear()
+    this.heightBlockCache.clear()
+    this.heightBlockCacheBaseSignature = null
   }
 
   // 控制两层网格的显示状态，保持一致性。
