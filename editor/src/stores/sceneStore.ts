@@ -11611,8 +11611,6 @@ export const useSceneStore = defineStore('scene', {
             this.queueSceneNodePatch(desiredId, ['visibility'])
           }
 
-          // Ensure required components exist and are configured.
-          this.ensureStaticRigidbodyComponent(desiredId)
           const wallComponent = (findNodeById(this.nodes, desiredId)?.components?.[WALL_COMPONENT_TYPE] as
             | SceneNodeComponentState<WallComponentProps>
             | undefined)
@@ -11639,8 +11637,6 @@ export const useSceneStore = defineStore('scene', {
           editorFlags: payload.editorFlags,
         })
         if (node) {
-          this.ensureStaticRigidbodyComponent(node.id)
-
           const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
             ? payload.bodyAssetId
             : null
