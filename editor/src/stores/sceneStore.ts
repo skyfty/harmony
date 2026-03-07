@@ -1,3 +1,5 @@
+import { isPlanningImageConversionNode } from '@/utils/planningToScene'
+
 import { watch, type WatchStopHandle } from 'vue'
 import * as THREE from 'three'
 import { defineStore } from 'pinia'
@@ -205,6 +207,8 @@ import {
 } from './assetCatalog'
 import { rebuildProceduralRuntimeObjects } from '@/utils/proceduralRuntime'
 import { resetScatterInstanceBinding } from '@/utils/terrainScatterRuntime'
+import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
+import { persistPlanningImageLayersToIndexedDB } from '@/utils/planningImageStorage'
 import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
@@ -4220,6 +4224,9 @@ export async function calculateSceneResourceSummary(
       if (!node) {
         continue
       }
+      if (isPlanningImageConversionNode(node)) {
+        continue
+      }
       nodeNameById.set(node.id, node.name ?? undefined)
       if (Array.isArray(node.materials) && node.materials.length) {
         node.materials.forEach((nodeMaterial) => {
@@ -4389,6 +4396,7 @@ export async function cloneSceneDocumentForExport(
     assetIndex: assetIndex,
     packageAssetMap,
     resourceSummary: scene.resourceSummary,
+    planningData: scene.planningData,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
     skybox: scene.skybox,
@@ -4688,6 +4696,9 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
     }
     nodes.forEach((node) => {
       if (!node) {
+        return
+      }
+      if (isPlanningImageConversionNode(node)) {
         return
       }
       collectNodeAssetDependencies(node, bucket)
@@ -5793,6 +5804,7 @@ function createSceneDocument(
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
     resourceSummary?: SceneResourceSummary
+    planningData?: PlanningSceneData | null
     viewportSettings?: Partial<SceneViewportSettings>
     skybox?: Partial<SceneSkyboxSettings>
     shadowsEnabled?: boolean
@@ -5868,6 +5880,7 @@ function createSceneDocument(
     assetIndex,
     packageAssetMap,
     resourceSummary,
+    planningData: clonePlanningData(options.planningData),
   }
 }
 
@@ -14033,6 +14046,77 @@ export const useSceneStore = defineStore('scene', {
         scenes,
       }
     },
+    async importScenePackageZip(zipBytes: ArrayBuffer): Promise<SceneImportResult> {
+      const { scenes } = await loadStoredScenesFromScenePackage(zipBytes)
+      if (!Array.isArray(scenes) || !scenes.length) {
+        throw new Error('Scene package does not contain any scene data')
+      }
+
+      const scenesStore = useScenesStore()
+      const projectsStore = useProjectsStore()
+      const projectId = projectsStore.activeProjectId
+      if (!projectId) {
+        throw new Error('Project must be opened before importing scene package')
+      }
+
+      const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
+      const imported: StoredSceneDocument[] = []
+      const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
+
+      for (let index = 0; index < scenes.length; index += 1) {
+        const entry = scenes[index]!
+        const baseName = typeof entry.name === 'string' ? entry.name : `Imported Scene ${index + 1}`
+        const normalizedName = baseName.trim() || `Imported Scene ${index + 1}`
+        const uniqueName = resolveUniqueSceneName(normalizedName, existingNames)
+        if (uniqueName !== normalizedName) {
+          renamedScenes.push({ originalName: normalizedName, renamedName: uniqueName })
+        }
+        existingNames.add(uniqueName)
+
+        const sceneDocument = createSceneDocument(uniqueName, {
+          nodes: entry.nodes as SceneNode[],
+          projectId,
+          selectedNodeId: typeof entry.selectedNodeId === 'string' ? entry.selectedNodeId : null,
+          selectedNodeIds: Array.isArray(entry.selectedNodeIds)
+            ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
+            : undefined,
+          camera: normalizeCameraStateInput(entry.camera),
+          resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
+          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
+          updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
+          assetCatalog: isAssetCatalog(entry.assetCatalog)
+            ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
+            : undefined,
+          assetIndex: isAssetIndex(entry.assetIndex)
+            ? (entry.assetIndex as Record<string, AssetIndexEntry>)
+            : undefined,
+          packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
+            ? (entry.packageAssetMap as Record<string, string>)
+            : undefined,
+          planningData: entry.planningData ?? null,
+          viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
+          panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
+          panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),
+          groundSettings: (entry as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ?? undefined,
+          environment: isPlainRecord((entry as { environment?: unknown }).environment)
+            ? ((entry as { environment?: Partial<EnvironmentSettings> | null }).environment ?? undefined)
+            : undefined,
+        })
+
+        await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
+        await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])
+        await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
+        imported.push(sceneDocument)
+      }
+
+      await scenesStore.saveSceneDocuments(imported)
+      await scenesStore.refreshMetadata()
+
+      return {
+        importedSceneIds: imported.map((scene) => scene.id),
+        renamedScenes,
+      }
+    },
     async importSceneBundle(payload: SceneBundleImportPayload): Promise<SceneImportResult> {
       const formatVersionRaw = (payload as { formatVersion?: unknown })?.formatVersion
       const formatVersion = typeof formatVersionRaw === 'number'
@@ -14097,6 +14181,9 @@ export const useSceneStore = defineStore('scene', {
           packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
             ? (entry.packageAssetMap as Record<string, string>)
             : undefined,
+          planningData: isPlainObject((entry as { planningData?: unknown }).planningData)
+            ? ((entry as { planningData?: PlanningSceneData | null }).planningData ?? null)
+            : null,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),

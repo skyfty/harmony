@@ -6,9 +6,8 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { unzipScenePackage, readTextFileFromScenePackage } from '@schema'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
+import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 
 export type SceneWorkspaceType = 'local' | 'user'
 
@@ -298,29 +297,12 @@ async function downloadSceneBundleZip(
 }
 
 async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<StoredSceneDocument> {
-  const pkg = unzipScenePackage(zipBytes)
-  const sceneEntry = pkg.manifest.scenes?.[0]
-  if (!sceneEntry?.path) {
+  const pkg = await loadStoredScenesFromScenePackage(zipBytes)
+  const scene = pkg.scenes[0]
+  if (!scene) {
     throw new Error('Scene bundle missing scene entry')
   }
-  const rawScene = JSON.parse(readTextFileFromScenePackage(pkg, sceneEntry.path)) as unknown
-  if (!rawScene || typeof rawScene !== 'object') {
-    throw new Error('Invalid scene.json in scene bundle')
-  }
-
-  const assetCache = useAssetCacheStore()
-  for (const entry of pkg.manifest.resources ?? []) {
-    const bytes = pkg.files[entry.path]
-    if (!bytes) {
-      throw new Error(`Missing resource file in scene bundle: ${entry.path}`)
-    }
-    const mimeType = entry.mimeType || 'application/octet-stream'
-    const filename = `${entry.logicalId}.${entry.ext}`
-    const blob = new Blob([new Uint8Array(bytes)], { type: mimeType })
-    await assetCache.storeAssetBlob(entry.logicalId, { blob, mimeType, filename })
-  }
-
-  return rawScene as StoredSceneDocument
+  return scene
 }
 
 async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<void> {

@@ -1078,7 +1078,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
   const orderedSceneIds = [...localSceneIds, ...externalOnly.map((meta) => meta.id)]
   const defaultSceneId = project.lastEditedSceneId ?? (orderedSceneIds[0] ?? null)
 
-  const embeddedScenes: Array<{ id: string; document: any }> = []
+  const embeddedScenes: Array<{ id: string; document: any; planningData?: any }> = []
   const totalToEmbed = orderedSceneIds.length
   for (let index = 0; index < orderedSceneIds.length; index += 1) {
     const id = orderedSceneIds[index]!
@@ -1102,7 +1102,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
       document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
 
       const exportDocument = await prepareJsonSceneExport(document, { ...options, format: 'json' })
-      embeddedScenes.push({ id, document: exportDocument })
+      embeddedScenes.push({ id, document: exportDocument, planningData: document.planningData ?? null })
       continue
     }
 
@@ -1132,6 +1132,7 @@ async function exportProjectPackageZip(options: SceneExportOptions, updateProgre
     },
     scenes: embeddedScenes,
     embedAssets: options.embedAssets ?? false,
+    includePlanningData: true,
     updateProgress,
   })
 }
@@ -1642,6 +1643,35 @@ async function handleSceneImportFileChange(event: Event) {
   })
 
   try {
+    const isZipPackage = file.name.toLowerCase().endsWith('.zip') || file.type === 'application/zip'
+    if (isZipPackage) {
+      const bytes = await readSceneFileAsArrayBuffer(file, (percent) => {
+        const progress = 5 + Math.round((percent / 100) * 45)
+        uiStore.updateLoadingProgress(Math.min(progress, 50))
+      })
+
+      uiStore.updateLoadingOverlay({ message: '导入场景包…' })
+      uiStore.updateLoadingProgress(75)
+
+      const result = await sceneStore.importScenePackageZip(bytes)
+      const importedCount = result.importedSceneIds.length
+      const renameCount = result.renamedScenes.length
+      let message = `成功导入 ${importedCount} 个场景`
+      if (renameCount) {
+        message += `，已自动重命名 ${renameCount} 个重名场景`
+      }
+
+      uiStore.updateLoadingOverlay({
+        title: '导入场景',
+        message,
+        closable: true,
+        autoClose: true,
+        autoCloseDelay: 1200,
+      })
+      uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 1200 })
+      return
+    }
+
     const text = await readSceneFileAsText(file, (percent) => {
       const progress = 5 + Math.round((percent / 100) * 35)
       uiStore.updateLoadingProgress(Math.min(progress, 45))
@@ -1906,6 +1936,28 @@ function readSceneFileAsText(file: File, onProgress?: (percent: number) => void)
       resolve(typeof reader.result === 'string' ? reader.result : '')
     }
     reader.readAsText(file)
+  })
+}
+
+function readSceneFileAsArrayBuffer(file: File, onProgress?: (percent: number) => void): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取文件失败'))
+    reader.onprogress = (event) => {
+      if (onProgress && event.lengthComputable && event.total > 0) {
+        const percent = (event.loaded / event.total) * 100
+        onProgress(Math.min(Math.max(percent, 0), 100))
+      }
+    }
+    reader.onload = () => {
+      const result = reader.result
+      if (result instanceof ArrayBuffer) {
+        resolve(result)
+        return
+      }
+      reject(new Error('读取文件失败'))
+    }
+    reader.readAsArrayBuffer(file)
   })
 }
 
@@ -2273,7 +2325,7 @@ onBeforeUnmount(() => {
     <input
       ref="sceneImportInputRef"
       type="file"
-      accept="application/json"
+      accept="application/json,.json,application/zip,.zip"
       style="display: none"
       @change="handleSceneImportFileChange"
     />

@@ -16,10 +16,6 @@ export interface PlanningPolygonData {
   terrainBlendMeters?: number
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
-  /** Optional; wall preset prefab asset id (.wall). When set, overrides the layer default. */
-  wallPresetAssetId?: string | null
-  /** Optional; floor preset prefab asset id (.floor). When set, overrides the layer default. */
-  floorPresetAssetId?: string | null
 }
 
 export interface PlanningPolylineData {
@@ -30,19 +26,19 @@ export interface PlanningPolylineData {
   /** Optional per-vertex metadata aligned with `points` when layer kind is 'guide-route'. */
   waypoints?: Array<{
     name?: string
+    dock?: boolean
   }>
-  /** 0-1. Only meaningful when layer kind is 'wall'. */
-  cornerSmoothness?: number
   /** Optional; when true conversion may create/mark an air wall for this feature. */
   airWallEnabled?: boolean
-  /** Optional; wall preset prefab asset id (.wall). When set, overrides the layer default. */
-  wallPresetAssetId?: string | null
 }
 
 export interface PlanningImageData {
   id: string
   name: string
   url: string
+  imageHash?: string
+  filename?: string | null
+  mimeType?: string | null
   sizeLabel: string
   width: number
   height: number
@@ -54,41 +50,21 @@ export interface PlanningImageData {
   alignMarker?: { x: number; y: number }
 }
 
-export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall' | 'floor' | 'water' | 'guide-route'
+export type PlanningLayerKind = 'terrain' | 'green' | 'guide-route'
 
 export interface PlanningLayerState {
   id: string
-  /** Optional; older snapshots may not include it. */
-  name?: string
-  /** Optional; older snapshots may not include it. */
-  kind?: PlanningLayerKind
-  /** Optional; older snapshots may not include it. */
-  color?: string
+  name: string
+  kind: PlanningLayerKind
+  color: string
   visible: boolean
-  /** Optional; older snapshots may not include it. */
-  locked?: boolean
-  /** Optional; currently used by road layers. */
-  roadWidthMeters?: number
-  /** Optional; controls how much road corners are rounded for this layer. */
-  roadSmoothing?: number
-  /** Optional; controls how smooth floor corners should be when converting. */
-  floorSmooth?: number
-  /** Optional; floor preset prefab asset id (expects .floor). */
-  floorPresetAssetId?: string | null
-  /** Optional; currently used by wall layers. */
-  wallHeightMeters?: number
-  /** Optional; currently used by wall layers. */
-  wallThicknessMeters?: number
-  /** Optional; wall preset prefab asset id (expects .wall). */
-  wallPresetAssetId?: string | null
-  /** Optional; controls water edge rounding when converting water layers. */
-  waterSmoothing?: number
+  locked: boolean
 }
 
 export interface PlanningSceneData {
   version: 1
   activeLayerId?: string
-  layers?: PlanningLayerState[]
+  layers: PlanningLayerState[]
   viewTransform?: { scale: number; offset: { x: number; y: number } }
   /** Optional reference guides (axis-aligned) in world meters. */
   guides?: PlanningGuideData[]
